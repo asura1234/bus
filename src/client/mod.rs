@@ -409,6 +409,9 @@ async fn run_client_loop(
     };
     let mut federated = endpoint_catalog.has_enabled_ssh();
     if let Some(shell) = state.shell.as_mut() {
+        shell
+            .start_bus()
+            .map_err(|error| ClientError::ConnectionFailed(io::Error::other(error)))?;
         shell.set_graphics_cell_size(initial_cell_width_px, initial_cell_height_px);
         shell.set_endpoint_catalog(&endpoint_catalog.ssh);
         shell.set_endpoint_methods_for(
@@ -2009,6 +2012,8 @@ async fn run_client_loop(
                     let (effects, outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
+                        outcome.repaint |= shell.tick_bus();
+                        outcome.detach |= shell.bus_exit_ready();
                         for expired in expired_endpoints {
                             if !shell.endpoint_is_active(&expired.endpoint_id) {
                                 continue;

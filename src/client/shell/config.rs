@@ -405,6 +405,13 @@ impl ClientShellConfig {
     }
 
     pub(crate) fn initial_surface_size(&self, cols: u16, rows: u16) -> ClientSurfaceSize {
+        if crate::bus::entry::data_dir().is_some() {
+            let surface = super::bus::layout(cols, rows).pane_surface;
+            return ClientSurfaceSize {
+                cols: surface.width.max(1),
+                rows: surface.height.max(1),
+            };
+        }
         let sidebar_collapsed = self
             .preferences
             .sidebar_collapsed

@@ -159,6 +159,14 @@ impl ClientShellState {
             outcome.repaint = true;
         }
         for event in events {
+            let ready = self.bus_terminal_ready();
+            if self
+                .bus
+                .as_mut()
+                .is_some_and(|bus| bus.input(&event, ready, &mut outcome))
+            {
+                continue;
+            }
             if let Some(update) = host_theme_update(&event) {
                 push_host_theme_update(&mut outcome.requests, update);
             }

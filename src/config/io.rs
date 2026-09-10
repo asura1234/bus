@@ -28,6 +28,9 @@ pub fn app_dir_name() -> &'static str {
 }
 
 pub fn config_dir() -> PathBuf {
+    if let Some(root) = crate::bus::entry::data_dir() {
+        return root.join("herdr-config");
+    }
     if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
         return PathBuf::from(dir).join(app_dir_name());
     }
@@ -35,6 +38,9 @@ pub fn config_dir() -> PathBuf {
 }
 
 pub fn state_dir() -> PathBuf {
+    if let Some(root) = crate::bus::entry::data_dir() {
+        return root.join("herdr-state");
+    }
     if let Ok(dir) = std::env::var("XDG_STATE_HOME") {
         return PathBuf::from(dir).join(app_dir_name());
     }
@@ -103,6 +109,14 @@ fn read_optional_config(path: &Path) -> std::io::Result<Option<String>> {
 
 impl Config {
     pub fn load() -> LoadedConfig {
+        let mut loaded = Self::load_inner();
+        if crate::bus::entry::data_dir().is_some() {
+            crate::bus::entry::apply_config(&mut loaded.config);
+        }
+        loaded
+    }
+
+    fn load_inner() -> LoadedConfig {
         let path = config_path();
         let content = match read_optional_config(&path) {
             Ok(Some(content)) => content,
@@ -167,6 +181,9 @@ pub(super) fn resolve_config_relative_path(path: &Path) -> PathBuf {
 }
 
 pub fn config_path() -> PathBuf {
+    if crate::bus::entry::data_dir().is_some() {
+        return config_dir().join("config.toml");
+    }
     if let Ok(path) = std::env::var(CONFIG_PATH_ENV_VAR) {
         return PathBuf::from(path);
     }

@@ -15,6 +15,7 @@ mod agent_resume;
 mod api;
 mod app;
 mod build_info;
+mod bus;
 mod checksum;
 mod cli;
 mod client;
@@ -491,6 +492,12 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    if let Some(result) = bus::callbacks::dispatch(&raw_args) {
+        return result;
+    }
+    if raw_args.get(1).is_some_and(|arg| arg == "--bus") {
+        return bus::entry::run(&raw_args[2..]);
+    }
     let args = match session::configure_from_args(&raw_args) {
         Ok(args) => args,
         Err(err) => {

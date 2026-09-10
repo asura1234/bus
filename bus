@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+bus_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ ! -x "$bus_root/target/debug/herdr" ]; then
+    echo "Build Bus first: see docs/next/bus.md" >&2
+    exit 1
+fi
+exec "$bus_root/target/debug/herdr" --bus "$@"

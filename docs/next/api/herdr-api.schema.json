@@ -1222,6 +1222,66 @@
     },
     "request": {
       "$defs": {
+        "AgentPromptIfIdleParams": {
+          "description": "A separate method makes older servers reject the safety guard, never ignore it.",
+          "properties": {
+            "expected_agent": {
+              "type": "string"
+            },
+            "expected_pane_id": {
+              "type": "string"
+            },
+            "expected_session_id": {
+              "type": "string"
+            },
+            "expected_terminal_id": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "text",
+            "expected_terminal_id",
+            "expected_pane_id",
+            "expected_agent",
+            "expected_session_id"
+          ],
+          "type": "object"
+        },
+        "AgentPromptIfUnboundParams": {
+          "description": "First interactive Codex turn: its SessionStart hook is deferred until input.\nThis separate method requires the exact managed launch, never an arbitrary pane.",
+          "properties": {
+            "expected_managed_name": {
+              "type": "string"
+            },
+            "expected_pane_id": {
+              "type": "string"
+            },
+            "expected_terminal_id": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "text",
+            "expected_terminal_id",
+            "expected_pane_id",
+            "expected_managed_name"
+          ],
+          "type": "object"
+        },
         "AgentPromptParams": {
           "properties": {
             "target": {
@@ -5459,6 +5519,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/AgentPromptParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.prompt_if_idle",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentPromptIfIdleParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.prompt_if_unbound",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentPromptIfUnboundParams"
             }
           },
           "required": [

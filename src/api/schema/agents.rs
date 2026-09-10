@@ -183,6 +183,28 @@ pub struct AgentPromptParams {
     pub wait: Option<AgentPromptWaitOptions>,
 }
 
+/// A separate method makes older servers reject the safety guard, never ignore it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentPromptIfIdleParams {
+    pub target: String,
+    pub text: String,
+    pub expected_terminal_id: String,
+    pub expected_pane_id: String,
+    pub expected_agent: String,
+    pub expected_session_id: String,
+}
+
+/// First interactive Codex turn: its SessionStart hook is deferred until input.
+/// This separate method requires the exact managed launch, never an arbitrary pane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentPromptIfUnboundParams {
+    pub target: String,
+    pub text: String,
+    pub expected_terminal_id: String,
+    pub expected_pane_id: String,
+    pub expected_managed_name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentInfo {
     pub terminal_id: String,

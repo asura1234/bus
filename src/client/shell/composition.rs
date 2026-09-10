@@ -100,6 +100,20 @@ impl ClientShellState {
 
     pub(crate) fn compose(&mut self, cols: u16, rows: u16) -> Option<FrameData> {
         self.last_composed_size = Some((cols, rows));
+        let bus_ready = self.bus_terminal_ready();
+        if let Some(bus) = self.bus.as_mut() {
+            bus.compute_view(cols, rows);
+            if !bus_ready {
+                self.hits = ShellHitMap::default();
+                let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
+                bus.render(&mut buffer);
+                return Some(FrameData::from_ratatui_buffer_with_hyperlinks(
+                    &buffer,
+                    bus.cursor(),
+                    &[],
+                ));
+            }
+        }
         if self.snapshot.is_none() || self.pane_surface.is_none() {
             return Some(self.compose_unavailable(cols, rows));
         }
@@ -133,31 +147,36 @@ impl ClientShellState {
             _ => (None, None),
         };
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
-        self.hits = render::render_shell(
-            &mut buffer,
-            layout,
-            snapshot,
-            &self.config,
-            render::ShellRenderState {
-                endpoints: &self.endpoints,
-                active_endpoint_id: &self.active_endpoint_id,
-                collapsed_endpoints: &self.collapsed_endpoints,
-                collapsed_groups: &self.collapsed_groups,
-                workspace_scroll: &mut self.workspace_scroll,
-                agent_scroll: &mut self.agent_scroll,
-                tab_scroll: &mut self.tab_scroll,
-                reveal_focused_workspace: &mut self.reveal_focused_workspace,
-                reveal_focused_tab: &mut self.reveal_focused_tab,
-                sidebar_collapsed: self.sidebar_collapsed,
-                sidebar_section_split: self.sidebar_section_split,
-                tab_drag_insert_index,
-                selected_workspace_id: (self.mode == ClientShellMode::Navigate)
-                    .then_some(self.navigate_workspace_id.as_deref())
-                    .flatten(),
-                dragged_workspace_id,
-                workspace_drop_indicator_row,
-            },
-        );
+        self.hits = if let Some(bus) = self.bus.as_ref() {
+            bus.render(&mut buffer);
+            ShellHitMap::default()
+        } else {
+            render::render_shell(
+                &mut buffer,
+                layout,
+                snapshot,
+                &self.config,
+                render::ShellRenderState {
+                    endpoints: &self.endpoints,
+                    active_endpoint_id: &self.active_endpoint_id,
+                    collapsed_endpoints: &self.collapsed_endpoints,
+                    collapsed_groups: &self.collapsed_groups,
+                    workspace_scroll: &mut self.workspace_scroll,
+                    agent_scroll: &mut self.agent_scroll,
+                    tab_scroll: &mut self.tab_scroll,
+                    reveal_focused_workspace: &mut self.reveal_focused_workspace,
+                    reveal_focused_tab: &mut self.reveal_focused_tab,
+                    sidebar_collapsed: self.sidebar_collapsed,
+                    sidebar_section_split: self.sidebar_section_split,
+                    tab_drag_insert_index,
+                    selected_workspace_id: (self.mode == ClientShellMode::Navigate)
+                        .then_some(self.navigate_workspace_id.as_deref())
+                        .flatten(),
+                    dragged_workspace_id,
+                    workspace_drop_indicator_row,
+                },
+            )
+        };
         self.hits.panes = surface
             .panes
             .iter()
@@ -241,7 +260,10 @@ impl ClientShellState {
         let mobile_navigate_panel = !layout.mobile_header.is_empty()
             && self.mode == ClientShellMode::Navigate
             && self.endpoint_error.is_none();
-        let mode_bar = if mobile_navigate_panel || self.overlay.is_some() {
+        let mode_bar = if mobile_navigate_panel
+            || self.overlay.is_some()
+            || (self.bus.is_some() && self.mode == ClientShellMode::Terminal)
+        {
             None
         } else {
             render::render_mode_bar(

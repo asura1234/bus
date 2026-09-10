@@ -16,6 +16,8 @@ __pycache__/
 !/docs/versions/
 !/docs/versions/**
 /.local/
+/.superpowers/
+/temp/
 /backlog
 
 /.pi/todos

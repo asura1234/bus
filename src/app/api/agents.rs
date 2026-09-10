@@ -12,6 +12,63 @@ use super::responses::{encode_error, encode_error_body, encode_success};
 
 const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 
+fn check_unbound_prompt_identity_and_idle(
+    agent: &crate::api::schema::AgentInfo,
+    params: &crate::api::schema::AgentPromptIfUnboundParams,
+) -> Result<(), (&'static str, &'static str)> {
+    if agent.terminal_id != params.expected_terminal_id
+        || agent.pane_id != params.expected_pane_id
+        || agent.agent.as_deref() != Some("codex")
+        || agent.name.as_deref() != Some(params.expected_managed_name.as_str())
+        || params.expected_managed_name.is_empty()
+        || agent.agent_session.is_some()
+    {
+        return Err((
+            "agent_identity_changed",
+            "Managed launch identity changed; prompt was not sent",
+        ));
+    }
+    if !matches!(
+        agent.agent_status,
+        crate::api::schema::AgentStatus::Idle | crate::api::schema::AgentStatus::Done
+    ) {
+        return Err(("agent_not_idle", "Agent is not idle; prompt was not sent"));
+    }
+    if agent.launch_pending || !agent.interactive_ready {
+        return Err(("agent_not_ready", "Agent is not ready; prompt was not sent"));
+    }
+    Ok(())
+}
+
+fn check_prompt_identity_and_idle(
+    agent: &crate::api::schema::AgentInfo,
+    params: &crate::api::schema::AgentPromptIfIdleParams,
+) -> Result<(), (&'static str, &'static str)> {
+    use crate::api::schema::AgentStatus;
+    if agent.terminal_id != params.expected_terminal_id
+        || agent.pane_id != params.expected_pane_id
+        || agent.agent.as_deref() != Some(params.expected_agent.as_str())
+        || agent
+            .agent_session
+            .as_ref()
+            .map(|session| session.value.as_str())
+            != Some(params.expected_session_id.as_str())
+        || params.expected_session_id.is_empty()
+    {
+        return Err((
+            "agent_identity_changed",
+            "Agent identity changed; prompt was not sent",
+        ));
+    }
+    if !matches!(agent.agent_status, AgentStatus::Idle | AgentStatus::Done) {
+        return Err(("agent_not_idle", "Agent is not idle; prompt was not sent"));
+    }
+    if agent.launch_pending || !agent.interactive_ready {
+        return Err(("agent_not_ready", "Agent is not ready; prompt was not sent"));
+    }
+    Ok(())
+}
+
 fn agent_prompt_submit_delay(agent: crate::detect::Agent, prompt_bytes: usize) -> Duration {
     #[cfg(windows)]
     if agent == crate::detect::Agent::Codex {
@@ -76,10 +133,19 @@ impl App {
         request: crate::api::schema::Request,
         respond_to: std::sync::mpsc::Sender<String>,
     ) -> bool {
-        let crate::api::schema::Method::AgentPrompt(params) = request.method else {
-            return false;
+        let queued = match request.method {
+            crate::api::schema::Method::AgentPrompt(params) => {
+                self.queue_agent_prompt(request.id, params)
+            }
+            crate::api::schema::Method::AgentPromptIfIdle(params) => {
+                self.queue_agent_prompt_if_idle(request.id, params)
+            }
+            crate::api::schema::Method::AgentPromptIfUnbound(params) => {
+                self.queue_agent_prompt_if_unbound(request.id, params)
+            }
+            _ => return false,
         };
-        match self.queue_agent_prompt(request.id, params) {
+        match queued {
             Ok((id, agent, completion)) => {
                 std::thread::spawn(move || {
                     let response = match completion.recv() {
@@ -98,6 +164,64 @@ impl App {
             }
         }
         true
+    }
+
+    fn queue_agent_prompt_if_unbound(
+        &mut self,
+        id: String,
+        params: crate::api::schema::AgentPromptIfUnboundParams,
+    ) -> Result<
+        (
+            String,
+            crate::api::schema::AgentInfo,
+            std::sync::mpsc::Receiver<std::io::Result<()>>,
+        ),
+        String,
+    > {
+        self.reconcile_managed_agent_target(&params.target);
+        let agent = self
+            .agent_info_for_target(&params.target)
+            .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
+        if let Err((code, message)) = check_unbound_prompt_identity_and_idle(&agent, &params) {
+            return Err(encode_error(id, code, message));
+        }
+        self.queue_agent_prompt(
+            id,
+            AgentPromptParams {
+                target: params.target,
+                text: params.text,
+                wait: None,
+            },
+        )
+    }
+
+    fn queue_agent_prompt_if_idle(
+        &mut self,
+        id: String,
+        params: crate::api::schema::AgentPromptIfIdleParams,
+    ) -> Result<
+        (
+            String,
+            crate::api::schema::AgentInfo,
+            std::sync::mpsc::Receiver<std::io::Result<()>>,
+        ),
+        String,
+    > {
+        self.reconcile_managed_agent_target(&params.target);
+        let agent = self
+            .agent_info_for_target(&params.target)
+            .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
+        if let Err((code, message)) = check_prompt_identity_and_idle(&agent, &params) {
+            return Err(encode_error(id, code, message));
+        }
+        self.queue_agent_prompt(
+            id,
+            AgentPromptParams {
+                target: params.target,
+                text: params.text,
+                wait: None,
+            },
+        )
     }
 
     fn queue_agent_prompt(
@@ -435,6 +559,192 @@ mod tests {
             agent_prompt_submit_delay(Agent::OpenCode, 4_096),
             AGENT_PROMPT_SUBMIT_DELAY
         );
+    }
+
+    #[tokio::test]
+    async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing() {
+        use crate::api::schema::{AgentPromptIfUnboundParams, Method, Request};
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let now = std::time::Instant::now();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.begin_managed_agent(
+            "bus-r1-a2".into(),
+            Agent::Codex,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(10),
+        );
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
+        let (runtime, mut rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 0, b"", 2,
+            );
+        runtime.test_process_pty_bytes(b"\x1b[?2004h");
+        app.state.insert_test_runtime(pane_id, runtime);
+        let info = app.agent_info(0, pane_id).unwrap();
+        let params = AgentPromptIfUnboundParams {
+            target: info.pane_id.clone(),
+            text: "first room prompt".into(),
+            expected_terminal_id: info.terminal_id.clone(),
+            expected_pane_id: info.pane_id.clone(),
+            expected_managed_name: "bus-r1-a2".into(),
+        };
+        let run = |app: &mut App, params: AgentPromptIfUnboundParams| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            assert!(app.handle_deferred_agent_api_request(
+                Request {
+                    id: "bootstrap".into(),
+                    method: Method::AgentPromptIfUnbound(params)
+                },
+                tx
+            ));
+            rx.recv_timeout(Duration::from_secs(2)).unwrap()
+        };
+        for name in ["", "different-launch"] {
+            let mut wrong = params.clone();
+            wrong.expected_managed_name = name.into();
+            assert!(run(&mut app, wrong).contains("agent_identity_changed"));
+            assert!(rx.try_recv().is_err());
+        }
+        for state in [AgentState::Working, AgentState::Blocked] {
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .set_detected_state(Some(Agent::Codex), state);
+            assert!(run(&mut app, params.clone()).contains("agent_not_idle"));
+            assert!(rx.try_recv().is_err());
+        }
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        let mut wrong = info.clone();
+        wrong.agent = Some("claude".into());
+        assert!(check_unbound_prompt_identity_and_idle(&wrong, &params).is_err());
+        let mut wrong = info.clone();
+        wrong.interactive_ready = false;
+        assert!(check_unbound_prompt_identity_and_idle(&wrong, &params).is_err());
+        let mut wrong = info.clone();
+        wrong.launch_pending = true;
+        assert!(check_unbound_prompt_identity_and_idle(&wrong, &params).is_err());
+        let mut wrong = params.clone();
+        wrong.expected_terminal_id = "different".into();
+        assert!(run(&mut app, wrong).contains("agent_identity_changed"));
+        let mut wrong = params.clone();
+        wrong.expected_pane_id = "different".into();
+        assert!(run(&mut app, wrong).contains("agent_identity_changed"));
+        assert!(rx.try_recv().is_err());
+        assert!(run(&mut app, params.clone()).contains("agent_prompted"));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Bytes::from_static(b"\x1b[200~first room prompt\x1b[201~")
+        );
+        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\r"));
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_agent_session_ref(
+                "herdr:codex".into(),
+                "codex".into(),
+                crate::agent_resume::AgentSessionRef::id("already-bound"),
+                Some(1),
+            );
+        assert!(run(&mut app, params).contains("agent_identity_changed"));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
+        use crate::api::schema::{AgentPromptIfIdleParams, Method, Request};
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        let now = std::time::Instant::now();
+        terminal.begin_managed_agent(
+            "bus-r1-a2".into(),
+            Agent::Codex,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(10),
+        );
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
+        terminal.set_agent_session_ref(
+            "bus".into(),
+            "codex".into(),
+            crate::agent_resume::AgentSessionRef::id("session"),
+            Some(1),
+        );
+        let (runtime, mut rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 0, b"", 2,
+            );
+        runtime.test_process_pty_bytes(b"\x1b[?2004h");
+        app.state.insert_test_runtime(pane_id, runtime);
+        let info = app.agent_info(0, pane_id).unwrap();
+        let params = AgentPromptIfIdleParams {
+            target: info.pane_id.clone(),
+            text: "literal @x $HOME".into(),
+            expected_terminal_id: info.terminal_id.clone(),
+            expected_pane_id: info.pane_id.clone(),
+            expected_agent: "codex".into(),
+            expected_session_id: "session".into(),
+        };
+        let run = |app: &mut App, params: AgentPromptIfIdleParams| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            assert!(app.handle_deferred_agent_api_request(
+                Request {
+                    id: "guard".into(),
+                    method: Method::AgentPromptIfIdle(params)
+                },
+                tx
+            ));
+            rx
+        };
+        let mut wrong = params.clone();
+        wrong.expected_session_id = "other".into();
+        let rejected = run(&mut app, wrong)
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(rejected.contains("agent_identity_changed"), "{rejected}");
+        assert!(rx.try_recv().is_err());
+        for state in [AgentState::Working, AgentState::Blocked] {
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .set_detected_state(Some(Agent::Codex), state);
+            let rejected = run(&mut app, params.clone())
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap();
+            assert!(rejected.contains("agent_not_idle"), "{rejected}");
+            assert!(rx.try_recv().is_err());
+        }
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        let response = run(&mut app, params);
+        assert!(response.try_recv().is_err());
+        let result = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(result.contains("agent_prompted"), "{result}");
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Bytes::from_static(b"\x1b[200~literal @x $HOME\x1b[201~")
+        );
+        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\r"));
     }
 
     #[tokio::test]

@@ -890,6 +890,7 @@ pub(super) struct ClientCopyModeState {
 }
 
 pub(crate) struct ClientShellState {
+    pub(super) bus: Option<super::bus::BusUi>,
     pub(super) config: ClientShellConfig,
     pub(super) snapshot: Option<Box<ClientShellSnapshot>>,
     pub(super) pane_surface: Option<PaneSurfaceFrame>,
@@ -1032,6 +1033,7 @@ impl ClientShellState {
             config.agent_panel_sort = sort;
         }
         Self {
+            bus: None,
             config,
             snapshot: None,
             pane_surface: None,
@@ -1172,6 +1174,9 @@ impl ClientShellState {
     }
 
     pub(super) fn layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
+        if self.bus.is_some() {
+            return super::bus::layout(cols, rows);
+        }
         self.config.layout(
             cols,
             rows,
@@ -1451,7 +1456,7 @@ impl ClientShellState {
         self.pane_scroll_targets
             .retain(|pane_id, _| pane_exists(pane_id));
 
-        if !self.config.startup_onboarding {
+        if self.bus.is_none() && !self.config.startup_onboarding {
             match snapshot.product_announcement.as_ref() {
                 Some(announcement) => {
                     let key = (announcement.version.clone(), announcement.id.clone());
