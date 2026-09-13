@@ -55,6 +55,20 @@ pub(crate) enum Parsed {
     Ignore,
 }
 
+impl Parsed {
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::Session(_) => "session",
+            Self::Started { .. } => "started",
+            Self::Final { .. } => "final",
+            Self::CursorResponse { .. } => "cursor_response",
+            Self::CursorStop { .. } => "cursor_stop",
+            Self::Failure { .. } => "failure",
+            Self::Ignore => "ignored",
+        }
+    }
+}
+
 fn field(value: &Value, key: &str) -> Result<String, String> {
     value.get(key).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_owned)
         .ok_or_else(|| format!("Hook missing {key}; update the CLI and verify Bus hooks. No prompt will be retried."))
@@ -180,6 +194,7 @@ pub(crate) fn append(dir: &Path, launch: &str, provider: Provider, value: Value)
     let id = super::io::digest(&serde_json::to_vec(&(launch, &value))?);
     let path = dir.join(format!("event-{id}.json"));
     if path.exists() {
+        tracing::debug!(event = "bus.callback.duplicate", callback_id = %id, "Callback already spooled");
         return Ok(());
     }
     let sequence = read_counter(dir)?
@@ -194,7 +209,12 @@ pub(crate) fn append(dir: &Path, launch: &str, provider: Provider, value: Value)
         manifest,
         value,
     };
-    super::io::atomic_write(&path, &serde_json::to_vec(&record)?)
+    super::io::atomic_write(&path, &serde_json::to_vec(&record)?)?;
+    tracing::info!(event = "bus.callback.spooled", callback_id = %record.id,
+        agent_id = record.manifest.agent_id.0, provider = ?provider, launch_id = launch,
+        sequence, kind = parse(provider, &record.value).map_or("invalid", |p| p.kind()),
+        "Provider callback persisted");
+    Ok(())
 }
 
 pub(crate) fn records(dir: &Path) -> io::Result<Vec<(PathBuf, Record)>> {
@@ -246,10 +266,25 @@ pub(crate) fn dispatch(args: &[String]) -> Option<io::Result<()>> {
     if args.get(1).map(String::as_str) != Some("--bus-callback") {
         return None;
     }
+    // Hooks run in short-lived processes before ordinary CLI initialization.
+    // Serialize their rotating log writers separately from the callback spool.
+    // A diagnostic failure must never prevent the callback itself being saved.
+    let diagnostics_dir = std::env::var_os("BUS_CALLBACK_DIR").map(PathBuf::from);
+    let _diagnostics_lease = diagnostics_dir
+        .as_ref()
+        .filter(|dir| dir.is_dir())
+        .and_then(|dir| super::io::append_lock(&dir.join("diagnostics.lock")).ok());
+    if _diagnostics_lease.is_some() {
+        if let Some(dir) = diagnostics_dir {
+            crate::logging::init_file_logging_at(dir, "hook.log");
+        }
+    }
+    tracing::debug!(event = "bus.callback.capture", "Provider hook invoked");
     let result = capture(args, io::stdin().lock());
     // Observation hooks must never inject context or approve a permission prompt.
     println!("{{}}");
     if let Err(error) = result {
+        tracing::warn!(event = "bus.callback.capture_failed", error_kind = ?error.kind(), "Provider hook capture failed");
         eprintln!("Bus callback: {error}");
     }
     Some(Ok(()))
@@ -278,6 +313,8 @@ fn capture(args: &[String], input: impl Read) -> io::Result<()> {
     }
     let value = serde_json::from_slice(&bytes)?;
     if matches!(parse(provider, &value), Ok(Parsed::Ignore)) {
+        tracing::debug!(event = "bus.callback.ignored", provider = ?provider,
+            reason = "not_interactive_or_unhandled", "Hook does not represent a terminal reply");
         return Ok(());
     }
     append(Path::new(&dir), &launch.to_string_lossy(), provider, value)

@@ -2516,6 +2516,35 @@
           ],
           "type": "object"
         },
+        "PaneCloseIfIdentityParams": {
+          "properties": {
+            "expected_agent": {
+              "type": "string"
+            },
+            "expected_managed_name": {
+              "type": "string"
+            },
+            "expected_session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expected_terminal_id": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "expected_terminal_id",
+            "expected_agent",
+            "expected_managed_name"
+          ],
+          "type": "object"
+        },
         "PaneCopyMotion": {
           "enum": [
             "line_end",
@@ -6463,6 +6492,23 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PluginPaneCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Close only an exact owned terminal/session, or acknowledge that it is absent.",
+          "properties": {
+            "method": {
+              "const": "pane.close_if_identity",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneCloseIfIdentityParams"
             }
           },
           "required": [

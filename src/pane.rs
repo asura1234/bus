@@ -1494,9 +1494,9 @@ fn shutdown_pane_processes(
     pane_id: PaneId,
     child_pid: u32,
     child_wait_completed: Option<&AtomicBool>,
-) {
+) -> bool {
     if child_pid == 0 {
-        return;
+        return true;
     }
 
     let mut pids = crate::platform::session_processes(child_pid);
@@ -1528,7 +1528,7 @@ fn shutdown_pane_processes(
                 ?signal,
                 "pane session terminated"
             );
-            return;
+            return true;
         }
     }
 
@@ -1538,6 +1538,7 @@ fn shutdown_pane_processes(
         pids = ?pids,
         "pane session still alive after forced shutdown"
     );
+    false
 }
 
 #[cfg(unix)]
@@ -1814,6 +1815,21 @@ impl PaneRuntime {
             self.child_wait_completed.as_deref(),
         );
         self.preserve_processes_on_drop = true;
+    }
+
+    /// Checked shutdown for destructive API operations. Preserve the runtime
+    /// for retry if a native process remains alive after the normal escalation.
+    pub fn stop_session_for_close(&self) -> bool {
+        let stopped = shutdown_pane_processes(
+            self.pane_id,
+            self.child_pid.load(Ordering::Acquire),
+            self.child_wait_completed.as_deref(),
+        );
+        if stopped {
+            // The subsequent normal close must not signal a recycled process id.
+            self.child_pid.store(0, Ordering::Release);
+        }
+        stopped
     }
 
     #[cfg(unix)]
@@ -3504,6 +3520,34 @@ mod tests {
     #[test]
     fn shutdown_liveness_treats_reaped_direct_child_as_gone() {
         assert!(!process_alive_for_shutdown(42, 42, true, |_| true));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn checked_close_stops_owned_native_session_and_clears_pid_before_retry() {
+        let (events, _event_rx) = mpsc::channel(8);
+        let runtime = PaneRuntime::spawn_shell_command(
+            PaneId::from_raw(43),
+            24,
+            80,
+            std::env::temp_dir(),
+            "exec sleep 30",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Disabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+        let pid = runtime.child_pid.load(Ordering::Acquire);
+        assert_ne!(pid, 0);
+        assert!(runtime.stop_session_for_close());
+        assert_eq!(runtime.child_pid.load(Ordering::Acquire), 0);
+        assert!(runtime.stop_session_for_close());
+        runtime.shutdown();
     }
 
     #[test]

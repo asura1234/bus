@@ -1,7 +1,10 @@
+mod deletion;
 mod editor;
 mod forms;
 mod help;
+mod history;
 mod input;
+mod recipients;
 mod render;
 mod state;
 #[cfg(test)]
@@ -25,13 +28,21 @@ impl super::ClientShellState {
         bus.handle = Some(handle);
         if let Some(room) = bus.room {
             bus.open_room(room);
-        } else {
+        } else if bus.seed_first_room {
             bus.queue(
                 crate::bus::runtime::BusCommand::CreateRoom("bus".into()),
                 Effect::None,
             );
         }
         bus.tick();
+        if std::env::var_os("BUS_DEV_EXISTING_SERVER").is_some() {
+            bus.error = Some(crate::bus::diagnostics::EXISTING_SERVER_NOTICE.into());
+            tracing::warn!(
+                event = "bus.dev.existing_server",
+                "{}",
+                crate::bus::diagnostics::EXISTING_SERVER_NOTICE
+            );
+        }
         self.overlay = None;
         self.bus = Some(bus);
         Ok(())

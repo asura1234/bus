@@ -22,6 +22,7 @@ fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically(
         let mut child = Command::new(env!("CARGO_BIN_EXE_herdr"))
             .args(["--bus-callback", "codex-hook"])
             .env("HERDR_ENV", "1")
+            .env("BUS_DEV", "1")
             .env("BUS_CALLBACK_DIR", &dir)
             .env("BUS_LAUNCH_ID", "launch-fixture")
             .stdin(Stdio::piped())
@@ -56,6 +57,11 @@ fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically(
     assert_eq!(event["manifest"]["agent_id"], 2);
     assert_eq!(event["value"]["turn_id"], "fixture-turn");
     assert_eq!(event["value"]["prompt"], "fixture @literal $HOME");
+    let log = std::fs::read_to_string(dir.join("hook.log")).unwrap();
+    assert!(log.contains("bus.callback.spooled"), "{log}");
+    assert!(log.contains("bus.callback.duplicate"), "{log}");
+    assert!(log.contains(event["id"].as_str().unwrap()), "{log}");
+    assert!(!log.contains("fixture @literal $HOME"), "{log}");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -107,6 +113,18 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
         assert_eq!(output.stdout, b"{}\n");
         assert!(String::from_utf8_lossy(&output.stderr).contains(error));
     }
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(files, ["diagnostics.lock", "hook.log", "manifest.json"]);
+    let log = std::fs::read_to_string(dir.join("hook.log")).unwrap();
+    assert_eq!(
+        log.matches("bus.callback.capture_failed").count(),
+        2,
+        "{log}"
+    );
+    assert!(!log.contains("bus.callback.spooled"), "{log}");
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -9,18 +9,65 @@ use tracing_subscriber::EnvFilter;
 const DEFAULT_MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 const DEFAULT_RETAINED_LOG_FILES: usize = 0;
 
+#[cfg(test)]
+pub(crate) mod test_capture {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    pub(crate) struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl Capture {
+        pub(crate) fn run(&self, action: impl FnOnce()) {
+            self.run_filtered("trace", action);
+        }
+        pub(crate) fn run_filtered(&self, filter: &str, action: impl FnOnce()) {
+            let writer = self.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+                .with_ansi(false)
+                .without_time()
+                .with_writer(move || writer.clone())
+                .finish();
+            tracing::subscriber::with_default(subscriber, action);
+        }
+        pub(crate) fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+}
+
 pub(crate) fn init_file_logging(file_name: &str) {
+    init_file_logging_at(crate::session::data_dir(), file_name);
+}
+
+pub(crate) fn init_file_logging_at(dir: PathBuf, file_name: &str) {
     let Ok(make_writer) = RotatingFileMakeWriter::new(
-        crate::session::data_dir(),
+        dir,
         file_name,
         DEFAULT_MAX_LOG_BYTES,
-        DEFAULT_RETAINED_LOG_FILES,
+        if crate::bus::diagnostics::dev_enabled() {
+            3
+        } else {
+            DEFAULT_RETAINED_LOG_FILES
+        },
     ) else {
         return;
     };
 
-    let filter =
-        EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("herdr=info"));
+    let filter = if crate::bus::diagnostics::dev_enabled() {
+        EnvFilter::new(crate::bus::diagnostics::DEV_FILTER)
+    } else {
+        EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("herdr=info"))
+    };
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -44,6 +91,8 @@ pub(crate) fn startup(role: &'static str) {
         subsystem = role,
         outcome = "started",
         pid = std::process::id(),
+        dev = crate::bus::diagnostics::dev_enabled(),
+        version = env!("CARGO_PKG_VERSION"),
         "herdr starting"
     );
 }

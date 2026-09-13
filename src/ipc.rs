@@ -51,6 +51,138 @@ pub(crate) fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
     }
 }
 
+/// Connects to a private local endpoint with a finite wait and nonblocking I/O.
+pub(crate) fn connect_local_stream_timeout(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> io::Result<LocalStream> {
+    use interprocess::{local_socket::ConnectOptions, ConnectWaitMode};
+
+    #[cfg(unix)]
+    let name = {
+        use interprocess::local_socket::{prelude::*, GenericFilePath};
+        path.to_fs_name::<GenericFilePath>()?
+    };
+    #[cfg(windows)]
+    let name = {
+        use interprocess::local_socket::{prelude::*, GenericNamespaced};
+        path.to_string_lossy()
+            .to_string()
+            .to_ns_name::<GenericNamespaced>()?
+    };
+    ConnectOptions::new()
+        .name(name)
+        .wait_mode(ConnectWaitMode::Timeout(timeout))
+        .nonblocking_stream(true)
+        .connect_sync()
+}
+
+/// Prevents Windows from retaining abandoned writes in interprocess's linger
+/// pool. Call only when closing a connection after peer closure or a deadline;
+/// any bytes the peer has not consumed are deliberately discarded.
+pub(crate) fn discard_local_stream_output_on_close(stream: &LocalStream) {
+    #[cfg(windows)]
+    {
+        let LocalStream::NamedPipe(pipe) = stream;
+        pipe.inner().assume_flushed();
+    }
+    #[cfg(unix)]
+    let _ = stream;
+}
+
+/// Fail closed for a replaceable private endpoint parent. Existing directories
+/// are never chmodded: callers choose an already private data directory.
+pub(crate) fn validate_private_socket_directory(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Control parent must be a real directory",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: geteuid has no arguments and returns this process's effective uid.
+        let uid = unsafe { libc::geteuid() };
+        if metadata.uid() != uid || metadata.permissions().mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Control parent must be owned by the current user with no group or other access",
+            ));
+        }
+    }
+    // Windows private named pipes enforce the owner DACL at creation.
+    Ok(())
+}
+
+/// Recover a crashed private listener only while the caller owns its endpoint
+/// lease. A timed-out/busy probe is not evidence of a stale endpoint.
+pub(crate) fn reclaim_stale_private_socket(
+    path: &Path,
+    timeout: std::time::Duration,
+) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Control endpoint is a symlink",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if !metadata.file_type().is_socket() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Control endpoint is not a socket",
+            ));
+        }
+    }
+    #[cfg(windows)]
+    {
+        // Only interprocess listener markers are recoverable, never arbitrary files.
+        let marker = fs::read_to_string(path)?;
+        if !marker.split_once(':').is_some_and(|(pid, timestamp)| {
+            !pid.is_empty()
+                && !timestamp.is_empty()
+                && pid.bytes().all(|b| b.is_ascii_digit())
+                && timestamp.bytes().all(|b| b.is_ascii_digit())
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Control endpoint is not a listener marker",
+            ));
+        }
+    }
+    let identity = socket_file_identity(path)?;
+    match connect_local_stream_timeout(path, timeout) {
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "Control endpoint is active",
+            ))
+        }
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) => {}
+        Err(error) => return Err(error),
+    }
+    remove_socket_file_if_owned(path, &identity)?;
+    if path.try_exists()? {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            "Control endpoint changed during stale probe",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
     #[cfg(unix)]
     {
@@ -344,6 +476,62 @@ mod tests {
     use interprocess::local_socket::traits::Listener as _;
     #[cfg(windows)]
     use std::path::PathBuf;
+
+    #[cfg(unix)]
+    #[test]
+    fn private_control_refuses_a_shared_directory_without_changing_permissions() {
+        let path = std::env::temp_dir().join(format!(
+            "bdp-{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&path).unwrap();
+        restrict_socket_permissions(&path, 0o755).unwrap();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(0);
+        let rejected = crate::bus::control::start(true, &path, tx).is_err();
+        let unchanged = fs::metadata(&path).unwrap().permissions().mode() & 0o777 == 0o755;
+        fs::remove_dir_all(&path).unwrap();
+        assert!(
+            rejected,
+            "shared parent must not host a private control listener"
+        );
+        assert!(
+            unchanged,
+            "startup must not chmod an existing user directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_control_client_refuses_an_endpoint_in_a_shared_directory() {
+        let path = std::env::temp_dir().join(format!(
+            "bdp-{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&path).unwrap();
+        restrict_socket_permissions(&path, 0o700).unwrap();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(0);
+        let server = crate::bus::control::start(true, &path, tx)
+            .unwrap()
+            .unwrap();
+        restrict_socket_permissions(&path, 0o755).unwrap();
+        let result = crate::bus::control::request(
+            &path,
+            &crate::bus::control::Request {
+                id: "private".into(),
+                method: "state".into(),
+                params: serde_json::Value::Null,
+            },
+        );
+        drop(server);
+        fs::remove_dir_all(&path).unwrap();
+        assert!(result.is_err(), "client must refuse a replaceable endpoint");
+    }
 
     #[test]
     fn stale_socket_connect_errors_keep_unix_would_block_strict() {

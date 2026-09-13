@@ -7,7 +7,7 @@ Ctrl+J         New line (legacy terminal fallback)
 + / Ctrl+F     Add files (Shift+= on US keyboards)
 Ctrl+E         Toggle full-height / compact composer
 Page Up/Down   Scroll the draft without moving the caret
-Mouse wheel    Scroll sidebar, history or draft under the pointer
+Mouse wheel    Scroll sidebar, history, recipients or draft under the pointer
 F3             Switch notes / composer
 /help + Enter  Open this guide locally
 
@@ -21,6 +21,8 @@ Ctrl+R         Add a room
 Ctrl+N         Add an agent
 F2             Rename selected room or agent
 Double-click   Rename a room or agent name
+× beside name  Delete room / agent after confirmation
+Esc / Enter    Cancel / OK in the delete warning
 F6             Return from terminal to room
 
 Forms

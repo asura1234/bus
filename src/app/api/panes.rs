@@ -1849,6 +1849,116 @@ impl App {
         }
     }
 
+    pub(super) fn handle_pane_close_if_identity(
+        &mut self,
+        id: String,
+        params: crate::api::schema::PaneCloseIfIdentityParams,
+    ) -> String {
+        if params.expected_terminal_id.is_empty()
+            || params.expected_agent.is_empty()
+            || params.expected_managed_name.is_empty()
+        {
+            return encode_error(
+                id,
+                "invalid_request",
+                "Exact terminal ownership is required",
+            );
+        }
+        // A lost response is safe to retry, including when the old pane id now
+        // refers to a different terminal. Never close that replacement pane.
+        let terminal_id = self
+            .state
+            .terminals
+            .keys()
+            .find(|terminal| terminal.to_string() == params.expected_terminal_id)
+            .cloned();
+        let Some(terminal_id) = terminal_id else {
+            if self
+                .terminal_runtimes
+                .contains_id(&params.expected_terminal_id)
+            {
+                return encode_error(
+                    id,
+                    "terminal_identity_changed",
+                    "Terminal runtime has no verifiable owner",
+                );
+            }
+            return encode_success(id, ResponseResult::Ok {});
+        };
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return encode_error(
+                id,
+                "terminal_identity_changed",
+                "Owned terminal moved; pane was not closed",
+            );
+        };
+        let Some(pane) = self.pane_info(ws_idx, pane_id) else {
+            return encode_error(
+                id,
+                "terminal_identity_changed",
+                "Pane identity is unavailable",
+            );
+        };
+        let terminal = &self.state.terminals[&terminal_id];
+        if pane.terminal_id != params.expected_terminal_id
+            || pane.pane_id != params.pane_id
+            || pane.agent.as_deref() != Some(params.expected_agent.as_str())
+            || terminal.agent_name.as_deref() != Some(params.expected_managed_name.as_str())
+            || pane
+                .agent_session
+                .as_ref()
+                .map(|session| session.value.as_str())
+                != params.expected_session_id.as_deref()
+        {
+            return encode_error(
+                id,
+                "terminal_identity_changed",
+                "Terminal or provider session changed; pane was not closed",
+            );
+        }
+        let attachment_count = self
+            .state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.tabs)
+            .flat_map(|tab| tab.panes.values())
+            .filter(|pane| pane.attached_terminal_id == terminal_id)
+            .count();
+        if attachment_count != 1 {
+            return encode_error(
+                id,
+                "terminal_identity_changed",
+                "Terminal is shared; pane was not closed",
+            );
+        }
+        if self.state.close_pane_would_close_workspace(ws_idx, pane_id)
+            && self.state.confirm_implicit_worktree_group_close(ws_idx)
+        {
+            return encode_error(
+                id,
+                "confirmation_required",
+                "Closing this pane would close a worktree group",
+            );
+        }
+        // Validate and stop in the same server dispatch, without an asynchronous
+        // gap in which the pane can be rebound. Keep state on shutdown failure.
+        if let Some(runtime) = self.terminal_runtimes.get(&terminal_id) {
+            if !runtime.stop_session_for_close() {
+                return encode_error(
+                    id,
+                    "terminal_stop_failed",
+                    "Terminal session is still running; retry deletion",
+                );
+            }
+        }
+        self.handle_pane_close(
+            id,
+            PaneTarget {
+                pane_id: params.pane_id,
+            },
+        )
+    }
+
     /// Close a pane; `Err` carries the encoded error response.
     pub(super) fn close_pane(&mut self, id: String, target: &PaneTarget) -> Result<(), String> {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&target.pane_id) else {
@@ -2222,6 +2332,108 @@ mod tests {
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
         (app, public_pane_id)
+    }
+
+    fn guarded_close_fixture() -> (
+        App,
+        crate::api::schema::PaneCloseIfIdentityParams,
+        PaneId,
+        PaneId,
+    ) {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let other = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.begin_managed_agent(
+            "bus-r1-a2".into(),
+            Agent::Codex,
+            std::time::Instant::now(),
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(10),
+        );
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
+        let params = crate::api::schema::PaneCloseIfIdentityParams {
+            pane_id: public_pane_id,
+            expected_terminal_id: terminal_id.to_string(),
+            expected_agent: "codex".into(),
+            expected_managed_name: "bus-r1-a2".into(),
+            expected_session_id: None,
+        };
+        (app, params, pane_id, other)
+    }
+
+    #[test]
+    fn guarded_close_rejects_changed_ownership_before_stopping_any_terminal() {
+        let (mut app, params, pane_id, other) = guarded_close_fixture();
+        let count = app.state.terminals.len();
+        for field in ["pane", "terminal", "name", "provider", "session"] {
+            let mut wrong = params.clone();
+            match field {
+                "pane" => wrong.pane_id = app.public_pane_id(0, other).unwrap(),
+                "terminal" => {
+                    wrong.expected_terminal_id = app
+                        .state
+                        .terminal_id_for_pane(0, other)
+                        .unwrap()
+                        .to_string()
+                }
+                "name" => wrong.expected_managed_name = "different-launch".into(),
+                "provider" => wrong.expected_agent = "claude".into(),
+                "session" => wrong.expected_session_id = Some("rebound-session".into()),
+                _ => unreachable!(),
+            }
+            let response = app.handle_pane_close_if_identity("guard".into(), wrong);
+            let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(error.error.code, "terminal_identity_changed", "{field}");
+            assert_eq!(app.state.terminals.len(), count);
+            assert!(app.state.workspaces[0].pane_state(pane_id).is_some());
+            assert!(app.state.workspaces[0].pane_state(other).is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn guarded_close_removes_only_exact_terminal_and_retries_absence_safely() {
+        let (mut app, params, pane_id, other) = guarded_close_fixture();
+        let other_terminal = app.state.terminal_id_for_pane(0, other).unwrap();
+        let (runtime, _rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 0, b"", 2,
+            );
+        app.terminal_runtimes
+            .insert(app.state.terminal_id_for_pane(0, pane_id).unwrap(), runtime);
+        let response = app.handle_pane_close_if_identity("close".into(), params.clone());
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(success.result, ResponseResult::Ok {}));
+        assert!(app.state.workspaces[0].pane_state(pane_id).is_none());
+        assert!(app.state.terminals.contains_key(&other_terminal));
+        assert!(!app
+            .terminal_runtimes
+            .contains_id(&params.expected_terminal_id));
+        // A different pane remains safe even if supplied in a retry after the
+        // expected terminal was already stopped and removed.
+        let mut retry = params;
+        retry.pane_id = app.public_pane_id(0, other).unwrap();
+        let response = app.handle_pane_close_if_identity("retry".into(), retry);
+        assert!(serde_json::from_str::<SuccessResponse>(&response).is_ok());
+        assert!(app.state.workspaces[0].pane_state(other).is_some());
+    }
+
+    #[test]
+    fn guarded_close_refuses_a_terminal_still_attached_to_multiple_panes() {
+        let (mut app, params, pane_id, other) = guarded_close_fixture();
+        let terminal = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+        app.state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&other)
+            .unwrap()
+            .attached_terminal_id = terminal;
+        let response = app.handle_pane_close_if_identity("shared".into(), params);
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "terminal_identity_changed");
+        assert!(app.state.workspaces[0].pane_state(pane_id).is_some());
+        assert!(app.state.workspaces[0].pane_state(other).is_some());
     }
 
     #[test]

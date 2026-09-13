@@ -30,6 +30,11 @@ impl BusUi {
                 }
                 return true;
             }
+            if self.deletion.is_some() {
+                self.deletion_input(event);
+                outcome.repaint = true;
+                return true;
+            }
             if key.code == KeyCode::F(6) {
                 if let Some(room) = self.room {
                     self.open_room(room);
@@ -46,6 +51,10 @@ impl BusUi {
                 outcome.repaint = true;
                 return true;
             }
+        }
+        if self.deletion_input(event) {
+            outcome.repaint = true;
+            return true;
         }
         if self.quitting.is_some()
             && matches!(
@@ -109,6 +118,23 @@ impl BusUi {
                     return true;
                 }
                 if self.terminal.is_none()
+                    && self.form.is_none()
+                    && self
+                        .view
+                        .recipient_bar
+                        .contains((mouse.column, mouse.row).into())
+                {
+                    self.recipient_scroll = if mouse.kind == MouseEventKind::ScrollDown {
+                        self.recipient_scroll
+                            .saturating_add(3)
+                            .min(self.view.recipient_max_scroll)
+                    } else {
+                        self.recipient_scroll.saturating_sub(3)
+                    };
+                    outcome.repaint = true;
+                    return true;
+                }
+                if self.terminal.is_none()
                     && !self.recipient_menu
                     && self
                         .view
@@ -141,6 +167,9 @@ impl BusUi {
                 } else {
                     scroll.saturating_sub(if file_row { 1 } else { 3 })
                 };
+                if self.view.history.contains((mouse.column, mouse.row).into()) {
+                    self.history_follow_tail = self.main_scroll == self.view.history_max_scroll;
+                }
                 outcome.repaint = true;
                 return true;
             }
@@ -210,6 +239,7 @@ impl BusUi {
 
     pub fn terminal_ready(&self, pane: Option<&str>) -> bool {
         self.terminal.is_some()
+            && self.deletion.is_none()
             && self.form.is_none()
             && self
                 .target_pane
@@ -276,18 +306,15 @@ impl BusUi {
         self.notes_focus = false;
         self.recipient_menu = false;
         self.main_scroll = 0;
+        self.history_follow_tail = true;
+        self.recipient_scroll = 0;
         self.queue(BusCommand::SelectRoom(room), Effect::None);
     }
-    pub fn quote(&mut self, agent: AgentId) {
+    pub fn quote(&mut self, request: RequestId) {
         let Some(room) = self.room else {
             return;
         };
-        let Some(reply) = self
-            .snapshot
-            .state
-            .room(room)
-            .and_then(|r| r.latest_replies.get(&agent))
-        else {
+        let Some((agent, text)) = super::history::reply(&self.snapshot.state, room, request) else {
             return;
         };
         let Some(name) = self.snapshot.state.agent(agent).map(|a| a.name.as_str()) else {
@@ -295,7 +322,7 @@ impl BusUi {
         };
         let quote = format!(
             "{name}: \"{}\"\n",
-            reply.text.replace('\\', "\\\\").replace('"', "\\\"")
+            text.replace('\\', "\\\\").replace('"', "\\\"")
         );
         if let Some(local) = self.locals.get_mut(&room) {
             local.text.cursor = local.text.text.len();
@@ -337,6 +364,9 @@ impl BusUi {
     }
     pub(super) fn action(&mut self, action: Action) {
         match action {
+            Action::Delete(target) => self.start_delete(target),
+            Action::CancelDelete => self.cancel_delete(),
+            Action::ConfirmDelete => self.confirm_delete(),
             Action::ScrollFiles(forward) => {
                 self.file_scroll = if forward {
                     self.file_scroll.saturating_add(1)

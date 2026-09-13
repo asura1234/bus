@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub(crate) struct TransportError {
+    pub(crate) code: Option<String>,
     pub(crate) message: String,
     pub(crate) definitely_rejected: bool,
 }
@@ -33,10 +34,17 @@ impl Transport for HerdrTransport {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         self.next_id += 1;
         let request = Request {
-            id: format!("bus:{}", self.next_id),
+            id: format!("bus:{}:{}", std::process::id(), self.next_id),
             method,
         };
         let shell_deadline = Instant::now() + Duration::from_secs(5);
+        let started = Instant::now();
+        let method_name = crate::api::api_method_name(&request.method);
+        let _span =
+            tracing::debug_span!("bus.api", api_request_id = %request.id, method = method_name)
+                .entered();
+        tracing::debug!(event = "bus.api.start", api_request_id = %request.id,
+            method = method_name, "Bus native API call");
         loop {
             let response = self
                 .client
@@ -47,12 +55,23 @@ impl Transport for HerdrTransport {
             // managed launch mutation. Never retry a timeout, input failure,
             // readiness failure after launch, or any prompt submission.
             if retry_shell_start(&request.method, &response, Instant::now() < shell_deadline) {
+                tracing::debug!(
+                    event = "bus.api.retry",
+                    reason = "shell_starting",
+                    "Launch rejected before input; retrying"
+                );
                 std::thread::sleep(Duration::from_millis(100));
                 continue;
             }
-            return response
+            let result = response
                 .map(|response| response.result)
                 .map_err(classify_error);
+            tracing::debug!(event = "bus.api.result", api_request_id = %request.id, method = method_name,
+                outcome = if result.is_ok() { "ok" } else { "error" },
+                error_code = ?result.as_ref().err().and_then(|e| e.code.as_deref()),
+                definitely_rejected = result.as_ref().err().is_some_and(|e| e.definitely_rejected),
+                elapsed_ms = started.elapsed().as_millis() as u64, "Bus native API result");
+            return result;
         }
     }
 }
@@ -73,6 +92,10 @@ fn classify_error(error: ApiClientError) -> TransportError {
     let definitely_rejected = matches!(&error, ApiClientError::ErrorResponse(response) if matches!(response.error.code.as_str(),
         "agent_not_idle" | "agent_identity_changed" | "agent_not_ready" | "agent_blocked" | "agent_not_found" | "empty_agent_prompt" | "unknown_method" | "invalid_request"));
     TransportError {
+        code: match &error {
+            ApiClientError::ErrorResponse(response) => Some(response.error.code.clone()),
+            _ => None,
+        },
         message: error.to_string(),
         definitely_rejected,
     }
@@ -174,6 +197,7 @@ mod tests {
         for (code, rejected) in [
             ("agent_not_idle", true),
             ("invalid_request", true),
+            ("unknown_method", true),
             ("timeout", false),
             ("agent_prompt_failed", false),
         ] {
@@ -184,10 +208,9 @@ mod tests {
                     message: code.into(),
                 },
             };
-            assert_eq!(
-                classify_error(ApiClientError::ErrorResponse(error)).definitely_rejected,
-                rejected
-            );
+            let classified = classify_error(ApiClientError::ErrorResponse(error));
+            assert_eq!(classified.definitely_rejected, rejected);
+            assert_eq!(classified.code.as_deref(), Some(code));
         }
     }
 

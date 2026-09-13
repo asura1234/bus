@@ -526,6 +526,11 @@ pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {
     if unsafe { libc::time(&mut timestamp) } == -1 {
         return None;
     }
+    local_datetime_at(timestamp)
+}
+
+pub(crate) fn local_datetime_at(seconds: i64) -> Option<time::PrimitiveDateTime> {
+    let timestamp = libc::time_t::try_from(seconds).ok()?;
     let mut local: libc::tm = unsafe { std::mem::zeroed() };
     if unsafe { libc::localtime_s(&mut local, &timestamp) } != 0 {
         return None;

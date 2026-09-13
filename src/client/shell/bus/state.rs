@@ -87,6 +87,7 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) terminal: Option<AgentId>,
     pub(super) target_pane: Option<String>,
     pub(super) form: Option<Form>,
+    pub(super) deletion: Option<super::deletion::DeleteDialog>,
     pub(super) rename: Option<Rename>,
     pub(super) notes_focus: bool,
     pub(super) recipient_menu: bool,
@@ -94,6 +95,9 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) suggestions: Suggestions,
     pub(super) view: View,
     pub(super) main_scroll: usize,
+    pub(super) history_follow_tail: bool,
+    pub(super) history: super::history::History,
+    pub(super) recipient_scroll: u16,
     pub(super) sidebar_scroll: usize,
     pub(super) file_scroll: usize,
     pub(super) last_click: Option<(super::render::Action, std::time::Instant)>,
@@ -112,6 +116,7 @@ impl BusUi {
             .rooms()
             .map(|r| (r.id, LocalRoom::from(r)))
             .collect();
+        let seed_first_room = snapshot.state.is_pristine();
         Self {
             handle: None,
             snapshot,
@@ -126,6 +131,7 @@ impl BusUi {
             terminal: None,
             target_pane: None,
             form: None,
+            deletion: None,
             rename: None,
             notes_focus: false,
             recipient_menu: false,
@@ -133,11 +139,14 @@ impl BusUi {
             suggestions: Suggestions::default(),
             view: View::default(),
             main_scroll: 0,
+            history_follow_tail: true,
+            history: super::history::History::default(),
+            recipient_scroll: 0,
             sidebar_scroll: 0,
             file_scroll: 0,
             last_click: None,
             detail_path: None,
-            seed_first_room: room.is_none(),
+            seed_first_room,
             quitting: None,
             force_exit_available: false,
             exit_ready: false,
@@ -148,6 +157,14 @@ impl BusUi {
             (Effect::Text(a,_),Effect::Text(b,_)) | (Effect::Notes(a,_),Effect::Notes(b,_)) | (Effect::Recipients(a,_),Effect::Recipients(b,_)) if a==b));
         let id = self.next_id;
         self.next_id += 1;
+        if let BusCommand::Submit(room) = &command {
+            tracing::info!(
+                event = "bus.message.submit",
+                room_id = room.0,
+                command_id = id,
+                "Room submit queued for coordinator"
+            );
+        }
         self.pending.push_back(Pending {
             id,
             command,
@@ -183,6 +200,14 @@ impl BusUi {
         match event {
             BusEvent::CommandFinished { command_id, result } => {
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == command_id) {
+                    if matches!(pending.command, BusCommand::Submit(_)) {
+                        tracing::info!(
+                            event = "bus.message.ack",
+                            command_id,
+                            outcome = if result.is_ok() { "queued" } else { "rejected" },
+                            "Room received submit acknowledgement"
+                        );
+                    }
                     pending.result = Some(result);
                 }
             }
@@ -218,6 +243,11 @@ impl BusUi {
         }
     }
     pub fn receive_snapshot(&mut self, snapshot: Arc<BusSnapshot>) {
+        crate::bus::diagnostics::replies(
+            &self.snapshot.state,
+            &snapshot.state,
+            "bus.reply.received",
+        );
         for room in snapshot.state.rooms() {
             self.locals
                 .entry(room.id)
@@ -228,7 +258,8 @@ impl BusUi {
                 }
             }
         }
-        self.snapshot = snapshot;
+        let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        self.reconcile_deleted_targets(&previous.state);
     }
     pub fn settle(&mut self) {
         while self
@@ -241,6 +272,7 @@ impl BusUi {
             };
             match pending.result.as_ref() {
                 Some(Err(error)) => {
+                    self.settle_deletion(pending.id, Some(error));
                     self.error = Some(error.clone());
                     self.send_intent = None;
                     if matches!(
@@ -249,11 +281,13 @@ impl BusUi {
                             | Effect::Notes(..)
                             | Effect::Recipients(..)
                             | Effect::Files(..)
-                    ) {
+                    ) && super::deletion::target_exists(&pending.command, &self.snapshot.state)
+                    {
                         self.failed.push(pending);
                     }
                 }
                 Some(Ok(())) => {
+                    self.settle_deletion(pending.id, None);
                     match pending.effect {
                         Effect::Text(room, generation) => {
                             if let Some(local) = self.locals.get_mut(&room) {
@@ -326,6 +360,12 @@ impl BusUi {
             .is_none_or(|local| local.recipients.is_empty())
         {
             self.error = Some("Choose agents with @ before sending.".into());
+            tracing::info!(
+                event = "bus.message.rejected",
+                room_id = room.0,
+                reason = "no_recipients",
+                "Room send rejected locally"
+            );
             return;
         }
         if self.send_intent.is_some()
@@ -337,6 +377,11 @@ impl BusUi {
             return;
         }
         let failed = std::mem::take(&mut self.failed);
+        if let Some(local) = self.locals.get(&room) {
+            tracing::debug!(event = "bus.message.requested", room_id = room.0,
+                recipients = ?local.recipients, text_bytes = local.text.text.len(),
+                "Room send requested");
+        }
         for pending in failed {
             match pending.effect {
                 Effect::Text(id, _) => self.text_changed(id),
@@ -350,6 +395,7 @@ impl BusUi {
         }
         self.error = None;
         self.send_intent = Some(room);
+        self.history_follow_tail = true;
     }
     pub fn notes_changed(&mut self, room: RoomId) {
         if let Some(local) = self.locals.get_mut(&room) {
@@ -400,7 +446,16 @@ impl BusUi {
             self.error=Some("Unsaved changes or slow storage. Ctrl+C retries saving; Ctrl+Shift+Q exits and may lose unsaved edits.".into());
             changed = true;
         }
-        if let Some(pending) = self.pending.front_mut() {
+        // Confirmation must reach the worker even while an earlier Submit is
+        // awaiting its post-poll snapshot. Preserve command order and exact
+        // acknowledgements, but enqueue the prefix through deletion together.
+        let dispatch_count = self
+            .deletion
+            .as_ref()
+            .and_then(|dialog| dialog.command_id)
+            .and_then(|id| self.pending.iter().position(|pending| pending.id == id))
+            .map_or(1, |index| index + 1);
+        for pending in self.pending.iter_mut().take(dispatch_count) {
             if !pending.enqueued {
                 if let Some(handle) = &self.handle {
                     match handle.try_send(pending.id, pending.command.clone()) {
@@ -410,9 +465,15 @@ impl BusUi {
                         }
                         Err(error) => {
                             if self.error.as_ref() != Some(&error) {
+                                tracing::warn!(
+                                    event = "bus.command.enqueue_failed",
+                                    command_id = pending.id,
+                                    "Coordinator command channel unavailable; command retained"
+                                );
                                 self.error = Some(error);
                                 changed = true;
                             }
+                            break;
                         }
                     }
                 }
@@ -470,6 +531,39 @@ mod tests {
         snapshot.revision += 1;
         ui.receive_snapshot(Arc::new(snapshot));
         ui.settle();
+    }
+    #[test]
+    fn delivery_logs_receipt_once_when_reply_snapshot_reaches_room() {
+        let (mut ui, room) = ui();
+        let agent = ui.snapshot.state.agents().next().unwrap().id;
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot
+            .state
+            .set_draft_text(room, "PRIVATE_PROMPT")
+            .unwrap();
+        let request = snapshot.state.submit_draft(room, 1).unwrap()[0];
+        // Project a completed reply from the coordinator, as the UI receives it.
+        let mut value = serde_json::to_value(&snapshot.state).unwrap();
+        value["rooms"][room.0.to_string()]["latest_replies"][agent.0.to_string()] = serde_json::json!({"request_id": request.0, "agent_id": agent.0,
+                "text": "PRIVATE_REPLY", "received_at_ms": 2});
+        snapshot.state = serde_json::from_value(value).unwrap();
+        snapshot.revision += 1;
+        let capture = crate::logging::test_capture::Capture::default();
+        capture.run(|| {
+            ui.receive_snapshot(Arc::new(snapshot.clone()));
+            ui.receive_snapshot(Arc::new(snapshot));
+        });
+        let logs = capture.text();
+        assert_eq!(logs.matches("bus.reply.received").count(), 1, "{logs}");
+        assert!(
+            logs.contains(&format!("request_id={}", request.0)),
+            "{logs}"
+        );
+        assert!(!logs.contains("PRIVATE_"), "{logs}");
+        assert_eq!(
+            ui.snapshot.state.room(room).unwrap().latest_replies[&agent].text,
+            "PRIVATE_REPLY"
+        );
     }
     #[test]
     fn immediate_enter_waits_for_own_success_and_snapshot_before_submit() {

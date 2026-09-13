@@ -2,6 +2,15 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneCloseIfIdentityParams {
+    pub pane_id: String,
+    pub expected_terminal_id: String,
+    pub expected_agent: String,
+    pub expected_managed_name: String,
+    pub expected_session_id: Option<String>,
+}
+
 pub(crate) const PANE_GRAPHICS_SET_MAX_BYTES: usize = 512 * 1024;
 pub(crate) const PANE_GRAPHICS_STREAM_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const PANE_GRAPHICS_DIRECT_FILE_MAX_BYTES: usize = 400 * 1024 * 1024;

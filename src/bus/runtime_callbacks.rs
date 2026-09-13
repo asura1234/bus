@@ -2,6 +2,61 @@
 use super::*;
 
 impl Worker {
+    /// A native hook can bind its session before the Bus spool is consumed.
+    /// During deletion, reconcile only that first launch-attested identity;
+    /// never publish native metadata, process replies, or clear suspension.
+    pub(super) fn reconcile_deleting_initial_session(
+        &mut self,
+        id: AgentId,
+    ) -> Result<bool, String> {
+        let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
+        if !agent.deletion_pending
+            || agent.session_binding_invalidated
+            || agent.runtime_identity.session_id.is_some()
+        {
+            return Ok(false);
+        }
+        let Some(launch) = &agent.runtime_identity.launch_id else {
+            return Ok(false);
+        };
+        let records = callbacks::records(&self.data_dir.join("callbacks").join(launch))
+            .map_err(|e| e.to_string())?;
+        let mut sessions = BTreeSet::new();
+        for (_, record) in records {
+            let Ok(Parsed::Session(session)) = callbacks::parse(agent.provider, &record.value)
+            else {
+                continue;
+            };
+            if record.manifest.agent_id != id
+                || record.manifest.provider != agent.provider
+                || &record.manifest.launch_id != launch
+            {
+                return self.agent_error(id, "Session-start callback launch identity mismatch; deletion remains suspended.".into()).map(|_| false);
+            }
+            sessions.insert(session);
+        }
+        if sessions.len() > 1 {
+            return self
+                .agent_error(
+                    id,
+                    "Conflicting initial session-start callbacks; deletion remains suspended."
+                        .into(),
+                )
+                .map(|_| false);
+        }
+        let Some(session) = sessions.into_iter().next() else {
+            return Ok(false);
+        };
+        let mut identity = agent.runtime_identity.clone();
+        identity.session_id = Some(session);
+        let mut state = self.state.clone();
+        state
+            .set_agent_runtime_identity(id, identity)
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
+        Ok(true)
+    }
+
     pub(super) fn consume_callbacks(&mut self, id: AgentId, dir: &Path) -> Result<(), String> {
         let mut records = callbacks::records(dir).map_err(|e| e.to_string())?;
         // Companion hooks can reach the spool in either order, including after reconnect.
@@ -17,19 +72,43 @@ impl Worker {
         });
         for (path, record) in &records {
             let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
+            let _span = tracing::info_span!("bus.callback", agent_id = id.0,
+                room_id = agent.room_id.0, request_id = ?agent.current_request.map(|r| r.0),
+                callback_id = %record.id, sequence = record.sequence,
+                launch_id = %record.manifest.launch_id)
+            .entered();
+            tracing::debug!(
+                event = "bus.callback.observed",
+                "Reading spooled provider callback"
+            );
             if record.manifest.agent_id != id
                 || record.manifest.provider != agent.provider
                 || Some(record.manifest.launch_id.as_str())
                     != agent.runtime_identity.launch_id.as_deref()
             {
+                tracing::warn!(
+                    event = "bus.callback.rejected",
+                    reason = "launch_identity_mismatch",
+                    "Callback not accepted"
+                );
                 return self.agent_error(id, "Callback launch identity mismatch".into());
             }
             if agent.session_binding_invalidated {
+                tracing::debug!(
+                    event = "bus.callback.deferred",
+                    reason = "session_invalidated",
+                    "Callback retained"
+                );
                 return Ok(());
             }
             let parsed = match callbacks::parse(agent.provider, &record.value) {
                 Ok(parsed) => parsed,
                 Err(message) => {
+                    tracing::warn!(
+                        event = "bus.callback.rejected",
+                        reason = "invalid_payload",
+                        "Callback retained for inspection"
+                    );
                     let mut state = self.state.clone();
                     state
                         .set_agent_error(id, Some(message))
@@ -38,6 +117,11 @@ impl Worker {
                     continue;
                 }
             };
+            tracing::debug!(
+                event = "bus.callback.parsed",
+                kind = parsed.kind(),
+                "Callback parsed"
+            );
             let mut state = self.state.clone();
             let callback_session = match &parsed {
                 Parsed::Session(session)
@@ -55,6 +139,11 @@ impl Worker {
                     .as_ref()
                     .is_some_and(|known| known != session)
                 {
+                    tracing::warn!(
+                        event = "bus.callback.rejected",
+                        reason = "session_mismatch",
+                        "Callback does not own this terminal session"
+                    );
                     // Retain the attested identity even on uncertain sends. Clearing
                     // it would let a repeated foreign SessionStart silently rebind.
                     if matches!(parsed, Parsed::Session(_)) {
@@ -74,6 +163,11 @@ impl Worker {
                 if agent.runtime_identity.session_id.is_none()
                     && !matches!(parsed, Parsed::Session(_))
                 {
+                    tracing::debug!(
+                        event = "bus.callback.deferred",
+                        reason = "session_start_missing",
+                        "Callback retained"
+                    );
                     // Do not bind a turn before this launch's SessionStart attests
                     // which provider session owns the terminal.
                     continue;
@@ -152,6 +246,11 @@ impl Worker {
                             }
                         });
                     let Some((other_path, text)) = found else {
+                        tracing::debug!(
+                            event = "bus.callback.deferred",
+                            reason = "cursor_response_missing",
+                            "Awaiting response companion"
+                        );
                         continue;
                     };
                     remove.push(other_path.clone());
@@ -171,11 +270,18 @@ impl Worker {
                                 && callback.sequence > r.submission_boundary.unwrap_or(u64::MAX)
                         })
                 {
+                    tracing::debug!(
+                        event = "bus.callback.deferred",
+                        reason = "trusted_start_missing",
+                        "Final retained until matching submit hook arrives"
+                    );
                     state.set_agent_error(id,Some("Awaiting trusted submit-hook binding; final callback retained and no retry will occur".into())).map_err(|e|e.to_string())?;
                     self.save(state)?;
                     continue;
                 }
                 let disposition = state.accept_callback(callback);
+                tracing::info!(event = "bus.callback.correlated", disposition = ?disposition,
+                    "Provider callback correlation result");
                 if matches!(
                     disposition,
                     CallbackDisposition::Rejected(
@@ -186,6 +292,10 @@ impl Worker {
                 }
             }
             self.save(state)?;
+            tracing::debug!(
+                event = "bus.callback.applied",
+                "Callback state persisted before spool acknowledgement"
+            );
             for path in remove {
                 match std::fs::remove_file(path) {
                     Ok(()) => {}

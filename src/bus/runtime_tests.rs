@@ -12,10 +12,114 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[test]
+fn delivery_logs_explain_queued_hook_gate_once_without_prompt_contents() {
+    let capture = crate::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+        let mut value = serde_json::to_value(&worker.state).unwrap();
+        value["agents"][agent.0.to_string()]["hook_setup_confirmed"] = json!(false);
+        worker.save(serde_json::from_value(value).unwrap()).unwrap();
+        let (events, _) = mpsc::channel();
+        worker
+            .command(
+                BusCommand::SetDraftText(room, "PRIVATE_PROMPT".into()),
+                &events,
+            )
+            .unwrap();
+        worker
+            .command(BusCommand::SetRecipients(room, [agent].into()), &events)
+            .unwrap();
+        worker.command(BusCommand::Submit(room), &events).unwrap();
+        for _ in 0..3 {
+            worker.submit_ready().unwrap();
+        }
+        assert!(calls.lock().unwrap().is_empty());
+        assert_eq!(
+            worker.state.requests().next().unwrap().phase,
+            RequestPhase::Queued
+        );
+        let logs = capture.text();
+        assert!(logs.contains("bus.message.queued"), "{logs}");
+        assert_eq!(logs.matches("bus.delivery.wait").count(), 1, "{logs}");
+        assert!(logs.contains("hook_setup_unconfirmed"), "{logs}");
+        assert!(logs.contains("request_id=4"), "{logs}");
+        assert!(!logs.contains("PRIVATE_PROMPT"), "{logs}");
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
+#[test]
+fn delivery_logs_correlate_submission_callback_and_persisted_reply() {
+    let capture = crate::logging::test_capture::Capture::default();
+    capture.run(|| {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");
+        worker.submit_ready().unwrap(); // Fake transport's unknown response is deliberately uncertain.
+        record(&dir, Provider::Codex, json!({"hook_event_name":"UserPromptSubmit","session_id":"session","turn_id":"turn","prompt":"PRIVATE_PROMPT"}));
+        record(&dir, Provider::Codex, json!({"hook_event_name":"Stop","session_id":"session","turn_id":"turn","last_assistant_message":"PRIVATE_REPLY"}));
+        worker.consume_callbacks(agent, &dir.join("callbacks/launch")).unwrap();
+        let mut state = worker.state.clone();
+        state.observe_status(agent, RuntimeStatus::Idle, 100).unwrap();
+        worker.save(state).unwrap();
+        assert_eq!(worker.state.request(request).unwrap().phase, RequestPhase::Completed);
+        let logs = capture.text();
+        for event in ["bus.delivery.start", "bus.delivery.result", "bus.callback.observed", "bus.callback.correlated", "bus.reply.persisted"] {
+            assert!(logs.contains(event), "missing {event}: {logs}");
+        }
+        assert!(logs.contains("uncertain"), "{logs}");
+        assert!(logs.contains("request_id=4"), "{logs}");
+        assert!(!logs.contains("PRIVATE_PROMPT") && !logs.contains("PRIVATE_REPLY"), "{logs}");
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
 struct FakeTransport {
     replies: VecDeque<Result<ResponseResult, TransportError>>,
     calls: Arc<Mutex<Vec<&'static str>>>,
     state_path: PathBuf,
+}
+
+#[test]
+fn delivery_logs_do_not_claim_reply_persisted_when_storage_fails() {
+    let capture = crate::logging::test_capture::Capture::default();
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session","turn_id":"turn","prompt":"PRIVATE_PROMPT"}),
+    );
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"Stop","session_id":"session","turn_id":"turn","last_assistant_message":"PRIVATE_REPLY"}),
+    );
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    let mut state = worker.state.clone();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 100)
+        .unwrap();
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    std::fs::rename(worker.store.path(), dir.join("original-state.json")).unwrap();
+    std::fs::create_dir(worker.store.path()).unwrap();
+    capture.run(|| {
+        assert!(worker.save(state).is_err());
+    });
+    let logs = capture.text();
+    assert!(logs.contains("bus.storage.failed"), "{logs}");
+    assert!(!logs.contains("bus.reply.persisted"), "{logs}");
+    assert!(!logs.contains("PRIVATE_"), "{logs}");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 impl Transport for FakeTransport {
@@ -24,6 +128,35 @@ impl Transport for FakeTransport {
             .lock()
             .unwrap()
             .push(crate::api::api_method_name(&method));
+        if let Method::PaneCloseIfIdentity(params) = &method {
+            let state = JsonStore::new(self.state_path.clone())
+                .load()
+                .unwrap()
+                .unwrap();
+            let agent = state
+                .agents()
+                .find(|agent| {
+                    agent.runtime_identity.terminal_id.as_deref()
+                        == Some(&params.expected_terminal_id)
+                })
+                .unwrap();
+            assert!(
+                agent.deletion_pending,
+                "delivery must stop durably before terminal shutdown"
+            );
+            assert_eq!(
+                params.pane_id,
+                agent.runtime_identity.pane_id.clone().unwrap()
+            );
+            assert_eq!(
+                params.expected_session_id,
+                agent.runtime_identity.session_id
+            );
+            assert_eq!(
+                params.expected_managed_name,
+                format!("bus-r{}-a{}", agent.room_id.0, agent.id.0)
+            );
+        }
         if matches!(
             method,
             Method::AgentPromptIfIdle(_) | Method::AgentPromptIfUnbound(_)
@@ -98,6 +231,538 @@ fn queue(worker: &mut Worker, room: RoomId, agent: AgentId, text: &str) -> Reque
     let request = state.submit_draft(room, 2).unwrap()[0];
     worker.save(state).unwrap();
     request
+}
+
+#[test]
+fn delete_agent_stops_terminal_before_removing_persisted_work() {
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "discard me");
+    let (events, _) = mpsc::channel();
+    worker
+        .command(BusCommand::DeleteAgent(agent), &events)
+        .unwrap();
+    assert!(worker.state.agent(agent).is_none());
+    assert!(worker.state.request(request).is_none());
+    assert!(worker
+        .state
+        .room(room)
+        .unwrap()
+        .draft
+        .recipient_ids
+        .is_empty());
+    assert_eq!(*calls.lock().unwrap(), vec!["pane.close_if_identity"]);
+    worker.submit_ready().unwrap();
+    drop(worker);
+    let recovered = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert!(recovered.agent(agent).is_none());
+    assert!(recovered.request(request).is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn delete_failure_suspends_delivery_across_restart_and_allows_retry() {
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::Codex,
+        vec![Err(TransportError {
+            message: "identity changed".into(),
+            code: Some("terminal_identity_changed".into()),
+            definitely_rejected: true,
+        })],
+    );
+    let request = queue(
+        &mut worker,
+        room,
+        agent,
+        "must never send after delete confirmation",
+    );
+    let (events, _) = mpsc::channel();
+    assert!(worker
+        .command(BusCommand::DeleteAgent(agent), &events)
+        .is_err());
+    assert!(worker.state.agent(agent).unwrap().deletion_pending);
+    assert!(worker.state.request(request).is_some());
+    worker.submit_ready().unwrap();
+    assert_eq!(*calls.lock().unwrap(), vec!["pane.close_if_identity"]);
+    drop(worker);
+    let fake = FakeTransport {
+        replies: VecDeque::new(),
+        calls: Arc::clone(&calls),
+        state_path: dir.join("state.json"),
+    };
+    let mut recovered = Worker::open(dir.clone(), Box::new(fake)).unwrap();
+    recovered
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 10)
+        .unwrap();
+    recovered.submit_ready().unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    recovered
+        .command(BusCommand::DeleteAgent(agent), &events)
+        .unwrap();
+    assert!(recovered.state.agent(agent).is_none());
+    assert!(recovered.state.request(request).is_none());
+    drop(recovered);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn delete_room_partial_close_preserves_retryable_state_and_other_rooms() {
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::Codex,
+        vec![
+            Ok(ResponseResult::Ok {}),
+            Err(TransportError {
+                message: "stop failed".into(),
+                code: Some("terminal_stop_failed".into()),
+                definitely_rejected: false,
+            }),
+        ],
+    );
+    let project = dir.join("project-file.txt");
+    std::fs::write(&project, "keep project data").unwrap();
+    let other_room = worker.state.create_room("other").unwrap();
+    let other_agent = worker
+        .state
+        .create_agent(other_room, "unrelated", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    let second = worker
+        .state
+        .create_agent(room, "second", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            second,
+            AgentRuntimeIdentity {
+                launch_id: Some("second-launch".into()),
+                terminal_id: Some("second-terminal".into()),
+                pane_id: Some("second-pane".into()),
+                session_id: Some("second-session".into()),
+            },
+        )
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let request = queue(&mut worker, room, agent, "remove");
+    let (events, _) = mpsc::channel();
+    assert!(worker
+        .command(BusCommand::DeleteRoom(room), &events)
+        .is_err());
+    assert!(worker.state.room(room).unwrap().deletion_pending);
+    assert!(worker.state.agent(agent).unwrap().deletion_pending);
+    assert!(worker.state.agent(second).unwrap().deletion_pending);
+    assert!(!worker.state.agent(other_agent).unwrap().deletion_pending);
+    worker.submit_ready().unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 2);
+    drop(worker);
+    let fake = FakeTransport {
+        replies: VecDeque::new(),
+        calls: Arc::clone(&calls),
+        state_path: dir.join("state.json"),
+    };
+    let mut recovered = Worker::open(dir.clone(), Box::new(fake)).unwrap();
+    recovered
+        .command(BusCommand::DeleteRoom(room), &events)
+        .unwrap();
+    assert!(recovered.state.room(room).is_none());
+    assert!(recovered.state.agent(agent).is_none());
+    assert!(recovered.state.agent(second).is_none());
+    assert!(recovered.state.request(request).is_none());
+    assert!(recovered.state.agent(other_agent).is_some());
+    assert!(recovered.state.room(other_room).is_some());
+    assert_eq!(
+        std::fs::read_to_string(project).unwrap(),
+        "keep project data"
+    );
+    assert_eq!(calls.lock().unwrap().len(), 4);
+    drop(recovered);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn delete_unknown_launch_identity_fails_closed_without_transport() {
+    let (mut worker, agent, _, dir, calls) = fixture(Provider::Codex, vec![]);
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("uncertain-launch".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let (events, _) = mpsc::channel();
+    assert!(worker
+        .command(BusCommand::DeleteAgent(agent), &events)
+        .is_err());
+    assert!(worker.state.agent(agent).unwrap().deletion_pending);
+    assert!(calls.lock().unwrap().is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+struct NativeBoundClose {
+    session: String,
+    calls: Arc<Mutex<Vec<Option<String>>>>,
+    state_path: PathBuf,
+}
+
+impl Transport for NativeBoundClose {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        let Method::PaneCloseIfIdentity(params) = method else {
+            panic!("Deletion must not report native sessions or deliver prompts: {method:?}");
+        };
+        let saved = JsonStore::new(self.state_path.clone())
+            .load()
+            .unwrap()
+            .unwrap();
+        let saved_agent = saved.agents().next().unwrap();
+        assert!(saved_agent.deletion_pending);
+        assert_eq!(
+            saved_agent.runtime_identity.session_id,
+            params.expected_session_id
+        );
+        self.calls
+            .lock()
+            .unwrap()
+            .push(params.expected_session_id.clone());
+        if params.expected_session_id.as_deref() == Some(&self.session) {
+            Ok(ResponseResult::Ok {})
+        } else {
+            Err(TransportError {
+                message: "terminal_identity_changed".into(),
+                code: Some("terminal_identity_changed".into()),
+                definitely_rejected: true,
+            })
+        }
+    }
+}
+
+#[test]
+fn deletion_retry_reconciles_launch_attested_initial_session_without_callbacks_or_delivery() {
+    for provider in [Provider::ClaudeCode, Provider::Cursor, Provider::Codex] {
+        let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        worker
+            .state
+            .set_agent_runtime_identity(agent, identity)
+            .unwrap();
+        queue(&mut worker, room, agent, "never deliver");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        worker.transport = Box::new(NativeBoundClose {
+            session: "native-session".into(),
+            calls: Arc::clone(&calls),
+            state_path: dir.join("state.json"),
+        });
+        let (events, _) = mpsc::channel();
+        assert!(worker
+            .command(BusCommand::DeleteAgent(agent), &events)
+            .is_err());
+        assert!(worker.state.agent(agent).unwrap().deletion_pending);
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":if provider == Provider::Cursor {"sessionStart"} else {"SessionStart"}, "session_id":"native-session", "conversation_id":"native-session"}),
+        );
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":if provider == Provider::Cursor {"beforeSubmitPrompt"} else {"UserPromptSubmit"}, "session_id":"native-session", "conversation_id":"native-session", "prompt_id":"p", "turn_id":"p", "generation_id":"p", "prompt":"never deliver"}),
+        );
+        record(
+            &dir,
+            provider,
+            json!({"hook_event_name":if provider == Provider::Cursor {"afterAgentResponse"} else {"Stop"}, "session_id":"native-session", "conversation_id":"native-session", "prompt_id":"p", "turn_id":"p", "generation_id":"p", "last_assistant_message":"never publish", "text":"never publish"}),
+        );
+        worker
+            .command(BusCommand::DeleteAgent(agent), &events)
+            .unwrap();
+        assert!(worker.state.agent(agent).is_none());
+        assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+        assert_eq!(worker.state.requests().count(), 0);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![None, None, Some("native-session".into())]
+        );
+        assert_eq!(
+            callbacks::records(&dir.join("callbacks/launch"))
+                .unwrap()
+                .len(),
+            3
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn deletion_initial_session_reconciliation_rejects_conflicting_launch_sessions() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    worker
+        .state
+        .set_agent_runtime_identity(agent, identity)
+        .unwrap();
+    worker.state.prepare_delete_agent(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    for session in ["first", "second"] {
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            json!({"hook_event_name":"SessionStart", "session_id":session}),
+        );
+    }
+    assert!(worker
+        .reconcile_deleting_initial_session(agent)
+        .unwrap_err()
+        .contains("Conflicting"));
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .runtime_identity
+        .session_id
+        .is_none());
+    assert!(worker.state.agent(agent).unwrap().deletion_pending);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn deletion_never_rebinds_a_known_session_from_a_later_session_start() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(NativeBoundClose {
+        session: "rebound".into(),
+        calls: Arc::clone(&calls),
+        state_path: dir.join("state.json"),
+    });
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"SessionStart", "session_id":"rebound"}),
+    );
+    let (events, _) = mpsc::channel();
+    assert!(worker
+        .command(BusCommand::DeleteAgent(agent), &events)
+        .is_err());
+    assert_eq!(
+        worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .runtime_identity
+            .session_id
+            .as_deref(),
+        Some("session")
+    );
+    assert_eq!(*calls.lock().unwrap(), vec![Some("session".into())]);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn unsupported_native_close_requires_server_restart_and_never_falls_back() {
+    for code in ["unknown_method", "invalid_request"] {
+        let (mut worker, agent, _, dir, calls) = fixture(
+            Provider::Codex,
+            vec![Err(TransportError {
+                message: "RAW_API_DETAIL unknown_method: pane.close_if_identity; expected one of many API variants".repeat(20),
+                code: Some(code.into()),
+                definitely_rejected: true,
+            })],
+        );
+        let (events, _) = mpsc::channel();
+        let error = worker
+            .command(BusCommand::DeleteAgent(agent), &events)
+            .unwrap_err();
+        assert!(
+            error.contains("Update and restart the Bus server"),
+            "{error}"
+        );
+        assert!(error.len() < 220, "user-facing error must remain compact");
+        assert!(!error.contains("RAW_API_DETAIL"));
+        assert!(worker.state.agent(agent).unwrap().deletion_pending);
+        assert_eq!(*calls.lock().unwrap(), vec!["pane.close_if_identity"]);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn deletion_transport_details_stay_out_of_user_errors() {
+    for result in [
+        Err(TransportError {
+            message: "RAW_API_DETAIL terminal driver details".repeat(100),
+            code: Some("terminal_stop_failed".into()),
+            definitely_rejected: false,
+        }),
+        Ok(ResponseResult::AgentList { agents: vec![] }),
+    ] {
+        let (mut worker, agent, _, dir, calls) = fixture(Provider::Codex, vec![result]);
+        let (events, _) = mpsc::channel();
+        let error = worker
+            .command(BusCommand::DeleteAgent(agent), &events)
+            .unwrap_err();
+        assert!(error.len() < 220, "{error}");
+        assert!(
+            !error.contains("RAW_API_DETAIL") && !error.contains("AgentList"),
+            "{error}"
+        );
+        assert!(worker.state.agent(agent).unwrap().deletion_pending);
+        assert_eq!(*calls.lock().unwrap(), vec!["pane.close_if_identity"]);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn successful_deletion_retry_clears_previous_worker_snapshot_error() {
+    for delete_room in [false, true] {
+        let (worker, agent, room, dir, _) = fixture(
+            Provider::Codex,
+            vec![
+                Err(TransportError {
+                    message: "temporary stop failure".into(),
+                    code: Some("terminal_stop_failed".into()),
+                    definitely_rejected: true,
+                }),
+                Ok(ResponseResult::Ok {}),
+            ],
+        );
+        let deletion = if delete_room {
+            BusCommand::DeleteRoom(room)
+        } else {
+            BusCommand::DeleteAgent(agent)
+        };
+        let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+        let (commands, receiver) = mpsc::sync_channel(256);
+        let (events, received) = mpsc::channel();
+        commands.send((1, deletion.clone())).unwrap();
+        commands.send((2, deletion)).unwrap();
+        commands.send((3, BusCommand::Shutdown)).unwrap();
+        worker.run(receiver, events, Arc::clone(&snapshots));
+        let outcomes: Vec<_> = received
+            .try_iter()
+            .filter_map(|event| match event {
+                BusEvent::CommandFinished { result, .. } => Some(result),
+                _ => None,
+            })
+            .collect();
+        assert!(outcomes[0].is_err());
+        assert!(outcomes[1].is_ok());
+        assert!(snapshots.lock().unwrap().error.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn delete_last_room_stays_empty_after_restart_and_ignores_late_callbacks() {
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    queue(&mut worker, room, agent, "deleted request");
+    let (events, _) = mpsc::channel();
+    worker
+        .command(BusCommand::DeleteRoom(room), &events)
+        .unwrap();
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"SessionStart", "session_id":"late-session"}),
+    );
+    drop(worker);
+    let fake = FakeTransport {
+        replies: vec![Ok(ResponseResult::AgentList { agents: vec![] })].into(),
+        calls: Arc::clone(&calls),
+        state_path: dir.join("state.json"),
+    };
+    let mut recovered = Worker::open(dir.clone(), Box::new(fake)).unwrap();
+    recovered.tick().unwrap();
+    assert_eq!(recovered.state.rooms().count(), 0);
+    assert_eq!(recovered.state.agents().count(), 0);
+    assert_eq!(recovered.state.requests().count(), 0);
+    assert!(!recovered.state.is_pristine());
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["pane.close_if_identity", "agent.list"]
+    );
+    let new_room = recovered.state.create_room("new room").unwrap();
+    assert!(new_room.0 > agent.0);
+    drop(recovered);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn queued_delete_is_applied_before_background_delivery_of_earlier_submit() {
+    struct ReadyTransport {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        delete_during_poll: Option<(mpsc::SyncSender<(u64, BusCommand)>, AgentId)>,
+    }
+    impl Transport for ReadyTransport {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(crate::api::api_method_name(&method));
+            if matches!(method, Method::AgentList(_)) {
+                if let Some((commands, agent)) = self.delete_during_poll.take() {
+                    commands.send((2, BusCommand::DeleteAgent(agent))).unwrap();
+                    commands.send((3, BusCommand::Shutdown)).unwrap();
+                }
+                let info = serde_json::from_value(json!({
+                    "terminal_id":"terminal", "agent":"codex", "agent_status":"idle",
+                    "agent_session":{"source":"herdr:codex","agent":"codex","kind":"id","value":"session"},
+                    "workspace_id":"workspace", "tab_id":"tab", "pane_id":"pane",
+                    "focused":false, "interactive_ready":true, "revision":1
+                })).unwrap();
+                Ok(ResponseResult::AgentList { agents: vec![info] })
+            } else {
+                Ok(ResponseResult::Ok {})
+            }
+        }
+    }
+    for during_poll in [false, true] {
+        let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+        let (commands, receiver) = mpsc::sync_channel(256);
+        worker.transport = Box::new(ReadyTransport {
+            calls: Arc::clone(&calls),
+            delete_during_poll: during_poll.then(|| (commands.clone(), agent)),
+        });
+        worker
+            .state
+            .set_draft_text(room, "must be discarded before delivery")
+            .unwrap();
+        worker.state.set_draft_recipients(room, [agent]).unwrap();
+        worker.save(worker.state.clone()).unwrap();
+        let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+        let (events, received) = mpsc::channel();
+        commands.send((1, BusCommand::Submit(room))).unwrap();
+        if !during_poll {
+            commands.send((2, BusCommand::DeleteAgent(agent))).unwrap();
+            commands.send((3, BusCommand::Shutdown)).unwrap();
+        }
+        worker.run(receiver, events, Arc::clone(&snapshots));
+        let expected = if during_poll {
+            vec!["agent.list", "pane.close_if_identity"]
+        } else {
+            vec!["pane.close_if_identity"]
+        };
+        assert_eq!(*calls.lock().unwrap(), expected);
+        assert!(snapshots.lock().unwrap().state.agent(agent).is_none());
+        let outcomes: Vec<_> = received
+            .try_iter()
+            .filter_map(|event| match event {
+                BusEvent::CommandFinished { command_id, result } => Some((command_id, result)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outcomes, vec![(1, Ok(())), (2, Ok(())), (3, Ok(()))]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[test]
@@ -407,6 +1072,7 @@ fn uncertain_submission_survives_restart_and_never_retries() {
         Provider::Codex,
         vec![Err(TransportError {
             message: "lost response".into(),
+            code: None,
             definitely_rejected: false,
         })],
     );
@@ -445,6 +1111,7 @@ fn uncertain_submission_rejects_wrong_session_start_binding() {
         Provider::Codex,
         vec![Err(TransportError {
             message: "lost response".into(),
+            code: None,
             definitely_rejected: false,
         })],
     );
@@ -520,6 +1187,7 @@ fn busy_rejection_restores_exact_fifo_and_blocked_does_not_submit() {
         Provider::Codex,
         vec![Err(TransportError {
             message: "busy".into(),
+            code: Some("agent_not_idle".into()),
             definitely_rejected: true,
         })],
     );
@@ -544,6 +1212,7 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
         Provider::Cursor,
         vec![Err(TransportError {
             message: "unknown".into(),
+            code: None,
             definitely_rejected: false,
         })],
     );
@@ -650,6 +1319,7 @@ fn late_old_identical_codex_final_cannot_bind_and_provider_error_holds_queue() {
         Provider::Codex,
         vec![Err(TransportError {
             message: "unknown".into(),
+            code: None,
             definitely_rejected: false,
         })],
     );

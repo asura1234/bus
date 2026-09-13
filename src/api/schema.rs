@@ -268,6 +268,9 @@ pub enum Method {
     PluginPaneFocus(PluginPaneFocusParams),
     #[serde(rename = "plugin.pane.close")]
     PluginPaneClose(PluginPaneCloseParams),
+    /// Close only an exact owned terminal/session, or acknowledge that it is absent.
+    #[serde(rename = "pane.close_if_identity")]
+    PaneCloseIfIdentity(PaneCloseIfIdentityParams),
 }
 
 #[cfg(test)]

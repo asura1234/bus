@@ -21,6 +21,10 @@ impl TerminalRuntimeRegistry {
         self.runtimes.get(terminal_id)
     }
 
+    pub(crate) fn contains_id(&self, terminal_id: &str) -> bool {
+        self.runtimes.keys().any(|id| id.as_str() == terminal_id)
+    }
+
     pub(crate) fn insert(
         &mut self,
         terminal_id: TerminalId,

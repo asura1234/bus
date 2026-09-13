@@ -1,4 +1,8 @@
 pub(crate) mod callbacks;
+pub(crate) mod colors;
+pub(crate) mod control;
+pub(crate) mod control_cli;
+pub(crate) mod diagnostics;
 pub(crate) mod entry;
 pub(crate) mod files;
 mod io;

@@ -133,6 +133,8 @@ impl App {
         request: crate::api::schema::Request,
         respond_to: std::sync::mpsc::Sender<String>,
     ) -> bool {
+        let api_request_id = request.id.clone();
+        let started = std::time::Instant::now();
         let queued = match request.method {
             crate::api::schema::Method::AgentPrompt(params) => {
                 self.queue_agent_prompt(request.id, params)
@@ -147,8 +149,22 @@ impl App {
         };
         match queued {
             Ok((id, agent, completion)) => {
+                tracing::debug!(event = "bus.terminal.queued", api_request_id = %id,
+                    pane_id = %agent.pane_id, terminal_id = %agent.terminal_id,
+                    "Prompt submission queued in native terminal writer");
                 std::thread::spawn(move || {
-                    let response = match completion.recv() {
+                    let completed = completion.recv();
+                    let outcome = match &completed {
+                        Ok(Ok(())) => "written",
+                        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => "timeout",
+                        Ok(Err(_)) => "write_failed",
+                        Err(_) => "writer_closed",
+                    };
+                    tracing::info!(event = "bus.terminal.result", api_request_id = %id,
+                        pane_id = %agent.pane_id, terminal_id = %agent.terminal_id, outcome,
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "Native prompt and Enter submission completed; this is not model acceptance");
+                    let response = match completed {
                         Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
                         Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
                             encode_error(id, "timeout", err.to_string())
@@ -160,6 +176,8 @@ impl App {
                 });
             }
             Err(response) => {
+                tracing::info!(event = "bus.terminal.rejected", api_request_id = %api_request_id,
+                    "Native submit rejected; API response contains the error code");
                 let _ = respond_to.send(response);
             }
         }

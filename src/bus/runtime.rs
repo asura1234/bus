@@ -3,6 +3,8 @@
 mod callback_runtime;
 #[path = "runtime_commands.rs"]
 mod commands;
+#[path = "runtime_control.rs"]
+mod dev_control;
 use super::{
     callbacks::{self, Parsed},
     launch::{self, AddAgent},
@@ -26,6 +28,8 @@ pub(crate) enum BusCommand {
     CreateRoom(String),
     RenameRoom(RoomId, String),
     RenameAgent(AgentId, String),
+    DeleteRoom(RoomId),
+    DeleteAgent(AgentId),
     SelectRoom(RoomId),
     LeaveRoom,
     #[allow(dead_code)] // Optional worker API; the shell marks seen with SelectRoom.
@@ -48,6 +52,7 @@ pub(crate) enum BusCommand {
         input: String,
         directories_only: bool,
     },
+    Dev(super::control::DevCall),
     Shutdown,
 }
 
@@ -83,6 +88,7 @@ pub(crate) struct BusSnapshot {
 }
 
 pub(crate) struct BusHandle {
+    _dev_control: Option<super::control::Server>,
     commands: mpsc::SyncSender<(u64, BusCommand)>,
     snapshots: Arc<Mutex<Arc<BusSnapshot>>>,
     events: mpsc::Receiver<BusEvent>,
@@ -97,10 +103,29 @@ pub(crate) fn default_data_dir() -> Result<PathBuf, String> {
 pub(crate) const DEFAULT_SESSION: &str = "bus";
 
 impl BusHandle {
+    #[cfg(test)]
+    pub(crate) fn test_channel(
+        snapshot: Arc<BusSnapshot>,
+    ) -> (Self, mpsc::Receiver<(u64, BusCommand)>) {
+        let (commands, receiver) = mpsc::sync_channel(256);
+        let (_, events) = mpsc::channel();
+        (
+            Self {
+                _dev_control: None,
+                commands,
+                snapshots: Arc::new(Mutex::new(snapshot)),
+                events,
+            },
+            receiver,
+        )
+    }
+
     pub(crate) fn start(data_dir: PathBuf, target: ConnectionTarget) -> Result<Self, String> {
-        let worker = Worker::open(data_dir, Box::new(HerdrTransport::new(target)))?;
+        let mut worker = Worker::open(data_dir.clone(), Box::new(HerdrTransport::new(target)))?;
+        worker.dev_enabled = super::diagnostics::dev_enabled();
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
         let (commands, receiver) = mpsc::sync_channel(256);
+        let dev_control = super::control::start(worker.dev_enabled, &data_dir, commands.clone())?;
         let (event_tx, events) = mpsc::channel();
         let shared = Arc::clone(&snapshots);
         std::thread::Builder::new()
@@ -108,6 +133,7 @@ impl BusHandle {
             .spawn(move || worker.run(receiver, event_tx, shared))
             .map_err(|e| e.to_string())?;
         Ok(Self {
+            _dev_control: dev_control,
             commands,
             snapshots,
             events,
@@ -143,6 +169,10 @@ struct Worker {
     error: Option<String>,
     storage_failed: bool,
     branch_checks: BTreeMap<AgentId, std::time::Instant>,
+    delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
+    dev_enabled: bool,
+    dev_receipts: BTreeMap<String, (super::control::Request, super::control::Response)>,
+    dev_receipt_bytes: usize,
 }
 
 impl Worker {
@@ -174,6 +204,10 @@ impl Worker {
             error: None,
             storage_failed: false,
             branch_checks: BTreeMap::new(),
+            delivery_waits: BTreeMap::new(),
+            dev_enabled: false,
+            dev_receipts: BTreeMap::new(),
+            dev_receipt_bytes: 0,
         })
     }
 
@@ -189,7 +223,24 @@ impl Worker {
     fn save(&mut self, state: BusState) -> Result<(), String> {
         if let Err(error) = self.store.save(&state) {
             self.storage_failed = true;
+            tracing::error!(
+                event = "bus.storage.failed",
+                reason = "save_failed",
+                "Sending suspended; state not persisted"
+            );
             return Err(format!("Bus storage failed at {}; sending is suspended. Fix storage and restart Bus: {error}",self.store.path().display()));
+        }
+        super::diagnostics::replies(&self.state, &state, "bus.reply.persisted");
+        for agent in state.agents() {
+            if self
+                .state
+                .agent(agent.id)
+                .is_some_and(|old| old.status != agent.status)
+            {
+                tracing::debug!(event = "bus.agent.status", agent_id = agent.id.0,
+                    room_id = agent.room_id.0, request_id = ?agent.current_request.map(|id| id.0),
+                    status = ?agent.status, "Bus status changed");
+            }
         }
         self.state = state;
         self.revision += 1;
@@ -204,9 +255,14 @@ impl Worker {
     ) {
         let interval = Duration::from_millis(500);
         let mut next_poll = std::time::Instant::now();
+        let mut pending_command = None;
         loop {
             let timeout = next_poll.saturating_duration_since(std::time::Instant::now());
-            match commands.recv_timeout(timeout) {
+            match pending_command
+                .take()
+                .map(Ok)
+                .unwrap_or_else(|| commands.recv_timeout(timeout))
+            {
                 Ok((id, BusCommand::Shutdown)) => {
                     self.last_command_id = id;
                     if let Ok(mut shared) = snapshots.lock() {
@@ -219,13 +275,28 @@ impl Worker {
                     break;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Ok((_id, BusCommand::Dev(call))) => {
+                    let response = self.dev_response(&call.request);
+                    // A disconnected client does not cancel or replay a committed action.
+                    let _ = call.reply.try_send(response);
+                }
                 Ok((id, command)) => {
+                    let submitting = matches!(command, BusCommand::Submit(_));
+                    let _span = tracing::debug_span!("bus.command", command_id = id).entered();
                     let result = if self.storage_failed {
                         Err("Bus storage unavailable; restart after fixing storage".into())
                     } else {
                         self.command(command, &events)
                     };
                     self.last_command_id = id;
+                    if submitting {
+                        tracing::info!(
+                            event = "bus.message.accepted",
+                            command_id = id,
+                            outcome = if result.is_ok() { "queued" } else { "rejected" },
+                            "Bus submit command settled"
+                        );
+                    }
                     if let Err(error) = &result {
                         self.error = Some(error.clone());
                     }
@@ -236,9 +307,22 @@ impl Worker {
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
-            if std::time::Instant::now() >= next_poll {
+            // Apply already-confirmed user commands before delivering queued
+            // work. In particular, Submit followed by Delete must not send in
+            // the background between those two commands.
+            pending_command = commands.try_recv().ok();
+            if pending_command.is_none() && std::time::Instant::now() >= next_poll {
                 if !self.storage_failed {
-                    if let Err(error) = self.tick() {
+                    if let Err(error) =
+                        self.tick_with_delivery_check(|| match commands.try_recv() {
+                            Ok(command) => {
+                                pending_command = Some(command);
+                                false
+                            }
+                            Err(mpsc::TryRecvError::Empty) => true,
+                            Err(mpsc::TryRecvError::Disconnected) => false,
+                        })
+                    {
                         self.error = Some(error);
                     }
                 }
@@ -251,15 +335,46 @@ impl Worker {
         }
     }
 
+    #[cfg(test)]
     fn tick(&mut self) -> Result<(), String> {
-        self.poll()?;
+        self.tick_with_delivery_check(|| true)
+    }
+
+    fn tick_with_delivery_check(
+        &mut self,
+        can_deliver: impl FnMut() -> bool,
+    ) -> Result<(), String> {
+        self.poll().inspect_err(|_| {
+            tracing::warn!(
+                event = "bus.coordinator.failed",
+                stage = "poll",
+                "Delivery paused for this tick"
+            );
+        })?;
         let agents: Vec<_> = self.state.agents().cloned().collect();
         for agent in agents {
+            if agent.deletion_pending {
+                continue;
+            }
             if let Some(launch) = &agent.runtime_identity.launch_id {
-                self.consume_callbacks(agent.id, &self.data_dir.join("callbacks").join(launch))?;
+                self.consume_callbacks(agent.id, &self.data_dir.join("callbacks").join(launch))
+                    .inspect_err(|_| {
+                        tracing::warn!(
+                            event = "bus.coordinator.failed",
+                            stage = "callbacks",
+                            agent_id = agent.id.0,
+                            "Callback processing failed; ownership retained"
+                        );
+                    })?;
             }
         }
-        self.submit_ready()
+        self.submit_ready_while(can_deliver).inspect_err(|_| {
+            tracing::warn!(
+                event = "bus.coordinator.failed",
+                stage = "submit",
+                "Submission could not finish"
+            );
+        })
     }
 
     fn poll(&mut self) -> Result<(), String> {
@@ -345,12 +460,43 @@ impl Worker {
         self.save(state)
     }
 
+    #[cfg(test)]
     fn submit_ready(&mut self) -> Result<(), String> {
+        self.submit_ready_while(|| true)
+    }
+
+    fn submit_ready_while(&mut self, mut can_deliver: impl FnMut() -> bool) -> Result<(), String> {
+        self.delivery_waits
+            .retain(|id, _| self.state.agent(*id).is_some());
         let agents: Vec<_> = self.state.agents().cloned().collect();
         for agent in agents {
+            // A command may have arrived while polling or sending to a prior
+            // agent. Re-enter command dispatch before starting another send.
+            if !can_deliver() {
+                break;
+            }
+            if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
+                if let Some(reason) = super::diagnostics::wait_reason(&agent) {
+                    if self.delivery_waits.insert(agent.id, (request, reason))
+                        != Some((request, reason))
+                    {
+                        super::diagnostics::request(
+                            &self.state,
+                            request,
+                            "bus.delivery.wait",
+                            reason,
+                        );
+                    }
+                } else {
+                    self.delivery_waits.remove(&agent.id);
+                }
+            } else {
+                self.delivery_waits.remove(&agent.id);
+            }
             if agent.status != RuntimeStatus::Idle
                 || !agent.hook_setup_confirmed
                 || agent.session_binding_invalidated
+                || agent.deletion_pending
             {
                 continue;
             }
@@ -381,6 +527,25 @@ impl Worker {
                 .begin_submission(request, launch, boundary)
                 .map_err(|e| e.to_string())?;
             self.save(state)?;
+            super::diagnostics::request(
+                &self.state,
+                request,
+                "bus.delivery.start",
+                "native_submit",
+            );
+            let started = std::time::Instant::now();
+            let _span = tracing::info_span!(
+                "bus.delivery",
+                request_id = request.0,
+                agent_id = agent.id.0,
+                room_id = agent.room_id.0
+            )
+            .entered();
+            tracing::debug!(
+                event = "bus.delivery.payload",
+                payload_bytes = text.len(),
+                "Bus payload metadata"
+            );
             let method = if let Some(session) = &identity.session_id {
                 Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
                     target: pane.clone(),
@@ -417,6 +582,18 @@ impl Worker {
                     ),
                 },
             };
+            let outcome_name = match &outcome {
+                SubmissionOutcome::Confirmed { .. } => "confirmed",
+                SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
+                SubmissionOutcome::Uncertain { .. } => "uncertain",
+            };
+            tracing::info!(
+                event = "bus.delivery.result",
+                request_id = request.0,
+                outcome = outcome_name,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "Native submit result; uncertain outcomes are never retried"
+            );
             let mut state = self.state.clone();
             state
                 .record_submission(request, outcome)

@@ -106,6 +106,8 @@ pub(crate) struct Room {
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
     pub(crate) latest_replies: BTreeMap<AgentId, Reply>,
+    #[serde(default)]
+    pub(crate) deletion_pending: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -113,6 +115,8 @@ pub(crate) struct Agent {
     pub(crate) id: AgentId,
     pub(crate) room_id: RoomId,
     pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) color: [u8; 3],
     pub(crate) provider: Provider,
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
@@ -126,6 +130,8 @@ pub(crate) struct Agent {
     pub(crate) hook_setup_confirmed: bool,
     #[serde(default)]
     pub(crate) session_binding_invalidated: bool,
+    #[serde(default)]
+    pub(crate) deletion_pending: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -256,6 +262,7 @@ pub(crate) enum ModelError {
     InvalidTransition,
     MissingLaunchIdentity,
     LaunchIdentityMismatch,
+    DeletionPending,
 }
 
 impl std::fmt::Display for ModelError {
@@ -271,6 +278,7 @@ pub(crate) struct BusState {
     next_id: u64,
     next_status_revision: u64,
     rooms: BTreeMap<RoomId, Room>,
+    #[serde(deserialize_with = "deserialize_agents")]
     agents: BTreeMap<AgentId, Agent>,
     requests: BTreeMap<RequestId, Request>,
     queues: BTreeMap<AgentId, Vec<RequestId>>,
@@ -279,7 +287,37 @@ pub(crate) struct BusState {
     visible_room: Option<RoomId>,
 }
 
+fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, Agent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut agents = BTreeMap::<AgentId, Agent>::deserialize(deserializer)?;
+    let mut room_colors = BTreeMap::<RoomId, Vec<[u8; 3]>>::new();
+    // Reserve all saved, readable colors before filling missing legacy fields,
+    // including those belonging to agents later in ID order.
+    for agent in agents.values() {
+        if super::colors::is_agent_color(agent.color) {
+            room_colors
+                .entry(agent.room_id)
+                .or_default()
+                .push(agent.color);
+        }
+    }
+    for agent in agents.values_mut() {
+        if !super::colors::is_agent_color(agent.color) {
+            let occupied = room_colors.entry(agent.room_id).or_default();
+            agent.color = super::colors::next_agent_color(occupied.iter().copied());
+            occupied.push(agent.color);
+        }
+    }
+    Ok(agents)
+}
+
 impl BusState {
+    pub(crate) fn is_pristine(&self) -> bool {
+        self.next_id == 1
+    }
+
     pub(crate) fn new() -> Self {
         Self {
             next_id: 1,
@@ -313,6 +351,7 @@ impl BusState {
                 unread_count: 0,
                 latest_prompt: None,
                 latest_replies: BTreeMap::new(),
+                deletion_pending: false,
             },
         );
         Ok(id)
@@ -335,10 +374,18 @@ impl BusState {
         cwd: PathBuf,
         branch: Option<String>,
     ) -> Result<AgentId, ModelError> {
-        if !self.rooms.contains_key(&room_id) {
-            return Err(ModelError::UnknownRoom(room_id));
+        match self.rooms.get(&room_id) {
+            None => return Err(ModelError::UnknownRoom(room_id)),
+            Some(room) if room.deletion_pending => return Err(ModelError::DeletionPending),
+            Some(_) => {}
         }
         let name = normalized_name(name)?;
+        let color = super::colors::next_agent_color(
+            self.agents
+                .values()
+                .filter(|agent| agent.room_id == room_id)
+                .map(|agent| agent.color),
+        );
         let id = AgentId(self.allocate_id());
         self.agents.insert(
             id,
@@ -346,6 +393,7 @@ impl BusState {
                 id,
                 room_id,
                 name,
+                color,
                 provider,
                 cwd,
                 branch,
@@ -357,6 +405,7 @@ impl BusState {
                 current_request: None,
                 hook_setup_confirmed: false,
                 session_binding_invalidated: false,
+                deletion_pending: false,
             },
         );
         self.queues.insert(id, Vec::new());
@@ -369,6 +418,70 @@ impl BusState {
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?
             .name = name;
+        Ok(())
+    }
+
+    /// Suspend delivery durably before the runtime attempts terminal shutdown.
+    pub(crate) fn prepare_delete_agent(&mut self, id: AgentId) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        agent.deletion_pending = true;
+        agent.actionable_error = Some(
+            "Deletion pending; queued messages are suspended. Retry deletion to finish.".into(),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn prepare_delete_room(&mut self, id: RoomId) -> Result<(), ModelError> {
+        self.rooms
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownRoom(id))?
+            .deletion_pending = true;
+        let agents: Vec<_> = self
+            .agents
+            .values()
+            .filter(|agent| agent.room_id == id)
+            .map(|agent| agent.id)
+            .collect();
+        for agent in agents {
+            self.prepare_delete_agent(agent)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn delete_agent(&mut self, id: AgentId) -> Result<(), ModelError> {
+        self.agents
+            .remove(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        self.queues.remove(&id);
+        self.requests.retain(|_, request| request.agent_id != id);
+        for room in self.rooms.values_mut() {
+            room.draft.recipient_ids.remove(&id);
+            room.latest_replies.remove(&id);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn delete_room(&mut self, id: RoomId) -> Result<(), ModelError> {
+        if !self.rooms.contains_key(&id) {
+            return Err(ModelError::UnknownRoom(id));
+        }
+        let agents: Vec<_> = self
+            .agents
+            .values()
+            .filter(|agent| agent.room_id == id)
+            .map(|agent| agent.id)
+            .collect();
+        for agent in agents {
+            self.delete_agent(agent)?;
+        }
+        self.rooms.remove(&id);
+        self.requests.retain(|_, request| request.room_id != id);
+        if self.visible_room == Some(id) {
+            self.visible_room = None;
+        }
         Ok(())
     }
 
@@ -438,7 +551,6 @@ impl BusState {
         self.requests.get(&id)
     }
 
-    #[cfg(test)]
     pub(crate) fn requests(&self) -> impl Iterator<Item = &Request> {
         self.requests.values()
     }
@@ -569,17 +681,41 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn submit_draft(
+    /// Queue an automation prompt without changing the room's human-owned draft.
+    pub(crate) fn submit_message(
         &mut self,
         room: RoomId,
+        draft: Draft,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        let draft = self
+        let original = self
             .rooms
             .get(&room)
             .ok_or(ModelError::UnknownRoom(room))?
             .draft
             .clone();
+        self.rooms
+            .get_mut(&room)
+            .ok_or(ModelError::UnknownRoom(room))?
+            .draft = draft;
+        let result = self.submit_draft(room, now_ms);
+        self.rooms
+            .get_mut(&room)
+            .ok_or(ModelError::UnknownRoom(room))?
+            .draft = original;
+        result
+    }
+
+    pub(crate) fn submit_draft(
+        &mut self,
+        room: RoomId,
+        now_ms: u64,
+    ) -> Result<Vec<RequestId>, ModelError> {
+        let room_state = self.rooms.get(&room).ok_or(ModelError::UnknownRoom(room))?;
+        if room_state.deletion_pending {
+            return Err(ModelError::DeletionPending);
+        }
+        let draft = room_state.draft.clone();
         if draft.text.is_empty() && draft.files.is_empty() {
             return Err(ModelError::EmptyPrompt);
         }
@@ -593,6 +729,9 @@ impl BusState {
                 .ok_or(ModelError::UnknownAgent(*agent_id))?;
             if agent.room_id != room {
                 return Err(ModelError::AgentOutsideRoom(*agent_id));
+            }
+            if agent.deletion_pending {
+                return Err(ModelError::DeletionPending);
             }
         }
 
@@ -657,6 +796,9 @@ impl BusState {
             .agents
             .get(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?;
+        if agent.deletion_pending {
+            return Err(ModelError::DeletionPending);
+        }
         let expected_launch = agent
             .runtime_identity
             .launch_id
@@ -780,6 +922,9 @@ impl BusState {
         let Some(agent) = self.agents.get(&callback.agent_id) else {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         };
+        if agent.deletion_pending {
+            return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+        }
         let Some(request_id) = agent.current_request else {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         };
@@ -899,7 +1044,7 @@ impl BusState {
 
     pub(crate) fn next_queued_request(&self, agent: AgentId) -> Option<RequestId> {
         let agent_state = self.agents.get(&agent)?;
-        if agent_state.current_request.is_some() {
+        if agent_state.current_request.is_some() || agent_state.deletion_pending {
             return None;
         }
         self.queues.get(&agent)?.first().copied()
@@ -1015,6 +1160,130 @@ mod tests {
 
     use super::*;
 
+    fn serialized_agent_color(state: &BusState, id: AgentId) -> [u8; 3] {
+        let document = serde_json::to_value(state).expect("serialize state");
+        serde_json::from_value(document["agents"][id.0.to_string()]["color"].clone())
+            .expect("each agent has a persisted RGB color")
+    }
+
+    #[test]
+    fn agent_color_assignment_maximizes_room_separation_and_reserves_you() {
+        let mut state = BusState::new();
+        let room = state.create_room("colors").unwrap();
+        // Independent reference calculation over the readable 17-step sRGB grid,
+        // using Euclidean Oklab distance with [102, 255, 102] already occupied.
+        for expected in [
+            [221, 0, 255],
+            [170, 119, 51],
+            [255, 204, 255],
+            [0, 136, 255],
+        ] {
+            let id = state
+                .create_agent(room, "agent", Provider::Codex, "/repo".into(), None)
+                .unwrap();
+            assert_eq!(serialized_agent_color(&state, id), expected);
+        }
+        let another_room = state.create_room("independent room").unwrap();
+        let id = state
+            .create_agent(
+                another_room,
+                "reviewer",
+                Provider::ClaudeCode,
+                "/repo".into(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(serialized_agent_color(&state, id), [221, 0, 255]);
+    }
+
+    #[test]
+    fn agent_colors_stay_readable_and_distinct_for_many_agents() {
+        // WCAG luminance, independently evaluated at the persisted RGB boundary.
+        let luminance = |rgb: [u8; 3]| {
+            rgb.into_iter()
+                .zip([0.2126, 0.7152, 0.0722])
+                .map(|(channel, weight)| {
+                    let channel = f64::from(channel) / 255.0;
+                    weight
+                        * if channel <= 0.04045 {
+                            channel / 12.92
+                        } else {
+                            ((channel + 0.055) / 1.055).powf(2.4)
+                        }
+                })
+                .sum::<f64>()
+        };
+        let mut state = BusState::new();
+        let room = state.create_room("many agents").unwrap();
+        let mut occupied = BTreeSet::from([[102, 255, 102]]);
+        for _ in 0..32 {
+            let id = state
+                .create_agent(room, "agent", Provider::Codex, "/repo".into(), None)
+                .unwrap();
+            let color = serialized_agent_color(&state, id);
+            assert!(occupied.insert(color), "color was reused: {color:?}");
+            assert!(
+                !(u16::from(color[1]) > u16::from(color[0]) + 32
+                    && u16::from(color[1]) > u16::from(color[2]) + 32),
+                "recognizably green identity belongs to You: {color:?}"
+            );
+            let contrast = (luminance(color) + 0.05) / (luminance([24, 24, 28]) + 0.05);
+            assert!(contrast >= 4.5, "unreadable color {color:?}: {contrast}");
+        }
+    }
+
+    #[test]
+    fn agent_colors_survive_rename_neighbor_deletion_and_restart() {
+        let (mut state, _, first, second) = state_with_room_and_agents();
+        let original = serialized_agent_color(&state, second);
+        state.rename_agent(second, "new name").unwrap();
+        state.delete_agent(first).unwrap();
+        let reloaded: BusState =
+            serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        assert_eq!(serialized_agent_color(&reloaded, second), original);
+        assert_eq!(reloaded, state);
+    }
+
+    #[test]
+    fn legacy_agent_colors_backfill_without_recoloring_saved_neighbors() {
+        let (state, _, first, second) = state_with_room_and_agents();
+        let mut document = serde_json::to_value(&state).unwrap();
+        document["agents"][first.0.to_string()]
+            .as_object_mut()
+            .unwrap()
+            .remove("color");
+        // A saved custom color must be retained and considered during migration.
+        document["agents"][second.0.to_string()]["color"] = serde_json::json!([0, 136, 255]);
+        let migrated: BusState = serde_json::from_value(document.clone()).unwrap();
+        assert_eq!(serialized_agent_color(&migrated, second), [0, 136, 255]);
+        let first_color = serialized_agent_color(&migrated, first);
+        assert_ne!(first_color, [0, 136, 255]);
+        assert_ne!(first_color, [102, 255, 102]);
+        assert_ne!(first_color, [0, 0, 0]);
+        assert_eq!(
+            migrated,
+            serde_json::from_value::<BusState>(document).unwrap(),
+            "legacy assignment is deterministic"
+        );
+        assert_eq!(
+            migrated,
+            serde_json::from_value::<BusState>(serde_json::to_value(&migrated).unwrap()).unwrap(),
+            "migration is idempotent"
+        );
+    }
+
+    #[test]
+    fn agent_colors_migrate_unreadable_or_reserved_saved_rgb() {
+        let (mut state, _, first, second) = state_with_room_and_agents();
+        state.delete_agent(second).unwrap();
+        for invalid in [[0, 0, 0], [102, 255, 102], [0, 170, 0]] {
+            let mut document = serde_json::to_value(&state).unwrap();
+            document["agents"][first.0.to_string()]["color"] = serde_json::json!(invalid);
+            let migrated: BusState = serde_json::from_value(document).unwrap();
+            assert_eq!(serialized_agent_color(&migrated, first), [221, 0, 255]);
+        }
+    }
+
     fn state_with_room_and_agents() -> (BusState, RoomId, AgentId, AgentId) {
         let mut state = BusState::new();
         let room = state.create_room("launch").expect("room");
@@ -1059,6 +1328,95 @@ mod tests {
             )
             .expect("identity");
         (state, room, codex, claude)
+    }
+
+    #[test]
+    fn deletion_cleans_owned_state_preserves_neighbors_and_never_reuses_ids() {
+        let (mut state, room, agent, other) = state_with_room_and_agents();
+        let request = submit_text(&mut state, room, agent, "delete active work");
+        start_request(&mut state, request, "launch-codex", 10);
+        let queued = submit_text(&mut state, room, agent, "delete queue");
+        state.set_draft_recipients(room, [agent, other]).unwrap();
+        state.rooms.get_mut(&room).unwrap().latest_replies.insert(
+            agent,
+            Reply {
+                request_id: request,
+                agent_id: agent,
+                text: "old reply".into(),
+                received_at_ms: 1,
+            },
+        );
+        let unrelated_room = state.create_room("unrelated").unwrap();
+        let unaffected = state.agent(other).unwrap().clone();
+        state.delete_agent(agent).unwrap();
+        assert_eq!(state.agent(other), Some(&unaffected));
+        assert!(state.request(request).is_none());
+        assert!(state.request(queued).is_none());
+        assert!(state.queued_requests(agent).is_empty());
+        assert_eq!(
+            state.room(room).unwrap().draft.recipient_ids,
+            BTreeSet::from([other])
+        );
+        assert!(state.room(room).unwrap().latest_replies.is_empty());
+        assert!(matches!(
+            state.accept_callback(ProviderCallback::final_event(
+                "late",
+                99,
+                agent,
+                "launch-codex",
+                "provider-session",
+                "turn-1",
+                "delete active work",
+                "late result"
+            )),
+            CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest)
+        ));
+        state.select_room(room).unwrap();
+        state.delete_room(room).unwrap();
+        assert!(state.agent(other).is_none());
+        assert_eq!(state.visible_room, None);
+        assert!(state.room(unrelated_room).is_some());
+        let new_room = state.create_room("new").unwrap();
+        assert!(new_room.0 > unrelated_room.0);
+        assert!(!state.is_pristine());
+        state.delete_room(new_room).unwrap();
+        state.delete_room(unrelated_room).unwrap();
+        assert!(!state.is_pristine());
+    }
+
+    #[test]
+    fn pending_deletion_rejects_new_work_even_with_an_empty_draft() {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let request = submit_text(&mut state, room, agent, "queued");
+        state.prepare_delete_room(room).unwrap();
+        assert_eq!(
+            state.submit_draft(room, 20),
+            Err(ModelError::DeletionPending)
+        );
+        assert_eq!(
+            state.begin_submission(request, "launch-codex", 10),
+            Err(ModelError::DeletionPending)
+        );
+        assert_eq!(state.next_queued_request(agent), None);
+        assert_eq!(
+            state.create_agent(room, "late", Provider::Codex, PathBuf::from("/repo"), None),
+            Err(ModelError::DeletionPending)
+        );
+    }
+
+    #[test]
+    fn older_saved_state_defaults_deletion_flags_to_false() {
+        let (state, room, agent, _) = state_with_room_and_agents();
+        let mut saved = serde_json::to_value(&state).unwrap();
+        for collection in ["rooms", "agents"] {
+            for value in saved[collection].as_object_mut().unwrap().values_mut() {
+                value.as_object_mut().unwrap().remove("deletion_pending");
+            }
+        }
+        let recovered: BusState = serde_json::from_value(saved).unwrap();
+        assert!(!recovered.room(room).unwrap().deletion_pending);
+        assert!(!recovered.agent(agent).unwrap().deletion_pending);
+        assert_eq!(recovered, state);
     }
 
     fn submit_text(state: &mut BusState, room: RoomId, agent: AgentId, text: &str) -> RequestId {
