@@ -2,7 +2,11 @@
 
 `skills/` is the canonical source for Bus workflows. Each skill lives in its own
 directory and must have a `SKILL.md` with `name` and `description` frontmatter.
+The top-level [skill-architecture.md](skill-architecture.md) defines the shared
+workflow layering, artifact lifecycle, and agent communication conventions.
 
+- Follow `skill-architecture.md` when deciding whether a rule belongs in the
+  executable entrypoint, a guide, a deterministic helper, or a format contract.
 - Keep a skill self-contained. Put deterministic helpers in `scripts/`, durable
   explanation in `guide.md`, and output contracts in `references/` only when
   they materially improve execution.
