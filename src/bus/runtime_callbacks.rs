@@ -202,7 +202,16 @@ impl Worker {
                         .set_agent_runtime_identity(id, identity)
                         .map_err(|e| e.to_string())?;
                     if agent.current_request.is_none() {
-                        state.set_agent_error(id, if agent.hook_setup_confirmed {None} else {Some("Finish trusting all Bus hook entries and confirm hook setup in Bus; room prompts remain queued.".into())}).map_err(|e|e.to_string())?;
+                        state
+                            .set_agent_error(
+                                id,
+                                if agent.hook_setup_confirmed {
+                                    None
+                                } else {
+                                    Some("Not ready; waiting for the provider terminal.".into())
+                                },
+                            )
+                            .map_err(|e| e.to_string())?;
                     }
                     None
                 }

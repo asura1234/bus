@@ -457,6 +457,30 @@ impl Worker {
                     schema::AgentStatus::Unknown => RuntimeStatus::Unavailable,
                 }
             });
+            // Hook installation is explicitly consented before the agent is
+            // created. Once the native terminal reports that exact owned
+            // agent as interactive, room delivery is ready too; requiring a
+            // second Bus-only confirmation creates an Idle-but-undeliverable
+            // deadlock (especially for Codex, whose SessionStart is deferred
+            // until its first prompt).
+            if info.is_some_and(|info| info.interactive_ready)
+                && !agent.hook_setup_confirmed
+                && !agent.session_binding_invalidated
+                && !agent.deletion_pending
+            {
+                state
+                    .confirm_hook_setup(agent.id)
+                    .map_err(|e| e.to_string())?;
+                state
+                    .set_agent_error(agent.id, None)
+                    .map_err(|e| e.to_string())?;
+                tracing::info!(
+                    event = "bus.agent.ready",
+                    agent_id = agent.id.0,
+                    provider = ?agent.provider,
+                    "Owned provider terminal is interactive; room delivery enabled"
+                );
+            }
             state
                 .observe_status(agent.id, status, super::io::now_ms())
                 .map_err(|e| e.to_string())?;

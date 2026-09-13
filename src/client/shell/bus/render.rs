@@ -42,7 +42,6 @@ pub(super) enum Action {
     Suggestion(usize),
     Cancel,
     Add,
-    Trust(crate::bus::model::AgentId),
 }
 #[derive(Clone, Debug)]
 pub(super) struct Hit {
@@ -379,8 +378,17 @@ pub(super) fn status(status: RuntimeStatus) -> &'static str {
         RuntimeStatus::Idle => "Idle",
         RuntimeStatus::Working => "Working",
         RuntimeStatus::Blocked => "Blocked",
-        RuntimeStatus::Launching => "Starting",
+        RuntimeStatus::Launching => "Not ready",
         RuntimeStatus::Unavailable => "Unavailable",
+    }
+}
+
+fn agent_status(agent: &Agent) -> &'static str {
+    if !agent.hook_setup_confirmed && !agent.session_binding_invalidated && !agent.deletion_pending
+    {
+        "Not ready"
+    } else {
+        status(agent.status)
     }
 }
 impl BusUi {
@@ -498,7 +506,7 @@ impl BusUi {
                 y += height;
                 continue;
             }
-            let right = status(agent.status);
+            let right = agent_status(agent);
             let name_width = sw.saturating_sub(right.len() as u16 + 3);
             let rect = at(1, y, name_width);
             if let Some(rename) = self
@@ -633,22 +641,16 @@ impl BusUi {
             .filter(|a| a.room_id == room.id)
             .map(|a| self.snapshot.state.queued_requests(a.id).len())
             .sum();
-        let setup_agent = self.pending_hook_setup();
-        let errors = setup_agent
-            .and_then(|id| self.snapshot.state.agent(id))
-            .map(|agent| format!("{}: Confirm setup (Ctrl+T).", agent.name))
-            .into_iter()
-            .chain(
-                self.snapshot
-                    .state
-                    .agents()
-                    .filter(|a| a.room_id == room.id && Some(a.id) != setup_agent)
-                    .filter_map(|a| {
-                        a.actionable_error
-                            .as_ref()
-                            .map(|e| format!("{}: {e}", a.name))
-                    }),
-            )
+        let errors = self
+            .snapshot
+            .state
+            .agents()
+            .filter(|a| a.room_id == room.id)
+            .filter_map(|a| {
+                a.actionable_error
+                    .as_ref()
+                    .map(|e| format!("{}: {e}", a.name))
+            })
             .collect::<Vec<_>>()
             .join(" · ");
         let notice = self
@@ -869,9 +871,7 @@ impl BusUi {
         view.lines(
             Rect::new(x, bottom.saturating_sub(1), width, 1),
             &status,
-            setup_agent
-                .filter(|_| self.visible_error().is_none())
-                .map(Action::Trust),
+            None,
             true,
         );
         let controls_y = composer_y + u16::from(bar_height > 1);
@@ -1289,21 +1289,10 @@ impl BusUi {
             }
             Form::Consent { notice, .. } => {
                 let text = format!(
-                    "{}\n{}\n\nAdd confirms writing these Bus-owned hook entries. This does not complete provider trust or approve permissions.",
+                    "{}\n{}\n\nAdd confirms writing these Bus-owned hook entries. Bus will become ready automatically; this does not approve provider permissions.",
                     notice.message,
                     notice.path.display()
                 );
-                let height = wrap(&text, width).len() as u16;
-                view.lines(Rect::new(x, y, width, height), &text, None, false);
-                y += height + 2;
-            }
-            Form::Trust(agent) => {
-                let cli = self
-                    .snapshot
-                    .state
-                    .agent(*agent)
-                    .map_or("agent", |a| provider(a.provider));
-                let text = format!("Review the Bus hooks in {cli} first (Codex: /hooks).\n\nOnce you have trusted them and closed the CLI menus, choose Confirm setup below to allow Bus to deliver queued messages. This does not grant any permissions in the CLI.\n\nEsc returns to the room; open the agent to review its hooks.");
                 let height = wrap(&text, width).len() as u16;
                 view.lines(Rect::new(x, y, width, height), &text, None, false);
                 y += height + 2;
@@ -1318,11 +1307,7 @@ impl BusUi {
         );
         view.row(
             Rect::new(x + 16, y, 24.min(width.saturating_sub(16)), 1),
-            if matches!(form, Form::Trust(_)) {
-                "Confirm setup (Enter)"
-            } else {
-                "Add (Enter)"
-            },
+            "Add (Enter)",
             Some(Action::Add),
             false,
             false,

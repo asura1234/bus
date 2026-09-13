@@ -22,7 +22,6 @@ pub(super) enum Form {
         input: AddAgent,
         notice: SetupNotice,
     },
-    Trust(AgentId),
 }
 
 impl Form {

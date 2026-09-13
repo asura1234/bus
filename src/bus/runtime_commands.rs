@@ -241,11 +241,15 @@ impl Worker {
         state
             .set_agent_error(
                 id,
-                Some(match input.provider {
-                    Provider::Codex => "Review Bus hooks in Codex, then confirm setup in Bus to send queued messages.",
-                    Provider::Cursor => "Review Bus hooks in Cursor, then confirm setup in Bus. Queued messages wait for its session to be ready.",
-                    Provider::ClaudeCode => "Launching; awaiting provider hook readiness",
-                }.into()),
+                Some(
+                    match input.provider {
+                        Provider::Codex | Provider::Cursor => {
+                            "Not ready; waiting for the provider terminal."
+                        }
+                        Provider::ClaudeCode => "Not ready; waiting for provider hook readiness.",
+                    }
+                    .into(),
+                ),
             )
             .map_err(|e| e.to_string())?;
         self.save(state)?;

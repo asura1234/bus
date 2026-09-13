@@ -106,9 +106,6 @@ fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
             .hits
             .iter()
             .any(|hit| { hit.action == render::Action::Agent(second) && hit.rect.y == 10 }));
-        assert!(ui.view.hits.iter().all(|hit| {
-            hit.rect.x >= ui.view.sidebar.right() || !matches!(hit.action, render::Action::Trust(_))
-        }));
     }
 }
 
@@ -156,117 +153,30 @@ fn expanded_sidebar_omits_absent_branch_without_a_placeholder_row() {
 }
 
 #[test]
-fn room_setup_recovery_opens_explicit_confirmation_from_notice_or_keyboard() {
-    for keyboard in [false, true] {
-        let (mut ui, room, agent) = fixture();
-        let mut snapshot = (*ui.snapshot).clone();
-        snapshot
-            .state
-            .set_agent_error(agent, Some("Review Bus hooks".into()))
-            .unwrap();
-        ui.receive_snapshot(Arc::new(snapshot));
-        ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
-        ui.compute_view(120, 40);
-        if keyboard {
-            key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
-        } else {
-            let hit = ui
-                .view
-                .hits
-                .iter()
-                .find(|hit| {
-                    hit.action == render::Action::Trust(agent)
-                        && hit.rect.x >= ui.view.sidebar.right()
-                })
-                .expect("room notice must retain the explicit setup entry point")
-                .clone();
-            mouse(
-                &mut ui,
-                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-                hit.rect.x,
-                hit.rect.y,
-            );
-        }
-        assert!(matches!(ui.form, Some(forms::Form::Trust(id)) if id == agent));
-        assert!(!ui.snapshot.state.agent(agent).unwrap().hook_setup_confirmed);
-        assert!(!ui
-            .pending
-            .iter()
-            .any(|p| matches!(p.command, BusCommand::CompleteHookSetup(_))));
-        assert_eq!(ui.locals[&room].text.text, "keep draft");
-        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-        assert!(ui
-            .pending
-            .iter()
-            .any(|p| { matches!(p.command, BusCommand::CompleteHookSetup(id) if id == agent) }));
-    }
-}
-
-#[test]
-fn room_setup_recovery_skips_invalidated_deleting_and_confirmed_agents() {
-    let (mut ui, room, invalidated) = fixture();
+fn room_not_ready_state_never_requires_a_second_bus_confirmation() {
+    let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();
+    let mut value = serde_json::to_value(&snapshot.state).unwrap();
+    value["agents"][agent.0.to_string()]["hook_setup_confirmed"] = serde_json::json!(false);
+    snapshot.state = serde_json::from_value(value).unwrap();
     snapshot
         .state
-        .invalidate_agent_session(invalidated)
+        .set_agent_error(
+            agent,
+            Some("Not ready; waiting for the provider terminal.".into()),
+        )
         .unwrap();
-    snapshot
-        .state
-        .set_agent_error(invalidated, Some("Session changed: add a new agent".into()))
-        .unwrap();
-    let mut pending_agents = Vec::new();
-    for (name, kind) in [
-        ("deleting", 0),
-        ("confirmed", 1),
-        ("pending", 2),
-        ("next-pending", 2),
-    ] {
-        let agent = snapshot
-            .state
-            .create_agent(room, name, Provider::Codex, "/project".into(), None)
-            .unwrap();
-        snapshot
-            .state
-            .set_agent_error(agent, Some("Review setup".into()))
-            .unwrap();
-        match kind {
-            0 => snapshot.state.prepare_delete_agent(agent).unwrap(),
-            1 => snapshot.state.confirm_hook_setup(agent).unwrap(),
-            _ => pending_agents.push((agent, name)),
-        }
-    }
     ui.receive_snapshot(Arc::new(snapshot));
-    for (pending, name) in pending_agents {
-        ui.compute_view(120, 40);
-        let hit = ui
-            .view
-            .hits
-            .iter()
-            .find(|hit| hit.action == render::Action::Trust(pending))
-            .unwrap();
-        assert!(hit.rect.x >= ui.view.sidebar.right());
-        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 120, 40));
-        ui.render(&mut buffer);
-        let notice: String = (hit.rect.x..hit.rect.right())
-            .map(|x| buffer[(x, hit.rect.y)].symbol())
-            .collect();
-        assert!(
-            notice.starts_with(&format!("{name}: Confirm setup")),
-            "click target must match the visible setup notice: {notice}"
-        );
-        key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
-        assert!(matches!(ui.form, Some(forms::Form::Trust(id)) if id == pending));
-        key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
-        let mut snapshot = (*ui.snapshot).clone();
-        snapshot.state.confirm_hook_setup(pending).unwrap();
-        ui.receive_snapshot(Arc::new(snapshot));
-    }
+    ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
+    ui.compute_view(120, 40);
+
     key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
     assert!(ui.form.is_none());
     assert!(!ui
         .pending
         .iter()
-        .any(|p| matches!(p.command, BusCommand::CompleteHookSetup(_))));
+        .any(|pending| matches!(pending.command, BusCommand::CompleteHookSetup(_))));
+    assert_eq!(ui.locals[&room].text.text, "keep draft");
 }
 
 fn key(ui: &mut BusUi, code: KeyCode, modifiers: KeyModifiers) {
@@ -2310,6 +2220,27 @@ fn hook_consent_clears_old_pwd_suggestions_before_enter_can_confirm() {
         .pending
         .iter()
         .any(|p| matches!(&p.command,BusCommand::AddAgent(input) if input.consent_project_hooks)));
+}
+
+#[test]
+fn sidebar_calls_an_unconfirmed_idle_agent_not_ready() {
+    let (mut ui, _, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut value = serde_json::to_value(&snapshot.state).unwrap();
+    value["agents"][agent.0.to_string()]["hook_setup_confirmed"] = serde_json::json!(false);
+    snapshot.state = serde_json::from_value(value).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.compute_view(100, 30);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let mut sidebar = String::new();
+    for y in 0..ui.view.sidebar.height {
+        for x in 0..ui.view.sidebar.width {
+            sidebar.push_str(buffer[(x, y)].symbol());
+        }
+    }
+    assert!(sidebar.contains("Not ready"), "{sidebar}");
+    assert!(!sidebar.contains("Idle"), "{sidebar}");
 }
 
 fn mouse(ui: &mut BusUi, kind: crossterm::event::MouseEventKind, column: u16, row: u16) {

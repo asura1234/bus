@@ -210,7 +210,7 @@ fn cold_resume_preserves_uncertain_request_and_settles_its_original_reply_once()
 }
 
 #[test]
-fn cold_resume_does_not_grant_hook_consent_or_settle_a_pending_deletion() {
+fn interactive_ready_releases_setup_gate_but_pending_deletion_stays_closed() {
     for deleting in [false, true] {
         let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
         let request = queue(&mut worker, room, agent, "original");
@@ -249,7 +249,7 @@ fn cold_resume_does_not_grant_hook_consent_or_settle_a_pending_deletion() {
         });
         worker.poll().unwrap();
         let restored = worker.state.agent(agent).unwrap();
-        assert!(!restored.hook_setup_confirmed);
+        assert_eq!(restored.hook_setup_confirmed, !deleting);
         assert_eq!(restored.deletion_pending, deleting);
         assert_eq!(
             restored.runtime_identity.terminal_id.as_deref(),
@@ -266,6 +266,9 @@ fn cold_resume_does_not_grant_hook_consent_or_settle_a_pending_deletion() {
                 RequestPhase::Completed
             );
             assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+        } else {
+            assert_eq!(restored.status, RuntimeStatus::Idle);
+            assert!(restored.actionable_error.is_none());
         }
         worker.submit_ready().unwrap();
         assert_eq!(

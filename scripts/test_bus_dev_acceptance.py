@@ -36,8 +36,20 @@ class AcceptanceProfileTests(unittest.TestCase):
     def test_three_provider_profile_runs_each_provider_alone_pairs_and_all(self):
         profile = acceptance.profiles()["claude-codex-cursor"]
         self.assertEqual(profile["providers"], ("claude", "codex", "cursor"))
-        self.assertEqual(profile["messages"], 15)
+        self.assertEqual(profile["messages"], 20)
         self.assertEqual(profile["recipients"], ((0,), (1,), (2,), (0, 1), (0, 2), (1, 2), (0, 1, 2)))
+
+    def test_live_matrix_defaults_to_five_seconds_between_messages(self):
+        args = acceptance.parse_args(["--allow-live-models", "--profile", "claude-codex-cursor",
+                                      "--claude-pwd", "/tmp/claude", "--codex-pwd", "/tmp/codex",
+                                      "--cursor-pwd", "/tmp/cursor"])
+        self.assertEqual(args.message_delay, 5.0)
+
+    def test_round_trip_prompt_explicitly_forbids_skills_tools_and_work(self):
+        prompt = acceptance.round_trip_prompt("TOKEN")
+        self.assertIn("only testing Bus message round trip", prompt)
+        self.assertIn("Do not use skills, tools, or modify files", prompt)
+        self.assertIn("Reply with exactly TOKEN", prompt)
 
     def test_original_four_agent_profile_is_preserved(self):
         profile = acceptance.profiles()["claude-codex"]
@@ -52,7 +64,7 @@ class AcceptanceProfileTests(unittest.TestCase):
         args = acceptance.parse_args(["--allow-live-models", "--profile", "claude-codex-cursor",
                                       "--claude-pwd", "/tmp/claude", "--codex-pwd", "/tmp/codex",
                                       "--cursor-pwd", "/tmp/cursor"])
-        self.assertEqual(args.messages, 15)
+        self.assertEqual(args.messages, 20)
         self.assertEqual(args.cursor_pwd, "/tmp/cursor")
 
     def test_delivery_verifier_rejects_wrong_target_and_uncorrelated_cursor_reply(self):
@@ -67,6 +79,22 @@ class AcceptanceProfileTests(unittest.TestCase):
 
 
 class AcceptanceObservationTests(unittest.TestCase):
+    def test_terminal_read_retries_transient_eagain(self):
+        outputs = iter([
+            AssertionError({"error": {"message": "Resource temporarily unavailable (os error 35)"}}),
+            {"output": "TOKEN"},
+        ])
+
+        def bus(*_args, **_kwargs):
+            result = next(outputs)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with mock.patch.object(acceptance.time, "sleep") as sleep:
+            self.assertEqual(acceptance.read_agent_output(bus, 3, timeout=1), "TOKEN")
+        sleep.assert_called_once()
+
     def test_all_selector_requires_exact_owned_room_membership(self):
         self.assertTrue(hasattr(acceptance, "recipient_selector"))
         agents = [{"id": 3}, {"id": 4}]

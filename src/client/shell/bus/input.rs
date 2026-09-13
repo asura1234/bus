@@ -309,20 +309,6 @@ impl BusUi {
             };
         }
     }
-    pub(super) fn pending_hook_setup(&self) -> Option<AgentId> {
-        self.snapshot
-            .state
-            .agents()
-            .find(|agent| {
-                Some(agent.room_id) == self.room
-                    && !agent.hook_setup_confirmed
-                    && !agent.session_binding_invalidated
-                    && !agent.deletion_pending
-                    && (agent.actionable_error.is_some()
-                        || !self.snapshot.state.queued_requests(agent.id).is_empty())
-            })
-            .map(|agent| agent.id)
-    }
     pub fn open_terminal(&mut self, agent: AgentId) {
         self.clear_selection();
         self.terminal = Some(agent);
@@ -502,7 +488,6 @@ impl BusUi {
                 }
             }
             Action::Add => self.add(),
-            Action::Trust(agent) => self.open_form(Form::Trust(agent)),
         }
     }
     fn toggle_recipient(&mut self, id: Option<AgentId>) {
@@ -672,11 +657,6 @@ impl BusUi {
                 self.paste_image();
             }
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => self.action(Action::NewAgent),
-            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
-                if let Some(agent) = self.pending_hook_setup() {
-                    self.action(Action::Trust(agent));
-                }
-            }
             (KeyCode::Char('f'), KeyModifiers::CONTROL) => self.action(Action::Files),
             (KeyCode::Char('@' | '+'), modifiers)
                 if !self.notes_focus && modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
@@ -1194,10 +1174,6 @@ impl BusUi {
             Form::Consent { mut input, .. } => {
                 input.consent_project_hooks = true;
                 self.queue(BusCommand::AddAgent(input), Effect::None);
-            }
-            Form::Trust(agent) => {
-                self.queue(BusCommand::CompleteHookSetup(agent), Effect::None);
-                self.open_terminal(agent);
             }
         }
     }

@@ -153,8 +153,8 @@ pub(crate) fn setup_notice(provider: Provider, cwd: &Path) -> Option<SetupNotice
     let cwd = root.as_path();
     match provider {
         Provider::ClaudeCode => None,
-        Provider::Codex => Some(SetupNotice { path: cwd.join(".codex/hooks.json"), message: "Add Bus-owned SessionStart, UserPromptSubmit and Stop observation hooks. Trust this project and all three definitions in Codex, close its setup menus, then confirm setup in Bus. Codex emits SessionStart with your first room prompt; no priming message or restart is needed. Existing hooks/notify remain. Cleanup: remove only entries whose command is this Bus executable plus --bus-callback codex-hook.".into() }),
-        Provider::Cursor => Some(SetupNotice { path: cwd.join(".cursor/hooks.json"), message: "Add Bus-owned sessionStart, beforeSubmitPrompt, afterAgentResponse and stop observation hooks. Complete normal Cursor trust/setup and confirm setup in Bus. Queued prompts wait for a matching sessionStart. Cleanup: remove only entries whose command is this Bus executable plus --bus-callback cursor-hook.".into() }),
+        Provider::Codex => Some(SetupNotice { path: cwd.join(".codex/hooks.json"), message: "Add Bus-owned SessionStart, UserPromptSubmit and Stop observation hooks. Trust this project and all three definitions in Codex. Bus enables room delivery automatically when the terminal is ready. Codex emits SessionStart with the first room prompt; no priming message or restart is needed. Existing hooks/notify remain. Cleanup: remove only entries whose command is this Bus executable plus --bus-callback codex-hook.".into() }),
+        Provider::Cursor => Some(SetupNotice { path: cwd.join(".cursor/hooks.json"), message: "Add Bus-owned sessionStart, beforeSubmitPrompt, afterAgentResponse and stop observation hooks. Complete normal Cursor trust/setup. Bus enables room delivery automatically when the terminal is ready; queued prompts wait until then. Cleanup: remove only entries whose command is this Bus executable plus --bus-callback cursor-hook.".into() }),
     }
 }
 

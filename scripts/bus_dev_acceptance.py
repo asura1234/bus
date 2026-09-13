@@ -26,6 +26,25 @@ def verify_delivery(status, expected, token):
         assert request["reply"]["text"].strip() == token, request
 
 
+def round_trip_prompt(token):
+    return ("We are only testing Bus message round trip. "
+            "Do not use skills, tools, or modify files. Do not perform project work. "
+            f"Reply with exactly {token} and nothing else.")
+
+
+def read_agent_output(bus, agent_id, timeout=15):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            output = bus("agent", "read", agent_id)["output"]
+            return output if isinstance(output, str) else json.dumps(output)
+        except AssertionError as error:
+            transient = "resource temporarily unavailable" in str(error).lower()
+            if not transient or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.25)
+
+
 def verify_setup_gate(status, expected, token, outputs):
     assert not status["complete"], status
     requests = status["requests"]
@@ -104,7 +123,7 @@ def profiles():
     return {
         "claude-codex": {"providers": ("claude", "codex", "claude", "codex"), "messages": 20,
                          "recipients": ((0,), (1,), (0, 1), (0, 1, 2), (0, 1, 2, 3))},
-        "claude-codex-cursor": {"providers": ("claude", "codex", "cursor"), "messages": 15,
+        "claude-codex-cursor": {"providers": ("claude", "codex", "cursor"), "messages": 20,
                                 "recipients": ((0,), (1,), (2,), (0, 1), (0, 2), (1, 2), (0, 1, 2))},
         "six-agents": {"providers": ("claude", "codex", "cursor", "claude", "codex", "cursor"),
                        "messages": 20,
@@ -125,6 +144,8 @@ def parse_args(argv=None):
     parser.add_argument("--codex-pwd", required=True)
     parser.add_argument("--cursor-pwd")
     parser.add_argument("--messages", type=int)
+    parser.add_argument("--message-delay", type=float, default=5.0,
+                        help="Seconds to wait between completed message cases (default: 5)")
     args = parser.parse_args(argv)
     if "cursor" in profiles()[args.profile]["providers"] and not args.cursor_pwd:
         parser.error("--cursor-pwd is required for a profile containing Cursor")
@@ -135,6 +156,8 @@ def parse_args(argv=None):
         args.messages = profiles()[args.profile]["messages"]
     if not 1 <= args.messages <= 100:
         parser.error("--messages must be between 1 and 100")
+    if not 0 <= args.message_delay <= 300:
+        parser.error("--message-delay must be between 0 and 300 seconds")
     return args
 
 
@@ -182,7 +205,7 @@ def main():
         def send_case(index):
             recipients = [agents[i] for i in sets[index % len(sets)]]
             token = f"BUS_DEV_{run_id}_{index + 1:02d}"
-            text = f"Reply with exactly {token} and nothing else. Do not use tools or modify files."
+            text = round_trip_prompt(token)
             # Exercise --to all only after checking the new room's exact owned membership.
             selector = recipient_selector(bus, room, agents, recipients)
             receipt = bus("send", "--room", room, "--to", selector, "--text", text,
@@ -192,43 +215,8 @@ def main():
             save()
             return case
 
-        if args.profile == "six-agents":
-            # Wait for launch/detection, without confirming the separate Bus gate.
-            deadline = time.monotonic() + 90
-            providers_by_id = {a["id"]: a["provider"] for a in agents}
-            while True:
-                diagnostics = bus("diagnostics")
-                selected = [a for a in diagnostics["agents"] if a["agent_id"] in {a["id"] for a in agents}]
-                evidence["readiness_before_setup"] = selected
-                save()
-                if len(selected) == len(agents) and all(a["status"] == "idle" and
-                        (a["identity"]["session_id"] or providers_by_id[a["agent_id"]] == "codex")
-                        for a in selected):
-                    break
-                if time.monotonic() >= deadline:
-                    raise AssertionError("Agents not idle before setup; inspect owned terminals")
-                time.sleep(0.2)
-            first = send_case(0)
-            gate = first["setup_gate"] = {"samples": [], "passed": False}
-            for _ in range(6):
-                status = bus("message", "status", first["receipt"]["message_id"])
-                gate["samples"].append(status)
-                save()
-                verify_setup_gate(status, first["recipient_ids"], first["token"], {})
-                time.sleep(0.2)
-            outputs = {a["name"]: bus("agent", "read", a["id"])["output"] for a in agents}
-            status = bus("message", "status", first["receipt"]["message_id"])
-            verify_setup_gate(status, first["recipient_ids"], first["token"], outputs)
-            assert {r["request_id"] for r in status["requests"]} == set(first["receipt"]["request_ids"])
-            gate.update({"passed": True, "terminal_checks": {name: {"token_seen": False} for name in outputs}})
-            save()
-            print(json.dumps({"setup_gate": "passed", "message_id": first["receipt"]["message_id"]}), flush=True)
-        # This confirms Bus setup, not provider trust. Review provider hooks before this run.
-        for agent in agents:
-            if agent["provider"] in ("codex", "cursor"):
-                bus("agent", "setup-confirm", agent["id"], "--confirm")
         deadline = time.monotonic() + 90
-        while args.profile != "six-agents":
+        while True:
             diagnostics = bus("diagnostics")
             selected = [a for a in diagnostics["agents"] if a["agent_id"] in {a["id"] for a in agents}]
             if len(selected) == len(agents) and all(a["reason"] is None for a in selected):
@@ -239,19 +227,21 @@ def main():
             time.sleep(1)
         for index in range(args.messages):
             recipients = [agents[i] for i in sets[index % len(sets)]]
-            case = evidence["cases"][0] if index == 0 and args.profile == "six-agents" else send_case(index)
+            case = send_case(index)
             token = case["token"]
             status = poll_delivery(bus, case, agents, save)
             case["status"] = status
             # Inspect actual owned runtime output too: catches unintended terminal fan-out.
             for agent in agents:
-                runtime = bus("agent", "read", agent["id"])
-                seen = token in json.dumps(runtime["output"])
+                output = read_agent_output(bus, agent["id"])
+                seen = token in output
                 assert seen == (agent in recipients), (agent, "unexpected token visibility", seen)
                 case.setdefault("terminal_checks", {})[agent["name"]] = {"token_seen": seen}
             case["passed"] = True
             save()
             print(json.dumps({"case": index + 1, "recipients": len(recipients), "passed": True}), flush=True)
+            if index + 1 < args.messages:
+                time.sleep(args.message_delay)
         history = bus("history", "--room", room)
         ids = [m["prompt"]["id"] for m in history["messages"]]
         assert len(ids) == args.messages and ids == sorted(ids) and len(set(ids)) == len(ids)
