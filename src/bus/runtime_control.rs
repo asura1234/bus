@@ -4,7 +4,16 @@ use crate::bus::control::{Request as ControlRequest, Response};
 use serde_json::{json, Value};
 
 impl Worker {
-    pub(super) fn dev_response(&mut self, request: &ControlRequest) -> Response {
+    #[cfg(test)]
+    fn dev_response(&mut self, request: &ControlRequest) -> Response {
+        self.dev_response_with_events(request, None)
+    }
+
+    pub(super) fn dev_response_with_events(
+        &mut self,
+        request: &ControlRequest,
+        events: Option<&mpsc::Sender<BusEvent>>,
+    ) -> Response {
         if !self.dev_enabled {
             return Response::failure(
                 &request.id,
@@ -35,6 +44,7 @@ impl Worker {
             "room.create" => (&["name"], true),
             "room.rename" => (&["room", "name"], true),
             "room.delete" => (&["room", "confirm"], true),
+            "room.focus" => (&["room"], true),
             "agent.add" => (
                 &[
                     "room",
@@ -48,6 +58,7 @@ impl Worker {
             ),
             "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
             "agent.read" => (&["agent"], false),
+            "agent.focus" => (&["agent"], true),
             "message.send" => (&["room", "to", "text", "files"], true),
             "message.status" => (&["message"], false),
             "room.history" => (&["room"], false),
@@ -101,7 +112,7 @@ impl Worker {
         }
         let _span = tracing::info_span!("bus.dev.command", control_request_id = %request.id, method = %request.method).entered();
         let started = std::time::Instant::now();
-        let response = match self.dev_execute(&request.method, &request.params) {
+        let response = match self.dev_execute(&request.method, &request.params, events) {
             Ok(result) => Response::success(&request.id, result),
             Err(error) => {
                 // Detailed domain diagnostics remain available via state and log IDs.
@@ -126,8 +137,36 @@ impl Worker {
         response
     }
 
-    fn dev_execute(&mut self, method: &str, p: &Value) -> Result<Value, String> {
+    fn dev_execute(
+        &mut self,
+        method: &str,
+        p: &Value,
+        events: Option<&mpsc::Sender<BusEvent>>,
+    ) -> Result<Value, String> {
         match method {
+            "agent.focus" | "room.focus" => {
+                let (room, agent) = if method == "agent.focus" {
+                    let id = self.dev_agent(required(p, "agent")?, None)?;
+                    let agent = self.state.agent(id).ok_or("Unknown agent")?;
+                    if agent.runtime_identity.pane_id.is_none() {
+                        return Err("Agent has no terminal; inspect its launch error".into());
+                    }
+                    (agent.room_id, Some(id))
+                } else {
+                    (self.dev_room(required(p, "room")?)?, None)
+                };
+                // Navigation is client presentation state. The UI uses its normal
+                // focus command path; this receipt only attests enqueueing.
+                events
+                    .ok_or("Bus UI event channel unavailable")?
+                    .send(BusEvent::DevFocusRequested { room, agent })
+                    .map_err(|_| "Bus UI event channel disconnected")?;
+                let mut result = json!({"stage":"queued", "room_id":room});
+                if let Some(agent) = agent {
+                    result["agent_id"] = json!(agent);
+                }
+                Ok(result)
+            }
             "state" => Ok(
                 json!({"revision":self.revision,"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"notes":r.notes,"deletion_pending":r.deletion_pending})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>()}),
             ),
@@ -378,3 +417,7 @@ fn unique<T>(mut items: impl Iterator<Item = T>) -> Result<T, String> {
 #[cfg(test)]
 #[path = "runtime_control_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_focus_tests.rs"]
+mod focus_tests;

@@ -200,8 +200,8 @@ fn agent_identity_color_matches_sidebar_chip_and_reply_header() {
         }
     }
     assert_eq!(
-        labels, 3,
-        "one consistent agent identity across the three surfaces"
+        labels, 4,
+        "one consistent agent identity in the sidebar, chip, recipient and reply headers"
     );
 }
 
@@ -243,4 +243,80 @@ fn old_prompts_and_replies_show_relative_day_label() {
     saved_history(&mut ui, room, agent, 1);
     let screen = room_screen(&mut ui, 100, 40);
     assert_eq!(screen.matches("> 1 day").count(), 2);
+}
+
+#[test]
+fn history_recipient_colors_survive_wrapping_without_coloring_message_text() {
+    use ratatui::{buffer::Buffer, layout::Rect, style::Color};
+
+    let (mut ui, room, author) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let reviewer = snapshot
+        .state
+        .create_agent(room, "审核Beta", Provider::Cursor, "/project".into(), None)
+        .unwrap();
+    snapshot
+        .state
+        .set_draft_recipients(room, [author, reviewer])
+        .unwrap();
+    snapshot
+        .state
+        .set_draft_text(room, "You author 审核Beta")
+        .unwrap();
+    snapshot.state.submit_draft(room, 1).unwrap();
+    let colors: Vec<_> = [author, reviewer]
+        .iter()
+        .map(|id| {
+            let [r, g, b] = snapshot.state.agent(*id).unwrap().color;
+            Color::Rgb(r, g, b)
+        })
+        .collect();
+    ui.receive_snapshot(Arc::new(snapshot));
+    // At 29 columns the history has 16 cells: 审 ends one header line and
+    // 核Beta starts the next, so the split crosses a UTF-8 name span.
+    for (cols, reviewer_rows) in [(100, 1), (44, 1), (29, 2)] {
+        ui.compute_view(cols, 40);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, cols, 40));
+        ui.render(&mut buffer);
+        let mut cells = Vec::new();
+        let mut colored_rows = 0;
+        for y in ui.view.history.y..ui.view.history.bottom() {
+            let mut row = Vec::new();
+            for x in ui.view.history.x + 2..ui.view.history.right() - 2 {
+                let cell = &buffer[(x, y)];
+                for ch in cell.symbol().chars().filter(|ch| !ch.is_whitespace()) {
+                    row.push((ch, cell.fg));
+                }
+            }
+            colored_rows += usize::from(row.iter().any(|(_, color)| *color == colors[1]));
+            cells.extend(row);
+        }
+        assert_eq!(
+            colored_rows, reviewer_rows,
+            "name wrapping at {cols} columns"
+        );
+        let header = "You→author,审核Beta>1day";
+        assert_eq!(
+            cells
+                .iter()
+                .take(header.chars().count())
+                .map(|c| c.0)
+                .collect::<String>(),
+            header
+        );
+        let expected_colors = [
+            ("You", Color::Rgb(102, 255, 102)),
+            ("→", Color::Rgb(145, 148, 159)),
+            ("author", colors[0]),
+            (",", Color::Rgb(145, 148, 159)),
+            ("审核Beta", colors[1]),
+            (">1day", Color::Rgb(145, 148, 159)),
+            ("Youauthor审核Beta", Color::Rgb(222, 222, 226)),
+        ];
+        let expected: Vec<_> = expected_colors
+            .into_iter()
+            .flat_map(|(text, color)| text.chars().map(move |ch| (ch, color)))
+            .collect();
+        assert_eq!(cells, expected, "rendered history colors at {cols} columns");
+    }
 }

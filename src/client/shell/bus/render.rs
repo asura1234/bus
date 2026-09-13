@@ -291,7 +291,7 @@ impl BusUi {
                 .map(|(agent, paths)| {
                     3 + usize::from(agent.details_disclosed)
                         + paths.len()
-                        + usize::from(agent.actionable_error.is_some())
+                        + usize::from(agent.actionable_error.is_some() && !agent.deletion_pending)
                 })
                 .sum::<usize>();
         let footer = if self.force_exit_available {
@@ -370,7 +370,7 @@ impl BusUi {
             let height = 3
                 + usize::from(agent.details_disclosed)
                 + paths.len()
-                + usize::from(agent.actionable_error.is_some());
+                + usize::from(agent.actionable_error.is_some() && !agent.deletion_pending);
             if y >= visible_end {
                 break;
             }
@@ -446,13 +446,8 @@ impl BusUi {
                     y += 1;
                 }
             }
-            if agent.actionable_error.is_some() {
-                let (label, action) = if agent.deletion_pending {
-                    (
-                        "Retry delete",
-                        Action::Delete(DeleteTarget::Agent(agent.id)),
-                    )
-                } else if agent.session_binding_invalidated {
+            if agent.actionable_error.is_some() && !agent.deletion_pending {
+                let (label, action) = if agent.session_binding_invalidated {
                     ("Session changed: add agent", Action::NewAgent)
                 } else {
                     ("Confirm setup", Action::Trust(agent.id))
@@ -697,16 +692,30 @@ impl BusUi {
                 false,
                 matches!(line.tone, super::history::Tone::Muted),
             );
-            let color = match line.tone {
-                super::history::Tone::You => Some(ACCENT),
-                super::history::Tone::Agent(id) => self.snapshot.state.agent(id).map(|agent| {
-                    let [r, g, b] = agent.color;
-                    Color::Rgb(r, g, b)
-                }),
-                _ => None,
-            };
-            if let Some(color) = color {
-                view.color_last_row(rect, color);
+            let mut column = 0u16;
+            for (text, tone) in &line.spans {
+                let span_width = unicode_width::UnicodeWidthStr::width(text.as_str()) as u16;
+                let color = match tone {
+                    super::history::Tone::You => Some(ACCENT),
+                    super::history::Tone::Agent(id) => {
+                        self.snapshot.state.agent(*id).map(|agent| {
+                            let [r, g, b] = agent.color;
+                            Color::Rgb(r, g, b)
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(color) = color {
+                    let span_rect = Rect::new(
+                        rect.x + column,
+                        rect.y,
+                        span_width.min(width.saturating_sub(column)),
+                        1,
+                    );
+                    view.row(span_rect, text, None, false, false);
+                    view.color_last_row(span_rect, color);
+                }
+                column = column.saturating_add(span_width);
             }
         }
         view.lines(

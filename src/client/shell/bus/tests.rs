@@ -28,6 +28,77 @@ fn fixture() -> (BusUi, RoomId, AgentId) {
     }));
     (ui, room, agent)
 }
+
+#[test]
+fn pending_delete_keeps_sidebar_details_and_only_the_original_delete_button() {
+    let (mut ui, _room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .set_agent_details_disclosed(agent, true)
+        .unwrap();
+    snapshot.state.prepare_delete_agent(agent).unwrap();
+    snapshot
+        .state
+        .set_agent_error(agent, Some("The terminal could not be closed".into()))
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    let screen = room_screen(&mut ui, 100, 40);
+    assert!(screen.contains("main"));
+    assert!(screen.contains("/project"));
+    assert!(!screen.contains("Retry delete"));
+    assert_eq!(
+        ui.view
+            .hits
+            .iter()
+            .filter(|hit| {
+                hit.action == render::Action::Delete(deletion::DeleteTarget::Agent(agent))
+            })
+            .count(),
+        1
+    );
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::Details(agent)));
+}
+
+#[test]
+fn non_deletion_errors_keep_their_sidebar_recovery_action() {
+    for invalidated in [false, true] {
+        let (mut ui, _room, agent) = fixture();
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot
+            .state
+            .set_agent_error(agent, Some("Setup required".into()))
+            .unwrap();
+        if invalidated {
+            snapshot.state.invalidate_agent_session(agent).unwrap();
+        }
+        ui.receive_snapshot(Arc::new(snapshot));
+        let screen = room_screen(&mut ui, 100, 40);
+        assert!(screen.contains("Setup required"));
+        let details = ui
+            .view
+            .hits
+            .iter()
+            .find(|hit| hit.action == render::Action::Details(agent))
+            .unwrap();
+        let (label, action) = if invalidated {
+            ("Session changed", render::Action::NewAgent)
+        } else {
+            ("Confirm setup", render::Action::Trust(agent))
+        };
+        assert!(screen.contains(label));
+        assert!(ui
+            .view
+            .hits
+            .iter()
+            .any(|hit| { hit.rect.y == details.rect.y + 1 && hit.action == action }));
+    }
+}
+
 fn key(ui: &mut BusUi, code: KeyCode, modifiers: KeyModifiers) {
     ui.input(
         &RawInputEvent::Key(TerminalKey::new(code, modifiers)),
@@ -1693,6 +1764,19 @@ fn bus_presentation_1_and_15_agents_stays_bounded_to_visible_rows() {
                 )
                 .unwrap();
         }
+        let recipients: Vec<_> = snapshot.state.agents().map(|agent| agent.id).collect();
+        snapshot
+            .state
+            .set_draft_recipients(room, recipients)
+            .unwrap();
+        snapshot
+            .state
+            .set_draft_text(
+                room,
+                "Exercise visible recipient names in the history header",
+            )
+            .unwrap();
+        snapshot.state.submit_draft(room, 1).unwrap();
         ui.receive_snapshot(Arc::new(snapshot));
         let started = std::time::Instant::now();
         for _ in 0..200 {

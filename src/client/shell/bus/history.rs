@@ -1,5 +1,5 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
-use super::render::{provider, wrap, Action};
+use super::render::{display, provider, wrap, Action};
 use crate::bus::model::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -16,6 +16,7 @@ pub(super) struct Line {
     pub text: String,
     pub action: Option<Action>,
     pub tone: Tone,
+    pub spans: Vec<(String, Tone)>,
 }
 
 #[derive(Default)]
@@ -110,25 +111,25 @@ impl History {
         }
         let mut lines = Vec::new();
         for message in messages.into_values() {
-            let (header, text, tone, files, quote) = match message {
+            let (header, text, files, quote) = match message {
                 Message::Prompt(prompt) => {
-                    let recipients = prompt
+                    let mut header = vec![("You".into(), Tone::You), (" → ".into(), Tone::Muted)];
+                    for (index, agent) in prompt
                         .recipient_ids
                         .iter()
                         .filter_map(|id| state.agent(*id))
-                        .map(|agent| agent.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    (
-                        format!(
-                            "You → {recipients}  {}",
-                            timestamp(prompt.submitted_at_ms, now)
-                        ),
-                        prompt.text.as_str(),
-                        Tone::You,
-                        prompt.files.as_slice(),
-                        None,
-                    )
+                        .enumerate()
+                    {
+                        if index > 0 {
+                            header.push((", ".into(), Tone::Muted));
+                        }
+                        header.push((agent.name.clone(), Tone::Agent(agent.id)));
+                    }
+                    header.push((
+                        format!("  {}", timestamp(prompt.submitted_at_ms, now)),
+                        Tone::Muted,
+                    ));
+                    (header, prompt.text.as_str(), prompt.files.as_slice(), None)
                 }
                 Message::Reply {
                     request,
@@ -140,28 +141,25 @@ impl History {
                         continue;
                     };
                     (
-                        format!(
-                            "{}  {}  {}",
-                            agent.name,
-                            provider(agent.provider),
-                            timestamp(at, now)
-                        ),
+                        vec![
+                            (agent.name.clone(), Tone::Agent(agent.id)),
+                            (
+                                format!("  {}  {}", provider(agent.provider), timestamp(at, now)),
+                                Tone::Muted,
+                            ),
+                        ],
                         text,
-                        Tone::Agent(agent.id),
                         &[][..],
                         Some(request),
                     )
                 }
             };
-            lines.extend(wrap(&header, width).into_iter().map(|text| Line {
-                text,
-                action: None,
-                tone,
-            }));
+            lines.extend(wrap_header(header, width));
             lines.extend(wrap(text, width).into_iter().map(|text| Line {
                 text,
                 action: None,
                 tone: Tone::Text,
+                spans: Vec::new(),
             }));
             for path in files {
                 lines.push(Line {
@@ -171,6 +169,7 @@ impl History {
                     ),
                     action: Some(Action::FileDetail(path.clone())),
                     tone: Tone::Muted,
+                    spans: Vec::new(),
                 });
             }
             if let Some(request) = quote {
@@ -178,18 +177,54 @@ impl History {
                     text: "Quote".into(),
                     action: Some(Action::Quote(request)),
                     tone: Tone::Muted,
+                    spans: Vec::new(),
                 });
             }
             lines.push(Line {
                 text: String::new(),
                 action: None,
                 tone: Tone::Text,
+                spans: Vec::new(),
             });
         }
         self.key = Some(key);
         self.lines = lines;
         &self.lines
     }
+}
+
+// Keep styling attached to header fields, not matches against arbitrary message
+// text. Wrapping preserves every byte of the sanitized source, including UTF-8.
+fn wrap_header(spans: Vec<(String, Tone)>, width: u16) -> Vec<Line> {
+    let mut source = String::new();
+    let mut ranges = Vec::new();
+    for (text, tone) in spans {
+        let start = source.len();
+        source.push_str(&display(&text));
+        ranges.push((start..source.len(), tone));
+    }
+    let mut offset = 0;
+    wrap(&source, width)
+        .into_iter()
+        .map(|text| {
+            let end = offset + text.len();
+            let spans = ranges
+                .iter()
+                .filter_map(|(range, tone)| {
+                    let start = range.start.max(offset);
+                    let stop = range.end.min(end);
+                    (start < stop).then(|| (source[start..stop].to_owned(), *tone))
+                })
+                .collect();
+            offset = end;
+            Line {
+                text,
+                action: None,
+                tone: Tone::Muted,
+                spans,
+            }
+        })
+        .collect()
 }
 
 // Prompts and completed finals are immutable after creation. Check their

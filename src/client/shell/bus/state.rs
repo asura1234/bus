@@ -12,6 +12,10 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(test)]
+#[path = "focus_tests.rs"]
+mod focus_tests;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ComposerSize {
     #[default]
@@ -198,6 +202,16 @@ impl BusUi {
     }
     pub fn receive_event(&mut self, event: BusEvent) {
         match event {
+            BusEvent::DevFocusRequested { room, agent } => {
+                if let Some(agent) = agent {
+                    // Show this agent's room in the sidebar without marking the
+                    // room history read merely because its terminal was opened.
+                    self.room = Some(room);
+                    self.open_terminal(agent);
+                } else {
+                    self.open_room(room);
+                }
+            }
             BusEvent::CommandFinished { command_id, result } => {
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == command_id) {
                     if matches!(pending.command, BusCommand::Submit(_)) {

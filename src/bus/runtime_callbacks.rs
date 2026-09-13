@@ -235,23 +235,40 @@ impl Worker {
                                 Ok(Parsed::CursorResponse {
                                     session: s,
                                     turn: t,
-                                    text,
+                                    ..
                                 }) if s == session
                                     && t == turn
                                     && other.manifest.launch_id == record.manifest.launch_id =>
                                 {
-                                    Some((other_path, text))
+                                    Some((other_path, other))
                                 }
                                 _ => None,
                             }
                         });
-                    let Some((other_path, text)) = found else {
+                    let Some((other_path, response)) = found else {
                         tracing::debug!(
                             event = "bus.callback.deferred",
                             reason = "cursor_response_missing",
                             "Awaiting response companion"
                         );
                         continue;
+                    };
+                    let text = match callbacks::cursor_reply::final_text(&response.value) {
+                        Ok(text) => text,
+                        Err(message) => {
+                            tracing::debug!(
+                                event = "bus.callback.deferred",
+                                reason = "cursor_transcript_pending",
+                                "Awaiting completed Cursor transcript"
+                            );
+                            if agent.actionable_error.as_deref() != Some(message.as_str()) {
+                                state
+                                    .set_agent_error(id, Some(message))
+                                    .map_err(|e| e.to_string())?;
+                                self.save(state)?;
+                            }
+                            continue;
+                        }
                     };
                     remove.push(other_path.clone());
                     Some(record.callback(session, turn, None, CallbackEventKind::Final { text }))

@@ -13,14 +13,20 @@ use serde_json::{json, Value};
 
 use super::control::{self, Request, Response};
 
+#[cfg(test)]
+#[path = "control_focus_cli_tests.rs"]
+mod focus_tests;
+
 pub const HELP: &str = "Developer commands (require an already running Bus --dev instance):
   state
   room create NAME
   room rename ROOM NAME
   room delete ROOM --confirm
+  room focus ROOM
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks]
   agent read AGENT
+  agent focus AGENT
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
   send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...]
@@ -32,6 +38,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
 Every command accepts --request-id STRING and emits one JSON response.
 ROOM and AGENT accept a name or numeric ID. Use --to all explicitly for all room agents.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
+focus queues a visible Bus view change; its receipt does not claim the view has rendered.
 Commands only connect to the existing instance in BUS_DATA_DIR; they never start or enable it.";
 
 pub fn run(data_dir: &Path, args: &[String]) -> io::Result<()> {
@@ -169,6 +176,7 @@ fn cli() -> Command {
             subcommand("room")
                 .subcommand_required(true)
                 .subcommand(subcommand("create").arg(value_arg("name").required(true)))
+                .subcommand(subcommand("focus").arg(value_arg("room").required(true)))
                 .subcommand(
                     subcommand("rename")
                         .arg(value_arg("room").required(true))
@@ -193,6 +201,7 @@ fn cli() -> Command {
                         .arg(flag("consent-hooks")),
                 )
                 .subcommand(subcommand("read").arg(value_arg("agent").required(true)))
+                .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
                 .subcommand(
                     subcommand("setup-confirm")
                         .arg(value_arg("agent").required(true))
@@ -255,6 +264,7 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         "state" => ("state", json!({})),
         "diagnostics" => ("diagnostics", json!({})),
         "room" => match args.subcommand() {
+            Some(("focus", args)) => ("room.focus", json!({"room": required(args, "room")?})),
             Some(("create", args)) => ("room.create", json!({"name": required(args, "name")?})),
             Some(("rename", args)) => (
                 "room.rename",
@@ -267,6 +277,7 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             _ => return Err("unknown room command".into()),
         },
         "agent" => match args.subcommand() {
+            Some(("focus", args)) => ("agent.focus", json!({"agent": required(args, "agent")?})),
             Some(("add", args)) => (
                 "agent.add",
                 json!({

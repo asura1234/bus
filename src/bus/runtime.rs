@@ -58,6 +58,11 @@ pub(crate) enum BusCommand {
 
 #[derive(Clone, Debug)]
 pub(crate) enum BusEvent {
+    /// Explicit dev navigation request; enqueueing does not prove it is visible yet.
+    DevFocusRequested {
+        room: RoomId,
+        agent: Option<AgentId>,
+    },
     /// Outcome of this exact command, independent of later snapshot acknowledgements.
     CommandFinished {
         command_id: u64,
@@ -276,7 +281,7 @@ impl Worker {
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Ok((_id, BusCommand::Dev(call))) => {
-                    let response = self.dev_response(&call.request);
+                    let response = self.dev_response_with_events(&call.request, Some(&events));
                     // A disconnected client does not cancel or replay a committed action.
                     let _ = call.reply.try_send(response);
                 }

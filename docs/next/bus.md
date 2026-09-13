@@ -185,9 +185,11 @@ agent; existing request ownership remains preserved.
 
 ### Message identity and time
 
-Outgoing `You → recipients` headers use the green accent. Each agent has a
-persisted identity color used for its sidebar name, recipient chip, and reply
-header. Creation chooses the candidate with the largest minimum Oklab distance
+The `You` label in outgoing headers uses the green accent. Each agent has a
+persisted identity color used for its sidebar name, recipient chip, outgoing
+recipient name, and incoming reply name. Header separators, provider labels,
+and timestamps remain muted; message bodies retain their normal text color.
+Creation chooses the candidate with the largest minimum Oklab distance
 from green and the existing room colors. Candidates come from a deterministic
 17-step RGB grid with at least 4.5:1 text contrast against the dark background;
 recognizably green hues are excluded. This maximizes separation within that
@@ -298,6 +300,14 @@ hook setup; `agent setup-confirm --confirm` records the separate Bus readiness
 confirmation. Neither option grants provider permissions or trusts hooks on
 the provider's behalf. Review actual provider setup before confirming.
 
+`bus agent focus AGENT` switches the visible Bus view to that agent's terminal;
+`bus room focus ROOM` returns to the room view. Both accept a unique name or
+numeric ID and require the already running `--dev` instance. They send no
+terminal input and preserve drafts and message history. Their JSON receipt
+reports `stage: "queued"`: the UI still has to process the navigation request,
+so inspect the screen before assuming the target is visible. Reusing the same
+request ID returns the original receipt without repeating the focus change.
+
 `send` atomically preserves the human's composer draft. Its receipt means
 **queued**, not delivered. `message status` reports each target separately:
 `queued`, `submitting`, `awaiting_start`, `delivered`, or `replied`, with blocker
@@ -360,6 +370,26 @@ callbacks; it is never substituted with another provider. The driver does not
 close the app or delete the room on success or failure. Run Bus in the terminal
 you want to inspect, then run the driver from a second terminal; leave the first
 window open to check scrolling afterwards.
+
+For two agents of each provider and 20 prompts, run from this checkout:
+
+```sh
+BUS_DATA_DIR=/absolute/disposable/bus-data python3 scripts/bus_dev_acceptance.py \
+  --allow-live-models --profile six-agents \
+  --claude-pwd "$PWD" --codex-pwd "$PWD" --cursor-pwd "$PWD"
+```
+
+This profile requires every agent's PWD to be the Bus checkout. It tests each
+agent alone, pairs, triples, and all six, with 48 expected final replies and
+120 terminal checks for intended and unintended delivery. The first Cursor
+message is queued before Bus setup confirmation, then verified to complete
+with the same request ID after confirmation. Working and Idle must both be
+observed for every provider. Real permission/question menus and deletion
+must be tested separately; this driver never selects provider menu options.
+
+To deliberately test an already running default `~/.local/share/bus` instance,
+add `--allow-existing-user-root`. Only a fresh test room and its new agents are
+used; the default user root is rejected without this explicit opt-in.
 
 ## Verification scope
 

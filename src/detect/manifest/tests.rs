@@ -1000,7 +1000,7 @@ fn codex_osc_title_plain_is_idle() {
 }
 
 #[test]
-fn codex_trust_directory_requires_live_top_region() {
+fn codex_trust_directory_requires_live_chooser() {
     let screen = "> You are in C:\\Users\\user\\project\n\n\
         Do you trust the contents of this\n\
         directory? Working with untrusted\n\
@@ -1011,14 +1011,28 @@ fn codex_trust_directory_requires_live_top_region() {
         › 1. Yes, continue\n\
           2. No, quit\n\n\
         Press enter to continue\n";
-    let result = osc_explain(Agent::Codex, screen, "project", "");
+    // The live bottom buffer can retain the shell launch title above the chooser.
+    for prefix in ["", "codex\n~/work/bus\n\n✗ codex\n"] {
+        let live = format!("{prefix}{screen}");
+        let result = osc_explain(Agent::Codex, &live, "project", "");
+        assert_eq!(result.state, AgentState::Blocked, "prefix: {prefix:?}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("trust_directory")
+        );
+        assert!(result.visible_blocker);
+    }
 
-    assert_eq!(result.state, AgentState::Blocked);
-    assert_eq!(
-        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-        Some("trust_directory")
-    );
-    assert!(result.visible_blocker);
+    for inactive in [
+        format!("{screen}\n› New prompt\n"),
+        screen.replace("› 1. Yes, continue\n", ""),
+        screen.replace("2. No, quit\n", ""),
+        screen.replace("Press enter to continue\n", ""),
+    ] {
+        let result = osc_explain(Agent::Codex, &inactive, "project", "");
+        assert_eq!(result.state, AgentState::Idle);
+        assert!(!result.visible_blocker);
+    }
 
     let transcript = "› > You are in C:\\Users\\user\\project\n\n\
         Do you trust the contents of this\n\
@@ -1263,4 +1277,197 @@ fn codex_osc_working_beats_weak_blocker_screen() {
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
         Some("osc_title_working")
     );
+}
+
+// Reduced to the live control lines captured from Cursor Agent
+// v2026.09.10-fd3934a, pane w1:p8, on 2026-09-13. Question wording and the
+// transcript above the chooser are deliberately not detection invariants.
+const CURSOR_QUESTION_CONTROLS: &str = concat!(
+    " │   › [ ] Continue │\n",
+    " │     [ ] Cancel │\n",
+    " │     [ ] Other: (type to answer) │\n",
+    " │ │\n",
+    " │ ↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip │\n",
+    " └────────────────────────────────────────────────────────────────────────────────┘\n",
+);
+
+fn cursor_question_explain(screen: &str) -> DetectionExplain {
+    let loaded = bundled_loaded_manifest(
+        Agent::Cursor,
+        bundled_manifest(Agent::Cursor).unwrap(),
+        None,
+        None,
+        false,
+    );
+    evaluate_loaded_manifest(
+        Agent::Cursor,
+        DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        },
+        loaded,
+        false,
+    )
+}
+
+#[test]
+fn cursor_native_question_controls_are_a_visible_blocker() {
+    let result = cursor_question_explain(CURSOR_QUESTION_CONTROLS);
+    assert_eq!(result.state, AgentState::Blocked);
+    assert!(result.visible_blocker);
+    assert!(!result.visible_working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("question_prompt")
+    );
+}
+
+#[test]
+fn cursor_question_blocker_requires_both_options_and_navigation_controls() {
+    let screens = [
+        CURSOR_QUESTION_CONTROLS.replace("[ ]", "option"),
+        CURSOR_QUESTION_CONTROLS.replace("Space select", "Selection finished"),
+        "Question 1 of 1: Continue or Cancel?\n".to_owned(),
+        "Explain ↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip\n"
+            .to_owned(),
+    ];
+    for screen in screens {
+        let result = cursor_question_explain(&screen);
+        assert_eq!(result.state, AgentState::Idle, "{screen}");
+        assert!(!result.visible_blocker, "{screen}");
+    }
+}
+
+#[test]
+fn cursor_previous_question_does_not_block_current_prompt_or_working_turn() {
+    for (suffix, expected) in [
+        ("\n > Ask anything\n", AgentState::Idle),
+        ("\n ctrl+c to stop\n", AgentState::Working),
+    ] {
+        let screen = format!("{CURSOR_QUESTION_CONTROLS}{suffix}");
+        let result = cursor_question_explain(&screen);
+        assert_eq!(result.state, expected, "{screen}");
+        assert!(!result.visible_blocker, "{screen}");
+    }
+}
+
+// Live Codex 0.154.0 controls captured from w1:pE (startup) and w1:pB
+// (Hooks table). Keep the tests about active controls, not hook counts or
+// surrounding transcript content.
+const CODEX_HOOKS_STARTUP: &str = concat!(
+    "  Hooks need review\n",
+    "  3 hooks are new or changed.\n",
+    "  Hooks can run outside the sandbox after you trust them.\n\n",
+    "› 1. Review hooks\n",
+    "  2. Trust all and continue\n",
+    "  3. Continue without trusting (hooks won't run)\n\n",
+    "  Press enter to confirm or esc to go back\n",
+);
+
+const CODEX_HOOKS_TABLE: &str = concat!(
+    "  Hooks\n",
+    "  Lifecycle hooks from config and enabled plugins.\n\n",
+    "  ⚠ 3 hooks need review before they can run.\n\n",
+    "  Event                 Installed   Active      Review      Description\n",
+    "  SessionStart          3           2           1           When a new session starts\n",
+    "  Stop                  4           3           1           Right before Codex ends its turn\n\n",
+    "  Press t to trust all; enter to review hooks; esc to close\n",
+);
+
+// Same live table after the three Bus callbacks were reviewed and trusted.
+const CODEX_HOOKS_TRUSTED_TABLE: &str = concat!(
+    "  Hooks\n",
+    "  Lifecycle hooks from config and enabled plugins.\n\n",
+    "  Event                 Installed   Active      Description\n",
+    "  SessionStart          3           3           When a new session starts\n",
+    "  Stop                  4           4           Right before Codex ends its turn\n\n",
+    "  Press enter to view hooks; esc to close\n",
+);
+
+fn codex_hooks_explain(screen: &str) -> DetectionExplain {
+    let loaded = bundled_loaded_manifest(
+        Agent::Codex,
+        bundled_manifest(Agent::Codex).unwrap(),
+        None,
+        None,
+        false,
+    );
+    evaluate_loaded_manifest(
+        Agent::Codex,
+        DetectionInput {
+            screen,
+            osc_title: "bus",
+            osc_progress: "",
+        },
+        loaded,
+        false,
+    )
+}
+
+#[test]
+fn codex_hooks_startup_chooser_blocks_at_every_selected_option() {
+    for selected in 1..=3 {
+        let screen = CODEX_HOOKS_STARTUP
+            .replace("› 1.", "  1.")
+            .replace(&format!("  {selected}."), &format!("› {selected}."));
+        let result = codex_hooks_explain(&format!("codex\n~/work/bus\n✗ codex\n{screen}"));
+        assert_eq!(result.state, AgentState::Blocked, "selected={selected}");
+        assert!(result.visible_blocker, "selected={selected}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("hooks_startup_review")
+        );
+    }
+}
+
+#[test]
+fn codex_hooks_table_with_live_controls_blocks_without_a_pending_count_gate() {
+    for screen in [
+        CODEX_HOOKS_TABLE.to_owned(),
+        CODEX_HOOKS_TABLE.replace("  ⚠ 3 hooks need review before they can run.\n", ""),
+        CODEX_HOOKS_TRUSTED_TABLE.to_owned(),
+    ] {
+        let result = codex_hooks_explain(&screen);
+        assert_eq!(result.state, AgentState::Blocked);
+        assert!(result.visible_blocker);
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("hooks_table_review")
+        );
+    }
+}
+
+#[test]
+fn codex_hooks_blockers_require_live_controls_and_ignore_previous_menus() {
+    for screen in [
+        CODEX_HOOKS_STARTUP,
+        CODEX_HOOKS_TABLE,
+        CODEX_HOOKS_TRUSTED_TABLE,
+    ] {
+        let inactive = format!("{screen}\n› Ask Codex to do anything\n");
+        let result = codex_hooks_explain(&inactive);
+        assert_eq!(result.state, AgentState::Idle);
+        assert!(!result.visible_blocker);
+        let working = format!("{screen}\n• Working (4s • esc to interrupt)\n");
+        let result = codex_hooks_explain(&working);
+        assert_eq!(result.state, AgentState::Working);
+        assert!(!result.visible_blocker);
+    }
+    for screen in [
+        CODEX_HOOKS_STARTUP.replace("  2. Trust all and continue\n", ""),
+        CODEX_HOOKS_STARTUP.replace("Press enter to confirm or esc to go back", ""),
+        CODEX_HOOKS_TABLE.replace("Installed   Active      Review", ""),
+        CODEX_HOOKS_TABLE.replace(
+            "Press t to trust all; enter to review hooks; esc to close",
+            "",
+        ),
+        CODEX_HOOKS_TRUSTED_TABLE.replace("Installed   Active", ""),
+        CODEX_HOOKS_TRUSTED_TABLE.replace("Press enter to view hooks; esc to close", ""),
+        "› Explain Hooks need review and Press enter to confirm or esc to go back\n".into(),
+    ] {
+        let result = codex_hooks_explain(&screen);
+        assert_eq!(result.state, AgentState::Idle, "{screen}");
+        assert!(!result.visible_blocker, "{screen}");
+    }
 }

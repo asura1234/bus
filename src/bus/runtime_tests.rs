@@ -1218,6 +1218,23 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
     );
     let request = queue(&mut worker, room, agent, "same");
     worker.submit_ready().unwrap();
+    let transcript = dir.join("cursor-session.jsonl");
+    let completed_transcript = concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"same\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I will ask first.\"},{\"type\":\"tool_use\",\"name\":\"AskQuestion\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"real final\"}]}}\n",
+            "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+    );
+    // Cursor can publish hooks before its transcript writer finishes the turn.
+    std::fs::write(
+        &transcript,
+        completed_transcript
+            .lines()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
     record(
         &dir,
         Provider::Cursor,
@@ -1226,18 +1243,26 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
     record(
         &dir,
         Provider::Cursor,
-        json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn","text":"real final"}),
+        json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn","text":"I will ask first.real final","transcript_path":transcript}),
     );
     worker
         .consume_callbacks(agent, &dir.join("callbacks/launch"))
         .unwrap();
     assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .is_some_and(|message| message.contains("completed transcript")));
     assert_eq!(
         callbacks::records(&dir.join("callbacks/launch"))
             .unwrap()
             .len(),
         2
     );
+    std::fs::write(&transcript, completed_transcript).unwrap();
     record(
         &dir,
         Provider::Cursor,
@@ -1282,12 +1307,44 @@ fn cursor_stop_before_response_and_start_survives_detach_without_duplicate_reply
     record(
         &dir,
         Provider::Cursor,
-        json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn","text":"real final"}),
+        json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn","text":"I will ask first.real final","transcript_path":transcript}),
     );
     worker
         .consume_callbacks(agent, &dir.join("callbacks/launch"))
         .unwrap();
     assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
+    // A second request may legitimately produce exactly the same answer. Its
+    // callback identity, not the uniqueness of its text, owns the room reply.
+    let next = queue(&mut worker, room, agent, "same");
+    worker.submit_ready().unwrap();
+    std::fs::write(
+        &transcript,
+        format!("{completed_transcript}{completed_transcript}"),
+    )
+    .unwrap();
+    for value in [
+        json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn-2","prompt":"same"}),
+        json!({"hook_event_name":"stop","conversation_id":"session","generation_id":"turn-2","status":"completed"}),
+        json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn-2","text":"I will ask first.real final","transcript_path":transcript}),
+    ] {
+        record(&dir, Provider::Cursor, value);
+    }
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 8)
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    for (id, turn) in [(request, "turn"), (next, "turn-2")] {
+        let original = worker.state.request(id).unwrap();
+        assert_eq!(original.phase, RequestPhase::Completed);
+        assert_eq!(original.provider_turn_id.as_deref(), Some(turn));
+        assert_eq!(original.pending_final.as_ref().unwrap().text, "real final");
+    }
+    assert_eq!(worker.state.room(room).unwrap().unread_count, 2);
+    assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

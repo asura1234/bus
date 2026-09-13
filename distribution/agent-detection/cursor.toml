@@ -1,8 +1,22 @@
 id = "cursor"
-version = "2026.08.03.1"
+version = "2026.09.13.1"
 min_engine_version = 1
-updated_at = "2026-08-03T01:08:04Z"
+updated_at = "2026-09-13T06:42:45Z"
 aliases = ["cursor-agent"]
+
+# Cursor Agent 2026.09.10: the native question chooser has boxed checkbox
+# options and a navigation footer. Both must be live at the screen bottom;
+# a previous chooser above a new prompt or working footer is not a blocker.
+[[rules]]
+id = "question_prompt"
+state = "blocked"
+priority = 310
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+all = [
+  { line_regex = ['^\s*│\s*(?:›\s*)?\[[ x]\]\s+\S'] },
+  { regex = ['(?m)^\s*│\s*↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip\s*│\s*\n\s*└─+┘\s*\z'] },
+]
 
 [[rules]]
 id = "write_file_approval"

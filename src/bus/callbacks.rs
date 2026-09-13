@@ -9,6 +9,9 @@ use std::{
 
 const MAX_CALLBACK_BYTES: u64 = 2 * 1024 * 1024;
 
+#[path = "cursor_reply.rs"]
+pub(super) mod cursor_reply;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct Manifest {
     pub(crate) agent_id: AgentId,
