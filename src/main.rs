@@ -438,9 +438,6 @@ pane_history = false
 # scrollback_limit_bytes = 10000000
 "##;
 
-// Bundled at build time so the printed skill always matches this binary's release.
-const SKILL: &str = include_str!("../skills/herdr/SKILL.md");
-
 fn should_block_nested(config: &config::Config) -> bool {
     should_block_nested_for_env(config, std::env::var(HERDR_ENV_VAR).ok().as_deref())
 }
@@ -520,7 +517,7 @@ fn main() -> io::Result<()> {
         && !args.iter().any(|a| {
             matches!(
                 a.as_str(),
-                "--help" | "-h" | "--version" | "-V" | "--default-config" | "--skill"
+                "--help" | "-h" | "--version" | "-V" | "--default-config"
             )
         })
     {
@@ -690,7 +687,6 @@ fn main() -> io::Result<()> {
         println!("                      Keybindings for --remote app attach (default: local)");
         println!("  --handoff           Opt into live handoff for update or remote attach");
         println!("  --default-config    Print default configuration and exit");
-        println!("  --skill             Print the agent skill file and exit");
         println!("  --version, -V       Print version and exit");
         println!("  --help, -h          Show this help");
         println!();
@@ -715,12 +711,6 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    if args.iter().any(|a| a == "--skill") {
-        platform::begin_cli_output();
-        print!("{SKILL}");
-        return Ok(());
-    }
-
     // Reject unknown flags
     let known_flags = [
         "--session",
@@ -729,7 +719,6 @@ fn main() -> io::Result<()> {
         "--version",
         "-V",
         "--default-config",
-        "--skill",
         "--help",
         "-h",
     ];
