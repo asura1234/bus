@@ -342,8 +342,9 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("○ Local · local agent"), "frame: {text}");
-    assert!(text.contains("× Build · remote agent"), "frame: {text}");
+    assert!(text.contains("Local · local agent"), "frame: {text}");
+    assert!(!text.contains("○ Local"), "frame: {text}");
+    assert!(text.contains("Blocked · Build · remot"), "frame: {text}");
     assert!(text.contains("grouped"), "frame: {text}");
     let toggle = state.hits.agent_sort_toggle;
     assert!(!toggle.is_empty());
@@ -362,10 +363,11 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
     let buffer = frame
         .to_ratatui_buffer()
         .expect("aggregate frame should reconstruct");
-    assert!(buffer
-        .content()
-        .iter()
-        .any(|cell| cell.symbol() == "×" && cell.fg == state.config.palette.red));
+    assert!(buffer.content().iter().any(|cell| {
+        cell.symbol() == "B"
+            && cell.fg == state.config.palette.red
+            && cell.modifier.contains(ratatui::style::Modifier::DIM)
+    }));
 }
 
 #[test]
@@ -682,7 +684,7 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
         Some(ClientEndpointStatus::Reconnecting)
     );
     assert!(text.contains("◐ reconnecting"), "frame: {text}");
-    assert!(text.contains("Build · remote agent"), "frame: {text}");
+    assert!(text.contains("Blocked · Build · remot"), "frame: {text}");
     assert!(
         text.contains("LIVE"),
         "frozen surface should remain: {text}"
@@ -690,12 +692,19 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
     assert!(state.hits.panes.is_empty());
     assert!(frame.cursor.is_none());
     let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
-    let stale_icon = buffer
-        .content()
+    let stale_agent_row = state
+        .hits
+        .endpoint_agents
         .iter()
-        .find(|cell| cell.symbol() == "×")
-        .expect("stale blocked icon");
-    assert_eq!(stale_icon.fg, state.config.palette.overlay0);
+        .find(|(_, rendered_endpoint_id, _)| rendered_endpoint_id == &endpoint_id)
+        .expect("stale endpoint agent")
+        .0;
+    let stale_status = &buffer[(stale_agent_row.x + 1, stale_agent_row.y)];
+    assert_eq!(stale_status.symbol(), "B");
+    assert_eq!(stale_status.fg, state.config.palette.overlay0);
+    assert!(stale_status
+        .modifier
+        .contains(ratatui::style::Modifier::DIM));
 }
 
 #[cfg(unix)]

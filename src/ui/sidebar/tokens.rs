@@ -278,6 +278,7 @@ rows = [[{ token = "workspace", rules = [{ equals = "long-workspace-name", fg = 
                 &rows[0],
                 ("*", theme),
                 theme,
+                None,
                 theme,
                 theme,
                 theme,

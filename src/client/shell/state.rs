@@ -1782,7 +1782,7 @@ impl ClientShellState {
     fn animated_sidebar_status_visible(&self) -> bool {
         use crate::api::schema::AgentStatus;
 
-        if self.config.status_indicators != crate::config::StatusIndicatorStyle::Dots {
+        if self.sidebar_collapsed {
             return false;
         }
         let animated = |status| matches!(status, AgentStatus::Working | AgentStatus::Blocked);
@@ -1827,7 +1827,9 @@ impl ClientShellState {
         if now.saturating_duration_since(last_tick) < FRAME_INTERVAL {
             return false;
         }
-        self.status_animation_phase = self.status_animation_phase.wrapping_add(1) % 12;
+        // 42 is a shared cycle boundary for the seven-letter Working wave and
+        // the six-frame Blocked pulse, so neither animation jumps mid-cycle.
+        self.status_animation_phase = self.status_animation_phase.wrapping_add(1) % 42;
         self.status_animation_last_tick = Some(now);
         true
     }

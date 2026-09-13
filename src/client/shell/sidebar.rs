@@ -29,7 +29,6 @@ pub(crate) fn render_collapsed_sidebar(
     area: Rect,
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
-    status_animation_phase: u8,
     selected_workspace_id: Option<&str>,
     hits: &mut ShellHitMap,
 ) {
@@ -144,18 +143,6 @@ pub(crate) fn render_collapsed_sidebar(
             } else {
                 palette.overlay0
             }),
-        );
-        put_text(
-            buffer,
-            rect.x.saturating_add(2),
-            rect.y,
-            rect.width.saturating_sub(2),
-            sidebar_agent_status_icon(
-                agent.agent_status,
-                config.status_indicators,
-                status_animation_phase,
-            ),
-            Style::default().fg(sidebar_agent_status_color(agent.agent_status, palette)),
         );
         hits.agents.push((rect, pane_id));
     }
@@ -688,6 +675,7 @@ pub(in crate::client::shell) fn render_workspace_rows(
             Style::default()
                 .fg(status_color(status, palette))
                 .add_modifier(Modifier::DIM),
+            None,
             workspace_style,
             secondary_style,
             Style::default().fg(palette.overlay1),

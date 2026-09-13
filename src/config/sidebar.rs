@@ -442,7 +442,7 @@ impl Default for AgentsSidebarConfig {
         Self {
             rows: vec![
                 vec![
-                    AgentSidebarToken::StateIcon,
+                    AgentSidebarToken::StateText,
                     AgentSidebarToken::Machine,
                     AgentSidebarToken::Workspace,
                     AgentSidebarToken::Tab,
@@ -493,7 +493,7 @@ mod tests {
             config.agents.rows,
             vec![
                 vec![
-                    AgentSidebarToken::StateIcon,
+                    AgentSidebarToken::StateText,
                     AgentSidebarToken::Machine,
                     AgentSidebarToken::Workspace,
                     AgentSidebarToken::Tab,

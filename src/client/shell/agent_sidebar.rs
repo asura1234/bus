@@ -335,24 +335,9 @@ pub(super) fn render_agent_row(
             .fg(palette.subtext0)
             .add_modifier(Modifier::BOLD)
     };
-    let status_style = Style::default()
-        .fg(sidebar_agent_status_color(row.status, palette))
-        .add_modifier(if row.focused {
-            Modifier::empty()
-        } else {
-            Modifier::DIM
-        });
     let secondary = Style::default()
         .fg(palette.overlay0)
         .add_modifier(Modifier::DIM);
-    let icon = (
-        if animate_status {
-            sidebar_agent_status_icon(row.status, config.status_indicators, status_animation_phase)
-        } else {
-            status_icon(row.status, config.status_indicators)
-        },
-        Style::default().fg(sidebar_agent_status_color(row.status, palette)),
-    );
     let rows = if row.rows.is_empty() {
         vec![vec![crate::ui::ResolvedToken {
             kind: crate::ui::ResolvedTokenKind::StateIcon,
@@ -362,12 +347,40 @@ pub(super) fn render_agent_row(
         row.rows.clone()
     };
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
+        let mut emitted_status = false;
+        let tokens = tokens
+            .iter()
+            .filter_map(|token| {
+                if !matches!(
+                    token.kind,
+                    crate::ui::ResolvedTokenKind::StateIcon
+                        | crate::ui::ResolvedTokenKind::StateText(_)
+                ) {
+                    return Some(token.clone());
+                }
+                let word = sidebar_agent_status_word(row.status)?;
+                if emitted_status {
+                    return None;
+                }
+                emitted_status = true;
+                Some(crate::ui::ResolvedToken {
+                    kind: crate::ui::ResolvedTokenKind::StateText(word.into()),
+                    style: Default::default(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let status_styles = if animate_status {
+            sidebar_agent_status_styles(row.status, status_animation_phase, palette)
+        } else {
+            sidebar_agent_status_styles(row.status, 1, palette)
+        };
         let indent = if index == 0 { 1 } else { 3 };
         let mut spans = vec![ratatui::text::Span::raw(" ".repeat(indent))];
         spans.extend(crate::ui::resolved_token_spans(
-            tokens,
-            icon,
-            status_style,
+            &tokens,
+            ("", Style::default()),
+            Style::default(),
+            Some(&status_styles),
             name_style,
             secondary,
             secondary,

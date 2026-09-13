@@ -449,117 +449,112 @@ fn sidebar_status_agent(status: AgentStatus) -> ClientShellAgent {
 }
 
 #[test]
-fn sidebar_working_status_ripples_green() {
-    let palette = ClientShellConfig::from_config(&Config::default()).palette;
-
-    assert_eq!(
-        sidebar_agent_status_icon(
-            AgentStatus::Working,
-            crate::config::StatusIndicatorStyle::Dots,
-            0,
-        ),
-        "·"
-    );
-    assert_eq!(
-        sidebar_agent_status_icon(
-            AgentStatus::Working,
-            crate::config::StatusIndicatorStyle::Dots,
-            1,
-        ),
-        "○"
-    );
-    assert_eq!(
-        sidebar_agent_status_icon(
-            AgentStatus::Working,
-            crate::config::StatusIndicatorStyle::Dots,
-            3,
-        ),
-        "●"
-    );
-    assert_eq!(
-        sidebar_agent_status_color(AgentStatus::Working, &palette),
-        palette.green
-    );
-}
-
-#[test]
-fn sidebar_blocked_status_pulses_red() {
-    let palette = ClientShellConfig::from_config(&Config::default()).palette;
-
-    assert_eq!(
-        sidebar_agent_status_icon(
-            AgentStatus::Blocked,
-            crate::config::StatusIndicatorStyle::Dots,
-            0,
-        ),
-        "●"
-    );
-    assert_eq!(
-        sidebar_agent_status_icon(
-            AgentStatus::Blocked,
-            crate::config::StatusIndicatorStyle::Dots,
-            2,
-        ),
-        "○"
-    );
-    assert_eq!(
-        sidebar_agent_status_color(AgentStatus::Blocked, &palette),
-        palette.red
-    );
-}
-
-#[test]
-fn sidebar_idle_status_stays_grey() {
-    let palette = ClientShellConfig::from_config(&Config::default()).palette;
-
-    for phase in 0..8 {
-        assert_eq!(
-            sidebar_agent_status_icon(
-                AgentStatus::Idle,
-                crate::config::StatusIndicatorStyle::Dots,
-                phase,
-            ),
-            "○"
-        );
-    }
-    assert_eq!(
-        sidebar_agent_status_color(AgentStatus::Idle, &palette),
-        palette.overlay0
-    );
-}
-
-#[test]
-fn sidebar_symbol_statuses_remain_static() {
-    for phase in 0..8 {
-        assert_eq!(
-            sidebar_agent_status_icon(
-                AgentStatus::Working,
-                crate::config::StatusIndicatorStyle::Symbols,
-                phase,
-            ),
-            "◐"
-        );
-    }
-}
-
-#[test]
-fn expanded_agent_sidebar_renders_the_working_ripple() {
+fn expanded_agent_sidebar_renders_working_as_a_green_left_to_right_wave() {
     let mut projected = snapshot();
     projected.agents = vec![sidebar_status_agent(AgentStatus::Working)];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
 
-    let frame = state.compose(106, 30).expect("expanded agent sidebar");
+    state.status_animation_phase = 0;
+    let frame = state.compose(106, 30).expect("working wave phase zero");
     let agent = state.hits.agents[0].0;
     let buffer = frame.to_ratatui_buffer().expect("expanded sidebar buffer");
-    let indicator = &buffer[(agent.x + 1, agent.y)];
-    assert_eq!(indicator.symbol(), "·");
-    assert_eq!(indicator.fg, state.config.palette.green);
+    let cells = (0..7)
+        .map(|offset| &buffer[(agent.x + 1 + offset, agent.y)])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cells.iter().map(|cell| cell.symbol()).collect::<String>(),
+        "Working"
+    );
+    assert!(cells
+        .iter()
+        .all(|cell| cell.fg == state.config.palette.green));
+    assert!(cells[0].modifier.contains(Modifier::BOLD));
+    assert!(!cells[1].modifier.intersects(Modifier::BOLD | Modifier::DIM));
+    assert!(cells[3].modifier.contains(Modifier::DIM));
+
+    state.status_animation_phase = 1;
+    let frame = state.compose(106, 30).expect("working wave phase one");
+    let buffer = frame.to_ratatui_buffer().expect("expanded sidebar buffer");
+    assert!(buffer[(agent.x + 2, agent.y)]
+        .modifier
+        .contains(Modifier::BOLD));
+
+    state.status_animation_phase = 6;
+    let frame = state
+        .compose(106, 30)
+        .expect("working wave reaches the end");
+    let buffer = frame.to_ratatui_buffer().expect("expanded sidebar buffer");
+    assert!(buffer[(agent.x + 7, agent.y)]
+        .modifier
+        .contains(Modifier::BOLD));
+
+    state.status_animation_phase = 7;
+    let frame = state
+        .compose(106, 30)
+        .expect("working wave restarts from the left");
+    let buffer = frame.to_ratatui_buffer().expect("expanded sidebar buffer");
+    assert!(buffer[(agent.x + 1, agent.y)]
+        .modifier
+        .contains(Modifier::BOLD));
 }
 
 #[test]
-fn compact_agent_sidebar_renders_the_working_ripple() {
+fn expanded_agent_sidebar_renders_blocked_as_a_red_whole_word_pulse() {
+    let mut projected = snapshot();
+    projected.agents = vec![sidebar_status_agent(AgentStatus::Blocked)];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+
+    state.status_animation_phase = 0;
+    let frame = state.compose(106, 30).expect("blocked pulse dim phase");
+    let agent = state.hits.agents[0].0;
+    let buffer = frame.to_ratatui_buffer().expect("expanded sidebar buffer");
+    let cells = (0..7)
+        .map(|offset| &buffer[(agent.x + 1 + offset, agent.y)])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cells.iter().map(|cell| cell.symbol()).collect::<String>(),
+        "Blocked"
+    );
+    assert!(cells.iter().all(|cell| cell.fg == state.config.palette.red));
+    assert!(cells
+        .iter()
+        .all(|cell| cell.modifier.contains(Modifier::DIM)));
+
+    state.status_animation_phase = 2;
+    let frame = state.compose(106, 30).expect("blocked pulse bright phase");
+    let buffer = frame.to_ratatui_buffer().expect("expanded sidebar buffer");
+    assert!((0..7).all(|offset| buffer[(agent.x + 1 + offset, agent.y)]
+        .modifier
+        .contains(Modifier::BOLD)));
+}
+
+#[test]
+fn inactive_agent_statuses_render_no_sidebar_marker() {
+    for status in [AgentStatus::Idle, AgentStatus::Done, AgentStatus::Unknown] {
+        let mut projected = snapshot();
+        projected.agents = vec![sidebar_status_agent(status)];
+        let mut config = Config::default();
+        config.ui.sidebar.agents.rows = vec![vec![
+            crate::config::AgentSidebarToken::StateIcon,
+            crate::config::AgentSidebarToken::StateText,
+        ]];
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+        state.set_snapshot(Box::new(projected));
+        state.set_pane_surface(surface());
+
+        let frame = state.compose(106, 30).expect("inactive agent sidebar");
+        let agent = state.hits.agents[0].0;
+        let buffer = frame.to_ratatui_buffer().expect("expanded sidebar buffer");
+        assert!((0..agent.width).all(|offset| buffer[(agent.x + offset, agent.y)].symbol() == " "));
+    }
+}
+
+#[test]
+fn compact_agent_sidebar_renders_no_status_icon() {
     let mut projected = snapshot();
     projected.agents = vec![sidebar_status_agent(AgentStatus::Working)];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -570,9 +565,7 @@ fn compact_agent_sidebar_renders_the_working_ripple() {
     let frame = state.compose(106, 30).expect("compact agent sidebar");
     let agent = state.hits.agents[0].0;
     let buffer = frame.to_ratatui_buffer().expect("compact sidebar buffer");
-    let indicator = &buffer[(agent.x + 2, agent.y)];
-    assert_eq!(indicator.symbol(), "·");
-    assert_eq!(indicator.fg, state.config.palette.green);
+    assert_eq!(buffer[(agent.x + 2, agent.y)].symbol(), " ");
 }
 
 #[test]
@@ -591,9 +584,9 @@ fn visible_animated_agent_advances_on_the_sidebar_cadence() {
 
     let frame = state.compose(106, 30).expect("next ripple frame");
     let agent = state.hits.agents[0].0;
-    let indicator =
+    let bright_letter =
         &frame.cells[usize::from(agent.y) * usize::from(frame.width) + usize::from(agent.x + 1)];
-    assert_eq!(indicator.symbol, "○");
+    assert_eq!(bright_letter.symbol, "W");
 }
 
 #[test]
@@ -611,7 +604,7 @@ fn idle_agent_does_not_request_animation_repaints() {
 }
 
 #[test]
-fn symbol_statuses_do_not_request_animation_repaints() {
+fn legacy_icon_style_does_not_disable_word_animation() {
     let mut config = Config::default();
     config.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
     let mut projected = snapshot();
@@ -623,7 +616,7 @@ fn symbol_statuses_do_not_request_animation_repaints() {
     let started = std::time::Instant::now();
 
     assert!(!state.tick_status_animation(started));
-    assert!(!state.tick_status_animation(started + std::time::Duration::from_secs(1)));
+    assert!(state.tick_status_animation(started + std::time::Duration::from_millis(200)));
 }
 
 #[test]
@@ -699,7 +692,8 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("× needs input"), "frame: {text}");
+    assert!(text.contains("Blocked"), "frame: {text}");
+    assert!(!text.contains("× Blocked"), "frame: {text}");
     assert!(text.contains("pi two"), "frame: {text}");
     assert!(text.contains("waiting for"), "frame: {text}");
     assert_eq!(

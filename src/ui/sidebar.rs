@@ -107,6 +107,7 @@ pub(crate) fn resolved_token_spans(
     resolved: &[ResolvedToken],
     state_icon: (&str, Style),
     state_text_style: Style,
+    state_text_character_styles: Option<&[Style]>,
     workspace_style: Style,
     secondary_style: Style,
     custom_style: Style,
@@ -229,10 +230,28 @@ pub(crate) fn resolved_token_spans(
                 state_icon.0.to_string(),
                 apply_token_style(state_icon.1, token.style),
             )),
-            ResolvedTokenKind::StateText(text) => spans.push(Span::styled(
-                truncate_end(text, budgets[index]),
-                apply_token_style(state_text_style, token.style),
-            )),
+            ResolvedTokenKind::StateText(text) => {
+                let text = truncate_end(text, budgets[index]);
+                if let Some(character_styles) = state_text_character_styles {
+                    spans.extend(text.chars().enumerate().map(|(index, character)| {
+                        Span::styled(
+                            character.to_string(),
+                            apply_token_style(
+                                character_styles
+                                    .get(index)
+                                    .copied()
+                                    .unwrap_or(state_text_style),
+                                token.style,
+                            ),
+                        )
+                    }));
+                } else {
+                    spans.push(Span::styled(
+                        text,
+                        apply_token_style(state_text_style, token.style),
+                    ));
+                }
+            }
             ResolvedTokenKind::Workspace(text) => spans.push(Span::styled(
                 truncate_end(text, budgets[index]),
                 apply_token_style(workspace_style, token.style),

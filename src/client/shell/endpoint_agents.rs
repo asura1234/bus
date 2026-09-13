@@ -7,7 +7,6 @@ pub(super) fn render_collapsed(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
-    status_animation_phase: u8,
     hits: &mut ShellHitMap,
 ) {
     let rows = agent_rows(endpoints, active_endpoint_id, config);
@@ -17,26 +16,17 @@ pub(super) fn render_collapsed(
             buffer.set_style(rect, Style::default().bg(config.palette.active_row_bg));
         }
         let initial = row.machine_label.chars().next().unwrap_or('?');
-        let status_icon = if row.stale {
-            status_icon(row.agent.status, config.status_indicators)
-        } else {
-            sidebar_agent_status_icon(
-                row.agent.status,
-                config.status_indicators,
-                status_animation_phase,
-            )
-        };
         put_text(
             buffer,
             rect.x,
             rect.y,
             rect.width,
-            &format!("{initial}{status_icon}"),
+            &initial.to_string(),
             Style::default()
                 .fg(if row.stale {
                     config.palette.overlay0
                 } else {
-                    sidebar_agent_status_color(row.agent.status, &config.palette)
+                    config.palette.subtext0
                 })
                 .add_modifier(if row.stale {
                     Modifier::DIM

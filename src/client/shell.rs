@@ -213,23 +213,50 @@ fn status_icon(
     }
 }
 
-fn sidebar_agent_status_icon(
-    status: crate::api::schema::AgentStatus,
-    style: crate::config::StatusIndicatorStyle,
-    animation_phase: u8,
-) -> &'static str {
+fn sidebar_agent_status_word(status: crate::api::schema::AgentStatus) -> Option<&'static str> {
     use crate::api::schema::AgentStatus;
-    use crate::config::StatusIndicatorStyle;
-
-    if style == StatusIndicatorStyle::Symbols {
-        return status_icon(status, style);
-    }
 
     match status {
-        AgentStatus::Working => ["·", "○", "◉", "●", "◉", "○"][usize::from(animation_phase) % 6],
-        AgentStatus::Blocked => ["●", "◉", "○", "◉"][usize::from(animation_phase) % 4],
-        _ => status_icon(status, style),
+        AgentStatus::Working => Some("Working"),
+        AgentStatus::Blocked => Some("Blocked"),
+        AgentStatus::Idle | AgentStatus::Done | AgentStatus::Unknown => None,
     }
+}
+
+fn sidebar_agent_status_styles(
+    status: crate::api::schema::AgentStatus,
+    animation_phase: u8,
+    palette: &Palette,
+) -> Vec<Style> {
+    use crate::api::schema::AgentStatus;
+
+    let Some(word) = sidebar_agent_status_word(status) else {
+        return Vec::new();
+    };
+    let length = word.chars().count();
+    let wave_head = usize::from(animation_phase) % length;
+    word.chars()
+        .enumerate()
+        .map(|(index, _)| {
+            let modifier = match status {
+                AgentStatus::Working if index == wave_head => Modifier::BOLD,
+                AgentStatus::Working if index.abs_diff(wave_head) == 1 => Modifier::empty(),
+                AgentStatus::Working => Modifier::DIM,
+                AgentStatus::Blocked => match animation_phase % 6 {
+                    0 | 5 => Modifier::DIM,
+                    2 | 3 => Modifier::BOLD,
+                    _ => Modifier::empty(),
+                },
+                AgentStatus::Idle | AgentStatus::Done | AgentStatus::Unknown => Modifier::empty(),
+            };
+            let color = if status == AgentStatus::Working {
+                palette.green
+            } else {
+                palette.red
+            };
+            Style::default().fg(color).add_modifier(modifier)
+        })
+        .collect()
 }
 
 fn status_dot(status: crate::api::schema::AgentStatus) -> &'static str {
@@ -269,19 +296,6 @@ fn status_color(
         AgentStatus::Done => palette.teal,
         AgentStatus::Idle => palette.green,
         AgentStatus::Unknown => palette.overlay0,
-    }
-}
-
-fn sidebar_agent_status_color(
-    status: crate::api::schema::AgentStatus,
-    palette: &Palette,
-) -> ratatui::style::Color {
-    use crate::api::schema::AgentStatus;
-    match status {
-        AgentStatus::Working => palette.green,
-        AgentStatus::Blocked => palette.red,
-        AgentStatus::Done => palette.teal,
-        AgentStatus::Idle | AgentStatus::Unknown => palette.overlay0,
     }
 }
 
