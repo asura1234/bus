@@ -71,6 +71,11 @@ pub(crate) struct Prompt {
 
 impl Prompt {
     pub(crate) fn rendered_payload(&self) -> String {
+        // Terminal paste sources can preserve CRLF or lone CR separators while
+        // provider submit hooks report the accepted prompt with LF separators.
+        // Canonicalize only line endings so trusted callback matching remains
+        // exact for every other character.
+        let text = self.text.replace("\r\n", "\n").replace('\r', "\n");
         let quoted_files = self
             .files
             .iter()
@@ -80,9 +85,9 @@ impl Prompt {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        match (self.text.is_empty(), quoted_files.is_empty()) {
-            (false, false) => format!("{}\n{quoted_files}", self.text),
-            (false, true) => self.text.clone(),
+        match (text.is_empty(), quoted_files.is_empty()) {
+            (false, false) => format!("{text}\n{quoted_files}"),
+            (false, true) => text,
             (true, false) => quoted_files,
             (true, true) => String::new(),
         }
@@ -1520,6 +1525,108 @@ mod tests {
             )),
             CallbackDisposition::AcceptedPendingSettlement
         );
+    }
+
+    #[test]
+    fn callback_prompt_matching_normalizes_terminal_line_endings_and_releases_queue() {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let request = submit_text(
+            &mut state,
+            room,
+            agent,
+            "first line\r  second line\r\nthird line",
+        );
+        let queued = submit_text(&mut state, room, agent, "queued next");
+        state
+            .begin_submission(request, "launch-codex", 10)
+            .expect("begin");
+        state
+            .record_submission(
+                request,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: Some("provider-session".into()),
+                    provider_turn_id: Some("turn-1".into()),
+                },
+            )
+            .expect("confirmed");
+
+        assert_eq!(
+            state.accept_callback(ProviderCallback {
+                callback_id: "normalized-start".into(),
+                sequence: 11,
+                occurred_at_ms: 11,
+                agent_id: agent,
+                launch_id: "launch-codex".into(),
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: Some("turn-1".into()),
+                provider_prompt_id: None,
+                prompt_payload: Some("first line\n  second line\nthird line".into()),
+                kind: CallbackEventKind::PromptStarted,
+            }),
+            CallbackDisposition::AcceptedBinding
+        );
+        assert_eq!(
+            state.accept_callback(ProviderCallback::final_event(
+                "normalized-final",
+                12,
+                agent,
+                "launch-codex",
+                "provider-session",
+                "turn-1",
+                "first line\n  second line\nthird line",
+                "finished",
+            )),
+            CallbackDisposition::AcceptedPendingSettlement
+        );
+
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 13)
+            .expect("settled");
+
+        assert_eq!(
+            state.request(request).expect("request").phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(state.next_queued_request(agent), Some(queued));
+        assert_eq!(
+            state.room(room).expect("room").latest_replies[&agent].text,
+            "finished"
+        );
+    }
+
+    #[test]
+    fn callback_prompt_matching_rejects_prefilled_composer_text() {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let request = submit_text(&mut state, room, agent, "hello?");
+        state
+            .begin_submission(request, "launch-codex", 20)
+            .expect("begin");
+        state
+            .record_submission(
+                request,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: Some("provider-session".into()),
+                    provider_turn_id: Some("turn-1".into()),
+                },
+            )
+            .expect("confirmed");
+
+        assert_eq!(
+            state.accept_callback(ProviderCallback {
+                callback_id: "prefilled-start".into(),
+                sequence: 21,
+                occurred_at_ms: 21,
+                agent_id: agent,
+                launch_id: "launch-codex".into(),
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: Some("turn-1".into()),
+                provider_prompt_id: None,
+                prompt_payload: Some("draft already present\nhello?".into()),
+                kind: CallbackEventKind::PromptStarted,
+            }),
+            CallbackDisposition::Rejected(CallbackRejection::WrongPrompt)
+        );
+        assert!(!state.request(request).expect("request").trusted_start_bound);
     }
 
     #[test]

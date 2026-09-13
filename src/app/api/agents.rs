@@ -12,6 +12,22 @@ use super::responses::{encode_error, encode_error_body, encode_success};
 
 const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 
+fn codex_composer_is_empty(screen: &str) -> bool {
+    let Some(body) = screen
+        .lines()
+        .rev()
+        .find_map(|line| line.trim_start().strip_prefix('›').map(|body| body.trim()))
+    else {
+        return false;
+    };
+
+    body.is_empty()
+        || matches!(
+            body,
+            "Ask Codex to do anything" | "Use /skills to list available skills"
+        )
+}
+
 fn check_unbound_prompt_identity_and_idle(
     agent: &crate::api::schema::AgentInfo,
     params: &crate::api::schema::AgentPromptIfUnboundParams,
@@ -231,6 +247,22 @@ impl App {
             .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
         if let Err((code, message)) = check_prompt_identity_and_idle(&agent, &params) {
             return Err(encode_error(id, code, message));
+        }
+        if agent.agent.as_deref() == Some("codex") {
+            let resolved = self
+                .resolve_agent_target(&params.target)
+                .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
+            let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)
+            else {
+                return Err(agent_not_found(id, &params.target));
+            };
+            if !codex_composer_is_empty(&runtime.visible_text()) {
+                return Err(encode_error(
+                    id,
+                    "agent_not_ready",
+                    "Codex composer is not empty; prompt was not sent",
+                ));
+            }
         }
         self.queue_agent_prompt(
             id,
@@ -579,6 +611,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn codex_composer_check_accepts_only_empty_prompt_states() {
+        for screen in [
+            "history\n›\n  gpt-5.6-sol",
+            "history\n› Ask Codex to do anything\n  gpt-5.6-sol",
+            "history\n› Use /skills to list available skills\n  gpt-5.6-sol",
+        ] {
+            assert!(codex_composer_is_empty(screen), "{screen}");
+        }
+        for screen in [
+            "",
+            "history without a prompt",
+            "history\n› draft already present\n  gpt-5.6-sol",
+            "history\n› check the logs\n  hello?\n  gpt-5.6-sol",
+        ] {
+            assert!(!codex_composer_is_empty(screen), "{screen}");
+        }
+    }
+
     #[tokio::test]
     async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing() {
         use crate::api::schema::{AgentPromptIfUnboundParams, Method, Request};
@@ -708,7 +759,9 @@ mod tests {
             crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
                 80, 24, 0, b"", 2,
             );
-        runtime.test_process_pty_bytes(b"\x1b[?2004h");
+        runtime.test_process_pty_bytes(
+            "\x1b[?2004h\x1b[2J\x1b[H› Ask Codex to do anything".as_bytes(),
+        );
         app.state.insert_test_runtime(pane_id, runtime);
         let info = app.agent_info(0, pane_id).unwrap();
         let params = AgentPromptIfIdleParams {
@@ -763,6 +816,66 @@ mod tests {
             Bytes::from_static(b"\x1b[200~literal @x $HOME\x1b[201~")
         );
         assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\r"));
+    }
+
+    #[tokio::test]
+    async fn guarded_codex_prompt_rejects_nonempty_composer_without_writing() {
+        use crate::api::schema::{AgentPromptIfIdleParams, Method, Request};
+
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        let now = std::time::Instant::now();
+        terminal.begin_managed_agent(
+            "bus-r1-a2".into(),
+            Agent::Codex,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(10),
+        );
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
+        terminal.set_agent_session_ref(
+            "bus".into(),
+            "codex".into(),
+            crate::agent_resume::AgentSessionRef::id("session"),
+            Some(1),
+        );
+        let (runtime, mut writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 0, b"", 2,
+            );
+        runtime
+            .test_process_pty_bytes("\x1b[?2004h\x1b[2J\x1b[H› draft already present".as_bytes());
+        app.state.insert_test_runtime(pane_id, runtime);
+        let info = app.agent_info(0, pane_id).unwrap();
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+
+        assert!(app.handle_deferred_agent_api_request(
+            Request {
+                id: "guard-nonempty".into(),
+                method: Method::AgentPromptIfIdle(AgentPromptIfIdleParams {
+                    target: info.pane_id.clone(),
+                    text: "hello?".into(),
+                    expected_terminal_id: info.terminal_id,
+                    expected_pane_id: info.pane_id,
+                    expected_agent: "codex".into(),
+                    expected_session_id: "session".into(),
+                }),
+            },
+            respond_to,
+        ));
+
+        let response = response_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(response.contains("agent_not_ready"), "{response}");
+        assert!(response.contains("composer is not empty"), "{response}");
+        assert!(
+            writes.try_recv().is_err(),
+            "prompt bytes must not be written"
+        );
     }
 
     #[tokio::test]
