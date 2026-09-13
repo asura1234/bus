@@ -272,6 +272,20 @@ impl BusUi {
             };
         }
     }
+    pub(super) fn pending_hook_setup(&self) -> Option<AgentId> {
+        self.snapshot
+            .state
+            .agents()
+            .find(|agent| {
+                Some(agent.room_id) == self.room
+                    && !agent.hook_setup_confirmed
+                    && !agent.session_binding_invalidated
+                    && !agent.deletion_pending
+                    && (agent.actionable_error.is_some()
+                        || !self.snapshot.state.queued_requests(agent.id).is_empty())
+            })
+            .map(|agent| agent.id)
+    }
     pub fn open_terminal(&mut self, agent: AgentId) {
         self.terminal = Some(agent);
         self.target_pane = None;
@@ -587,6 +601,11 @@ impl BusUi {
             }
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.action(Action::NewRoom),
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => self.action(Action::NewAgent),
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+                if let Some(agent) = self.pending_hook_setup() {
+                    self.action(Action::Trust(agent));
+                }
+            }
             (KeyCode::Char('f'), KeyModifiers::CONTROL) => self.action(Action::Files),
             (KeyCode::Char('@' | '+'), modifiers)
                 if !self.notes_focus && modifiers.difference(KeyModifiers::SHIFT).is_empty() =>

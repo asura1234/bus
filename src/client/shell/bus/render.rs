@@ -281,19 +281,14 @@ impl BusUi {
                 } else {
                     Vec::new()
                 };
-                (agent, paths)
+                let height = 3
+                    + usize::from(agent.details_disclosed && agent.branch.is_some())
+                    + paths.len();
+                (agent, paths, height)
             })
             .collect();
-        let content_height = 6
-            + rooms.len()
-            + agents
-                .iter()
-                .map(|(agent, paths)| {
-                    3 + usize::from(agent.details_disclosed)
-                        + paths.len()
-                        + usize::from(agent.actionable_error.is_some() && !agent.deletion_pending)
-                })
-                .sum::<usize>();
+        let content_height =
+            6 + rooms.len() + agents.iter().map(|(_, _, height)| height).sum::<usize>();
         let footer = if self.force_exit_available {
             2
         } else {
@@ -366,11 +361,7 @@ impl BusUi {
             false,
         );
         y += 2;
-        for (agent, paths) in agents {
-            let height = 3
-                + usize::from(agent.details_disclosed)
-                + paths.len()
-                + usize::from(agent.actionable_error.is_some() && !agent.deletion_pending);
+        for (agent, paths, height) in agents {
             if y >= visible_end {
                 break;
             }
@@ -433,27 +424,14 @@ impl BusUi {
             );
             y += 1;
             if agent.details_disclosed {
-                view.row(
-                    at(1, y, sw),
-                    agent.branch.as_deref().unwrap_or("No branch"),
-                    None,
-                    false,
-                    true,
-                );
-                y += 1;
+                if let Some(branch) = &agent.branch {
+                    view.row(at(1, y, sw), branch, None, false, true);
+                    y += 1;
+                }
                 for line in paths {
                     view.row(at(1, y, sw), line, None, false, true);
                     y += 1;
                 }
-            }
-            if agent.actionable_error.is_some() && !agent.deletion_pending {
-                let (label, action) = if agent.session_binding_invalidated {
-                    ("Session changed: add agent", Action::NewAgent)
-                } else {
-                    ("Confirm setup", Action::Trust(agent.id))
-                };
-                view.row(at(1, y, sw), label, Some(action), false, true);
-                y += 1;
             }
             y += 1;
         }
@@ -526,26 +504,22 @@ impl BusUi {
             .filter(|a| a.room_id == room.id)
             .map(|a| self.snapshot.state.queued_requests(a.id).len())
             .sum();
-        let errors = self
-            .snapshot
-            .state
-            .agents()
-            .filter(|a| a.room_id == room.id)
-            .filter_map(|a| {
-                if !a.hook_setup_confirmed
-                    && !a.deletion_pending
-                    && !self.snapshot.state.queued_requests(a.id).is_empty()
-                {
-                    Some(format!(
-                        "{}: Confirm setup to send queued messages.",
-                        a.name
-                    ))
-                } else {
-                    a.actionable_error
-                        .as_ref()
-                        .map(|e| format!("{}: {e}", a.name))
-                }
-            })
+        let setup_agent = self.pending_hook_setup();
+        let errors = setup_agent
+            .and_then(|id| self.snapshot.state.agent(id))
+            .map(|agent| format!("{}: Confirm setup (Ctrl+T).", agent.name))
+            .into_iter()
+            .chain(
+                self.snapshot
+                    .state
+                    .agents()
+                    .filter(|a| a.room_id == room.id && Some(a.id) != setup_agent)
+                    .filter_map(|a| {
+                        a.actionable_error
+                            .as_ref()
+                            .map(|e| format!("{}: {e}", a.name))
+                    }),
+            )
             .collect::<Vec<_>>()
             .join(" · ");
         let notice = self
@@ -721,7 +695,9 @@ impl BusUi {
         view.lines(
             Rect::new(x, bottom.saturating_sub(1), width, 1),
             &status,
-            None,
+            setup_agent
+                .filter(|_| self.visible_error().is_none())
+                .map(Action::Trust),
             true,
         );
         let controls_y = composer_y + u16::from(bar_height > 1);

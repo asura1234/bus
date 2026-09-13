@@ -40,6 +40,28 @@ Only one Bus coordinator may own a data root. Closing the client leaves the
 native server and agent terminals available; callback records can spool until
 Bus reconnects. Run the launcher again with the same data root to reconnect.
 
+### Resuming after a server restart
+
+Bus inherits Herdr's native conversation resume for Claude Code, Codex, and
+Cursor. A cold restart creates new terminal identities but resumes the saved
+provider conversation IDs. Bus verifies each conversation's provider and
+managed agent identity, then saves its new terminal mapping before allowing
+delivery. The existing per-agent callback configuration is restored too, so
+new final replies still return to the original room. Normal non-Bus Herdr
+sessions keep their existing resume behavior.
+
+This requires a previously recorded provider session, its local provider
+history, and the existing Bus callback files. An agent that never acquired a
+session ID cannot have its conversation recovered by matching its display
+name. Missing or mismatched ownership/callback configuration suspends native
+resume and records `bus.resume.suspended`; successful reconnection records
+`bus.resume.rebound`. Keep the same Bus data root and executable location.
+
+Restart does not grant hook trust, cancel pending deletion, or replay an
+uncertain prompt. Those holds remain visible for explicit resolution. A reply
+already awaiting trusted request binding is not attached to a later prompt.
+Room messages, notes, drafts and the original request ownership stay saved.
+
 ## Developer logs
 
 Start with `./bus --dev` to enable DEBUG/TRACE diagnostics in log files, not in
@@ -94,6 +116,9 @@ BUS_DATA_DIR="${BUS_DATA_DIR:-$HOME/.local/share/bus}" ./target/debug/herdr sess
 Use the same `BUS_DATA_DIR` you normally use. This is an explicit server restart,
 not required for ordinary client-only UI changes. Room data and project files
 remain on disk; existing agent processes are stopped.
+On reopening, eligible saved conversations resume as described above. Wait
+for agents to finish before restarting; restarting a process is not a way to
+retry an uncertain in-flight request.
 
 ## Working in rooms
 
@@ -241,8 +266,9 @@ Provider executables and directories are validated before launch. Codex and
 Cursor may need project-local observation hooks. Bus first shows the exact
 path and hook notice; Add explicitly consents to writing only those owned
 entries. This is separate from reviewing/trusting hooks in the actual CLI.
-Use the sidebar's **Confirm setup** action after reviewing all listed
-hooks and closing the CLI's setup menus. In Codex, inspect them using `/hooks`.
+After reviewing all listed hooks and closing the CLI's setup menus, return to
+the room and click its **Confirm setup** notice or press **Ctrl+T**. In Codex,
+inspect the hooks using `/hooks`. Setup and error notices never add sidebar rows.
 The **Confirm setup (Enter)** button is Bus's separate delivery confirmation,
 not permission approval in the provider. Until it is confirmed, prompts remain
 queued even if the terminal is idle. Codex emits SessionStart with its

@@ -65,10 +65,26 @@ fn pending_delete_keeps_sidebar_details_and_only_the_original_delete_button() {
 }
 
 #[test]
-fn non_deletion_errors_keep_their_sidebar_recovery_action() {
-    for invalidated in [false, true] {
-        let (mut ui, _room, agent) = fixture();
+fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
+    for (invalidated, deleting) in [(false, false), (true, false), (false, true)] {
+        let (mut ui, room, agent) = fixture();
         let mut snapshot = (*ui.snapshot).clone();
+        let second = snapshot
+            .state
+            .create_agent(room, "second", Provider::Cursor, "/other".into(), None)
+            .unwrap();
+        ui.receive_snapshot(Arc::new(snapshot.clone()));
+        let before = room_screen(&mut ui, 100, 12);
+        let sidebar_width = usize::from(ui.view.sidebar.width);
+        let sidebar = |screen: &str| {
+            screen
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(100)
+                .map(|line| line.iter().take(sidebar_width).collect::<String>())
+                .collect::<Vec<_>>()
+        };
+        let max_scroll = ui.view.sidebar_max_scroll;
         snapshot
             .state
             .set_agent_error(agent, Some("Setup required".into()))
@@ -76,27 +92,179 @@ fn non_deletion_errors_keep_their_sidebar_recovery_action() {
         if invalidated {
             snapshot.state.invalidate_agent_session(agent).unwrap();
         }
+        if deleting {
+            snapshot.state.prepare_delete_agent(agent).unwrap();
+        }
         ui.receive_snapshot(Arc::new(snapshot));
-        let screen = room_screen(&mut ui, 100, 40);
-        assert!(screen.contains("Setup required"));
+        let after = room_screen(&mut ui, 100, 12);
+        assert_eq!(sidebar(&after), sidebar(&before));
+        assert_eq!(ui.view.sidebar_max_scroll, max_scroll);
+        assert!(ui
+            .view
+            .hits
+            .iter()
+            .any(|hit| { hit.action == render::Action::Agent(second) && hit.rect.y == 10 }));
+        assert!(ui.view.hits.iter().all(|hit| {
+            hit.rect.x >= ui.view.sidebar.right() || !matches!(hit.action, render::Action::Trust(_))
+        }));
+    }
+}
+
+#[test]
+fn expanded_sidebar_omits_absent_branch_without_a_placeholder_row() {
+    let (mut ui, room, first) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let second = snapshot
+        .state
+        .create_agent(room, "second", Provider::Cursor, "/other".into(), None)
+        .unwrap();
+    for agent in [first, second] {
+        snapshot
+            .state
+            .set_agent_details_disclosed(agent, true)
+            .unwrap();
+    }
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.compute_view(100, 14);
+    assert_eq!(ui.view.sidebar_max_scroll, 2);
+    ui.sidebar_scroll = usize::MAX;
+    ui.compute_view(100, 14);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 14));
+    ui.render(&mut buffer);
+    let row_text = |y| {
+        (1..ui.view.sidebar.right() - 1)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>()
+    };
+    for (agent, branch, pwd) in [(first, Some("main"), "/project"), (second, None, "/other")] {
         let details = ui
             .view
             .hits
             .iter()
             .find(|hit| hit.action == render::Action::Details(agent))
             .unwrap();
-        let (label, action) = if invalidated {
-            ("Session changed", render::Action::NewAgent)
+        let mut y = details.rect.y + 1;
+        if let Some(branch) = branch {
+            assert!(row_text(y).starts_with(branch));
+            y += 1;
+        }
+        assert!(row_text(y).starts_with(pwd));
+        assert!(row_text(y + 1).trim().is_empty());
+    }
+}
+
+#[test]
+fn room_setup_recovery_opens_explicit_confirmation_from_notice_or_keyboard() {
+    for keyboard in [false, true] {
+        let (mut ui, room, agent) = fixture();
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot
+            .state
+            .set_agent_error(agent, Some("Review Bus hooks".into()))
+            .unwrap();
+        ui.receive_snapshot(Arc::new(snapshot));
+        ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
+        ui.compute_view(120, 40);
+        if keyboard {
+            key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
         } else {
-            ("Confirm setup", render::Action::Trust(agent))
-        };
-        assert!(screen.contains(label));
+            let hit = ui
+                .view
+                .hits
+                .iter()
+                .find(|hit| {
+                    hit.action == render::Action::Trust(agent)
+                        && hit.rect.x >= ui.view.sidebar.right()
+                })
+                .expect("room notice must retain the explicit setup entry point")
+                .clone();
+            mouse(
+                &mut ui,
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                hit.rect.x,
+                hit.rect.y,
+            );
+        }
+        assert!(matches!(ui.form, Some(forms::Form::Trust(id)) if id == agent));
+        assert!(!ui.snapshot.state.agent(agent).unwrap().hook_setup_confirmed);
+        assert!(!ui
+            .pending
+            .iter()
+            .any(|p| matches!(p.command, BusCommand::CompleteHookSetup(_))));
+        assert_eq!(ui.locals[&room].text.text, "keep draft");
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
         assert!(ui
+            .pending
+            .iter()
+            .any(|p| { matches!(p.command, BusCommand::CompleteHookSetup(id) if id == agent) }));
+    }
+}
+
+#[test]
+fn room_setup_recovery_skips_invalidated_deleting_and_confirmed_agents() {
+    let (mut ui, room, invalidated) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .invalidate_agent_session(invalidated)
+        .unwrap();
+    snapshot
+        .state
+        .set_agent_error(invalidated, Some("Session changed: add a new agent".into()))
+        .unwrap();
+    let mut pending_agents = Vec::new();
+    for (name, kind) in [
+        ("deleting", 0),
+        ("confirmed", 1),
+        ("pending", 2),
+        ("next-pending", 2),
+    ] {
+        let agent = snapshot
+            .state
+            .create_agent(room, name, Provider::Codex, "/project".into(), None)
+            .unwrap();
+        snapshot
+            .state
+            .set_agent_error(agent, Some("Review setup".into()))
+            .unwrap();
+        match kind {
+            0 => snapshot.state.prepare_delete_agent(agent).unwrap(),
+            1 => snapshot.state.confirm_hook_setup(agent).unwrap(),
+            _ => pending_agents.push((agent, name)),
+        }
+    }
+    ui.receive_snapshot(Arc::new(snapshot));
+    for (pending, name) in pending_agents {
+        ui.compute_view(120, 40);
+        let hit = ui
             .view
             .hits
             .iter()
-            .any(|hit| { hit.rect.y == details.rect.y + 1 && hit.action == action }));
+            .find(|hit| hit.action == render::Action::Trust(pending))
+            .unwrap();
+        assert!(hit.rect.x >= ui.view.sidebar.right());
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 120, 40));
+        ui.render(&mut buffer);
+        let notice: String = (hit.rect.x..hit.rect.right())
+            .map(|x| buffer[(x, hit.rect.y)].symbol())
+            .collect();
+        assert!(
+            notice.starts_with(&format!("{name}: Confirm setup")),
+            "click target must match the visible setup notice: {notice}"
+        );
+        key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
+        assert!(matches!(ui.form, Some(forms::Form::Trust(id)) if id == pending));
+        key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+        let mut snapshot = (*ui.snapshot).clone();
+        snapshot.state.confirm_hook_setup(pending).unwrap();
+        ui.receive_snapshot(Arc::new(snapshot));
     }
+    key(&mut ui, KeyCode::Char('t'), KeyModifiers::CONTROL);
+    assert!(ui.form.is_none());
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::CompleteHookSetup(_))));
 }
 
 fn key(ui: &mut BusUi, code: KeyCode, modifiers: KeyModifiers) {

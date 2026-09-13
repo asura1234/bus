@@ -19,6 +19,7 @@ Esc / Tab      Close the picker
 Rooms and agents
 Ctrl+R         Add a room
 Ctrl+N         Add an agent
+Ctrl+T         Review pending hook setup from the room
 F2             Rename selected room or agent
 Double-click   Rename a room or agent name
 × beside name  Delete room / agent after confirmation

@@ -217,7 +217,35 @@ impl App {
             return false;
         }
 
-        let Some(resume_command) = shell_command_from_argv(&plan.argv) else {
+        let Some(terminal) = self.state.terminals.get(&terminal_id) else {
+            return false;
+        };
+        let extras = match crate::bus::resume_launch::for_native_resume(terminal, &plan, &cwd) {
+            Ok(extras) => extras,
+            Err(reason) => {
+                tracing::warn!(event = "bus.resume.suspended", pane = pane_id.raw(), terminal = %terminal_id, %reason,
+                    "Bus conversation was kept; resume requires inspection before restarting");
+                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                    // Keep durable name/session metadata for recovery on a later
+                    // restart, but do not retry disk reads on every layout tick.
+                    terminal.pending_agent_resume_plan = None;
+                    let kind = terminal.managed_agent_kind();
+                    terminal.set_detected_state_with_screen_signals_at(
+                        kind,
+                        crate::detect::AgentState::Unknown,
+                        false,
+                        false,
+                        false,
+                        false,
+                        Instant::now(),
+                    );
+                }
+                return true;
+            }
+        };
+        let mut argv = plan.argv;
+        argv.extend(extras.args);
+        let Some(resume_command) = shell_command_from_argv(&argv) else {
             tracing::warn!(
                 pane = pane_id.raw(),
                 terminal = %terminal_id,
@@ -228,7 +256,7 @@ impl App {
         };
         let Some(launch_env) = self
             .find_pane(pane_id)
-            .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, Vec::new()))
+            .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, extras.env))
         else {
             return false;
         };
@@ -376,6 +404,55 @@ mod tests {
             "-c".into(),
             "printf '%s' 'restored agent: shell quoted | marker'; sleep 5".into(),
         ]
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn invalid_bus_resume_context_does_not_launch_or_retry_and_keeps_session() {
+        let root = std::env::temp_dir().join("bus-resume-missing-context-test");
+        let _env = crate::bus::resume_launch::test_support::ProcessEnvironment::enter(
+            Some(&root),
+            Some("bus"),
+        );
+        let mut app = test_app();
+        let workspace = crate::workspace::Workspace::test_new("restored-bus");
+        let terminal_id = workspace
+            .terminal_id(workspace.tabs[0].root_pane)
+            .cloned()
+            .unwrap();
+        app.state.view.pane_infos = workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 30));
+        app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let session = crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("missing-bus-session").unwrap(),
+        };
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.restore_managed_agent("bus-r999-a999".into(), crate::detect::Agent::Codex);
+        terminal.set_persisted_agent_session(session.clone());
+        terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            agent: "codex".into(),
+            argv: marker_resume_test_argv(),
+            dedupe_key: "test-untrusted-plan".into(),
+        });
+
+        assert!(app.start_pending_agent_resumes(true));
+        assert!(
+            app.terminal_runtimes.get(&terminal_id).is_none(),
+            "an owned Bus terminal must not resume without validated capture context"
+        );
+        assert!(
+            !app.has_pending_agent_resumes(),
+            "failed context must not trigger file I/O on subsequent layout ticks"
+        );
+        let terminal = &app.state.terminals[&terminal_id];
+        assert_eq!(terminal.state, crate::detect::AgentState::Unknown);
+        assert_eq!(terminal.persisted_agent_session, Some(session));
+        assert_eq!(terminal.agent_name.as_deref(), Some("bus-r999-a999"));
+        assert!(!app.start_pending_agent_resumes(true));
     }
 
     #[cfg(unix)]

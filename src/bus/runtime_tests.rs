@@ -12,6 +12,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[path = "runtime_resume_tests.rs"]
+mod resume_tests;
+
 #[test]
 fn delivery_logs_explain_queued_hook_gate_once_without_prompt_contents() {
     let capture = crate::logging::test_capture::Capture::default();

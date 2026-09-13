@@ -86,6 +86,10 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     // when the remote side lacks matching terminfo entries.
     cmd.env("TERM", PANE_TERM);
     cmd.env("COLORTERM", PANE_COLORTERM);
+    // The server may be launched by a noninteractive tool with NO_COLOR set.
+    // A pane is its own interactive terminal; launch_env can still explicitly
+    // opt out of colors after these defaults are applied.
+    cmd.env_remove("NO_COLOR");
     cmd.env_remove("WT_SESSION");
 }
 
@@ -3567,6 +3571,7 @@ mod tests {
 
     #[cfg(unix)]
     fn capture_shell_output(command: &str, extra_env: &[(&str, &str)]) -> String {
+        static CAPTURE_ID: AtomicU64 = AtomicU64::new(0);
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -3576,8 +3581,9 @@ mod tests {
             })
             .unwrap();
         let output_path = std::env::temp_dir().join(format!(
-            "herdr-pane-term-test-{}-{}.txt",
+            "herdr-pane-term-test-{}-{}-{}.txt",
             std::process::id(),
+            CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -3589,6 +3595,7 @@ mod tests {
         cmd.cwd(std::env::current_dir().unwrap());
         cmd.env("TERM", "xterm-ghostty");
         cmd.env("COLORTERM", "falsecolor");
+        cmd.env("NO_COLOR", "1");
         apply_pane_terminal_env(&mut cmd);
         for (key, value) in extra_env {
             cmd.env(key, value);
@@ -3895,6 +3902,21 @@ mod tests {
             &[("TERM", "vt100"), ("COLORTERM", "24bit")],
         );
         assert_eq!(output, "vt100\n24bit\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_terminal_does_not_inherit_outer_no_color() {
+        let output = capture_shell_output("printf '%s' \"${NO_COLOR-unset}\"", &[]);
+        assert_eq!(output, "unset");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pane_terminal_allows_explicit_no_color_override() {
+        let output =
+            capture_shell_output("printf '%s' \"${NO_COLOR-unset}\"", &[("NO_COLOR", "1")]);
+        assert_eq!(output, "1");
     }
 
     #[cfg(unix)]

@@ -5,6 +5,8 @@ mod callback_runtime;
 mod commands;
 #[path = "runtime_control.rs"]
 mod dev_control;
+#[path = "runtime_resume.rs"]
+mod resume;
 use super::{
     callbacks::{self, Parsed},
     launch::{self, AddAgent},
@@ -402,23 +404,44 @@ impl Worker {
             }
         };
         let mut state = self.state.clone();
+        let mut rebound = Vec::new();
         for agent in self.state.agents() {
-            let info = infos.iter().find(|i| {
-                Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
-                    && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
-                    && i.agent.as_deref() == Some(launch::provider_kind(agent.provider))
-                    && agent
-                        .runtime_identity
-                        .session_id
-                        .as_ref()
-                        .is_none_or(|expected| {
-                            i.agent_session
-                                .as_ref()
-                                .is_some_and(|session| &session.value == expected)
-                        })
-            });
+            let info = infos
+                .iter()
+                .find(|i| {
+                    Some(i.terminal_id.as_str()) == agent.runtime_identity.terminal_id.as_deref()
+                        && Some(i.pane_id.as_str()) == agent.runtime_identity.pane_id.as_deref()
+                        && i.agent.as_deref() == Some(launch::provider_kind(agent.provider))
+                        && agent
+                            .runtime_identity
+                            .session_id
+                            .as_ref()
+                            .is_none_or(|expected| {
+                                i.agent_session
+                                    .as_ref()
+                                    .is_some_and(|session| &session.value == expected)
+                            })
+                })
+                .or_else(|| resume::restored_agent(&self.state, agent, &infos));
+            if let Some(info) = info {
+                if agent.runtime_identity.terminal_id.as_deref() != Some(info.terminal_id.as_str())
+                    || agent.runtime_identity.pane_id.as_deref() != Some(info.pane_id.as_str())
+                {
+                    let mut identity = agent.runtime_identity.clone();
+                    identity.terminal_id = Some(info.terminal_id.clone());
+                    identity.pane_id = Some(info.pane_id.clone());
+                    state
+                        .set_agent_runtime_identity(agent.id, identity)
+                        .map_err(|e| e.to_string())?;
+                    rebound.push((
+                        agent.id,
+                        agent.runtime_identity.terminal_id.clone(),
+                        info.terminal_id.clone(),
+                    ));
+                }
+            }
             let status = info.map_or(RuntimeStatus::Unavailable, |info| {
-                if agent.session_binding_invalidated {
+                if agent.session_binding_invalidated || agent.deletion_pending {
                     return RuntimeStatus::Unavailable;
                 }
                 if info.launch_pending {
@@ -462,7 +485,13 @@ impl Worker {
                     .map_err(|e| e.to_string())?;
             }
         }
-        self.save(state)
+        self.save(state)?;
+        for (agent, previous, current) in rebound {
+            tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
+                previous_terminal_id = ?previous, terminal_id = current,
+                "Reconnected the saved provider conversation; request ownership preserved");
+        }
+        Ok(())
     }
 
     #[cfg(test)]
