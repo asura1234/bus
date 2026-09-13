@@ -28,6 +28,14 @@ pub(super) fn dispatch_client_shell_actions(
             shell::ClientShellAction::ClipboardWrite(bytes) => {
                 crate::selection::write_osc52_bytes(&bytes);
             }
+            shell::ClientShellAction::EditComposer => {
+                if let Some(shell) = shell.as_deref_mut() {
+                    if let Err(error) = shell.edit_bus_composer() {
+                        tracing::warn!(error = %error, "bus composer editor failed");
+                    }
+                    repaint = true;
+                }
+            }
             shell::ClientShellAction::ActivateEndpoint {
                 endpoint_id,
                 target,
@@ -649,7 +657,7 @@ pub(super) fn finish_client_shell_input(
         query_host_terminal_appearance();
     }
     if outcome.query_host_theme {
-        query_host_terminal_theme();
+        query_host_terminal_theme(&state.host_palette_query_pending);
     }
     sync_client_shell_keyboard_report_all(state)?;
     let (replay, dispatch_repaint) = dispatch_client_shell_actions(

@@ -1,5 +1,5 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
-use super::render::{display, provider, wrap, Action};
+use super::render::{display, provider, wrap, wrap_ranges, Action};
 use crate::bus::model::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -17,6 +17,8 @@ pub(super) struct Line {
     pub action: Option<Action>,
     pub tone: Tone,
     pub spans: Vec<(String, Tone)>,
+    /// Soft-wrapped continuation of the previous row, rejoined when copied.
+    pub continued: bool,
 }
 
 #[derive(Default)]
@@ -38,6 +40,10 @@ enum Message<'a> {
 }
 
 impl History {
+    /// Rows from the latest `lines` call, as currently displayed.
+    pub fn cached(&self) -> &[Line] {
+        &self.lines
+    }
     pub fn lines(
         &mut self,
         state: &BusState,
@@ -155,11 +161,13 @@ impl History {
                 }
             };
             lines.extend(wrap_header(header, width));
-            lines.extend(wrap(text, width).into_iter().map(|text| Line {
-                text,
+            let rows = wrap_ranges(text, width);
+            lines.extend(rows.iter().enumerate().map(|(index, row)| Line {
+                text: display(&text[row.clone()]),
                 action: None,
                 tone: Tone::Text,
                 spans: Vec::new(),
+                continued: index > 0 && rows[index - 1].end == row.start,
             }));
             for path in files {
                 lines.push(Line {
@@ -170,6 +178,7 @@ impl History {
                     action: Some(Action::FileDetail(path.clone())),
                     tone: Tone::Muted,
                     spans: Vec::new(),
+                    continued: false,
                 });
             }
             if let Some(request) = quote {
@@ -178,6 +187,7 @@ impl History {
                     action: Some(Action::Quote(request)),
                     tone: Tone::Muted,
                     spans: Vec::new(),
+                    continued: false,
                 });
             }
             lines.push(Line {
@@ -185,6 +195,7 @@ impl History {
                 action: None,
                 tone: Tone::Text,
                 spans: Vec::new(),
+                continued: false,
             });
         }
         self.key = Some(key);
@@ -206,7 +217,8 @@ fn wrap_header(spans: Vec<(String, Tone)>, width: u16) -> Vec<Line> {
     let mut offset = 0;
     wrap(&source, width)
         .into_iter()
-        .map(|text| {
+        .enumerate()
+        .map(|(index, text)| {
             let end = offset + text.len();
             let spans = ranges
                 .iter()
@@ -222,6 +234,7 @@ fn wrap_header(spans: Vec<(String, Tone)>, width: u16) -> Vec<Line> {
                 action: None,
                 tone: Tone::Muted,
                 spans,
+                continued: index > 0,
             }
         })
         .collect()

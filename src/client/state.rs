@@ -10,6 +10,8 @@ pub(super) struct ClientState {
     /// Latest physical host theme observations, retained so an endpoint selected after the
     /// observation receives the same client-owned baseline.
     pub(super) host_theme_updates: Vec<crate::protocol::ClientHostThemeUpdate>,
+    /// Remains set until the reader consumes the final reply from a 256-color host query.
+    pub(super) host_palette_query_pending: Arc<AtomicBool>,
     pub(super) direct_mouse_capture_preference: bool,
     pub(super) shell_mouse_capture_preference: bool,
     pub(super) direct_keyboard_protocol: crate::terminal_modes::DirectHostKeyboardState,

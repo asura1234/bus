@@ -8,8 +8,11 @@ use crate::bus::model::*;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 use ratatui::{buffer::Buffer, layout::Rect};
+use std::ops::Range;
 use unicode_width::UnicodeWidthChar;
 
+/// Background of mouse-selected text.
+const SELECTION: Color = Color::Rgb(44, 88, 56);
 const ACCENT: Color = {
     let [r, g, b] = crate::bus::colors::YOU_COLOR;
     Color::Rgb(r, g, b)
@@ -84,6 +87,12 @@ pub(super) struct View {
     pub help_max_scroll: usize,
     rows: Vec<Row>,
     pub cursor: Option<crate::protocol::CursorState>,
+    pub notes: Rect,
+    pub notes_scroll: usize,
+    /// Text columns of the visible history rows.
+    pub history_text: Rect,
+    /// Selected cells, painted after the rows they cover.
+    selection: Vec<Rect>,
 }
 impl View {
     fn overlay_row(&mut self, rect: Rect, text: String, action: Option<Action>, selected: bool) {
@@ -149,8 +158,10 @@ impl View {
         }
     }
     fn editor(&mut self, rect: Rect, editor: &Editor, action: Option<Action>, focused: bool) {
-        self.editor_scrolled(rect, editor, action, focused, None);
+        self.editor_scrolled(rect, editor, action, focused, None, 0);
     }
+    /// Draws an editor's wrapped rows. `scroll` pins the viewport; otherwise it
+    /// moves from the `previous` frame's offset only as far as the caret needs.
     fn editor_scrolled(
         &mut self,
         rect: Rect,
@@ -158,48 +169,79 @@ impl View {
         action: Option<Action>,
         focused: bool,
         scroll: Option<usize>,
+        previous: usize,
     ) -> (usize, usize) {
         if rect.width == 0 || rect.height == 0 {
             return (0, 0);
         }
-        let prefix = wrap(&editor.text[..editor.cursor], rect.width);
-        let cursor_row = prefix.len().saturating_sub(1);
-        let lines = wrap(&editor.text, rect.width);
+        let lines = wrap_ranges(&editor.text, rect.width);
+        let (cursor_row, cursor_column) = wrapped_position(&editor.text, &lines, editor.cursor);
         let count = lines.len();
+        let height = usize::from(rect.height);
         let skip = scroll
-            .unwrap_or_else(|| {
-                cursor_row.saturating_sub(usize::from(rect.height.saturating_sub(1)))
+            .unwrap_or(if cursor_row < previous {
+                cursor_row
+            } else {
+                previous.max((cursor_row + 1).saturating_sub(height))
             })
-            .min(count.saturating_sub(usize::from(rect.height)));
-        for (index, line) in lines
-            .into_iter()
-            .skip(skip)
-            .take(usize::from(rect.height))
-            .enumerate()
-        {
-            self.row(
-                Rect::new(rect.x, rect.y + index as u16, rect.width, 1),
-                line,
-                None,
-                focused,
-                false,
-            );
+            .min(count.saturating_sub(height));
+        let selection = editor.selection();
+        for (index, line) in lines.iter().enumerate().skip(skip).take(height) {
+            let row = Rect::new(rect.x, rect.y + (index - skip) as u16, rect.width, 1);
+            let text = &editor.text[line.clone()];
+            self.row(row, display(text), None, focused, false);
+            if let Some(selection) = &selection {
+                let newline = editor.text[line.end..].starts_with('\n');
+                self.select(row, text, line.start, selection, newline);
+            }
         }
         if let Some(action) = action {
             self.hits.push(Hit { rect, action });
         }
-        if focused && (skip..skip + usize::from(rect.height)).contains(&cursor_row) {
-            let col = prefix.last().map_or(0, |line| {
-                unicode_width::UnicodeWidthStr::width(line.as_str())
-            }) as u16;
+        if focused && (skip..skip + height).contains(&cursor_row) {
             self.cursor = Some(crate::protocol::CursorState {
-                x: rect.x + col.min(rect.width - 1),
+                x: rect.x + cursor_column.min(usize::from(rect.width - 1)) as u16,
                 y: rect.y + (cursor_row - skip) as u16,
                 visible: true,
                 shape: 2,
             });
         }
         (skip, count)
+    }
+    /// Highlights the cells of one displayed row inside `selection`, a byte
+    /// range in the source whose row text begins at byte `start`. A selection
+    /// running through a hard line end also marks the cell after the text.
+    fn select(
+        &mut self,
+        row: Rect,
+        text: &str,
+        start: usize,
+        selection: &Range<usize>,
+        newline: bool,
+    ) {
+        let end = start + text.len();
+        let through = newline && selection.start <= end && selection.end > end;
+        if selection.start > end || selection.end < start {
+            return;
+        }
+        let width = usize::from(row.width);
+        // History offsets can predate a re-wrap; count whole characters only.
+        let cells_before = |offset: usize| {
+            (0..=offset - start)
+                .rev()
+                .find_map(|index| text.get(..index))
+                .map_or(0, cells)
+        };
+        let left = cells_before(selection.start.max(start)).min(width);
+        let right = (cells_before(selection.end.min(end)) + usize::from(through)).min(width);
+        if right > left {
+            self.selection.push(Rect::new(
+                row.x + left as u16,
+                row.y,
+                (right - left) as u16,
+                1,
+            ));
+        }
     }
 }
 
@@ -217,26 +259,113 @@ pub(super) fn display(text: &str) -> String {
         })
         .collect()
 }
-pub(super) fn wrap(text: &str, width: u16) -> Vec<String> {
+/// Terminal cells for one source character after `display` filtering.
+pub(super) fn cell_width(c: char) -> usize {
+    if c == '\t' || c.is_control() {
+        1
+    } else {
+        c.width().unwrap_or(0)
+    }
+}
+fn cells(text: &str) -> usize {
+    text.chars().map(cell_width).sum()
+}
+/// Word-wraps `text` into byte ranges, one per terminal row. Every byte except
+/// the newline separators belongs to exactly one row, so cursors and
+/// selections map back to the source. Spaces hang past the right edge instead
+/// of starting a row, words longer than a row break at the edge, and wide
+/// (CJK) characters may break on either side.
+pub(super) fn wrap_ranges(text: &str, width: u16) -> Vec<Range<usize>> {
     if width == 0 {
         return Vec::new();
     }
+    let width = usize::from(width);
     let mut lines = Vec::new();
+    let mut base = 0;
     for source in text.split('\n') {
-        let mut line = String::new();
+        let mut start = base;
         let mut used = 0;
-        for c in display(source).chars() {
-            let size = c.width().unwrap_or(0) as u16;
-            if used + size > width && !line.is_empty() {
-                lines.push(std::mem::take(&mut line));
-                used = 0;
+        let mut breakpoint = None;
+        for (offset, c) in source.char_indices() {
+            let index = base + offset;
+            let size = cell_width(c);
+            if c == ' ' || c == '\t' {
+                used += size;
+                breakpoint = Some(index + c.len_utf8());
+                continue;
             }
-            line.push(c);
+            if size > 1 {
+                breakpoint = Some(index);
+            }
+            if used + size > width && index > start {
+                match breakpoint.filter(|point| *point > start) {
+                    Some(point) => {
+                        lines.push(start..point);
+                        used = cells(&text[point..index]);
+                        start = point;
+                    }
+                    None => {
+                        lines.push(start..index);
+                        used = 0;
+                        start = index;
+                    }
+                }
+                breakpoint = None;
+                if used + size > width && index > start {
+                    lines.push(start..index);
+                    used = 0;
+                    start = index;
+                }
+            }
             used += size;
+            if size > 1 {
+                breakpoint = Some(index + c.len_utf8());
+            }
         }
-        lines.push(line);
+        base += source.len();
+        lines.push(start..base);
+        base += 1;
     }
     lines
+}
+pub(super) fn wrap(text: &str, width: u16) -> Vec<String> {
+    wrap_ranges(text, width)
+        .into_iter()
+        .map(|range| display(&text[range]))
+        .collect()
+}
+/// Row and cell column of a byte offset within wrapped rows. An offset on a
+/// soft-wrap boundary belongs to the following row, where typing continues.
+pub(super) fn wrapped_position(
+    text: &str,
+    lines: &[Range<usize>],
+    offset: usize,
+) -> (usize, usize) {
+    let row = lines
+        .iter()
+        .rposition(|line| line.start <= offset)
+        .unwrap_or(0);
+    let column = lines.get(row).map_or(0, |line| {
+        cells(&text[line.start..offset.clamp(line.start, line.end)])
+    });
+    (row, column)
+}
+/// Byte offset of the cell at `column` in `text`: before the character there,
+/// or after it when `inclusive` (a forward drag includes the cell under the
+/// pointer). Columns past the end map to the end of the text.
+pub(super) fn cell_offset(text: &str, column: usize, inclusive: bool) -> usize {
+    let mut used = 0;
+    for (index, c) in text.char_indices() {
+        used += cell_width(c);
+        if used > column {
+            return if inclusive {
+                index + c.len_utf8()
+            } else {
+                index
+            };
+        }
+    }
+    text.len()
 }
 pub(super) fn provider(provider: Provider) -> &'static str {
     match provider {
@@ -307,7 +436,7 @@ impl BusUi {
                 Rect::default()
             }
         };
-        view.row(at(1, 1, sw), "ROOMS", None, false, true);
+        view.row(at(1, 1, sw), "BUSSES", None, false, true);
         view.row(
             at(sidebar.width.saturating_sub(3), 1, 1),
             "+",
@@ -488,7 +617,7 @@ impl BusUi {
         let Some(room) = self.room.and_then(|id| self.snapshot.state.room(id)) else {
             view.lines(
                 Rect::new(main.x + 2, 2, main.width.saturating_sub(4), 3),
-                "No rooms. Click ROOMS + or press Ctrl+R to add one.",
+                "No rooms. Click BUSSES + or press Ctrl+Shift+R to add one.",
                 None,
                 true,
             );
@@ -525,15 +654,34 @@ impl BusUi {
         let notice = self
             .visible_error()
             .or_else(|| (!errors.is_empty()).then_some(errors.as_str()));
-        let status = notice.map(str::to_owned).unwrap_or_else(|| {
-            if self.send_intent.is_some() {
-                "Saving latest draft before sending…".into()
-            } else if queued > 0 {
-                format!("{queued} queued requests")
-            } else {
-                String::new()
-            }
+        let search_status = self
+            .history_search
+            .as_ref()
+            .map(|search| (search.query.clone(), search.selected));
+        let search_status = search_status.map(|(query, selected)| {
+            let total = self
+                .room
+                .map(|room| self.filtered_history(room, &query).len())
+                .unwrap_or(0)
+                .max(1);
+            (query, selected, total)
         });
+        let status = notice
+            .map(str::to_owned)
+            .or_else(|| {
+                search_status.as_ref().map(|(query, selected, total)| {
+                    format!("search {query}  {}/{total}", selected + 1)
+                })
+            })
+            .unwrap_or_else(|| {
+                if self.send_intent.is_some() {
+                    "Saving latest draft before sending…".into()
+                } else if queued > 0 {
+                    format!("{queued} queued requests")
+                } else {
+                    String::new()
+                }
+            });
         let x = main.x + 2;
         let width = main.width.saturating_sub(4);
         let bottom = main.bottom();
@@ -613,11 +761,14 @@ impl BusUi {
             view.history_divider =
                 Rect::new(main.x + 1, history_y - 1, main.width.saturating_sub(2), 1);
         }
-        view.editor(
-            Rect::new(x, 3, width, note_height),
+        view.notes = Rect::new(x, 3, width, note_height);
+        (view.notes_scroll, _) = view.editor_scrolled(
+            view.notes,
             &local.notes,
             Some(Action::Notes),
             self.notes_focus,
+            None,
+            self.view.notes_scroll,
         );
         if note_height > 0 && local.notes.text.is_empty() {
             view.row(
@@ -652,6 +803,10 @@ impl BusUi {
         } else {
             self.main_scroll.min(view.history_max_scroll)
         };
+        view.history_text = Rect::new(x, history_y, width, view.history.height);
+        let selection = self
+            .history_selection
+            .map(|(anchor, head)| (anchor.min(head), anchor.max(head)));
         for (index, line) in content
             .iter()
             .skip(self.main_scroll)
@@ -666,6 +821,25 @@ impl BusUi {
                 false,
                 matches!(line.tone, super::history::Tone::Muted),
             );
+            let line_index = self.main_scroll + index;
+            if let Some((start, end)) =
+                selection.filter(|(start, end)| (start.line..=end.line).contains(&line_index))
+            {
+                let from = if line_index == start.line {
+                    start.offset
+                } else {
+                    0
+                };
+                let to = if line_index == end.line {
+                    end.offset
+                } else {
+                    usize::MAX
+                };
+                let newline = content
+                    .get(line_index + 1)
+                    .is_some_and(|next| !next.continued);
+                view.select(rect, &line.text, 0, &(from..to), newline);
+            }
             let mut column = 0u16;
             for (text, tone) in &line.spans {
                 let span_width = unicode_width::UnicodeWidthStr::width(text.as_str()) as u16;
@@ -757,6 +931,7 @@ impl BusUi {
             Some(Action::Composer),
             !self.notes_focus && !self.recipient_menu && self.rename.is_none(),
             local.composer_scroll,
+            self.view.composer_scroll,
         );
         if local.text.text.is_empty() {
             view.row(
@@ -863,6 +1038,7 @@ impl BusUi {
             {
                 view.cursor = None;
             }
+            view.selection.retain(|rect| !rect.intersects(popup));
         }
         if self.recipient_menu {
             let agents: Vec<_> = self
@@ -913,6 +1089,8 @@ impl BusUi {
                 );
             }
             view.cursor = None;
+            let menu = Rect::new(x, y, width, height);
+            view.selection.retain(|rect| !rect.intersects(menu));
         }
     }
     fn delete_view(&self, view: &mut View, area: Rect) {
@@ -1238,8 +1416,22 @@ impl BusUi {
                 }
             }
         }
+        // Selection tints the rows it covers but stays beneath a dialog.
+        fn paint_selection(selection: &[Rect], buffer: &mut Buffer) {
+            for rect in selection {
+                let rect = rect.intersection(buffer.area);
+                for y in rect.top()..rect.bottom() {
+                    for x in rect.left()..rect.right() {
+                        buffer[(x, y)].set_bg(SELECTION);
+                    }
+                }
+            }
+        }
+        let mut selection_painted = false;
         for (index, row) in self.view.rows.iter().enumerate() {
             if index == self.view.dialog_rows_start && self.view.dialog.width > 0 {
+                paint_selection(&self.view.selection, buffer);
+                selection_painted = true;
                 let rect = self.view.dialog.intersection(buffer.area);
                 Clear.render(rect, buffer);
                 Block::default()
@@ -1272,6 +1464,9 @@ impl BusUi {
             if row.color.is_none() && row.text.starts_with('#') {
                 buffer.set_stringn(row.x, row.y, "#", 1, Style::default().fg(ACCENT));
             }
+        }
+        if !selection_painted {
+            paint_selection(&self.view.selection, buffer);
         }
         let sidebar = self.view.sidebar.intersection(buffer.area);
         if sidebar.width > 0 {

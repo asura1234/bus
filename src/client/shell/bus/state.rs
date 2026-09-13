@@ -32,6 +32,10 @@ pub(super) struct LocalRoom {
     pub composer_size: ComposerSize,
     // None follows the caret; Some is an independently scrolled viewport.
     pub composer_scroll: Option<usize>,
+    pub recall: Vec<String>,
+    pub stash: Vec<String>,
+    pub history_index: Option<usize>,
+    pub live_draft: Option<String>,
     pub text_generation: u64,
     pub notes_generation: u64,
     pub recipient_generation: u64,
@@ -47,6 +51,10 @@ impl From<&Room> for LocalRoom {
             recipients: room.draft.recipient_ids.clone(),
             composer_size: ComposerSize::Auto,
             composer_scroll: None,
+            recall: Vec::new(),
+            stash: Vec::new(),
+            history_index: None,
+            live_draft: None,
             text_generation: 0,
             notes_generation: 0,
             recipient_generation: 0,
@@ -101,6 +109,10 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) main_scroll: usize,
     pub(super) history_follow_tail: bool,
     pub(super) history: super::history::History,
+    /// Region receiving the current left-button drag, if it started a selection.
+    pub(super) drag: Option<super::selection::Region>,
+    /// History selection as (anchor, head); editor selections live in `Editor`.
+    pub(super) history_selection: Option<(super::selection::Point, super::selection::Point)>,
     pub(super) recipient_scroll: u16,
     pub(super) sidebar_scroll: usize,
     pub(super) file_scroll: usize,
@@ -110,6 +122,16 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) quitting: Option<std::time::Instant>,
     pub(super) force_exit_available: bool,
     pub exit_ready: bool,
+    pub(super) history_search: Option<HistorySearch>,
+    pub(super) pending_line_continue: bool,
+    pub(super) last_esc: Option<std::time::Instant>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct HistorySearch {
+    pub query: String,
+    pub selected: usize,
+    pub live_draft: String,
 }
 
 impl BusUi {
@@ -145,6 +167,8 @@ impl BusUi {
             main_scroll: 0,
             history_follow_tail: true,
             history: super::history::History::default(),
+            drag: None,
+            history_selection: None,
             recipient_scroll: 0,
             sidebar_scroll: 0,
             file_scroll: 0,
@@ -154,6 +178,9 @@ impl BusUi {
             quitting: None,
             force_exit_available: false,
             exit_ready: false,
+            history_search: None,
+            pending_line_continue: false,
+            last_esc: None,
         }
     }
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
@@ -267,7 +294,8 @@ impl BusUi {
                 .entry(room.id)
                 .or_insert_with(|| LocalRoom::from(room));
             if let Some(local) = self.locals.get_mut(&room.id) {
-                if local.notes_generation == 0 {
+                // Rebuilding unchanged notes would drop their caret and selection.
+                if local.notes_generation == 0 && local.notes.text != room.notes {
                     local.notes = Editor::new(room.notes.clone());
                 }
             }
@@ -408,8 +436,54 @@ impl BusUi {
             }
         }
         self.error = None;
+        if let Some(local) = self.locals.get_mut(&room) {
+            let text = local.text.text.clone();
+            if !text.is_empty() && local.recall.last() != Some(&text) {
+                local.recall.push(text);
+            }
+            local.history_index = None;
+            local.live_draft = None;
+        }
         self.send_intent = Some(room);
         self.history_follow_tail = true;
+    }
+    pub(super) fn apply_external_edit(&mut self, room: RoomId, text: String) {
+        if let Some(local) = self.locals.get_mut(&room) {
+            local.text = super::editor::Editor::new(text);
+            local.history_index = None;
+            local.live_draft = None;
+        }
+        self.text_changed(room);
+    }
+    pub(super) fn edit_in_external_editor(&mut self) -> Result<(), String> {
+        let room = self.room.ok_or("No room selected")?;
+        let text = self
+            .locals
+            .get(&room)
+            .map(|local| local.text.text.clone())
+            .unwrap_or_default();
+        let path = std::env::temp_dir().join(format!("bus-prompt-{}.md", std::process::id()));
+        std::fs::write(&path, text).map_err(|error| error.to_string())?;
+        let argv =
+            crate::platform::scrollback_editor_argv(&path).map_err(|error| error.to_string())?;
+        let Some((program, args)) = argv.split_first() else {
+            let _ = std::fs::remove_file(&path);
+            return Err("editor command is empty".into());
+        };
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
+        let status = std::process::Command::new(program).args(args).status();
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen);
+        let _ = crossterm::terminal::enable_raw_mode();
+        let result = match status {
+            Ok(status) if status.success() => std::fs::read_to_string(&path)
+                .map_err(|error| error.to_string())
+                .map(|edited| self.apply_external_edit(room, edited)),
+            Ok(status) => Err(format!("editor exited with {status}")),
+            Err(error) => Err(error.to_string()),
+        };
+        let _ = std::fs::remove_file(&path);
+        result
     }
     pub fn notes_changed(&mut self, room: RoomId) {
         if let Some(local) = self.locals.get_mut(&room) {
@@ -494,6 +568,42 @@ impl BusUi {
             }
         }
         changed
+    }
+    /// Ctrl+C clears a visible room draft before it may quit Bus. A draft that
+    /// is already being sent stays intact, but still keeps Bus open.
+    pub(super) fn clear_composer(&mut self) -> bool {
+        if self.quitting.is_some()
+            || self.force_exit_available
+            || self.deletion.is_some()
+            || self.form.is_some()
+            || self.rename.is_some()
+            || self.terminal.is_some()
+        {
+            return false;
+        }
+        let Some(room) = self.room else {
+            return false;
+        };
+        if self
+            .locals
+            .get(&room)
+            .is_none_or(|local| local.text.text.is_empty())
+        {
+            return false;
+        }
+        let sending = self.send_intent == Some(room)
+            || self
+                .pending
+                .iter()
+                .any(|p| matches!(p.effect, Effect::Submit(id, _) if id == room));
+        if !sending {
+            if let Some(local) = self.locals.get_mut(&room) {
+                local.text = Editor::default();
+            }
+            self.drag = None;
+            self.text_changed(room);
+        }
+        true
     }
     pub(super) fn request_quit(&mut self) {
         self.quitting = Some(std::time::Instant::now());

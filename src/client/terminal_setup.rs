@@ -3,6 +3,8 @@
 use std::io::{self, Write as _};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
@@ -112,6 +114,32 @@ pub(super) fn setup_terminal_with_capabilities(
 
 pub(super) fn should_enable_host_color_scheme_reports(enable_client_protocols: bool) -> bool {
     enable_client_protocols && should_query_host_terminal_theme()
+}
+
+#[cfg(unix)]
+pub(super) fn wait_for_host_palette_query(pending: &AtomicBool, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while pending.load(Ordering::Acquire) {
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        std::thread::sleep((deadline - now).min(Duration::from_millis(1)));
+    }
+    true
+}
+
+#[cfg(unix)]
+pub(super) fn finish_terminal_input(
+    host_palette_query_pending: &AtomicBool,
+    input_reader_should_quit: &AtomicBool,
+    timeout: Duration,
+) -> bool {
+    // Keep raw mode active while the reader consumes terminal-generated replies. Restoring echo
+    // first would make a slow OSC 4 tail visible at the user's shell prompt.
+    let complete = wait_for_host_palette_query(host_palette_query_pending, timeout);
+    input_reader_should_quit.store(true, Ordering::Release);
+    complete
 }
 
 /// Guard that restores the terminal when dropped.
@@ -441,5 +469,48 @@ impl Drop for TerminalGuard {
                 self.restore_windows_input_mode,
             );
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn shutdown_waits_for_final_palette_reply_before_restoring_echo() {
+        let pending = Arc::new(AtomicBool::new(true));
+        let completed = pending.clone();
+        let reply = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            completed.store(false, Ordering::Release);
+        });
+
+        assert!(wait_for_host_palette_query(
+            &pending,
+            Duration::from_millis(100),
+        ));
+        reply.join().unwrap();
+    }
+
+    #[test]
+    fn shutdown_keeps_input_reader_alive_until_palette_drain_finishes() {
+        let pending = Arc::new(AtomicBool::new(true));
+        let reader_quit = Arc::new(AtomicBool::new(false));
+        let completed = pending.clone();
+        let observed_quit = reader_quit.clone();
+        let reply = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(10));
+            assert!(!observed_quit.load(Ordering::Acquire));
+            completed.store(false, Ordering::Release);
+        });
+
+        assert!(finish_terminal_input(
+            &pending,
+            &reader_quit,
+            Duration::from_millis(100),
+        ));
+        assert!(reader_quit.load(Ordering::Acquire));
+        reply.join().unwrap();
     }
 }

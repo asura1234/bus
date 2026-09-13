@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Ctrl+C now waits for in-flight host palette replies before restoring terminal echo, preventing raw OSC color data from appearing at the shell prompt.
+
 ## [0.9.0] - 2026-09-07
 
 ### Added

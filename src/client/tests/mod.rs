@@ -356,7 +356,12 @@ fn write_host_terminal_appearance_query_emits_mode_2031_query() {
 #[test]
 fn write_host_terminal_theme_query_emits_osc_queries() {
     let mut output = Vec::new();
-    write_host_terminal_theme_query(&mut output).unwrap();
+    let palette_query_pending = AtomicBool::new(false);
+    write_host_terminal_theme_query(&mut output, &palette_query_pending).unwrap();
+    assert_eq!(
+        palette_query_pending.load(Ordering::Acquire),
+        crate::platform::should_query_host_terminal_palette()
+    );
     assert_eq!(
         output,
         crate::terminal_theme::host_terminal_theme_query_sequence(

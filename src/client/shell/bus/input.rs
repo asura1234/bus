@@ -22,6 +22,10 @@ impl BusUi {
                 || (matches!(key.code, KeyCode::Char('q' | 'Q'))
                     && key.modifiers.contains(KeyModifiers::CONTROL));
             if quit && key.kind != KeyEventKind::Release {
+                if matches!(key.code, KeyCode::Char('c' | 'C')) && self.clear_composer() {
+                    outcome.repaint = true;
+                    return true;
+                }
                 if key.modifiers.contains(KeyModifiers::SHIFT) && self.force_exit_available {
                     outcome.detach = true;
                 } else {
@@ -86,6 +90,10 @@ impl BusUi {
                     self.detail_path = detail;
                     outcome.repaint = true;
                 }
+            }
+            if self.selection_mouse(mouse, hit.as_ref(), outcome) {
+                outcome.repaint = true;
+                return true;
             }
             if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
                 if let Some(action) = hit {
@@ -189,6 +197,7 @@ impl BusUi {
         match event {
             RawInputEvent::Text(text) => {
                 self.insert(text.as_str());
+                self.keep_focused_selection(None);
             }
             RawInputEvent::Paste(text) => {
                 if self.form.is_none() && self.rename.is_none() && !self.notes_focus {
@@ -211,9 +220,36 @@ impl BusUi {
                 } else {
                     self.insert(text);
                 }
+                self.keep_focused_selection(None);
             }
             RawInputEvent::Key(key) => {
                 if key.kind == KeyEventKind::Release {
+                    return true;
+                }
+                // Terminals that forward Cmd+C can copy the selection again.
+                if matches!(key.code, KeyCode::Char('c' | 'C'))
+                    && key.modifiers == KeyModifiers::SUPER
+                {
+                    if let Some(text) = self.selected_text() {
+                        outcome.actions.push(
+                            crate::client::shell::ClientShellAction::ClipboardWrite(
+                                text.into_bytes(),
+                            ),
+                        );
+                    }
+                    return true;
+                }
+                if matches!(key.code, KeyCode::Char('g' | 'G'))
+                    && key.modifiers == KeyModifiers::CONTROL
+                    && self.form.is_none()
+                    && self.rename.is_none()
+                    && self.terminal.is_none()
+                    && !self.notes_focus
+                {
+                    outcome
+                        .actions
+                        .push(crate::client::shell::ClientShellAction::EditComposer);
+                    outcome.repaint = true;
                     return true;
                 }
                 // Enhanced terminals can report the base key plus its shifted
@@ -229,6 +265,7 @@ impl BusUi {
                     key.code
                 };
                 self.key(code, key.modifiers);
+                self.keep_focused_selection(Some(key.code));
             }
             RawInputEvent::Mouse(_) => {}
             _ => return false,
@@ -287,6 +324,7 @@ impl BusUi {
             .map(|agent| agent.id)
     }
     pub fn open_terminal(&mut self, agent: AgentId) {
+        self.clear_selection();
         self.terminal = Some(agent);
         self.target_pane = None;
         self.form = None;
@@ -295,6 +333,7 @@ impl BusUi {
         self.queue(BusCommand::FocusTerminal(agent), Effect::None);
     }
     pub fn open_room(&mut self, room: RoomId) {
+        self.clear_selection();
         if let Some(index) = self
             .snapshot
             .state
@@ -339,6 +378,8 @@ impl BusUi {
             text.replace('\\', "\\\\").replace('"', "\\\"")
         );
         if let Some(local) = self.locals.get_mut(&room) {
+            // A leftover mouse selection must not be replaced by the quote.
+            local.text.anchor = None;
             local.text.cursor = local.text.text.len();
             if !local.text.text.is_empty() && !local.text.text.ends_with('\n') {
                 local.text.insert("\n");
@@ -362,6 +403,7 @@ impl BusUi {
         }
     }
     fn open_form(&mut self, form: Form) {
+        self.clear_selection();
         if self.failed.is_empty() {
             // Dismiss only a handled UI operation's matching snapshot copy,
             // not unrelated background/runtime failures or unsaved drafts.
@@ -396,7 +438,7 @@ impl BusUi {
                 name: Editor::default(),
                 provider: Provider::Codex,
                 cwd: Editor::new("~/".into()),
-                args: Editor::default(),
+                args: Box::new(Editor::default()),
                 field: 0,
             }),
             Action::Notes => {
@@ -506,9 +548,13 @@ impl BusUi {
             if self.notes_focus {
                 local.notes.insert(text);
             } else {
+                local.history_index = None;
+                local.live_draft = None;
                 local.text.insert(text);
             }
         }
+        self.pending_line_continue = false;
+        self.last_esc = None;
         if self.notes_focus {
             self.notes_changed(room);
         } else {
@@ -541,7 +587,7 @@ impl BusUi {
                 }
                 _ => {
                     if let Some(rename) = &mut self.rename {
-                        rename.editor.key(code);
+                        rename.editor.key(code, modifiers);
                     }
                 }
             }
@@ -572,6 +618,13 @@ impl BusUi {
             }
             return;
         }
+        if self.history_search.is_some() && !self.notes_focus {
+            self.search_key(code, modifiers);
+            return;
+        }
+        if !matches!(code, KeyCode::Esc) {
+            self.last_esc = None;
+        }
         match (code, modifiers) {
             (KeyCode::F(2), _) => {
                 if let Some(id) = self.terminal {
@@ -581,7 +634,11 @@ impl BusUi {
                 }
             }
             (KeyCode::F(3), _) => self.notes_focus = !self.notes_focus,
-            (KeyCode::Char('e'), KeyModifiers::CONTROL) if !self.notes_focus => {
+            (KeyCode::Char('e' | 'E'), modifiers)
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && modifiers.contains(KeyModifiers::SHIFT)
+                    && !self.notes_focus =>
+            {
                 if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
                     local.composer_size = if local.composer_size == ComposerSize::Full
                         || (self.view.composer.height > 0
@@ -599,7 +656,21 @@ impl BusUi {
                     usize::from(self.view.composer.height.saturating_sub(1).max(1)),
                 );
             }
-            (KeyCode::Char('r'), KeyModifiers::CONTROL) => self.action(Action::NewRoom),
+            (KeyCode::Char('r' | 'R'), KeyModifiers::CONTROL) if !self.notes_focus => {
+                self.cycle_history_search();
+            }
+            (KeyCode::Char('r' | 'R'), modifiers)
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.action(Action::NewRoom);
+            }
+            (KeyCode::Char('s' | 'S'), KeyModifiers::CONTROL) if !self.notes_focus => {
+                self.stash_prompt();
+            }
+            (KeyCode::Char('v' | 'V'), KeyModifiers::CONTROL) if !self.notes_focus => {
+                self.paste_image();
+            }
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => self.action(Action::NewAgent),
             (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
                 if let Some(agent) = self.pending_hook_setup() {
@@ -619,13 +690,23 @@ impl BusUi {
             (KeyCode::Char('j'), KeyModifiers::CONTROL) | (KeyCode::Enter, KeyModifiers::SHIFT) => {
                 self.insert("\n")
             }
+            (KeyCode::Char('\\'), modifiers)
+                if !self.notes_focus && modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+            {
+                self.insert("\\");
+                self.pending_line_continue = true;
+            }
             (KeyCode::Enter, _) if self.notes_focus => self.insert("\n"),
+            (KeyCode::Enter, _) if self.pending_line_continue => self.finish_line_continue(),
             (KeyCode::Enter, _) => {
                 if let Some(room) = self.room {
                     self.request_send(room);
                 }
             }
-            (KeyCode::Esc, _) => self.notes_focus = false,
+            (KeyCode::Up | KeyCode::Down, KeyModifiers::NONE) if !self.notes_focus => {
+                self.history_or_move(code);
+            }
+            (KeyCode::Esc, _) => self.escape(),
             (KeyCode::Char(c), _)
                 if !modifiers.intersects(
                     KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
@@ -644,9 +725,8 @@ impl BusUi {
                         } else {
                             &mut local.text
                         };
-                        let before = editor.text.len();
-                        editor.key(code);
-                        if editor.text.len() != before {
+                        let changed = editor.key(code, modifiers);
+                        if changed {
                             if self.notes_focus {
                                 self.notes_changed(room);
                             } else {
@@ -656,6 +736,282 @@ impl BusUi {
                     }
                 }
             }
+        }
+    }
+    fn escape(&mut self) {
+        if self.notes_focus {
+            self.notes_focus = false;
+            self.last_esc = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self.last_esc.is_some_and(|last| {
+            now.saturating_duration_since(last) < std::time::Duration::from_millis(800)
+        }) {
+            self.archive_draft();
+            self.last_esc = None;
+        } else {
+            self.last_esc = Some(now);
+        }
+    }
+    fn archive_draft(&mut self) {
+        let Some(room) = self.room else {
+            return;
+        };
+        let Some(local) = self.locals.get_mut(&room) else {
+            return;
+        };
+        let text = std::mem::take(&mut local.text.text);
+        if !text.is_empty() && local.recall.last() != Some(&text) {
+            local.recall.push(text);
+        }
+        local.text = Editor::default();
+        local.history_index = None;
+        local.live_draft = None;
+        self.text_changed(room);
+    }
+    fn stash_prompt(&mut self) {
+        let Some(room) = self.room else {
+            return;
+        };
+        let Some(local) = self.locals.get_mut(&room) else {
+            return;
+        };
+        if local.text.text.is_empty() {
+            if let Some(text) = local.stash.pop() {
+                local.text = Editor::new(text);
+                local.history_index = None;
+                local.live_draft = None;
+                self.text_changed(room);
+            }
+            return;
+        }
+        local.stash.push(std::mem::take(&mut local.text.text));
+        local.text = Editor::default();
+        local.history_index = None;
+        local.live_draft = None;
+        self.text_changed(room);
+    }
+    fn finish_line_continue(&mut self) {
+        self.pending_line_continue = false;
+        let Some(room) = self.room else {
+            return;
+        };
+        if let Some(local) = self.locals.get_mut(&room) {
+            if local.text.cursor > 0 && local.text.text[..local.text.cursor].ends_with('\\') {
+                local.text.key(KeyCode::Backspace, KeyModifiers::NONE);
+            }
+            local.text.insert("\n");
+        }
+        self.text_changed(room);
+    }
+    fn paste_image(&mut self) {
+        let Some(image) = crate::platform::read_clipboard_image() else {
+            return;
+        };
+        let Some(room) = self.room else {
+            return;
+        };
+        let path = std::env::temp_dir().join(format!(
+            "bus-paste-{}-{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0),
+            image.extension
+        ));
+        if std::fs::write(&path, &image.bytes).is_err() {
+            self.error = Some("Could not write the clipboard image.".into());
+            return;
+        }
+        self.queue(
+            BusCommand::AttachFile(room, path.display().to_string()),
+            Effect::Files(room),
+        );
+    }
+    fn history_entries(&self, room: RoomId) -> Vec<String> {
+        let mut entries = self
+            .locals
+            .get(&room)
+            .map(|local| local.recall.clone())
+            .unwrap_or_default();
+        for request in self
+            .snapshot
+            .state
+            .requests()
+            .filter(|request| request.room_id == room)
+        {
+            if entries.last() != Some(&request.prompt.text) {
+                entries.push(request.prompt.text.clone());
+            }
+        }
+        if let Some(text) = self
+            .snapshot
+            .state
+            .room(room)
+            .and_then(|room| room.latest_prompt.as_ref())
+            .map(|prompt| prompt.text.clone())
+        {
+            if entries.last() != Some(&text) {
+                entries.push(text);
+            }
+        }
+        entries
+    }
+    fn history_or_move(&mut self, code: KeyCode) {
+        let Some(room) = self.room else {
+            return;
+        };
+        let Some(local) = self.locals.get(&room) else {
+            return;
+        };
+        if code == KeyCode::Up && local.text.at_first_line() {
+            self.history_older(room);
+        } else if code == KeyCode::Down && local.text.at_last_line() {
+            self.history_newer(room);
+        } else if let Some(local) = self.locals.get_mut(&room) {
+            local.composer_scroll = None;
+            local.text.key(code, KeyModifiers::NONE);
+        }
+    }
+    fn history_older(&mut self, room: RoomId) {
+        let entries = self.history_entries(room);
+        if entries.is_empty() {
+            return;
+        }
+        let Some(local) = self.locals.get_mut(&room) else {
+            return;
+        };
+        let index = match local.history_index {
+            None => {
+                local.live_draft = Some(local.text.text.clone());
+                entries.len() - 1
+            }
+            Some(0) => 0,
+            Some(index) => index - 1,
+        };
+        local.history_index = Some(index);
+        local.text = Editor::new(entries[index].clone());
+        self.text_changed(room);
+    }
+    fn history_newer(&mut self, room: RoomId) {
+        let entries = self.history_entries(room);
+        let Some(local) = self.locals.get_mut(&room) else {
+            return;
+        };
+        match local.history_index {
+            None => {}
+            Some(index) if index + 1 < entries.len() => {
+                local.history_index = Some(index + 1);
+                local.text = Editor::new(entries[index + 1].clone());
+                self.text_changed(room);
+            }
+            Some(_) => {
+                local.history_index = None;
+                let draft = local.live_draft.take().unwrap_or_default();
+                local.text = Editor::new(draft);
+                self.text_changed(room);
+            }
+        }
+    }
+    fn cycle_history_search(&mut self) {
+        let Some(room) = self.room else {
+            return;
+        };
+        if self.history_entries(room).is_empty() {
+            return;
+        }
+        match &mut self.history_search {
+            None => {
+                let live_draft = self
+                    .locals
+                    .get(&room)
+                    .map(|local| local.text.text.clone())
+                    .unwrap_or_default();
+                self.history_search = Some(HistorySearch {
+                    query: String::new(),
+                    selected: 0,
+                    live_draft,
+                });
+            }
+            Some(search) => search.selected = search.selected.saturating_add(1),
+        }
+        self.apply_search(room);
+    }
+    pub(super) fn filtered_history(&self, room: RoomId, query: &str) -> Vec<String> {
+        let query = query.to_lowercase();
+        self.history_entries(room)
+            .into_iter()
+            .rev()
+            .filter(|text| query.is_empty() || text.to_lowercase().contains(&query))
+            .collect()
+    }
+    fn apply_search(&mut self, room: RoomId) {
+        let Some(search) = &self.history_search else {
+            return;
+        };
+        let matches = self.filtered_history(room, &search.query);
+        if matches.is_empty() {
+            return;
+        }
+        let selected = search.selected % matches.len();
+        let text = matches[selected].clone();
+        if let Some(search) = &mut self.history_search {
+            search.selected = selected;
+        }
+        if let Some(local) = self.locals.get_mut(&room) {
+            local.text = Editor::new(text);
+            local.history_index = None;
+        }
+        self.text_changed(room);
+    }
+    fn cancel_search(&mut self) {
+        let Some(search) = self.history_search.take() else {
+            return;
+        };
+        let Some(room) = self.room else {
+            return;
+        };
+        if let Some(local) = self.locals.get_mut(&room) {
+            local.text = Editor::new(search.live_draft);
+            local.history_index = None;
+            local.live_draft = None;
+        }
+        self.text_changed(room);
+    }
+    fn search_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        let Some(room) = self.room else {
+            return;
+        };
+        match (code, modifiers) {
+            (KeyCode::Esc, _) => self.cancel_search(),
+            (KeyCode::Enter, _) => self.history_search = None,
+            (KeyCode::Char('r' | 'R'), KeyModifiers::CONTROL) => {
+                if let Some(search) = &mut self.history_search {
+                    search.selected = search.selected.saturating_add(1);
+                }
+                self.apply_search(room);
+            }
+            (KeyCode::Backspace, _) => {
+                if let Some(search) = &mut self.history_search {
+                    search.query.pop();
+                    search.selected = 0;
+                }
+                self.apply_search(room);
+            }
+            (KeyCode::Char(c), modifiers)
+                if !modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                if let Some(search) = &mut self.history_search {
+                    search.query.push(c);
+                    search.selected = 0;
+                }
+                self.apply_search(room);
+            }
+            _ => {}
         }
     }
     fn form_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
@@ -731,11 +1087,19 @@ impl BusUi {
                 .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
             {
                 self.insert(&c.to_string());
+                return;
             }
-        } else {
-            if let Some(editor) = self.form.as_mut().and_then(Form::editor_mut) {
-                editor.key(code);
-            }
+        }
+        // Modified letters are editing chords (Alt+B/F/D, Ctrl+W) or no-ops.
+        let edited = self
+            .form
+            .as_mut()
+            .and_then(Form::editor_mut)
+            .is_some_and(|editor| {
+                let before = editor.cursor;
+                editor.key(code, modifiers) || editor.cursor != before
+            });
+        if edited || !matches!(code, KeyCode::Char(_)) {
             self.query_paths();
         }
     }

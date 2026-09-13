@@ -14,7 +14,7 @@ pub(super) enum Form {
         name: Editor,
         provider: Provider,
         cwd: Editor,
-        args: Editor,
+        args: Box<Editor>,
         field: usize,
     },
     Files(Editor),

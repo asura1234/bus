@@ -69,6 +69,8 @@ use terminal_geometry::{
 };
 #[cfg(unix)]
 use terminal_geometry::{reported_cell_size_from_events, store_reported_cell_size};
+#[cfg(unix)]
+use terminal_setup::finish_terminal_input;
 use terminal_setup::{
     effective_mouse_capture, effective_sgr_pixel_mouse, set_mouse_capture,
     setup_direct_attach_terminal, setup_terminal, should_draw_host_cursor,
@@ -133,6 +135,12 @@ use crate::protocol::{self, ClientMessage, FrameData, ServerMessage, MAX_GRAPHIC
 #[cfg(test)]
 use crate::protocol::{AttachScrollDirection, AttachScrollSource, NotifyKind};
 use crate::server::socket_paths::client_socket_path;
+
+#[derive(Clone, Default)]
+struct ClientInputLifecycle {
+    reader_should_quit: Arc<AtomicBool>,
+    host_palette_query_pending: Arc<AtomicBool>,
+}
 
 fn run_client_with_mode(
     attach_request: Option<(String, bool)>,
@@ -294,6 +302,7 @@ fn run_client_with_mode(
         .map_err(io::Error::other)?;
 
     let should_quit = Arc::new(AtomicBool::new(false));
+    let input_lifecycle = ClientInputLifecycle::default();
 
     // ctrlc's "termination" feature also catches SIGTERM/SIGHUP so direct
     // termination signals still run the quit path and TerminalGuard::Drop.
@@ -314,11 +323,24 @@ fn run_client_with_mode(
             cell_height_px,
             exact_cell_size,
             should_quit,
+            input_lifecycle.clone(),
             loop_config,
             attach_escape,
         )
         .await
     });
+
+    // Terminal palette replies are stdin, so let the reader drain them before restoring echo.
+    #[cfg(unix)]
+    let _ = finish_terminal_input(
+        &input_lifecycle.host_palette_query_pending,
+        &input_lifecycle.reader_should_quit,
+        Duration::from_millis(100),
+    );
+    #[cfg(not(unix))]
+    input_lifecycle
+        .reader_should_quit
+        .store(true, Ordering::Release);
 
     // Restore the terminal before printing any final status message.
     let terminal_restore_failed = terminal_guard.restore().is_err();
@@ -364,6 +386,7 @@ async fn run_client_loop(
     initial_cell_height_px: u32,
     initial_pixel_geometry_exact: bool,
     should_quit: Arc<AtomicBool>,
+    input_lifecycle: ClientInputLifecycle,
     config: ClientLoopConfig,
     attach_escape: Option<AttachEscapeState>,
 ) -> Result<(), ClientError> {
@@ -379,6 +402,7 @@ async fn run_client_loop(
         endpoint_mouse_capture_requested: false,
         endpoint_sgr_pixels_requested: false,
         host_theme_updates: Vec::new(),
+        host_palette_query_pending: input_lifecycle.host_palette_query_pending,
         direct_mouse_capture_preference: attach_escape.is_some() && config.mouse_capture_active,
         shell_mouse_capture_preference: config.mouse_capture_active,
         direct_keyboard_protocol: crate::terminal_modes::DirectHostKeyboardState::default(),
@@ -452,9 +476,10 @@ async fn run_client_loop(
     // host terminal directly instead of falling back to an assumed cell size.
     let will_query_host_cell_size = state.attach_escape.is_none()
         && host_cell_size_query_required(state.kitty_graphics_enabled);
-    let stdin_quit = should_quit.clone();
+    let stdin_quit = input_lifecycle.reader_should_quit;
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
     let stdin_sgr_pixels_active = host_sgr_pixels_active.clone();
+    let stdin_host_palette_query_pending = state.host_palette_query_pending.clone();
     #[cfg(unix)]
     let stdin_direct_response = state.direct_graphics_response.clone();
     #[cfg(unix)]
@@ -468,6 +493,7 @@ async fn run_client_loop(
             &stdin_quit,
             will_query_host_terminal_theme,
             will_query_host_cell_size,
+            stdin_host_palette_query_pending,
             stdin_mouse_capture_active,
             stdin_sgr_pixels_active,
             #[cfg(unix)]
@@ -478,7 +504,7 @@ async fn run_client_loop(
     });
 
     if will_query_host_terminal_theme {
-        query_host_terminal_theme();
+        query_host_terminal_theme(&state.host_palette_query_pending);
         #[cfg(not(windows))]
         if state.shell.is_some() {
             query_host_terminal_appearance();
@@ -850,7 +876,7 @@ async fn run_client_loop(
                         query_host_terminal_appearance();
                     }
                     if crate::raw_input::events_require_host_terminal_theme_query(&events) {
-                        query_host_terminal_theme();
+                        query_host_terminal_theme(&state.host_palette_query_pending);
                     }
                     if let Some((width_px, height_px)) = reported_cell_size_from_events(&events) {
                         store_reported_cell_size(&reported_cell_size, width_px, height_px);
@@ -2012,6 +2038,7 @@ async fn run_client_loop(
                     let (effects, outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
+                        outcome.repaint |= shell.tick_status_animation(now);
                         outcome.repaint |= shell.tick_bus();
                         outcome.detach |= shell.bus_exit_ready();
                         for expired in expired_endpoints {

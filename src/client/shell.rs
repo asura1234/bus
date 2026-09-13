@@ -213,6 +213,25 @@ fn status_icon(
     }
 }
 
+fn sidebar_agent_status_icon(
+    status: crate::api::schema::AgentStatus,
+    style: crate::config::StatusIndicatorStyle,
+    animation_phase: u8,
+) -> &'static str {
+    use crate::api::schema::AgentStatus;
+    use crate::config::StatusIndicatorStyle;
+
+    if style == StatusIndicatorStyle::Symbols {
+        return status_icon(status, style);
+    }
+
+    match status {
+        AgentStatus::Working => ["·", "○", "◉", "●", "◉", "○"][usize::from(animation_phase) % 6],
+        AgentStatus::Blocked => ["●", "◉", "○", "◉"][usize::from(animation_phase) % 4],
+        _ => status_icon(status, style),
+    }
+}
+
 fn status_dot(status: crate::api::schema::AgentStatus) -> &'static str {
     status_icon(status, crate::config::StatusIndicatorStyle::Dots)
 }
@@ -250,6 +269,19 @@ fn status_color(
         AgentStatus::Done => palette.teal,
         AgentStatus::Idle => palette.green,
         AgentStatus::Unknown => palette.overlay0,
+    }
+}
+
+fn sidebar_agent_status_color(
+    status: crate::api::schema::AgentStatus,
+    palette: &Palette,
+) -> ratatui::style::Color {
+    use crate::api::schema::AgentStatus;
+    match status {
+        AgentStatus::Working => palette.green,
+        AgentStatus::Blocked => palette.red,
+        AgentStatus::Done => palette.teal,
+        AgentStatus::Idle | AgentStatus::Unknown => palette.overlay0,
     }
 }
 

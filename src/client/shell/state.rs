@@ -298,6 +298,7 @@ pub(crate) enum ClientShellAction {
         request: Box<crate::api::schema::Request>,
     },
     ClipboardWrite(Vec<u8>),
+    EditComposer,
     OpenSafeWebUrl(String),
     ActivateEndpoint {
         endpoint_id: ClientEndpointId,
@@ -907,6 +908,8 @@ pub(crate) struct ClientShellState {
     pub(super) sidebar_section_split: f32,
     pub(super) sidebar_section_split_manual: bool,
     pub(super) agent_panel_sort_manual: bool,
+    pub(super) status_animation_phase: u8,
+    pub(super) status_animation_last_tick: Option<std::time::Instant>,
     pub(super) last_sidebar_divider_click: Option<std::time::Instant>,
     pub(super) chrome_drag: Option<ClientChromeDrag>,
     pub(super) workspace_press: Option<ClientWorkspacePress>,
@@ -1051,6 +1054,8 @@ impl ClientShellState {
             sidebar_section_split,
             sidebar_section_split_manual: preferences.sidebar_section_split.is_some(),
             agent_panel_sort_manual: preferences.agent_panel_sort.is_some(),
+            status_animation_phase: 0,
+            status_animation_last_tick: None,
             last_sidebar_divider_click: None,
             chrome_drag: None,
             workspace_press: None,
@@ -1772,6 +1777,59 @@ impl ClientShellState {
             repaint = true;
         }
         repaint
+    }
+
+    fn animated_sidebar_status_visible(&self) -> bool {
+        use crate::api::schema::AgentStatus;
+
+        if self.config.status_indicators != crate::config::StatusIndicatorStyle::Dots {
+            return false;
+        }
+        let animated = |status| matches!(status, AgentStatus::Working | AgentStatus::Blocked);
+        let local_visible = self.hits.agents.iter().any(|(_, pane_id)| {
+            self.snapshot.as_deref().is_some_and(|snapshot| {
+                snapshot
+                    .agents
+                    .iter()
+                    .any(|agent| &agent.pane_id == pane_id && animated(agent.agent_status))
+            })
+        });
+        local_visible
+            || self
+                .hits
+                .endpoint_agents
+                .iter()
+                .any(|(_, endpoint_id, pane_id)| {
+                    self.endpoints.iter().any(|endpoint| {
+                        endpoint.endpoint_id == *endpoint_id
+                            && endpoint.status == ClientEndpointStatus::Online
+                            && endpoint.snapshot.as_deref().is_some_and(|snapshot| {
+                                snapshot.agents.iter().any(|agent| {
+                                    agent.pane_id == *pane_id && animated(agent.agent_status)
+                                })
+                            })
+                    })
+                })
+    }
+
+    pub(crate) fn tick_status_animation(&mut self, now: std::time::Instant) -> bool {
+        const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
+        if !self.animated_sidebar_status_visible() {
+            self.status_animation_phase = 0;
+            self.status_animation_last_tick = None;
+            return false;
+        }
+        let Some(last_tick) = self.status_animation_last_tick else {
+            self.status_animation_last_tick = Some(now);
+            return false;
+        };
+        if now.saturating_duration_since(last_tick) < FRAME_INTERVAL {
+            return false;
+        }
+        self.status_animation_phase = self.status_animation_phase.wrapping_add(1) % 12;
+        self.status_animation_last_tick = Some(now);
+        true
     }
 
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {

@@ -52,6 +52,7 @@ impl ClientShellState {
                 reveal_focused_tab: &mut self.reveal_focused_tab,
                 sidebar_collapsed: false,
                 sidebar_section_split: self.sidebar_section_split,
+                status_animation_phase: self.status_animation_phase,
                 tab_drag_insert_index: None,
                 selected_workspace_id: self.navigate_workspace_id.as_deref(),
                 dragged_workspace_id: None,
@@ -168,6 +169,7 @@ impl ClientShellState {
                     reveal_focused_tab: &mut self.reveal_focused_tab,
                     sidebar_collapsed: self.sidebar_collapsed,
                     sidebar_section_split: self.sidebar_section_split,
+                    status_animation_phase: self.status_animation_phase,
                     tab_drag_insert_index,
                     selected_workspace_id: (self.mode == ClientShellMode::Navigate)
                         .then_some(self.navigate_workspace_id.as_deref())

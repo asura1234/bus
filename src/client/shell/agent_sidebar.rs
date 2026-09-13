@@ -54,6 +54,7 @@ pub(super) fn render_agent_panel(
     area: Rect,
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
+    status_animation_phase: u8,
     agent_scroll: &mut usize,
     hits: &mut ShellHitMap,
 ) {
@@ -82,7 +83,7 @@ pub(super) fn render_agent_panel(
         |row| row.rows.len(),
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
-            render_agent_row(buffer, rect, row, config);
+            render_agent_row(buffer, rect, row, config, status_animation_phase, true);
         },
     );
 }
@@ -316,6 +317,8 @@ pub(super) fn render_agent_row(
     rect: Rect,
     row: &AgentRow,
     config: &ClientShellConfig,
+    status_animation_phase: u8,
+    animate_status: bool,
 ) {
     let palette = &config.palette;
     let row_style = if row.focused {
@@ -333,7 +336,7 @@ pub(super) fn render_agent_row(
             .add_modifier(Modifier::BOLD)
     };
     let status_style = Style::default()
-        .fg(status_color(row.status, palette))
+        .fg(sidebar_agent_status_color(row.status, palette))
         .add_modifier(if row.focused {
             Modifier::empty()
         } else {
@@ -343,8 +346,12 @@ pub(super) fn render_agent_row(
         .fg(palette.overlay0)
         .add_modifier(Modifier::DIM);
     let icon = (
-        status_icon(row.status, config.status_indicators),
-        Style::default().fg(status_color(row.status, palette)),
+        if animate_status {
+            sidebar_agent_status_icon(row.status, config.status_indicators, status_animation_phase)
+        } else {
+            status_icon(row.status, config.status_indicators)
+        },
+        Style::default().fg(sidebar_agent_status_color(row.status, palette)),
     );
     let rows = if row.rows.is_empty() {
         vec![vec![crate::ui::ResolvedToken {

@@ -93,6 +93,36 @@ fn quote_uses_the_clicked_historical_reply() {
 }
 
 #[test]
+fn quote_after_selecting_draft_text_appends_without_replacing_the_selection() {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::Down};
+    let (mut ui, room, agent) = fixture();
+    saved_history(&mut ui, room, agent, 1);
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("keep all of this");
+    ui.compute_view(100, 80);
+    let rect = composer_rect(&ui);
+    assert_eq!(
+        drag_copy(&mut ui, (rect.x + 5, rect.y), (rect.x + 7, rect.y)).as_deref(),
+        Some("all")
+    );
+    let quote = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| matches!(hit.action, render::Action::Quote(_)))
+        .unwrap()
+        .rect;
+    assert_eq!(pointer(&mut ui, Down(Left), quote.x, quote.y), None);
+    assert_eq!(
+        ui.locals[&room].text.text,
+        "keep all of this\nauthor: \"answer-00\"\n"
+    );
+}
+
+#[test]
 fn selected_agent_rectangles_wrap_whole_and_keep_every_name() {
     let (mut ui, room, agent) = fixture();
     let mut snapshot = (*ui.snapshot).clone();

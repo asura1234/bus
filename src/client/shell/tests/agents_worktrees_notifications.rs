@@ -429,6 +429,203 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
     ));
 }
 
+fn sidebar_status_agent(status: AgentStatus) -> ClientShellAgent {
+    ClientShellAgent {
+        pane_id: "pane_1".into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some("codex".into()),
+        display_agent: None,
+        agent: Some("codex".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: status,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: Vec::new(),
+        focused: true,
+    }
+}
+
+#[test]
+fn sidebar_working_status_ripples_green() {
+    let palette = ClientShellConfig::from_config(&Config::default()).palette;
+
+    assert_eq!(
+        sidebar_agent_status_icon(
+            AgentStatus::Working,
+            crate::config::StatusIndicatorStyle::Dots,
+            0,
+        ),
+        "·"
+    );
+    assert_eq!(
+        sidebar_agent_status_icon(
+            AgentStatus::Working,
+            crate::config::StatusIndicatorStyle::Dots,
+            1,
+        ),
+        "○"
+    );
+    assert_eq!(
+        sidebar_agent_status_icon(
+            AgentStatus::Working,
+            crate::config::StatusIndicatorStyle::Dots,
+            3,
+        ),
+        "●"
+    );
+    assert_eq!(
+        sidebar_agent_status_color(AgentStatus::Working, &palette),
+        palette.green
+    );
+}
+
+#[test]
+fn sidebar_blocked_status_pulses_red() {
+    let palette = ClientShellConfig::from_config(&Config::default()).palette;
+
+    assert_eq!(
+        sidebar_agent_status_icon(
+            AgentStatus::Blocked,
+            crate::config::StatusIndicatorStyle::Dots,
+            0,
+        ),
+        "●"
+    );
+    assert_eq!(
+        sidebar_agent_status_icon(
+            AgentStatus::Blocked,
+            crate::config::StatusIndicatorStyle::Dots,
+            2,
+        ),
+        "○"
+    );
+    assert_eq!(
+        sidebar_agent_status_color(AgentStatus::Blocked, &palette),
+        palette.red
+    );
+}
+
+#[test]
+fn sidebar_idle_status_stays_grey() {
+    let palette = ClientShellConfig::from_config(&Config::default()).palette;
+
+    for phase in 0..8 {
+        assert_eq!(
+            sidebar_agent_status_icon(
+                AgentStatus::Idle,
+                crate::config::StatusIndicatorStyle::Dots,
+                phase,
+            ),
+            "○"
+        );
+    }
+    assert_eq!(
+        sidebar_agent_status_color(AgentStatus::Idle, &palette),
+        palette.overlay0
+    );
+}
+
+#[test]
+fn sidebar_symbol_statuses_remain_static() {
+    for phase in 0..8 {
+        assert_eq!(
+            sidebar_agent_status_icon(
+                AgentStatus::Working,
+                crate::config::StatusIndicatorStyle::Symbols,
+                phase,
+            ),
+            "◐"
+        );
+    }
+}
+
+#[test]
+fn expanded_agent_sidebar_renders_the_working_ripple() {
+    let mut projected = snapshot();
+    projected.agents = vec![sidebar_status_agent(AgentStatus::Working)];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("expanded agent sidebar");
+    let agent = state.hits.agents[0].0;
+    let buffer = frame.to_ratatui_buffer().expect("expanded sidebar buffer");
+    let indicator = &buffer[(agent.x + 1, agent.y)];
+    assert_eq!(indicator.symbol(), "·");
+    assert_eq!(indicator.fg, state.config.palette.green);
+}
+
+#[test]
+fn compact_agent_sidebar_renders_the_working_ripple() {
+    let mut projected = snapshot();
+    projected.agents = vec![sidebar_status_agent(AgentStatus::Working)];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.sidebar_collapsed = true;
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("compact agent sidebar");
+    let agent = state.hits.agents[0].0;
+    let buffer = frame.to_ratatui_buffer().expect("compact sidebar buffer");
+    let indicator = &buffer[(agent.x + 2, agent.y)];
+    assert_eq!(indicator.symbol(), "·");
+    assert_eq!(indicator.fg, state.config.palette.green);
+}
+
+#[test]
+fn visible_animated_agent_advances_on_the_sidebar_cadence() {
+    let mut projected = snapshot();
+    projected.agents = vec![sidebar_status_agent(AgentStatus::Working)];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("visible working agent");
+    let started = std::time::Instant::now();
+
+    assert!(!state.tick_status_animation(started));
+    assert!(!state.tick_status_animation(started + std::time::Duration::from_millis(199)));
+    assert!(state.tick_status_animation(started + std::time::Duration::from_millis(200)));
+
+    let frame = state.compose(106, 30).expect("next ripple frame");
+    let agent = state.hits.agents[0].0;
+    let indicator =
+        &frame.cells[usize::from(agent.y) * usize::from(frame.width) + usize::from(agent.x + 1)];
+    assert_eq!(indicator.symbol, "○");
+}
+
+#[test]
+fn idle_agent_does_not_request_animation_repaints() {
+    let mut projected = snapshot();
+    projected.agents = vec![sidebar_status_agent(AgentStatus::Idle)];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("visible idle agent");
+    let started = std::time::Instant::now();
+
+    assert!(!state.tick_status_animation(started));
+    assert!(!state.tick_status_animation(started + std::time::Duration::from_secs(1)));
+}
+
+#[test]
+fn symbol_statuses_do_not_request_animation_repaints() {
+    let mut config = Config::default();
+    config.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
+    let mut projected = snapshot();
+    projected.agents = vec![sidebar_status_agent(AgentStatus::Working)];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("visible symbol agent");
+    let started = std::time::Instant::now();
+
+    assert!(!state.tick_status_animation(started));
+    assert!(!state.tick_status_animation(started + std::time::Duration::from_secs(1)));
+}
+
 #[test]
 fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     let mut projected = snapshot();

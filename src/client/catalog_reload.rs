@@ -117,6 +117,7 @@ mod tests {
             endpoint_mouse_capture_requested: false,
             endpoint_sgr_pixels_requested: false,
             host_theme_updates: Vec::new(),
+            host_palette_query_pending: Arc::new(AtomicBool::new(false)),
             direct_mouse_capture_preference: false,
             shell_mouse_capture_preference: false,
             direct_keyboard_protocol: Default::default(),

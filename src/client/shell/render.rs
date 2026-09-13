@@ -222,6 +222,7 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) reveal_focused_tab: &'a mut bool,
     pub(super) sidebar_collapsed: bool,
     pub(super) sidebar_section_split: f32,
+    pub(super) status_animation_phase: u8,
     pub(super) tab_drag_insert_index: Option<usize>,
     pub(super) selected_workspace_id: Option<&'a str>,
     pub(super) dragged_workspace_id: Option<&'a str>,
@@ -271,6 +272,7 @@ pub(super) fn render_shell(
                 layout.sidebar,
                 snapshot,
                 config,
+                state.status_animation_phase,
                 state.selected_workspace_id,
                 &mut hits,
             );

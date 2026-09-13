@@ -8,6 +8,8 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use std::sync::Arc;
 #[path = "history_tests.rs"]
 mod history_tests;
+#[path = "keys_tests.rs"]
+mod keys_tests;
 fn fixture() -> (BusUi, RoomId, AgentId) {
     let mut state = BusState::default();
     let room = state.create_room("room").unwrap();
@@ -888,7 +890,7 @@ fn sidebar_has_uppercase_headings_and_a_matching_divider_after_room_names() {
         let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
         ui.render(&mut buffer);
         let row_text = |y| (1..26).map(|x| buffer[(x, y)].symbol()).collect::<String>();
-        assert!(row_text(1).starts_with("ROOMS"));
+        assert!(row_text(1).starts_with("BUSSES"));
         assert!(row_text(4 + count).starts_with("AGENTS"));
         let color = buffer[(27, 0)].fg;
         for x in 1..26 {
@@ -926,7 +928,7 @@ fn entire_sidebar_scrolls_together_and_all_agents_remain_reachable() {
     mouse(&mut ui, ScrollDown, 2, 1); // Wheel over the room heading scrolls the whole column.
     let moved = room_screen(&mut ui, 100, 30);
     assert!(
-        !moved.contains("ROOMS") && !moved.contains("Rooms"),
+        !moved.contains("BUSSES") && !moved.contains("Busses"),
         "heading must scroll with content"
     );
     assert_ne!(moved, start);
@@ -1133,7 +1135,7 @@ fn agent_enter_adds_from_every_field_with_its_own_directory_and_escape_cancels()
             name: editor::Editor::new("frontend".into()),
             provider: Provider::ClaudeCode,
             cwd: editor::Editor::new("/projects/frontend".into()),
-            args: editor::Editor::new("--model sonnet".into()),
+            args: Box::new(editor::Editor::new("--model sonnet".into())),
             field,
         });
         // Suggestions must not hijack Enter; Tab remains path completion.
@@ -1259,10 +1261,18 @@ fn composer_uses_full_height_and_toggle_preserves_draft_and_recipients() {
         "use every row below the recipient chips and borders"
     );
     assert!(full.bottom() <= 28);
-    key(&mut ui, KeyCode::Char('e'), KeyModifiers::CONTROL);
+    key(
+        &mut ui,
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
     room_screen(&mut ui, 100, 30);
     assert_eq!(composer_rect(&ui).height, 3);
-    key(&mut ui, KeyCode::Char('e'), KeyModifiers::CONTROL);
+    key(
+        &mut ui,
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    );
     room_screen(&mut ui, 100, 30);
     assert_eq!(composer_rect(&ui), full);
     assert_eq!(ui.locals[&room].text.text, draft);
@@ -1544,7 +1554,7 @@ fn room_renders_without_native_snapshot_and_only_approved_chrome_and_collapsed_m
         2,
         "sidebar and room heading"
     );
-    for required in ["ROOMS", "AGENTS", "# room", "author", "Codex", "Quote"] {
+    for required in ["BUSSES", "AGENTS", "# room", "author", "Codex", "Quote"] {
         if required != "Quote" {
             assert!(text.contains(required), "missing {required}");
         }
@@ -1594,7 +1604,7 @@ fn native_shell_composes_bus_before_any_server_frame_and_uses_same_resize_geomet
     shell.bus = Some(ui);
     let frame = shell.compose(100, 30).unwrap();
     let text: String = frame.cells.iter().map(|c| c.symbol.as_str()).collect();
-    assert!(text.contains("ROOMS"));
+    assert!(text.contains("BUSSES"));
     assert!(text.contains("# room"));
     assert_eq!(shell.surface_size(100, 30).rows, 30);
     assert_eq!(shell.surface_size(100, 30).cols, 72);
@@ -1626,6 +1636,65 @@ fn native_terminal_bytes_are_held_during_focus_then_forwarded_to_matching_pane()
     assert_eq!(frame.cursor.as_ref().unwrap().x, 29);
     let text: String = frame.cells.iter().map(|c| c.symbol.as_str()).collect();
     assert!(text.contains("LIVE"));
+}
+
+#[test]
+fn working_agent_projection_updates_hold_native_terminal_instead_of_flashing_placeholder() {
+    use crate::client::shell::tests::{snapshot, surface};
+    let (mut ui, _, agent) = fixture();
+    ui.open_terminal(agent);
+    ui.receive_event(BusEvent::TerminalFocused {
+        agent,
+        pane_id: "pane_1".into(),
+    });
+    let mut shell = crate::client::shell::ClientShellState::new(
+        crate::client::shell::ClientShellConfig::from_config(&crate::config::Config::default()),
+    );
+    shell.bus = Some(ui);
+    shell.apply_active_snapshot(Box::new(snapshot()));
+    shell.set_pane_surface(surface());
+    let screen = |shell: &mut crate::client::shell::ClientShellState| {
+        shell.compose(100, 30).map(|frame| {
+            frame
+                .cells
+                .iter()
+                .map(|c| c.symbol.as_str())
+                .collect::<String>()
+        })
+    };
+    let at_revision = |revision| {
+        let mut snapshot = snapshot();
+        snapshot.revision = revision;
+        Box::new(snapshot)
+    };
+    let surface_at = |revision| {
+        let mut surface = surface();
+        surface.projection_revision = revision;
+        surface
+    };
+    assert!(screen(&mut shell).is_some_and(|text| text.contains("LIVE")));
+
+    // Spinner titles advance the projection several times a second; its
+    // surface follows separately. The presented terminal must stay on screen.
+    shell.apply_active_snapshot(at_revision(2));
+    assert_eq!(screen(&mut shell), None, "hold the last terminal frame");
+    let outcome = shell.handle_input_bytes(b"x");
+    assert!(
+        outcome.requests.iter().any(|r| matches!(
+            r,
+            crate::protocol::ClientMessage::ClientShellPaneInput { pane_id, .. }
+                if pane_id == "pane_1"
+        )),
+        "typing must not be swallowed while the pair catches up"
+    );
+    shell.set_pane_surface(surface_at(2));
+    assert!(screen(&mut shell).is_some_and(|text| text.contains("LIVE")));
+
+    // The successor surface may also arrive before its snapshot.
+    shell.set_pane_surface(surface_at(3));
+    assert_eq!(screen(&mut shell), None, "hold the last terminal frame");
+    shell.apply_active_snapshot(at_revision(3));
+    assert!(screen(&mut shell).is_some_and(|text| text.contains("LIVE")));
 }
 
 #[test]
@@ -1662,7 +1731,7 @@ fn quit_waits_for_draft_then_shutdown_ack_instead_of_exiting_immediately() {
 }
 
 #[test]
-fn ctrl_c_quits_bus_in_any_view_without_forwarding_or_discarding_pending_saves() {
+fn ctrl_c_clears_room_draft_then_quits_from_any_view_without_forwarding_or_losing_saves() {
     for view in ["room", "form", "terminal"] {
         let (mut ui, room, agent) = fixture();
         ui.locals
@@ -1687,6 +1756,15 @@ fn ctrl_c_quits_bus_in_any_view_without_forwarding_or_discarding_pending_saves()
         shell.snapshot = Some(Box::new(crate::client::shell::tests::snapshot()));
         shell.pane_surface = Some(crate::client::shell::tests::surface());
         shell.compose(100, 30);
+        // Only the room shows the draft box, so only there Ctrl+C clears it first.
+        let expected = if view == "room" {
+            shell.handle_input_bytes(b"\x03");
+            let ui = shell.bus.as_ref().unwrap();
+            assert!(ui.quitting.is_none(), "a visible draft blocks quitting");
+            ""
+        } else {
+            "keep this draft"
+        };
         let outcome = shell.handle_input_bytes(b"\x03");
         let ui = shell.bus.as_mut().unwrap();
         assert!(ui.quitting.is_some(), "Ctrl+C must quit from {view}");
@@ -1698,8 +1776,8 @@ fn ctrl_c_quits_bus_in_any_view_without_forwarding_or_discarding_pending_saves()
             r,
             crate::protocol::ClientMessage::ClientShellPaneInput { .. }
         )));
-        assert_eq!(ui.locals[&room].text.text, "keep this draft");
-        assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text == "keep this draft")));
+        assert_eq!(ui.locals[&room].text.text, expected);
+        assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text == expected)));
         assert!(!ui
             .pending
             .iter()
@@ -1727,6 +1805,237 @@ fn ctrl_c_release_and_modified_copy_chords_do_not_quit_bus() {
     assert!(ui.quitting.is_none());
     key(&mut ui, KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert!(ui.quitting.is_some());
+}
+
+#[test]
+fn ctrl_c_keeps_a_draft_that_is_already_being_sent_and_stays_open() {
+    let (mut ui, room, agent) = fixture();
+    let local = ui.locals.get_mut(&room).unwrap();
+    local.recipients.insert(agent);
+    local.text.insert("on its way");
+    ui.text_changed(room);
+    ui.request_send(room);
+    key(&mut ui, KeyCode::Char('c'), KeyModifiers::CONTROL);
+    assert!(ui.quitting.is_none());
+    assert_eq!(ui.locals[&room].text.text, "on its way");
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|p| matches!(&p.command, BusCommand::SetDraftText(_, text) if text.is_empty())));
+}
+
+#[test]
+fn wrap_ranges_break_between_words_and_cover_every_source_byte() {
+    let text = "hello world\nabcdefghij 界界xy";
+    let rows: Vec<_> = render::wrap_ranges(text, 5)
+        .into_iter()
+        .map(|range| &text[range])
+        .collect();
+    assert_eq!(rows, ["hello ", "world", "abcde", "fghij ", "界界", "xy"]);
+    assert_eq!(rows.concat(), text.replace('\n', ""));
+}
+
+fn composer_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
+    ui.compute_view(cols, rows);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
+    ui.render(&mut buffer);
+    let rect = composer_rect(ui);
+    (rect.y..rect.bottom())
+        .map(|y| {
+            (rect.x..rect.right())
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn composer_wraps_whole_words_and_places_the_caret_on_the_wrapped_row() {
+    let (mut ui, room, _) = fixture();
+    ui.compute_view(100, 30);
+    let width = usize::from(composer_rect(&ui).width);
+    let filler = "a".repeat(width - 3);
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert(&format!("{filler} hello world"));
+    assert_eq!(
+        composer_rows(&mut ui, 100, 30)[..2],
+        [filler, "hello world".into()]
+    );
+    let rect = composer_rect(&ui);
+    let cursor = ui.cursor().unwrap();
+    assert_eq!((cursor.x, cursor.y), (rect.x + 11, rect.y + 1));
+    // The caret before a wrapped word sits where that word starts.
+    ui.locals.get_mut(&room).unwrap().text.cursor = width - 2;
+    ui.compute_view(100, 30);
+    let cursor = ui.cursor().unwrap();
+    assert_eq!((cursor.x, cursor.y), (rect.x, rect.y + 1));
+}
+
+fn pointer(
+    ui: &mut BusUi,
+    kind: crossterm::event::MouseEventKind,
+    column: u16,
+    row: u16,
+) -> Option<String> {
+    let mut outcome = crate::client::shell::ClientShellInput::default();
+    ui.input(
+        &RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }),
+        false,
+        &mut outcome,
+    );
+    outcome.actions.into_iter().find_map(|action| match action {
+        crate::client::shell::ClientShellAction::ClipboardWrite(bytes) => {
+            String::from_utf8(bytes).ok()
+        }
+        _ => None,
+    })
+}
+
+fn drag_copy(ui: &mut BusUi, from: (u16, u16), to: (u16, u16)) -> Option<String> {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::*};
+    assert_eq!(pointer(ui, Down(Left), from.0, from.1), None);
+    assert_eq!(pointer(ui, Drag(Left), to.0, to.1), None);
+    pointer(ui, Up(Left), to.0, to.1)
+}
+
+#[test]
+fn dragging_history_copies_rejoined_soft_wraps_and_highlights_the_cells() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot
+        .state
+        .set_draft_text(
+            room,
+            "alpha beta gamma delta epsilon zeta eta theta\nsecond line",
+        )
+        .unwrap();
+    snapshot.state.submit_draft(room, 1).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.compute_view(60, 30);
+    let text = ui.view.history_text;
+    let row_of = |ui: &BusUi, prefix: &str| {
+        let index = ui
+            .history
+            .cached()
+            .iter()
+            .position(|line| line.text.starts_with(prefix))
+            .unwrap();
+        text.y + (index - ui.main_scroll) as u16
+    };
+    let first = row_of(&ui, "alpha beta");
+    let second = row_of(&ui, "second");
+    assert!(second > first + 1, "the long prompt must soft-wrap");
+    let copied = drag_copy(&mut ui, (text.x + 6, first), (text.x + 5, second));
+    assert_eq!(
+        copied.as_deref(),
+        Some("beta gamma delta epsilon zeta eta theta\nsecond")
+    );
+    ui.compute_view(60, 30);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 30));
+    ui.render(&mut buffer);
+    let tint = ratatui::style::Color::Rgb(44, 88, 56);
+    assert_eq!(buffer[(text.x + 6, first)].bg, tint);
+    assert_ne!(buffer[(text.x + 5, first)].bg, tint);
+    assert_eq!(buffer[(text.x + 5, second)].bg, tint);
+    assert_ne!(buffer[(text.x + 6, second)].bg, tint);
+    // Typing ends the history selection.
+    key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
+    assert!(ui.history_selection.is_none());
+}
+
+#[test]
+fn dragging_the_draft_copies_and_typing_replaces_the_selection() {
+    let (mut ui, room, _) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("hello brave world");
+    ui.notes_focus = true;
+    ui.compute_view(100, 30);
+    let rect = composer_rect(&ui);
+    let copied = drag_copy(&mut ui, (rect.x + 6, rect.y), (rect.x + 10, rect.y));
+    assert_eq!(copied.as_deref(), Some("brave"));
+    assert!(!ui.notes_focus, "pressing the draft focuses it");
+    ui.input(
+        &RawInputEvent::Paste("bold".into()),
+        false,
+        &mut Default::default(),
+    );
+    assert_eq!(ui.locals[&room].text.text, "hello bold world");
+    assert!(ui.pending.iter().any(|p| matches!(&p.command,
+        BusCommand::SetDraftText(id, text) if *id == room && text == "hello bold world")));
+}
+
+#[test]
+fn dragging_notes_copies_and_a_plain_click_only_moves_the_caret() {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::*};
+    let (mut ui, room, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .set_room_notes(room, "goal: ship it")
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.compute_view(100, 30);
+    let notes = ui.view.notes;
+    assert_eq!(pointer(&mut ui, Down(Left), notes.x + 6, notes.y), None);
+    assert_eq!(pointer(&mut ui, Drag(Left), notes.x + 8, notes.y), None);
+    // Routine coordinator snapshots must not reset notes mid-selection.
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    let copied = pointer(&mut ui, Up(Left), notes.x + 8, notes.y);
+    assert_eq!(copied.as_deref(), Some("shi"));
+    assert!(ui.notes_focus);
+    assert_eq!(pointer(&mut ui, Down(Left), notes.x + 2, notes.y), None);
+    assert_eq!(pointer(&mut ui, Up(Left), notes.x + 2, notes.y), None);
+    let local = &ui.locals[&room];
+    assert_eq!((local.notes.cursor, local.notes.selection()), (2, None));
+    assert_eq!(local.notes.text, "goal: ship it");
+}
+
+#[test]
+fn option_delete_and_option_arrows_edit_by_word_from_terminal_bytes() {
+    let (mut ui, room, _) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("keep these words");
+    let mut shell = crate::client::shell::ClientShellState::new(
+        crate::client::shell::ClientShellConfig::from_config(&crate::config::Config::default()),
+    );
+    shell.bus = Some(ui);
+    shell.snapshot = Some(Box::new(crate::client::shell::tests::snapshot()));
+    shell.pane_surface = Some(crate::client::shell::tests::surface());
+    shell.compose(100, 30);
+    let draft = |shell: &crate::client::shell::ClientShellState| {
+        let local = &shell.bus.as_ref().unwrap().locals[&room];
+        (local.text.text.clone(), local.text.cursor)
+    };
+    for (bytes, text, cursor) in [
+        (b"\x1b\x7f".as_slice(), "keep these ", 11),
+        (b"\x1b[127;3u", "keep ", 5),
+        (b"\x1bb", "keep ", 0),
+        (b"\x1b[1;3C", "keep ", 4),
+        (b"\x1b[1;3D", "keep ", 0),
+    ] {
+        shell.handle_input_bytes(bytes);
+        assert_eq!(draft(&shell), (text.to_owned(), cursor), "{bytes:?}");
+    }
+    assert!(shell.bus.as_ref().unwrap().quitting.is_none());
 }
 
 #[test]

@@ -6,6 +6,7 @@ mod history;
 mod input;
 mod recipients;
 mod render;
+mod selection;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -53,6 +54,23 @@ impl super::ClientShellState {
     pub(crate) fn bus_exit_ready(&self) -> bool {
         self.bus.as_ref().is_some_and(|bus| bus.exit_ready)
     }
+    pub(crate) fn edit_bus_composer(&mut self) -> Result<(), String> {
+        let bus = self
+            .bus
+            .as_mut()
+            .ok_or_else(|| "Bus is not open".to_string())?;
+        match bus.edit_in_external_editor() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                bus.error = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+    /// The native terminal owns the pane area once its target pane is on a retained surface.
+    /// Exact snapshot/surface pairing is a presentation concern: agent title and status updates
+    /// advance the projection several times a second, and `compose` holds the last frame until the
+    /// pair catches up. Requiring the pair here flashed the opening placeholder and dropped input.
     pub(super) fn bus_terminal_ready(&self) -> bool {
         let Some(bus) = &self.bus else {
             return false;
@@ -60,14 +78,11 @@ impl super::ClientShellState {
         let Some(snapshot) = self.snapshot.as_ref() else {
             return false;
         };
-        self.pending_pane_surface.is_none()
-            && self.pane_surface.as_ref().is_some_and(|surface| {
-                surface.projection_revision == snapshot.revision
-                    && surface
-                        .panes
-                        .iter()
-                        .any(|p| Some(p.pane_id.as_str()) == snapshot.focused_pane_id.as_deref())
-            })
-            && bus.terminal_ready(snapshot.focused_pane_id.as_deref())
+        self.pane_surface.as_ref().is_some_and(|surface| {
+            surface
+                .panes
+                .iter()
+                .any(|p| Some(p.pane_id.as_str()) == snapshot.focused_pane_id.as_deref())
+        }) && bus.terminal_ready(snapshot.focused_pane_id.as_deref())
     }
 }
