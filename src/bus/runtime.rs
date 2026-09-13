@@ -101,12 +101,6 @@ pub(crate) struct BusHandle {
     events: mpsc::Receiver<BusEvent>,
 }
 
-pub(crate) fn default_data_dir() -> Result<PathBuf, String> {
-    Ok(std::env::home_dir()
-        .ok_or("Home directory unavailable")?
-        .join(".local/share/bus"))
-}
-
 pub(crate) const DEFAULT_SESSION: &str = "bus";
 
 impl BusHandle {

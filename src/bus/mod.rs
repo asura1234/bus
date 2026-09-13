@@ -7,6 +7,9 @@ pub(crate) mod entry;
 pub(crate) mod files;
 mod io;
 pub(crate) mod launch;
+pub(crate) mod local_sessions;
+#[cfg(test)]
+mod local_sessions_tests;
 pub(crate) mod model;
 pub(crate) mod resume_launch;
 pub(crate) mod runtime;
