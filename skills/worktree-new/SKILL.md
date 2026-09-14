@@ -13,7 +13,7 @@ checkout, not a promise to delete its branch later.
 2. Require a non-empty name. Convert `/` to `-` only for the directory name;
    preserve the requested branch name. Use the `codex/` prefix by default when
    creating a new branch unless the user supplied an exact different name.
-3. Resolve the base explicitly. Default to `origin/main` only when it exists.
+3. Resolve the base explicitly. Default to `origin/master` only when it exists.
    Never substitute remote HEAD or `upstream/master`. Fetch the selected remote
    and record the immutable base SHA.
 4. Choose a sibling path `<main-worktree>-<safe-name>`. Refuse an existing path,

@@ -5,7 +5,7 @@ description: Split a multi-purpose Bus branch into independent single-purpose br
 
 # Split PR
 
-1. Resolve the source branch and explicit base. Default to `origin/main` only
+1. Resolve the source branch and explicit base. Default to `origin/master` only
    when it exists; never infer the base from remote HEAD. Refuse detached HEAD
    or a source equal to the base branch.
 2. Require all changes intended for splitting to be committed. Preserve

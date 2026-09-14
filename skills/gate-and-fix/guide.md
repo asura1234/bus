@@ -9,10 +9,10 @@ repair loop so failures remain attributable, then run the full gate once the
 tree is composed. Never import LibTV Desktop's `./run`, pnpm workspace, Electron
 session, coverage-partition, or submodule procedures.
 
-The host may not have `just` or `cargo-nextest`. Inspect the `justfile` and use
-direct commands for focused iteration rather than guessing. A `cargo test`
-fallback is useful evidence but does not satisfy a policy that specifically
-requires `just ci`; disclose and resolve that provisioning gap before PR.
+The host may not have `just` or `cargo-nextest`. The deterministic runner
+expands `just ci` into the corresponding direct Cargo, Python, and Bun gates on
+that host. This is an explicit Bus adapter, and the round artifact records the
+exact commands rather than claiming that an unavailable wrapper ran.
 
 A passing command is evidence only for what it exercised. Record unavailable or
 skipped checks plainly. Existing unrelated failures are not permission to

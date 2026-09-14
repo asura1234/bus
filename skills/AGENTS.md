@@ -7,9 +7,10 @@ workflow layering, artifact lifecycle, and agent communication conventions.
 
 - Follow `skill-architecture.md` when deciding whether a rule belongs in the
   executable entrypoint, a guide, a deterministic helper, or a format contract.
-- Keep a skill self-contained. Put deterministic helpers in `scripts/`, durable
-  explanation in `guide.md`, and output contracts in `references/` only when
-  they materially improve execution.
+- Keep skill-local helpers in `scripts/`, local principles in `guide.md`, and
+  single-skill formats in `references/`. Put shared guides/formats in
+  `docs/guides/`, shared templates in `docs/templates/`, and shared Python in
+  `cli_extensions/`.
 - Write workflows for this Rust repository. Use Cargo and the `justfile`; never
   import LibTV Desktop's `./run`, pnpm, Electron, submodule, or `build/deps`
   assumptions.
@@ -20,18 +21,21 @@ workflow layering, artifact lifecycle, and agent communication conventions.
   reference to a root `AGENTS.md` apply when submitting to `herdrdev/herdr`, not
   to ordinary work in `asura1234/bus`. The Bus fork intentionally has no root
   `AGENTS.md` or root `CLAUDE.md`.
-- Prefer `origin/main` as the Bus integration base only when it resolves. Never
-  infer a base from a remote's symbolic HEAD.
+- The Bus integration base is `origin/master`. Never infer a base from a
+  remote's symbolic HEAD.
 - Preserve unrelated and pre-existing worktree changes. Stage explicit paths,
   never `git add .` or `git add -A`.
 - Use lowercase Conventional Commit subjects accepted by
   `scripts/conventional_commits.py`.
 - Use `just test-one <filter>` for focused Rust iteration and `just ci` for the
-  full pre-PR gate. Preflight `just` and `cargo nextest`; if unavailable, run
-  direct focused Cargo/Python/Bun checks where possible and report that the full
-  PR gate remains blocked rather than claiming equivalent coverage.
-- Keep skill entrypoints concise and fail closed around destructive or
-  publishing operations.
+  full pre-PR gate. `gate-and-fix` preflights `just` and `cargo-nextest`; when
+  either is unavailable, its Bus adapter expands `just ci` into the
+  corresponding direct Cargo, Python, and Bun gates and records every exact
+  command in the round artifact.
+- Keep skill entrypoints under 250 lines and fail closed around destructive or
+  publishing operations. `execute-plan` preserves the canonical evidence/state
+  machinery but adapts Desktop-specific gates to `just lint`, `just test`, and
+  optional `just build`.
 
 Discovery links are derived views: `.agents/skills` serves Codex and Cursor,
 and `.claude/skills` serves Claude. Edit only the canonical copy here.

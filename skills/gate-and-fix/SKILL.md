@@ -1,37 +1,80 @@
 ---
 name: gate-and-fix
-description: Run Bus's relevant quality gates, diagnose failures from complete evidence, make scoped fixes, and repeat until the requested gate passes. Use when asked to run gates, fix CI, validate a branch, or prepare code for review.
+description: Run Bus quality gates through canonical round artifacts, remediate failures from complete evidence, and repeat on a committed tree until the branch converges.
 ---
 
-# Gate and fix
+# Gate and Fix
 
-Read [guide.md](guide.md) before changing code.
+Read [guide.md](guide.md) and [gate-round-format.md](references/gate-round-format.md) completely.
 
-1. Inspect repository status and identify the caller's owned diff. Preserve
-   unrelated work.
-2. Preflight `command -v just` and `cargo nextest --version`. Do not install or
-   upgrade host tooling unless that is in scope. When `just` is missing, inspect
-   the recipe and run its direct Cargo/Python/Bun command for focused iteration.
-   When `cargo-nextest` is missing, `cargo test --locked` can provide local
-   evidence but is not equivalent to the repository's full PR gate.
-3. Choose the smallest gate that can reproduce the problem:
-   - Rust behavior: `just test-one <filter>`.
-   - Python maintenance script: `python3 -m unittest <module>`.
-   - Integration asset or docs script: run its matching `just` recipe.
-   - Formatting/lint: `just lint`.
-   - Full pre-PR confidence: `just ci`.
-4. Capture the complete failing command, exit code, and first causal error. Do
-   not diagnose from a truncated tail or fix downstream cascades first.
-5. Establish the root cause before editing. Add or strengthen a regression test
-   when the failure is a behavior bug.
-6. Make the smallest coherent fix within the owned scope. Do not bypass,
-   weaken, skip, or delete a failing check merely to obtain green output.
-7. Re-run the focused failure until it passes, then run the directly affected
-   neighboring tests.
-8. When preparing a PR, run `just ci` from the final tree. If required tooling
-   is unavailable, report the exact unrun gate instead of claiming success.
-9. If the workflow was explicitly asked to land changes, hand the verified
-   changes to `commit-and-push`; otherwise leave them for review.
+```text
+INPUT = [--base <immutable commit>]
 
-Stop and ask for direction if the required fix expands product scope, changes a
-public contract, or overlaps changes owned by somebody else.
+repo   = git rev-parse --show-toplevel
+branch = git branch --show-current
+base   = caller-provided immutable commit, otherwise origin/master
+
+IF branch is empty
+  STOP "gate-and-fix requires a named branch."
+IF git status --porcelain --untracked-files=all is nonempty
+  STOP "The worktree must be clean before gate-and-fix starts."
+IF git diff --name-only <base>...HEAD is empty
+  STOP "There are no committed changes against the base."
+
+branch_slug = branch with characters outside [A-Za-z0-9_-] replaced by -
+artifact_root = temp/gate-and-fix/<branch_slug>
+round = 1
+
+LOOP:
+  Run:
+    python3 skills/gate-and-fix/scripts/gate_and_fix.py \
+      --repo "<repo>" --base "<base>" --round "<round>" \
+      --artifact-root "<artifact_root>"
+
+  Capture the exit code and sole stdout artifact path.
+  IF exit code NOT IN {0, 1}
+    STOP with stderr; never read an older artifact.
+
+  Run:
+    python3 skills/gate-and-fix/scripts/gate_and_fix.py verify \
+      --artifact "<artifact>" --base "<resolved base commit>"
+  IF verification fails
+    STOP with the artifact; do not infer results from Markdown.
+
+  IF runner exit == 0
+    Assert verifier output is PASS and BREAK.
+  Assert verifier output is FAIL.
+
+  Run:
+    python3 skills/gate-and-fix/scripts/gate_and_fix.py list \
+      --artifact "<artifact>" --base "<resolved base commit>"
+  Capture the exact failed gate names.
+
+  FOR each failed gate and stream in {stdout, stderr}
+    Run:
+      python3 skills/gate-and-fix/scripts/gate_and_fix.py show \
+        --artifact "<artifact>" --base "<resolved base commit>" \
+        --gate "<gate>" --stream "<stream>"
+    Treat the complete decoded stream as remediation evidence.
+
+  Group failures by writable owner. The main agent may fix a small local group
+  directly or delegate genuinely disjoint groups. Every worker receives only
+  its artifact identity, decoded logs, and exact owned paths; it performs no Git
+  mutation. Overlapping owners are one group, never concurrent writers.
+
+  After remediation, inspect the composed delta. STOP if an owner is unclear,
+  groups overlap unsafely, a blocker remains, or the intended repair made no
+  tree change. Never retry the same tree.
+
+  Invoke commit-and-push once; it owns the round's sole Git mutation. Increment
+  round and rerun the entire applicable gate set on the clean committed tree.
+
+RETURN the final PASS artifact, base/head identities, each round's commits, and
+any host/tooling limitation. Never hand-summarize a malformed artifact.
+```
+
+The Bus adapter runs `just ci` when both `just` and `cargo-nextest` are
+available. Otherwise it expands that recipe into direct Cargo, Python, and Bun
+commands, then runs any affected skill-local Python tests and
+`git diff --check`. The artifact records the exact path used. It deliberately
+does not import Desktop pnpm, coverage, Electron-session, or submodule gates.

@@ -34,10 +34,10 @@ Commit only the changes the user authorized, without absorbing unrelated work.
     git push origin <branch>:<branch>
     ```
 
-Main-branch policy: do not commit on `main` by default. If the user explicitly
-asked to commit or push directly to `main`, that instruction authorizes the
-normal commit and `git push origin main:main`; still run all ownership and
-validation checks. Never force-push `main`.
+Default-branch policy: do not commit on `master` by default. If the user
+explicitly asked to commit or push directly to `master`, that instruction
+authorizes the normal commit and `git push origin master:master`; still run all
+ownership and validation checks. Never force-push `master`.
 
 Report commit hashes, subjects, pushed ref, validation run, and any changes left
 untouched.

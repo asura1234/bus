@@ -9,10 +9,14 @@ __pycache__/
 .DS_Store
 
 /docs/*
+!/docs/guides/
+!/docs/guides/**
 !/docs/next/
 !/docs/next/**
 !/docs/preview/
 !/docs/preview/**
+!/docs/templates/
+!/docs/templates/**
 !/docs/versions/
 !/docs/versions/**
 /.local/
