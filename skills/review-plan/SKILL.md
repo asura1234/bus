@@ -33,8 +33,12 @@ ask for the exact path. A named reviewer remains the lane for every follow-up.
    needs a testable acceptance signal.
 6. Verify file paths, symbols, commands, and external assumptions against the
    current repository. Mark inference as inference.
-7. Report only actionable findings. For each: severity, claim, evidence,
-   consequence, and the minimum plan correction.
+7. Report only actionable findings. Give each finding an unranked ID such as
+   `F-01`, followed by its claim, evidence, consequence, and minimum plan
+   correction. Severity and priority language is forbidden: do not use
+   `Blocker`, `Critical`, `Major`, `Minor`, `P0`-`P3`, high/medium/low, or an
+   equivalent ranking in a tag, heading, field, grouping, or prose judgment.
+   Every reported finding must be resolved before `Ready`.
 
 ## Follow-up rounds
 
@@ -47,5 +51,12 @@ reopen equivalent nits or expand to unrelated pre-existing design.
 - `Ready`: no material finding remains.
 - `Not Ready`: at least one material finding remains.
 
-Write `review.md` in the artifact directory, then return that content. Keep the
-verdict evidence-backed; a clean format is not proof of correctness.
+Write `review.md` in the artifact directory, then remove any forbidden labels
+that slipped into the artifact:
+
+```sh
+python3 scripts/sanitize_review_severity.py --in-place <review.md>
+```
+
+Re-read and return the sanitized content. Keep the verdict evidence-backed; a
+clean format is not proof of correctness.

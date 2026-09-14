@@ -34,8 +34,12 @@ the base from remote HEAD. Preserve the same reviewer lane in follow-up rounds.
    mock or duplicates implementation logic is not proof.
 5. For a suspected behavior bug, prefer a focused test that fails on reviewed
    HEAD and would pass after the required fix. Run only the narrow test first.
-6. Report material, actionable findings with priority, exact location, failure
-   path, evidence, and impact. Do not report general cleanup or style opinions.
+6. Report material, actionable findings with an unranked ID such as `F-01`,
+   exact location, failure path, evidence, and impact. Severity and priority
+   language is forbidden: do not use `Blocker`, `Critical`, `Major`, `Minor`,
+   `P0`-`P3`, high/medium/low, or an equivalent ranking in a tag, heading,
+   field, grouping, or prose judgment. Every reported finding must be resolved
+   before `Ready`. Do not report general cleanup or style opinions.
 
 ## Follow-up rounds
 
@@ -48,5 +52,13 @@ HEAD is resolved even if an older comment was originally valid.
 - `Ready`: no material finding remains.
 - `Not Ready`: one or more material findings remain.
 
-Write and return `review.md`. Mention any reviewer tests created and leave them
-uncommitted for the author unless the user explicitly requests otherwise.
+Write `review.md`, then remove any forbidden labels that slipped into the
+artifact:
+
+```sh
+python3 scripts/sanitize_review_severity.py --in-place <review.md>
+```
+
+Re-read and return the sanitized content. Mention any reviewer tests created
+and leave them uncommitted for the author unless the user explicitly requests
+otherwise.

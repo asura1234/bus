@@ -11,12 +11,16 @@ Prioritize defects that can affect users or repository safety:
 7. Regression-test quality.
 8. Focus and reviewability of the diff.
 
-Use priorities sparingly:
+Findings are deliberately unranked. Use stable IDs such as `F-01`, `F-02`, and
+so on only to reference them across review rounds. The reviewer must not add or
+imply severity or priority with labels, headings, fields, groups, or prose
+judgments. Banned language includes `Blocker`, `Critical`, `Major`, `Minor`,
+`P0` through `P3`, high/medium/low severity or priority, and equivalent ranking
+terms.
 
-- **P0**: catastrophic and immediate.
-- **P1**: blocks landing; common or severe correctness/safety failure.
-- **P2**: material but bounded defect.
-- **P3**: worthwhile low-risk correction; omit pure nits.
+Every reported finding is required work before `Ready`. If a claim is not
+supported, actionable, material, and within scope, omit it instead of assigning
+it a lower rank. Pure nits are not findings.
 
 Every finding must identify a concrete failure scenario supported by current
 code. Do not assume a name match proves ownership, or that green tests cover an
