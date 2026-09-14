@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+    echo "Usage: ./run dev [Bus arguments]" >&2
+    echo "" >&2
+    echo "Examples:" >&2
+    echo "  ./run dev" >&2
+    echo "  ./run dev resume --last" >&2
+    echo "  ./run dev sessions" >&2
+}
+
+case "${1:-}" in
+    dev)
+        shift
+        cd "$REPO_ROOT"
+        cargo build --locked --bin herdr
+        exec "$REPO_ROOT/target/debug/herdr" --bus --dev "$@"
+        ;;
+    -h|--help)
+        usage
+        ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac
