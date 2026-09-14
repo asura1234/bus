@@ -455,6 +455,7 @@ impl BusUi {
         self.view.cursor.clone()
     }
     pub fn compute_view(&mut self, cols: u16, rows: u16) {
+        self.sync_toast();
         let layout = layout(cols, rows);
         let sidebar = layout.sidebar;
         let main = layout.pane_surface;
@@ -662,12 +663,7 @@ impl BusUi {
         view.settings_divider = Rect::new(1, rows.saturating_sub(2), sw, 1);
         let settings_width = ("Settings".len() as u16).min(sw);
         view.row(
-            Rect::new(
-                1 + sw - settings_width,
-                rows.saturating_sub(1),
-                settings_width,
-                1,
-            ),
+            Rect::new(1, rows.saturating_sub(1), settings_width, 1),
             "Settings",
             Some(Action::Settings),
             matches!(self.form, Some(Form::Settings)),
@@ -718,21 +714,7 @@ impl BusUi {
             .filter(|a| a.room_id == room.id)
             .map(|a| self.snapshot.state.queued_requests(a.id).len())
             .sum();
-        let errors = self
-            .snapshot
-            .state
-            .agents()
-            .filter(|a| a.room_id == room.id)
-            .filter_map(|a| {
-                a.actionable_error
-                    .as_ref()
-                    .map(|e| format!("{}: {e}", a.name))
-            })
-            .collect::<Vec<_>>()
-            .join(" · ");
-        let notice = self
-            .visible_error()
-            .or_else(|| (!errors.is_empty()).then_some(errors.as_str()));
+        let notice = self.toast_text_at(std::time::Instant::now(), main.width.saturating_sub(4));
         let search_status = self
             .history_search
             .as_ref()
@@ -746,7 +728,6 @@ impl BusUi {
             (query, selected, total)
         });
         let status = notice
-            .map(str::to_owned)
             .or_else(|| {
                 search_status.as_ref().map(|(query, selected, total)| {
                     format!("search {query}  {}/{total}", selected + 1)

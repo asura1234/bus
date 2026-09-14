@@ -1,7 +1,7 @@
 use super::editor::Editor;
 use super::{
     forms::{Form, Rename, Suggestions},
-    render::View,
+    render::{display, View},
 };
 use crate::bus::{
     model::*,
@@ -85,6 +85,17 @@ pub(super) struct Pending {
     pub result: Option<Result<(), String>>,
 }
 
+const DEFAULT_TOAST_DURATION: std::time::Duration = std::time::Duration::from_secs(15);
+const TOAST_EDGE_PAUSE: std::time::Duration = std::time::Duration::from_secs(1);
+const TOAST_SCROLL_STEP: std::time::Duration = std::time::Duration::from_millis(125);
+
+#[derive(Clone, Debug)]
+pub(super) struct Toast {
+    pub(super) message: String,
+    pub(super) started_at: std::time::Instant,
+    duration: std::time::Duration,
+}
+
 pub(in crate::client::shell) struct BusUi {
     pub handle: Option<BusHandle>,
     pub snapshot: Arc<BusSnapshot>,
@@ -95,6 +106,9 @@ pub(in crate::client::shell) struct BusUi {
     pub send_intent: Option<RoomId>,
     pub error: Option<String>,
     pub(super) dismissed_snapshot_error: Option<String>,
+    pub(super) toast: Option<Toast>,
+    observed_notice: Option<String>,
+    pub(super) toast_animation_last_tick: Option<std::time::Instant>,
     pub(super) failed: Vec<Pending>,
     pub(super) terminal: Option<AgentId>,
     pub(super) target_pane: Option<String>,
@@ -158,6 +172,9 @@ impl BusUi {
             send_intent: None,
             error: None,
             dismissed_snapshot_error: None,
+            toast: None,
+            observed_notice: None,
+            toast_animation_last_tick: None,
             failed: Vec::new(),
             terminal: None,
             target_pane: None,
@@ -245,6 +262,85 @@ impl BusUi {
                 .filter(|error| self.dismissed_snapshot_error.as_deref() != Some(*error))
         })
     }
+    pub(super) fn show_toast(&mut self, message: impl Into<String>) {
+        self.show_toast_for(message, DEFAULT_TOAST_DURATION);
+    }
+    pub(super) fn show_toast_for(
+        &mut self,
+        message: impl Into<String>,
+        duration: std::time::Duration,
+    ) {
+        let message = message.into();
+        let now = std::time::Instant::now();
+        tracing::debug!(
+            event = "bus.toast.shown",
+            message_bytes = message.len(),
+            duration_ms = duration.as_millis(),
+            "Bus toast shown"
+        );
+        self.toast = Some(Toast {
+            message,
+            started_at: now,
+            duration,
+        });
+        self.toast_animation_last_tick = Some(now);
+    }
+    pub(super) fn toast_text_at(&self, now: std::time::Instant, width: u16) -> Option<String> {
+        let toast = self.toast.as_ref()?;
+        let elapsed = now.saturating_duration_since(toast.started_at);
+        if elapsed >= toast.duration || width == 0 {
+            return None;
+        }
+        let message = display(&toast.message);
+        let characters = message.chars().collect::<Vec<_>>();
+        let visible = usize::from(width);
+        let maximum_offset = characters.len().saturating_sub(visible);
+        if maximum_offset == 0 {
+            return Some(message);
+        }
+        let pause_ms = TOAST_EDGE_PAUSE.as_millis();
+        let step_ms = TOAST_SCROLL_STEP.as_millis();
+        let scroll_ms = maximum_offset as u128 * step_ms;
+        let cycle_ms = pause_ms * 2 + scroll_ms;
+        let position_ms = elapsed.as_millis() % cycle_ms;
+        let offset = if position_ms < pause_ms {
+            0
+        } else if position_ms < pause_ms + scroll_ms {
+            ((position_ms - pause_ms) / step_ms) as usize
+        } else {
+            maximum_offset
+        };
+        Some(characters.into_iter().skip(offset).take(visible).collect())
+    }
+    fn current_notice(&self) -> Option<String> {
+        self.visible_error().map(str::to_owned).or_else(|| {
+            let room = self.room?;
+            let errors = self
+                .snapshot
+                .state
+                .agents()
+                .filter(|agent| agent.room_id == room)
+                .filter_map(|agent| {
+                    agent
+                        .actionable_error
+                        .as_ref()
+                        .map(|error| format!("{}: {error}", agent.name))
+                })
+                .collect::<Vec<_>>()
+                .join(" · ");
+            (!errors.is_empty()).then_some(errors)
+        })
+    }
+    pub(super) fn sync_toast(&mut self) {
+        let notice = self.current_notice();
+        if notice == self.observed_notice {
+            return;
+        }
+        self.observed_notice = notice.clone();
+        if let Some(notice) = notice {
+            self.show_toast(notice);
+        }
+    }
     pub fn receive_event(&mut self, event: BusEvent) {
         match event {
             BusEvent::DevFocusRequested { room, agent } => {
@@ -320,6 +416,7 @@ impl BusUi {
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
         self.reconcile_deleted_targets(&previous.state);
+        self.sync_toast();
     }
     pub fn settle(&mut self) {
         while self
@@ -586,7 +683,29 @@ impl BusUi {
             }
         }
         changed |= self.tick_status_animation(std::time::Instant::now());
+        changed |= self.tick_toast(std::time::Instant::now());
         changed
+    }
+
+    fn tick_toast(&mut self, now: std::time::Instant) -> bool {
+        let Some(toast) = self.toast.as_ref() else {
+            self.toast_animation_last_tick = None;
+            return false;
+        };
+        if now.saturating_duration_since(toast.started_at) >= toast.duration {
+            self.toast = None;
+            self.toast_animation_last_tick = None;
+            return true;
+        }
+        let Some(last_tick) = self.toast_animation_last_tick else {
+            self.toast_animation_last_tick = Some(now);
+            return false;
+        };
+        if now.saturating_duration_since(last_tick) < TOAST_SCROLL_STEP {
+            return false;
+        }
+        self.toast_animation_last_tick = Some(now);
+        true
     }
 
     fn tick_status_animation(&mut self, now: std::time::Instant) -> bool {
