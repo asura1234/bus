@@ -48,7 +48,7 @@ fn saved_round_trips_scroll_oldest_to_newest_with_fixed_chrome() {
     assert!(!bottom.contains("prompt-00"));
     let composer = composer_rect(&ui);
     let mut seen = String::new();
-    for _ in 0..70 {
+    for _ in 0..=ui.view.history_max_scroll {
         seen.push_str(&room_screen(&mut ui, 100, 30));
         mouse(&mut ui, ScrollUp, 40, 12);
         ui.compute_view(100, 30);
@@ -65,7 +65,7 @@ fn saved_round_trips_scroll_oldest_to_newest_with_fixed_chrome() {
     let after = room_screen(&mut ui, 100, 30);
     assert!(after.contains("prompt-00"));
     assert_eq!(ui.main_scroll, 0);
-    for _ in 0..100 {
+    for _ in 0..=ui.view.history_max_scroll {
         mouse(&mut ui, ScrollDown, 40, 12);
         ui.compute_view(100, 30);
     }

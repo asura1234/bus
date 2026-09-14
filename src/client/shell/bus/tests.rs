@@ -1199,6 +1199,28 @@ fn entire_sidebar_scrolls_together_and_all_agents_remain_reachable() {
 }
 
 #[test]
+fn history_scroll_moves_one_row_per_event() {
+    use crossterm::event::MouseEventKind::ScrollUp;
+    let (mut ui, room, agent) = fixture();
+    let history = (0..80)
+        .map(|i| format!("history-{i:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_text(room, &history).unwrap();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot.state.submit_draft(room, 10).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    room_screen(&mut ui, 100, 30);
+    let bottom = ui.main_scroll;
+    assert!(bottom > 1);
+
+    mouse(&mut ui, ScrollUp, 40, 12);
+
+    assert_eq!(ui.main_scroll, bottom - 1);
+}
+
+#[test]
 fn history_scrolls_and_clamps_without_moving_or_editing_the_composer() {
     use crossterm::event::MouseEventKind::{ScrollDown, ScrollUp};
     let (mut ui, room, agent) = fixture();

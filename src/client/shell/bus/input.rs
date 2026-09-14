@@ -154,6 +154,7 @@ impl BusUi {
                     return true;
                 }
                 let file_row = self.view.files.contains((mouse.column, mouse.row).into());
+                let history_row = self.view.history.contains((mouse.column, mouse.row).into());
                 if file_row {
                     self.detail_path = None;
                 }
@@ -161,21 +162,20 @@ impl BusUi {
                     (&mut self.sidebar_scroll, self.view.sidebar_max_scroll)
                 } else if file_row {
                     (&mut self.file_scroll, usize::MAX)
-                } else if self.view.history.contains((mouse.column, mouse.row).into()) {
+                } else if history_row {
                     (&mut self.main_scroll, self.view.history_max_scroll)
                 } else if self.terminal.is_none() || self.form.is_some() {
                     return true;
                 } else {
                     return !ready;
                 };
+                let step = if file_row || history_row { 1 } else { 3 };
                 *scroll = if mouse.kind == MouseEventKind::ScrollDown {
-                    scroll
-                        .saturating_add(if file_row { 1 } else { 3 })
-                        .min(maximum)
+                    scroll.saturating_add(step).min(maximum)
                 } else {
-                    scroll.saturating_sub(if file_row { 1 } else { 3 })
+                    scroll.saturating_sub(step)
                 };
-                if self.view.history.contains((mouse.column, mouse.row).into()) {
+                if history_row {
                     self.history_follow_tail = self.main_scroll == self.view.history_max_scroll;
                 }
                 outcome.repaint = true;
