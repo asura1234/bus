@@ -1334,7 +1334,7 @@ impl BusUi {
                 );
                 view.row(
                     Rect::new(x, 8, width, 1),
-                    "Close (Esc) · Space / Enter toggles",
+                    "Close (Esc) · Enter toggles",
                     Some(Action::Cancel),
                     false,
                     true,

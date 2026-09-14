@@ -576,7 +576,7 @@ fn color_blind_mode_defaults_off_and_switches_agent_identity_colors() {
 
     ui.action(render::Action::Settings);
     assert!(matches!(ui.form, Some(forms::Form::Settings)));
-    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(ui.settings.color_blind_mode);
     assert!(crate::bus::settings::load(&path).unwrap().color_blind_mode);
     assert_eq!(name_color(&mut ui), accessible);
@@ -591,6 +591,27 @@ fn color_blind_mode_defaults_off_and_switches_agent_identity_colors() {
     assert!(!crate::bus::settings::load(&path).unwrap().color_blind_mode);
     assert_eq!(name_color(&mut ui), standard);
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn settings_space_does_not_toggle_color_blind_mode() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+
+    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+
+    assert!(!ui.settings.color_blind_mode);
+}
+
+#[test]
+fn settings_footer_advertises_enter_as_the_only_toggle_key() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+
+    let screen = room_screen(&mut ui, 100, 30);
+
+    assert!(screen.contains("Enter toggles"), "{screen}");
+    assert!(!screen.contains("Space"), "{screen}");
 }
 
 fn set_sidebar_agent_status(ui: &mut BusUi, agent: AgentId, status: RuntimeStatus) {

@@ -1009,7 +1009,7 @@ impl BusUi {
             return;
         }
         if matches!(self.form, Some(Form::Settings)) {
-            if matches!(code, KeyCode::Enter | KeyCode::Char(' ')) {
+            if code == KeyCode::Enter {
                 self.toggle_color_blind_mode();
             }
             return;
