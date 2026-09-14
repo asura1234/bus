@@ -9,6 +9,7 @@ pub(super) enum Form {
     Help {
         scroll: usize,
     },
+    Settings,
     Room(Editor),
     Agent {
         name: Editor,

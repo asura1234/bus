@@ -127,6 +127,9 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) history_search: Option<HistorySearch>,
     pub(super) pending_line_continue: bool,
     pub(super) last_esc: Option<std::time::Instant>,
+    pub(super) settings: crate::bus::settings::BusSettings,
+    /// None keeps toggles in memory only.
+    pub(super) settings_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -185,6 +188,17 @@ impl BusUi {
             history_search: None,
             pending_line_continue: false,
             last_esc: None,
+            settings: crate::bus::settings::BusSettings::default(),
+            settings_path: None,
+        }
+    }
+    /// Applies immediately; a failed save keeps the choice for this run only.
+    pub(super) fn toggle_color_blind_mode(&mut self) {
+        self.settings.color_blind_mode = !self.settings.color_blind_mode;
+        if let Some(path) = &self.settings_path {
+            if let Err(error) = crate::bus::settings::save(path, self.settings) {
+                self.error = Some(error);
+            }
         }
     }
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {

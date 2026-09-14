@@ -27,6 +27,13 @@ impl super::ClientShellState {
         let snapshot = handle.snapshot().ok_or("Bus initial state unavailable")?;
         let mut bus = BusUi::new(snapshot);
         bus.handle = Some(handle);
+        bus.settings_path = crate::bus::settings::path();
+        if let Some(path) = &bus.settings_path {
+            match crate::bus::settings::load(path) {
+                Ok(settings) => bus.settings = settings,
+                Err(error) => bus.error = Some(error),
+            }
+        }
         if let Some(room) = bus.room {
             bus.open_room(room);
         } else if bus.seed_first_room {

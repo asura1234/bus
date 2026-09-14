@@ -45,6 +45,8 @@ pub(super) enum Action {
     Field(usize),
     Provider(Provider),
     Suggestion(usize),
+    Settings,
+    ToggleColorBlindMode,
     Cancel,
     Add,
 }
@@ -71,6 +73,7 @@ pub(super) struct View {
     pub sidebar_body: Rect,
     pub sidebar_max_scroll: usize,
     sidebar_divider: Rect,
+    settings_divider: Rect,
     pub history: Rect,
     pub history_max_scroll: usize,
     pub recipient_bar: Rect,
@@ -406,6 +409,16 @@ fn agent_status(agent: &Agent) -> &'static str {
     }
 }
 
+/// The agent's identity color for the current color vision setting.
+fn identity_color(agent: &Agent, settings: crate::bus::settings::BusSettings) -> Color {
+    let [r, g, b] = if settings.color_blind_mode {
+        agent.accessible_color
+    } else {
+        agent.color
+    };
+    Color::Rgb(r, g, b)
+}
+
 fn animated_agent_status_colors(agent: &Agent, phase: u8) -> Option<Vec<Color>> {
     let word = agent_status(agent);
     match word {
@@ -472,12 +485,13 @@ impl BusUi {
             .collect();
         let content_height =
             6 + rooms.len() + agents.iter().map(|(_, _, height)| height).sum::<usize>();
-        let footer = if self.force_exit_available {
+        let notices = if self.force_exit_available {
             2
         } else {
             u16::from(self.quitting.is_some())
         };
-        view.sidebar_body = Rect::new(0, 0, sidebar.width, rows.saturating_sub(footer));
+        // The settings divider and button stay pinned below any exit notices.
+        view.sidebar_body = Rect::new(0, 0, sidebar.width, rows.saturating_sub(notices + 2));
         view.sidebar_max_scroll =
             content_height.saturating_sub(usize::from(view.sidebar_body.height));
         self.sidebar_scroll = self.sidebar_scroll.min(view.sidebar_max_scroll);
@@ -569,8 +583,7 @@ impl BusUi {
                     self.terminal == Some(agent.id),
                     false,
                 );
-                let [r, g, b] = agent.color;
-                view.color_last_row(rect, Color::Rgb(r, g, b));
+                view.color_last_row(rect, identity_color(agent, self.settings));
             }
             let status_rect = at(
                 sidebar.width.saturating_sub(right.len() as u16 + 4),
@@ -623,7 +636,7 @@ impl BusUi {
             y += 1;
         }
         view.row(
-            Rect::new(1, rows.saturating_sub(2), sw, 1),
+            Rect::new(1, rows.saturating_sub(4), sw, 1),
             if self.force_exit_available {
                 "Unsaved: Ctrl+Shift+Q exits"
             } else {
@@ -634,7 +647,7 @@ impl BusUi {
             true,
         );
         view.row(
-            Rect::new(1, rows.saturating_sub(1), sw, 1),
+            Rect::new(1, rows.saturating_sub(3), sw, 1),
             if self.quitting.is_some() {
                 "Saving before exit…"
             } else if self.force_exit_available {
@@ -645,6 +658,20 @@ impl BusUi {
             None,
             false,
             true,
+        );
+        view.settings_divider = Rect::new(1, rows.saturating_sub(2), sw, 1);
+        let settings_width = ("Settings".len() as u16).min(sw);
+        view.row(
+            Rect::new(
+                1 + sw - settings_width,
+                rows.saturating_sub(1),
+                settings_width,
+                1,
+            ),
+            "Settings",
+            Some(Action::Settings),
+            matches!(self.form, Some(Form::Settings)),
+            false,
         );
         if let Some(form) = &self.form {
             self.form_view(&mut view, main, form);
@@ -897,12 +924,11 @@ impl BusUi {
                 let span_width = unicode_width::UnicodeWidthStr::width(text.as_str()) as u16;
                 let color = match tone {
                     super::history::Tone::You => Some(ACCENT),
-                    super::history::Tone::Agent(id) => {
-                        self.snapshot.state.agent(*id).map(|agent| {
-                            let [r, g, b] = agent.color;
-                            Color::Rgb(r, g, b)
-                        })
-                    }
+                    super::history::Tone::Agent(id) => self
+                        .snapshot
+                        .state
+                        .agent(*id)
+                        .map(|agent| identity_color(agent, self.settings)),
                     _ => None,
                 };
                 if let Some(color) = color {
@@ -959,10 +985,7 @@ impl BusUi {
                 .snapshot
                 .state
                 .agent(chip.agent)
-                .map_or(ACCENT, |agent| {
-                    let [r, g, b] = agent.color;
-                    Color::Rgb(r, g, b)
-                });
+                .map_or(ACCENT, |agent| identity_color(agent, self.settings));
             view.recipient_chips.push((rect, color));
             let label_rect = Rect::new(rect.x + 2, rect.y + 1, rect.width.saturating_sub(4), 1);
             view.row(label_rect, &chip.label, None, false, false);
@@ -1274,6 +1297,40 @@ impl BusUi {
                 );
                 return;
             }
+            Form::Settings => {
+                view.row(Rect::new(x, 1, width, 1), "Settings", None, false, false);
+                view.row(
+                    Rect::new(x, 3, width, 1),
+                    format!(
+                        "[{}] Color blind mode",
+                        if self.settings.color_blind_mode {
+                            "x"
+                        } else {
+                            " "
+                        }
+                    ),
+                    Some(Action::ToggleColorBlindMode),
+                    true,
+                    false,
+                );
+                view.lines(
+                    Rect::new(x + 4, 4, width.saturating_sub(4), 3),
+                    "Agent colors stay distinct and readable with red-green or blue-yellow color blindness.",
+                    None,
+                    true,
+                );
+                view.row(
+                    Rect::new(x, 8, width, 1),
+                    "Close (Esc) · Space / Enter toggles",
+                    Some(Action::Cancel),
+                    false,
+                    true,
+                );
+                if let Some(error) = self.visible_error() {
+                    view.lines(Rect::new(x, 10, width, 3), error, None, false);
+                }
+                return;
+            }
             Form::Room(editor) => {
                 view.row(Rect::new(x, y, width, 1), "Room name", None, false, true);
                 view.editor(Rect::new(x, y + 1, width, 1), editor, None, true);
@@ -1438,6 +1495,7 @@ impl BusUi {
             self.view.composer_divider,
             self.view.history_divider,
             self.view.sidebar_divider,
+            self.view.settings_divider,
         ] {
             Block::default()
                 .borders(Borders::TOP)

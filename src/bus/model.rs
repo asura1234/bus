@@ -122,6 +122,9 @@ pub(crate) struct Agent {
     pub(crate) name: String,
     #[serde(default)]
     pub(crate) color: [u8; 3],
+    /// Shown instead of `color` in color blind mode; allocated the same way.
+    #[serde(default)]
+    pub(crate) accessible_color: [u8; 3],
     pub(crate) provider: Provider,
     pub(crate) cwd: PathBuf,
     pub(crate) branch: Option<String>,
@@ -297,25 +300,45 @@ where
     D: serde::Deserializer<'de>,
 {
     let mut agents = BTreeMap::<AgentId, Agent>::deserialize(deserializer)?;
+    backfill_colors(
+        &mut agents,
+        |agent| &mut agent.color,
+        super::colors::is_agent_color,
+        |occupied| super::colors::next_agent_color(occupied.iter().copied()),
+    );
+    backfill_colors(
+        &mut agents,
+        |agent| &mut agent.accessible_color,
+        super::colors::is_accessible_agent_color,
+        |occupied| super::colors::next_accessible_agent_color(occupied.iter().copied()),
+    );
+    Ok(agents)
+}
+
+fn backfill_colors(
+    agents: &mut BTreeMap<AgentId, Agent>,
+    color: fn(&mut Agent) -> &mut [u8; 3],
+    valid: fn([u8; 3]) -> bool,
+    next: fn(&[[u8; 3]]) -> [u8; 3],
+) {
     let mut room_colors = BTreeMap::<RoomId, Vec<[u8; 3]>>::new();
     // Reserve all saved, readable colors before filling missing legacy fields,
     // including those belonging to agents later in ID order.
-    for agent in agents.values() {
-        if super::colors::is_agent_color(agent.color) {
+    for agent in agents.values_mut() {
+        if valid(*color(agent)) {
             room_colors
                 .entry(agent.room_id)
                 .or_default()
-                .push(agent.color);
+                .push(*color(agent));
         }
     }
     for agent in agents.values_mut() {
-        if !super::colors::is_agent_color(agent.color) {
+        if !valid(*color(agent)) {
             let occupied = room_colors.entry(agent.room_id).or_default();
-            agent.color = super::colors::next_agent_color(occupied.iter().copied());
-            occupied.push(agent.color);
+            *color(agent) = next(occupied);
+            occupied.push(*color(agent));
         }
     }
-    Ok(agents)
 }
 
 impl BusState {
@@ -385,11 +408,14 @@ impl BusState {
             Some(_) => {}
         }
         let name = normalized_name(name)?;
-        let color = super::colors::next_agent_color(
+        let neighbors = || {
             self.agents
                 .values()
                 .filter(|agent| agent.room_id == room_id)
-                .map(|agent| agent.color),
+        };
+        let color = super::colors::next_agent_color(neighbors().map(|agent| agent.color));
+        let accessible_color = super::colors::next_accessible_agent_color(
+            neighbors().map(|agent| agent.accessible_color),
         );
         let id = AgentId(self.allocate_id());
         self.agents.insert(
@@ -399,6 +425,7 @@ impl BusState {
                 room_id,
                 name,
                 color,
+                accessible_color,
                 provider,
                 cwd,
                 branch,
@@ -1287,6 +1314,42 @@ mod tests {
             let migrated: BusState = serde_json::from_value(document).unwrap();
             assert_eq!(serialized_agent_color(&migrated, first), [221, 0, 255]);
         }
+    }
+
+    fn serialized_accessible_color(state: &BusState, id: AgentId) -> [u8; 3] {
+        let document = serde_json::to_value(state).expect("serialize state");
+        serde_json::from_value(document["agents"][id.0.to_string()]["accessible_color"].clone())
+            .expect("each agent has a persisted color blind mode RGB color")
+    }
+
+    #[test]
+    fn accessible_agent_colors_persist_beside_standard_colors() {
+        let (mut state, _, first, second) = state_with_room_and_agents();
+        let standard = serialized_agent_color(&state, second);
+        let accessible = serialized_accessible_color(&state, second);
+        assert!(crate::bus::colors::is_accessible_agent_color(accessible));
+        assert_ne!(serialized_accessible_color(&state, first), accessible);
+        state.rename_agent(second, "new name").unwrap();
+        state.delete_agent(first).unwrap();
+        let reloaded: BusState =
+            serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        assert_eq!(serialized_agent_color(&reloaded, second), standard);
+        assert_eq!(serialized_accessible_color(&reloaded, second), accessible);
+        assert_eq!(reloaded, state);
+    }
+
+    #[test]
+    fn legacy_agents_backfill_accessible_colors_in_creation_order() {
+        let (state, _, first, second) = state_with_room_and_agents();
+        let mut document = serde_json::to_value(&state).unwrap();
+        for agent in [first, second] {
+            document["agents"][agent.0.to_string()]
+                .as_object_mut()
+                .unwrap()
+                .remove("accessible_color");
+        }
+        let migrated: BusState = serde_json::from_value(document).unwrap();
+        assert_eq!(migrated, state, "standard colors are untouched");
     }
 
     fn state_with_room_and_agents() -> (BusState, RoomId, AgentId, AgentId) {

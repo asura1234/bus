@@ -76,7 +76,7 @@ fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
             .create_agent(room, "second", Provider::Cursor, "/other".into(), None)
             .unwrap();
         ui.receive_snapshot(Arc::new(snapshot.clone()));
-        let before = room_screen(&mut ui, 100, 12);
+        let before = room_screen(&mut ui, 100, 14);
         let sidebar_width = usize::from(ui.view.sidebar.width);
         let sidebar = |screen: &str| {
             screen
@@ -98,7 +98,7 @@ fn sidebar_errors_never_add_agent_rows_or_scroll_height() {
             snapshot.state.prepare_delete_agent(agent).unwrap();
         }
         ui.receive_snapshot(Arc::new(snapshot));
-        let after = room_screen(&mut ui, 100, 12);
+        let after = room_screen(&mut ui, 100, 14);
         assert_eq!(sidebar(&after), sidebar(&before));
         assert_eq!(ui.view.sidebar_max_scroll, max_scroll);
         assert!(ui
@@ -124,11 +124,11 @@ fn expanded_sidebar_omits_absent_branch_without_a_placeholder_row() {
             .unwrap();
     }
     ui.receive_snapshot(Arc::new(snapshot));
-    ui.compute_view(100, 14);
+    ui.compute_view(100, 16);
     assert_eq!(ui.view.sidebar_max_scroll, 2);
     ui.sidebar_scroll = usize::MAX;
-    ui.compute_view(100, 14);
-    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 14));
+    ui.compute_view(100, 16);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 16));
     ui.render(&mut buffer);
     let row_text = |y| {
         (1..ui.view.sidebar.right() - 1)
@@ -397,6 +397,87 @@ fn room_chrome_uses_shared_phosphor_green() {
     }
     assert_ne!(buffer[(editor.x, editor.y)].fg, green);
     assert_ne!(buffer[(3, 3)].fg, green); // The room name keeps its text color.
+}
+
+#[test]
+fn sidebar_pins_green_divider_and_settings_button_to_lower_right() {
+    let (mut ui, _, _) = fixture();
+    ui.compute_view(100, 30);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let green = ratatui::style::Color::Rgb(102, 255, 102);
+    let right = ui.view.sidebar.right() - 2;
+    for x in 1..right {
+        assert_eq!(buffer[(x, 28)].symbol(), "─", "divider at x={x}");
+        assert_eq!(buffer[(x, 28)].fg, green, "divider at x={x}");
+    }
+    let settings = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::Settings)
+        .expect("settings button")
+        .rect;
+    assert_eq!((settings.y, settings.right()), (29, right));
+    assert_eq!(
+        (settings.x..settings.right())
+            .map(|x| buffer[(x, 29)].symbol())
+            .collect::<String>(),
+        "Settings"
+    );
+}
+
+#[test]
+fn color_blind_mode_defaults_off_and_switches_agent_identity_colors() {
+    let (mut ui, room, agent) = fixture();
+    let rgb = |[r, g, b]: [u8; 3]| ratatui::style::Color::Rgb(r, g, b);
+    let (standard, accessible) = {
+        let agent = ui.snapshot.state.agent(agent).unwrap();
+        (rgb(agent.color), rgb(agent.accessible_color))
+    };
+    assert_ne!(standard, accessible);
+    let name_color = |ui: &mut BusUi| {
+        ui.compute_view(100, 30);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+        ui.render(&mut buffer);
+        let name = ui
+            .view
+            .hits
+            .iter()
+            .find(|hit| hit.action == render::Action::Agent(agent))
+            .expect("sidebar agent name")
+            .rect;
+        buffer[(name.x, name.y)].fg
+    };
+    let path = std::env::temp_dir().join(format!(
+        "bus-ui-settings-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    ui.settings_path = Some(path.clone());
+    assert!(!ui.settings.color_blind_mode);
+    assert_eq!(name_color(&mut ui), standard);
+
+    ui.action(render::Action::Settings);
+    assert!(matches!(ui.form, Some(forms::Form::Settings)));
+    key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
+    assert!(ui.settings.color_blind_mode);
+    assert!(crate::bus::settings::load(&path).unwrap().color_blind_mode);
+    assert_eq!(name_color(&mut ui), accessible);
+
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(ui.form.is_none());
+    assert_eq!(ui.room, Some(room));
+    assert_eq!(name_color(&mut ui), accessible);
+
+    ui.action(render::Action::Settings);
+    ui.action(render::Action::ToggleColorBlindMode);
+    assert!(!crate::bus::settings::load(&path).unwrap().color_blind_mode);
+    assert_eq!(name_color(&mut ui), standard);
+    let _ = std::fs::remove_file(path);
 }
 
 fn set_sidebar_agent_status(ui: &mut BusUi, agent: AgentId, status: RuntimeStatus) {

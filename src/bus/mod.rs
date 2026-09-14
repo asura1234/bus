@@ -13,5 +13,6 @@ mod local_sessions_tests;
 pub(crate) mod model;
 pub(crate) mod resume_launch;
 pub(crate) mod runtime;
+pub(crate) mod settings;
 pub(crate) mod store;
 pub(crate) mod transport;

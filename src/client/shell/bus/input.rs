@@ -487,9 +487,13 @@ impl BusUi {
                 self.suggestions.selected = index;
                 self.complete_path();
             }
+            Action::Settings => self.open_form(Form::Settings),
+            Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::Cancel => {
                 if let Some(room) = self.room {
                     self.open_room(room);
+                } else {
+                    self.form = None;
                 }
             }
             Action::Add => self.add(),
@@ -1004,6 +1008,12 @@ impl BusUi {
             self.action(Action::Cancel);
             return;
         }
+        if matches!(self.form, Some(Form::Settings)) {
+            if matches!(code, KeyCode::Enter | KeyCode::Char(' ')) {
+                self.toggle_color_blind_mode();
+            }
+            return;
+        }
         if matches!(self.form, Some(Form::Help { .. })) {
             match code {
                 KeyCode::Enter => self.action(Action::Cancel),
@@ -1170,7 +1180,7 @@ impl BusUi {
             return;
         };
         match form {
-            Form::Help { .. } => {}
+            Form::Help { .. } | Form::Settings => {}
             Form::Room(editor) => {
                 self.queue(BusCommand::CreateRoom(editor.text), Effect::None);
             }
