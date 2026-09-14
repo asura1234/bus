@@ -46,9 +46,13 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
         let value: Value = serde_json::from_str(line).ok()?;
         match value.get("role").and_then(Value::as_str) {
             Some("user") => {
-                has_user = true;
-                accumulated.clear();
-                last = None;
+                // Cursor can inject synthetic user records within one generation;
+                // only `turn_ended` closes that provider turn.
+                if !has_user {
+                    has_user = true;
+                    accumulated.clear();
+                    last = None;
+                }
             }
             Some("assistant") if has_user => {
                 let content = value.get("message")?.get("content")?.as_array()?;
@@ -141,6 +145,24 @@ mod tests {
             )
             .as_deref(),
             Some("final answer")
+        );
+    }
+
+    #[test]
+    fn cursor_final_reply_ignores_injected_user_records_within_completed_turn() {
+        let transcript = concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"review\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Checking.\"},{\"type\":\"tool_use\",\"name\":\"Read\"}]}}\n",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<available_subagent_types>...</available_subagent_types>\"}]}}\n",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"review\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Ready\"}]}}\n",
+            "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+        );
+
+        assert_eq!(
+            matching_completed_message(transcript, "Checking.Ready").as_deref(),
+            Some("Ready")
         );
     }
 
