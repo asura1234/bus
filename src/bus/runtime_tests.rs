@@ -79,6 +79,52 @@ fn delivery_logs_correlate_submission_callback_and_persisted_reply() {
     });
 }
 
+#[test]
+fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
+    for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+        let (mut worker, agent, room, dir, _) = fixture(provider, vec![]);
+        let request = queue(&mut worker, room, agent, "round trip payload ");
+        worker.submit_ready().unwrap();
+        let callback = match provider {
+            Provider::ClaudeCode => json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "session",
+                "prompt_id": "turn",
+                "prompt": "round trip payload"
+            }),
+            Provider::Codex => json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "session",
+                "turn_id": "turn",
+                "prompt": "round trip payload"
+            }),
+            Provider::Cursor => json!({
+                "hook_event_name": "beforeSubmitPrompt",
+                "conversation_id": "session",
+                "generation_id": "turn",
+                "prompt": "round trip payload"
+            }),
+        };
+        record(&dir, provider, callback);
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+
+        assert!(
+            worker.state.request(request).unwrap().trusted_start_bound,
+            "terminal-trimmed prompt must bind for {provider:?}"
+        );
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_none());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 struct FakeTransport {
     replies: VecDeque<Result<ResponseResult, TransportError>>,
     calls: Arc<Mutex<Vec<&'static str>>>,

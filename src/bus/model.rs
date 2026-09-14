@@ -92,6 +92,18 @@ impl Prompt {
             (true, true) => String::new(),
         }
     }
+
+    fn matches_callback_payload(&self, payload: &str) -> bool {
+        fn normalize(value: &str) -> String {
+            value
+                .replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .trim_end_matches(|character: char| character.is_ascii_whitespace())
+                .to_owned()
+        }
+
+        normalize(payload) == normalize(&self.rendered_payload())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -996,7 +1008,7 @@ impl BusState {
         if callback
             .prompt_payload
             .as_deref()
-            .is_some_and(|payload| payload != request.prompt.rendered_payload())
+            .is_some_and(|payload| !request.prompt.matches_callback_payload(payload))
         {
             return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
         }
@@ -1006,8 +1018,10 @@ impl BusState {
                 if callback.provider_session_id.is_none() || callback.provider_turn_id.is_none() {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
-                if callback.prompt_payload.as_deref()
-                    != Some(request.prompt.rendered_payload().as_str())
+                if !callback
+                    .prompt_payload
+                    .as_deref()
+                    .is_some_and(|payload| request.prompt.matches_callback_payload(payload))
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
