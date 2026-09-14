@@ -576,7 +576,7 @@ impl BusUi {
     }
 
     fn tick_status_animation(&mut self, now: std::time::Instant) -> bool {
-        const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+        const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
         let animated_status_visible = self.room.is_some_and(|room| {
             self.snapshot.state.agents().any(|agent| {

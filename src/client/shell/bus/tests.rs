@@ -453,7 +453,7 @@ fn bus_sidebar_working_brightness_wave_moves_left_to_right() {
         ]
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(210));
+    std::thread::sleep(std::time::Duration::from_millis(110));
     assert!(ui.tick(), "visible Working status should request a repaint");
     assert_eq!(
         rendered_agent_status_colors(&mut ui, agent, "Working"),
@@ -480,7 +480,7 @@ fn bus_sidebar_blocked_pulses_the_whole_red_word_together() {
         vec![ratatui::style::Color::Rgb(128, 44, 52); 7]
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(210));
+    std::thread::sleep(std::time::Duration::from_millis(110));
     assert!(ui.tick(), "visible Blocked status should request a repaint");
     assert_eq!(
         rendered_agent_status_colors(&mut ui, agent, "Blocked"),
