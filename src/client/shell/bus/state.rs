@@ -735,7 +735,7 @@ impl BusUi {
         if now.saturating_duration_since(last_tick) < FRAME_INTERVAL {
             return false;
         }
-        self.status_animation_phase = self.status_animation_phase.wrapping_add(1) % 42;
+        self.status_animation_phase = self.status_animation_phase.wrapping_add(1) % 84;
         self.status_animation_last_tick = Some(now);
         true
     }

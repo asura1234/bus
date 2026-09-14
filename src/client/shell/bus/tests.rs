@@ -629,7 +629,7 @@ fn rendered_agent_status_colors(
 }
 
 #[test]
-fn bus_sidebar_working_brightness_wave_moves_left_to_right() {
+fn bus_sidebar_working_adds_frames_without_speeding_up() {
     let (mut ui, _, agent) = fixture();
     set_sidebar_agent_status(&mut ui, agent, RuntimeStatus::Working);
     assert!(!ui.tick(), "first visible frame starts the animation clock");
@@ -647,8 +647,25 @@ fn bus_sidebar_working_brightness_wave_moves_left_to_right() {
         ]
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(110));
-    assert!(ui.tick(), "visible Working status should request a repaint");
+    ui.status_animation_last_tick =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(110));
+    assert!(ui.tick(), "100 ms should render an intermediate frame");
+    assert_eq!(
+        rendered_agent_status_colors(&mut ui, agent, "Working"),
+        vec![
+            ratatui::style::Color::Rgb(85, 223, 93),
+            ratatui::style::Color::Rgb(85, 223, 93),
+            ratatui::style::Color::Rgb(52, 151, 68),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+        ]
+    );
+
+    ui.status_animation_last_tick =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(110));
+    assert!(ui.tick(), "200 ms should reach the next original keyframe");
     assert_eq!(
         rendered_agent_status_colors(&mut ui, agent, "Working"),
         vec![
@@ -664,7 +681,7 @@ fn bus_sidebar_working_brightness_wave_moves_left_to_right() {
 }
 
 #[test]
-fn bus_sidebar_blocked_pulses_the_whole_red_word_together() {
+fn bus_sidebar_blocked_adds_frames_without_speeding_up() {
     let (mut ui, _, agent) = fixture();
     set_sidebar_agent_status(&mut ui, agent, RuntimeStatus::Blocked);
     assert!(!ui.tick(), "first visible frame starts the animation clock");
@@ -674,11 +691,36 @@ fn bus_sidebar_blocked_pulses_the_whole_red_word_together() {
         vec![ratatui::style::Color::Rgb(128, 44, 52); 7]
     );
 
-    std::thread::sleep(std::time::Duration::from_millis(110));
-    assert!(ui.tick(), "visible Blocked status should request a repaint");
+    ui.status_animation_last_tick =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(110));
+    assert!(ui.tick(), "100 ms should render an intermediate frame");
+    assert_eq!(
+        rendered_agent_status_colors(&mut ui, agent, "Blocked"),
+        vec![ratatui::style::Color::Rgb(167, 54, 62); 7]
+    );
+
+    ui.status_animation_last_tick =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(110));
+    assert!(ui.tick(), "200 ms should reach the next original keyframe");
     assert_eq!(
         rendered_agent_status_colors(&mut ui, agent, "Blocked"),
         vec![ratatui::style::Color::Rgb(205, 64, 72); 7]
+    );
+}
+
+#[test]
+fn bus_sidebar_blocked_does_not_jump_when_the_shared_phase_wraps() {
+    let (mut ui, _, agent) = fixture();
+    set_sidebar_agent_status(&mut ui, agent, RuntimeStatus::Blocked);
+    assert!(!ui.tick(), "first visible frame starts the animation clock");
+
+    ui.status_animation_phase = 41;
+    ui.status_animation_last_tick =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(110));
+    assert!(ui.tick(), "the next 100 ms frame should repaint");
+    assert_eq!(
+        rendered_agent_status_colors(&mut ui, agent, "Blocked"),
+        vec![ratatui::style::Color::Rgb(255, 92, 102); 7]
     );
 }
 

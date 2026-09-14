@@ -419,31 +419,63 @@ fn identity_color(agent: &Agent, settings: crate::bus::settings::BusSettings) ->
     Color::Rgb(r, g, b)
 }
 
+fn midpoint_color(first: Color, second: Color) -> Color {
+    let midpoint = |first: u8, second: u8| (u16::from(first) + u16::from(second)).div_ceil(2) as u8;
+    match (first, second) {
+        (Color::Rgb(fr, fg, fb), Color::Rgb(sr, sg, sb)) => {
+            Color::Rgb(midpoint(fr, sr), midpoint(fg, sg), midpoint(fb, sb))
+        }
+        _ => first,
+    }
+}
+
+fn working_status_colors(word: &str, keyframe: usize) -> Vec<Color> {
+    let head = keyframe % word.len();
+    word.chars()
+        .enumerate()
+        .map(|(index, _)| {
+            if index == head {
+                ACCENT
+            } else if index.abs_diff(head) == 1 {
+                WORKING_MID
+            } else {
+                WORKING_DIM
+            }
+        })
+        .collect()
+}
+
 fn animated_agent_status_colors(agent: &Agent, phase: u8) -> Option<Vec<Color>> {
     let word = agent_status(agent);
     match word {
         "Working" => {
-            let head = usize::from(phase) % word.len();
-            Some(
-                word.chars()
-                    .enumerate()
-                    .map(|(index, _)| {
-                        if index == head {
-                            ACCENT
-                        } else if index.abs_diff(head) == 1 {
-                            WORKING_MID
-                        } else {
-                            WORKING_DIM
-                        }
-                    })
-                    .collect(),
-            )
+            let keyframe = usize::from(phase / 2);
+            let current = working_status_colors(word, keyframe);
+            if phase.is_multiple_of(2) {
+                Some(current)
+            } else {
+                let next = working_status_colors(word, keyframe + 1);
+                Some(
+                    current
+                        .into_iter()
+                        .zip(next)
+                        .map(|(current, next)| midpoint_color(current, next))
+                        .collect(),
+                )
+            }
         }
         "Blocked" => {
-            let color = match phase % 6 {
+            let keyframe = phase / 2;
+            let color_at = |keyframe| match keyframe % 6 {
                 0 | 5 => BLOCKED_DIM,
                 2 | 3 => BLOCKED_BRIGHT,
                 _ => BLOCKED_MID,
+            };
+            let current = color_at(keyframe);
+            let color = if phase.is_multiple_of(2) {
+                current
+            } else {
+                midpoint_color(current, color_at(keyframe + 1))
             };
             Some(vec![color; word.len()])
         }
