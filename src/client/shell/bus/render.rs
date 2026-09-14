@@ -490,7 +490,7 @@ impl BusUi {
                 Rect::default()
             }
         };
-        view.row(at(1, 1, sw), "BUSSES", None, false, true);
+        view.row(at(1, 1, sw), "ROOMS", None, false, true);
         view.row(
             at(sidebar.width.saturating_sub(3), 1, 1),
             "+",
@@ -675,7 +675,7 @@ impl BusUi {
         let Some(room) = self.room.and_then(|id| self.snapshot.state.room(id)) else {
             view.lines(
                 Rect::new(main.x + 2, 2, main.width.saturating_sub(4), 3),
-                "No rooms. Click BUSSES + or press Ctrl+Shift+R to add one.",
+                "No rooms. Click ROOMS + or press Ctrl+Shift+R to add one.",
                 None,
                 true,
             );

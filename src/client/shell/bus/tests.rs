@@ -657,10 +657,12 @@ fn deleting_agent_prunes_checked_recipient_and_last_room_stays_deleted_after_res
     snapshot.state.delete_room(room).unwrap();
     ui.receive_snapshot(Arc::new(snapshot.clone()));
     assert!(ui.room.is_none() && ui.locals.is_empty());
-    assert!(room_screen(&mut ui, 100, 30).contains("No rooms"));
+    assert!(room_screen(&mut ui, 100, 30)
+        .contains("No rooms. Click ROOMS + or press Ctrl+Shift+R to add one."));
     let mut reopened = BusUi::new(Arc::new(snapshot));
     assert!(!reopened.seed_first_room);
-    assert!(room_screen(&mut reopened, 100, 30).contains("No rooms"));
+    assert!(room_screen(&mut reopened, 100, 30)
+        .contains("No rooms. Click ROOMS + or press Ctrl+Shift+R to add one."));
 }
 
 #[test]
@@ -889,7 +891,7 @@ fn sidebar_has_uppercase_headings_and_a_matching_divider_after_room_names() {
         let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 40));
         ui.render(&mut buffer);
         let row_text = |y| (1..26).map(|x| buffer[(x, y)].symbol()).collect::<String>();
-        assert!(row_text(1).starts_with("BUSSES"));
+        assert!(row_text(1).starts_with("ROOMS"));
         assert!(row_text(4 + count).starts_with("AGENTS"));
         let color = buffer[(27, 0)].fg;
         for x in 1..26 {
@@ -927,7 +929,7 @@ fn entire_sidebar_scrolls_together_and_all_agents_remain_reachable() {
     mouse(&mut ui, ScrollDown, 2, 1); // Wheel over the room heading scrolls the whole column.
     let moved = room_screen(&mut ui, 100, 30);
     assert!(
-        !moved.contains("BUSSES") && !moved.contains("Busses"),
+        !moved.contains("ROOMS") && !moved.contains("Rooms"),
         "heading must scroll with content"
     );
     assert_ne!(moved, start);
@@ -1634,7 +1636,7 @@ fn room_renders_without_native_snapshot_and_only_approved_chrome_and_collapsed_m
         2,
         "sidebar and room heading"
     );
-    for required in ["BUSSES", "AGENTS", "# room", "author", "Codex", "Quote"] {
+    for required in ["ROOMS", "AGENTS", "# room", "author", "Codex", "Quote"] {
         if required != "Quote" {
             assert!(text.contains(required), "missing {required}");
         }
@@ -1684,7 +1686,7 @@ fn native_shell_composes_bus_before_any_server_frame_and_uses_same_resize_geomet
     shell.bus = Some(ui);
     let frame = shell.compose(100, 30).unwrap();
     let text: String = frame.cells.iter().map(|c| c.symbol.as_str()).collect();
-    assert!(text.contains("BUSSES"));
+    assert!(text.contains("ROOMS"));
     assert!(text.contains("# room"));
     assert_eq!(shell.surface_size(100, 30).rows, 30);
     assert_eq!(shell.surface_size(100, 30).cols, 72);
