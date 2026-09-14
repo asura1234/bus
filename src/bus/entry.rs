@@ -3,11 +3,12 @@ use std::{io, path::PathBuf};
 
 use super::local_sessions::{LocalSessionRegistry, ResumeTarget};
 
-const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last";
+const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Action {
     Run,
+    Sessions,
     Resume(ResumeTarget),
     Paths,
     Help,
@@ -40,6 +41,10 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
             }
             "--help" | "-h" if action.is_none() => {
                 action = Some(Action::Help);
+                index += 1;
+            }
+            "sessions" if action.is_none() => {
+                action = Some(Action::Sessions);
                 index += 1;
             }
             "resume" if action.is_none() => {
@@ -89,6 +94,14 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     let explicit_root = data_dir();
     let base = super::local_sessions::default_base_dir().map_err(io::Error::other)?;
     let registry = LocalSessionRegistry::new(base.clone());
+    if invocation.action == Action::Sessions {
+        let sessions = registry.list().map_err(io::Error::other)?;
+        let output = super::local_sessions::format_session_list(&sessions, super::io::now_ms());
+        if !output.is_empty() {
+            println!("{output}");
+        }
+        return Ok(());
+    }
     let (root, local_session_id) = match &invocation.action {
         Action::Run => match explicit_root {
             Some(root) => (root, None),
@@ -116,7 +129,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             }
         },
         Action::Paths => (explicit_root.unwrap_or_else(|| base.clone()), None),
-        Action::Help => unreachable!(),
+        Action::Sessions | Action::Help => unreachable!(),
     };
     if !root.is_absolute() {
         return Err(io::Error::other(
@@ -144,7 +157,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     match invocation.action {
         Action::Control(control_args) => super::control_cli::run(&root, &control_args),
         Action::Run | Action::Resume(_) => {
-            if let Some(id) = local_session_id {
+            if let Some(id) = &local_session_id {
                 eprintln!("Bus session: {id}");
             }
             // Only a read-only liveness check: never change an attached server's
@@ -153,7 +166,23 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
                 std::env::set_var("BUS_DEV_EXISTING_SERVER", "1");
                 eprintln!("{}", super::diagnostics::EXISTING_SERVER_NOTICE);
             }
-            crate::server::autodetect::auto_detect_launch(false)
+            let result = crate::server::autodetect::auto_detect_launch(false);
+            if let Some(id) = local_session_id {
+                let cleanup = (|| -> Result<(), String> {
+                    if !registry.is_empty(&id)? {
+                        return Ok(());
+                    }
+                    if crate::server::autodetect::is_server_listening() {
+                        crate::session::stop_active_server()?;
+                    }
+                    registry.discard_if_empty(&id)?;
+                    Ok(())
+                })();
+                if result.is_ok() {
+                    cleanup.map_err(io::Error::other)?;
+                }
+            }
+            result
         }
         Action::Paths => {
             println!(
@@ -162,13 +191,13 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             );
             Ok(())
         }
-        Action::Help => unreachable!(),
+        Action::Sessions | Action::Help => unreachable!(),
     }
 }
 
 fn print_help() {
     println!("{}\n", super::control_cli::HELP);
-    println!("Bus — coordinate selected agents in native terminal rooms\n\n{USAGE}\n\nA plain `bus` launch always creates a new local session.\n`bus resume <session-id>` resumes that exact session.\n`bus resume --last` resumes the last opened session.\n--dev enables developer log files, excluding input/content dumps.\nExisting servers keep their original log level; they are never automatically restarted.\n--paths shows data and log directories without starting a session.\nBUS_DATA_DIR is an exact isolated-root override for development and tests; it cannot be combined with resume.\n\nCtrl+Shift+R room · Ctrl+N agent · Ctrl+F files · F2 rename · F3 notes\n@ choose agents · + choose files (type the shifted symbols)\nEnter send · Shift+Enter (supported hosts) / Ctrl+J newline\nCtrl+A/E line start/end · Ctrl+R history search · Ctrl+Shift+E composer size\nF6 room · Ctrl+C save and quit (Ctrl+Q also works)\n\nBuilt on Herdr; upstream license and attribution are preserved.");
+    println!("Bus — coordinate selected agents in native terminal rooms\n\n{USAGE}\n\nA plain `bus` launch always creates a new local session.\n`bus sessions` lists resumable sessions, their rooms, and recent activity.\n`bus resume <session-id>` resumes that exact session.\n`bus resume --last` resumes the last opened session.\n--dev enables developer log files, excluding input/content dumps.\nExisting servers keep their original log level; they are never automatically restarted.\n--paths shows data and log directories without starting a session.\nBUS_DATA_DIR is an exact isolated-root override for development and tests; it cannot be combined with resume.\n\nCtrl+Shift+R room · Ctrl+N agent · Ctrl+F files · F2 rename · F3 notes\n@ choose agents · + choose files (type the shifted symbols)\nEnter send · Shift+Enter (supported hosts) / Ctrl+J newline\nCtrl+A/E line start/end · Ctrl+R history search · Ctrl+Shift+E composer size\nF6 room · Ctrl+C save and quit (Ctrl+Q also works)\n\nBuilt on Herdr; upstream license and attribution are preserved.");
 }
 
 pub(crate) fn apply_config(config: &mut crate::config::Config) {

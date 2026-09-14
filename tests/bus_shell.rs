@@ -83,3 +83,24 @@ fn bus_help_documents_fresh_and_resumed_session_commands() {
     assert!(help.contains("bus [--dev] resume <session-id>"));
     assert!(help.contains("bus [--dev] resume --last"));
 }
+
+#[test]
+fn bus_sessions_is_read_only_and_succeeds_when_no_sessions_exist() {
+    let home = isolated_home("sessions-empty");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args(["--bus", "sessions"])
+        .env_remove("BUS_DATA_DIR")
+        .env("HOME", &home)
+        .output()
+        .expect("list sessions");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(!home.join(".local/share/bus").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
