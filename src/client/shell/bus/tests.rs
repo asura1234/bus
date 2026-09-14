@@ -1127,12 +1127,13 @@ fn enter_without_checked_agents_shows_error_and_preserves_draft() {
 }
 
 #[test]
-fn agent_enter_adds_from_every_field_with_its_own_directory_and_escape_cancels() {
-    for field in 0..4 {
+fn agent_enter_adds_from_non_model_fields_with_its_own_directory_and_escape_cancels() {
+    for field in [0, 2, 3] {
         let (mut ui, room, _) = fixture();
         ui.form = Some(forms::Form::Agent {
             name: editor::Editor::new("frontend".into()),
-            provider: Provider::ClaudeCode,
+            provider: Some(Provider::ClaudeCode),
+            provider_cursor: Provider::ClaudeCode,
             cwd: editor::Editor::new("/projects/frontend".into()),
             args: Box::new(editor::Editor::new("--model sonnet".into())),
             field,
@@ -1159,6 +1160,86 @@ fn agent_enter_adds_from_every_field_with_its_own_directory_and_escape_cancels()
             .pending
             .iter()
             .any(|p| matches!(p.command, BusCommand::AddAgent(_))));
+    }
+}
+
+#[test]
+fn new_agent_starts_without_a_selected_model() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::NewAgent);
+
+    assert!(room_screen(&mut ui, 100, 30).contains("Choose model"));
+}
+
+#[test]
+fn add_agent_form_keeps_model_and_pwd_labels_concise() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Provider(Provider::ClaudeCode));
+
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(screen.contains("< Claude Code >"), "{screen}");
+    assert!(screen.contains("PWD"), "{screen}");
+    assert!(!screen.contains("arrows /"), "{screen}");
+    assert!(!screen.contains("(this agent only)"), "{screen}");
+}
+
+#[test]
+fn model_menu_enter_selects_without_submitting_or_showing_an_error() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Field(1));
+
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(matches!(ui.form, Some(forms::Form::Agent { field: 2, .. })));
+    assert!(ui
+        .pending
+        .iter()
+        .all(|pending| !matches!(pending.command, BusCommand::AddAgent(_))));
+    assert!(ui.visible_error().is_none());
+    assert!(room_screen(&mut ui, 100, 30).contains("Claude Code"));
+}
+
+#[test]
+fn add_agent_rejects_each_missing_required_field_and_keeps_the_form_open() {
+    for missing in ["Name", "Model", "PWD"] {
+        let (mut ui, _, _) = fixture();
+        ui.action(render::Action::NewAgent);
+        if let Some(forms::Form::Agent { name, cwd, .. }) = &mut ui.form {
+            name.text = "frontend".into();
+            if missing == "PWD" {
+                cwd.text.clear();
+            }
+        }
+        if missing != "Model" {
+            ui.action(render::Action::Provider(Provider::Codex));
+        }
+        if missing == "Name" {
+            if let Some(forms::Form::Agent { name, .. }) = &mut ui.form {
+                name.text.clear();
+            }
+        }
+
+        key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+
+        assert!(
+            matches!(ui.form, Some(forms::Form::Agent { .. })),
+            "{missing}"
+        );
+        assert!(
+            ui.pending
+                .iter()
+                .all(|pending| !matches!(pending.command, BusCommand::AddAgent(_))),
+            "{missing}"
+        );
+        assert!(
+            ui.visible_error()
+                .is_some_and(|error| error.contains(missing)),
+            "{missing}: {:?}",
+            ui.visible_error()
+        );
     }
 }
 

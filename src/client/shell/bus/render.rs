@@ -1299,7 +1299,8 @@ impl BusUi {
             }
             Form::Agent {
                 name,
-                provider: kind,
+                provider: selected,
+                provider_cursor: _,
                 cwd,
                 args,
                 field,
@@ -1307,7 +1308,7 @@ impl BusUi {
                 for (index, label, editor) in [
                     (0, "Name", Some(name)),
                     (1, "Agent", None),
-                    (2, "PWD (this agent only)", Some(cwd)),
+                    (2, "PWD", Some(cwd)),
                     (3, "Additional launch args (optional)", Some(args)),
                 ] {
                     view.row(
@@ -1328,7 +1329,7 @@ impl BusUi {
                     } else {
                         view.row(
                             Rect::new(x, y, width, 1),
-                            format!("< {} >  arrows / Space", provider(*kind)),
+                            format!("< {} >", selected.map_or("Choose model", provider)),
                             Some(Action::Field(1)),
                             *field == 1,
                             false,
@@ -1393,7 +1394,7 @@ impl BusUi {
             );
         }
         if let Form::Agent {
-            provider: selected,
+            provider_cursor,
             field: 1,
             ..
         } = form
@@ -1406,7 +1407,7 @@ impl BusUi {
                     Rect::new(x, 8 + index as u16, width, 1),
                     provider(kind),
                     Some(Action::Provider(kind)),
-                    *selected == kind,
+                    *provider_cursor == kind,
                     false,
                 );
             }

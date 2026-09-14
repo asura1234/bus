@@ -12,7 +12,8 @@ pub(super) enum Form {
     Room(Editor),
     Agent {
         name: Editor,
-        provider: Provider,
+        provider: Option<Provider>,
+        provider_cursor: Provider,
         cwd: Editor,
         args: Box<Editor>,
         field: usize,

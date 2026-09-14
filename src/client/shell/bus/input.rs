@@ -422,7 +422,8 @@ impl BusUi {
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
             Action::NewAgent => self.open_form(Form::Agent {
                 name: Editor::default(),
-                provider: Provider::Codex,
+                provider: None,
+                provider_cursor: Provider::Codex,
                 cwd: Editor::new("~/".into()),
                 args: Box::new(Editor::default()),
                 field: 0,
@@ -470,10 +471,14 @@ impl BusUi {
             }
             Action::Provider(kind) => {
                 if let Some(Form::Agent {
-                    provider, field, ..
+                    provider,
+                    provider_cursor,
+                    field,
+                    ..
                 }) = &mut self.form
                 {
-                    *provider = kind;
+                    *provider = Some(kind);
+                    *provider_cursor = kind;
                     *field = 2;
                 }
                 self.query_paths();
@@ -1012,10 +1017,6 @@ impl BusUi {
             }
             return;
         }
-        if code == KeyCode::Enter && matches!(self.form, Some(Form::Agent { .. })) {
-            self.add();
-            return;
-        }
         if matches!(code, KeyCode::Up | KeyCode::Down) && !self.suggestions.entries.is_empty() {
             self.suggestions.selected = if code == KeyCode::Up {
                 self.suggestions.selected.saturating_sub(1)
@@ -1027,16 +1028,48 @@ impl BusUi {
         if matches!(self.form, Some(Form::Agent { field: 1, .. }))
             && matches!(
                 code,
-                KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Char(' ')
+                KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Char(' ')
+                    | KeyCode::Enter
             )
         {
-            if let Some(Form::Agent { provider, .. }) = &mut self.form {
-                *provider = match provider {
-                    Provider::Codex => Provider::ClaudeCode,
-                    Provider::ClaudeCode => Provider::Cursor,
-                    Provider::Cursor => Provider::Codex,
-                };
+            if let Some(Form::Agent {
+                provider,
+                provider_cursor,
+                field,
+                ..
+            }) = &mut self.form
+            {
+                match code {
+                    KeyCode::Left | KeyCode::Up => {
+                        *provider_cursor = match provider_cursor {
+                            Provider::Codex => Provider::Cursor,
+                            Provider::ClaudeCode => Provider::Codex,
+                            Provider::Cursor => Provider::ClaudeCode,
+                        };
+                    }
+                    KeyCode::Right | KeyCode::Down => {
+                        *provider_cursor = match provider_cursor {
+                            Provider::Codex => Provider::ClaudeCode,
+                            Provider::ClaudeCode => Provider::Cursor,
+                            Provider::Cursor => Provider::Codex,
+                        };
+                    }
+                    KeyCode::Char(' ') | KeyCode::Enter => {
+                        *provider = Some(*provider_cursor);
+                        *field = 2;
+                    }
+                    _ => unreachable!(),
+                }
             }
+            self.query_paths();
+            return;
+        }
+        if code == KeyCode::Enter && matches!(self.form, Some(Form::Agent { .. })) {
+            self.add();
             return;
         }
         if matches!(code, KeyCode::Tab | KeyCode::Enter) && !self.suggestions.entries.is_empty() {
@@ -1148,12 +1181,34 @@ impl BusUi {
                 args,
                 ..
             } => {
+                let mut missing = Vec::new();
+                if name.text.trim().is_empty() {
+                    missing.push("Name");
+                }
+                if provider.is_none() {
+                    missing.push("Model");
+                }
+                if cwd.text.trim().is_empty() {
+                    missing.push("PWD");
+                }
+                if !missing.is_empty() {
+                    self.error = Some(match missing.as_slice() {
+                        [field] => format!("{field} is required."),
+                        [first, second] => format!("{first} and {second} are required."),
+                        [first, second, third] => {
+                            format!("{first}, {second}, and {third} are required.")
+                        }
+                        _ => unreachable!(),
+                    });
+                    return;
+                }
+                self.error = None;
                 if let Some(room) = self.room {
                     self.queue(
                         BusCommand::AddAgent(AddAgent {
                             room,
                             name: name.text,
-                            provider,
+                            provider: provider.expect("validated provider"),
                             cwd: cwd.text,
                             extra_args: args.text,
                             consent_project_hooks: false,
