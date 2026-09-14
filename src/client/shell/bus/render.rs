@@ -17,6 +17,11 @@ const ACCENT: Color = {
     let [r, g, b] = crate::bus::colors::YOU_COLOR;
     Color::Rgb(r, g, b)
 };
+const WORKING_MID: Color = Color::Rgb(68, 190, 84);
+const WORKING_DIM: Color = Color::Rgb(36, 112, 52);
+const BLOCKED_BRIGHT: Color = Color::Rgb(255, 92, 102);
+const BLOCKED_MID: Color = Color::Rgb(205, 64, 72);
+const BLOCKED_DIM: Color = Color::Rgb(128, 44, 52);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Action {
@@ -57,6 +62,7 @@ struct Row {
     selected: bool,
     muted: bool,
     color: Option<Color>,
+    character_colors: Option<Vec<Color>>,
 }
 #[derive(Default)]
 pub(super) struct View {
@@ -126,6 +132,7 @@ impl View {
             selected,
             muted,
             color: None,
+            character_colors: None,
         });
         if let Some(action) = action {
             self.hits.push(Hit { rect, action });
@@ -135,6 +142,13 @@ impl View {
         if rect.width > 0 && rect.height > 0 {
             if let Some(row) = self.rows.last_mut() {
                 row.color = Some(color);
+            }
+        }
+    }
+    fn color_last_row_characters(&mut self, rect: Rect, colors: Vec<Color>) {
+        if rect.width > 0 && rect.height > 0 {
+            if let Some(row) = self.rows.last_mut() {
+                row.character_colors = Some(colors);
             }
         }
     }
@@ -391,6 +405,38 @@ fn agent_status(agent: &Agent) -> &'static str {
         status(agent.status)
     }
 }
+
+fn animated_agent_status_colors(agent: &Agent, phase: u8) -> Option<Vec<Color>> {
+    let word = agent_status(agent);
+    match word {
+        "Working" => {
+            let head = usize::from(phase) % word.len();
+            Some(
+                word.chars()
+                    .enumerate()
+                    .map(|(index, _)| {
+                        if index == head {
+                            ACCENT
+                        } else if index.abs_diff(head) == 1 {
+                            WORKING_MID
+                        } else {
+                            WORKING_DIM
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        "Blocked" => {
+            let color = match phase % 6 {
+                0 | 5 => BLOCKED_DIM,
+                2 | 3 => BLOCKED_BRIGHT,
+                _ => BLOCKED_MID,
+            };
+            Some(vec![color; word.len()])
+        }
+        _ => None,
+    }
+}
 impl BusUi {
     pub fn cursor(&self) -> Option<crate::protocol::CursorState> {
         self.view.cursor.clone()
@@ -526,17 +572,21 @@ impl BusUi {
                 let [r, g, b] = agent.color;
                 view.color_last_row(rect, Color::Rgb(r, g, b));
             }
+            let status_rect = at(
+                sidebar.width.saturating_sub(right.len() as u16 + 4),
+                y,
+                right.len() as u16,
+            );
             view.row(
-                at(
-                    sidebar.width.saturating_sub(right.len() as u16 + 4),
-                    y,
-                    right.len() as u16,
-                ),
+                status_rect,
                 right,
                 Some(Action::Agent(agent.id)),
                 false,
                 true,
             );
+            if let Some(colors) = animated_agent_status_colors(agent, self.status_animation_phase) {
+                view.color_last_row_characters(status_rect, colors);
+            }
             view.row(
                 at(sidebar.width.saturating_sub(3), y, 1),
                 "×",
@@ -1446,6 +1496,31 @@ impl BusUi {
                 row.width.min(buffer.area.right() - row.x) as usize,
                 style,
             );
+            if let Some(colors) = &row.character_colors {
+                let mut x = row.x;
+                let right = row.x.saturating_add(row.width).min(buffer.area.right());
+                for (index, character) in display(&row.text).chars().enumerate() {
+                    let width = cell_width(character) as u16;
+                    if width == 0 {
+                        continue;
+                    }
+                    if x.saturating_add(width) > right {
+                        break;
+                    }
+                    let color = colors
+                        .get(index)
+                        .copied()
+                        .unwrap_or(style.fg.unwrap_or_default());
+                    buffer.set_stringn(
+                        x,
+                        row.y,
+                        character.to_string(),
+                        usize::from(width),
+                        style.fg(color),
+                    );
+                    x = x.saturating_add(width);
+                }
+            }
             if row.color.is_none() && row.text.starts_with('#') {
                 buffer.set_stringn(row.x, row.y, "#", 1, Style::default().fg(ACCENT));
             }

@@ -106,6 +106,8 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) recipient_index: usize,
     pub(super) suggestions: Suggestions,
     pub(super) view: View,
+    pub(super) status_animation_phase: u8,
+    pub(super) status_animation_last_tick: Option<std::time::Instant>,
     pub(super) main_scroll: usize,
     pub(super) history_follow_tail: bool,
     pub(super) history: super::history::History,
@@ -164,6 +166,8 @@ impl BusUi {
             recipient_index: 0,
             suggestions: Suggestions::default(),
             view: View::default(),
+            status_animation_phase: 0,
+            status_animation_last_tick: None,
             main_scroll: 0,
             history_follow_tail: true,
             history: super::history::History::default(),
@@ -567,7 +571,40 @@ impl BusUi {
                 }
             }
         }
+        changed |= self.tick_status_animation(std::time::Instant::now());
         changed
+    }
+
+    fn tick_status_animation(&mut self, now: std::time::Instant) -> bool {
+        const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
+        let animated_status_visible = self.room.is_some_and(|room| {
+            self.snapshot.state.agents().any(|agent| {
+                agent.room_id == room
+                    && agent.hook_setup_confirmed
+                    && !agent.session_binding_invalidated
+                    && !agent.deletion_pending
+                    && matches!(
+                        agent.status,
+                        RuntimeStatus::Working | RuntimeStatus::Blocked
+                    )
+            })
+        });
+        if !animated_status_visible {
+            self.status_animation_phase = 0;
+            self.status_animation_last_tick = None;
+            return false;
+        }
+        let Some(last_tick) = self.status_animation_last_tick else {
+            self.status_animation_last_tick = Some(now);
+            return false;
+        };
+        if now.saturating_duration_since(last_tick) < FRAME_INTERVAL {
+            return false;
+        }
+        self.status_animation_phase = self.status_animation_phase.wrapping_add(1) % 42;
+        self.status_animation_last_tick = Some(now);
+        true
     }
     /// Ctrl+C clears a visible room draft before it may quit Bus. A draft that
     /// is already being sent stays intact, but still keeps Bus open.

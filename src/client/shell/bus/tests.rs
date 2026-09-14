@@ -399,6 +399,95 @@ fn room_chrome_uses_shared_phosphor_green() {
     assert_ne!(buffer[(3, 3)].fg, green); // The room name keeps its text color.
 }
 
+fn set_sidebar_agent_status(ui: &mut BusUi, agent: AgentId, status: RuntimeStatus) {
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.confirm_hook_setup(agent).unwrap();
+    snapshot.state.observe_status(agent, status, 1).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+}
+
+fn rendered_agent_status_colors(
+    ui: &mut BusUi,
+    agent: AgentId,
+    expected: &str,
+) -> Vec<ratatui::style::Color> {
+    ui.compute_view(100, 30);
+    let status = ui
+        .view
+        .hits
+        .iter()
+        .filter(|hit| hit.action == render::Action::Agent(agent))
+        .max_by_key(|hit| hit.rect.x)
+        .expect("agent status hit")
+        .rect;
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    assert_eq!(
+        (0..status.width)
+            .map(|offset| buffer[(status.x + offset, status.y)].symbol())
+            .collect::<String>(),
+        expected
+    );
+    (0..status.width)
+        .map(|offset| buffer[(status.x + offset, status.y)].fg)
+        .collect()
+}
+
+#[test]
+fn bus_sidebar_working_brightness_wave_moves_left_to_right() {
+    let (mut ui, _, agent) = fixture();
+    set_sidebar_agent_status(&mut ui, agent, RuntimeStatus::Working);
+    assert!(!ui.tick(), "first visible frame starts the animation clock");
+
+    assert_eq!(
+        rendered_agent_status_colors(&mut ui, agent, "Working"),
+        vec![
+            ratatui::style::Color::Rgb(102, 255, 102),
+            ratatui::style::Color::Rgb(68, 190, 84),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+        ]
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(210));
+    assert!(ui.tick(), "visible Working status should request a repaint");
+    assert_eq!(
+        rendered_agent_status_colors(&mut ui, agent, "Working"),
+        vec![
+            ratatui::style::Color::Rgb(68, 190, 84),
+            ratatui::style::Color::Rgb(102, 255, 102),
+            ratatui::style::Color::Rgb(68, 190, 84),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+            ratatui::style::Color::Rgb(36, 112, 52),
+        ]
+    );
+}
+
+#[test]
+fn bus_sidebar_blocked_pulses_the_whole_red_word_together() {
+    let (mut ui, _, agent) = fixture();
+    set_sidebar_agent_status(&mut ui, agent, RuntimeStatus::Blocked);
+    assert!(!ui.tick(), "first visible frame starts the animation clock");
+
+    assert_eq!(
+        rendered_agent_status_colors(&mut ui, agent, "Blocked"),
+        vec![ratatui::style::Color::Rgb(128, 44, 52); 7]
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(210));
+    assert!(ui.tick(), "visible Blocked status should request a repaint");
+    assert_eq!(
+        rendered_agent_status_colors(&mut ui, agent, "Blocked"),
+        vec![ratatui::style::Color::Rgb(205, 64, 72); 7]
+    );
+}
+
 #[test]
 fn delete_room_warning_blocks_underlying_input_and_escape_preserves_draft() {
     use crossterm::event::{MouseButton, MouseEventKind};
