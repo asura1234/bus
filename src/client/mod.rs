@@ -119,7 +119,7 @@ use terminal_sessions::terminal_control_command_from_json;
 #[cfg(unix)]
 use std::collections::HashMap;
 use std::io::{self, Write as _};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 #[cfg(unix)]
 use std::sync::Mutex;
@@ -140,6 +140,7 @@ use crate::server::socket_paths::client_socket_path;
 struct ClientInputLifecycle {
     reader_should_quit: Arc<AtomicBool>,
     host_palette_query_pending: Arc<AtomicBool>,
+    host_palette_query_progress: Arc<AtomicU16>,
 }
 
 fn run_client_with_mode(
@@ -334,8 +335,10 @@ fn run_client_with_mode(
     #[cfg(unix)]
     let _ = finish_terminal_input(
         &input_lifecycle.host_palette_query_pending,
+        &input_lifecycle.host_palette_query_progress,
         &input_lifecycle.reader_should_quit,
-        Duration::from_millis(100),
+        Duration::from_millis(250),
+        Duration::from_secs(2),
     );
     #[cfg(not(unix))]
     input_lifecycle
@@ -403,6 +406,7 @@ async fn run_client_loop(
         endpoint_sgr_pixels_requested: false,
         host_theme_updates: Vec::new(),
         host_palette_query_pending: input_lifecycle.host_palette_query_pending,
+        host_palette_query_progress: input_lifecycle.host_palette_query_progress,
         direct_mouse_capture_preference: attach_escape.is_some() && config.mouse_capture_active,
         shell_mouse_capture_preference: config.mouse_capture_active,
         direct_keyboard_protocol: crate::terminal_modes::DirectHostKeyboardState::default(),
@@ -480,6 +484,7 @@ async fn run_client_loop(
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
     let stdin_sgr_pixels_active = host_sgr_pixels_active.clone();
     let stdin_host_palette_query_pending = state.host_palette_query_pending.clone();
+    let stdin_host_palette_query_progress = state.host_palette_query_progress.clone();
     #[cfg(unix)]
     let stdin_direct_response = state.direct_graphics_response.clone();
     #[cfg(unix)]
@@ -494,6 +499,7 @@ async fn run_client_loop(
             will_query_host_terminal_theme,
             will_query_host_cell_size,
             stdin_host_palette_query_pending,
+            stdin_host_palette_query_progress,
             stdin_mouse_capture_active,
             stdin_sgr_pixels_active,
             #[cfg(unix)]
@@ -504,7 +510,10 @@ async fn run_client_loop(
     });
 
     if will_query_host_terminal_theme {
-        query_host_terminal_theme(&state.host_palette_query_pending);
+        query_host_terminal_theme(
+            &state.host_palette_query_pending,
+            &state.host_palette_query_progress,
+        );
         #[cfg(not(windows))]
         if state.shell.is_some() {
             query_host_terminal_appearance();
@@ -876,7 +885,10 @@ async fn run_client_loop(
                         query_host_terminal_appearance();
                     }
                     if crate::raw_input::events_require_host_terminal_theme_query(&events) {
-                        query_host_terminal_theme(&state.host_palette_query_pending);
+                        query_host_terminal_theme(
+                            &state.host_palette_query_pending,
+                            &state.host_palette_query_progress,
+                        );
                     }
                     if let Some((width_px, height_px)) = reported_cell_size_from_events(&events) {
                         store_reported_cell_size(&reported_cell_size, width_px, height_px);

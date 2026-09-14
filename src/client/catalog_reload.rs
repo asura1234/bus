@@ -118,6 +118,7 @@ mod tests {
             endpoint_sgr_pixels_requested: false,
             host_theme_updates: Vec::new(),
             host_palette_query_pending: Arc::new(AtomicBool::new(false)),
+            host_palette_query_progress: Arc::new(AtomicU16::new(0)),
             direct_mouse_capture_preference: false,
             shell_mouse_capture_preference: false,
             direct_keyboard_protocol: Default::default(),

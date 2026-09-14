@@ -357,11 +357,14 @@ fn write_host_terminal_appearance_query_emits_mode_2031_query() {
 fn write_host_terminal_theme_query_emits_osc_queries() {
     let mut output = Vec::new();
     let palette_query_pending = AtomicBool::new(false);
-    write_host_terminal_theme_query(&mut output, &palette_query_pending).unwrap();
+    let palette_query_progress = AtomicU16::new(42);
+    write_host_terminal_theme_query(&mut output, &palette_query_pending, &palette_query_progress)
+        .unwrap();
     assert_eq!(
         palette_query_pending.load(Ordering::Acquire),
         crate::platform::should_query_host_terminal_palette()
     );
+    assert_eq!(palette_query_progress.load(Ordering::Acquire), 0);
     assert_eq!(
         output,
         crate::terminal_theme::host_terminal_theme_query_sequence(

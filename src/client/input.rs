@@ -10,7 +10,7 @@
 //! - We avoid duplicating parsing logic in the client
 //! - Host terminal control replies can be buffered or discarded before they leak
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 
 #[cfg(unix)]
@@ -41,6 +41,7 @@ pub fn stdin_reader_loop(
     host_color_query_sent: bool,
     host_cell_size_query_sent: bool,
     host_palette_query_pending: Arc<AtomicBool>,
+    host_palette_query_progress: Arc<AtomicU16>,
     host_mouse_capture_active: Arc<AtomicBool>,
     host_sgr_pixels_active: Arc<AtomicBool>,
     #[cfg(unix)] direct_response: Arc<std::sync::Mutex<super::direct_graphics::ResponseMatcher>>,
@@ -52,6 +53,7 @@ pub fn stdin_reader_loop(
             host_color_query_sent,
             host_cell_size_query_sent,
             host_palette_query_pending,
+            host_palette_query_progress,
             host_mouse_capture_active,
             host_sgr_pixels_active,
         );
@@ -65,6 +67,7 @@ pub fn stdin_reader_loop(
         host_color_query_sent,
         host_cell_size_query_sent,
         host_palette_query_pending,
+        host_palette_query_progress,
         host_mouse_capture_active,
         host_sgr_pixels_active,
         direct_response,
@@ -79,6 +82,7 @@ fn unix_stdin_reader_loop(
     host_color_query_sent: bool,
     host_cell_size_query_sent: bool,
     host_palette_query_pending: Arc<AtomicBool>,
+    host_palette_query_progress: Arc<AtomicU16>,
     host_mouse_capture_active: Arc<AtomicBool>,
     host_sgr_pixels_active: Arc<AtomicBool>,
     direct_response: Arc<std::sync::Mutex<super::direct_graphics::ResponseMatcher>>,
@@ -114,6 +118,7 @@ fn unix_stdin_reader_loop(
                 if event_tx
                     .blocking_send(ClientLoopEvent::StdinInput(data))
                     .is_err()
+                    && !host_palette_query_pending.load(Ordering::Acquire)
                 {
                     return;
                 }
@@ -142,6 +147,7 @@ fn unix_stdin_reader_loop(
                         if event_tx
                             .blocking_send(ClientLoopEvent::DirectGraphicsResponse(response))
                             .is_err()
+                            && !host_palette_query_pending.load(Ordering::Acquire)
                         {
                             return;
                         }
@@ -161,6 +167,7 @@ fn unix_stdin_reader_loop(
                     &event_tx,
                     &mut pending_palette,
                     &host_palette_query_pending,
+                    &host_palette_query_progress,
                     sgr_pixels,
                     last_geometry,
                 ) {
@@ -180,15 +187,21 @@ fn unix_stdin_reader_loop(
                     if !framer.has_pending_input() {
                         pending_mode = None;
                     }
-                    if !send_unix_input_chunks(
+                    let chunks_sent = send_unix_input_chunks(
                         chunks,
                         &event_tx,
                         &mut pending_palette,
                         &host_palette_query_pending,
+                        &host_palette_query_progress,
                         sgr_pixels,
                         last_geometry,
-                    ) || !flush_unix_palette_input(&event_tx, &mut pending_palette)
-                    {
+                    );
+                    let palette_sent = flush_unix_palette_input(
+                        &event_tx,
+                        &mut pending_palette,
+                        &host_palette_query_pending,
+                    );
+                    if !chunks_sent || !palette_sent {
                         return;
                     }
                     if held_escape
@@ -206,6 +219,7 @@ fn unix_stdin_reader_loop(
                             &event_tx,
                             &mut pending_palette,
                             &host_palette_query_pending,
+                            &host_palette_query_progress,
                             sgr_pixels,
                             last_geometry,
                         ) {
@@ -248,6 +262,7 @@ fn send_unix_input_chunks(
     event_tx: &mpsc::Sender<ClientLoopEvent>,
     pending_palette: &mut Vec<Vec<u8>>,
     host_palette_query_pending: &AtomicBool,
+    host_palette_query_progress: &AtomicU16,
     sgr_pixels: bool,
     geometry: Option<crate::input::mouse::HostGeometry>,
 ) -> bool {
@@ -256,11 +271,13 @@ fn send_unix_input_chunks(
             .ok()
             .and_then(crate::terminal_theme::parse_palette_color_response);
         if let Some((index, _color)) = palette_response {
+            host_palette_query_progress.store(u16::from(index) + 1, Ordering::Release);
             if index == u8::MAX {
                 host_palette_query_pending.store(false, Ordering::Release);
             }
             pending_palette.push(data);
-            if pending_palette.len() == 256 && !flush_unix_palette_input(event_tx, pending_palette)
+            if pending_palette.len() == 256
+                && !flush_unix_palette_input(event_tx, pending_palette, host_palette_query_pending)
             {
                 return false;
             }
@@ -270,13 +287,18 @@ fn send_unix_input_chunks(
             .ok()
             .and_then(crate::terminal_theme::parse_default_color_response)
             .is_some();
-        if !default_color_response && !flush_unix_palette_input(event_tx, pending_palette) {
+        if !default_color_response
+            && !flush_unix_palette_input(event_tx, pending_palette, host_palette_query_pending)
+        {
             return false;
         }
         let Some(event) = classify_unix_input(data, sgr_pixels, geometry) else {
             continue;
         };
         if event_tx.blocking_send(event).is_err() {
+            if host_palette_query_pending.load(Ordering::Acquire) {
+                continue;
+            }
             return false;
         }
     }
@@ -307,14 +329,16 @@ fn classify_unix_input(
 fn flush_unix_palette_input(
     event_tx: &mpsc::Sender<ClientLoopEvent>,
     pending_palette: &mut Vec<Vec<u8>>,
+    host_palette_query_pending: &AtomicBool,
 ) -> bool {
     if pending_palette.is_empty() {
         return true;
     }
     let data = std::mem::take(pending_palette).concat();
-    event_tx
+    let delivered = event_tx
         .blocking_send(ClientLoopEvent::StdinInput(data))
-        .is_ok()
+        .is_ok();
+    delivered || host_palette_query_pending.load(Ordering::Acquire)
 }
 
 #[cfg(unix)]
@@ -677,6 +701,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(4);
         let mut pending = Vec::new();
         let palette_query_pending = AtomicBool::new(true);
+        let palette_query_progress = AtomicU16::new(0);
         assert!(send_unix_input_chunks(
             vec![
                 b"\x1b]4;0;rgb:1111/2222/3333\x1b\\".to_vec(),
@@ -685,13 +710,19 @@ mod tests {
             &tx,
             &mut pending,
             &palette_query_pending,
+            &palette_query_progress,
             false,
             None,
         ));
         assert!(rx.try_recv().is_err());
         assert!(palette_query_pending.load(Ordering::Acquire));
+        assert_eq!(palette_query_progress.load(Ordering::Acquire), 2);
 
-        assert!(flush_unix_palette_input(&tx, &mut pending));
+        assert!(flush_unix_palette_input(
+            &tx,
+            &mut pending,
+            &palette_query_pending,
+        ));
         let ClientLoopEvent::StdinInput(data) = rx.try_recv().unwrap() else {
             panic!("expected palette input batch");
         };
@@ -709,17 +740,59 @@ mod tests {
         let (tx, _rx) = mpsc::channel(4);
         let mut pending = Vec::new();
         let palette_query_pending = AtomicBool::new(true);
+        let palette_query_progress = AtomicU16::new(0);
 
         assert!(send_unix_input_chunks(
             vec![b"\x1b]4;255;rgb:eeee/eeee/eeee\x1b\\".to_vec()],
             &tx,
             &mut pending,
             &palette_query_pending,
+            &palette_query_progress,
             false,
             None,
         ));
 
         assert!(!palette_query_pending.load(Ordering::Acquire));
+        assert_eq!(palette_query_progress.load(Ordering::Acquire), 256);
+    }
+
+    #[test]
+    fn shutdown_palette_drain_survives_a_closed_event_receiver_until_final_reply() {
+        let (tx, rx) = mpsc::channel(4);
+        drop(rx);
+        let mut pending = Vec::new();
+        let palette_query_pending = AtomicBool::new(true);
+        let palette_query_progress = AtomicU16::new(0);
+
+        assert!(send_unix_input_chunks(
+            vec![
+                b"\x1b]4;0;rgb:1111/2222/3333\x1b\\".to_vec(),
+                b"interleaved input".to_vec(),
+            ],
+            &tx,
+            &mut pending,
+            &palette_query_pending,
+            &palette_query_progress,
+            false,
+            None,
+        ));
+        assert!(palette_query_pending.load(Ordering::Acquire));
+        assert_eq!(palette_query_progress.load(Ordering::Acquire), 1);
+
+        assert!(!send_unix_input_chunks(
+            vec![
+                b"\x1b]4;255;rgb:eeee/eeee/eeee\x1b\\".to_vec(),
+                b"interleaved input".to_vec(),
+            ],
+            &tx,
+            &mut pending,
+            &palette_query_pending,
+            &palette_query_progress,
+            false,
+            None,
+        ));
+        assert!(!palette_query_pending.load(Ordering::Acquire));
+        assert_eq!(palette_query_progress.load(Ordering::Acquire), 256);
     }
 
     #[test]

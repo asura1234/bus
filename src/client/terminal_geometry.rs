@@ -1,5 +1,5 @@
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -188,8 +188,15 @@ pub(super) fn write_host_terminal_appearance_query(mut writer: impl io::Write) -
     writer.flush()
 }
 
-pub(super) fn query_host_terminal_theme(host_palette_query_pending: &AtomicBool) {
-    let _ = write_host_terminal_theme_query(io::stdout(), host_palette_query_pending);
+pub(super) fn query_host_terminal_theme(
+    host_palette_query_pending: &AtomicBool,
+    host_palette_query_progress: &AtomicU16,
+) {
+    let _ = write_host_terminal_theme_query(
+        io::stdout(),
+        host_palette_query_pending,
+        host_palette_query_progress,
+    );
 }
 
 pub(super) fn should_query_host_terminal_theme() -> bool {
@@ -199,8 +206,10 @@ pub(super) fn should_query_host_terminal_theme() -> bool {
 pub(super) fn write_host_terminal_theme_query(
     mut writer: impl io::Write,
     host_palette_query_pending: &AtomicBool,
+    host_palette_query_progress: &AtomicU16,
 ) -> io::Result<()> {
     let include_palette = crate::platform::should_query_host_terminal_palette();
+    host_palette_query_progress.store(0, Ordering::Release);
     host_palette_query_pending.store(include_palette, Ordering::Release);
     let query = crate::terminal_theme::host_terminal_theme_query_sequence(include_palette);
     writer.write_all(query.as_bytes())?;

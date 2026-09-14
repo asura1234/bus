@@ -1,7 +1,7 @@
 //! Terminal setup and restoration for the rendered client.
 
 use std::io::{self, Write as _};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
@@ -117,14 +117,31 @@ pub(super) fn should_enable_host_color_scheme_reports(enable_client_protocols: b
 }
 
 #[cfg(unix)]
-pub(super) fn wait_for_host_palette_query(pending: &AtomicBool, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
+pub(super) fn wait_for_host_palette_query(
+    pending: &AtomicBool,
+    progress: &AtomicU16,
+    idle_timeout: Duration,
+    hard_timeout: Duration,
+) -> bool {
+    let started = Instant::now();
+    let hard_deadline = started + hard_timeout;
+    let mut idle_deadline = started + idle_timeout;
+    let mut observed_progress = progress.load(Ordering::Acquire);
     while pending.load(Ordering::Acquire) {
         let now = Instant::now();
-        if now >= deadline {
-            return false;
+        let current_progress = progress.load(Ordering::Acquire);
+        if current_progress != observed_progress {
+            observed_progress = current_progress;
+            idle_deadline = now + idle_timeout;
         }
-        std::thread::sleep((deadline - now).min(Duration::from_millis(1)));
+        if now >= idle_deadline || now >= hard_deadline {
+            return !pending.load(Ordering::Acquire);
+        }
+        std::thread::sleep(
+            (idle_deadline - now)
+                .min(hard_deadline - now)
+                .min(Duration::from_millis(1)),
+        );
     }
     true
 }
@@ -132,12 +149,19 @@ pub(super) fn wait_for_host_palette_query(pending: &AtomicBool, timeout: Duratio
 #[cfg(unix)]
 pub(super) fn finish_terminal_input(
     host_palette_query_pending: &AtomicBool,
+    host_palette_query_progress: &AtomicU16,
     input_reader_should_quit: &AtomicBool,
-    timeout: Duration,
+    idle_timeout: Duration,
+    hard_timeout: Duration,
 ) -> bool {
     // Keep raw mode active while the reader consumes terminal-generated replies. Restoring echo
     // first would make a slow OSC 4 tail visible at the user's shell prompt.
-    let complete = wait_for_host_palette_query(host_palette_query_pending, timeout);
+    let complete = wait_for_host_palette_query(
+        host_palette_query_pending,
+        host_palette_query_progress,
+        idle_timeout,
+        hard_timeout,
+    );
     input_reader_should_quit.store(true, Ordering::Release);
     complete
 }
@@ -475,11 +499,49 @@ impl Drop for TerminalGuard {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicU16;
     use std::time::Duration;
+
+    #[test]
+    fn shutdown_drain_stays_open_while_palette_replies_advance() {
+        let pending = Arc::new(AtomicBool::new(true));
+        let progress = Arc::new(AtomicU16::new(0));
+        let advancing_pending = pending.clone();
+        let advancing_progress = progress.clone();
+        let replies = std::thread::spawn(move || {
+            for reply_count in 1..=4 {
+                std::thread::sleep(Duration::from_millis(40));
+                advancing_progress.store(reply_count, Ordering::Release);
+            }
+            advancing_pending.store(false, Ordering::Release);
+        });
+
+        assert!(wait_for_host_palette_query(
+            &pending,
+            &progress,
+            Duration::from_millis(100),
+            Duration::from_millis(500),
+        ));
+        replies.join().unwrap();
+    }
+
+    #[test]
+    fn shutdown_drain_stops_when_palette_replies_stall() {
+        let pending = AtomicBool::new(true);
+        let progress = AtomicU16::new(0);
+
+        assert!(!wait_for_host_palette_query(
+            &pending,
+            &progress,
+            Duration::from_millis(10),
+            Duration::from_millis(100),
+        ));
+    }
 
     #[test]
     fn shutdown_waits_for_final_palette_reply_before_restoring_echo() {
         let pending = Arc::new(AtomicBool::new(true));
+        let progress = AtomicU16::new(0);
         let completed = pending.clone();
         let reply = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(10));
@@ -488,6 +550,8 @@ mod tests {
 
         assert!(wait_for_host_palette_query(
             &pending,
+            &progress,
+            Duration::from_millis(100),
             Duration::from_millis(100),
         ));
         reply.join().unwrap();
@@ -496,6 +560,7 @@ mod tests {
     #[test]
     fn shutdown_keeps_input_reader_alive_until_palette_drain_finishes() {
         let pending = Arc::new(AtomicBool::new(true));
+        let progress = AtomicU16::new(0);
         let reader_quit = Arc::new(AtomicBool::new(false));
         let completed = pending.clone();
         let observed_quit = reader_quit.clone();
@@ -507,7 +572,9 @@ mod tests {
 
         assert!(finish_terminal_input(
             &pending,
+            &progress,
             &reader_quit,
+            Duration::from_millis(100),
             Duration::from_millis(100),
         ));
         assert!(reader_quit.load(Ordering::Acquire));

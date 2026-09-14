@@ -12,6 +12,8 @@ pub(super) struct ClientState {
     pub(super) host_theme_updates: Vec<crate::protocol::ClientHostThemeUpdate>,
     /// Remains set until the reader consumes the final reply from a 256-color host query.
     pub(super) host_palette_query_pending: Arc<AtomicBool>,
+    /// One-based index of the latest reply consumed from the active host palette query.
+    pub(super) host_palette_query_progress: Arc<AtomicU16>,
     pub(super) direct_mouse_capture_preference: bool,
     pub(super) shell_mouse_capture_preference: bool,
     pub(super) direct_keyboard_protocol: crate::terminal_modes::DirectHostKeyboardState,
