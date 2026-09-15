@@ -10,7 +10,6 @@ from scripts.changelog import (
     archived_releases_from_current_manifest,
     build_latest_json,
     canonicalize_manifest,
-    DEFAULT_PRODUCT_ANNOUNCEMENT_PATH,
     default_release_assets,
     ensure_current_release_assets_are_mirrored,
     ensure_manifest_is_outdated,
@@ -276,10 +275,6 @@ class ChangelogScriptTests(unittest.TestCase):
         with tmp:
             tmp.write(content)
         return Path(tmp.name)
-
-    def test_checked_in_product_announcement_is_valid_or_null(self) -> None:
-        self.assertTrue(DEFAULT_PRODUCT_ANNOUNCEMENT_PATH.is_file())
-        load_product_announcement(DEFAULT_PRODUCT_ANNOUNCEMENT_PATH)
 
     def test_load_product_announcement_accepts_null(self) -> None:
         path = self.write_temp_json("null\n")

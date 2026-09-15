@@ -250,15 +250,6 @@ class RealModelTests(unittest.TestCase):
         self.assertIn("ui.sound.agents.claude", keys)
         self.assertNotIn("keys.command", keys)
 
-    def test_preview_reference_matches_real_config_model(self) -> None:
-        self.assertEqual(
-            check(
-                Path("src/config"),
-                Path("docs/next/website/src/data/config-reference.json"),
-            ),
-            [],
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

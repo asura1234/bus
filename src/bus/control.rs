@@ -513,15 +513,26 @@ mod tests {
     use std::{
         io::Write,
         path::PathBuf,
-        sync::mpsc,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            mpsc,
+        },
         thread,
         time::{Duration, Instant},
     };
 
+    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(1);
+
     struct TestDir(PathBuf);
     impl TestDir {
         fn new() -> Self {
-            let dir = std::env::temp_dir().join(format!("bdc-{:x}", super::super::io::now_ns()));
+            // Hex keeps the socket path short; pid and counter separate parallel processes.
+            let dir = std::env::temp_dir().join(format!(
+                "bdc-{:x}-{:x}-{:x}",
+                std::process::id(),
+                super::super::io::now_ns(),
+                NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed)
+            ));
             Self(dir)
         }
         fn socket(&self) -> PathBuf {

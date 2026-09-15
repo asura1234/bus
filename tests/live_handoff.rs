@@ -86,6 +86,9 @@ fn spawn_server_with_env(
         "HERDR_CLIENT_SOCKET_PATH",
         runtime_dir.join("herdr-client.sock"),
     );
+    // A test run from inside a Bus pane must not resolve config into that live Bus session.
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("HERDR_SESSION");
     cmd.env("SHELL", "/bin/sh");
     for (key, value) in extra_env {
         cmd.env(key, value);
@@ -124,6 +127,7 @@ fn spawn_named_session_server(
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    cmd.env_remove("BUS_DATA_DIR");
     cmd.env("HERDR_SESSION", session_name);
     cmd.env_remove("HERDR_SOCKET_PATH");
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
@@ -159,6 +163,7 @@ fn spawn_default_session_server(config_home: &Path, runtime_dir: &Path) -> Spawn
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
     cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
+    cmd.env_remove("BUS_DATA_DIR");
     cmd.env_remove("HERDR_SESSION");
     cmd.env_remove("HERDR_SOCKET_PATH");
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
@@ -203,6 +208,7 @@ fn spawn_server_with_args_and_socket_env(
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
+    cmd.env_remove("BUS_DATA_DIR");
     cmd.env_remove("HERDR_SESSION");
     if let Some(api_socket_env) = api_socket_env {
         cmd.env("HERDR_SOCKET_PATH", api_socket_env);
@@ -985,7 +991,6 @@ fn live_handoff_preserves_pane_process_io() {
         &api_socket,
         serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
     ));
-    drop(spawned);
     assert!(
         wait_for_message_variant(
             &mut client_stream,
@@ -995,6 +1000,7 @@ fn live_handoff_preserves_pane_process_io() {
         .unwrap(),
         "connected client shell should receive live-handoff shutdown"
     );
+    drop(spawned);
     thread::sleep(Duration::from_millis(300));
     wait_for_api(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(5));
@@ -1356,10 +1362,17 @@ fn live_handoff_keeps_unmanaged_agent_name_bound_to_saved_session() {
     let started_marker = base.join("agent-started");
     let fake_pi = base.join("pi");
     fs::create_dir_all(&base).unwrap();
+    // macOS omits the environment of Apple platform binaries such as /bin/sleep from
+    // KERN_PROCARGS2, so there the fake agent is identified by its argv0 instead.
+    let exec_agent = if cfg!(target_os = "macos") {
+        "exec -a pi /bin/sleep 30"
+    } else {
+        "exec /bin/sleep 30"
+    };
     fs::write(
         &fake_pi,
         format!(
-            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\nexec /bin/sleep 30\n",
+            "#!/bin/sh\nexport HERDR_AGENT=pi\necho started > {}\n{exec_agent}\n",
             started_marker.display()
         ),
     )
