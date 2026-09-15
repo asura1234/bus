@@ -134,6 +134,10 @@ For APPLY, include the corresponding test in the repair allowlist and narrowly p
 
 PR mode lands accepted tests with the repair through commit-and-push, including previously dirty or untracked reviewer files. Verify every adopted hunk entered the commit and remote branch. Do not commit rejected, disputed, or unrelated probes automatically. `--no-commit-and-push` still forbids landing.
 
+## Plan-review finalization boundary
+
+Every plan-review lane returning Ready is a fact, not a state transition. Reviewers stay read-only and never write plan state, and no runtime or helper advances from a verdict. When a room Orchestrator explicitly assigns finalization to the separate author, the author runs `skills/address-review-comments/scripts/finalize_plan_review.py finalize`, bound to the exact plan hash and each lane's Ready round. The helper verifies every named lane artifact, then writes only `review-plan-complete` and returns a receipt. Missing, stale, mixed-hash, duplicate-lane, or finding-bearing evidence fails closed without changing the plan. Without such an assignment, plan status authority is unchanged.
+
 ## Landing and boundaries
 
 - Land only verified APPLY claims and fix root causes rather than copying proposed patches.
