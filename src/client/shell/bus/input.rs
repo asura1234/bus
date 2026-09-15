@@ -440,6 +440,7 @@ impl BusUi {
                 self.notes_focus = false;
             }
             Action::Recipient(id) => self.toggle_recipient(id),
+            Action::RecipientEntry(entry) => self.toggle_recipient_entry(entry),
             Action::Files => self.open_form(Form::Files(Editor::new("~/".into()))),
             Action::RemoveFile(path) => {
                 if let Some(room) = self.room {
@@ -463,7 +464,9 @@ impl BusUi {
             }
             Action::Quote(agent) => self.quote(agent),
             Action::Field(index) => {
-                if let Some(Form::Agent { field, .. }) = &mut self.form {
+                if matches!(self.form, Some(Form::Settings)) {
+                    self.settings_field = index;
+                } else if let Some(Form::Agent { field, .. }) = &mut self.form {
                     *field = index;
                 }
                 self.query_paths();
@@ -486,8 +489,14 @@ impl BusUi {
                 self.suggestions.selected = index;
                 self.complete_path();
             }
-            Action::Settings => self.open_form(Form::Settings),
+            Action::Settings => {
+                self.settings_field = 0;
+                self.settings_key = Editor::default();
+                self.open_form(Form::Settings);
+            }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
+            Action::ToggleOrchestrator => self.toggle_orchestrator_enabled(),
+            Action::Coordination(action) => self.dispatch_coordination(action),
             Action::Cancel => {
                 if let Some(room) = self.room {
                     self.open_room(room);
@@ -498,17 +507,19 @@ impl BusUi {
             Action::Add => self.add(),
         }
     }
-    fn toggle_recipient(&mut self, id: Option<AgentId>) {
+    pub(super) fn toggle_recipient(&mut self, id: Option<AgentId>) {
         let Some(room) = self.room else {
             return;
         };
-        let all: AgentRecipients = self
-            .snapshot
-            .state
-            .agents()
-            .filter(|a| a.room_id == room)
-            .map(|a| a.id)
-            .collect();
+        let all: AgentRecipients = super::orchestrator_ui::all_coding_agents(
+            self.snapshot
+                .state
+                .agents()
+                .filter(|a| a.room_id == room)
+                .map(|a| a.id),
+        )
+        .into_iter()
+        .collect();
         if let Some(local) = self.locals.get_mut(&room) {
             if let Some(id) = id {
                 if !local.recipients.remove(&id) {
@@ -530,6 +541,10 @@ impl BusUi {
             return;
         }
         if let Some(form) = &mut self.form {
+            if matches!(form, Form::Settings) && self.settings_field == 2 {
+                self.settings_key.insert(text);
+                return;
+            }
             if let Some(editor) = form.editor_mut() {
                 editor.insert(text);
             }
@@ -600,15 +615,20 @@ impl BusUi {
                 .filter(|a| Some(a.room_id) == self.room)
                 .map(|a| a.id)
                 .collect();
+            let entries = super::orchestrator_ui::recipient_entries(
+                self.settings.orchestrator.enabled,
+                ids.iter().copied(),
+            );
+            let last = entries.len().saturating_sub(1);
             match code {
                 KeyCode::Esc | KeyCode::Tab => self.recipient_menu = false,
                 KeyCode::Up => self.recipient_index = self.recipient_index.saturating_sub(1),
-                KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(ids.len()),
-                KeyCode::Enter | KeyCode::Char(' ') => self.toggle_recipient(
-                    self.recipient_index
-                        .checked_sub(1)
-                        .and_then(|i| ids.get(i).copied()),
-                ),
+                KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(last),
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    if let Some(entry) = entries.get(self.recipient_index).cloned() {
+                        self.toggle_recipient_entry(entry);
+                    }
+                }
                 _ => {}
             }
             return;
@@ -1010,8 +1030,19 @@ impl BusUi {
             return;
         }
         if matches!(self.form, Some(Form::Settings)) {
-            if code == KeyCode::Enter {
-                self.toggle_color_blind_mode();
+            match code {
+                KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
+                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(2),
+                KeyCode::Enter => match self.settings_field {
+                    0 => self.toggle_color_blind_mode(),
+                    1 => self.toggle_orchestrator_enabled(),
+                    _ => self.save_orchestrator_key(),
+                },
+                _ => {
+                    if self.settings_field == 2 {
+                        self.settings_key.key(code, modifiers);
+                    }
+                }
             }
             return;
         }

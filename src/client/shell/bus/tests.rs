@@ -10,6 +10,8 @@ use std::sync::Arc;
 mod history_tests;
 #[path = "keys_tests.rs"]
 mod keys_tests;
+#[path = "orchestrator_ui_tests.rs"]
+mod orchestrator_ui_tests;
 fn fixture() -> (BusUi, RoomId, AgentId) {
     let mut state = BusState::default();
     let room = state.create_room("room").unwrap();

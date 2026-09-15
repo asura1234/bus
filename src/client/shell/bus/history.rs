@@ -115,11 +115,13 @@ impl History {
         if self.key == Some(key) {
             return &self.lines;
         }
+        // Prompts and room messages share one monotonic identity allocator, so that
+        // identity is the conversation order; timestamps are display-only.
         let mut exchanges = BTreeMap::new();
         for request in state.requests().filter(|r| r.room_id == room.id) {
             let prompt = &request.prompt;
             exchanges
-                .entry((prompt.submitted_at_ms, prompt.id.0))
+                .entry(prompt.id.0)
                 .or_insert_with(|| Exchange {
                     prompt,
                     requests: BTreeMap::new(),
@@ -134,7 +136,7 @@ impl History {
                 .any(|exchange| exchange.prompt.id == prompt.id)
         }) {
             exchanges.insert(
-                (prompt.submitted_at_ms, prompt.id.0),
+                prompt.id.0,
                 Exchange {
                     prompt,
                     requests: BTreeMap::new(),
@@ -143,9 +145,19 @@ impl History {
         }
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
+        let mut messages = state.room_messages(room.id).peekable();
         for exchange in exchanges.into_values() {
             let prompt = exchange.prompt;
-            let mut header = vec![("You".into(), Tone::You), (" → ".into(), Tone::Muted)];
+            while let Some(record) = messages.next_if(|record| record.message_id.0 < prompt.id.0) {
+                push_room_message(&mut lines, state, record, width);
+            }
+            let mut header = vec![
+                (
+                    participant_label(state, &prompt.author),
+                    participant_tone(&prompt.author),
+                ),
+                (" → ".into(), Tone::Muted),
+            ];
             for (index, agent) in prompt
                 .recipient_ids
                 .iter()
@@ -224,6 +236,22 @@ impl History {
                     (agent.name.clone(), Tone::Agent(agent.id)),
                     (format!("  {}", provider(agent.provider)), Tone::Muted),
                 ];
+                if let Some(request) = request {
+                    if let Some(settlement) = state.work_settlement(request.id) {
+                        reply_header.push((
+                            format!(
+                                "  {}",
+                                super::orchestrator_ui::settlement_label(
+                                    super::orchestrator_ui::settlement_reason(&settlement)
+                                )
+                            ),
+                            Tone::Muted,
+                        ));
+                        if let Some(turn) = settlement.callback_lineage.provider_turn {
+                            reply_header.push((format!("  {turn}"), Tone::Muted));
+                        }
+                    }
+                }
                 if let Some(at) = at {
                     reply_header.push((format!("  {}", timestamp(at, now)), Tone::Muted));
                 }
@@ -273,6 +301,9 @@ impl History {
                 continued: false,
                 anchor: RowAnchor::new(prompt.id, None, RowKind::Gap),
             });
+        }
+        for record in messages {
+            push_room_message(&mut lines, state, record, width);
         }
         self.markdown
             .retain(|request, _| active_markdown.contains(request));
@@ -550,6 +581,77 @@ fn wrap_header(
 // identity/settlement metadata, not their potentially large text, when a
 // global poll/draft revision arrives. Only a changed room history, names,
 // width, or age label requires sorting and wrapping those immutable bodies.
+fn participant_label(
+    state: &BusState,
+    participant: &crate::bus::orchestrator::ParticipantId,
+) -> String {
+    super::orchestrator_ui::author_label(participant, |id| {
+        state
+            .agent(id)
+            .map(|agent| agent.name.clone())
+            .unwrap_or_else(|| "Agent".into())
+    })
+}
+
+fn participant_tone(participant: &crate::bus::orchestrator::ParticipantId) -> Tone {
+    match participant {
+        crate::bus::orchestrator::ParticipantId::Agent(id) => Tone::Agent(*id),
+        crate::bus::orchestrator::ParticipantId::Human => Tone::You,
+        crate::bus::orchestrator::ParticipantId::Orchestrator => Tone::Muted,
+    }
+}
+
+/// A room message is not a Request: it has no reply slots, settlement or timestamp.
+fn push_room_message(
+    lines: &mut Vec<Line>,
+    state: &BusState,
+    record: &crate::bus::orchestrator::RoomMessageRecord,
+    width: u16,
+) {
+    use crate::bus::orchestrator::{ParticipantId, RoomRecipient};
+    let message = &record.message;
+    let recipient = match message.to {
+        RoomRecipient::Human => ParticipantId::Human,
+        RoomRecipient::Orchestrator => ParticipantId::Orchestrator,
+        RoomRecipient::Agent(id) => ParticipantId::Agent(id),
+    };
+    // Room messages share the prompt identity space, so the id is a unique row anchor.
+    let id = PromptId(record.message_id.0);
+    lines.extend(wrap_header(
+        vec![
+            (
+                participant_label(state, &message.author),
+                participant_tone(&message.author),
+            ),
+            (" → ".into(), Tone::Muted),
+            (
+                participant_label(state, &recipient),
+                participant_tone(&recipient),
+            ),
+        ],
+        width,
+        "",
+        RowAnchor::new(id, None, RowKind::PromptHeader),
+    ));
+    push_body(
+        lines,
+        &message.text,
+        width,
+        "",
+        RowAnchor::new(id, None, RowKind::PromptBody),
+    );
+    lines.push(Line {
+        text: String::new(),
+        action: None,
+        tone: Tone::Text,
+        spans: Vec::new(),
+        styles: Vec::new(),
+        raw_markdown: None,
+        continued: false,
+        anchor: RowAnchor::new(id, None, RowKind::Gap),
+    });
+}
+
 fn signature(state: &BusState, room: &Room) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     for request in state.requests().filter(|r| r.room_id == room.id) {
@@ -565,6 +667,9 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         }
     }
     room.latest_prompt.as_ref().map(|p| p.id.0).hash(&mut hash);
+    for record in state.room_messages(room.id) {
+        record.message_id.0.hash(&mut hash);
+    }
     for reply in room.latest_replies.values() {
         (reply.request_id.0, reply.received_at_ms).hash(&mut hash);
     }

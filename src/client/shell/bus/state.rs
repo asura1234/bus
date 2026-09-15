@@ -29,6 +29,7 @@ pub(super) struct LocalRoom {
     pub text: Editor,
     pub notes: Editor,
     pub recipients: AgentRecipients,
+    pub to_orchestrator: bool,
     pub composer_size: ComposerSize,
     // None follows the caret; Some is an independently scrolled viewport.
     pub composer_scroll: Option<usize>,
@@ -49,6 +50,7 @@ impl From<&Room> for LocalRoom {
             text: Editor::new(room.draft.text.clone()),
             notes: Editor::new(room.notes.clone()),
             recipients: room.draft.recipient_ids.clone(),
+            to_orchestrator: false,
             composer_size: ComposerSize::Auto,
             composer_scroll: None,
             recall: Vec::new(),
@@ -144,6 +146,8 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) settings: crate::bus::settings::BusSettings,
     /// None keeps toggles in memory only.
     pub(super) settings_path: Option<std::path::PathBuf>,
+    pub(super) settings_field: usize,
+    pub(super) settings_key: super::editor::Editor,
 }
 
 #[derive(Clone, Debug)]
@@ -207,16 +211,91 @@ impl BusUi {
             last_esc: None,
             settings: crate::bus::settings::BusSettings::default(),
             settings_path: None,
+            settings_field: 0,
+            settings_key: super::editor::Editor::default(),
         }
     }
     /// Applies immediately; a failed save keeps the choice for this run only.
     pub(super) fn toggle_color_blind_mode(&mut self) {
         self.settings.color_blind_mode = !self.settings.color_blind_mode;
+        self.persist_settings();
+    }
+    pub(super) fn toggle_orchestrator_enabled(&mut self) {
+        self.settings.orchestrator.enabled = !self.settings.orchestrator.enabled;
+        self.persist_settings();
+    }
+    fn persist_settings(&mut self) {
         if let Some(path) = &self.settings_path {
             if let Err(error) = crate::bus::settings::save(path, self.settings) {
                 self.error = Some(error);
             }
         }
+    }
+    pub(super) fn save_orchestrator_key(&mut self) {
+        let key = self.settings_key.text.trim().to_owned();
+        if key.is_empty() {
+            return;
+        }
+        let Some(path) = &self.settings_path else {
+            self.error = Some("Bus settings path is unavailable".into());
+            return;
+        };
+        let root = path.parent().unwrap_or(path.as_path());
+        match crate::bus::credentials::CredentialStore::new(root).replace(&key) {
+            Ok(_) => {
+                self.settings_key = super::editor::Editor::default();
+                self.settings.orchestrator.enabled = true;
+                self.persist_settings();
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+    pub(super) fn credential_digest(&self) -> Option<String> {
+        let path = self.settings_path.as_ref()?;
+        let root = path.parent().unwrap_or(path.as_path());
+        crate::bus::credentials::CredentialStore::new(root)
+            .load()
+            .map(|credential| credential.digest)
+    }
+    pub(super) fn toggle_recipient_entry(&mut self, entry: super::orchestrator_ui::RecipientEntry) {
+        match entry {
+            super::orchestrator_ui::RecipientEntry::Orchestrator => {
+                let Some(room) = self.room else {
+                    return;
+                };
+                if let Some(local) = self.locals.get_mut(&room) {
+                    local.to_orchestrator = !local.to_orchestrator;
+                }
+            }
+            super::orchestrator_ui::RecipientEntry::Separator => {}
+            super::orchestrator_ui::RecipientEntry::AllAgents => self.toggle_recipient(None),
+            super::orchestrator_ui::RecipientEntry::Agent(id) => self.toggle_recipient(Some(id)),
+        }
+    }
+    /// Dispatches the displayed Worker facts unchanged; only the Worker decides staleness.
+    pub(super) fn dispatch_coordination(
+        &mut self,
+        action: super::orchestrator_ui::CoordinationAction,
+    ) {
+        let command = match action {
+            super::orchestrator_ui::CoordinationAction::ApproveProposal { revision, digest } => {
+                let Some(room) = self.room else {
+                    return;
+                };
+                BusCommand::ConfirmRoomBriefProposal(
+                    crate::bus::orchestrator::ConfirmRoomBriefProposal {
+                        room_id: room,
+                        expected_developer: crate::bus::orchestrator::ParticipantId::Human,
+                        expected_proposal_revision: revision,
+                        expected_proposal_digest: digest,
+                    },
+                )
+            }
+            super::orchestrator_ui::CoordinationAction::ApproveWorkflowPromotion(review) => {
+                BusCommand::CreateDeveloperWorkflowApproval(review.approval_command())
+            }
+        };
+        self.queue(command, Effect::None);
     }
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
         self.pending.retain(|p|p.enqueued || !matches!((&p.effect,&effect),
@@ -465,12 +544,20 @@ impl BusUi {
                         _ => {}
                     }
                     if let Effect::Submit(room, generation) = pending.effect {
+                        let mut cleared = false;
                         if let Some(local) = self.locals.get_mut(&room) {
                             if local.text_generation == generation {
                                 local.text = Editor::default();
                                 local.composer_size = ComposerSize::Auto;
                                 local.composer_scroll = None;
+                                cleared = true;
                             }
+                        }
+                        // Only an agent Submit clears the Worker draft, so an Orchestrator-only
+                        // message saves the cleared composer explicitly.
+                        if cleared && matches!(pending.command, BusCommand::MessageOrchestrator(_))
+                        {
+                            self.text_changed(room);
                         }
                     }
                     // Local editors remain authoritative; an old successful save never replaces
@@ -481,11 +568,39 @@ impl BusUi {
         }
         if self.pending.is_empty() {
             if let Some(room) = self.send_intent.take() {
-                let generation = self
-                    .locals
-                    .get(&room)
-                    .map_or(0, |local| local.text_generation);
-                self.queue(BusCommand::Submit(room), Effect::Submit(room, generation));
+                let orchestrator_enabled = self.settings.orchestrator.enabled;
+                let (generation, body, to_agents, to_orchestrator) =
+                    self.locals
+                        .get(&room)
+                        .map_or((0, String::new(), false, false), |local| {
+                            (
+                                local.text_generation,
+                                local.text.text.clone(),
+                                !local.recipients.is_empty(),
+                                orchestrator_enabled && local.to_orchestrator,
+                            )
+                        });
+                // The Orchestrator is never an agent recipient: its message is a Worker room
+                // message, and the agent Submit is sent only when agents are selected.
+                if to_orchestrator {
+                    let effect = if to_agents {
+                        Effect::None
+                    } else {
+                        Effect::Submit(room, generation)
+                    };
+                    self.queue(
+                        BusCommand::MessageOrchestrator(
+                            crate::bus::orchestrator::HumanOrchestratorMessage {
+                                room_id: room,
+                                body,
+                            },
+                        ),
+                        effect,
+                    );
+                }
+                if to_agents || !to_orchestrator {
+                    self.queue(BusCommand::Submit(room), Effect::Submit(room, generation));
+                }
             } else if self.quitting.is_some() && self.failed.is_empty() && !self.exit_ready {
                 self.queue(BusCommand::Shutdown, Effect::Shutdown);
             }
@@ -511,11 +626,10 @@ impl BusUi {
             self.suggestions.query_id += 1;
             return;
         }
-        if self
-            .locals
-            .get(&room)
-            .is_none_or(|local| local.recipients.is_empty())
-        {
+        let orchestrator_enabled = self.settings.orchestrator.enabled;
+        if self.locals.get(&room).is_none_or(|local| {
+            local.recipients.is_empty() && !(orchestrator_enabled && local.to_orchestrator)
+        }) {
             self.error = Some("Choose agents with @ before sending.".into());
             tracing::info!(
                 event = "bus.message.rejected",

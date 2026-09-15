@@ -3,6 +3,7 @@ use super::{
     deletion::DeleteTarget,
     editor::Editor,
     forms::{Form, RenameTarget},
+    orchestrator_ui::{CoordinationAction, RecipientEntry},
 };
 use crate::bus::model::*;
 use ratatui::style::{Color, Style};
@@ -37,6 +38,7 @@ pub(super) enum Action {
     Composer,
     Recipients,
     Recipient(Option<crate::bus::model::AgentId>),
+    RecipientEntry(RecipientEntry),
     Files,
     RemoveFile(std::path::PathBuf),
     FileDetail(std::path::PathBuf),
@@ -47,9 +49,116 @@ pub(super) enum Action {
     Suggestion(usize),
     Settings,
     ToggleColorBlindMode,
+    ToggleOrchestrator,
+    Coordination(CoordinationAction),
     Cancel,
     Add,
 }
+/// Rows of Worker-owned room coordination facts. Each action carries the facts it displays.
+/// A workflow approval is offered only after its complete review fits the visible header, so
+/// the developer cannot approve a diff that is clipped by rows or width.
+fn orchestrator_header(
+    state: &BusState,
+    room: &Room,
+    notes: &str,
+    visible_rows: usize,
+    width: u16,
+) -> Vec<(String, Option<Action>, bool)> {
+    let mut rows = Vec::new();
+    if !room.brief.goal.is_empty() {
+        rows.push((format!("Goal: {}", room.brief.goal), None, false));
+    }
+    if !room.brief.non_goals.is_empty() {
+        rows.push((format!("Non-goals: {}", room.brief.non_goals), None, false));
+    }
+    if let Some((revision, digest)) = state.room_brief_proposal(room.id) {
+        rows.push((
+            format!("Confirm proposal rev {revision}"),
+            Some(Action::Coordination(CoordinationAction::ApproveProposal {
+                revision,
+                digest,
+            })),
+            false,
+        ));
+    }
+    if let Some(receipt) = state.room_brief_confirmation(room.id) {
+        rows.push((
+            format!(
+                "Confirmed rev {} {}",
+                receipt.approved_revision, receipt.proposal_digest
+            ),
+            None,
+            true,
+        ));
+    }
+    rows.push(match notes.lines().next() {
+        Some(line) => (format!("Notes: {line}"), Some(Action::Notes), false),
+        None => ("Add notes… (F3)".into(), Some(Action::Notes), true),
+    });
+    for approval in state.developer_workflow_approvals(room.id) {
+        rows.push((
+            format!(
+                "Approved {} rev {} {}",
+                approval.workflow_id, approval.draft_revision, approval.approval_id
+            ),
+            None,
+            true,
+        ));
+    }
+    for review in state.workflow_promotion_reviews(room.id) {
+        let mut block = vec![
+            (
+                format!(
+                    "Review {} · draft {} rev {}",
+                    review.workflow_id, review.draft_id, review.draft_revision
+                ),
+                None,
+                false,
+            ),
+            (format!("content {}", review.content_digest), None, true),
+            (
+                format!(
+                    "base {}",
+                    review.standard_base_digest.as_deref().unwrap_or("absent")
+                ),
+                None,
+                true,
+            ),
+            (format!("diff {}", review.reviewed_diff_digest), None, true),
+        ];
+        block.extend(
+            review
+                .rendered_diff
+                .lines()
+                .map(|line| (line.to_owned(), None, false)),
+        );
+        block.push((
+            format!("Approve workflow {}", review.workflow_id),
+            Some(Action::Coordination(
+                CoordinationAction::ApproveWorkflowPromotion(Box::new(review.clone())),
+            )),
+            false,
+        ));
+        let fits = rows.len() + block.len() <= visible_rows
+            && block.iter().all(|(text, _, _)| {
+                unicode_width::UnicodeWidthStr::width(display(text).as_str()) <= usize::from(width)
+            });
+        if fits {
+            rows.extend(block);
+        } else {
+            rows.push((
+                format!(
+                    "Review {} diff is not fully shown; enlarge the terminal to approve",
+                    review.workflow_id
+                ),
+                None,
+                true,
+            ));
+        }
+    }
+    rows
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Hit {
     pub rect: Rect,
@@ -850,35 +959,74 @@ impl BusUi {
                 false,
             );
         }
-        let note_height = 3.min(composer_y.saturating_sub(5));
+        let orchestrator = self.settings.orchestrator.enabled;
+        // Worker coordination rows yield to at least three conversation rows.
+        let header_budget = composer_y.saturating_sub(9);
+        let header = if orchestrator {
+            orchestrator_header(
+                &self.snapshot.state,
+                room,
+                &local.notes.text,
+                usize::from(header_budget),
+                width,
+            )
+        } else {
+            Vec::new()
+        };
+        let note_height = if orchestrator {
+            (header.len() as u16).min(header_budget)
+        } else {
+            3.min(composer_y.saturating_sub(5))
+        };
         if note_height > 0 {
             view.notes_box =
                 Rect::new(main.x + 1, 2, main.width.saturating_sub(2), note_height + 2);
         }
         // The expanded draft may hide the top section. Never paint a history
         // separator over its editor or reserve rows from full-screen editing.
-        let history_y = 8;
+        let history_y = match (orchestrator, note_height) {
+            (false, _) => 8,
+            (true, 0) => 3,
+            (true, rows) => rows + 5,
+        };
         if history_y - 1 < view.composer_box.y {
             view.history_divider =
                 Rect::new(main.x + 1, history_y - 1, main.width.saturating_sub(2), 1);
         }
         view.notes = Rect::new(x, 3, width, note_height);
-        (view.notes_scroll, _) = view.editor_scrolled(
-            view.notes,
-            &local.notes,
-            Some(Action::Notes),
-            self.notes_focus,
-            None,
-            self.view.notes_scroll,
-        );
-        if note_height > 0 && local.notes.text.is_empty() {
-            view.row(
-                Rect::new(x, 3, width, 1),
-                "Add notes… (F3)",
+        if orchestrator && !self.notes_focus {
+            view.notes_scroll = self.view.notes_scroll;
+            for (index, (text, action, muted)) in header
+                .into_iter()
+                .take(usize::from(note_height))
+                .enumerate()
+            {
+                view.row(
+                    Rect::new(x, 3 + index as u16, width, 1),
+                    text,
+                    action,
+                    false,
+                    muted,
+                );
+            }
+        } else {
+            (view.notes_scroll, _) = view.editor_scrolled(
+                view.notes,
+                &local.notes,
                 Some(Action::Notes),
-                false,
-                true,
+                self.notes_focus,
+                None,
+                self.view.notes_scroll,
             );
+            if note_height > 0 && local.notes.text.is_empty() {
+                view.row(
+                    Rect::new(x, 3, width, 1),
+                    "Add notes… (F3)",
+                    Some(Action::Notes),
+                    false,
+                    true,
+                );
+            }
         }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1163,44 +1311,68 @@ impl BusUi {
                 .agents()
                 .filter(|a| a.room_id == room.id)
                 .collect();
+            let entries = super::orchestrator_ui::recipient_entries(
+                self.settings.orchestrator.enabled,
+                agents.iter().map(|agent| agent.id),
+            );
             let available_above = composer_y.saturating_sub(2);
-            // At full height the picker overlays the draft, not an empty area
-            // above it. Its later hit targets win over the editor beneath.
-            let (y, height) = if available_above >= (agents.len() + 1).min(3) as u16 {
-                let height = (agents.len() + 1).min(usize::from(available_above)) as u16;
+            let (y, height) = if available_above >= entries.len().min(3) as u16 {
+                let height = entries.len().min(usize::from(available_above)) as u16;
                 (composer_y - 1 - height, height)
             } else {
                 (
                     view.composer.y,
-                    (agents.len() + 1).min(usize::from(text_height)) as u16,
+                    entries.len().min(usize::from(text_height)) as u16,
                 )
             };
             let start = self
                 .recipient_index
                 .saturating_sub(height.saturating_sub(1) as usize);
             let all = !agents.is_empty() && agents.iter().all(|a| local.recipients.contains(&a.id));
-            let entries = std::iter::once((format!("[{}] All", if all { "x" } else { " " }), None))
-                .chain(agents.iter().map(|a| {
-                    (
-                        format!(
-                            "[{}] {}  {}  {}",
-                            if local.recipients.contains(&a.id) {
-                                "x"
-                            } else {
-                                " "
-                            },
-                            a.name,
-                            provider(a.provider),
-                            status_name(a.status)
-                        ),
-                        Some(a.id),
-                    )
-                }));
-            for (index, (label, id)) in entries.enumerate().skip(start).take(height as usize) {
+            for (index, entry) in entries.iter().enumerate().skip(start).take(height as usize) {
+                let label = match entry {
+                    super::orchestrator_ui::RecipientEntry::Orchestrator => format!(
+                        "[{}] Orchestrator",
+                        if local.to_orchestrator { "x" } else { " " }
+                    ),
+                    super::orchestrator_ui::RecipientEntry::Separator => "────────".into(),
+                    super::orchestrator_ui::RecipientEntry::AllAgents => {
+                        format!("[{}] All", if all { "x" } else { " " })
+                    }
+                    super::orchestrator_ui::RecipientEntry::Agent(id) => agents
+                        .iter()
+                        .find(|agent| agent.id == *id)
+                        .map(|agent| {
+                            format!(
+                                "[{}] {}  {}  {}",
+                                if local.recipients.contains(&agent.id) {
+                                    "x"
+                                } else {
+                                    " "
+                                },
+                                agent.name,
+                                provider(agent.provider),
+                                status_name(agent.status)
+                            )
+                        })
+                        .unwrap_or_default(),
+                };
+                let action = match entry {
+                    super::orchestrator_ui::RecipientEntry::Orchestrator => {
+                        Some(Action::RecipientEntry(entry.clone()))
+                    }
+                    super::orchestrator_ui::RecipientEntry::Separator => None,
+                    super::orchestrator_ui::RecipientEntry::AllAgents => {
+                        Some(Action::Recipient(None))
+                    }
+                    super::orchestrator_ui::RecipientEntry::Agent(id) => {
+                        Some(Action::Recipient(Some(*id)))
+                    }
+                };
                 view.overlay_row(
                     Rect::new(x, y + (index - start) as u16, width, 1),
                     label,
-                    Some(Action::Recipient(id)),
+                    action,
                     index == self.recipient_index,
                 );
             }
@@ -1353,24 +1525,59 @@ impl BusUi {
                         }
                     ),
                     Some(Action::ToggleColorBlindMode),
-                    true,
+                    self.settings_field == 0,
                     false,
                 );
                 view.lines(
-                    Rect::new(x + 4, 4, width.saturating_sub(4), 3),
+                    Rect::new(x + 4, 4, width.saturating_sub(4), 2),
                     "Agent colors stay distinct and readable with red-green or blue-yellow color blindness.",
                     None,
                     true,
                 );
                 view.row(
+                    Rect::new(x, 7, width, 1),
+                    "Orchestrator",
+                    None,
+                    false,
+                    false,
+                );
+                view.row(
                     Rect::new(x, 8, width, 1),
+                    format!(
+                        "[{}] Enable room Orchestrator",
+                        if self.settings.orchestrator.enabled {
+                            "x"
+                        } else {
+                            " "
+                        }
+                    ),
+                    Some(Action::ToggleOrchestrator),
+                    self.settings_field == 1,
+                    false,
+                );
+                let key_label = if !self.settings_key.text.is_empty() {
+                    super::orchestrator_ui::redact_secret(&self.settings_key.text)
+                } else if let Some(digest) = self.credential_digest() {
+                    format!("stored digest {digest}")
+                } else {
+                    "API key".into()
+                };
+                view.row(
+                    Rect::new(x, 10, width, 1),
+                    key_label,
+                    Some(Action::Field(2)),
+                    self.settings_field == 2,
+                    self.settings_key.text.is_empty(),
+                );
+                view.row(
+                    Rect::new(x, 12, width, 1),
                     "Close (Esc) · Enter toggles",
                     Some(Action::Cancel),
                     false,
                     true,
                 );
                 if let Some(error) = self.visible_error() {
-                    view.lines(Rect::new(x, 10, width, 3), error, None, false);
+                    view.lines(Rect::new(x, 14, width, 3), error, None, false);
                 }
                 return;
             }
