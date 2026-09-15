@@ -5375,6 +5375,32 @@ mod tests {
     }
 
     #[test]
+    fn recent_text_snapshot_honors_line_requests_above_one_thousand() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut terminal = crate::ghostty::Terminal::new(80, 3, 10_000_000).unwrap();
+        write_numbered_lines(&mut terminal, 1500);
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        let snapshot = pane.recent_text_snapshot(5000);
+        let returned = snapshot
+            .text
+            .split_inclusive('\n')
+            .filter(|line| !line.is_empty())
+            .count();
+        assert!(
+            returned > 1000,
+            "expected more than the old 1000-line clamp, got {returned}"
+        );
+        assert!(
+            snapshot.text.contains("000000"),
+            "honored 5000-line window should include the oldest retained row"
+        );
+        assert!(
+            !snapshot.truncated,
+            "fewer rows than requested means available history is exhausted"
+        );
+    }
+
+    #[test]
     fn recent_snapshots_report_omitted_rendered_rows() {
         let (tx, _rx) = mpsc::channel(4);
         let mut terminal = crate::ghostty::Terminal::new(20, 3, 100).unwrap();

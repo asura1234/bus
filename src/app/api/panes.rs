@@ -2887,6 +2887,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn api_pane_read_honors_recent_line_requests_above_one_thousand() {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let runtime =
+            crate::terminal::TerminalRuntime::test_with_scrollback_bytes(80, 3, 10_000_000, &[]);
+        for index in 0..1500 {
+            runtime.test_process_pty_bytes(format!("{index:06}\r\n").as_bytes());
+        }
+        app.state.insert_test_runtime(pane_id, runtime);
+
+        let response = app.handle_pane_read(
+            "req".into(),
+            PaneReadParams {
+                pane_id: public_pane_id,
+                source: crate::api::schema::ReadSource::Recent,
+                lines: Some(5000),
+                format: crate::api::schema::ReadFormat::Text,
+                strip_ansi: true,
+                intent: crate::api::schema::ReadIntent::Interactive,
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneRead { read } = success.result else {
+            panic!("expected pane read response");
+        };
+        let returned = read
+            .text
+            .split_inclusive('\n')
+            .filter(|line| !line.is_empty())
+            .count();
+        assert!(returned > 1000, "got {returned} rows");
+        assert!(read.text.contains("000000"));
+        assert!(!read.truncated);
+    }
+
+    #[tokio::test]
     async fn api_pane_send_keys_preserves_legacy_control_c_aliases() {
         let (mut app, pane_id, mut rx) = app_with_send_key_runtime(3);
 

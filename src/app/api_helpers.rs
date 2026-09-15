@@ -114,7 +114,7 @@ pub(super) fn read_terminal_snapshot(
 ) -> crate::pane::TerminalReadSnapshot {
     use crate::api::schema::{ReadFormat, ReadSource};
 
-    let line_limit = lines.map(|lines| lines.min(1000) as usize);
+    let line_limit = lines.map(|lines| lines as usize);
     let recent_lines = line_limit.unwrap_or(80);
     match (format, source) {
         (ReadFormat::Text, ReadSource::Visible) => {
@@ -185,6 +185,38 @@ mod read_snapshot_tests {
         let snapshot = limit_snapshot_lines("one\ntwo\n".into(), None);
         assert_eq!(snapshot.text, "one\ntwo\n");
         assert!(!snapshot.truncated);
+    }
+
+    #[tokio::test]
+    async fn recent_read_honors_line_requests_above_one_thousand() {
+        let terminal =
+            crate::terminal::TerminalRuntime::test_with_scrollback_bytes(80, 3, 10_000_000, &[]);
+        for index in 0..1500 {
+            terminal.test_process_pty_bytes(format!("{index:06}\r\n").as_bytes());
+        }
+        let snapshot = super::read_terminal_snapshot(
+            &terminal,
+            crate::api::schema::ReadSource::Recent,
+            crate::api::schema::ReadFormat::Text,
+            Some(5000),
+        );
+        let returned = snapshot
+            .text
+            .split_inclusive('\n')
+            .filter(|line| !line.is_empty())
+            .count();
+        assert!(
+            returned > 1000,
+            "expected more than the old 1000-line clamp, got {returned}"
+        );
+        assert!(
+            snapshot.text.contains("000000"),
+            "honored 5000-line window should include the oldest retained row"
+        );
+        assert!(
+            !snapshot.truncated,
+            "fewer rows than requested means available history is exhausted"
+        );
     }
 }
 

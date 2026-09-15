@@ -97,7 +97,7 @@ impl PendingAltScreenRead {
         source: crate::api::schema::ReadSource,
         lines: Option<u32>,
     ) -> crate::pane::TerminalReadSnapshot {
-        let line_limit = lines.map(|lines| lines.min(1000) as usize);
+        let line_limit = lines.map(|lines| lines as usize);
         match source {
             crate::api::schema::ReadSource::Recent
             | crate::api::schema::ReadSource::RecentUnwrapped => {

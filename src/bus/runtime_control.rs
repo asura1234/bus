@@ -427,11 +427,11 @@ impl Worker {
         {
             return Err("Agent terminal identity changed; inspect the owned session".into());
         }
-        const NATIVE_RECENT_MAX_LINES: u32 = 1000;
+        const NATIVE_RECENT_COMPAT_LINES: u32 = 400;
         let native_lines = match read_source {
             schema::ReadSource::Visible => None,
-            schema::ReadSource::Recent if !inspect => Some(400),
-            schema::ReadSource::Recent => lines.map(|n| n.min(NATIVE_RECENT_MAX_LINES)),
+            schema::ReadSource::Recent if !inspect => Some(NATIVE_RECENT_COMPAT_LINES),
+            schema::ReadSource::Recent => lines,
             _ => return Err("Source must be visible or recent".into()),
         };
         let viewport = if read_source == schema::ReadSource::Visible {
@@ -469,6 +469,7 @@ impl Worker {
         let ResponseResult::PaneRead { read } = output else {
             return Err("Unexpected native read response".into());
         };
+        let returned_lines = snapshot_line_count(&read.text);
         let mut capture = json!({
             "at_ms": crate::bus::io::now_ms(),
             "source": if read_source == schema::ReadSource::Visible { "visible" } else { "recent" },
@@ -481,19 +482,13 @@ impl Worker {
                 capture["viewport"] = viewport;
             }
         } else {
-            let honored = native_lines;
-            let capped = lines.is_some_and(|n| n > NATIVE_RECENT_MAX_LINES);
+            let exhausted = !read.truncated
+                && lines.is_some_and(|requested| returned_lines < u64::from(requested));
             capture["requested_lines"] = json!(lines);
-            capture["lines"] = json!(honored);
-            capture["native_max_lines"] = json!(NATIVE_RECENT_MAX_LINES);
-            capture["resumable"] =
-                json!(read.truncated && honored.is_none_or(|n| n < NATIVE_RECENT_MAX_LINES));
-            if capped {
-                capture["limit"] = json!({
-                    "applied": true,
-                    "source": "native AgentRead/pane.read caps lines at 1000",
-                });
-            }
+            capture["lines"] = json!(native_lines);
+            capture["returned_lines"] = json!(returned_lines);
+            capture["exhausted"] = json!(exhausted);
+            capture["resumable"] = json!(read.truncated);
         }
         Ok(json!({
             "agent_id": id,
@@ -538,6 +533,13 @@ fn optional_u32(p: &Value, field: &str) -> Result<Option<u32>, String> {
                 .ok_or_else(|| format!("Invalid {field}"))
         })
         .transpose()
+}
+fn snapshot_line_count(text: &str) -> u64 {
+    if text.is_empty() {
+        0
+    } else {
+        text.split_inclusive('\n').count() as u64
+    }
 }
 fn unique<T>(mut items: impl Iterator<Item = T>) -> Result<T, String> {
     let first = items.next().ok_or("No matching room or agent")?;

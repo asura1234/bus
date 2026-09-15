@@ -474,6 +474,19 @@ mod tests {
                 json!({"agent": "Claude Agent", "source": "recent", "lines": 80}),
             ),
             (
+                &[
+                    "agent",
+                    "read",
+                    "Claude Agent",
+                    "--source",
+                    "recent",
+                    "--lines",
+                    "5000",
+                ],
+                "agent.read",
+                json!({"agent": "Claude Agent", "source": "recent", "lines": 5000}),
+            ),
+            (
                 &["agent", "read", "Claude Agent", "--lines", "50"],
                 "agent.read",
                 json!({"agent": "Claude Agent", "lines": 50}),

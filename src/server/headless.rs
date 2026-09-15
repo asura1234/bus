@@ -2689,7 +2689,7 @@ impl HeadlessServer {
         let runtime = self.app.terminal_runtimes.get(&terminal.id)?;
         let (screen, snapshot) = runtime.screen_text_snapshot()?;
         if screen != crate::ghostty::ActiveScreen::Alternate
-            || snapshot.rows.len() >= requested.min(1000) as usize
+            || snapshot.rows.len() >= requested as usize
         {
             return None;
         }
@@ -2726,7 +2726,7 @@ impl HeadlessServer {
         {
             return None;
         }
-        let lines = lines.unwrap_or(80).min(1000) as usize;
+        let lines = lines.unwrap_or(80) as usize;
         if lines == 0
             || self
                 .terminal_attach_owners

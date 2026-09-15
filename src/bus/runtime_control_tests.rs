@@ -609,23 +609,25 @@ fn dev_read_recent_uses_caller_selected_native_lines_and_reports_more() {
     assert_eq!(result.result["capture"]["revision"], 11);
     assert_eq!(result.result["capture"]["lines"], 80);
     assert_eq!(result.result["capture"]["requested_lines"], 80);
-    assert_eq!(result.result["capture"]["native_max_lines"], 1000);
+    assert_eq!(result.result["capture"]["returned_lines"], 2);
+    assert_eq!(result.result["capture"]["exhausted"], false);
+    assert!(result.result["capture"].get("native_max_lines").is_none());
     assert!(result.result["capture"].get("limit").is_none());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn dev_read_recent_surfaces_native_line_cap_without_silent_truncation() {
-    struct CappedRecent;
-    impl Transport for CappedRecent {
+fn dev_read_recent_honors_caller_lines_above_one_thousand() {
+    struct UncappedRecent;
+    impl Transport for UncappedRecent {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
                 Method::AgentGet(_) => Ok(ResponseResult::AgentInfo {
                     agent: owned_agent_info("w1:p2", "bus-r1-a2", None),
                 }),
                 Method::AgentRead(params) => {
-                    assert_eq!(params.lines, Some(1000));
+                    assert_eq!(params.lines, Some(5000));
                     Ok(ResponseResult::PaneRead {
                         read: schema::PaneReadResult {
                             pane_id: "w1:p2".into(),
@@ -633,9 +635,12 @@ fn dev_read_recent_surfaces_native_line_cap_without_silent_truncation() {
                             tab_id: "t1".into(),
                             source: schema::ReadSource::Recent,
                             format: schema::ReadFormat::Text,
-                            text: "capped history".into(),
+                            text: (0..1200)
+                                .map(|index| format!("row-{index:04}"))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
                             revision: 2,
-                            truncated: true,
+                            truncated: false,
                         },
                     })
                 }
@@ -655,23 +660,23 @@ fn dev_read_recent_surfaces_native_line_cap_without_silent_truncation() {
             },
         )
         .unwrap();
-    worker.transport = Box::new(CappedRecent);
+    worker.transport = Box::new(UncappedRecent);
     let result = call(
         &mut worker,
-        "read-capped",
+        "read-uncapped",
         "agent.read",
-        json!({"agent":"codex1","lines":2000}),
+        json!({"agent":"codex1","source":"recent","lines":5000}),
     );
     assert!(result.ok, "{result:?}");
-    assert_eq!(result.result["capture"]["requested_lines"], 2000);
-    assert_eq!(result.result["capture"]["lines"], 1000);
-    assert_eq!(result.result["capture"]["native_max_lines"], 1000);
-    assert_eq!(result.result["capture"]["more"], true);
+    assert_eq!(result.result["capture"]["requested_lines"], 5000);
+    assert_eq!(result.result["capture"]["lines"], 5000);
+    assert_eq!(result.result["capture"]["returned_lines"], 1200);
+    assert_eq!(result.result["capture"]["truncated"], false);
+    assert_eq!(result.result["capture"]["more"], false);
+    assert_eq!(result.result["capture"]["exhausted"], true);
     assert_eq!(result.result["capture"]["resumable"], false);
-    assert_eq!(
-        result.result["capture"]["limit"]["source"],
-        "native AgentRead/pane.read caps lines at 1000"
-    );
+    assert!(result.result["capture"].get("limit").is_none());
+    assert!(result.result["capture"].get("native_max_lines").is_none());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

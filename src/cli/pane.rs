@@ -2032,6 +2032,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_pane_read_args_honors_line_requests_above_one_thousand() {
+        let params =
+            parse_pane_read_args(&args(&["issue-1", "--source", "recent", "--lines", "5000"]))
+                .unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert_eq!(params.source, ReadSource::Recent);
+        assert_eq!(params.lines, Some(5000));
+    }
+
+    #[test]
     fn parse_pane_read_args_accepts_space_separated_options() {
         let params = parse_pane_read_args(&args(&[
             "issue-1", "--source", "visible", "--lines", "5", "--ansi",
