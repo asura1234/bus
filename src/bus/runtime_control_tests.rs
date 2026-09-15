@@ -278,10 +278,20 @@ fn dev_read_visible_returns_bounded_snapshot_and_correlation_metadata() {
                         .unwrap(),
                     })
                 }
+                Method::PaneGet(params) => {
+                    assert_eq!(params.pane_id, "w1:p2");
+                    Ok(ResponseResult::PaneInfo {
+                        pane: owned_pane_info(Some(schema::PaneScrollInfo {
+                            offset_from_bottom: 0,
+                            max_offset_from_bottom: 12,
+                            viewport_rows: 24,
+                        })),
+                    })
+                }
                 Method::AgentRead(params) => {
                     assert_eq!(params.target, "w1:p2");
                     assert_eq!(params.source, schema::ReadSource::Visible);
-                    assert_eq!(params.lines, Some(400));
+                    assert_eq!(params.lines, None);
                     assert_eq!(params.format, schema::ReadFormat::Text);
                     assert!(params.strip_ansi);
                     Ok(ResponseResult::PaneRead {
@@ -291,9 +301,9 @@ fn dev_read_visible_returns_bounded_snapshot_and_correlation_metadata() {
                             tab_id: "t1".into(),
                             source: schema::ReadSource::Visible,
                             format: schema::ReadFormat::Text,
-                            text: "visible screen\ntruncated tail".into(),
+                            text: "complete viewport\nrow two".into(),
                             revision: 9,
-                            truncated: true,
+                            truncated: false,
                         },
                     })
                 }
@@ -346,16 +356,43 @@ fn dev_read_visible_returns_bounded_snapshot_and_correlation_metadata() {
     assert_eq!(result.result["runtime"]["pane_id"], "w1:p2");
     assert_eq!(result.result["runtime"]["terminal_id"], "term_internal");
     assert_eq!(result.result["capture"]["source"], "visible");
-    assert_eq!(result.result["capture"]["truncated"], true);
+    assert_eq!(result.result["capture"]["truncated"], false);
+    assert_eq!(result.result["capture"]["more"], false);
     assert_eq!(result.result["capture"]["revision"], 9);
+    assert!(result.result["capture"].get("lines").is_none());
+    assert_eq!(result.result["capture"]["viewport"]["rows"], 24);
+    assert_eq!(
+        result.result["capture"]["viewport"]["offset_from_bottom"],
+        0
+    );
+    assert_eq!(
+        result.result["capture"]["viewport"]["max_offset_from_bottom"],
+        12
+    );
     let captured = result.result["capture"]["at_ms"].as_u64().unwrap();
     assert!(
         captured >= before && captured <= after,
         "capture time {captured} outside {before}..={after}"
     );
-    assert_eq!(result.result["text"], "visible screen\ntruncated tail");
+    assert_eq!(result.result["text"], "complete viewport\nrow two");
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn owned_pane_info(scroll: Option<schema::PaneScrollInfo>) -> schema::PaneInfo {
+    let mut value = json!({
+        "pane_id": "w1:p2",
+        "terminal_id": "term_internal",
+        "workspace_id": "w1",
+        "tab_id": "t1",
+        "focused": false,
+        "agent_status": "working",
+        "revision": 3
+    });
+    if let Some(scroll) = scroll {
+        value["scroll"] = serde_json::to_value(scroll).unwrap();
+    }
+    serde_json::from_value(value).unwrap()
 }
 
 fn owned_agent_info(pane_id: &str, name: &str, session: Option<&str>) -> schema::AgentInfo {
@@ -430,12 +467,26 @@ fn dev_read_visible_fails_closed_for_missing_or_stale_runtime_identity() {
     );
     let rejected = call(
         &mut worker,
-        "read-recent-source",
+        "read-detection-source",
         "agent.read",
-        json!({"agent":"codex1","source":"recent"}),
+        json!({"agent":"codex1","source":"detection"}),
     );
     assert!(!rejected.ok, "{rejected:?}");
-    assert_eq!(rejected.error.unwrap().message, "Source must be visible");
+    assert_eq!(
+        rejected.error.unwrap().message,
+        "Source must be visible or recent"
+    );
+    let visible_lines = call(
+        &mut worker,
+        "read-visible-lines",
+        "agent.read",
+        json!({"agent":"codex1","source":"visible","lines":20}),
+    );
+    assert!(!visible_lines.ok, "{visible_lines:?}");
+    assert_eq!(
+        visible_lines.error.unwrap().message,
+        "Visible reads return the complete viewport; omit lines"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -494,6 +545,133 @@ fn dev_read_without_source_keeps_recent_output_contract() {
     assert_eq!(result.result["output"]["read"]["text"], "recent history");
     assert!(result.result.get("text").is_none() || result.result["text"].is_null());
     assert!(result.result.get("capture").is_none() || result.result["capture"].is_null());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dev_read_recent_uses_caller_selected_native_lines_and_reports_more() {
+    struct RecentRange;
+    impl Transport for RecentRange {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentGet(params) => {
+                    assert_eq!(params.target, "w1:p2");
+                    Ok(ResponseResult::AgentInfo {
+                        agent: owned_agent_info("w1:p2", "bus-r1-a2", None),
+                    })
+                }
+                Method::AgentRead(params) => {
+                    assert_eq!(params.source, schema::ReadSource::Recent);
+                    assert_eq!(params.lines, Some(80));
+                    Ok(ResponseResult::PaneRead {
+                        read: schema::PaneReadResult {
+                            pane_id: "w1:p2".into(),
+                            workspace_id: "w1".into(),
+                            tab_id: "t1".into(),
+                            source: schema::ReadSource::Recent,
+                            format: schema::ReadFormat::Text,
+                            text: "line 79\nline 80".into(),
+                            revision: 11,
+                            truncated: true,
+                        },
+                    })
+                }
+                other => panic!("unexpected native method: {other:?}"),
+            }
+        }
+    }
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                pane_id: Some("w1:p2".into()),
+                terminal_id: Some("term_internal".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    worker.transport = Box::new(RecentRange);
+    let result = call(
+        &mut worker,
+        "read-range",
+        "agent.read",
+        json!({"agent":"codex1","source":"recent","lines":80}),
+    );
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["text"], "line 79\nline 80");
+    assert_eq!(result.result["capture"]["source"], "recent");
+    assert_eq!(result.result["capture"]["truncated"], true);
+    assert_eq!(result.result["capture"]["more"], true);
+    assert_eq!(result.result["capture"]["resumable"], true);
+    assert_eq!(result.result["capture"]["revision"], 11);
+    assert_eq!(result.result["capture"]["lines"], 80);
+    assert_eq!(result.result["capture"]["requested_lines"], 80);
+    assert_eq!(result.result["capture"]["native_max_lines"], 1000);
+    assert!(result.result["capture"].get("limit").is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dev_read_recent_surfaces_native_line_cap_without_silent_truncation() {
+    struct CappedRecent;
+    impl Transport for CappedRecent {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentGet(_) => Ok(ResponseResult::AgentInfo {
+                    agent: owned_agent_info("w1:p2", "bus-r1-a2", None),
+                }),
+                Method::AgentRead(params) => {
+                    assert_eq!(params.lines, Some(1000));
+                    Ok(ResponseResult::PaneRead {
+                        read: schema::PaneReadResult {
+                            pane_id: "w1:p2".into(),
+                            workspace_id: "w1".into(),
+                            tab_id: "t1".into(),
+                            source: schema::ReadSource::Recent,
+                            format: schema::ReadFormat::Text,
+                            text: "capped history".into(),
+                            revision: 2,
+                            truncated: true,
+                        },
+                    })
+                }
+                other => panic!("unexpected native method: {other:?}"),
+            }
+        }
+    }
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                pane_id: Some("w1:p2".into()),
+                terminal_id: Some("term_internal".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    worker.transport = Box::new(CappedRecent);
+    let result = call(
+        &mut worker,
+        "read-capped",
+        "agent.read",
+        json!({"agent":"codex1","lines":2000}),
+    );
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["capture"]["requested_lines"], 2000);
+    assert_eq!(result.result["capture"]["lines"], 1000);
+    assert_eq!(result.result["capture"]["native_max_lines"], 1000);
+    assert_eq!(result.result["capture"]["more"], true);
+    assert_eq!(result.result["capture"]["resumable"], false);
+    assert_eq!(
+        result.result["capture"]["limit"]["source"],
+        "native AgentRead/pane.read caps lines at 1000"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

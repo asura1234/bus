@@ -25,7 +25,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   room focus ROOM
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks]
-  agent read AGENT [--source visible]
+  agent read AGENT [--source visible|recent] [--lines N]
   agent focus AGENT
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
@@ -204,7 +204,16 @@ fn cli() -> Command {
                 .subcommand(
                     subcommand("read")
                         .arg(value_arg("agent").required(true))
-                        .arg(Arg::new("source").long("source").value_parser(["visible"])),
+                        .arg(
+                            Arg::new("source")
+                                .long("source")
+                                .value_parser(["visible", "recent"]),
+                        )
+                        .arg(
+                            Arg::new("lines")
+                                .long("lines")
+                                .value_parser(clap::value_parser!(u32).range(1..)),
+                        ),
                 )
                 .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
                 .subcommand(
@@ -303,6 +312,13 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
                 let mut params = json!({"agent": required(args, "agent")?});
                 if let Some(source) = args.get_one::<String>("source") {
                     params["source"] = json!(source);
+                }
+                if let Some(lines) = args.get_one::<u32>("lines") {
+                    params["lines"] = json!(lines);
+                }
+                if params.get("source") == Some(&json!("visible")) && params.get("lines").is_some()
+                {
+                    return Err("Visible reads return the complete viewport; omit --lines".into());
                 }
                 ("agent.read", params)
             }
@@ -445,6 +461,24 @@ mod tests {
                 json!({"agent": "Claude Agent", "source": "visible"}),
             ),
             (
+                &[
+                    "agent",
+                    "read",
+                    "Claude Agent",
+                    "--source",
+                    "recent",
+                    "--lines",
+                    "80",
+                ],
+                "agent.read",
+                json!({"agent": "Claude Agent", "source": "recent", "lines": 80}),
+            ),
+            (
+                &["agent", "read", "Claude Agent", "--lines", "50"],
+                "agent.read",
+                json!({"agent": "Claude Agent", "lines": 50}),
+            ),
+            (
                 &["agent", "setup-confirm", "2", "--confirm"],
                 "agent.setup-confirm",
                 json!({"agent": "2", "confirm": true}),
@@ -555,7 +589,16 @@ mod tests {
             &["room", "delete", "7"],
             &["agent", "delete", "9"],
             &["agent", "setup-confirm", "9"],
-            &["agent", "read", "Claude Agent", "--source", "recent"],
+            &["agent", "read", "Claude Agent", "--source", "detection"],
+            &[
+                "agent",
+                "read",
+                "Claude Agent",
+                "--source",
+                "visible",
+                "--lines",
+                "20",
+            ],
             &[
                 "agent",
                 "add",

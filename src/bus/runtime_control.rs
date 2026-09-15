@@ -57,7 +57,7 @@ impl Worker {
                 true,
             ),
             "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
-            "agent.read" => (&["agent", "source"], false),
+            "agent.read" => (&["agent", "source", "lines"], false),
             "agent.focus" => (&["agent"], true),
             "message.send" => (&["room", "to", "text", "files"], true),
             "message.status" => (&["message"], false),
@@ -209,6 +209,7 @@ impl Worker {
             "agent.read" => self.dev_read(
                 self.dev_agent(required(p, "agent")?, None)?,
                 optional_text(p, "source")?,
+                optional_u32(p, "lines")?,
             ),
             "message.send" => self.dev_send(p),
             "message.status" => {
@@ -381,12 +382,21 @@ impl Worker {
         )
     }
 
-    fn dev_read(&mut self, id: AgentId, source: Option<&str>) -> Result<Value, String> {
+    fn dev_read(
+        &mut self,
+        id: AgentId,
+        source: Option<&str>,
+        lines: Option<u32>,
+    ) -> Result<Value, String> {
         let read_source = match source {
-            None => schema::ReadSource::Recent,
+            None | Some("recent") => schema::ReadSource::Recent,
             Some("visible") => schema::ReadSource::Visible,
-            Some(_) => return Err("Source must be visible".into()),
+            Some(_) => return Err("Source must be visible or recent".into()),
         };
+        if read_source == schema::ReadSource::Visible && lines.is_some() {
+            return Err("Visible reads return the complete viewport; omit lines".into());
+        }
+        let inspect = source.is_some() || lines.is_some();
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let target = agent
             .runtime_identity
@@ -417,22 +427,74 @@ impl Worker {
         {
             return Err("Agent terminal identity changed; inspect the owned session".into());
         }
+        const NATIVE_RECENT_MAX_LINES: u32 = 1000;
+        let native_lines = match read_source {
+            schema::ReadSource::Visible => None,
+            schema::ReadSource::Recent if !inspect => Some(400),
+            schema::ReadSource::Recent => lines.map(|n| n.min(NATIVE_RECENT_MAX_LINES)),
+            _ => return Err("Source must be visible or recent".into()),
+        };
+        let viewport = if read_source == schema::ReadSource::Visible {
+            self.transport
+                .request(Method::PaneGet(schema::PaneTarget {
+                    pane_id: target.clone(),
+                }))
+                .ok()
+                .and_then(|response| match response {
+                    ResponseResult::PaneInfo { pane } => pane.scroll.map(|scroll| {
+                        json!({
+                            "rows": scroll.viewport_rows,
+                            "offset_from_bottom": scroll.offset_from_bottom,
+                            "max_offset_from_bottom": scroll.max_offset_from_bottom,
+                        })
+                    }),
+                    _ => None,
+                })
+        } else {
+            None
+        };
         let output = self
             .transport
             .request(Method::AgentRead(schema::AgentReadParams {
                 target,
                 source: read_source,
-                lines: Some(400),
+                lines: native_lines,
                 format: schema::ReadFormat::Text,
                 strip_ansi: true,
             }))
             .map_err(|e| e.message)?;
-        if read_source == schema::ReadSource::Recent {
+        if !inspect {
             return Ok(json!({"agent_id":id,"runtime":info,"output":output}));
         }
         let ResponseResult::PaneRead { read } = output else {
             return Err("Unexpected native read response".into());
         };
+        let mut capture = json!({
+            "at_ms": crate::bus::io::now_ms(),
+            "source": if read_source == schema::ReadSource::Visible { "visible" } else { "recent" },
+            "truncated": read.truncated,
+            "more": read.truncated,
+            "revision": read.revision,
+        });
+        if read_source == schema::ReadSource::Visible {
+            if let Some(viewport) = viewport {
+                capture["viewport"] = viewport;
+            }
+        } else {
+            let honored = native_lines;
+            let capped = lines.is_some_and(|n| n > NATIVE_RECENT_MAX_LINES);
+            capture["requested_lines"] = json!(lines);
+            capture["lines"] = json!(honored);
+            capture["native_max_lines"] = json!(NATIVE_RECENT_MAX_LINES);
+            capture["resumable"] =
+                json!(read.truncated && honored.is_none_or(|n| n < NATIVE_RECENT_MAX_LINES));
+            if capped {
+                capture["limit"] = json!({
+                    "applied": true,
+                    "source": "native AgentRead/pane.read caps lines at 1000",
+                });
+            }
+        }
         Ok(json!({
             "agent_id": id,
             "name": name,
@@ -444,12 +506,7 @@ impl Worker {
                 "pane_id": identity.pane_id,
                 "terminal_id": identity.terminal_id,
             },
-            "capture": {
-                "at_ms": crate::bus::io::now_ms(),
-                "source": "visible",
-                "truncated": read.truncated,
-                "revision": read.revision,
-            },
+            "capture": capture,
             "text": read.text,
         }))
     }
@@ -470,6 +527,17 @@ fn optional_bool(p: &Value, field: &str) -> Result<bool, String> {
     p.get(field).map_or(Ok(false), |v| {
         v.as_bool().ok_or_else(|| format!("Invalid {field}"))
     })
+}
+fn optional_u32(p: &Value, field: &str) -> Result<Option<u32>, String> {
+    p.get(field)
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|&n| n > 0)
+                .ok_or_else(|| format!("Invalid {field}"))
+        })
+        .transpose()
 }
 fn unique<T>(mut items: impl Iterator<Item = T>) -> Result<T, String> {
     let first = items.next().ok_or("No matching room or agent")?;
