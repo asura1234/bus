@@ -38,21 +38,29 @@ pub(crate) fn final_text(value: &Value) -> Result<String, String> {
 }
 
 fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<String> {
+    let mut candidates: Vec<(String, Option<String>)> = Vec::new();
     let mut has_user = false;
-    let mut accumulated = String::new();
-    let mut last = None;
+    let mut direct_last = None;
     let mut matched = None;
+    let mut ambiguous = false;
     for line in transcript.lines().filter(|line| !line.trim().is_empty()) {
         let value: Value = serde_json::from_str(line).ok()?;
         match value.get("role").and_then(Value::as_str) {
             Some("user") => {
-                // Cursor can inject synthetic user records within one generation;
-                // only `turn_ended` closes that provider turn.
-                if !has_user {
-                    has_user = true;
-                    accumulated.clear();
-                    last = None;
-                }
+                // Cursor can both inject user-shaped metadata within a generation
+                // and replace an older generation's turn_ended marker when the
+                // transcript advances. Preserve existing candidates while starting
+                // another at every possible user boundary.
+                observe_candidates(
+                    &candidates,
+                    direct_last.as_deref(),
+                    hook_text,
+                    &mut matched,
+                    &mut ambiguous,
+                );
+                candidates.push((String::new(), None));
+                has_user = true;
+                direct_last = None;
             }
             Some("assistant") if has_user => {
                 let content = value.get("message")?.get("content")?.as_array()?;
@@ -61,37 +69,64 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
                     .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
                     .filter_map(|part| part.get("text").and_then(Value::as_str))
                     .collect::<String>();
-                accumulated.push_str(&text);
                 // An assistant message containing a tool call is commentary.
-                last = (!text.trim().is_empty()
+                let final_text = (!text.trim().is_empty()
                     && !content
                         .iter()
                         .any(|part| part.get("type").and_then(Value::as_str) == Some("tool_use")))
-                .then_some(text);
+                .then_some(text.clone());
+                for (accumulated, last) in &mut candidates {
+                    accumulated.push_str(&text);
+                    *last = final_text.clone();
+                }
+                candidates.retain(|(accumulated, _)| hook_text.starts_with(accumulated.as_str()));
+                direct_last = final_text;
             }
             _ => {}
         }
         if value.get("type").and_then(Value::as_str) == Some("turn_ended") {
-            if has_user && value.get("status").and_then(Value::as_str) == Some("success") {
-                if let Some(last) = last.take() {
-                    if accumulated == hook_text || last == hook_text {
-                        // Callback identity already owns the request. Repeated
-                        // matching turns are safe if their extracted answers agree;
-                        // only conflicting commentary/final splits are ambiguous.
-                        if matched.as_ref().is_some_and(|text| text != &last) {
-                            return None;
-                        }
-                        matched = Some(last);
-                    }
-                }
+            if value.get("status").and_then(Value::as_str) == Some("success") {
+                observe_candidates(
+                    &candidates,
+                    direct_last.as_deref(),
+                    hook_text,
+                    &mut matched,
+                    &mut ambiguous,
+                );
             }
+            candidates.clear();
             has_user = false;
+            direct_last = None;
         }
     }
-    // A newer direct-terminal turn may start before Bus consumes this callback.
-    // Find an unambiguous completed answer, not simply the newest turn. The hook
-    // still supplies the attested session/generation and exact text bound.
-    matched
+    (!ambiguous).then_some(matched).flatten()
+}
+
+fn observe_candidates(
+    candidates: &[(String, Option<String>)],
+    direct_last: Option<&str>,
+    hook_text: &str,
+    matched: &mut Option<String>,
+    ambiguous: &mut bool,
+) {
+    for candidate in candidates
+        .iter()
+        .filter(|(accumulated, _)| accumulated == hook_text)
+        .filter_map(|(_, last)| last.as_deref())
+        .chain(direct_last.filter(|last| *last == hook_text))
+    {
+        // Callback identity already owns the request. Repeated matching turns
+        // are safe if their extracted answers agree; conflicting
+        // commentary/final splits remain ambiguous and fail closed.
+        if matched
+            .as_ref()
+            .is_some_and(|existing| existing != candidate)
+        {
+            *ambiguous = true;
+        } else if matched.is_none() {
+            *matched = Some(candidate.to_owned());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -157,6 +192,28 @@ mod tests {
             "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"review\"}]}}\n",
             "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\"}]}}\n",
             "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Ready\"}]}}\n",
+            "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
+        );
+
+        assert_eq!(
+            matching_completed_message(transcript, "Checking.Ready").as_deref(),
+            Some("Ready")
+        );
+    }
+
+    #[test]
+    fn cursor_final_reply_recovers_prior_generation_after_transcript_advances() {
+        let transcript = concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"older\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Older answer\"}]}}\n",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"review\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Checking.\"},{\"type\":\"tool_use\",\"name\":\"Read\"}]}}\n",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<available_subagent_types>...</available_subagent_types>\"}]}}\n",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"review\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Ready\"}]}}\n",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"newer\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Newer answer\"}]}}\n",
             "{\"type\":\"turn_ended\",\"status\":\"success\"}\n",
         );
 
