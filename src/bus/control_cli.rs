@@ -25,7 +25,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   room focus ROOM
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks]
-  agent read AGENT
+  agent read AGENT [--source visible]
   agent focus AGENT
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
@@ -201,7 +201,11 @@ fn cli() -> Command {
                         .arg(Arg::new("args").long("args").allow_hyphen_values(true))
                         .arg(flag("consent-hooks")),
                 )
-                .subcommand(subcommand("read").arg(value_arg("agent").required(true)))
+                .subcommand(
+                    subcommand("read")
+                        .arg(value_arg("agent").required(true))
+                        .arg(Arg::new("source").long("source").value_parser(["visible"])),
+                )
                 .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
                 .subcommand(
                     subcommand("setup-confirm")
@@ -295,7 +299,13 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
                     "consent_project_hooks": args.get_flag("consent-hooks"),
                 }),
             ),
-            Some(("read", args)) => ("agent.read", json!({"agent": required(args, "agent")?})),
+            Some(("read", args)) => {
+                let mut params = json!({"agent": required(args, "agent")?});
+                if let Some(source) = args.get_one::<String>("source") {
+                    params["source"] = json!(source);
+                }
+                ("agent.read", params)
+            }
             Some(("setup-confirm", args)) => (
                 "agent.setup-confirm",
                 json!({"agent": required(args, "agent")?, "confirm": args.get_flag("confirm")}),
@@ -430,6 +440,11 @@ mod tests {
                 json!({"agent": "Claude Agent"}),
             ),
             (
+                &["agent", "read", "Claude Agent", "--source", "visible"],
+                "agent.read",
+                json!({"agent": "Claude Agent", "source": "visible"}),
+            ),
+            (
                 &["agent", "setup-confirm", "2", "--confirm"],
                 "agent.setup-confirm",
                 json!({"agent": "2", "confirm": true}),
@@ -540,6 +555,7 @@ mod tests {
             &["room", "delete", "7"],
             &["agent", "delete", "9"],
             &["agent", "setup-confirm", "9"],
+            &["agent", "read", "Claude Agent", "--source", "recent"],
             &[
                 "agent",
                 "add",

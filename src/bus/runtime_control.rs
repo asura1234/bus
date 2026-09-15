@@ -57,7 +57,7 @@ impl Worker {
                 true,
             ),
             "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
-            "agent.read" => (&["agent"], false),
+            "agent.read" => (&["agent", "source"], false),
             "agent.focus" => (&["agent"], true),
             "message.send" => (&["room", "to", "text", "files"], true),
             "message.status" => (&["message"], false),
@@ -206,7 +206,10 @@ impl Worker {
                     consent_project_hooks: optional_bool(p, "consent_project_hooks")?,
                 }))
             }
-            "agent.read" => self.dev_read(self.dev_agent(required(p, "agent")?, None)?),
+            "agent.read" => self.dev_read(
+                self.dev_agent(required(p, "agent")?, None)?,
+                optional_text(p, "source")?,
+            ),
             "message.send" => self.dev_send(p),
             "message.status" => {
                 let id = required(p, "message")?
@@ -378,7 +381,12 @@ impl Worker {
         )
     }
 
-    fn dev_read(&mut self, id: AgentId) -> Result<Value, String> {
+    fn dev_read(&mut self, id: AgentId, source: Option<&str>) -> Result<Value, String> {
+        let read_source = match source {
+            None => schema::ReadSource::Recent,
+            Some("visible") => schema::ReadSource::Visible,
+            Some(_) => return Err("Source must be visible".into()),
+        };
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let target = agent
             .runtime_identity
@@ -387,6 +395,9 @@ impl Worker {
             .ok_or("Agent has no terminal")?;
         let identity = agent.runtime_identity.clone();
         let expected_name = format!("bus-r{}-a{}", agent.room_id.0, id.0);
+        let name = agent.name.clone();
+        let status = agent.status;
+        let current_request = agent.current_request;
         let response = self
             .transport
             .request(Method::AgentGet(schema::AgentTarget {
@@ -410,13 +421,37 @@ impl Worker {
             .transport
             .request(Method::AgentRead(schema::AgentReadParams {
                 target,
-                source: schema::ReadSource::Recent,
+                source: read_source,
                 lines: Some(400),
                 format: schema::ReadFormat::Text,
                 strip_ansi: true,
             }))
             .map_err(|e| e.message)?;
-        Ok(json!({"agent_id":id,"runtime":info,"output":output}))
+        if read_source == schema::ReadSource::Recent {
+            return Ok(json!({"agent_id":id,"runtime":info,"output":output}));
+        }
+        let ResponseResult::PaneRead { read } = output else {
+            return Err("Unexpected native read response".into());
+        };
+        Ok(json!({
+            "agent_id": id,
+            "name": name,
+            "status": status,
+            "current_request": current_request,
+            "runtime": {
+                "launch_id": identity.launch_id,
+                "session_id": identity.session_id,
+                "pane_id": identity.pane_id,
+                "terminal_id": identity.terminal_id,
+            },
+            "capture": {
+                "at_ms": crate::bus::io::now_ms(),
+                "source": "visible",
+                "truncated": read.truncated,
+                "revision": read.revision,
+            },
+            "text": read.text,
+        }))
     }
 }
 

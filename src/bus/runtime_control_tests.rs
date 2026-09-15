@@ -251,6 +251,254 @@ fn dev_read_uses_native_pane_selector_not_internal_terminal_id() {
 }
 
 #[test]
+fn dev_read_visible_returns_bounded_snapshot_and_correlation_metadata() {
+    struct VisibleInspect;
+    impl Transport for VisibleInspect {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentGet(params) => {
+                    assert_eq!(params.target, "w1:p2");
+                    Ok(ResponseResult::AgentInfo {
+                        agent: serde_json::from_value(json!({
+                            "terminal_id": "term_internal",
+                            "pane_id": "w1:p2",
+                            "name": "bus-r1-a2",
+                            "agent_status": "working",
+                            "agent_session": {
+                                "source": "herdr:codex",
+                                "agent": "codex",
+                                "kind": "id",
+                                "value": "session"
+                            },
+                            "workspace_id": "w1",
+                            "tab_id": "t1",
+                            "focused": false,
+                            "revision": 3
+                        }))
+                        .unwrap(),
+                    })
+                }
+                Method::AgentRead(params) => {
+                    assert_eq!(params.target, "w1:p2");
+                    assert_eq!(params.source, schema::ReadSource::Visible);
+                    assert_eq!(params.lines, Some(400));
+                    assert_eq!(params.format, schema::ReadFormat::Text);
+                    assert!(params.strip_ansi);
+                    Ok(ResponseResult::PaneRead {
+                        read: schema::PaneReadResult {
+                            pane_id: "w1:p2".into(),
+                            workspace_id: "w1".into(),
+                            tab_id: "t1".into(),
+                            source: schema::ReadSource::Visible,
+                            format: schema::ReadFormat::Text,
+                            text: "visible screen\ntruncated tail".into(),
+                            revision: 9,
+                            truncated: true,
+                        },
+                    })
+                }
+                other => panic!("unexpected native method: {other:?}"),
+            }
+        }
+    }
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                session_id: Some("session".into()),
+                pane_id: Some("w1:p2".into()),
+                terminal_id: Some("term_internal".into()),
+            },
+        )
+        .unwrap();
+    let sent = call(
+        &mut worker,
+        "send-visible",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"inspect me"}),
+    );
+    assert!(sent.ok, "{sent:?}");
+    let request = RequestId(sent.result["request_ids"][0].as_u64().unwrap());
+    worker.state.begin_submission(request, "launch", 4).unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Working, 5)
+        .unwrap();
+    worker.transport = Box::new(VisibleInspect);
+    let before = crate::bus::io::now_ms();
+    let result = call(
+        &mut worker,
+        "read-visible",
+        "agent.read",
+        json!({"agent":"codex1","source":"visible"}),
+    );
+    let after = crate::bus::io::now_ms();
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["agent_id"], agent.0);
+    assert_eq!(result.result["name"], "codex1");
+    assert_eq!(result.result["status"], "working");
+    assert_eq!(result.result["current_request"], request.0);
+    assert_eq!(result.result["runtime"]["launch_id"], "launch");
+    assert_eq!(result.result["runtime"]["session_id"], "session");
+    assert_eq!(result.result["runtime"]["pane_id"], "w1:p2");
+    assert_eq!(result.result["runtime"]["terminal_id"], "term_internal");
+    assert_eq!(result.result["capture"]["source"], "visible");
+    assert_eq!(result.result["capture"]["truncated"], true);
+    assert_eq!(result.result["capture"]["revision"], 9);
+    let captured = result.result["capture"]["at_ms"].as_u64().unwrap();
+    assert!(
+        captured >= before && captured <= after,
+        "capture time {captured} outside {before}..={after}"
+    );
+    assert_eq!(result.result["text"], "visible screen\ntruncated tail");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn owned_agent_info(pane_id: &str, name: &str, session: Option<&str>) -> schema::AgentInfo {
+    let mut value = json!({
+        "terminal_id": "term_internal",
+        "pane_id": pane_id,
+        "name": name,
+        "agent_status": "idle",
+        "workspace_id": "w1",
+        "tab_id": "t1",
+        "focused": false,
+        "revision": 1
+    });
+    if let Some(session) = session {
+        value["agent_session"] = json!({
+            "source": "herdr:codex",
+            "agent": "codex",
+            "kind": "id",
+            "value": session
+        });
+    }
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn dev_read_visible_fails_closed_for_missing_or_stale_runtime_identity() {
+    struct StaleInspect;
+    impl Transport for StaleInspect {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentGet(_) => Ok(ResponseResult::AgentInfo {
+                    agent: owned_agent_info("w1:other", "bus-r1-a2", Some("session")),
+                }),
+                Method::AgentRead(_) => panic!("stale identity must not read the pane"),
+                other => panic!("unexpected native method: {other:?}"),
+            }
+        }
+    }
+    let (mut worker, _room, agent, dir) = fixture();
+    let missing = call(
+        &mut worker,
+        "read-missing",
+        "agent.read",
+        json!({"agent":"codex1","source":"visible"}),
+    );
+    assert!(!missing.ok, "{missing:?}");
+    assert_eq!(missing.error.unwrap().message, "Agent has no terminal");
+
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                session_id: Some("session".into()),
+                pane_id: Some("w1:p2".into()),
+                terminal_id: Some("term_internal".into()),
+            },
+        )
+        .unwrap();
+    worker.transport = Box::new(StaleInspect);
+    let stale = call(
+        &mut worker,
+        "read-stale",
+        "agent.read",
+        json!({"agent":"codex1","source":"visible"}),
+    );
+    assert!(!stale.ok, "{stale:?}");
+    assert_eq!(
+        stale.error.unwrap().message,
+        "Agent terminal identity changed; inspect the owned session"
+    );
+    let rejected = call(
+        &mut worker,
+        "read-recent-source",
+        "agent.read",
+        json!({"agent":"codex1","source":"recent"}),
+    );
+    assert!(!rejected.ok, "{rejected:?}");
+    assert_eq!(rejected.error.unwrap().message, "Source must be visible");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dev_read_without_source_keeps_recent_output_contract() {
+    struct RecentInspect;
+    impl Transport for RecentInspect {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentGet(params) => {
+                    assert_eq!(params.target, "w1:p2");
+                    Ok(ResponseResult::AgentInfo {
+                        agent: owned_agent_info("w1:p2", "bus-r1-a2", None),
+                    })
+                }
+                Method::AgentRead(params) => {
+                    assert_eq!(params.target, "w1:p2");
+                    assert_eq!(params.source, schema::ReadSource::Recent);
+                    assert_eq!(params.lines, Some(400));
+                    Ok(ResponseResult::PaneRead {
+                        read: schema::PaneReadResult {
+                            pane_id: "w1:p2".into(),
+                            workspace_id: "w1".into(),
+                            tab_id: "t1".into(),
+                            source: schema::ReadSource::Recent,
+                            format: schema::ReadFormat::Text,
+                            text: "recent history".into(),
+                            revision: 4,
+                            truncated: false,
+                        },
+                    })
+                }
+                other => panic!("unexpected native method: {other:?}"),
+            }
+        }
+    }
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                pane_id: Some("w1:p2".into()),
+                terminal_id: Some("term_internal".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    worker.transport = Box::new(RecentInspect);
+    let result = call(&mut worker, "read", "agent.read", json!({"agent":"codex1"}));
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.result["agent_id"], agent.0);
+    assert_eq!(result.result["runtime"]["pane_id"], "w1:p2");
+    assert_eq!(result.result["output"]["type"], "pane_read");
+    assert_eq!(result.result["output"]["read"]["text"], "recent history");
+    assert!(result.result.get("text").is_none() || result.result["text"].is_null());
+    assert!(result.result.get("capture").is_none() || result.result["capture"].is_null());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dev_history_retains_twenty_ordered_messages_and_their_own_final_replies() {
     let (mut worker, _room, agent, dir) = fixture();
     worker
