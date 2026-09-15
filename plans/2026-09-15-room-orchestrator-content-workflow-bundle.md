@@ -1,0 +1,495 @@
+# 交付智能体主导的编排器内容包与动态 SOP
+
+**状态**：review-plan-in-progress
+**作者**：dylanliu8949
+**创建日期**：2026-09-15
+**基于提交**：413dbecff7f183f6e1914993e1e012384717b896
+**分支**：master
+**前置任务（如适用）**：完成并验证 `plans/2026-09-15-room-orchestrator-agent-led-harness.md` 的 generic room capability shell、agent-owned control、production content seam 与 scripted-provider acceptance
+**后续任务（如适用）**：无
+
+> **语言无关说明**：本模板适用于本仓库涉及的任意目标语言。Rust 是产品主语言，workflow helper 使用 Python，少量集成资源使用 TypeScript。下方代码片段示例必须改用任务的目标语言表达。
+
+> **状态说明**：
+> 状态值为 `<phase>-<phase-state>` 的组合：6 个 phase 按下表顺序线性推进；前 5 个 phase 各有 `in-progress` 和 `complete` 两个 phase-state，第 6 个 phase `merge` 只有 `merge-complete`（合并是瞬时操作，没有“进行中”的中间态——`code-review-complete` 之后下一个状态就是 `merge-complete`）。完整枚举共 12 值：`<phase>-in-progress` / `<phase>-complete` × 5 + `merge-complete` + 特殊终态 `abandoned`（任意阶段可手动写入，表示计划废弃）。该字段是机器可读的工作流门控，请勿引入此列表以外的值。
+>
+> | # | phase | 含义 | `in-progress` 写入时机 | `complete` 写入时机 |
+> |---|-------|------|-----------------------|---------------------|
+> | 1 | `create-plan` | 计划文档撰写 | `/create-plan` 启动 | 落盘等待审查 |
+> | 2 | `review-plan` | 计划审查 | `/address-review-comments` 首次处理评审时（`/review-plan` 对计划只读、不写状态） | 审查通过（`/execute-plan` 的最低门槛） |
+> | 3 | `plan-execution` | 任务图实施 | `/execute-plan` 启动 | 全部任务验收 + 自动 EXIT CHECK 达标，并以最后一步 `commit-and-push` 提交、推送精确 tree |
+> | 4 | `manual-test` | 人工手动测试 | 开发者手动 | 开发者手动 |
+> | 5 | `code-review` | 最终代码审查 | 人工测试完成后开始 | 审查通过 |
+> | 6 | `merge` | PR 合入 `master` | — （无 in-progress） | 合并完成后由开发者或合并流程写入（终态） |
+>
+> **门控规则**：
+> - `/review-plan` 与 `/execute-plan` 只依赖本文档格式和状态，不依赖 `/create-plan` session 或额外私有状态；开发者手写但通过同一格式/gate 的计划同样合法
+> - `/execute-plan` 在自动 gate 全绿后以 `commit-and-push` 作为最后一步，结束于已提交并推送到当前具名分支的精确 tree；之后依次由开发者人工验证、`/pr` 创建或更新面向 `master` 的 PR、`/review-pr` 审查。只有开发者明确要求时才直接落盘 `master`
+> - 本仓库没有校验计划状态的 CI workflow，`状态` 由上述 workflow skill 自己消费。已进入 `plan-execution-complete` 及之后状态的计划文档视为已用，不得被新 PR 复用；需要新工作时新建计划文档
+
+> **⚠️ 不可修改**：以下规则部分必须包含在每个计划文档中，AI 和开发者不得修改此部分。
+
+<!-- 规则优先级：开始 - 此部分不可修改 -->
+## 规则优先级
+
+1. 开发者在对话中的最新明确要求。
+2. 触及范围内实际存在的 `AGENTS.md`。
+3. 本计划的目标、非目标与已归档决策。
+4. 本模板、计划指南与代码现状。
+
+事实必须区分为：当前源码已验证、开发者明确决定、待验证假设、延期工作。POC 的 ceiling 假设不得写成生产承诺。
+
+- 计划生成规则和计划执行规则优先于模型的隐式行为
+- 当任务指令与计划生成规则或计划执行规则冲突时，必须遵循这些规则
+- 如果由于任务约束无法遵循计划生成规则或计划执行规则中的某条规则，应暂停并请求澄清，而不是猜测
+- 如需覆盖这些规则，应更新计划模板文档，而不是在单个计划文档中覆盖
+<!-- 规则优先级：结束 -->
+
+## 目标
+
+交付驱动 agent-led room orchestrator 的版本化内容包，包括 harness-level identity/system policy、domain-neutral `agent.md`、Mermaid-first `workflow-template.md`、`create-workflow` / `execute-workflow` skills、标准 SWE SOPs 与 coding-agent Room Brief 契约，使智能体能够自主解释、修订和执行动态流程而不承担技术实现工作。
+
+> **重要**：
+> - **目标与非目标共同标示本计划的意图（intent）与范围（scope）**：目标声明**要做什么 / 交付什么**（**强制**——写任何计划正文前必须先清晰设定，见 create-plan 的 GOAL GATE），非目标声明**刻意不做什么**（**可选**——未声明即视为无、AI 不问不猜，但**一旦声明即被强制执行**）；二者一起把计划的意图与边界钉死，是后续 create / review / execute 全程锁定的地基。
+> - 计划必须**单一目标**。判断标准是**目标是否内聚**，不是任务数量——一个 XXXL 计划可以有多个粗粒度任务，只要它们共同服务同一个目标，它就仍是单一目标。
+> - 类比：「建一座动物园」是单一目标，即使内部有建狮笼、建鸡舍、修围栏等多个任务，它们仍共同拼成一个成果。若顶层目标是多件互不相关的事，则应拆成多份单一目的计划。
+> - 目标陈述聚焦**做什么 / 交付什么**（结果），不描述**怎么做**（实现细节留给后续章节）。
+> - 计划一律 one-shot 执行、执行后再做 e2e 验证、一个计划一个 PR，与大小无关；不要把「单一目标 + 大」误当成「多目的」而拆散。
+> - **目标在 create-plan 阶段定稿后即锁定**：只有开发者可修改。plan review / 任何 agent **不得推翻、扩张、缩小或重新定义**它，只能检查计划正文是否服务于该目标（详见 [`docs/guides/plan-review-guide.md`](../guides/plan-review-guide.md)「工作流结构是既定常量」）。
+
+## 非目标
+
+- 不修改前置 harness 的 provider、journal、tool registry、permissions、persistence、TUI、control protocol 或 safety policy；content 不能新增 tool 或让 harness 理解 workflow。
+- 不让 orchestrator 检查、编写或修复技术实现，不让其从源码自行判断技术正确性、挑选 patch 或替代 coding agent；技术问题必须转发。
+- 不增加 shell、source/diff/test/Git、任意文件读取、raw terminal-input、self-approval 或 cross-room capability；prompt 只是 defense-in-depth，hard authority 仍由 harness tool surface 限制。
+- 不实现 executable workflow runner、固定 transition table、graph parser、领域 state machine、Appium test generator、Mermaid renderer 或 visual editor。
+- 不实现 future best-of-N skill 本体；现有 SOP 可让 orchestrator 收集 N 份独立建议并明确委派 author agent 从完整候选中选择。
+- 未经开发者明确授权，不执行 live paid DeepSeek call；正常 gate 只使用 scripted fake provider 和 fixed fixtures。
+- 不允许 model/chat 直接把 `.bus/temp` 覆盖到 `.bus/standard`；promotion 仍要求 exact human action。
+- 不把 orchestrator-only skills 暴露给 coding agents；只修改 canonical `skills/` sources 与其 derived symlink views。
+
+> **重要**：
+> - **可选，但设了就强制**：开发者未显式声明即写「无」——AI **不问、不猜、不外推**（宁可留「无」，不要编）；**一旦声明了任一条非目标，它即被强制执行**（往其方向推进的评审意见一律驳回，见下）。这是与目标的关键差别：目标**强制必设**，非目标**可留空、但设了不可犯**。
+> - 与目标一样**锁定**：定稿后只有开发者可改；plan review / 任何 agent 不得新增、扩张或重新定义非目标。
+> - 往非目标方向推进的评审意见（如「顺便也做 X」而 X 正是某条非目标）= 扩范围熵，一律驳回（见 [`docs/guides/plan-review-guide.md`](../guides/plan-review-guide.md) 与 [`docs/guides/code-review-guide.md`](../guides/code-review-guide.md)）。
+
+## 当前状态分析
+
+- **当前源码已验证**：在 base commit 中尚无 `src/bus/orchestrator/` 与 `.bus/`，所以必须先完成 canonical harness successor；本计划不能通过 content 自行添加缺失 runtime capability。
+- **当前源码已验证**：canonical coding-agent skills 位于 `skills/`，`.agents/skills` 与 `.claude/skills` 是 derived symlink views；修改必须落到 canonical source。
+- **当前源码已验证**：现有 create/review/PR skills 分别拥有自己的 Goal/Non-goals derivation/locking 规则；orchestrated path 需要一个 shared Room Brief contract，同时必须保留 standalone path。
+- **当前源码已验证**：`justfile` 提供 repository gates，但本环境没有 `just` 与 `cargo nextest`；执行前必须 provision。
+- **开发者明确决定**：system/agent/skills 需要把“orchestrator owns process, coding agents own technical work”写成一致身份；hard tool denial 已在 prerequisite harness，实现内容不能冒充 security boundary。
+- **开发者明确决定**：workflow 是可动态成长的 SOP。Mermaid 说明当前建议流程、循环和分支，但 agent 根据真实 room state 决定实际下一步，并在 scope 内更新 `.bus/temp`。
+- **开发者明确决定**：initial proposal 显示 Goal/Non-goals、to-do、agents/models/effort、resource/permission needs，并等待 human confirmation；其后只有 scope/authority/risk materially 扩大才重新批准。
+- **开发者明确决定**：workflow complexity、agent count、compute 与 intelligence 增长不改变 harness；content 和 context 可增长。
+- **开发者明确决定**：content 必须称 human、orchestrator 与 coding agents 为 first-class room partners；workflow 分配 role/capability，而不是把 agents 描述成由人类操作的软件组件。
+
+```mermaid
+flowchart LR
+    H[Agent-led harness] --> C[system + agent identity]
+    C --> CW[create-workflow skill]
+    C --> EW[execute-workflow skill]
+    T[workflow-template.md] --> SOP[Markdown + Mermaid SOP]
+    CW --> SOP
+    SOP --> EW
+    EW -->|agent chooses every next action| B[Bus capabilities]
+    B --> A[Coding agents and human workers]
+    A -->|evidence, blockers, handovers| EW
+    EW -->|adapt .bus/temp within locked scope| SOP
+```
+
+## 参考资料
+
+- `plans/2026-09-15-room-orchestrator-agent-led-harness.md`（canonical prerequisite；agent owns every workflow decision）
+- `plans/2026-09-14-room-orchestrator-content.md`、`plans/2026-09-14-room-orchestrator-harness.md`（legacy plans，迁移后只保留 abandoned pointer）
+- `docs/templates/plan-template.md`（完整读取；canonical plan contract）
+- `docs/guides/consumer-fallout-format.md`（完整读取；consumer inventory interpretation）
+- `skills/AGENTS.md`（完整读取；canonical skill ownership and Bus gate conventions）
+- `skills/skill-architecture.md`（完整读取；execution/principle/mechanic/format layering）
+- `skills/create-plan/SKILL.md`、`skills/review-plan/SKILL.md`、`skills/execute-plan/SKILL.md`、`skills/pr/SKILL.md`、`skills/review-pr/SKILL.md`、`skills/address-review-comments/SKILL.md`（current coding-agent goal and workflow contracts）
+- `docs/guides/review-response-guide.md`（完整读取；review findings remain evidence-bearing claims and technical disposition stays with coding-agent author）
+- prerequisite `src/bus/orchestrator/` content interface、`build.rs`、`Cargo.toml`、`justfile`（执行时验证；当前 base 尚未实现）
+- `scripts/test_skill_migration_contract.py`、`scripts/test_sanitize_review_severity.py`、`scripts/test_bus_dev_acceptance.py`（完整读取；adjacent deterministic Python test patterns and existing no-severity/link contracts）
+
+> **重要**：
+> - 使用官方库 / 框架 / SDK 文档，并在本节记录实际读取的链接
+> - 如果任务涉及现有模块，必须包含适用的 `AGENTS.md`；Bus 当前只有 `skills/` 与 vendored libghostty-vt 树维护局部 `AGENTS.md`
+> - 如果任务跨模块或触及仓库级契约，必须包含对应的根文档、`docs/` 文档或 `skills/skill-architecture.md`
+> - 如果任务涉及第三方 SDK，应包含以下链接：
+>   - SDK 集成文档
+>   - 如何启用 XX 功能的文档
+> - 创建计划时先阅读所有适用 `AGENTS.md`，再由现有模块和调用点确定职责、依赖方向、公开 API、测试与验收入口
+> - 新增的模块、文件、类型、函数命名应遵循相邻代码与对应模块 `AGENTS.md` 中体现的命名约定
+> - 如果计划包含测试，应参考相邻 Rust `#[cfg(test)]`、模块测试、`scripts/test_*.py` 或集成资源测试的既有模式
+> - 如果计划涉及日志输出或运行时不变量，必须读取实际拥有该行为的 Rust 模块和现有测试
+> - 如果计划涉及跨平台行为，必须说明 Unix/macOS 与 Windows 各自的可用验证入口
+> - 如果此任务基于另一个任务，或未来任务依赖此任务，应包含相关任务计划文档的路径
+> - 如果找不到或未提供所有相关文档，AI 应停止计划生成并通知开发者
+
+## 需要决策的事项
+
+**当前计划完整程度**：100%
+
+无待确认事项。
+
+> **注意**：初始生成计划时，此完整程度应留空。随着开发者做出更多决策，AI 应更新此百分比。
+
+> **重要**：
+> - 只有当计划完整程度达到或超过 95%（AI 有 95%+ 把握能完成任务）时，开发者才可以执行计划
+> - 任何不清楚、缺失或可以用不同解决方案实现的事项都应列在此部分
+> - AI 不应猜测，应在计划执行前始终询问相关信息
+> - 如果 AI 无法推断出可用选项，可以提出开放性问题
+> - 每个决策项可以有多个选项（不限于两个），根据实际情况列出所有可行的选择
+> - 每个选项的描述应列出优缺点（pros and cons）
+> - 在做出大的方向性决策后，AI 应继续提出后续问题并更新此部分
+> - 开发者做出决策后，应更新此完整程度百分比
+> - 新增开放决策后，必须把 **状态** 改回 `create-plan-in-progress`。此回退由开发者/计划作者在新增该决策时同步完成；`/address-review-comments` 等审查响应工具不代做此回退
+
+## 已归档的决策
+
+1. **Process authority**
+   - **选项**：content 描述 fixed runtime；content 只在 failure 时唤醒 agent；content 指示 agent 持续拥有流程。
+   - **选择**：第三项。`execute-workflow` 在每次 room event 后由 agent 判断下一步，所有 dispatch/wait/adaptation/recovery 都通过 tool call 明确发生。
+   - **依据**：开发者明确选择 B 并要求彻底移除 script+agent design。
+
+2. **Mermaid semantics**
+   - **选项**：可执行 DSL；装饰图；SOP 的 normative visual map。
+   - **选择**：第三项。图必须与 prose 对齐并可表达循环/分支/并行/人类步骤，但现实状态和 agent judgment 决定执行；agent 可在 `.bus/temp` 修订图与 prose。
+   - **依据**：开发者选择 Mermaid-in-Markdown，同时强调 workflow 是 SOP、不是 script。
+
+3. **Production content ownership**
+   - **选项**：runtime hard-code；repo file shadow；fixed versioned content bundle。
+   - **选择**：第三项。System、agent、两个 skills 与 template 使用 prerequisite seam 内嵌；standard SOPs/README 由 repo `.bus/standard` 持有。
+   - **依据**：content 与 harness 分计划、避免 repo prompt injection shadow production identity。
+
+4. **Technical boundary wording**
+   - **选项**：orchestrator 可直接分析代码；只用 prompt 禁止；prompt + harness capability denial。
+   - **选择**：第三项。Content 要求 route technical questions, compare process evidence, ask agents for recommendations；不能声称 prompt 能阻止越权。
+   - **依据**：开发者要求 harness-level constraint，content 只加强角色一致性。
+
+5. **Standard convergence**
+   - **选项**：单 reviewer；同 family reviewers；independent mixed-family lanes + separate author + repeated convergence。
+   - **选择**：第三项。每轮 lanes 不读 peers；有 finding 时收集 reviewers 与 author recommendations，把完整集合交给 author 做 best-of-N-style resolution；无法 cleanly resolve 时才找 human。
+   - **依据**：开发者对 mixed-model review 和实际 Bus dogfood 的明确流程。
+
+6. **Dynamic scope and approval**
+   - **选项**：每次 SOP 改动重批；批准后任意扩 scope；locked boundary 内动态修订。
+   - **选择**：第三项。Routine adaptation、attempt/lesson 增长与 `.bus/temp` 更新不重批；Goal/Non-goals、authority、destructive/publish 或 material budget/resource expansion 重批。
+   - **依据**：开发者需要 agent 从 entropy 中恢复，同时保留 human authority。
+
+7. **Participant language and authority**
+   - **选项**：human controller + agent components；所有参与者完全相同权限；first-class partners + role-specific capabilities。
+   - **选择**：第三项。System、agent、skills、template 与 SOP 都使用 participant/partner/assignment/evidence vocabulary；human approval 与 orchestrator process ownership 是能力差异，不是否定 agent 主体性。
+   - **依据**：开发者明确指出这是 Bus 的核心模型，并强调 orchestrator agent 拥有很大权力。
+
+## 大小
+
+**大小**：XL
+
+> **大小说明**：
+> - `大小` 字段只允许填写一个等级 token：`XS`、`S`、`M`、`L`、`XL`、`XXL` 或 `XXXL`。
+> - 禁止在 `大小` 字段后追加括号说明、scope、文件数量、行数、抽象数量或工作清单。例如应写 `**大小**：S`，不要写 `**大小**：S（client-only：...；约 6-7 个文件；新增 1 个 helper）`。
+> - scope、涉及文件、抽象与工作内容应写在「当前状态分析」、「需要修改/添加的文件」和「实施步骤」中，而不是塞进 `大小` 字段。
+> - `XS`: 超小任务（代码变更行数 < 50，涉及文件数 < 3，新增抽象数 0）
+> - `S`: 小任务（代码变更行数 50-200，涉及文件数 3-5，新增抽象数 0-1）
+> - `M`: 中等任务（代码变更行数 200-500，涉及文件数 5-10，新增抽象数 1-3）
+> - `L`: 大任务（代码变更行数 500-1000，涉及文件数 10-20，新增抽象数 3-5）
+> - `XL`: 超大任务（代码变更行数 > 1000，涉及文件数 > 20，新增抽象数 > 5）
+> - `XXL`: 特大任务（代码变更行数 > 3000，涉及文件数 > 50，跨多个模块的架构变更）— 适合由 AI Agent 主导执行、有完整单元测试覆盖的场景
+> - `XXXL`: 巨型任务（代码变更行数 > 5000，涉及文件数 > 100，系统级架构重构）— 仅适用于 AI Agent 全程执行 + 完整自动化测试套件可兜底的 yolo 场景
+>
+> **机械性变更降级规则**：
+> 上述大小阈值衡量的是**设计/审查复杂度**，不是 diff 行数或文件数。如果绝大部分变更是纯机械操作——每处都遵循同一条可机械验证的规则、不涉及业务逻辑或设计判断——应将大小**至少降一档，必要时大幅降级**（例如：100 文件的方法重命名实际复杂度可能只是 XS/S，因为审查者抽样 3-5 处确认替换规则一致即可，不需要逐文件思考）。
+>
+> 典型机械性变更：
+> - 重命名公开方法 / 类 / 字段，导致全仓库 N 个调用点跟改
+> - 修改某个广泛使用的函数签名（增删参数、改返回类型），所有调用点机械跟改
+> - 模块拆分 / 重组，大量文件移动 + import 路径调整
+> - 批量修复新增 lint 规则触发的全仓库违规
+> - 按 codemod 规则批量替换 API（旧 API → 新 API 迁移）
+> - 统一 import 顺序 / 路径 / 别名
+> - 目录重组、按规范批量重命名文件
+> - 给已有未标注的代码批量加类型注解
+>
+> 判断准则：
+> - 审查者是否需要逐文件思考？如果只需抽样核对「是否都按同一规则改」，就是机械性变更
+> - 仍按原始复杂度计大小的部分：触发机械变更的「源头」本身（新增的 lint 规则、codemod 脚本、新 API 接口、新签名的方法声明）不参与降级
+
+> **⚠️ 不可修改**：以下规则部分必须包含在每个计划文档中，AI 和开发者不得修改此部分。
+
+<!-- 计划生成规则：开始 - 此部分不可修改 -->
+## 计划生成规则
+
+- **作者**字段必须填写 GitHub 用户名（通过 `gh api user -q .login` 获取），不得使用 "claude_code"、"AI" 等非人类标识符。此字段用于追踪计划质量归属。
+- **分支**字段必须是当前具名分支。默认使用 feature 分支；只有开发者明确要求时才允许直接在 `master` 落盘。
+- 一份计划只有一个目标；大小不等于多目的。
+- AI 生成的计划文档必须包含本模板中的所有部分；标记为「（如适用）」的部分是可选的，开发者可以选择主动删除。
+- 所有 `> **重要**：` 块必须从模板中复制，不得修改或省略。
+- 开放决策存在时，保持 `create-plan-in-progress`，不生成文件契约、任务图或测试计划。
+- **当前计划完整程度**初始应留空，AI 不得自动填写百分比；随着开发者做出更多决策，AI 应更新此百分比。
+- **大小**、**需要修改/添加的文件**、**错误跟踪**、**断言检测**、**实施步骤**和**测试计划**初始应留空，仅当以下条件全部满足后才生成和更新内容：
+  - 「参考资料」已完整
+  - 「需要决策的事项」中无未解决的问题
+  - 当前计划完整程度达到或超过 95%
+- 决策清空后，正文完整程度必须达到至少 95%，任务通常为 1–5 个粗粒度单元。
+- 开发者做出决策后：
+  - 必须将决策保存到「已归档的决策」
+  - 如果上述各生成部分不为空，必须同步更新它们以反映新的决策
+- 当以下条件全部满足时，AI 必须自动将**当前计划完整程度**更新为 100%：
+  - 「需要决策的事项」中没有未解决的问题（所有决策已归档）
+  - 所有必需的生成部分均已填写，并与已归档决策保持一致
+- `拥有文件` 是排他写入边界。不同任务 owner 不得重叠；明确文件必须由一个且仅一个 owner 覆盖。
+- `consumes` 必须同时出现在 `blocked-by`；任务依赖必须是无环图。
+- POC 计划只承诺验证目标所需的最小闭环。生产打包、性能指标、网络、云服务等只有在目标明确要求时才能进入范围。
+<!-- 计划生成规则：结束 -->
+
+## 需要修改/添加的文件
+
+列出所有将被添加或修改的文件，并提供高级概念代码片段和关键实现细节。
+
+> **重要**：
+> - 每个有行为变化的 source 文件都必须附一段简洁的**高级概念代码片段**，用于锁定公开签名、关键类型或控制流；片段不含 import、不标行数，也不代替完整实现。
+> - **不要在代码片段中包含 import 语句**——import 是实现细节，不传达设计意图。
+> - **路径迁移只说明一次，不要逐处列举**：当某个 Rust 模块或公开符号迁移导致消费方路径机械跟改，只需说明所有引用都指向新路径，不把每个 `use` 改动逐条列出。
+> - 对于关键的实现细节，可以添加代码片段，但不需要完整实现；也可以在片段中用注释说明需要在何处添加或修改什么。
+> - **禁止标注代码行数估算**（如 `~20 LOC`、`约 50 行`、`+30/-10`）：行数对执行 agent 是噪音，文件职责和高级概念片段才是有用信息。
+> - `大小` 字段也不能承载文件数量、抽象数量或工作清单；这些内容应由本节逐文件说明。
+> - 需要说明新组件如何融入现有架构时使用 mermaid 绘图。
+> - 此部分应详尽，包含所有将被添加或修改的文件，并写明 repo-relative 路径。
+> - 测试文件可在本节或「测试计划」中用 `describe` / case 骨架表达，但必须能对应到计划中的行为契约。
+> - **例外**：以下类型的文件无需在此部分逐一列出代码片段，可直接修改：
+>   - 包 / 构建配置文件（如 `Cargo.toml`、`justfile`、`.github/workflows/*.yml` 等）
+>   - lock 文件（如 `Cargo.lock`）
+>   - 文档文件（如 `.md`、`.txt`）
+>   - 仅涉及 import 语句变更的文件
+> - 上述例外只豁免本节逐文件代码片段，不豁免任务 ownership、验收闸门或模块 SOT 同步。计划已经明确点名的文件与测试路径必须进入本节文件契约，并被一个且仅一个任务 owner containment 覆盖；合理 deviation 可在稳定 owner 内新增未预知文件。
+> - 改变 skill 架构或公开工作流契约时，`skills/AGENTS.md`、`skills/skill-architecture.md` 与受影响的共享 guide 必须进入同一 owner 与 gate。
+
+- **新文件**：`src/bus/orchestrator/content/manifest.toml`
+  - **用途**：把下列五个 fixed assets 映射到 prerequisite 的 immutable content slots，声明 content/compatibility version；不能注册 tool 或控制逻辑。
+- **新文件**：`src/bus/orchestrator/content/system.md`
+  - **用途**：建立 harness-level identity：orchestrator 是 first-class room participant 与 process owner；coding agents 和 humans 是 partners；所有 next-step decisions 属于 orchestrator。
+  - **关键修改**：明确 no technical problem solving、evidence-first routing、no self-approval、no hidden reasoning exposure；承认 hard security 来自 harness capabilities。
+- **新文件**：`src/bus/orchestrator/content/agent.md`
+  - **用途**：定义持续运行方式：理解 requirements、维护 Goal/Non-goals/to-do、选择 participant/model/effort、等待/追问、记录 attempt/lesson、恢复/替换与 sitrep。
+  - **关键修改**：happy path 与 failure path 都由 agent 驱动；遇到技术问题先找拥有上下文的 participant；完全失控才请求 human。
+- **新文件**：`src/bus/orchestrator/content/skills/create-workflow/SKILL.md`
+  - **用途**：选择 standard SOP 或从 template 创建 `.bus/temp/<name>.md`，生成 human-visible initial proposal。
+  - **关键修改**：收集 requirements → 写/选 SOP → lint → 提出 Goal/Non-goals、to-do、participants/models/effort/resource/permission budget → 等待 exact approval；approval 前零 dispatch。
+- **新文件**：`src/bus/orchestrator/content/skills/execute-workflow/SKILL.md`
+  - **用途**：让 orchestrator 在每个 room event 后读取当前 SOP、durable state 与 evidence，自主决定并执行下一步。
+  - **关键修改**：每次 create/send/wait/inquire/permission/lease/adapt/retry/replace/escalate 都是 agent judgment；不得等待 harness 自动推进；scope 内可持续修订 `.bus/temp`。
+- **新文件**：`src/bus/orchestrator/content/references/workflow-template.md`
+  - **用途**：作为 `plan-template.md` 的 workflow 对应物，提供 Markdown sections 与 exactly one Mermaid flowchart 的完整可复制 SOP skeleton。
+  - **关键修改**：包含 intent、inputs、participants/roles/capabilities、preflight proposal、success evidence、failure signals、adaptation authority、resource leases、attempt ledger、human tasks、stop/escalation、revision history；图与 prose 必须对齐，但图不具可执行语义。
+- **新文件**：`.bus/standard/review-plan.md`、`.bus/standard/review-pr.md`
+  - **用途**：描述三条 mixed-family independent reviewer lanes、separate author、循环至全部 Ready 的标准 SOP。
+  - **关键修改**：lane 顺序与隔离由 orchestrator维护；有 finding 时向三名 reviewers 和 author 收集建议，把四份完整建议交给 author 做 best-of-N-style resolution；无法 cleanly resolve 才找 human。
+- **新文件**：`.bus/standard/execute-plan.md`
+  - **用途**：由一个 author coding agent 使用其 native subagent harness 实施 reviewed plan，再进入 mixed-model independent review/address cycle。
+  - **关键修改**：orchestrator 避免 simultaneous uncoordinated writers；根据任务复杂度分配 effort；每个 stage 后验证当前 evidence，发生 drift/failure 时自主恢复。
+- **新文件**：`.bus/README.md`
+  - **用途**：说明 standard/temp ownership、Mermaid-as-SOP、dynamic revision、human/agent partnership、approval boundary、promotion、attempt/lesson 与 no-script/no-Appium default。
+- **新目录**：`src/bus/orchestrator/testdata/content/production/`、`src/bus/orchestrator/testdata/content/scenarios/`
+  - **用途**：fixed bundle integrity fixtures，以及 agent-led happy path、review convergence、dynamic spike benchmark、all-failed lessons/reseed、human worker 和 escalation scripted-provider scenarios。
+  - **关键修改**：每个 scenario 明确 model turn 与 tool call；expected trace 不包含 harness-generated next step。
+- **新文件**：`scripts/orchestrator_content_check.py`
+  - **用途**：静态检查 bundle、template、standard SOPs、cross-links、forbidden authority wording 和 scenario fixtures；不解释图的控制流。
+  ```python
+  def validate_repository(repo: Path) -> tuple[Diagnostic, ...]:
+      validate_fixed_content_bundle(repo)
+      validate_workflow_document_structure(repo)
+      validate_agent_led_language(repo)
+      validate_scripted_scenarios(repo)
+      return diagnostics_in_source_order()
+  ```
+- **新文件**：`scripts/test_orchestrator_content_check.py`
+  - **用途**：覆盖 valid bundle、结构错误、错误 authority wording、script-owned flow、participant hierarchy 和 scenario/model-decision correlation。
+- **修改文件**：`skills/AGENTS.md`、`skills/skill-architecture.md`；**新文件**：`docs/guides/orchestrated-room-brief.md`
+  - **用途**：建立 shared Room Brief/participant/handoff contract 与 canonical skill ownership，不在各 skill 重复 authority prose。
+- **修改文件**：`skills/create-plan/SKILL.md`、`skills/review-plan/SKILL.md`、`skills/execute-plan/SKILL.md`、`skills/pr/SKILL.md`、`skills/review-pr/SKILL.md`、`skills/address-review-comments/SKILL.md`
+  - **用途**：收到 harness-framed Room Brief/assignment 时逐字消费 locked Goal/Non-goals 并返回正常 artifact；standalone path 保留现有 derivation/locking。
+  - **关键修改**：orchestrator 可更新 room Goal/Non-goals 和 lock，但 coding skills 不再成为 orchestrated flow 的第二 goal writer；reviewer findings 始终是 evidence-bearing claims，不加 severity tags。
+- **新文件**：`scripts/skill_goal_ownership_check.py`
+  - **用途**：机械验证 shared guide references、single Room Brief writer、standalone fallback、derived symlinks、no severity language 和 no duplicated authority。
+  ```python
+  def validate_goal_ownership(repo: Path) -> tuple[Violation, ...]:
+      verify_shared_room_brief_contract(repo)
+      verify_orchestrated_and_standalone_skill_paths(repo)
+      verify_discovery_links(repo)
+      return violations_in_stable_order()
+  ```
+- **新文件**：`scripts/test_skill_goal_ownership_check.py`
+  - **用途**：覆盖六个 skill 的 orchestrated/standalone branches、single writer、participant handoff 与 canonical symlink integrity。
+- **修改文件**：`justfile`
+  - **用途**：把两个 content/skill checker suites 接入 `maintenance-test`。
+
+明确排除：`Cargo.toml`、`Cargo.lock`、`build.rs`、`src/bus/orchestrator/*.rs`（除 `content/` 与 `testdata/content/`）、`src/client/**`、`src/bus/runtime*.rs` 和 harness acceptance driver；本计划只消费 prerequisite 的 generic interfaces。
+
+## 实施步骤
+
+以粗粒度、可独立验收的任务图描述执行单元。给模型目标、工具、约束和二元验收闸门，不写操作流程。
+
+> **重要**：
+> - 一个任务 = 一段可独立 task acceptance 的完整工作；只因明确并行收益或硬依赖边拆分。天然串行且落在同一文件簇的工作必须合并。
+> - `任务<N>` 是计划内全局唯一、不可变的机读 id，从 1 按源码顺序连续递增；名称非空且唯一。
+> - `blocked-by` 是唯一调度边；`consumes` 只引用已在 `blocked-by` 中声明的生产方 `任务<N>`；产物名称和契约写在生产方 `produces`。
+> - 任意两个任务的 `拥有文件` 必须 containment-aware 两两隔离，依赖边不豁免 overlap；聚合文件和 SOT 只能由一个任务拥有。
+> - `拥有文件` 是任务间的排他写入 / 调度边界和最外层写入上限，不是预计 diff 的精确 allowlist。优先选择可容纳合理 deviation 的稳定模块 / 子系统边界；目录 owner 可以包含文件清单未逐项点名的 descendant，但不授权与任务目标无关的改动。
+> - 本计划明确点名的新增 / 修改 / 删除文件与具体测试文件必须进入文件契约，并被一个且仅一个任务 owner containment 覆盖；配置、文档、仅 import 等文件清单例外不豁免 ownership / gate。改变公开契约时，对应的 Bus 文档或 skill SOT 必须进入同一 owner 与 gate。
+> - 对迁移 / 删除生产模块运行 `skills/review-plan/scripts/consumer_fallout.py`，逐项核实 Rust `use` / `mod`、其他语言 import/require 与同名测试候选；相关项进入文件契约、owner 和 gate，不相关项写明排除依据。inventory 只辅助发现，不替代语义 review。
+> - `目标` 描述做完后是什么样；`工具` 列出必读 SOT、harness 和命令；`约束` 只写必须成立的硬顺序和不变量；`验收闸门` 固定以 `[TASK_LOCAL]` 开头，只给出 `just test-one <filter>`、直接 Cargo/Python/Bun 测试或模块编译等局部正确性命令与二元判定，不把 scoped rustfmt 或完整平台 build 重复写进 task gate。命令必须按当前 `justfile` 与测试 harness 核验；exit 0 但选择零测试或错误 harness 不算通过。
+> - 任务块内禁止 `(需要手动操作)`。人工验证只写在「手动测试」section；若人工裁决是后续实施的硬前置，拆成两份计划。
+> - 主 agent 只在 task report evidence 有效、`review-task Ready` 且所属 wave isolation 通过时勾选 `**完成**`。主 agent 不逐任务重跑 gate/lint；任务完成复选框是共享工作树进度，不表示已 commit。
+> - 自动 gate 完成前所有 actor 必须零 Git：不得 `git add/commit/push`。全部自动 gate 对最终计划 delta 全绿后，`execute-plan` 以 `commit-and-push` 作为最后一步提交并推送到当前具名分支；此后不得再改树。随后交回人工验证、`pr` 与最终 `review-pr`。
+> - 全局 EXIT CHECK 固定为 `just lint` → `just test` → 可选 `just build`，不得使用 task/file filter。任何修复改树都从 final lint 重新开始。任务级 Ready 与局部 review 对最终 PR review 不可替代。
+
+### 任务 1：交付 agent-led content bundle、template 与 standard SOPs
+
+- [ ] **完成**
+- **目标**：完成 production system/agent/create/execute/template 五资产、三个 standard SOPs、developer guide、agent-led scenario fixtures 和 structural checker，且所有文字一致声明 orchestrator model 拥有流程、Mermaid 只表达可修订 SOP、room participants 是 partners。
+- **拥有文件**：`src/bus/orchestrator/content/`、`src/bus/orchestrator/testdata/content/`、`.bus/`、`scripts/orchestrator_content_check.py`、`scripts/test_orchestrator_content_check.py`、`justfile`
+- **blocked-by**：无
+- **produces**：`AGENT_LED_CONTENT_CONTRACT`（five assets、standard/temp SOP contract、scripted scenarios、checker evidence）
+- **consumes**：无
+- **工具**：`plans/2026-09-15-room-orchestrator-agent-led-harness.md`、implemented content/tool/policy/context interfaces、`docs/templates/plan-template.md`、`skills/skill-architecture.md`、`python3 -m unittest scripts.test_orchestrator_content_check`
+- **参考实现**：`docs/templates/plan-template.md` 的 reusable structure；manual Bus review/address cycles；Ralph attempt/lessons evidence only
+- **约束**：不修改 Rust/Cargo/client/harness acceptance driver；SOP 不定义 tool；Mermaid 与 prose 同步但不被程序解释；每个 ordinary/failure transition 的 expected trace 都含 model turn/tool call；agents/humans 使用 first-class participant language；`.bus/temp` 可由 orchestrator动态写，`.bus/standard` only exact human promotion；live provider calls zero
+- **验收闸门**：[TASK_LOCAL] `python3 -m unittest scripts.test_orchestrator_content_check` + `python3 scripts/bus_orchestrator_acceptance.py --profile agent-led --content production --fake-provider` 均 exit 0，且 trace 中每个 workflow effect 都有 preceding model decision、没有 harness-owned transition
+
+### 任务 2：建立 coding-agent Room Brief 与 participant handoff contract
+
+- [ ] **完成**
+- **目标**：六个 canonical coding-agent skills 在 harness-framed dispatch 中逐字消费 orchestrator-owned locked Goal/Non-goals、保留自己的 technical authority 与 artifact contract，并以 first-class participant 身份返回 evidence，而 standalone behavior 完整保留。
+- **拥有文件**：`skills/AGENTS.md`、`skills/skill-architecture.md`、`skills/create-plan/SKILL.md`、`skills/review-plan/SKILL.md`、`skills/execute-plan/SKILL.md`、`skills/pr/SKILL.md`、`skills/review-pr/SKILL.md`、`skills/address-review-comments/SKILL.md`、`docs/guides/orchestrated-room-brief.md`、`scripts/skill_goal_ownership_check.py`、`scripts/test_skill_goal_ownership_check.py`
+- **blocked-by**：任务1
+- **produces**：`ROOM_BRIEF_PARTICIPANT_CONTRACT`（harness-framed assignment、single intent writer、technical ownership、standalone fallback）
+- **consumes**：任务1
+- **工具**：owned skill/docs、`docs/guides/review-response-guide.md`、`scripts/test_skill_migration_contract.py`、`scripts/test_sanitize_review_severity.py`、`python3 -m unittest scripts.test_skill_goal_ownership_check scripts.test_sanitize_review_severity scripts.test_skill_migration_contract`
+- **参考实现**：现有 plan/`.locked-goal` standalone branches、canonical symlink tests、任务1 assignment wording
+- **约束**：只改 canonical skill copies；derived links 不直接编辑；不引入 result envelope 或 workflow protocol；orchestrator owns process/brief，coding agent owns technical judgment；human 与 agent assignment 使用同一 participant/evidence vocabulary；保留 read-only review、closed-world、triage、landing、no-severity 与 250-line contracts
+- **验收闸门**：[TASK_LOCAL] `python3 -m unittest scripts.test_skill_goal_ownership_check scripts.test_sanitize_review_severity scripts.test_skill_migration_contract` + all named suites run nonzero tests and prove single brief writer, six skill branches, technical ownership, participant handoff and derived-link integrity
+
+## 测试计划
+
+定义测试策略和方法，以确保实现的功能符合预期并正确处理各种场景。**优先使用自动化测试**，手动测试仅作为最后手段。
+
+> **重要**：
+> - **自动化测试优先**：AI agent 可以运行 `just test-one <filter>`、`just test`、`just lint` 和适用的 Python/Bun 测试，因此脚本可执行的验证不归类为手动测试。
+> - **手动测试仅限于最后手段**：只有终端交互、视觉流畅度、真实 shell/PTY 生命周期或当前不能安全自动化的 OS 行为才使用。运行命令和查看日志本身不是手动测试。
+> - 测试按 Rust 单元/模块测试、维护脚本测试、集成资源测试和真实终端验收的最小充分层级放置。
+> - 跨平台逻辑使用 `cfg` 与对应 CI/目标验证；不要用运行时条件跳过来伪装覆盖。
+
+### 测试文件：`scripts/test_orchestrator_content_check.py`
+
+- Valid production manifest maps exactly five fixed assets with compatible versions/caps and stable digests.
+- Missing, extra, oversized, non-UTF-8, path-escaping, duplicate or incompatible assets fail closed without exposing prompt bodies.
+- Prompt layering remains system → agent → active skill → trusted projection → delimited untrusted content; content cannot add tools or change mode views.
+- Template requires intent/participants/capabilities/proposal/evidence/failure/adaptation/resource/attempt/human/escalation/revision sections plus exactly one Mermaid flowchart; generated files retain no placeholder.
+- Checker rejects executable code, workflow-defined tools, claims that Mermaid or harness advances work, agents described as disposable components, self-approval, direct technical work and standard writes without human promotion.
+- Standard SOPs keep mixed-family reviewers independent, use a separate author, collect all recommendations before author selection, repeat until all Ready, and escalate only when clean convergence fails.
+- Scripted scenarios prove happy-path, failure-path, lease sequencing, all-spikes-failed handovers/lessons/reseed and human worker steps all contain explicit orchestrator model decisions.
+
+### 测试文件：`scripts/test_skill_goal_ownership_check.py`
+
+- Each of six canonical skills has exactly one harness-framed Room Brief branch and preserves its standalone fallback.
+- Orchestrated coding-agent paths consume rather than rewrite Goal/Non-goals; orchestrator remains the room-level brief owner.
+- No duplicate orchestrator-only skill appears under top-level/discovery skill roots; every discovery link still resolves to canonical source.
+- Entry points remain under 250 lines; no severity/priority review labels or duplicate authority prose are introduced.
+- Handoffs treat human/orchestrator/coding agents as first-class participants with explicit asymmetric capabilities and preserved provenance.
+
+### 单元测试
+
+编写自动化测试用例来验证各个代码单元的功能正确性，确保代码在隔离环境中按预期工作。
+
+**重要**
+
+测试应覆盖以下路径：
+
+- **成功路径**：正常操作流程
+- **回退路径**：当主要方案不可用时的明确降级处理（降级语义必须可观察、可测试）
+- **错误路径**：错误处理与不变量违反
+
+Rust tests live beside their owners or in the repository's existing test modules. Python helper tests use `unittest` or `pytest` according to the neighboring suite; integration assets use the existing Bun harness. For PTY, process, timing, or terminal behavior, state whether the proof uses a deterministic backend/clock or a controlled real process.
+
+#### 测试文件：`scripts/test_orchestrator_content_check.py`
+
+```python
+class CheckedInContentContractTests(unittest.TestCase):
+    def test_all_assets_and_standard_workflows_pass_fixed_harness_contract(self):
+        self.assertEqual(validate_repository(REPO), ())
+
+    def test_script_owned_flow_and_component_language_fail_closed(self):
+        self.assert_rejected("harness-advances-workflow")
+        self.assert_rejected("agents-are-components")
+```
+
+#### 测试文件：`scripts/test_skill_goal_ownership_check.py`
+
+```python
+class LockedRoomBriefContractTests(unittest.TestCase):
+    def test_orchestrated_and_standalone_paths_have_one_goal_owner(self):
+        self.assertEqual(validate_goal_ownership(REPO), ())
+```
+
+### 全局 EXIT CHECK
+
+按顺序运行：
+
+1. `just lint`
+2. `just test`
+3. `just build`
+
+> **重要**：
+> - 前两步必需且顺序固定。`just build` 是可选的第三个槽位，仅在计划行为需要构建证明时保留。
+> - 每个槽位只接受与当前 `justfile` 一致的完整仓库命令，不接受 task filter；计划特有的命令属于 `[TASK_LOCAL]` 闸门。
+> - 需要 Windows 证明时，按影响范围额外运行 `just windows-lint` 或 CI 的 Windows gate，并如实记录当前宿主无法完成的真实终端交互。
+> - 无法由 agent 完整运行的设备 / 视觉验收只进入「手动测试」。
+
+本计划保留 `just build`，因为 production content 必须通过 prerequisite packaging seam 进入 release binary。自动测试另行调用 prerequisite generic acceptance driver 的 closed production-content selector；不修改 driver、不使用 live paid DeepSeek 或真实 coding-agent terminal，因此无额外手动测试。
+
+> **⚠️ 不可修改**：以下规则部分必须包含在每个计划文档中，AI 和开发者不得修改此部分。
+
+<!-- 计划执行规则：开始 - 此部分不可修改 -->
+## 计划执行规则
+
+- AI 只以计划状态判断评审就绪：首次执行必须为 `review-plan-complete`，恢复执行允许为 `plan-execution-in-progress`。
+- `execute-plan` 不再重复检查计划完整程度或逐文件审查状态；文件契约、任务 owner、依赖图与验收闸门仍必须通过结构和安全校验。
+- **最小变更原则**：
+  - 仅修改任务直接要求的代码
+  - 除非明确要求，否则不得重写、重新排序或重构不相关的文件或模块
+  - 除非必要，否则不得修改空白字符（不删除空行、不添加空行、不更改缩进或格式）
+  - 保留所有现有的命名、风格、模式和架构
+  - 不确定是否需要额外的自定义逻辑、抽象或新结构时，应停止并请求人工确认，而不是发明新机制
+- **注释质量原则**：
+  - 不要生成重复代码内容的注释
+  - 不要描述函数名、参数名、返回类型或基本逻辑（循环、空值检查、简单条件判断）
+  - 仅在解释**为什么**时添加注释，而非解释**是什么**
+  - 允许的注释内容：非显而易见的逻辑或行为、关键假设或约束、平台特定问题、副作用或生命周期交互、代码中不明显的重要推理
+  - 宁愿**不添加注释**，也不要添加无意义或冗余的注释
+  - Public-repository comments must use concise English
+- **禁止 TODO 原则**：
+  - 不得编写 TODO、FIXME、XXX 或占位符注释
+  - 不得留下存根实现、空代码块、静默降级或伪造成功
+  - 生成的每段代码必须完整、具体且可在上下文中运行
+  - 如果无法完全实现某项功能，应停止并请求澄清，而不是猜测或留下占位符
+- **任务范围原则**：
+  - **一个计划 = 一次性执行 = 一个 PR，与大小无关**：任务图只用于安全并行和硬依赖调度，不是人工断点；编排方不得将非法图或资源限制不透明地静默串行化。
+  - 执行开始前记录 `DIRTY_BASELINE`；与任务 owner 重叠的预存脏路径必须 STOP，不重叠的 baseline 必须保持逐字不变。
+  - 执行期任务只能写自己的 owner；发现 owner gap 必须停止并修计划，不得越界。
+  - 每个任务必须发布与当前 generation、文件内容和 gate 日志绑定的 evidence，再经过 `/execute-plan` 内部 task review。
+  - 全部任务 Ready 后，在同一 candidate tree 上运行完整 EXIT CHECK；任何修复改树都从 final lint 重建证据。
+  - 最终工作树必须包含任务 checkbox、deviation report 和 `plan-execution-complete` 状态，再计算 tree hash。
+  - 全部 task Ready 后，`/execute-plan` 在 final gate 前机械写入 `plan-execution-complete`，使状态本身进入被验证 tree；任一 final gate 失败或 tree 漂移必须恢复 in-progress，修复后重新写入 complete 并从 final lint 重建证据。
+  - agent-driven e2e 必须在该精确 tree 上运行；人工 e2e 只记录待验证 tree 与清单，不冒充通过。
+  - 任务内不得出现 `(需要手动操作)`；人工验证只存在于「手动测试」section。人工结果若是后续实施的硬前置，必须拆成两份计划。
+  - task acceptance 只是局部安全门；人工验证后仍必须运行完整 `/review-pr`。
+  - XXL/XXXL 也使用同一粗粒度任务图；任务数量不按计划大小机械扩张。
+  - 无需考虑渐进式迁移策略，应直接完整实现所需功能。
+- **Git 落盘原则**（以 [`commit-and-push`](../../skills/commit-and-push/SKILL.md) 为 SOT）：
+  - 从进入 `plan-execution-in-progress` 到全部自动 gate 完成，所有 actor 必须零 Git：不得 `git add`、`commit`、`push`、`stash`、`rebase` 或切换 ref。
+  - 自动 gate 全绿后只允许以 `commit-and-push` 作为最后一步落盘，之后不得再改树。
+  - 默认不在共享分支落盘；开发者明确要求直接在 `master` commit-and-push 时，该要求授权普通提交和显式 `git push origin master:master`，但不授权 force-push。
+  - feature 分支落盘后交回开发者人工验证，再由 `pr` 创建或更新面向 `master` 的 PR，并由 `review-pr` 完成最终审查；`execute-plan` 自身不 rebase、不创建 PR。
+<!-- 计划执行规则：结束 -->
