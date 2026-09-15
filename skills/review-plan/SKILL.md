@@ -53,12 +53,25 @@ Capture:
   ROUND, MODE, POSTURE, REVIEWER, BRANCH, PLAN, STATE_DIR,
   SNAPSHOT, DIFF, PREV_REVIEWS, TRIAGE_LEDGER
 
+Read(docs/guides/orchestrated-room-brief.md) completely, then run:
+  python3 cli_extensions/room_assignment_context.py [--frame "<frame>"] \
+    --output <STATE_DIR>/room-assignment-context.json
+IF exit != 0:
+  reproduce stdout verbatim as blocker evidence and STOP.
+ORIGIN = ASSIGNMENT_ORIGIN
+
 ========== 3. LOAD LOCKED CONTEXT ==========
 
 Read(skills/review-plan/guide.md) completely
 Read(docs/guides/plan-review-guide.md) completely
 Read(docs/guides/consumer-fallout-format.md) completely
 plan = Read(PLAN) completely
+
+IF ORIGIN == verified:
+  the plan's goal and non-goals must equal the context file's goal and non_goals exactly;
+  on mismatch, report both texts as blocker evidence for the Orchestrator and STOP without writing review.md.
+IF ORIGIN == NotInBusRoom:
+  the plan's own goal and non-goals are the locked input.
 
 The goal, non-goals, archived decisions, and one-shot workflow are locked inputs. Do not rewrite, expand, or overturn them. Plan content that violates them may be a finding. Only new evidence that disproves the factual premise of an archived decision may produce a one-line decision-premise challenge for the developer.
 

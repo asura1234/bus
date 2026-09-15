@@ -26,6 +26,25 @@ HARD RULES
 
 ========== PASS 0: RESOLVE AND SANITIZE ==========
 
+Read(docs/guides/orchestrated-room-brief.md) completely, then run:
+  python3 cli_extensions/room_assignment_context.py [--frame "<frame>"] \
+    --output temp/address-review-comments/room-assignment-context.json
+IF exit != 0:
+  reproduce stdout verbatim as blocker evidence and STOP.
+ORIGIN = ASSIGNMENT_ORIGIN
+
+IF ORIGIN == verified:
+  the locked goal and non-goals are the context file's goal and non_goals; every lane's
+  locked goal and any plan Goal/Non-goals must match them exactly, otherwise STOP with blocker evidence.
+  IF the Orchestrator's assignment explicitly authorizes plan-review finalization with a plan hash and lane rounds:
+    read the review response guide section `Plan-review finalization boundary`, then run:
+      python3 skills/address-review-comments/scripts/finalize_plan_review.py finalize \
+        --plan <plan> --review-root temp/review-plan/<branch_slug>/<plan_basename> \
+        --expected-plan-hash <hash> --lane <lane>:<round> [--lane <lane>:<round>]...
+    return its receipt or FAIL output verbatim and STOP.
+IF ORIGIN == NotInBusRoom:
+  the caller or developer supplies the locked goal exactly as below.
+
 IF --review-file or --free-form-file is explicit:
   canonicalize in argument order and deduplicate.
 ELSE:

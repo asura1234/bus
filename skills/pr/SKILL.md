@@ -12,7 +12,7 @@ plans = every plan path supplied by the developer for this invocation, in argume
 RULES
 - Code narrative uses only the current repository, feature branch, and actual changes as facts. Plans lock goal and non-goals only.
 - Prior create-plan, execute-plan, review-plan, or review-pr invocation is not required.
-- Do not inspect or infer another skill's private control state, callbacks, or temporary artifacts. The sole cross-skill handoff is the `.locked-goal` written and returned by pr_goal_context.py.
+- Do not inspect or infer another skill's private control state, callbacks, or temporary artifacts. The sole cross-skill handoff is `.locked-goal` and `.locked-non-goals`, written and returned by pr_goal_context.py.
 - PR title and narrative content are English. Canonical fixed headings and machine tokens remain byte-compatible with references/pr-template.md. Both the initial Draft and final body must pass pr_format_check.py with the matching phase.
 - Every commit and push is delegated to commit-and-push. Every rebase is delegated to rebase-origin-main. Do not duplicate their Git protocols.
 
@@ -72,7 +72,21 @@ draft_commits = git log <baseline>..<draft_head> --oneline
 
 ========== LOCK PR INTENT ==========
 
-IF plans nonempty:
+Read(docs/guides/orchestrated-room-brief.md) completely, then run:
+  python3 cli_extensions/room_assignment_context.py [--frame "<frame>"] \
+    --output "<ignored-temp-assignment-context>"
+IF exit != 0:
+  STOP and return stdout verbatim as blocker evidence.
+ORIGIN = ASSIGNMENT_ORIGIN
+
+IF ORIGIN == verified:
+  Run:
+    python3 skills/pr/scripts/pr_goal_context.py \
+      --branch "<branch>" --output "<ignored-temp-goal-context>" \
+      --assignment-context "<ignored-temp-assignment-context>" \
+      [--plan "<path>" ... in supplied order]
+  Supplied plans must match the verified Room Brief exactly; the script fails closed otherwise.
+ELSE IF ORIGIN == NotInBusRoom AND plans nonempty:
   Run:
     python3 skills/pr/scripts/pr_goal_context.py \
       --branch "<branch>" --output "<ignored-temp-goal-context>" \
@@ -88,9 +102,9 @@ ELSE:
 IF the command fails:
   STOP. Do not hand-parse plans or create the lock manually.
 
-Capture GOAL_CONTEXT_FILE and LOCKED_GOAL_FILE.
+Capture GOAL_CONTEXT_FILE, LOCKED_GOAL_FILE, and LOCKED_NON_GOALS_FILE.
 Read(GOAL_CONTEXT_FILE) completely.
-The generated goal/non-goal sections and `.locked-goal` are immutable for the rest of this run.
+The generated goal/non-goal sections and both locks are immutable for the rest of this run.
 
 ========== PUBLISH DRAFT OR CAPTURE EXISTING READY PR ==========
 
@@ -196,7 +210,7 @@ Report:
   - final HEAD
   - commits created or updated
   - final PASS gate artifact with Base/Head and finalized docs audit plus git diff --check
-  - GOAL_CONTEXT_FILE and LOCKED_GOAL_FILE for review-pr
+  - GOAL_CONTEXT_FILE, LOCKED_GOAL_FILE, and LOCKED_NON_GOALS_FILE for review-pr
   - pr_format_check result on the published PR
   - pending manual verification
   - unrelated dirty files explicitly excluded

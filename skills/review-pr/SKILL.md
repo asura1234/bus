@@ -26,7 +26,7 @@ SHOULD for dimensions 2 / 3 / 7:
   - a probe must have a meaningful failure mode and must turn red when the implementation is wrong; assertions about the harness itself or a mock configured by the test prove nothing
 
 MAY:
-  - write this skill's round artifacts and `.locked-goal` under temp/review-pr/
+  - write this skill's round artifacts under temp/review-pr/; review locks come only from pr_goal_context.py
   - run read-only source and Git queries
 
 MUST NOT:
@@ -53,6 +53,19 @@ UNPROVEN SUSPICION:
 
 ========== 2. DETERMINISTIC PROLOGUE ==========
 
+Read(docs/guides/orchestrated-room-brief.md) completely, then run:
+  python3 cli_extensions/room_assignment_context.py [--frame "<frame>"] \
+    --output temp/review-pr/room-assignment-context.json
+IF exit != 0:
+  reproduce stdout verbatim as blocker evidence and STOP.
+ORIGIN = ASSIGNMENT_ORIGIN
+IF ORIGIN == verified:
+  Run:
+    python3 skills/pr/scripts/pr_goal_context.py \
+      --branch "<current branch>" --output temp/review-pr/goal-context.md \
+      --assignment-context temp/review-pr/room-assignment-context.json [--plan <plan-file>]
+  IF it fails: reproduce stderr verbatim as blocker evidence and STOP.
+
 Run:
   python3 skills/review-pr/scripts/review_round.py \
     --base <ref> [--reviewer <lane>] [--devils-advocate] [--plan <plan-file>]
@@ -66,11 +79,18 @@ IF exit != 0 AND output says a bare invocation is ambiguous because multiple or 
     rerun immediately with that exact --reviewer value.
   ELSE:
     reproduce stdout/stderr verbatim, request the exact lane, and STOP.
-ELSE IF exit != 0 AND FAIL says a planless PR lacks a locked goal:
-  ask the developer for the PR's one-sentence goal;
-  write the reply verbatim to the reported temp/review-pr/<branch>/.locked-goal path after trimming only leading/trailing whitespace;
-  do not infer it from the diff, commits, or PR description;
-  rerun the prologue.
+ELSE IF exit != 0 AND FAIL names missing, blank, or mismatched locked Goal/Non-goals:
+  IF ORIGIN == verified:
+    reproduce stdout verbatim as blocker evidence and STOP.
+  IF ORIGIN == NotInBusRoom AND --plan was supplied:
+    run pr_goal_context.py --branch <branch> --output temp/review-pr/goal-context.md --plan <plan-file>;
+    rerun the prologue once; reproduce any remaining FAIL verbatim and STOP.
+  IF ORIGIN == NotInBusRoom AND no plan was supplied:
+    ask the developer for the PR's one-sentence Goal and its explicit Non-goals (`无` when none);
+    save each reply verbatim to ignored temp goal and non-goal files, trimming only leading/trailing whitespace;
+    do not infer either from the diff, commits, or PR description;
+    run pr_goal_context.py --branch <branch> --output temp/review-pr/goal-context.md --goal-file <goal-file> --non-goal-file <non-goal-file>;
+    rerun the prologue.
 ELSE IF exit != 0:
   reproduce stdout/stderr verbatim and STOP.
 
@@ -81,7 +101,7 @@ IF NOTE says the worktree is dirty:
 Capture:
   ROUND, MODE, POSTURE, REVIEWER, BRANCH, BASE, HEAD, STATE_DIR,
   DIFF_SNAPSHOT, DIFF_DELTA, PREV_REVIEWS, PLAN, LOCKED_GOAL_FILE,
-  TRIAGE_LEDGER
+  LOCKED_NON_GOALS_FILE, TRIAGE_LEDGER
 
 The prologue excludes plan documents from the committed code-review diff. Plan changes do not enter touched-file scope, findings, consistency drift, or the PR single-purpose calculation.
 
@@ -93,12 +113,12 @@ diff = Read(DIFF_SNAPSHOT)
 
 IF PLAN != none:
   plan = Read(PLAN) completely
-  locked_goal = the plan's goal verbatim
-  non_goals = the plan's non-goals verbatim, when present
+  locked_goal = the plan's goal verbatim, equal to LOCKED_GOAL_FILE
+  non_goals = the plan's non-goals verbatim, equal to LOCKED_NON_GOALS_FILE
   archived_decisions = the plan's archived decisions verbatim, when present
 ELSE:
   locked_goal = Read(LOCKED_GOAL_FILE)
-  non_goals = none
+  non_goals = Read(LOCKED_NON_GOALS_FILE)
   archived_decisions = none
 
 An associated plan supplies only locked goal, non-goals, and archived decisions. It is not a code-review target. Do not review or comment on plan-file changes in this PR.

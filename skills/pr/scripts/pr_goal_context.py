@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the PR goal/non-goal fragment and the review-pr branch goal lock."""
+"""Render the PR goal/non-goal fragment and the review-pr branch goal and non-goal locks."""
 
 from __future__ import annotations
 
@@ -11,6 +11,13 @@ from typing import Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+CLI_EXTENSIONS = REPO_ROOT / "cli_extensions"
+if str(CLI_EXTENSIONS) not in sys.path:
+    sys.path.insert(0, str(CLI_EXTENSIONS))
+
+from room_assignment_context import OrchestratedContext, read_assignment_context  # noqa: E402
+
+
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 H2_RE = re.compile(r"^## ([^\r\n]+)$")
 
@@ -95,6 +102,22 @@ def render_context(goal: str, non_goal: str) -> str:
     return f"## 目标\n\n{goal}\n\n## 非目标\n\n{non_goal}\n"
 
 
+def locked_context_paths(repo_root: Path, branch: str) -> tuple[Path, Path]:
+    branch_slug = re.sub(r"[^A-Za-z0-9_-]", "-", branch)
+    lane_root = repo_root / "temp" / "review-pr" / branch_slug
+    return lane_root / ".locked-goal", lane_root / ".locked-non-goals"
+
+
+def _verified_room_brief(path: Path) -> tuple[str, str]:
+    context = read_assignment_context(path)
+    if not isinstance(context, OrchestratedContext):
+        raise ValueError("room assignment context 必须来自 verified TRUSTED_ROOM_ASSIGNMENT_V1")
+    return (
+        _trim_boundary_blank_lines(context.goal),
+        _trim_boundary_blank_lines(context.non_goals),
+    )
+
+
 def prepare_context(
     *,
     branch: str,
@@ -103,29 +126,41 @@ def prepare_context(
     plan_paths: Sequence[Path] = (),
     goal_path: Path | None = None,
     non_goal_path: Path | None = None,
+    assignment_context_path: Path | None = None,
 ) -> Path:
     if not branch or branch in {"main", "master"}:
         raise ValueError("必须提供非 main/master 的具名 feature branch")
-    if plan_paths and (goal_path is not None or non_goal_path is not None):
-        raise ValueError("计划模式与 agent authored goal/non-goal 模式不能混用")
+    authored = goal_path is not None or non_goal_path is not None
+    if authored and (plan_paths or assignment_context_path is not None):
+        raise ValueError("authored goal/non-goal 模式不能与计划或 room assignment context 混用")
+
+    room_brief = (
+        _verified_room_brief(assignment_context_path)
+        if assignment_context_path is not None
+        else None
+    )
     if plan_paths:
         goal, non_goal = build_context(
             [path.read_text(encoding="utf-8") for path in plan_paths]
         )
+        if room_brief is not None and (goal, non_goal) != room_brief:
+            raise ValueError("计划 Goal/Non-goals 与 verified Room Brief 不一致；不得覆盖")
+    elif room_brief is not None:
+        goal, non_goal = room_brief
     else:
         if goal_path is None or non_goal_path is None:
             raise ValueError("无计划时必须同时提供 --goal-file 与 --non-goal-file")
         goal = _trim_boundary_blank_lines(goal_path.read_text(encoding="utf-8"))
         non_goal = _trim_boundary_blank_lines(non_goal_path.read_text(encoding="utf-8"))
         if not goal or not non_goal:
-            raise ValueError("agent authored goal/non-goal 不得为空")
+            raise ValueError("authored goal/non-goal 不得为空")
 
-    branch_slug = re.sub(r"[^A-Za-z0-9_-]", "-", branch)
-    locked_goal_path = repo_root / "temp" / "review-pr" / branch_slug / ".locked-goal"
+    locked_goal_path, locked_non_goals_path = locked_context_paths(repo_root, branch)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     locked_goal_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_context(goal, non_goal), encoding="utf-8")
     locked_goal_path.write_text(f"{goal}\n", encoding="utf-8")
+    locked_non_goals_path.write_text(f"{non_goal}\n", encoding="utf-8")
     return locked_goal_path
 
 
@@ -138,13 +173,14 @@ def _relative(path: Path, root: Path) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Prepare exact PR goal/non-goal context and review-pr goal lock"
+        description="Prepare exact PR goal/non-goal context and review-pr goal/non-goal locks"
     )
     parser.add_argument("--branch", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--plan", type=Path, action="append", default=[])
     parser.add_argument("--goal-file", type=Path)
     parser.add_argument("--non-goal-file", type=Path)
+    parser.add_argument("--assignment-context", type=Path)
     args = parser.parse_args(argv)
     try:
         locked_goal_path = prepare_context(
@@ -154,12 +190,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan_paths=args.plan,
             goal_path=args.goal_file,
             non_goal_path=args.non_goal_file,
+            assignment_context_path=args.assignment_context,
         )
     except (OSError, UnicodeError, ValueError) as error:
         print(f"pr goal context failed: {error}", file=sys.stderr)
         return 1
+    _, locked_non_goals_path = locked_context_paths(REPO_ROOT, args.branch)
     print(f"GOAL_CONTEXT_FILE={_relative(args.output, REPO_ROOT)}")
     print(f"LOCKED_GOAL_FILE={_relative(locked_goal_path, REPO_ROOT)}")
+    print(f"LOCKED_NON_GOALS_FILE={_relative(locked_non_goals_path, REPO_ROOT)}")
     return 0
 
 

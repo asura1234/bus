@@ -11,7 +11,8 @@ What it does:
      - base ref (default origin/master) resolvable
      - committed non-plan diff is non-empty (nothing to review otherwise); `plans/**`
        is excluded because plans are locked review context, not code-review targets
-     - when no plan is associated, a developer-supplied branch-level locked goal exists
+     - both branch-level locks, `.locked-goal` and `.locked-non-goals`, exist and are
+       nonblank; with an associated plan both must equal the plan's Goal/Non-goals
 
   2. Round bookkeeping under temp/review-pr/<branch>/<reviewer>/:
      - each reviewer gets an isolated lane — multi-reviewer lanes must not collide
@@ -52,7 +53,8 @@ stdout on success (KEY=VALUE, one per line; paths repo-relative):
   DIFF_DELTA=.../round-02/diff-delta.patch                     (or "none")
   PREV_REVIEWS=.../round-01/review.md                          (comma-joined, or "none")
   PLAN=<plan-file>                                             (or "none")
-  LOCKED_GOAL_FILE=temp/review-pr/<branch>/.locked-goal        (or "none" when PLAN exists)
+  LOCKED_GOAL_FILE=temp/review-pr/<branch>/.locked-goal
+  LOCKED_NON_GOALS_FILE=temp/review-pr/<branch>/.locked-non-goals
   TRIAGE_LEDGER=.../<ts1>/triage.md,.../<ts2>/triage.md        (PR mode only, mtime old→new, comma-joined, or "none")
   NOTE=...                                                     (zero or more)
 
@@ -69,15 +71,38 @@ import difflib
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+PR_SCRIPTS = REPO_ROOT / "skills" / "pr" / "scripts"
+if str(PR_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(PR_SCRIPTS))
+
+# The lock writer owns plan section parsing; exact-match checks reuse that single parser.
+from pr_goal_context import build_context  # noqa: E402
+
+
 TRIAGE_MODE_FIELD_RE = re.compile(
     r"(?im)^\s*(?:\*\*)?(?:review type|review mode|审查类型|模式)(?:\*\*)?\s*[:：]\s*(plan|pr|code|task)\b"
 )
 TRIAGE_MODE_TITLE_RE = re.compile(r"(?im)^#.*?[（(]\s*(plan|pr|code|task)\s*模式")
 TRIAGE_MODE_ALIASES = {"plan": "plan", "pr": "pr", "code": "pr", "task": "task"}
+LOCKED_GOAL_NAME = ".locked-goal"
+LOCKED_NON_GOALS_NAME = ".locked-non-goals"
+
+
+class LockedContextError(ValueError):
+    """Locked review Goal/Non-goals are missing, blank, or disagree with the plan."""
+
+
+@dataclass(frozen=True)
+class LockedReviewContext:
+    goal: str
+    non_goals: str
+    goal_file: Path
+    non_goals_file: Path
 
 
 def rel(path: Path) -> str:
@@ -91,12 +116,49 @@ def git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True)
 
 
-def read_locked_goal(goal_file: Path) -> str | None:
-    """读取无计划 PR 的开发者锁定目标；不存在或只有空白时返回 None。"""
-    if not goal_file.is_file():
-        return None
-    goal = goal_file.read_text().strip()
-    return goal or None
+def read_required_goal_and_non_goals(lane_root: Path) -> LockedReviewContext:
+    """读取分支级 Goal 与 Non-goals 两份 lock；任一缺失或只有空白都 fail closed。"""
+    goal_file = lane_root / LOCKED_GOAL_NAME
+    non_goals_file = lane_root / LOCKED_NON_GOALS_NAME
+    values: dict[Path, str] = {}
+    missing: list[str] = []
+    for path in (goal_file, non_goals_file):
+        value = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+        if value:
+            values[path] = value
+        else:
+            missing.append(rel(path))
+    if missing:
+        raise LockedContextError("缺少或空白的锁定上下文：" + "、".join(missing))
+    return LockedReviewContext(
+        goal=values[goal_file],
+        non_goals=values[non_goals_file],
+        goal_file=goal_file,
+        non_goals_file=non_goals_file,
+    )
+
+
+def require_exact_plan_match(context: LockedReviewContext, plan: Path) -> None:
+    goal, non_goals = build_context([plan.read_text(encoding="utf-8")])
+    mismatched = [
+        label
+        for label, locked, planned in (
+            ("Goal", context.goal, goal.strip()),
+            ("Non-goals", context.non_goals, non_goals.strip()),
+        )
+        if locked != planned
+    ]
+    if mismatched:
+        raise LockedContextError(
+            "锁定的 " + "、".join(mismatched) + f" 与计划 {rel(plan)} 不一致；不得自动覆盖"
+        )
+
+
+def load_locked_review_context(lane_root: Path, plan: Path | None) -> LockedReviewContext:
+    context = read_required_goal_and_non_goals(lane_root)
+    if plan is not None:
+        require_exact_plan_match(context, plan)
+    return context
 
 
 def triage_mode(path: Path) -> str | None:
@@ -274,17 +336,16 @@ def main(argv: list[str]) -> int:
 
     branch_slug = re.sub(r"[^A-Za-z0-9_-]", "-", branch)
     lane_root = REPO_ROOT / "temp" / "review-pr" / branch_slug
-    locked_goal_file: Path | None = None
-    if plan_path is None:
-        locked_goal_file = lane_root / ".locked-goal"
-        if read_locked_goal(locked_goal_file) is None:
-            print("FAIL")
-            print(
-                "- 当前 PR 没有关联计划，也没有开发者锁定目标。请用一句话说明："
-                "这个 PR 的单一 GOAL 是什么？收到回答后，reviewer 必须将原文写入 "
-                f"{rel(locked_goal_file)} 再继续；不得从 diff、commit 或 PR 描述自行推断。"
-            )
-            return 1
+    try:
+        locked = load_locked_review_context(lane_root, plan_path)
+    except (LockedContextError, ValueError, OSError, UnicodeError) as error:
+        print("FAIL")
+        print(
+            f"- {error}。两份 locks 只由 skills/pr/scripts/pr_goal_context.py 生成"
+            "（--plan、verified --assignment-context，或开发者提供的 --goal-file 与 --non-goal-file）；"
+            "不得从 diff、commit 或 PR 描述自行推断。"
+        )
+        return 1
 
     notes: list[str] = []
     if git("status", "--porcelain").stdout.strip():
@@ -374,7 +435,8 @@ def main(argv: list[str]) -> int:
     prev_reviews = ",".join(rel(d / "review.md") for d in completed)
     print(f"PREV_REVIEWS={prev_reviews if prev_reviews else 'none'}")
     print(f"PLAN={rel(plan_path) if plan_path else 'none'}")
-    print(f"LOCKED_GOAL_FILE={rel(locked_goal_file) if locked_goal_file else 'none'}")
+    print(f"LOCKED_GOAL_FILE={rel(locked.goal_file)}")
+    print(f"LOCKED_NON_GOALS_FILE={rel(locked.non_goals_file)}")
     triage = triage_ledgers(branch_slug)
     print(f"TRIAGE_LEDGER={','.join(rel(t) for t in triage) if triage else 'none'}")
     for note in notes:

@@ -36,6 +36,12 @@ workflow layering, artifact lifecycle, and agent communication conventions.
   publishing operations. `execute-plan` preserves the canonical evidence/state
   machinery but adapts Desktop-specific gates to `just lint`, `just test`, and
   optional `just build`.
+- Workflows that consume Goal and Non-goals inside a Bus room follow
+  [orchestrated-room-brief.md](../docs/guides/orchestrated-room-brief.md)
+  through `cli_extensions/room_assignment_context.py`; only
+  `skills/pr/scripts/pr_goal_context.py` produces review Goal/Non-goals locks.
+  Orchestrator-only skills live in the embedded production content bundle,
+  never under `skills/`.
 
 Discovery links are derived views: `.agents/skills` serves Codex and Cursor,
 and `.claude/skills` serves Claude. Edit only the canonical copy here.

@@ -15,6 +15,20 @@ Read these files completely before starting:
 
 This skill consumes plans that follow [the canonical plan template](../../docs/templates/plan-template.md), regardless of whether `create-plan` or a developer authored them.
 
+## 0. Room assignment context
+
+Read [Orchestrated Room Brief](../../docs/guides/orchestrated-room-brief.md), then run:
+
+```sh
+python3 cli_extensions/room_assignment_context.py [--frame "<frame>"] \
+  --output temp/room-assignment/execute-plan/context.json
+```
+
+A nonzero exit is blocker evidence: return its stdout verbatim and stop. Otherwise branch on `ASSIGNMENT_ORIGIN`:
+
+- IF ORIGIN == verified: the plan's Goal and Non-goals must equal the context file exactly; a mismatch is blocker evidence. Perform only the bounded task, review, remediation, or finalization action the room Orchestrator assigned, inside its owner and gate, and report the evidence to the Orchestrator. Do not run the `execute_plan.py` progression commands; the Orchestrator chooses every next action.
+- IF ORIGIN == NotInBusRoom: run the standalone workflow below unchanged.
+
 ## 1. Start or resume
 
 `review-plan-complete` is the only first-run readiness state. A resumed execution accepts `plan-execution-in-progress`. Do not create a second readiness system from per-file checkboxes or completeness percentages.

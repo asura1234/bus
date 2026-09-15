@@ -106,6 +106,15 @@ A control message contains at least the closed status, task identity, and artifa
 
 A worker immediately reports missing context, owner gaps, blockers, or completed work with correctness concerns. The main agent waits only on known-running workers and progresses local orchestration first. Use bounded long waits, not repeated short polling or "are you done" messages.
 
+## Room assignment context
+
+Canonical workflow skills can run inside a Bus room. Each layer keeps its own authority:
+
+- **Format:** `docs/guides/room-brief-projection-format.md` owns the trusted assignment projection and the verifier result.
+- **Principles:** `docs/guides/orchestrated-room-brief.md` owns branch mapping, Goal/Non-goals precedence, and participant handoff.
+- **Mechanics:** `cli_extensions/room_assignment_context.py` maps discovery and verifier results to one context; `skills/pr/scripts/pr_goal_context.py` produces the review Goal/Non-goals locks; `scripts/skill_goal_ownership_check.py` verifies the consuming skills.
+- **Execution:** each consuming `SKILL.md` runs the shared consumer before deriving intent and branches on `verified` or `NotInBusRoom`; any other result stops with blocker evidence.
+
 ## Directory and discovery contract
 
 ```text

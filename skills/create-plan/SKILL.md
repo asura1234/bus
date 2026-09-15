@@ -15,6 +15,12 @@ TEMPLATE docs/templates/plan-template.md
 ========== 1. LOCK INPUT ==========
 
 Read skills/AGENTS.md and docs/templates/plan-template.md completely.
+Read docs/guides/orchestrated-room-brief.md completely, then run:
+  python3 cli_extensions/room_assignment_context.py [--frame "<frame>"] \
+    --output temp/room-assignment/create-plan/context.json
+IF exit != 0:
+  reproduce stdout verbatim as blocker evidence and STOP.
+ORIGIN = ASSIGNMENT_ORIGIN
 
 date = today in YYYY-MM-DD
 slug = prompt condensed to about five lowercase kebab-case English words
@@ -30,6 +36,12 @@ Populate every metadata placeholder:
   created     = date
   status      = create-plan-in-progress
   prerequisites/follow-ups = explicit prompt facts, otherwise 无
+
+IF ORIGIN == verified:
+  goal = the context file's goal, verbatim;
+  non-goals = the context file's non_goals, verbatim;
+  never rewrite, narrow, or extend them, and skip the GOAL GATE below.
+IF ORIGIN == NotInBusRoom, apply the standalone GOAL GATE:
 
 GOAL GATE:
 Extract one exact outcome from the prompt and conversation. Cohesion, not task
