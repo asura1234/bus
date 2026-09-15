@@ -8,7 +8,7 @@ use crate::bus::{
     runtime::{BusCommand, BusEvent, BusHandle, BusSnapshot},
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, VecDeque},
     sync::Arc,
 };
 
@@ -28,7 +28,7 @@ pub(super) enum ComposerSize {
 pub(super) struct LocalRoom {
     pub text: Editor,
     pub notes: Editor,
-    pub recipients: BTreeSet<AgentId>,
+    pub recipients: AgentRecipients,
     pub composer_size: ComposerSize,
     // None follows the caret; Some is an independently scrolled viewport.
     pub composer_scroll: Option<usize>,

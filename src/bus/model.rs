@@ -18,6 +18,99 @@ id_type!(AgentId);
 id_type!(PromptId);
 id_type!(RequestId);
 
+/// Unique recipients in the order the sender selected them.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub(crate) struct AgentRecipients(Vec<AgentId>);
+
+impl AgentRecipients {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &AgentId> {
+        self.0.iter()
+    }
+
+    pub(crate) fn contains(&self, id: &AgentId) -> bool {
+        self.0.contains(id)
+    }
+
+    pub(crate) fn insert(&mut self, id: AgentId) -> bool {
+        if self.contains(&id) {
+            false
+        } else {
+            self.0.push(id);
+            true
+        }
+    }
+
+    pub(crate) fn remove(&mut self, id: &AgentId) -> bool {
+        let Some(index) = self.0.iter().position(|candidate| candidate == id) else {
+            return false;
+        };
+        self.0.remove(index);
+        true
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&AgentId) -> bool) {
+        self.0.retain(|id| keep(id));
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentRecipients {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(Vec::<AgentId>::deserialize(deserializer)?
+            .into_iter()
+            .collect())
+    }
+}
+
+impl FromIterator<AgentId> for AgentRecipients {
+    fn from_iter<T: IntoIterator<Item = AgentId>>(iter: T) -> Self {
+        let mut recipients = Self::default();
+        for id in iter {
+            recipients.insert(id);
+        }
+        recipients
+    }
+}
+
+impl<const N: usize> From<[AgentId; N]> for AgentRecipients {
+    fn from(ids: [AgentId; N]) -> Self {
+        ids.into_iter().collect()
+    }
+}
+
+impl<'a> IntoIterator for &'a AgentRecipients {
+    type Item = &'a AgentId;
+    type IntoIter = std::slice::Iter<'a, AgentId>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for AgentRecipients {
+    type Item = AgentId;
+    type IntoIter = std::vec::IntoIter<AgentId>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Provider {
@@ -58,7 +151,7 @@ pub(crate) struct AgentRuntimeIdentity {
 pub(crate) struct Draft {
     pub(crate) text: String,
     pub(crate) files: Vec<PathBuf>,
-    pub(crate) recipient_ids: BTreeSet<AgentId>,
+    pub(crate) recipient_ids: AgentRecipients,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -66,7 +159,7 @@ pub(crate) struct Prompt {
     pub(crate) id: PromptId,
     pub(crate) text: String,
     pub(crate) files: Vec<PathBuf>,
-    pub(crate) recipient_ids: BTreeSet<AgentId>,
+    pub(crate) recipient_ids: AgentRecipients,
     pub(crate) submitted_at_ms: u64,
 }
 
@@ -656,7 +749,7 @@ impl BusState {
         if !self.rooms.contains_key(&id) {
             return Err(ModelError::UnknownRoom(id));
         }
-        let recipients = recipients.into_iter().collect::<BTreeSet<_>>();
+        let recipients = recipients.into_iter().collect::<AgentRecipients>();
         for agent_id in &recipients {
             let agent = self
                 .agents
@@ -1516,7 +1609,7 @@ mod tests {
         assert!(state.queued_requests(agent).is_empty());
         assert_eq!(
             state.room(room).unwrap().draft.recipient_ids,
-            BTreeSet::from([other])
+            [other].into()
         );
         assert!(state.room(room).unwrap().latest_replies.is_empty());
         assert!(matches!(
@@ -1834,6 +1927,42 @@ mod tests {
         assert_eq!(
             draft.recipient_ids.iter().copied().collect::<Vec<_>>(),
             [claude]
+        );
+    }
+
+    #[test]
+    fn submission_preserves_first_recipient_selection_order() {
+        let (mut state, room, codex, claude) = state_with_room_and_agents();
+        state
+            .set_draft_recipients(room, [claude, codex, claude])
+            .expect("ordered recipients");
+        state.set_draft_text(room, "review this").expect("draft");
+
+        let requests = state.submit_draft(room, 99).expect("submit");
+        let request_agents = requests
+            .iter()
+            .map(|id| state.request(*id).expect("request").agent_id)
+            .collect::<Vec<_>>();
+        let prompt = &state.request(requests[0]).expect("request").prompt;
+
+        assert_eq!(request_agents, [claude, codex]);
+        assert_eq!(
+            prompt.recipient_ids.iter().copied().collect::<Vec<_>>(),
+            [claude, codex]
+        );
+        let restored: BusState =
+            serde_json::from_value(serde_json::to_value(&state).expect("serialize"))
+                .expect("deserialize");
+        assert_eq!(
+            restored
+                .request(requests[0])
+                .expect("restored request")
+                .prompt
+                .recipient_ids
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            [claude, codex]
         );
     }
 

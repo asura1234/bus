@@ -883,13 +883,22 @@ impl BusUi {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |duration| duration.as_millis() as u64);
-        let content = self.history.lines(
+        let visible_anchor = (!self.history_follow_tail)
+            .then(|| self.history.anchor_at(self.main_scroll))
+            .flatten();
+        self.history.lines(
             &self.snapshot.state,
             room,
             width,
             self.snapshot.revision,
             now,
         );
+        if let Some(anchor) = visible_anchor {
+            if let Some(index) = self.history.index_of(anchor) {
+                self.main_scroll = index;
+            }
+        }
+        let content = self.history.cached();
         view.history = Rect::new(
             main.x,
             history_y,

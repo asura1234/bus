@@ -80,6 +80,60 @@ fn dev_send_preserves_draft_and_targets_exactly_one_agent() {
 }
 
 #[test]
+fn dev_send_and_history_preserve_explicit_recipient_order() {
+    let (mut worker, room, codex, dir) = fixture();
+    let claude = worker
+        .state
+        .create_agent(room, "claude1", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    let cursor = worker
+        .state
+        .create_agent(room, "cursor1", Provider::Cursor, dir.clone(), None)
+        .unwrap();
+
+    let sent = call(
+        &mut worker,
+        "ordered-send",
+        "message.send",
+        json!({"room":"test","to":["cursor1","codex1","claude1","cursor1"],"text":"review"}),
+    );
+    assert!(sent.ok, "{sent:?}");
+    let message = sent.result["message_id"].clone();
+    let request_agents = sent.result["request_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| {
+            worker
+                .state
+                .request(RequestId(id.as_u64().unwrap()))
+                .unwrap()
+                .agent_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(request_agents, [cursor, codex, claude]);
+
+    let history = call(
+        &mut worker,
+        "ordered-history",
+        "room.history",
+        json!({"room":"test"}),
+    );
+    assert!(history.ok, "{history:?}");
+    assert_eq!(history.result["messages"][0]["prompt"]["id"], message);
+    let history_agents = history.result["messages"][0]["delivery"]["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|request| request["agent_id"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(history_agents, [cursor.0, codex.0, claude.0]);
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dev_selectors_confirmation_and_normal_mode_fail_closed() {
     let (mut worker, room, _agent, dir) = fixture();
     let other = worker.state.create_room("other").unwrap();

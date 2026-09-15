@@ -38,7 +38,7 @@ pub(crate) enum BusCommand {
     MarkRoomSeen(RoomId),
     SetNotes(RoomId, String),
     SetDraftText(RoomId, String),
-    SetRecipients(RoomId, BTreeSet<AgentId>),
+    SetRecipients(RoomId, AgentRecipients),
     #[allow(dead_code)]
     // Worker API for persisted drafts; shell quotes into its newer local editor.
     Quote(RoomId, AgentId),

@@ -31,6 +31,37 @@ pub(super) struct Line {
     pub raw_markdown: Option<(RequestId, Arc<str>)>,
     /// Soft-wrapped continuation of the previous row, rejoined when copied.
     pub continued: bool,
+    anchor: RowAnchor,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) struct RowAnchor {
+    prompt: PromptId,
+    agent: Option<AgentId>,
+    kind: RowKind,
+    position: usize,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RowKind {
+    PromptHeader,
+    PromptBody,
+    File,
+    ReplyHeader,
+    ReplyBody,
+    Quote,
+    Gap,
+}
+
+impl RowAnchor {
+    fn new(prompt: PromptId, agent: Option<AgentId>, kind: RowKind) -> Self {
+        Self {
+            prompt,
+            agent,
+            kind,
+            position: 0,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -49,14 +80,9 @@ struct MarkdownReply {
     lines: Vec<Line>,
 }
 
-enum Message<'a> {
-    Prompt(&'a Prompt),
-    Reply {
-        request: RequestId,
-        agent: AgentId,
-        text: &'a str,
-        at: u64,
-    },
+struct Exchange<'a> {
+    prompt: &'a Prompt,
+    requests: BTreeMap<AgentId, &'a Request>,
 }
 
 impl History {
@@ -64,6 +90,15 @@ impl History {
     pub fn cached(&self) -> &[Line] {
         &self.lines
     }
+
+    pub fn anchor_at(&self, index: usize) -> Option<RowAnchor> {
+        self.lines.get(index).map(|line| line.anchor)
+    }
+
+    pub fn index_of(&self, anchor: RowAnchor) -> Option<usize> {
+        self.lines.iter().position(|line| line.anchor == anchor)
+    }
+
     pub fn lines(
         &mut self,
         state: &BusState,
@@ -80,131 +115,66 @@ impl History {
         if self.key == Some(key) {
             return &self.lines;
         }
-        let mut messages = BTreeMap::new();
-        let mut prompts = BTreeSet::new();
-        let mut replies = BTreeSet::new();
+        let mut exchanges = BTreeMap::new();
         for request in state.requests().filter(|r| r.room_id == room.id) {
             let prompt = &request.prompt;
-            if prompts.insert(prompt.id) {
-                messages.insert(
-                    (prompt.submitted_at_ms, prompt.id.0, 0),
-                    Message::Prompt(prompt),
-                );
-            }
-            if let Some(final_reply) = request
-                .pending_final
-                .as_ref()
-                .filter(|_| request.phase == RequestPhase::Completed)
-            {
-                replies.insert(request.id);
-                messages.insert(
-                    (final_reply.received_at_ms, request.id.0, 1),
-                    Message::Reply {
-                        request: request.id,
-                        agent: request.agent_id,
-                        text: &final_reply.text,
-                        at: final_reply.received_at_ms,
-                    },
-                );
-            }
+            exchanges
+                .entry((prompt.submitted_at_ms, prompt.id.0))
+                .or_insert_with(|| Exchange {
+                    prompt,
+                    requests: BTreeMap::new(),
+                })
+                .requests
+                .insert(request.agent_id, request);
         }
-        // Retain compatibility with saved latest-only records and a prompt
-        // whose final recipient has since been deleted. Never duplicate it.
-        if let Some(prompt) = room
-            .latest_prompt
-            .as_ref()
-            .filter(|p| !prompts.contains(&p.id))
-        {
-            messages.insert(
-                (prompt.submitted_at_ms, prompt.id.0, 0),
-                Message::Prompt(prompt),
-            );
-        }
-        for reply in room
-            .latest_replies
-            .values()
-            .filter(|r| !replies.contains(&r.request_id))
-        {
-            messages.insert(
-                (reply.received_at_ms, reply.request_id.0, 1),
-                Message::Reply {
-                    request: reply.request_id,
-                    agent: reply.agent_id,
-                    text: &reply.text,
-                    at: reply.received_at_ms,
+        // Retain compatibility with saved latest-only records.
+        if let Some(prompt) = room.latest_prompt.as_ref().filter(|prompt| {
+            !exchanges
+                .values()
+                .any(|exchange| exchange.prompt.id == prompt.id)
+        }) {
+            exchanges.insert(
+                (prompt.submitted_at_ms, prompt.id.0),
+                Exchange {
+                    prompt,
+                    requests: BTreeMap::new(),
                 },
             );
         }
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
-        for message in messages.into_values() {
-            let (header, text, files, quote) = match message {
-                Message::Prompt(prompt) => {
-                    let mut header = vec![("You".into(), Tone::You), (" → ".into(), Tone::Muted)];
-                    for (index, agent) in prompt
-                        .recipient_ids
-                        .iter()
-                        .filter_map(|id| state.agent(*id))
-                        .enumerate()
-                    {
-                        if index > 0 {
-                            header.push((", ".into(), Tone::Muted));
-                        }
-                        header.push((agent.name.clone(), Tone::Agent(agent.id)));
-                    }
-                    header.push((
-                        format!("  {}", timestamp(prompt.submitted_at_ms, now)),
-                        Tone::Muted,
-                    ));
-                    (header, prompt.text.as_str(), prompt.files.as_slice(), None)
+        for exchange in exchanges.into_values() {
+            let prompt = exchange.prompt;
+            let mut header = vec![("You".into(), Tone::You), (" → ".into(), Tone::Muted)];
+            for (index, agent) in prompt
+                .recipient_ids
+                .iter()
+                .filter_map(|id| state.agent(*id))
+                .enumerate()
+            {
+                if index > 0 {
+                    header.push((", ".into(), Tone::Muted));
                 }
-                Message::Reply {
-                    request,
-                    agent,
-                    text,
-                    at,
-                } => {
-                    let Some(agent) = state.agent(agent) else {
-                        continue;
-                    };
-                    (
-                        vec![
-                            (agent.name.clone(), Tone::Agent(agent.id)),
-                            (
-                                format!("  {}  {}", provider(agent.provider), timestamp(at, now)),
-                                Tone::Muted,
-                            ),
-                        ],
-                        text,
-                        &[][..],
-                        Some(request),
-                    )
-                }
-            };
-            lines.extend(wrap_header(header, width));
-            if let Some(request) = quote {
-                active_markdown.insert(request);
-                let markdown = self
-                    .markdown
-                    .entry(request)
-                    .or_insert_with(|| MarkdownReply::new(text));
-                if markdown.source.as_ref() != text {
-                    *markdown = MarkdownReply::new(text);
-                }
-                lines.extend(markdown.lines(width, request).iter().cloned());
-            } else {
-                let rows = wrap_ranges(text, width);
-                lines.extend(rows.iter().enumerate().map(|(index, row)| Line {
-                    text: display(&text[row.clone()]),
-                    action: None,
-                    tone: Tone::Text,
-                    spans: Vec::new(),
-                    styles: Vec::new(),
-                    raw_markdown: None,
-                    continued: index > 0 && rows[index - 1].end == row.start,
-                }));
+                header.push((agent.name.clone(), Tone::Agent(agent.id)));
             }
-            for path in files {
+            header.push((
+                format!("  {}", timestamp(prompt.submitted_at_ms, now)),
+                Tone::Muted,
+            ));
+            lines.extend(wrap_header(
+                header,
+                width,
+                "",
+                RowAnchor::new(prompt.id, None, RowKind::PromptHeader),
+            ));
+            push_body(
+                &mut lines,
+                &prompt.text,
+                width,
+                "",
+                RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+            );
+            for (index, path) in prompt.files.iter().enumerate() {
                 lines.push(Line {
                     text: format!(
                         "[{}]",
@@ -216,18 +186,82 @@ impl History {
                     styles: Vec::new(),
                     raw_markdown: None,
                     continued: false,
+                    anchor: RowAnchor {
+                        position: index,
+                        ..RowAnchor::new(prompt.id, None, RowKind::File)
+                    },
                 });
             }
-            if let Some(request) = quote {
-                lines.push(Line {
-                    text: "Quote".into(),
-                    action: Some(Action::Quote(request)),
-                    tone: Tone::Muted,
-                    spans: Vec::new(),
-                    styles: Vec::new(),
-                    raw_markdown: None,
-                    continued: false,
-                });
+
+            for agent_id in &prompt.recipient_ids {
+                let Some(agent) = state.agent(*agent_id) else {
+                    continue;
+                };
+                let request = exchange.requests.get(agent_id).copied();
+                let final_reply = request
+                    .filter(|request| request.phase == RequestPhase::Completed)
+                    .and_then(|request| request.pending_final.as_ref());
+                let legacy_reply = request
+                    .is_none()
+                    .then(|| room.latest_replies.get(agent_id))
+                    .flatten();
+                let (text, at, quote) = if let Some(reply) = final_reply {
+                    (
+                        reply.text.as_str(),
+                        Some(reply.received_at_ms),
+                        request.map(|request| request.id),
+                    )
+                } else if let Some(reply) = legacy_reply {
+                    (
+                        reply.text.as_str(),
+                        Some(reply.received_at_ms),
+                        Some(reply.request_id),
+                    )
+                } else {
+                    ("…", None, None)
+                };
+                let mut reply_header = vec![
+                    (agent.name.clone(), Tone::Agent(agent.id)),
+                    (format!("  {}", provider(agent.provider)), Tone::Muted),
+                ];
+                if let Some(at) = at {
+                    reply_header.push((format!("  {}", timestamp(at, now)), Tone::Muted));
+                }
+                lines.extend(wrap_header(
+                    reply_header,
+                    width,
+                    "    ",
+                    RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyHeader),
+                ));
+                let reply_anchor = RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyBody);
+                if let Some(request) = quote {
+                    active_markdown.insert(request);
+                    let markdown = self
+                        .markdown
+                        .entry(request)
+                        .or_insert_with(|| MarkdownReply::new(text));
+                    if markdown.source.as_ref() != text {
+                        *markdown = MarkdownReply::new(text);
+                    }
+                    lines.extend(
+                        markdown
+                            .lines(width, request, "    ", reply_anchor)
+                            .iter()
+                            .cloned(),
+                    );
+                    lines.push(Line {
+                        text: "    Quote".into(),
+                        action: Some(Action::Quote(request)),
+                        tone: Tone::Muted,
+                        spans: Vec::new(),
+                        styles: Vec::new(),
+                        raw_markdown: None,
+                        continued: false,
+                        anchor: RowAnchor::new(prompt.id, Some(*agent_id), RowKind::Quote),
+                    });
+                } else {
+                    push_body(&mut lines, text, width, "    ", reply_anchor);
+                }
             }
             lines.push(Line {
                 text: String::new(),
@@ -237,6 +271,7 @@ impl History {
                 styles: Vec::new(),
                 raw_markdown: None,
                 continued: false,
+                anchor: RowAnchor::new(prompt.id, None, RowKind::Gap),
             });
         }
         self.markdown
@@ -278,15 +313,26 @@ impl MarkdownReply {
         }
     }
 
-    fn lines(&mut self, width: u16, request: RequestId) -> &[Line] {
+    fn lines(
+        &mut self,
+        width: u16,
+        request: RequestId,
+        indent: &str,
+        anchor: RowAnchor,
+    ) -> &[Line] {
         if self.width == Some(width) {
             return &self.lines;
         }
+        let content_width = width.saturating_sub(indent.len() as u16).max(1);
         self.lines = self
             .view
             .as_mut()
-            .and_then(|view| prepared_markdown_lines(view, width, request, &self.source))
-            .unwrap_or_else(|| literal_reply_lines(&self.source, width, request));
+            .and_then(|view| {
+                prepared_markdown_lines(view, content_width, request, &self.source, indent, anchor)
+            })
+            .unwrap_or_else(|| {
+                literal_reply_lines(&self.source, content_width, request, indent, anchor)
+            });
         self.width = Some(width);
         &self.lines
     }
@@ -297,6 +343,8 @@ fn prepared_markdown_lines(
     width: u16,
     request: RequestId,
     source: &Arc<str>,
+    indent: &str,
+    anchor: RowAnchor,
 ) -> Option<Vec<Line>> {
     let layout = match view.prepare(width) {
         Ok(layout) => layout,
@@ -323,13 +371,16 @@ fn prepared_markdown_lines(
         state.scroll_to(DocumentRow::new(first));
         layout.widget().render(area, &mut buffer, &mut state);
         for offset in 0..height {
+            let position = first + usize::from(offset);
             lines.push(line_from_buffer(
                 &buffer,
                 offset,
                 width,
                 request,
                 source,
-                first + usize::from(offset) > 0,
+                indent,
+                position > 0,
+                RowAnchor { position, ..anchor },
             ));
         }
         first += usize::from(height);
@@ -337,16 +388,23 @@ fn prepared_markdown_lines(
     Some(lines)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn line_from_buffer(
     buffer: &Buffer,
     row: u16,
     width: u16,
     request: RequestId,
     source: &Arc<str>,
+    indent: &str,
     continued: bool,
+    anchor: RowAnchor,
 ) -> Line {
-    let mut text = String::new();
-    let mut styles: Vec<(String, Style)> = Vec::new();
+    let mut text = indent.to_owned();
+    let mut styles: Vec<(String, Style)> = if indent.is_empty() {
+        Vec::new()
+    } else {
+        vec![(indent.to_owned(), Style::default())]
+    };
     let mut column = 0u16;
     while column < width {
         let cell = &buffer[(column, row)];
@@ -374,7 +432,7 @@ fn line_from_buffer(
         }
         column = column.saturating_add(cell.cell_width().max(1));
     }
-    while text.ends_with(' ') {
+    while text.len() > indent.len() && text.ends_with(' ') {
         text.pop();
         if let Some((run, _)) = styles.last_mut() {
             debug_assert!(run.ends_with(' '));
@@ -392,28 +450,61 @@ fn line_from_buffer(
         styles,
         raw_markdown: Some((request, Arc::clone(source))),
         continued,
+        anchor,
     }
 }
 
-fn literal_reply_lines(source: &Arc<str>, width: u16, request: RequestId) -> Vec<Line> {
+fn literal_reply_lines(
+    source: &Arc<str>,
+    width: u16,
+    request: RequestId,
+    indent: &str,
+    anchor: RowAnchor,
+) -> Vec<Line> {
     let rows = wrap_ranges(source, width);
     rows.iter()
         .enumerate()
         .map(|(index, row)| Line {
-            text: display(&source[row.clone()]),
+            text: format!("{indent}{}", display(&source[row.clone()])),
             action: None,
             tone: Tone::Text,
             spans: Vec::new(),
             styles: Vec::new(),
             raw_markdown: Some((request, Arc::clone(source))),
             continued: index > 0 && rows[index - 1].end == row.start,
+            anchor: RowAnchor {
+                position: row.start,
+                ..anchor
+            },
         })
         .collect()
 }
 
 // Keep styling attached to header fields, not matches against arbitrary message
 // text. Wrapping preserves every byte of the sanitized source, including UTF-8.
-fn wrap_header(spans: Vec<(String, Tone)>, width: u16) -> Vec<Line> {
+fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor: RowAnchor) {
+    let rows = wrap_ranges(text, width.saturating_sub(indent.len() as u16));
+    lines.extend(rows.iter().enumerate().map(|(index, row)| Line {
+        text: format!("{indent}{}", display(&text[row.clone()])),
+        action: None,
+        tone: Tone::Text,
+        spans: Vec::new(),
+        styles: Vec::new(),
+        raw_markdown: None,
+        continued: index > 0 && rows[index - 1].end == row.start,
+        anchor: RowAnchor {
+            position: row.start,
+            ..anchor
+        },
+    }));
+}
+
+fn wrap_header(
+    spans: Vec<(String, Tone)>,
+    width: u16,
+    indent: &str,
+    anchor: RowAnchor,
+) -> Vec<Line> {
     let mut source = String::new();
     let mut ranges = Vec::new();
     for (text, tone) in spans {
@@ -422,12 +513,12 @@ fn wrap_header(spans: Vec<(String, Tone)>, width: u16) -> Vec<Line> {
         ranges.push((start..source.len(), tone));
     }
     let mut offset = 0;
-    wrap(&source, width)
+    wrap(&source, width.saturating_sub(indent.len() as u16))
         .into_iter()
         .enumerate()
         .map(|(index, text)| {
             let end = offset + text.len();
-            let spans = ranges
+            let spans: Vec<_> = ranges
                 .iter()
                 .filter_map(|(range, tone)| {
                     let start = range.start.max(offset);
@@ -436,14 +527,20 @@ fn wrap_header(spans: Vec<(String, Tone)>, width: u16) -> Vec<Line> {
                 })
                 .collect();
             offset = end;
+            let mut line_spans = vec![(indent.to_owned(), Tone::Muted)];
+            line_spans.extend(spans);
             Line {
-                text,
+                text: format!("{indent}{text}"),
                 action: None,
                 tone: Tone::Muted,
-                spans,
+                spans: line_spans,
                 styles: Vec::new(),
                 raw_markdown: None,
                 continued: index > 0,
+                anchor: RowAnchor {
+                    position: index,
+                    ..anchor
+                },
             }
         })
         .collect()

@@ -324,7 +324,7 @@ impl Worker {
             selectors
                 .into_iter()
                 .map(|s| self.dev_agent(s, Some(room)))
-                .collect::<Result<BTreeSet<_>, _>>()?
+                .collect::<Result<AgentRecipients, _>>()?
         };
         let mut files = Vec::new();
         if let Some(value) = p.get("files") {
@@ -365,7 +365,7 @@ impl Worker {
     }
 
     fn dev_message(&self, message: PromptId) -> Result<Value, String> {
-        let requests = self
+        let mut requests = self
             .state
             .requests()
             .filter(|r| r.prompt.id == message)
@@ -373,6 +373,13 @@ impl Worker {
         if requests.is_empty() {
             return Err("Unknown message ID".into());
         }
+        let recipient_order = &requests[0].prompt.recipient_ids;
+        requests.sort_by_key(|request| {
+            recipient_order
+                .iter()
+                .position(|id| *id == request.agent_id)
+                .unwrap_or(usize::MAX)
+        });
         Ok(
             json!({"message_id":message,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"requests":requests.iter().map(|r| {
             let agent = self.state.agent(r.agent_id);

@@ -306,6 +306,218 @@ fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
     }));
 }
 
+fn complete_requests(
+    ui: &mut BusUi,
+    completions: impl IntoIterator<Item = (RequestId, &'static str, u64)>,
+) {
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut json = serde_json::to_value(&snapshot.state).unwrap();
+    for (id, text, received_at_ms) in completions {
+        let record = &mut json["requests"][id.0.to_string()];
+        record["phase"] = "completed".into();
+        record["completed_at_ms"] = received_at_ms.into();
+        record["pending_final"] = serde_json::json!({
+            "callback_id": format!("final-{}", id.0), "text": text,
+            "received_at_ms": received_at_ms,
+            "provider_session_id": "session", "provider_turn_id": format!("turn-{}", id.0)
+        });
+    }
+    snapshot.state = serde_json::from_value(json).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+}
+
+#[test]
+fn pending_replies_reserve_indented_slots_in_recipient_order() {
+    let (mut ui, room, author) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let claude = snapshot
+        .state
+        .create_agent(
+            room,
+            "claude1",
+            Provider::ClaudeCode,
+            "/project".into(),
+            None,
+        )
+        .unwrap();
+    let cursor = snapshot
+        .state
+        .create_agent(room, "cursor1", Provider::Cursor, "/project".into(), None)
+        .unwrap();
+    snapshot
+        .state
+        .set_draft_recipients(room, [cursor, author, claude])
+        .unwrap();
+    snapshot.state.set_draft_text(room, "review this").unwrap();
+    snapshot.state.submit_draft(room, 1_000).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+
+    let snapshot = ui.snapshot.clone();
+    let lines = ui.history.lines(
+        &snapshot.state,
+        snapshot.state.room(room).unwrap(),
+        100,
+        snapshot.revision,
+        2_000,
+    );
+    assert!(lines[0].text.starts_with("You → cursor1, author, claude1"));
+    let slot_headers = lines
+        .iter()
+        .filter_map(|line| {
+            let text = line.text.strip_prefix("    ")?;
+            ["cursor1", "author", "claude1"]
+                .into_iter()
+                .find(|name| text.starts_with(name))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(slot_headers, ["cursor1", "author", "claude1"]);
+    assert_eq!(lines.iter().filter(|line| line.text == "    …").count(), 3);
+}
+
+#[test]
+fn all_recipient_toggle_clears_a_full_selection_in_any_order() {
+    let (mut ui, room, author) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let claude = snapshot
+        .state
+        .create_agent(
+            room,
+            "claude1",
+            Provider::ClaudeCode,
+            "/project".into(),
+            None,
+        )
+        .unwrap();
+    let cursor = snapshot
+        .state
+        .create_agent(room, "cursor1", Provider::Cursor, "/project".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+
+    for agent in [cursor, author, claude] {
+        ui.action(render::Action::Recipient(Some(agent)));
+    }
+    assert_eq!(
+        ui.locals[&room]
+            .recipients
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        [cursor, author, claude]
+    );
+
+    ui.action(render::Action::Recipient(None));
+
+    assert!(ui.locals[&room].recipients.is_empty());
+}
+
+#[test]
+fn late_replies_stay_with_their_prompt_and_never_reorder_recipient_slots() {
+    let (mut ui, room, author) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let claude = snapshot
+        .state
+        .create_agent(
+            room,
+            "claude1",
+            Provider::ClaudeCode,
+            "/project".into(),
+            None,
+        )
+        .unwrap();
+    let cursor = snapshot
+        .state
+        .create_agent(room, "cursor1", Provider::Cursor, "/project".into(), None)
+        .unwrap();
+    snapshot
+        .state
+        .set_draft_recipients(room, [cursor, author, claude])
+        .unwrap();
+    snapshot.state.set_draft_text(room, "first prompt").unwrap();
+    let first = snapshot.state.submit_draft(room, 1_000).unwrap();
+    snapshot.state.set_draft_recipients(room, [author]).unwrap();
+    snapshot
+        .state
+        .set_draft_text(room, "second prompt")
+        .unwrap();
+    let second = snapshot.state.submit_draft(room, 2_000).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    complete_requests(
+        &mut ui,
+        [
+            (second[0], "second answer", 2_500),
+            (first[2], "claude answer", 3_000),
+            (first[1], "author answer", 4_000),
+            (first[0], "cursor answer", 5_000),
+        ],
+    );
+
+    let snapshot = ui.snapshot.clone();
+    let text = ui
+        .history
+        .lines(
+            &snapshot.state,
+            snapshot.state.room(room).unwrap(),
+            100,
+            snapshot.revision,
+            6_000,
+        )
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let positions = [
+        "first prompt",
+        "cursor answer",
+        "author answer",
+        "claude answer",
+        "second prompt",
+        "second answer",
+    ]
+    .map(|needle| {
+        text.find(needle)
+            .unwrap_or_else(|| panic!("missing {needle}:\n{text}"))
+    });
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+}
+
+#[test]
+fn late_reply_expansion_above_viewport_preserves_the_visible_anchor() {
+    let (mut ui, room, author) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut requests = Vec::new();
+    for index in 0..8 {
+        snapshot.state.set_draft_recipients(room, [author]).unwrap();
+        snapshot
+            .state
+            .set_draft_text(room, &format!("anchor-prompt-{index}"))
+            .unwrap();
+        requests.push(snapshot.state.submit_draft(room, 1_000 + index).unwrap()[0]);
+    }
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.compute_view(100, 24);
+    let anchor = "anchor-prompt-5";
+    ui.main_scroll = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.text == anchor)
+        .unwrap();
+    ui.history_follow_tail = false;
+
+    complete_requests(
+        &mut ui,
+        [(requests[0], "one\ntwo\nthree\nfour\nfive\nsix", 9_000)],
+    );
+    ui.compute_view(100, 24);
+
+    assert_eq!(ui.history.cached()[ui.main_scroll].text, anchor);
+}
+
 #[test]
 fn saved_round_trips_scroll_oldest_to_newest_with_fixed_chrome() {
     let (mut ui, room, agent) = fixture();
@@ -581,6 +793,12 @@ fn history_recipient_colors_survive_wrapping_without_coloring_message_text() {
         let mut cells = Vec::new();
         let mut colored_rows = 0;
         for y in ui.view.history.y..ui.view.history.bottom() {
+            let row_text = (ui.view.history.x + 2..ui.view.history.right() - 2)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>();
+            if row_text.starts_with("    ") {
+                break;
+            }
             let mut row = Vec::new();
             for x in ui.view.history.x + 2..ui.view.history.right() - 2 {
                 let cell = &buffer[(x, y)];

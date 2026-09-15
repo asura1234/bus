@@ -7,7 +7,6 @@ use super::{
 use crate::bus::{launch::AddAgent, model::*, runtime::BusCommand};
 use crate::{client::shell::ClientShellInput, raw_input::RawInputEvent};
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
-use std::collections::BTreeSet;
 
 impl BusUi {
     pub fn input(
@@ -503,7 +502,7 @@ impl BusUi {
         let Some(room) = self.room else {
             return;
         };
-        let all: BTreeSet<_> = self
+        let all: AgentRecipients = self
             .snapshot
             .state
             .agents()
@@ -515,7 +514,9 @@ impl BusUi {
                 if !local.recipients.remove(&id) {
                     local.recipients.insert(id);
                 }
-            } else if local.recipients == all {
+            } else if local.recipients.len() == all.len()
+                && all.iter().all(|id| local.recipients.contains(id))
+            {
                 local.recipients.clear();
             } else {
                 local.recipients = all;
