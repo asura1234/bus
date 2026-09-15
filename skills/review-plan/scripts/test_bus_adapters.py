@@ -50,3 +50,23 @@ def test_legacy_plan_gets_one_actionable_migration_failure() -> None:
     assert len(failures) == 1
     assert "legacy plan" in failures[0]
     assert "create-plan" in failures[0]
+
+
+def test_check_only_accepts_finalized_review_plan_status() -> None:
+    failures = prereq_failures(
+        "**状态**：review-plan-complete\n",
+        check_only=True,
+    )
+
+    assert not any("**状态** =" in failure for failure in failures)
+
+
+def test_review_round_rejects_finalized_review_plan_status() -> None:
+    failures = prereq_failures(
+        "**状态**：review-plan-complete\n",
+    )
+
+    assert any(
+        "**状态** = 'review-plan-complete'" in failure
+        for failure in failures
+    )

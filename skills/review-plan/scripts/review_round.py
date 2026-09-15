@@ -28,9 +28,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("plan", nargs="?", default=None)
     parser.add_argument("--reviewer", default=None)
     parser.add_argument("--devils-advocate", action="store_true", dest="devils_advocate")
-    # --check：只跑前提门禁（模板/状态/决策/目标/实施步骤结构），read-only、不建轮次、不写 .last-plan。
-    #   供 create-plan 在置 create-plan-complete 前自检「计划是否已达 /review-plan 可审门槛」，
-    #   把跨阶段步骤连续编号等结构缺陷挡在 create 阶段，而不是拖到 review 才 FAIL。
+    # --check：只跑结构/状态门禁，read-only、不建轮次、不写 .last-plan。
+    #   既供 create-plan 在置 create-plan-complete 前自检，也供 commit/publish 在
+    #   review-plan-complete 后复验 finalized plan；真正的 review round 仍拒绝 completed 状态。
     parser.add_argument("--check", action="store_true")
     try:
         args = parser.parse_args(argv[1:])
@@ -109,7 +109,7 @@ def main(argv: list[str]) -> int:
             print(f"- {f}")
         return 1
 
-    # --check：前提门禁通过即返回，不做任何轮次 bookkeeping（不写 .last-plan、不建 round 目录）。
+    # --check：结构/状态门禁通过即返回，不做任何轮次 bookkeeping（不写 .last-plan、不建 round 目录）。
     if args.check:
         print("PASS: 计划满足 /review-plan 前提门禁（模板 / 状态 / 决策 / 目标 / 实施步骤结构）")
         return 0

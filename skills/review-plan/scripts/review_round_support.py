@@ -9,8 +9,11 @@ What it does:
 
   1. Prereq (前提不满足 → FAIL):
      - plan was generated from the canonical template (plan_template_check)
-     - **状态** ∈ {create-plan-complete, review-plan-in-progress}
-       (in-progress 计划未完成 / plan-execution-* 已进执行阶段 / abandoned 一律拒绝)
+     - normal review rounds accept **状态** ∈
+       {create-plan-complete, review-plan-in-progress}
+     - read-only ``--check`` additionally accepts create-plan-in-progress for
+       create-plan preflight and review-plan-complete for publication checks
+       (plan-execution-* 已进执行阶段 / abandoned 一律拒绝)
      - 需要决策的事项 has NO open items — decisions are resolved by the developer
        with the plan author during create-plan (per plan-template 计划生成规则,
        the plan body isn't even generated until they are); open items mean the
@@ -71,7 +74,7 @@ Exit codes:
 Usage:
     python3 skills/review-plan/scripts/review_round.py [<plan.md>] \
         [--reviewer <lane>] [--devils-advocate]
-    python3 skills/review-plan/scripts/review_round.py <plan.md> --check   # 只跑前提门禁，read-only
+    python3 skills/review-plan/scripts/review_round.py <plan.md> --check   # 只跑结构/状态门禁，read-only；可验证已完成评审的计划
 """
 
 import re
@@ -184,18 +187,22 @@ def detect_branch_plan_docs() -> list[Path]:
 
 
 def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
-    # check_only=True 是 create-plan 的**落盘前预检**：计划此刻仍是 create-plan-in-progress
-    #   （尚未 flip 到 complete），只想确认「结构是否已达可审门槛」。此模式额外接受
-    #   create-plan-in-progress，从而 create-plan 可以在 **still-in-progress** 状态下预检、
-    #   只有 PASS 才 flip 到 create-plan-complete——避免「先置 complete、门禁再 FAIL」留下
-    #   错误的持久状态。真正的 /review-plan 门禁（check_only=False）仍只接受 complete / review-in-progress。
+    # check_only=True 是不创建 review round 的只读结构/状态验证：
+    #   - create-plan 在 still-in-progress 状态下预检，只有 PASS 才 flip 到 complete；
+    #   - commit/publish 在 review-plan-complete 状态下复验 finalized plan。
+    # 真正的 /review-plan 门禁（check_only=False）仍只接受 create-plan-complete /
+    # review-plan-in-progress，不能重新打开已完成评审的计划。
     if STATUS_RE.search(text) is None and LEGACY_STATUS_RE.search(text):
         return [
             "检测到 migration 前的 legacy plan 格式。历史内容不会被自动改写；"
             "请显式调用 create-plan，以 docs/templates/plan-template.md 新建 canonical successor 后再 review-plan"
         ]
 
-    allowed = ALLOWED_STATUSES | ({"create-plan-in-progress"} if check_only else frozenset())
+    allowed = ALLOWED_STATUSES | (
+        {"create-plan-in-progress", "review-plan-complete"}
+        if check_only
+        else frozenset()
+    )
     failures: list[str] = []
 
     _, template_path = detect_template(text)
@@ -208,11 +215,20 @@ def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
     if not m:
         failures.append("缺少 **状态** 字段（请使用 docs/templates/plan-template.md 最新模板）")
     elif m.group(1) not in allowed:
-        failures.append(
-            f"**状态** = '{m.group(1)}'。/review-plan 仅接受 "
-            "'create-plan-complete'（计划落盘待审）或 "
-            "'review-plan-in-progress'（继续审查）"
-        )
+        if check_only:
+            failures.append(
+                f"**状态** = '{m.group(1)}'。/review-plan --check 仅接受 "
+                "'create-plan-in-progress'（落盘前预检）、"
+                "'create-plan-complete'（计划落盘待审）、"
+                "'review-plan-in-progress'（继续审查）或 "
+                "'review-plan-complete'（发布前复验）"
+            )
+        else:
+            failures.append(
+                f"**状态** = '{m.group(1)}'。/review-plan 仅接受 "
+                "'create-plan-complete'（计划落盘待审）或 "
+                "'review-plan-in-progress'（继续审查）"
+            )
 
     # 决策评估不属于审查轮次：模板规则下计划正文（大小/实施步骤等）在决策全部解决前
     # 不会生成，存在未解决决策项即意味着计划尚不具备审查条件（前提不满足），
