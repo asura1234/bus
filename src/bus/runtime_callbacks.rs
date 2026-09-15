@@ -127,6 +127,7 @@ impl Worker {
                 Parsed::Session(session)
                 | Parsed::Started { session, .. }
                 | Parsed::Final { session, .. }
+                | Parsed::BackgroundPending { session, .. }
                 | Parsed::Failure { session, .. }
                 | Parsed::CursorStop { session, .. }
                 | Parsed::CursorResponse { session, .. } => Some(session),
@@ -230,6 +231,9 @@ impl Worker {
                     turn,
                     text,
                 } => Some(record.callback(session, turn, None, CallbackEventKind::Final { text })),
+                Parsed::BackgroundPending { session, turn } => {
+                    Some(record.callback(session, turn, None, CallbackEventKind::BackgroundPending))
+                }
                 Parsed::Failure {
                     session,
                     turn,

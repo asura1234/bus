@@ -932,6 +932,65 @@ fn deferred_codex_start_and_final_survive_background_sessions_without_rebinding(
 }
 
 #[test]
+fn claude_background_stop_and_same_session_wakeup_settle_only_the_later_final() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = queue(&mut worker, room, agent, "review the plan");
+    worker.submit_ready().unwrap();
+    for value in [
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":"prompt-1","prompt":"review the plan"}),
+        json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"prompt-1","last_assistant_message":"Waiting for reviewers","background_tasks":[{"task_id":"reviewer-1","status":"running"}],"session_crons":[]}),
+    ] {
+        record(&dir, Provider::ClaudeCode, value);
+    }
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 20)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+
+    for value in [
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":"prompt-2","prompt":"<task-notification>reviewer-1 finished</task-notification>"}),
+        json!({"hook_event_name":"Stop","session_id":"session","prompt_id":"prompt-2","last_assistant_message":"Ready","background_tasks":[],"session_crons":[]}),
+    ] {
+        record(&dir, Provider::ClaudeCode, value);
+    }
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        worker
+            .state
+            .request(request)
+            .unwrap()
+            .provider_turn_id
+            .as_deref(),
+        Some("prompt-2")
+    );
+    assert_eq!(
+        worker.state.room(room).unwrap().latest_replies[&agent].text,
+        "Ready"
+    );
+    assert!(callbacks::records(&dir.join("callbacks/launch"))
+        .unwrap()
+        .is_empty());
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn session_start_reports_bind_through_native_provider_session_adapter() {
     struct NativeSessionTransport(Arc<Mutex<Option<crate::agent_resume::AgentSessionRef>>>);
     impl Transport for NativeSessionTransport {

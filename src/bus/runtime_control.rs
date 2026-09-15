@@ -61,6 +61,7 @@ impl Worker {
             "agent.focus" => (&["agent"], true),
             "message.send" => (&["room", "to", "text", "files"], true),
             "message.status" => (&["message"], false),
+            "request.recover" => (&["request", "confirm"], true),
             "room.history" => (&["room"], false),
             _ => {
                 return Response::failure(
@@ -80,7 +81,9 @@ impl Worker {
         if params.keys().any(|key| !fields.contains(&key.as_str())) {
             return Response::failure(&request.id, "invalid_params", "Unknown parameter");
         }
-        if (request.method.ends_with(".delete") || request.method == "agent.setup-confirm")
+        if (request.method.ends_with(".delete")
+            || request.method == "agent.setup-confirm"
+            || request.method == "request.recover")
             && request.params.get("confirm") != Some(&Value::Bool(true))
         {
             return Response::failure(
@@ -211,6 +214,34 @@ impl Worker {
                     .map_err(|_| "Message must be a numeric ID")?;
                 self.dev_message(PromptId(id))
             }
+            "request.recover" => {
+                let id = required(p, "request")?
+                    .parse::<u64>()
+                    .map_err(|_| "Request must be a numeric ID")?;
+                let request = RequestId(id);
+                let agent = self
+                    .state
+                    .request(request)
+                    .ok_or("Unknown request ID")?
+                    .agent_id;
+                let mut state = self.state.clone();
+                state
+                    .recover_idle_request(request, crate::bus::io::now_ms())
+                    .map_err(|error| match error {
+                        ModelError::AgentNotIdle => {
+                            "Request recovery is allowed only while its agent is idle".into()
+                        }
+                        _ => error.to_string(),
+                    })?;
+                self.save(state)?;
+                crate::bus::diagnostics::request(
+                    &self.state,
+                    request,
+                    "bus.message.recovered",
+                    "abandoned",
+                );
+                Ok(json!({"request_id":request,"agent_id":agent,"stage":"abandoned"}))
+            }
             "room.history" => {
                 let room = self.dev_room(required(p, "room")?)?;
                 let messages = self
@@ -339,9 +370,9 @@ impl Worker {
             return Err("Unknown message ID".into());
         }
         Ok(
-            json!({"message_id":message,"complete":requests.iter().all(|r|r.phase==RequestPhase::Completed),"requests":requests.iter().map(|r| {
+            json!({"message_id":message,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"requests":requests.iter().map(|r| {
             let agent = self.state.agent(r.agent_id);
-            let stage = match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied" };
+            let stage = match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" };
             json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"reason":if r.phase==RequestPhase::Queued {agent.and_then(crate::bus::diagnostics::wait_reason)}else{None},"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
         }).collect::<Vec<_>>()}),
         )

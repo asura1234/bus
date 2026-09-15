@@ -41,6 +41,10 @@ pub(crate) enum Parsed {
         turn: String,
         text: String,
     },
+    BackgroundPending {
+        session: String,
+        turn: String,
+    },
     CursorResponse {
         session: String,
         turn: String,
@@ -64,6 +68,7 @@ impl Parsed {
             Self::Session(_) => "session",
             Self::Started { .. } => "started",
             Self::Final { .. } => "final",
+            Self::BackgroundPending { .. } => "background_pending",
             Self::CursorResponse { .. } => "cursor_response",
             Self::CursorStop { .. } => "cursor_stop",
             Self::Failure { .. } => "failure",
@@ -84,6 +89,46 @@ fn codex_background_sessions_without_transcripts_are_not_terminal_callbacks() {
         let value = serde_json::json!({"hook_event_name":event,"session_id":"background-title-or-memory","transcript_path":null,"turn_id":"background-turn","prompt":"Generate title","last_assistant_message":"Title"});
         assert_eq!(parse(Provider::Codex, &value).unwrap(), Parsed::Ignore);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn claude_stop_with_live_background_work_is_progress_not_a_final_reply() {
+    for extra in [
+        serde_json::json!({"background_tasks":[{"task_id":"task-1","status":"running"}],"session_crons":[]}),
+        serde_json::json!({"background_tasks":[],"session_crons":[{"cron_id":"cron-1","status":"running"}]}),
+    ] {
+        let mut value = serde_json::json!({
+            "hook_event_name":"Stop",
+            "session_id":"claude-session",
+            "prompt_id":"prompt-1",
+            "last_assistant_message":"Still waiting on a background reviewer"
+        });
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        assert_eq!(
+            parse(Provider::ClaudeCode, &value).unwrap(),
+            Parsed::BackgroundPending {
+                session: "claude-session".into(),
+                turn: "prompt-1".into(),
+            }
+        );
+    }
+
+    let settled = serde_json::json!({
+        "hook_event_name":"Stop",
+        "session_id":"claude-session",
+        "prompt_id":"prompt-1",
+        "last_assistant_message":"Final review",
+        "background_tasks":[],
+        "session_crons":[]
+    });
+    assert!(matches!(
+        parse(Provider::ClaudeCode, &settled).unwrap(),
+        Parsed::Final { text, .. } if text == "Final review"
+    ));
 }
 
 pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String> {
@@ -136,6 +181,17 @@ pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String>
             turn,
             prompt: field(value, "prompt")?,
         }),
+        "Stop"
+            if provider == Provider::ClaudeCode
+                && ["background_tasks", "session_crons"].iter().any(|key| {
+                    value
+                        .get(*key)
+                        .and_then(Value::as_array)
+                        .is_some_and(|items| !items.is_empty())
+                }) =>
+        {
+            Ok(Parsed::BackgroundPending { session, turn })
+        }
         "Stop" if !cursor => Ok(Parsed::Final {
             session,
             turn,

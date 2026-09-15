@@ -31,6 +31,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent delete AGENT --confirm
   send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...]
   message status MESSAGE_ID
+  request recover REQUEST_ID --confirm
   wait --message MESSAGE_ID [--timeout SECONDS]
   history --room ROOM
   diagnostics
@@ -226,6 +227,13 @@ fn cli() -> Command {
                 .subcommand(subcommand("status").arg(value_arg("message").required(true))),
         )
         .subcommand(
+            subcommand("request").subcommand_required(true).subcommand(
+                subcommand("recover")
+                    .arg(value_arg("request").required(true))
+                    .arg(flag("confirm").required(true)),
+            ),
+        )
+        .subcommand(
             subcommand("wait").arg(option("message")).arg(
                 Arg::new("timeout")
                     .long("timeout")
@@ -323,6 +331,13 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
                 json!({"message": required(args, "message")?}),
             ),
             _ => return Err("unknown message command".into()),
+        },
+        "request" => match args.subcommand() {
+            Some(("recover", args)) => (
+                "request.recover",
+                json!({"request": required(args, "request")?, "confirm": args.get_flag("confirm")}),
+            ),
+            _ => return Err("unknown request command".into()),
         },
         "wait" => {
             let timeout = args
@@ -428,6 +443,11 @@ mod tests {
                 &["message", "status", "19"],
                 "message.status",
                 json!({"message": "19"}),
+            ),
+            (
+                &["request", "recover", "64", "--confirm"],
+                "request.recover",
+                json!({"request": "64", "confirm": true}),
             ),
             (
                 &["history", "--room", "Planning"],
@@ -552,6 +572,7 @@ mod tests {
             &["wait", "--message", "19", "--timeout", "NaN"],
             &["history"],
             &["message", "status"],
+            &["request", "recover", "64"],
             &["state", "--request-id", "a", "--request-id", "b"],
         ];
         for args in cases {

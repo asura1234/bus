@@ -134,6 +134,88 @@ fn dev_status_explains_gate_without_claiming_delivery() {
 }
 
 #[test]
+fn dev_recovery_abandons_an_idle_wedged_request_without_replacing_the_agent() {
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                session_id: Some("session".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let sent = call(
+        &mut worker,
+        "send-wedged",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"wedged"}),
+    );
+    let request = RequestId(sent.result["request_ids"][0].as_u64().unwrap());
+    let message = sent.result["message_id"].clone();
+    worker
+        .state
+        .begin_submission(request, "launch", 10)
+        .unwrap();
+    worker
+        .state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn-1".into()),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        worker.state.accept_callback(ProviderCallback {
+            callback_id: "start".into(),
+            sequence: 11,
+            occurred_at_ms: 11,
+            agent_id: agent,
+            launch_id: "launch".into(),
+            provider_session_id: Some("session".into()),
+            provider_turn_id: Some("turn-1".into()),
+            provider_prompt_id: None,
+            prompt_payload: Some("wedged".into()),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 12)
+        .unwrap();
+
+    let recovered = call(
+        &mut worker,
+        "recover-wedged",
+        "request.recover",
+        json!({"request":request.0.to_string(),"confirm":true}),
+    );
+    assert!(recovered.ok, "{recovered:?}");
+    assert_eq!(recovered.result["stage"], "abandoned");
+    assert_eq!(recovered.result["agent_id"], agent.0);
+    assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
+
+    let status = call(
+        &mut worker,
+        "status-after-recovery",
+        "message.status",
+        json!({"message":message.to_string()}),
+    );
+    assert!(status.ok, "{status:?}");
+    assert_eq!(status.result["complete"], true);
+    assert_eq!(status.result["requests"][0]["stage"], "abandoned");
+    assert!(status.result["requests"][0]["reply"].is_null());
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dev_read_uses_native_pane_selector_not_internal_terminal_id() {
     struct InspectTarget;
     impl Transport for InspectTarget {

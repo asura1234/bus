@@ -43,6 +43,7 @@ pub(crate) enum RequestPhase {
     Submitting,
     Active,
     Completed,
+    Abandoned,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -201,6 +202,7 @@ pub(crate) enum SubmissionOutcome {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum CallbackEventKind {
     PromptStarted,
+    BackgroundPending,
     Final { text: String },
     Error { message: String },
 }
@@ -264,6 +266,8 @@ pub(crate) enum CallbackRejection {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CallbackDisposition {
     AcceptedBinding,
+    AcceptedContinuation,
+    AcceptedProgress,
     AcceptedPendingSettlement,
     AcceptedCompleted,
     AcceptedError,
@@ -283,6 +287,7 @@ pub(crate) enum ModelError {
     MissingLaunchIdentity,
     LaunchIdentityMismatch,
     DeletionPending,
+    AgentNotIdle,
 }
 
 impl std::fmt::Display for ModelError {
@@ -991,24 +996,37 @@ impl BusState {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongSession);
             }
         }
+        let continuation = matches!(callback.kind, CallbackEventKind::PromptStarted)
+            && request.trusted_start_bound
+            && request.provider_session_id.is_some()
+            && callback.provider_session_id == request.provider_session_id
+            && request.provider_turn_id.is_some()
+            && callback.provider_turn_id.is_some()
+            && callback.provider_turn_id != request.provider_turn_id
+            && callback
+                .prompt_payload
+                .as_deref()
+                .is_some_and(|payload| !request.prompt.matches_callback_payload(payload));
         if let Some(expected) = request.provider_turn_id.as_deref() {
-            if callback.provider_turn_id.as_deref() != Some(expected) {
+            if !continuation && callback.provider_turn_id.as_deref() != Some(expected) {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongTurn);
             }
         }
         if let Some(expected) = request.provider_prompt_id.as_deref() {
-            if callback
-                .provider_prompt_id
-                .as_deref()
-                .is_some_and(|actual| actual != expected)
+            if !continuation
+                && callback
+                    .provider_prompt_id
+                    .as_deref()
+                    .is_some_and(|actual| actual != expected)
             {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
             }
         }
-        if callback
-            .prompt_payload
-            .as_deref()
-            .is_some_and(|payload| !request.prompt.matches_callback_payload(payload))
+        if !continuation
+            && callback
+                .prompt_payload
+                .as_deref()
+                .is_some_and(|payload| !request.prompt.matches_callback_payload(payload))
         {
             return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
         }
@@ -1018,10 +1036,11 @@ impl BusState {
                 if callback.provider_session_id.is_none() || callback.provider_turn_id.is_none() {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
-                if !callback
-                    .prompt_payload
-                    .as_deref()
-                    .is_some_and(|payload| request.prompt.matches_callback_payload(payload))
+                if !continuation
+                    && !callback
+                        .prompt_payload
+                        .as_deref()
+                        .is_some_and(|payload| request.prompt.matches_callback_payload(payload))
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
@@ -1034,10 +1053,28 @@ impl BusState {
                 request.trusted_start_bound = true;
                 request.phase = RequestPhase::Active;
                 request.uncertain_outcome = false;
+                request.pending_final = None;
                 if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
                     agent.actionable_error = None;
                 }
-                CallbackDisposition::AcceptedBinding
+                if continuation {
+                    CallbackDisposition::AcceptedContinuation
+                } else {
+                    CallbackDisposition::AcceptedBinding
+                }
+            }
+            CallbackEventKind::BackgroundPending => {
+                if !request.trusted_start_bound
+                    || request.provider_session_id.is_none()
+                    || request.provider_turn_id.is_none()
+                {
+                    return CallbackDisposition::Rejected(CallbackRejection::UnboundFinal);
+                }
+                let Some(request) = self.requests.get_mut(&request_id) else {
+                    return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+                };
+                request.pending_final = None;
+                CallbackDisposition::AcceptedProgress
             }
             CallbackEventKind::Final { text } => {
                 if !request.trusted_start_bound
@@ -1094,6 +1131,48 @@ impl BusState {
             return None;
         }
         self.queues.get(&agent)?.first().copied()
+    }
+
+    pub(crate) fn recover_idle_request(
+        &mut self,
+        request: RequestId,
+        recovered_at_ms: u64,
+    ) -> Result<(), ModelError> {
+        let request_state = self
+            .requests
+            .get(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        if !matches!(
+            request_state.phase,
+            RequestPhase::Submitting | RequestPhase::Active
+        ) {
+            return Err(ModelError::InvalidTransition);
+        }
+        let agent_id = request_state.agent_id;
+        let agent = self
+            .agents
+            .get(&agent_id)
+            .ok_or(ModelError::UnknownAgent(agent_id))?;
+        if agent.current_request != Some(request) {
+            return Err(ModelError::InvalidTransition);
+        }
+        if agent.status != RuntimeStatus::Idle {
+            return Err(ModelError::AgentNotIdle);
+        }
+        let request_state = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        request_state.phase = RequestPhase::Abandoned;
+        request_state.pending_final = None;
+        request_state.completed_at_ms = Some(recovered_at_ms);
+        let agent = self
+            .agents
+            .get_mut(&agent_id)
+            .ok_or(ModelError::UnknownAgent(agent_id))?;
+        agent.current_request = None;
+        agent.actionable_error = None;
+        Ok(())
     }
 
     pub(crate) fn queued_requests(&self, agent: AgentId) -> &[RequestId] {
@@ -2178,5 +2257,101 @@ mod tests {
             state.request(request).expect("request").phase,
             RequestPhase::Completed
         );
+    }
+
+    #[test]
+    fn background_progress_and_same_session_continuation_wait_for_the_later_final() {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let request = submit_text(&mut state, room, agent, "review the plan");
+        start_request(&mut state, request, "launch-codex", 10);
+
+        assert_eq!(
+            state.accept_callback(ProviderCallback {
+                callback_id: "background-pending".into(),
+                sequence: 12,
+                occurred_at_ms: 12,
+                agent_id: agent,
+                launch_id: "launch-codex".into(),
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: Some("turn-1".into()),
+                provider_prompt_id: None,
+                prompt_payload: None,
+                kind: CallbackEventKind::BackgroundPending,
+            }),
+            CallbackDisposition::AcceptedProgress
+        );
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 13)
+            .expect("provider paused for background work");
+        assert_eq!(state.request(request).unwrap().phase, RequestPhase::Active);
+
+        assert_eq!(
+            state.accept_callback(ProviderCallback {
+                callback_id: "continuation-start".into(),
+                sequence: 14,
+                occurred_at_ms: 14,
+                agent_id: agent,
+                launch_id: "launch-codex".into(),
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: Some("turn-2".into()),
+                provider_prompt_id: None,
+                prompt_payload: Some(
+                    "<task-notification>reviewer finished</task-notification>".into()
+                ),
+                kind: CallbackEventKind::PromptStarted,
+            }),
+            CallbackDisposition::AcceptedContinuation
+        );
+        assert_eq!(
+            state.request(request).unwrap().provider_turn_id.as_deref(),
+            Some("turn-2")
+        );
+        assert_eq!(
+            state.accept_callback(ProviderCallback::final_event(
+                "continuation-final",
+                15,
+                agent,
+                "launch-codex",
+                "provider-session",
+                "turn-2",
+                "review the plan",
+                "Ready",
+            )),
+            CallbackDisposition::AcceptedCompleted
+        );
+        assert_eq!(
+            state.request(request).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(
+            state.room(room).unwrap().latest_replies[&agent].text,
+            "Ready"
+        );
+    }
+
+    #[test]
+    fn recovery_abandons_only_an_idle_current_request_and_releases_its_agent() {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let request = submit_text(&mut state, room, agent, "wedged request");
+        let queued = submit_text(&mut state, room, agent, "next request");
+        start_request(&mut state, request, "launch-codex", 10);
+
+        assert_eq!(
+            state.recover_idle_request(request, 20),
+            Err(ModelError::AgentNotIdle)
+        );
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 21)
+            .unwrap();
+        state.recover_idle_request(request, 22).unwrap();
+
+        assert_eq!(
+            state.request(request).unwrap().phase,
+            RequestPhase::Abandoned
+        );
+        assert_eq!(state.request(request).unwrap().completed_at_ms, Some(22));
+        assert_eq!(state.agent(agent).unwrap().current_request, None);
+        assert_eq!(state.next_queued_request(agent), Some(queued));
+        assert!(state.room(room).unwrap().latest_replies.is_empty());
     }
 }
