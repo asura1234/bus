@@ -1,11 +1,11 @@
 # 交付智能体主导的编排器内容包与动态 SOP
 
-**状态**：review-plan-complete
+**状态**：plan-execution-in-progress
 **作者**：dylanliu8949
 **创建日期**：2026-09-15
 **基于提交**：7bc910f2aba2f79ca4ddbc83e76a3c44f8fa88d5
 **分支**：master
-**前置任务（如适用）**：完成、重新审查并验证 `plans/2026-09-15-room-orchestrator-agent-led-harness.md` 的 generic room capability shell、agent-owned control、`ROOM_AGENT_CONTENT_INTERFACE_V1`、`TRUSTED_ROOM_ASSIGNMENT_V1` 与 scripted-provider acceptance
+**前置任务（如适用）**：完成、重新审查并验证 `plans/2026-09-15-room-orchestrator-agent-led-harness.md` 的 closed Orchestrator query/operation surface、Room Brief bootstrap/confirmation authority、`ROOM_AGENT_CONTENT_INTERFACE_V1` 与 `TRUSTED_ROOM_ASSIGNMENT_V1`；该前置计划已删除 synthetic scripted-provider acceptance driver，本计划不恢复或替代它
 **后续任务（如适用）**：无
 
 > **语言无关说明**：本模板适用于本仓库涉及的任意目标语言。Rust 是产品主语言，workflow helper 使用 Python，少量集成资源使用 TypeScript。下方代码片段示例必须改用任务的目标语言表达。
@@ -75,36 +75,41 @@
 
 ## 当前状态分析
 
-- **当前源码已验证**：在 base commit `7bc910f2` 中尚无 `src/bus/orchestrator/` 与 `.bus/`，所以必须先完成并重新审查 canonical harness successor；本计划不能通过 content 自行添加缺失 runtime capability。
+- **当前源码已验证（current HEAD，前置计划已完成）**：`src/bus/orchestrator/` 已存在。`build.rs` 只校验并打包 `src/bus/orchestrator/content/test-agent-led/manifest.json`；每个 manifest entry path 必须是 selector 目录内单一 `.md` 文件名（不能嵌套），单文件上限 64 KiB、总量上限 256 KiB。`src/bus/orchestrator/content.rs` 对 `ContentSelector::Production` 固定返回 `ProductionUnavailable`，因此 production bundle 需要本计划的最小 selector activation，不能只落盘静态文件。
+- **当前源码已验证**：closed `RoomQuery` 恰为 `InspectWork`、`WaitForChange`、`ReadAgent`（`VisibleViewport` 或 positive-N `RecentTail`）、`ObservePermissionPrompt`、`ReadWorkflowDraft` 与 `ReadContent`；closed `RoomOperation` 恰为 `ProposeRoomBrief`、`SendMessage`、`AbandonIdleRequest`、`PersistWorkflowDraft`、`PromoteWorkflowDraft`、`AcquireResource`、`ReleaseResource` 与 `ApprovePermissionOnce`。前置计划已删除 artifact/codebase-outline queries 与 agent lifecycle、steering、queue disposition、coordination、Human-request operations；content 不得引用、别名或模拟这些已删除 token。Work evidence 只经 `InspectWork` 返回的 `WorkSettlement` facts 暴露，技术 artifact 由 coding agent 在 reply 中报告。
+- **当前源码已验证**：没有任何 query 读取 `.bus/standard`；runtime 只在 developer approval 与 `PromoteWorkflowDraft` settlement 时读取或写入该目标。`ReadContent` 只读 embedded bundle 的 `system/system`、`agent/agent`、`index/index`、`skill/<name>` 与 `reference/<name>`；`ReadWorkflowDraft` 只读本 room 已由 `PersistWorkflowDraft` 登记的 `.bus/temp` draft。
+- **当前源码已验证**：`.gitignore` 忽略 `/.bus/`；`.bus/temp` 与 `.bus/standard` 是本地 runtime workspace，任何 checked-in `.bus/` deliverable 都不会进入 PR。
+- **当前源码已验证**：每次 model request 只注入 content 的 system、agent 与 index；skill/reference body 必须由 model 主动 `ReadContent`。Human 确认 Room Brief 前，Orchestrator 唯一可结算的是 unlocked room 上的 `ProposeRoomBrief`，所有 query（含 `ReadContent`）与其他 operation 都因缺少 grant 被拒绝；首次 exact Human confirmation 才激活固定 baseline capabilities。Brief 一旦 locked，`ProposeRoomBrief` 被拒绝，也不存在 update 或 unlock operation。
+- **当前源码已验证**：`bus assignment verify --frame FRAME`（经 `BUS_BINARY` 调用时为 `--bus assignment verify --frame FRAME`，见 `src/main.rs`）要求 frame；completed verification 输出 `verified` 或 `invalid` JSON 并 exit 0，缺失 discovery 报 `invalid`，CLI 不可达 `absent`。
 - **当前源码已验证**：canonical coding-agent skills 位于 `skills/`，`.agents/skills` 与 `.claude/skills` 是 derived symlink views；修改必须落到 canonical source。
 - **当前源码已验证**：现有 create/review/PR skills 分别拥有自己的 Goal/Non-goals derivation/locking 规则；orchestrated path 需要一个 shared Room Brief contract，同时必须保留 standalone path。
 - **当前源码已验证**：现有 standalone planless `review-pr` 只请求/锁定 developer-authored Goal，并把 Non-goals 视为 `none`；本计划保留 direct standalone invocation 与 developer-owned derivation authority，但明确把该 path 加强为 developer-authored Goal + explicit Non-goals 并同时持久化两份 locks，不能再描述为逐字保留旧 locking behavior。
-- **当前源码已验证**：`justfile` 提供 repository gates，但本环境没有 `just` 与 `cargo nextest`；执行前必须 provision。
+- **当前源码已验证**：`justfile` 提供 repository gates，`just` 与 `cargo nextest` 在当前环境可用；`just test` 包含全量 `cargo nextest` 与 `just maintenance-test`。
 - **开发者明确决定**：system/agent/skills 需要把“orchestrator owns process, coding agents own technical work”写成一致身份；hard tool denial 已在 prerequisite harness，实现内容不能冒充 security boundary。
 - **开发者明确决定**：workflow 是可动态成长的 SOP。Mermaid 说明当前建议流程、循环和分支，但 agent 根据真实 room state 决定实际下一步，并在 scope 内更新 `.bus/temp`。
-- **开发者明确决定**：initial proposal 显示 Goal/Non-goals、to-do、agents/models/effort、resource/permission needs，并等待 human confirmation；其后只有 scope/authority/risk materially 扩大才重新批准。
+- **开发者明确决定（2026-09-16 repair）**：唯一 typed Human approval 是 Room Brief Goal/Non-goals 的 exact confirmation。to-do、participants、models、effort、resources、permissions 与 Human tasks 是 advisory room conversation 和 SOP prose，不是第二个 typed approval 或 workflow state；locked brief 不可变，工作 materially 超出 Goal、Non-goals 或 authority 时，Orchestrator 以 Human-addressed `SendMessage` 请 Human 新建 room 或使用 existing Human-controlled action。
 - **开发者明确决定**：workflow complexity、agent count、compute 与 intelligence 增长不改变 harness；content 和 context 可增长。
 - **开发者明确决定**：content 必须称 human、orchestrator 与 coding agents 为 first-class room partners；workflow 分配 role/capability，而不是把 agents 描述成由人类操作的软件组件。
 - **当前源码已验证（`7bc910f2`，包含 dogfood lifecycle fix `3c96cbf8`）**：Claude background Stop 已成为 explicit `BackgroundPending`；trusted same-session continuation 会 rebind 并等待 later final；exact confirmed recovery 只在 named Request 仍由已确认 Idle agent 持有时标记 `Abandoned`。这些都是 content 必须教 Orchestrator 正确解释的 lifecycle facts/capability settlements，不能成为 runtime 自动推进规则。
-- **冻结前置契约已验证**：production content 中凡表示可调用 capability 的 token，必须逐字使用 prerequisite 的 closed `RoomQuery` / `RoomOperation` vocabulary。查询为 `InspectWork`、`WaitForChange`、`ReadAgent(VisibleViewport | RecentTail { lines })`、`ObservePermissionPrompt`、`ReadCodebaseOutline`、`ReadArtifact`、`ReadWorkflowDraft`、`ReadContent`；操作为 `CreateAgent`、`SendMessage`、`SteerActiveWork`、`SuspendWork`、`AbandonIdleRequest`、`RetireParticipant`、`ReplaceParticipant`、`ResolveQueuedWork`、`UpdateCoordination`、`PersistWorkflowDraft`、`PromoteWorkflowDraft`、`AcquireResource`、`ReleaseResource`、`ApprovePermissionOnce`、`RequestHuman`。Object/query pairing 同样冻结：embedded system/agent/skill/reference body 只用 `ReadContent`；harness 已暴露 `ArtifactId` 的 registered standard SOP 或其他 registered artifact 用 `ReadArtifact`；Bus `.bus/temp` draft 只用其 `WorkflowDraftId` 调 `ReadWorkflowDraft`。Content 不交换两种 handle、不从 raw path 猜 ID，也不为执行 standard SOP 强制复制 draft。该 vocabulary 只描述 model 可选择的 typed calls；它不把 SOP 变成 executable graph，也不授权 checker/runtime 选择调用顺序。
+- **开发者明确决定（2026-09-16 repair）**：三份 built-in SOP 作为 embedded production bundle 的 named `reference` entries 交付，并由 `ReadContent` 读取；动态或适配 SOP 只走 `PersistWorkflowDraft` 与 `ReadWorkflowDraft`；`PromoteWorkflowDraft` 把 developer-approved revision 发布到 `.bus/standard`，供后续 canonical incorporation，当前 model 不 raw-read `.bus/standard`。Capability token 只是 model 可选择的 typed call 名称，不把 SOP 变成 executable graph，也不授权 checker 或 runtime 选择调用顺序。
 
 ```mermaid
 flowchart LR
-    H[Agent-led harness] --> C[system + agent identity]
-    C --> CW[create-workflow skill]
-    C --> EW[execute-workflow skill]
-    T[workflow-template.md] --> SOP[Markdown + Mermaid SOP]
-    CW --> SOP
-    SOP --> EW
-    EW -->|agent chooses every next action| B[Bus capabilities]
-    B --> A[Coding agents and human workers]
-    A -->|evidence, blockers, handovers| EW
-    EW -->|adapt .bus/temp within locked scope| SOP
+    H[Closed prerequisite harness] --> C[injected system + agent + index]
+    C -->|ProposeRoomBrief| RB[Room Brief proposal]
+    RB -->|exact Human confirmation| G[baseline grants]
+    G --> RC[ReadContent: skills, template, built-in SOPs]
+    RC --> SOP[Markdown + Mermaid SOP]
+    SOP -->|adapt within locked scope| D[PersistWorkflowDraft and ReadWorkflowDraft]
+    D --> SOP
+    SOP --> EW[execute-workflow judgment]
+    EW -->|SendMessage and other closed calls| A[Coding agents and Human]
+    A -->|WorkSettlement facts and replies| EW
 ```
 
 ## 参考资料
 
-- `plans/2026-09-15-room-orchestrator-agent-led-harness.md`（canonical prerequisite；agent owns every workflow decision）
+- `plans/2026-09-15-room-orchestrator-agent-led-harness.md`（canonical prerequisite；final closed Orchestrator surface、Room Brief bootstrap/confirmation authority，以及删除 synthetic acceptance driver 与 artifact/outline queries 的归档决策）
 - `plans/2026-09-14-room-orchestrator-content.md`、`plans/2026-09-14-room-orchestrator-harness.md`（legacy plans，迁移后只保留 abandoned pointer）
 - `docs/templates/plan-template.md`（完整读取；canonical plan contract）
 - `docs/guides/consumer-fallout-format.md`（完整读取；consumer inventory interpretation）
@@ -112,7 +117,11 @@ flowchart LR
 - `skills/skill-architecture.md`（完整读取；execution/principle/mechanic/format layering）
 - `skills/create-plan/SKILL.md`、`skills/review-plan/SKILL.md`、`skills/execute-plan/SKILL.md`、`skills/pr/SKILL.md`、`skills/review-pr/SKILL.md`、`skills/address-review-comments/SKILL.md`（current coding-agent goal and workflow contracts）
 - `docs/guides/review-response-guide.md`（完整读取；review findings remain evidence-bearing claims and technical disposition stays with coding-agent author）
-- prerequisite `ROOM_AGENT_CONTENT_INTERFACE_V1`、`TRUSTED_ROOM_ASSIGNMENT_V1`、`docs/guides/room-orchestrator-content-interface-format.md`、`docs/guides/room-brief-projection-format.md`、production-safe `bus assignment verify --frame` typed result、`src/bus/orchestrator/`、`build.rs`、`Cargo.toml`、`justfile`（本计划执行前必须已实现并通过重新审查，不在执行时猜测 seam）
+- `docs/guides/room-orchestrator-content-interface-format.md`、`docs/guides/room-brief-projection-format.md`（完整读取；content manifest/packing/read 与 trusted assignment verifier result SOT）
+- `build.rs`、`src/bus/orchestrator/content.rs`、`src/bus/orchestrator/tests.rs`（当前 `test-agent-led` packing、flat-path/caps/digest 校验与 production typed-unavailable 分支）
+- `src/bus/orchestrator/types.rs`、`src/bus/orchestrator/registry.rs`、`src/bus/runtime_orchestrator.rs`、`src/bus/workflow_drafts.rs`（closed query/operation vocabulary、capability gate、request content injection、draft/promotion semantics）
+- `src/main.rs`、`src/bus/entry.rs`、`docs/how-to-bus-cli.md`（`--bus assignment verify --frame FRAME` 入口与 typed JSON result）
+- `.gitignore`、`justfile`（`/.bus/` ignored runtime workspace；`test-one`、`maintenance-test`、`test`、`lint` 与 `build` gates）
 - `scripts/test_skill_migration_contract.py`、`scripts/test_sanitize_review_severity.py`、`scripts/test_bus_dev_acceptance.py`（完整读取；adjacent deterministic Python test patterns and existing no-severity/link contracts）
 
 > **重要**：
@@ -163,8 +172,8 @@ flowchart LR
 
 3. **Production content ownership**
    - **选项**：runtime hard-code；repo file shadow；fixed versioned content bundle。
-   - **选择**：第三项。System、agent、两个 skills 与 template 使用 prerequisite seam 内嵌；standard SOPs/README 由 repo `.bus/standard` 持有。
-   - **依据**：content 与 harness 分计划、避免 repo prompt injection shadow production identity。
+   - **选择**：第三项。System、agent、两个 skills、workflow template 与三份 built-in SOP 全部作为 embedded production bundle 的 named entries 交付，Orchestrator 只以 `ReadContent` 读取。Adapted SOP 只存在于 Bus-derived `.bus/temp` draft；`PromoteWorkflowDraft` 把 developer-approved revision 写到 `.bus/standard`，作为后续 canonical incorporation 的输入，当前 model 不读取该目标。本计划不交付 checked-in `.bus/` 文件，因为 `/.bus/` 是 git-ignored runtime workspace。
+   - **依据**：content 与 harness 分计划、避免 repo prompt injection shadow production identity；前置计划删除 artifact query 后，开发者 2026-09-16 repair 决定以 embedded reference 承载 standard SOP，而不新增 query。
 
 4. **Technical boundary wording**
    - **选项**：orchestrator 可直接分析代码；只用 prompt 禁止；prompt + harness capability denial。
@@ -178,8 +187,8 @@ flowchart LR
 
 6. **Dynamic scope and approval**
    - **选项**：每次 SOP 改动重批；批准后任意扩 scope；locked boundary 内动态修订。
-   - **选择**：第三项。Routine adaptation、attempt/lesson 增长与 `.bus/temp` 更新不重批；Goal/Non-goals、authority、destructive/publish 或 material budget/resource expansion 重批。
-   - **依据**：开发者需要 agent 从 entropy 中恢复，同时保留 human authority。
+   - **选择**：第三项。唯一 typed approval 是 Human 对 `ProposeRoomBrief` proposal 的 exact Goal/Non-goals confirmation；确认前 Orchestrator 只能提出 brief，因此形成首个 proposal 所需的全部指导位于注入的 `agent.md`（及适用的 system/index）。确认后 routine adaptation、attempt/lesson 增长、to-do/participant/model/effort/resource/permission 讨论与 `.bus/temp` 更新都不重批，只作为 advisory room conversation 与 SOP prose。Locked brief 不可变；Goal/Non-goals、authority、destructive/publish 或 material budget/resource 超出时，Orchestrator 以 Human-addressed `SendMessage` 请 Human 新建 room 或使用 existing Human-controlled action，不新增 update、unlock 或 re-proposal operation。
+   - **依据**：开发者需要 agent 从 entropy 中恢复，同时保留 human authority；前置 runtime 只在 unlocked room 允许 bootstrap `ProposeRoomBrief`，并在首次 exact confirmation 时激活 baseline grants（开发者 2026-09-16 repair）。
 
 7. **Participant language and authority**
    - **选项**：human controller + agent components；所有参与者完全相同权限；first-class partners + role-specific capabilities。
@@ -188,13 +197,18 @@ flowchart LR
 
 8. **Production content interface boundary**
    - **选项**：本计划同时实现 build/runtime assembly；只交付 static content；消费 prerequisite-owned generic interface。
-   - **选择**：第三项。Prerequisite 的 `ROOM_AGENT_CONTENT_INTERFACE_V1` 拥有 schema/validation/packing、closed selector、model-authored content read 与 prompt layering；本计划只提供 production manifest、五个 concrete assets、SOPs、static checks 与 production-selector smoke。Manifest 使用 required system/agent entries + named skill/reference entries，使 content 增长不要求 harness 理解 workflow 或增加 Rust branches。
-   - **依据**：四份完整独立 recommendation 均选择 A；该 synthesis 保留一个 loader owner、content plan 的 runtime/build 非目标和 production bundle 目标。
+   - **选择**：第三项。Prerequisite 的 `ROOM_AGENT_CONTENT_INTERFACE_V1` 保持 schema、caps、digest、closed selector、model-authored read 与 prompt layering 的定义者；本计划只在 `build.rs`、`src/bus/orchestrator/content.rs` 与 `src/bus/orchestrator/tests.rs` 做最小 production activation：`src/bus/orchestrator/content/production/manifest.json` 存在时复用同一校验打包，并由 `production` selector 返回；缺失时仍为 `ProductionUnavailable`，非法时 build fail closed。Manifest 文件名是 `manifest.json`，全部 entry 都是 selector 目录内 flat `.md` 文件。不改 provider、journal、tool registry、permission、persistence、TUI、control 或 safety surface，也不增加 production smoke driver。
+   - **依据**：四份完整独立 recommendation 均选择 A；Task 1 generation 1 blocker 证明当前 build/loader 永不打包 production tree，开发者 2026-09-16 repair 授权这项最小 activation。
 
 9. **Trusted Room Brief carrier and precedence**
    - **选项**：content-owned in-band block；延期六个 skill branches；harness-produced versioned trusted assignment projection。
-   - **选择**：第三项。Prerequisite Worker 在已授权 coding-agent Request delivery 中产生 `TRUSTED_ROOM_ASSIGNMENT_V1`，且 prerequisite production verifier 独占 directory、immutable record、active pointer、endpoint/token、frame、current Request、resume/replace provenance 的信任判定。本计划的唯一 shared context adapter 与六个 skill branches 只调用该 verifier 并消费 `Verified | Absent | Invalid` typed result，不读取或重新验证 harness storage，也不信任 in-band lookalike。`Verified` authorizes orchestrated branch；plan Goal/Non-goals 与 `.locked-goal`/locked non-goals 必须 exact match，否则返回 blocker evidence 给 Orchestrator，绝不覆盖、fallback 或自动选择 recovery。Bus-intent branch 中只有 verifier `Absent` 保留 standalone path，`Invalid` 始终 blocker；既有 direct non-Bus invocation 仅在 outer frame 与全部四项 Bus discovery variables 同时不存在时，才由 content adapter 在调用 verifier 前返回 distinct `NotInBusRoom` standalone signal。出现 frame 或任一 discovery variable 即进入 Bus-intent branch，必须具备完整 discovery 并成功调用 verifier，任何 partial/missing discovery、unavailable/timeout/nonzero call 或 malformed result 都 fail closed。
-   - **依据**：四份完整独立 recommendation 均选择 A；only harness can bind durable room/work/request、author/recipient and approved brief revision without turning prompt prose into a trust root。
+   - **选择**：第三项。Prerequisite Worker 在已授权 coding-agent Request delivery 中产生 `TRUSTED_ROOM_ASSIGNMENT_V1`，prerequisite production verifier 独占 directory、immutable record、active pointer、endpoint/token、frame、current Request、resume/replace provenance 的信任判定。本计划唯一 shared context adapter 与六个 skill branches 不读取或重新验证 harness storage，也不信任 in-band lookalike：outer frame 与四项 Bus discovery variables 全部不存在时返回 distinct local `NotInBusRoom`，不调用 verifier 并保留 standalone path；任一 Bus-intent signal 存在但 frame 缺失或 discovery 不完整时直接 blocker，没有 standalone fallback；frame 与完整 discovery 同时存在时才调用 production verifier。Verifier `verified` 授权 orchestrated branch；`invalid`、malformed output、timeout、executable unavailable 或 nonzero exit 都是 blocker。CLI 要求 `--frame`，因此 adapter 不声称可达的 verifier-`absent` standalone result，出现该结果按 malformed 处理。Plan Goal/Non-goals 与 `.locked-goal`/`.locked-non-goals` 必须 exact match，否则返回 blocker evidence 给 Orchestrator，绝不覆盖、fallback 或自动选择 recovery。
+   - **依据**：四份完整独立 recommendation 均选择 A；only harness can bind durable room/work/request、author/recipient and approved brief revision without turning prompt prose into a trust root；`docs/guides/room-brief-projection-format.md` 规定 CLI 缺失 discovery 报 `invalid`、从不返回 `absent`。
+
+10. **Closed prerequisite surface reconciliation**
+   - **选项**：恢复已删除 queries/operations 与 acceptance driver；在 content 中为旧 token 保留 alias；把 content、checker 与 gate 全部改写到 current closed surface。
+   - **选择**：第三项。删除全部 synthetic acceptance driver、counter 与 `justfile` replay 要求，不以其它 harness 替代；删除 static expected-model-choice scenarios 与 semantic wording classifier，checker 只校验 objective entry set、structure、removed-token vocabulary、ownership 与 safety facts。旧概念只映射为 model judgment：steering 或 pivot 是新的 model-authored `SendMessage` Request；technical/codebase 问题以 `SendMessage` 委派；Human help 是 Human-addressed `SendMessage`；create/delete/replace agent 由 room message 请 Human 使用 existing Bus actions；evidence 来自 `InspectWork` 与 `WorkSettlement`；Goal/Non-goals 走 `ProposeRoomBrief` 与 exact Human confirmation；attempt、lesson、to-do、participant、model、effort、resource、permission 与 Human task 只是 advisory SOP prose。
+   - **依据**：Task 1 generation 1 blocker B1–B6 与开发者 2026-09-16 repair 决定；前置计划归档决策删除 Task 3 driver、artifact/outline queries 与 lifecycle/steering operations。Fixtures 不执行模型，也不证明 semantic orchestration quality；live provider calls 保持为零，Human 提供的 DeepSeek key 只用于后续人工端到端检查。
 
 ## 大小
 
@@ -279,66 +293,106 @@ flowchart LR
 > - 上述例外只豁免本节逐文件代码片段，不豁免任务 ownership、验收闸门或模块 SOT 同步。计划已经明确点名的文件与测试路径必须进入本节文件契约，并被一个且仅一个任务 owner containment 覆盖；合理 deviation 可在稳定 owner 内新增未预知文件。
 > - 改变 skill 架构或公开工作流契约时，`skills/AGENTS.md`、`skills/skill-architecture.md` 与受影响的共享 guide 必须进入同一 owner 与 gate。
 
-- **新文件**：`src/bus/orchestrator/content/production/manifest.toml`
-  - **用途**：为 `ROOM_AGENT_CONTENT_INTERFACE_V1` 提供 production instance：required singleton `system`/`agent`、named `skills[]` 中的 create/execute entries、named `references[]` 中的 workflow template，合计下列五个 concrete assets；声明 content/compatibility version、path、caps 与 SHA-256。不能注册 tool/capability、mode、workflow transition 或 control logic。
+- **修改文件**：`build.rs`
+  - **用途**：把现有 fixed-tree content validation/packing 从单一 `test-agent-led` 泛化到 closed selector 列表。`test-agent-led` 仍必需；`production` 在 `src/bus/orchestrator/content/production/manifest.json` 存在时复用同一 interface/version/compatibility/flat-path/UTF-8/per-file cap/total cap/SHA-256/name 校验并打包，缺失时写出 absent marker，非法时 build fail closed。不接受 env、path 或 repository shadow selector，不改其余 build 步骤。
+  ```rust
+  fn main() {
+      // Existing build steps stay unchanged.
+      pack_content_selector(&manifest_dir, "test-agent-led", SelectorPresence::Required);
+      pack_content_selector(&manifest_dir, "production", SelectorPresence::WhenManifestExists);
+  }
+
+  fn pack_content_selector(manifest_dir: &Path, selector: &str, presence: SelectorPresence) {
+      // Reuses validate_content_entry and the existing packed shape. An absent optional selector
+      // writes `null` to OUT_DIR/bus-<selector>-content.json so the loader reports it unavailable.
+  }
+  ```
+- **修改文件**：`src/bus/orchestrator/content.rs`
+  - **用途**：`ContentLoader` 同时解析 `test-agent-led` 与可选 `production` packed output；`production` selector 在 bundle 存在且 compatible 时返回该 bundle，缺失时返回 `ProductionUnavailable`。现有 constructor 名称保留，因为 `src/bus/runtime_orchestrator.rs` 已用它服务两个 selector 且不在本计划 owner 内；`ContentBundle::read` 的 kind/name pairing 不变。
+  ```rust
+  pub(crate) struct ContentLoader {
+      test: ContentBundle,
+      production: Option<ContentBundle>,
+  }
+
+  impl ContentLoader {
+      pub(crate) fn load(&self, selector: ContentSelector) -> Result<ContentBundle, ContentError> {
+          match selector {
+              ContentSelector::TestAgentLed => compatible(&self.test).cloned(),
+              ContentSelector::Production => match &self.production {
+                  Some(bundle) => compatible(bundle).cloned(),
+                  None => Err(ContentError::ProductionUnavailable),
+              },
+          }
+      }
+  }
+  ```
+- **修改文件**：`src/bus/orchestrator/tests.rs`
+  - **用途**：以 `room_orchestrator_core_content_` 前缀替换“production 永远 unavailable”断言：packed production bundle 经 `production` selector 加载，interface/compatibility/version/digest 有效；`system`、`agent`、`index`、`skill/create-workflow`、`skill/execute-workflow`、`reference/workflow-template`、`reference/sop-review-plan`、`reference/sop-review-pr` 与 `reference/sop-execute-plan` 均可经 `ContentBundle::read` 读取，未注册 entry 返回 `UnknownEntry`；test-only 构造的无 production loader 返回 `ProductionUnavailable`；`test-agent-led` 行为不变。
+- **新文件**：`src/bus/orchestrator/content/production/manifest.json`
+  - **用途**：`ROOM_AGENT_CONTENT_INTERFACE_V1` 的 production instance：`content_version` 与 `compatibility` 为 1，required `system`/`agent`，`skills` 为 `create-workflow`、`execute-workflow`，`references` 为 `workflow-template`、`sop-review-plan`、`sop-review-pr`、`sop-execute-plan`；每项是 flat `.md` path 与 SHA-256，合计八个 concrete assets 并满足 per-file/total caps。不声明 tool、capability、mode、transition 或 control logic。
 - **新文件**：`src/bus/orchestrator/content/production/system.md`
-  - **用途**：建立 harness-level identity：orchestrator 是 first-class room participant 与 process owner；coding agents 和 humans 是 partners；所有 next-step decisions 属于 orchestrator。
-  - **关键修改**：明确 no technical problem solving、evidence-first routing、no self-approval、no hidden reasoning exposure；承认 hard security 来自 harness capabilities。
+  - **用途**：建立 harness-level identity：Orchestrator 是 first-class room participant 与 process owner；coding agents 和 Human 是 partners；所有 next-step decisions 属于 Orchestrator model。
+  - **关键修改**：明确 no technical problem solving、evidence-first routing、no self-approval、no hidden reasoning exposure；承认 hard security 来自 harness capabilities，而不是 prompt。
 - **新文件**：`src/bus/orchestrator/content/production/agent.md`
-  - **用途**：定义持续运行方式：理解 requirements、维护 Goal/Non-goals/to-do、选择 participant/model/effort、等待/追问、记录 attempt/lesson、恢复/替换与 sitrep。
-  - **关键修改**：happy path 与 failure path 都由 agent 驱动；先从 injected skill/reference index 选择 exact entry，再以 `ReadContent` 加载 body。用 `InspectWork`、`WaitForChange`、`ReadAgent(VisibleViewport | RecentTail { lines })`、`ReadArtifact`、`ReadWorkflowDraft` 与 `ReadCodebaseOutline` 读取需要的 bounded facts，而不是相信 visual Idle；registered standard SOP/other artifact 的 `ArtifactId` 只交给 `ReadArtifact`，temp SOP 的 `WorkflowDraftId` 只交给 `ReadWorkflowDraft`，missing/unknown/mismatched handle 返回事实并由 model 重新判断，不能 raw-path fallback。区分 `BackgroundPending`、trusted continuation、Request/operation settlement、artifact evidence 与 higher-level outcome。只有 agent 选择 exact `CreateAgent`、`SendMessage`、`SteerActiveWork`、`SuspendWork`、`AbandonIdleRequest`、`RetireParticipant`、`ReplaceParticipant`、`ResolveQueuedWork`、`UpdateCoordination`、`PersistWorkflowDraft`、`PromoteWorkflowDraft`、`AcquireResource`、`ReleaseResource`、`ApprovePermissionOnce` 或 `RequestHuman`；permission 必须先以 `ObservePermissionPrompt` 获得 factual single-use fingerprint，再决定是否调用 `ApprovePermissionOnce`。遇到技术问题先找拥有上下文的 participant；完全失控才请求 human。
-- **新文件**：`src/bus/orchestrator/content/production/skills/create-workflow/SKILL.md`
-  - **用途**：通过 content index + `ReadContent` 加载 create skill/template；只从 harness-exposed registered SOP fact/`ArtifactId` 选择 standard SOP 并以 `ReadArtifact` 读取，或以 pathless `PersistWorkflowDraft` 创建/修订 Bus-derived `.bus/temp/<room-id>/<draft-id>.md` 并以 receipt `WorkflowDraftId` + `ReadWorkflowDraft` 读取，生成 human-visible initial proposal。Standard 可直接执行；只有 model 决定适配时才创建 temp draft，不能为读取而自动 materialize，也不提交 path 或 filename。
-  - **关键修改**：收集 requirements → 写/选 SOP → lint → 提出 Goal/Non-goals、to-do、participants/models/effort/resource/permission budget → 等待 exact approval；approval 前零 dispatch。Standard publication 是 separate developer review 对 immutable draft revision/content、current standard base 与 exact diff 的 approval；其后 Human 或 Orchestrator 才可另行选择 approval-bound pathless `PromoteWorkflowDraft`，runtime 只重验并结算。
-- **新文件**：`src/bus/orchestrator/content/production/skills/execute-workflow/SKILL.md`
-  - **用途**：让 orchestrator 在每个 room event 后读取当前 SOP、durable state 与 evidence，自主决定并执行下一步。
-  - **关键修改**：每次 exact `RoomQuery` / `RoomOperation` call 都是 agent judgment。Current SOP reference 必须保留来源类型与 harness-issued handle：`RegisteredStandard(ArtifactId)` 用 `ReadArtifact`，`TemporaryDraft(WorkflowDraftId)` 用 `ReadWorkflowDraft`；unknown/missing/mismatched handle typed-deny 后只返回事实，model 可重新 inspect/select/request Human，但 runtime/helper 不 fallback、不复制 standard、不选择 recovery。Skill 用 `InspectWork`/`WaitForChange`、model-selected `ReadAgent(VisibleViewport | RecentTail { lines })`、其他 `ReadArtifact` 或 `ReadCodebaseOutline` 收集所需事实，再自主选择 assignment、steering、queue/lifecycle、resource、workflow revision、permission 或 Human escalation operation。Permission path 固定为事实查询 `ObservePermissionPrompt` 后，model 才可选择 fingerprint-bound `ApprovePermissionOnce`；historically wedged current Request 的 recovery 名称为 `AbandonIdleRequest`。Typed stale/denied/uncertain facts 只触发重新判断，不触发 fixed recovery。Claude `BackgroundPending` 不结算、trusted same-session continuation rebind、ordinary final 只结算 Request、artifact/post-settlement activity 不宣告 work complete、exact confirmed idle-request recovery 只暴露 `Abandoned`；不得等待 harness 自动推进，scope 内 revision 只通过 `PersistWorkflowDraft`，promotion 只通过 developer-approved `PromoteWorkflowDraft`。
-- **新文件**：`src/bus/orchestrator/content/production/references/workflow-template.md`
+  - **用途**：每次 request 都注入的持续运行方式，并包含形成首个 Room Brief proposal 所需的全部指导，因为确认前不能 `ReadContent` 或 `PersistWorkflowDraft`。
+  - **关键修改**：确认前只理解 Human requirements，并以 exact expected revision 与 nonblank Goal/Non-goals 选择 `ProposeRoomBrief`，然后等待 Human exact confirmation；确认后才从 injected index 选择 exact entry，并以 `ReadContent` 加载 skills、template 与 built-in SOPs。以 `InspectWork` 返回的 `WorkSettlement`、`WaitForChange`、model-selected `ReadAgent`（`VisibleViewport` 或 positive-N `RecentTail`）与 `ReadWorkflowDraft` 获取 bounded facts，不相信 visual Idle。区分 `BackgroundPending`、trusted continuation、Request/operation settlement、reply evidence 与 higher-level outcome。Assignment、pivot、technical question 与 Human help 都是 model-authored `SendMessage`；agent create/delete/replace 通过 room message 请 Human 使用 existing Bus action；permission 先以 `ObservePermissionPrompt` 获得 single-use fingerprint，再判断是否 `ApprovePermissionOnce`；wedged current Request 只以 `AbandonIdleRequest` 恢复；shared resource 使用 `AcquireResource` 与 `ReleaseResource`。Locked brief 不可变，material expansion 请 Human 新建 room 或采取 Human-controlled action。
+- **新文件**：`src/bus/orchestrator/content/production/create-workflow.md`
+  - **用途**：确认后读取的 skill：从 index 选择 built-in SOP reference 并以 `ReadContent` 读取；只有 model 决定适配时，才以 pathless `PersistWorkflowDraft` 创建或修订 Bus-derived `.bus/temp` draft，并以 receipt draft id 调用 `ReadWorkflowDraft`。
+  - **关键修改**：Built-in SOP 可直接执行，不为读取而 materialize draft，也不提交 path 或 filename；以 Human-addressed `SendMessage` 分享 advisory to-do、participants、models、effort、resource 与 permission needs，不创建第二个 typed approval。Standard publication 需要 Human review surface 对 immutable draft revision/content、current standard base 与 exact diff 签发 developer approval；其后 Human 或 Orchestrator 才可选择 approval-bound pathless `PromoteWorkflowDraft`，runtime 只重验并结算。
+- **新文件**：`src/bus/orchestrator/content/production/execute-workflow.md`
+  - **用途**：让 Orchestrator 在每个 room event 后读取当前 SOP、durable facts 与 evidence，自主决定并执行下一步。
+  - **关键修改**：Current SOP reference 只记录 `ReadContent` reference name 或 `ReadWorkflowDraft` draft id；unknown、missing 或 mismatched 结果只返回事实，model 可重新 inspect/select 或请 Human，runtime/helper 不 fallback、不复制、不选择 recovery。每个 closed query/operation call 都是 model judgment；typed stale/denied/uncertain facts 只触发重新判断。Claude `BackgroundPending` 不结算、trusted same-session continuation rebind、ordinary final 只结算 Request、post-settlement activity 不宣告 work complete、exact idle-request recovery 只暴露 `Abandoned`；不得等待 harness 自动推进，scope 内 revision 只通过 `PersistWorkflowDraft`，publication 只通过 developer-approved `PromoteWorkflowDraft`。
+- **新文件**：`src/bus/orchestrator/content/production/workflow-template.md`
   - **用途**：作为 `plan-template.md` 的 workflow 对应物，提供 Markdown sections 与 exactly one Mermaid flowchart 的完整可复制 SOP skeleton。
-  - **关键修改**：包含 intent、inputs、participants/roles/capabilities、preflight proposal、current SOP source/handle、success evidence、provider/request/operation/artifact settlement evidence、failure signals、adaptation/recovery authority、resource leases、attempt ledger、human tasks、stop/escalation、revision history；current SOP 只能标记 `RegisteredStandard` + `ArtifactId` 或 `TemporaryDraft` + `WorkflowDraftId`，分别对应 `ReadArtifact` / `ReadWorkflowDraft`，不得含 raw path 或由 parser 选择转换。Capability slots 只接受 frozen exact query/operation token，permission、draft/promotion、terminal/history 与 idle-request recovery 使用上述 typed pair/variant；图与 prose 必须对齐，但图不具可执行语义。
-- **新文件**：`.bus/standard/review-plan.md`、`.bus/standard/review-pr.md`
-  - **用途**：描述三条 mixed-family independent reviewer lanes、separate author、循环至全部 Ready 的标准 SOP。
-  - **关键修改**：只有已经作为 registered standard SOP 获得 harness-exposed `ArtifactId` 时才可被选择，Orchestrator 只以 `ReadArtifact` 读取；lane 顺序与隔离由 orchestrator维护。有 finding 时向三名 reviewers 和 author 收集建议，把四份完整建议交给 author 做 best-of-N-style resolution；无法 cleanly resolve 才找 human。All-Ready 只是事实；Orchestrator 另行显式授权 separate author 执行 exact plan-hash/lane/round-bound finalization，reviewer/runtime 不自动写 `review-plan-complete`。
-- **新文件**：`.bus/standard/execute-plan.md`
-  - **用途**：由 room Orchestrator逐次选择 reviewed plan 中可执行的 bounded implementation、task-review、remediation 与 finalization assignment，coding agents 使用 native technical tools完成被委派的细节，再进入 mixed-model independent review/address cycle。
-  - **关键修改**：只有已经作为 registered standard SOP 获得 harness-exposed `ArtifactId` 时才可被选择，Orchestrator 只以 `ReadArtifact` 读取；orchestrated branch 不启动或跟随 standalone `execute-plan` Python progression driver。Deterministic helpers 只能验证 Orchestrator 已选择的 task/owner/hash/evidence/operation。Orchestrator 避免 simultaneous uncoordinated writers、根据任务复杂度分配 effort，并在每次 returned fact/artifact 后自主决定 wait、next assignment、repair 或 recovery。
-- **新文件**：`.bus/README.md`
-  - **用途**：说明 standard/temp ownership、Mermaid-as-SOP、dynamic revision、human/agent partnership、approval boundary、promotion、attempt/lesson 与 no-script/no-Appium default；记录 registered standard `ArtifactId` → `ReadArtifact`、temp `WorkflowDraftId` → `ReadWorkflowDraft` 的 exact read pairing 与 no raw-path/implicit-copy rule。明确 draft 只能经 pathless `PersistWorkflowDraft` 写入 Bus-derived temp identity，developer exact approval 是 standard publication 的 Human-only authority action，而 Human/Orchestrator 均可随后请求 pathless `PromoteWorkflowDraft` settlement。
-- **新目录**：`src/bus/orchestrator/testdata/content/production/`、`src/bus/orchestrator/testdata/content/scenarios/`
-  - **用途**：fixed bundle integrity fixtures，以及 versioned static fact/expected-model-choice scenarios：agent-led happy path、review convergence、dynamic spike benchmark、all-failed lessons/reseed、human worker、escalation、`BackgroundPending`/trusted continuation/later final、ordinary-final/post-settlement activity/artifact independence、idle-request `Abandoned` recovery、launch/hook readiness、active-turn steering、stale queue replace/retire/handover、non-building observation 与 three exact approve-once decisions。
-  - **关键修改**：每个 static scenario 明确 input facts、model turn、frozen exact query/operation call 与 authorized capability settlement；至少一例以 registered standard `ArtifactId` + `ReadArtifact` 执行且不创建 draft，一例以 temp `WorkflowDraftId` + `ReadWorkflowDraft` 执行，并覆盖 wrong/missing handle pairing fail closed。Permission cases 必须先记录 `ObservePermissionPrompt` observation/fingerprint 后才可能出现 `ApprovePermissionOnce`，terminal evidence 明确 model-selected `VisibleViewport` 或 positive-N `RecentTail`，idle recovery 使用 `AbandonIdleRequest`，SOP adaptation/publication 分别使用 pathless `PersistWorkflowDraft` / approval-bound `PromoteWorkflowDraft`。Fixture/checker 不声称执行模型或证明 semantic quality，且不包含 runtime/Mermaid/status/timeout generated next step。
+  - **关键修改**：包含 intent、inputs、participants and capabilities、Room Brief boundary、current SOP source、success evidence、settlement evidence、failure signals、adaptation and recovery authority、resource leases、attempt ledger、Human tasks、stop and escalation、revision history sections；current SOP source 只能是 `ReadContent` reference name 或 `ReadWorkflowDraft` draft id，不含 raw path。Capability slots 只写 closed query/operation token；attempt ledger、to-do 与 Human tasks 是 advisory prose，不是 typed state；图与 prose 对齐，但图不具可执行语义。
+- **新文件**：`src/bus/orchestrator/content/production/{sop-review-plan.md,sop-review-pr.md}`
+  - **用途**：描述三条 mixed-family independent reviewer lanes、separate author、循环至全部 Ready 的 built-in SOP，由 `ReadContent` 读取。
+  - **关键修改**：Lane 顺序与隔离由 Orchestrator 以 `SendMessage` assignment 维护；有 finding 时向三名 reviewers 与 author 收集建议，把四份完整建议交给 author 做 best-of-N-style resolution；无法 cleanly resolve 时才以 Human-addressed `SendMessage` 求助。All-Ready 只是事实；Orchestrator 另行以明确 assignment 授权 separate author 执行 exact plan-hash/lane/round-bound finalization，reviewer/runtime 不自动写 `review-plan-complete`。
+- **新文件**：`src/bus/orchestrator/content/production/sop-execute-plan.md`
+  - **用途**：由 room Orchestrator 逐次选择 reviewed plan 中可执行的 bounded implementation、task-review、remediation 与 finalization assignment，coding agents 使用 native technical tools 完成被委派的细节，再进入 mixed-model independent review/address cycle。
+  - **关键修改**：Orchestrated branch 不启动或跟随 standalone `execute-plan` Python progression driver；deterministic helpers 只验证 Orchestrator 已选择的 task/owner/hash/evidence/operation。Orchestrator 避免 simultaneous uncoordinated writers、按任务复杂度分配 effort，并在每次 returned fact 或 reply 后自主决定 wait、next assignment、repair 或 recovery。
 - **新文件**：`scripts/orchestrator_content_check.py`
-  - **用途**：静态检查 production manifest/asset digest 与 prerequisite schema conformance、template、standard SOPs、cross-links、forbidden authority wording 和 static scenario fixtures；不解释图的控制流，也不证明 runtime prompt layering或模型语义。
+  - **用途**：只做 objective static checks：production manifest 的 required entry names 与 flat files 存在；template 具备 required sections 且恰有一个 Mermaid flowchart；每份 built-in SOP 恰有一个 Mermaid flowchart；production content、六个 canonical skills 与 `docs/guides/orchestrated-room-brief.md` 不含前置计划删除的 query/operation/handle token（完整列表以前置计划归档决策为准）或其 snake-case tool 名。Schema、digest 与 caps 由 `build.rs` 在构建时校验，不在 Python 重复；checker 不解释图的控制流、不评估 wording 语义、不执行模型。
   ```python
   def validate_repository(repo: Path) -> tuple[Diagnostic, ...]:
-      validate_fixed_content_bundle(repo)
-      validate_workflow_document_structure(repo)
-      validate_frozen_capability_vocabulary(repo)
-      validate_sop_read_pairing(repo)
-      validate_agent_led_language(repo)
-      validate_scripted_scenarios(repo)
-      return diagnostics_in_source_order()
+      return (
+          *validate_production_entry_set(repo),
+          *validate_workflow_template_structure(repo),
+          *validate_single_mermaid_flowchart_per_sop(repo),
+          *validate_no_removed_capability_tokens(repo),
+      )
   ```
 - **新文件**：`scripts/test_orchestrator_content_check.py`
-  - **用途**：覆盖 valid bundle、结构错误、错误 authority wording、runtime-owned next-action wording、participant hierarchy 和 static scenario/model-decision correlation；其 named production-smoke case subprocess prerequisite exact `--profile agent-led --content production --fake-provider` driver、读取 evidence artifact 并断言 production bundle identity/digest 与 agent-led counters，使 `just test` 重放最终树 proof。
-- **修改文件**：`skills/AGENTS.md`、`skills/skill-architecture.md`；**新文件**：`docs/guides/orchestrated-room-brief.md`
-  - **用途**：消费 prerequisite `docs/guides/room-brief-projection-format.md` 与 production verifier typed-result contract，建立 shared Room Brief/participant/handoff precedence 与 canonical skill ownership，不重复 producer/verifier format 或在各 skill 复制 authority prose。No outer frame + none of `BUS_BINARY`、`BUS_TRUSTED_ASSIGNMENT_DIR`、`BUS_TRUSTED_ASSIGNMENT_ENDPOINT`、`BUS_TRUSTED_ASSIGNMENT_TOKEN` is distinct `NotInBusRoom` and preserves the direct standalone entry path；any frame or any discovery variable requires the complete set and production verifier。Verifier `Verified` authorizes orchestrated branch；plan/lock mirror exact-match or fail closed；verifier `Absent` preserves the standalone entry path，while partial discovery、unavailable/timeout/nonzero verifier、malformed output or `Invalid` blocks。
+  - **用途**：checked-in production tree 通过；temp-copy 变体证明缺 required entry、缺 template section、零或多个 Mermaid flowchart、任一 removed token（CamelCase 或 snake-case）各自产生指明文件的 diagnostic；不 subprocess 任何 driver，也不调用 provider。
+- **修改文件**：`skills/AGENTS.md`
+  - **用途**：记录 shared Room Brief、participant 与 handoff precedence 以及 canonical skill ownership，引用 `docs/guides/orchestrated-room-brief.md`，不复制 producer/verifier format 或各 skill 的 authority prose。
+- **修改文件**：`skills/skill-architecture.md`
+  - **用途**：把 shared room-assignment consumer 与六个 skill branches 放入现有 execution/principle/mechanic/format layering。
+- **新文件**：`docs/guides/orchestrated-room-brief.md`
+  - **用途**：消费 `docs/guides/room-brief-projection-format.md` 的 verifier typed-result contract，定义唯一 branch mapping：no outer frame 且 `BUS_BINARY`、`BUS_TRUSTED_ASSIGNMENT_DIR`、`BUS_TRUSTED_ASSIGNMENT_ENDPOINT`、`BUS_TRUSTED_ASSIGNMENT_TOKEN` 全部不存在时是 local `NotInBusRoom` standalone；任一 Bus-intent signal 缺 frame 或 discovery 不完整时是 blocker；frame 与完整 discovery 同时存在时调用 verifier，`verified` 授权 orchestrated branch，其余结果一律 blocker。Orchestrator 以 `ProposeRoomBrief` 拥有 room-level brief proposal 并由 Human 确认，coding-agent skills 只消费 locked Goal/Non-goals。
 - **新文件**：`cli_extensions/room_assignment_context.py`
-  - **用途**：六个 skill 共用的唯一 `TRUSTED_ROOM_ASSIGNMENT_V1` discovery/verifier-result consumer。它只检查 outer-frame presence 与四项 prerequisite discovery variable 的 presence：两者全无时返回 distinct `NotInBusRoom`；出现任一个 Bus-intent signal 时要求 complete set，并只通过 `BUS_BINARY` 调用 production-safe `bus assignment verify --frame <outer-frame>`。它 decode `Verified | Absent | Invalid`，把 `Verified` payload 变成 shared Goal/Non-goals/participant context；`Absent` 是 verifier-confirmed standalone，partial discovery、executable unavailable、timeout/nonzero exit、malformed output 与 `Invalid` 都是 blocker。它不打开 `BUS_TRUSTED_ASSIGNMENT_DIR`、不读取 immutable record/active pointer/token、不得自行比较 room/work/message/request/author/recipient/incarnation/launch/revision/digest，也不实现第二套 trust validator。
+  - **用途**：六个 skill 共用的唯一 `TRUSTED_ROOM_ASSIGNMENT_V1` discovery/verifier-result consumer。它只检查 outer-frame presence 与四项 discovery variable presence，并只通过 `BUS_BINARY` 以 `--bus assignment verify --frame <outer-frame>` 调用 production verifier；decode `verified | invalid`，把 `verified` payload 变成 shared Goal/Non-goals/participant context。`invalid`、CLI 不可达的 `absent`、malformed output、executable unavailable、timeout 与 nonzero exit 都是 blocker。它不打开 `BUS_TRUSTED_ASSIGNMENT_DIR`、不读取 immutable record/active pointer/token、不自行比较 identity/revision/digest，也不实现第二套 trust validator。
   ```python
   def load_assignment_context(frame: str | None, env: Mapping[str, str]) -> AssignmentContext:
-      if frame is None and no_bus_discovery_variables(env):
+      present = present_bus_discovery_variables(env)
+      if frame is None and not present:
           return StandaloneContext(origin="NotInBusRoom")
-      require_complete_bus_discovery(env)
+      if frame is None or present != REQUIRED_BUS_DISCOVERY_VARIABLES:
+          return BlockedContext(reason="incomplete-bus-intent")
       return map_verifier_result(run_production_verifier(frame, env))
   ```
 - **新文件**：`scripts/test_room_assignment_context.py`
-  - **用途**：以 fake verifier executable/typed fixtures 覆盖 no-frame/no-discovery `NotInBusRoom` standalone、frame-without-discovery、每种 partial discovery、complete discovery + exact frame invocation、executable unavailable、timeout/nonzero exit、`Verified` mapping、verifier-`Absent` standalone 与 `Invalid`/malformed blocker，以及 Goal/Non-goals precedence and no direct assignment-storage reads。Forged body、wrong identity/revision/digest、token/frame and resume/replace truth cases remain prerequisite verifier tests and are not reimplemented here。
-- **修改文件**：`skills/create-plan/SKILL.md`、`skills/review-plan/SKILL.md`、`skills/execute-plan/SKILL.md`、`skills/pr/SKILL.md`、`skills/review-pr/SKILL.md`、`skills/address-review-comments/SKILL.md`
-  - **用途**：收到 prerequisite verifier `Verified(TRUSTED_ROOM_ASSIGNMENT_V1)` 时逐字消费 locked Goal/Non-goals 并返回正常 artifact；verifier `Invalid`、malformed/call failure 或任何 partial Bus discovery 必须 blocker。Distinct local `NotInBusRoom` 与 verifier `Absent` 保留 direct standalone entry 与 developer-owned derivation authority，但 planless `review-pr` deliberately strengthens context/locking to explicit developer-authored Goal + Non-goals and both locks；artifact/evidence 必须区分 provenance，不能声称逐字保留旧 locking behavior。
-  - **关键修改**：create-plan 逐字复制 trusted Goal/Non-goals；plan-bound skills require exact match；orchestrated `execute-plan` bypasses deterministic progression and只完成 Orchestrator 明确选择的 bounded action；orchestrator 可 proposal/update room brief but coding skills 不成为第二 goal writer。Reviewer findings 始终是 evidence-bearing claims，不加 severity tags。
-- **修改文件**：`skills/pr/scripts/pr_goal_context.py`、`skills/pr/scripts/test_pr_format_check.py`、`skills/review-pr/scripts/review_round.py`；**新文件**：`skills/review-pr/scripts/test_review_round.py`
-  - **用途**：planless orchestrated PR path 从 verifier-`Verified` payload 同时生成并复用 `.locked-goal` 与 `.locked-non-goals`；standalone no-plan path 要求 developer-authored goal + explicit non-goal context 并生成相同两份 locks。`review_round.py` 直接读取二者并 fail closed on either missing/blank；有 plan 时两者均须与 plan Goal/Non-goals exact match。任何 mismatch 不自动覆盖。New direct prologue tests own both-lock parsing、missing/blank/mismatch failures 与 matching plan/no-plan cases，而不是由 `test_pr_format_check.py` 间接代证。
+  - **用途**：以 fake verifier executable 覆盖 no-frame/no-discovery `NotInBusRoom`（未调用 verifier）、frame-without-discovery、discovery-without-frame 与每种 partial discovery（均为 blocker 且未调用 verifier）、complete input 的 exact argv、executable unavailable、timeout、nonzero exit、`verified` mapping、`invalid`、`absent` 与 malformed output blocker，以及 Goal/Non-goals precedence 与 no direct assignment-storage reads。Forged body、identity/revision/digest、token/frame 与 resume/replace truth cases 仍归前置 verifier tests，不在这里重写。
+- **修改文件**：`skills/{create-plan,review-plan,execute-plan,pr,review-pr,address-review-comments}/SKILL.md`
+  - **用途**：shared consumer 返回 `verified` context 时逐字消费 locked Goal/Non-goals 并返回正常 artifact；blocker 结果停止并返回 evidence。只有 local `NotInBusRoom` 保留 direct standalone entry 与 developer-owned derivation authority，但 planless `review-pr` deliberately strengthens context/locking to explicit developer-authored Goal + Non-goals and both locks；artifact/evidence 必须区分 provenance，不能声称逐字保留旧 locking behavior。
+  - **关键修改**：create-plan 逐字复制 trusted Goal/Non-goals；plan-bound skills require exact match；orchestrated `execute-plan` bypasses deterministic progression and只完成 Orchestrator 明确选择的 bounded action；Orchestrator 以 `ProposeRoomBrief` 提出 brief 并由 Human 确认，coding skills 不成为第二 goal writer。Reviewer findings 始终是 evidence-bearing claims，不加 severity tags。
+- **修改文件**：`skills/pr/scripts/pr_goal_context.py`
+  - **用途**：planless orchestrated PR path 从 `verified` payload 同时生成并复用 `.locked-goal` 与 `.locked-non-goals`；standalone `NotInBusRoom` no-plan path 要求 developer-authored goal + explicit non-goal context 并生成相同两份 locks；任何 mismatch 不自动覆盖。
+- **修改文件**：`skills/pr/scripts/test_pr_format_check.py`
+  - **用途**：继续拥有 PR context production 的 orchestrated 与 standalone both-lock cases，不代替 review-pr consumption tests。
+- **修改文件**：`skills/review-pr/scripts/review_round.py`
+  - **用途**：直接读取两份 locks，任一 missing/blank fail closed；有 plan 时两者均须与 plan Goal/Non-goals exact match，mismatch 不自动覆盖。
   ```python
   def load_locked_review_context(lane_root: Path, plan: Path | None) -> LockedReviewContext:
       context = read_required_goal_and_non_goals(lane_root)
@@ -346,12 +400,16 @@ flowchart LR
           require_exact_plan_match(context, plan)
       return context
   ```
+- **新文件**：`skills/review-pr/scripts/test_review_round.py`
+  - **用途**：direct prologue tests own both-lock parsing、missing/blank/mismatch failures 与 matching plan/no-plan cases，而不是由 `test_pr_format_check.py` 间接代证。
 - **新文件**：`skills/address-review-comments/scripts/finalize_plan_review.py`
   - **用途**：提供 separate author 的 exact plan-hash/lane/round-bound `review-plan-complete` finalization operation。Only an explicit Orchestrator assignment invokes it；helper verifies all required canonical Ready artifacts against one current plan hash，then writes only the status field and returns receipt；missing/stale/mixed-hash/finding artifacts fail closed。Reviewer remains read-only，runtime never derives progression from verdict。
-- **新文件**：`scripts/test_plan_review_finalization.py`；**修改文件**：`docs/guides/review-response-guide.md`
-  - **用途**：覆盖 zero-finding first round、repaired later round、missing/finding/stale/mixed-hash/duplicate-lane failures and reviewer read-only preservation；shared guide records the explicit author-side settlement boundary。
+- **新文件**：`scripts/test_plan_review_finalization.py`
+  - **用途**：覆盖 zero-finding first round、repaired later round、missing/finding/stale/mixed-hash/duplicate-lane failures and reviewer read-only preservation。
+- **修改文件**：`docs/guides/review-response-guide.md`
+  - **用途**：shared guide records the explicit author-side settlement boundary。
 - **新文件**：`scripts/skill_goal_ownership_check.py`
-  - **用途**：机械验证 shared guide references、single Room Brief writer、standalone fallback、derived symlinks、no severity language 和 no duplicated authority。
+  - **用途**：机械验证 shared guide references、single Room Brief writer、`NotInBusRoom` standalone 与 blocker mapping、derived symlinks、no severity language 和 no duplicated authority。
   ```python
   def validate_goal_ownership(repo: Path) -> tuple[Violation, ...]:
       verify_shared_room_brief_contract(repo)
@@ -362,9 +420,9 @@ flowchart LR
 - **新文件**：`scripts/test_skill_goal_ownership_check.py`
   - **用途**：覆盖六个 skill 的 orchestrated/standalone branches、single writer、participant handoff 与 canonical symlink integrity。
 - **修改文件**：`justfile`
-  - **用途**：把 content/skill checker、room-assignment verifier-result consumer、plan-review finalizer、PR goal-context contract suites 接入 `maintenance-test`，并以 direct `python3 skills/review-pr/scripts/test_review_round.py` line 注册 review-pr prologue suite；content unittest 自身 subprocess exact production selector，因此 final `just test` 重放同一 production evidence。
+  - **用途**：把 content checker、skill ownership checker、room-assignment consumer、plan-review finalizer 与 PR goal-context contract suites 接入 `maintenance-test`，并以 direct `python3 skills/review-pr/scripts/test_review_round.py` line 注册 review-pr prologue suite；不新增 acceptance driver 或 replay target。
 
-明确排除：`Cargo.toml`、`Cargo.lock`、`build.rs`、`src/bus/orchestrator/*.rs`（除 `content/` 与 `testdata/content/`）、`src/client/**`、`src/bus/runtime*.rs` 和 harness acceptance driver；本计划只消费 prerequisite 的 generic interfaces。
+明确排除：`Cargo.toml`、`Cargo.lock`、`src/bus/orchestrator/` 中除 `content.rs`、`tests.rs` 与 `content/production/` 外的文件、`src/bus/runtime*.rs`、`src/bus/workflow_drafts.rs`、`src/bus/trusted_assignment.rs`、`src/client/**`、两份前置 format SOT、`.bus/`（git-ignored runtime workspace）以及任何 acceptance driver；本计划只消费前置计划的 generic interfaces，并只做上述最小 production selector activation。
 
 ## 实施步骤
 
@@ -387,15 +445,15 @@ flowchart LR
 ### 任务 1：交付 agent-led content、adaptive SOP 与 trusted participant handoff contract
 
 - [ ] **完成**
-- **目标**：在一个不可分割的 content/consumer owner 中完成 production system/agent/create/execute/template 五资产、三个 standard SOPs、developer guide、static fact/expected-choice scenarios、structural checker、`TRUSTED_ROOM_ASSIGNMENT_V1` verifier-result shared consumer，以及六个 canonical coding-agent skill branches；所有内容一致声明 Orchestrator model 拥有 room progression、Mermaid 只表达可修订 SOP、Human/Orchestrator/Coding Agent 是 explicit-capability partners、technical judgment 留给 coding agents。
-- **拥有文件**：`src/bus/orchestrator/content/`、`src/bus/orchestrator/testdata/content/`、`.bus/`、`skills/AGENTS.md`、`skills/skill-architecture.md`、`skills/create-plan/SKILL.md`、`skills/review-plan/SKILL.md`、`skills/execute-plan/SKILL.md`、`skills/pr/SKILL.md`、`skills/review-pr/SKILL.md`、`skills/address-review-comments/SKILL.md`、`skills/pr/scripts/pr_goal_context.py`、`skills/pr/scripts/test_pr_format_check.py`、`skills/review-pr/scripts/review_round.py`、`skills/review-pr/scripts/test_review_round.py`、`skills/address-review-comments/scripts/finalize_plan_review.py`、`docs/guides/orchestrated-room-brief.md`、`docs/guides/review-response-guide.md`、`cli_extensions/room_assignment_context.py`、`scripts/orchestrator_content_check.py`、`scripts/test_orchestrator_content_check.py`、`scripts/skill_goal_ownership_check.py`、`scripts/test_skill_goal_ownership_check.py`、`scripts/test_room_assignment_context.py`、`scripts/test_plan_review_finalization.py`、`justfile`
+- **目标**：在一个不可分割的 content/consumer owner 中完成可由 `production` selector 加载的 embedded production bundle（system、agent、create/execute skills、workflow template 与三份 built-in SOP references）、最小 selector activation、objective content checker、`TRUSTED_ROOM_ASSIGNMENT_V1` verifier-result shared consumer、shared Room Brief guide 与六个 canonical coding-agent skill branches；所有内容只使用前置计划的 closed query/operation surface，并一致声明 Orchestrator model 拥有 room progression、Mermaid 只表达可修订 SOP、Human/Orchestrator/Coding Agent 是 explicit-capability partners、technical judgment 留给 coding agents。
+- **拥有文件**：`build.rs`、`src/bus/orchestrator/content.rs`、`src/bus/orchestrator/tests.rs`、`src/bus/orchestrator/content/production/`、`skills/AGENTS.md`、`skills/skill-architecture.md`、`skills/create-plan/SKILL.md`、`skills/review-plan/SKILL.md`、`skills/execute-plan/SKILL.md`、`skills/pr/SKILL.md`、`skills/review-pr/SKILL.md`、`skills/address-review-comments/SKILL.md`、`skills/pr/scripts/pr_goal_context.py`、`skills/pr/scripts/test_pr_format_check.py`、`skills/review-pr/scripts/review_round.py`、`skills/review-pr/scripts/test_review_round.py`、`skills/address-review-comments/scripts/finalize_plan_review.py`、`docs/guides/orchestrated-room-brief.md`、`docs/guides/review-response-guide.md`、`cli_extensions/room_assignment_context.py`、`scripts/orchestrator_content_check.py`、`scripts/test_orchestrator_content_check.py`、`scripts/skill_goal_ownership_check.py`、`scripts/test_skill_goal_ownership_check.py`、`scripts/test_room_assignment_context.py`、`scripts/test_plan_review_finalization.py`、`justfile`
 - **blocked-by**：无
-- **produces**：`AGENT_LED_CONTENT_CONTRACT`（production five assets、standard/temp adaptive-SOP contract、static scenarios、production smoke）与 `ROOM_BRIEF_PARTICIPANT_CONTRACT`（trusted assignment consumption、single intent writer、technical ownership、standalone fallback、explicit plan-review finalization）
+- **produces**：`AGENT_LED_CONTENT_CONTRACT`（production bundle entries、minimal production selector activation、built-in `ReadContent` 与 temp `ReadWorkflowDraft` SOP read pairing、objective entry/structure/vocabulary checker）与 `ROOM_BRIEF_PARTICIPANT_CONTRACT`（trusted assignment branch mapping、single Room Brief writer、technical ownership、`NotInBusRoom` standalone path、explicit plan-review finalization）
 - **consumes**：无
-- **工具**：completed prerequisite `ROOM_AGENT_CONTENT_INTERFACE_V1` / `TRUSTED_ROOM_ASSIGNMENT_V1`、their two current `*-format.md` SOTs and production `bus assignment verify --frame` typed-result contract、`docs/templates/plan-template.md`、owned skill/docs、`docs/guides/review-response-guide.md`、`scripts/test_skill_migration_contract.py`、`scripts/test_sanitize_review_severity.py`、`python3 -m unittest scripts.test_orchestrator_content_check scripts.test_skill_goal_ownership_check scripts.test_room_assignment_context scripts.test_plan_review_finalization scripts.test_sanitize_review_severity scripts.test_skill_migration_contract`、`python3 skills/pr/scripts/test_pr_format_check.py`、`python3 skills/review-pr/scripts/test_review_round.py`
-- **参考实现**：`docs/templates/plan-template.md` reusable structure；existing plan/`.locked-goal` standalone branches and canonical symlink tests；manual Bus review/address cycles；`3c96cbf8` lifecycle tests；Ralph attempt/lessons evidence only
-- **约束**：开始前 exact prerequisite contracts 必须已实现/重新审查；不修改 Rust/Cargo/client/harness acceptance driver；production content 不定义 tool/capability，只逐字消费 frozen query/operation vocabulary；embedded content、registered standard/artifact 与 temp draft 分别只走 `ReadContent`、`ReadArtifact(ArtifactId)` 与 `ReadWorkflowDraft(WorkflowDraftId)`，unknown/mismatched handle fail closed 且不得 raw-path read、implicit materialization 或 helper-selected fallback；SOP/Mermaid/static scenarios 不被程序解释或执行；每个 expected workflow choice 明确归属 model turn，runtime delivery/readiness/callback/receipt/wake 只算 authorized settlement；orchestrated `execute-plan` 不调用 deterministic progression driver；content-owned helper only consumes prerequisite verifier `Verified | Absent | Invalid`，never reads/revalidates directory、record、active pointer、endpoint/token or authoritative Request facts；no-frame/no-discovery is distinct non-Bus standalone，whereas any Bus-intent signal requires complete discovery and a successful typed verifier result，with partial/call-failure/malformed/`Invalid` fail closed；review state 只由 Orchestrator 明确授权的 separate-author hash-bound operation写入；只改 canonical skill copies，derived links 不直接编辑；保留 read-only reviewer、closed-world、triage、landing、no-severity 与 250-line contracts；agents/humans 使用 first-class participant language；Orchestrator 只能以 pathless `PersistWorkflowDraft` revision `.bus/temp`，`.bus/standard` 需要 developer exact Human approval 后再由 Human/Orchestrator 选择 `PromoteWorkflowDraft`；live provider calls zero
-- **验收闸门**：[TASK_LOCAL] `python3 -m unittest scripts.test_orchestrator_content_check scripts.test_skill_goal_ownership_check scripts.test_room_assignment_context scripts.test_plan_review_finalization scripts.test_sanitize_review_severity scripts.test_skill_migration_contract`、`python3 skills/pr/scripts/test_pr_format_check.py` 与 `python3 skills/review-pr/scripts/test_review_round.py` 均 exit 0 and select nonzero tests；content unittest subprocesses exact `python3 scripts/bus_orchestrator_acceptance.py --profile agent-led --content production --fake-provider`，asserts production bundle version/digest、`unauthorized_workflow_operations=0`、`authorized_capability_settlements>0`、`live_provider_calls=0`；其余 tests prove frozen exact query/operation vocabulary and object pairing、registered-standard `ArtifactId` + `ReadArtifact`、temp `WorkflowDraftId` + `ReadWorkflowDraft`、wrong/missing handle denial with no implicit copy、static scenario attribution、single brief writer/verifier-result consumer、six skill branches、no-frame/no-discovery direct standalone、Bus-intent complete-discovery fail-closed matrix、`Verified` Goal/Non-goals/plan-lock mapping、verifier-`Absent` standalone、`Invalid` blocker、direct review-round two-lock parsing/mismatch behavior、no content-owned trust validator、explicit all-Ready finalization、technical ownership、participant handoff and derived-link integrity
+- **工具**：completed prerequisite `ROOM_AGENT_CONTENT_INTERFACE_V1` / `TRUSTED_ROOM_ASSIGNMENT_V1` 与两份当前 `*-format.md` SOT、`--bus assignment verify --frame` typed result、`docs/templates/plan-template.md`、owned skill/docs、`docs/guides/review-response-guide.md`、`scripts/test_skill_migration_contract.py`、`scripts/test_sanitize_review_severity.py`、`just test-one room_orchestrator_core_content_`、`python3 -m unittest scripts.test_orchestrator_content_check scripts.test_skill_goal_ownership_check scripts.test_room_assignment_context scripts.test_plan_review_finalization scripts.test_sanitize_review_severity scripts.test_skill_migration_contract`、`python3 skills/pr/scripts/test_pr_format_check.py`、`python3 skills/review-pr/scripts/test_review_round.py`
+- **参考实现**：`docs/templates/plan-template.md` reusable structure；现有 `test-agent-led` bundle 与 `build.rs` packing；existing plan/`.locked-goal` standalone branches and canonical symlink tests；manual Bus review/address cycles；`3c96cbf8` lifecycle tests
+- **约束**：开始前前置 contracts 必须已实现并重新审查；Rust 改动只限 `build.rs`、`src/bus/orchestrator/content.rs` 与 `src/bus/orchestrator/tests.rs` 的最小 production selector activation，不改 provider、journal、tool registry、permission、persistence、TUI、control 或 safety surface，也不改 `src/bus/runtime_orchestrator.rs`、Cargo 或 client；production content 不定义 tool/capability，capability token 只使用 closed `InspectWork`、`WaitForChange`、`ReadAgent`、`ObservePermissionPrompt`、`ReadWorkflowDraft`、`ReadContent` 与 `ProposeRoomBrief`、`SendMessage`、`AbandonIdleRequest`、`PersistWorkflowDraft`、`PromoteWorkflowDraft`、`AcquireResource`、`ReleaseResource`、`ApprovePermissionOnce`，不引用或别名任何已删除 token；embedded content（含 built-in SOP）只走 `ReadContent`，temp draft 只走 `ReadWorkflowDraft`，不 raw-read `.bus/standard`、不隐式 materialize、不 helper fallback；形成首个 Room Brief proposal 所需指导必须完整位于注入的 `agent.md`（及适用 system/index），不得假设确认前可 `ReadContent` 或 `PersistWorkflowDraft`；唯一 typed approval 是 Human exact Goal/Non-goals confirmation，advisory 讨论不成为第二审批，locked brief 不可变且不新增 update、unlock 或 re-proposal；manifest 使用 `manifest.json` 与 flat `.md` entry paths 并满足 caps；不交付 checked-in `.bus/` 文件；SOP/Mermaid 不被程序解释或执行，checker 只做 objective checks，不含 expected-model-choice scenarios 或 wording 语义分类；orchestrated `execute-plan` 不调用 deterministic progression driver；shared consumer 只按 `NotInBusRoom`、incomplete Bus-intent blocker 与 verifier call 三个分支工作，`verified` 之外全部 blocker，never reads/revalidates directory、record、active pointer、endpoint/token or authoritative Request facts；review state 只由 Orchestrator 明确授权的 separate-author hash-bound operation 写入；只改 canonical skill copies，derived links 不直接编辑；保留 read-only reviewer、closed-world、triage、landing、no-severity 与 250-line contracts；agents/humans 使用 first-class participant language；不创建 acceptance driver 或 replay target；live provider calls zero
+- **验收闸门**：[TASK_LOCAL] `just test-one room_orchestrator_core_content_`、`python3 -m unittest scripts.test_orchestrator_content_check scripts.test_skill_goal_ownership_check scripts.test_room_assignment_context scripts.test_plan_review_finalization scripts.test_sanitize_review_severity scripts.test_skill_migration_contract`、`python3 skills/pr/scripts/test_pr_format_check.py` 与 `python3 skills/review-pr/scripts/test_review_round.py` 均 exit 0 且选择非零测试；Rust tests 证明 packed production bundle 经 “production” selector 加载、八个 required entries 可读、未注册 entry 被拒绝、无 production bundle 时 typed-unavailable 且 “test-agent-led” 不变；Python tests 证明 required entry set、template sections、每份 SOP 单一 Mermaid flowchart、removed-token denial、六个 skill branches、“NotInBusRoom” standalone 不调用 verifier、incomplete Bus-intent blocker 不调用 verifier、complete input 的 exact verifier argv、“verified” Goal/Non-goals/plan-lock mapping、“invalid”/“absent”/malformed/timeout/unavailable/nonzero blocker、direct review-round two-lock parsing/mismatch behavior、no content-owned trust validator、explicit all-Ready finalization、single brief writer、participant handoff 与 derived-link integrity；这些 tests 不执行模型、不证明 semantic orchestration quality，live provider calls 为零
 
 ## 测试计划
 
@@ -407,23 +465,23 @@ flowchart LR
 > - 测试按 Rust 单元/模块测试、维护脚本测试、集成资源测试和真实终端验收的最小充分层级放置。
 > - 跨平台逻辑使用 `cfg` 与对应 CI/目标验证；不要用运行时条件跳过来伪装覆盖。
 
+### 测试文件：`src/bus/orchestrator/tests.rs`
+
+- Packed production bundle loads through the `production` selector with `ROOM_AGENT_CONTENT_INTERFACE_V1`, compatibility 1, a positive content version and a nonempty bundle digest.
+- `system/system`、`agent/agent`、`index/index`、`skill/create-workflow`、`skill/execute-workflow`、`reference/workflow-template`、`reference/sop-review-plan`、`reference/sop-review-pr` and `reference/sop-execute-plan` are readable；an unregistered kind/name returns `UnknownEntry` without raw-path fallback。
+- A test-only loader without a production bundle returns `ProductionUnavailable`；`test-agent-led` loading and reads are unchanged。
+- Manifest schema, digest, flat-path, UTF-8 and cap violations remain enforced by the shared `build.rs` validation used for both selectors；no second runtime validator is added。
+
 ### 测试文件：`scripts/test_orchestrator_content_check.py`
 
-- Valid production manifest conforms to `ROOM_AGENT_CONTENT_INTERFACE_V1` required system/agent entries plus named create/execute skills and workflow-template reference，for exactly five concrete assets with compatible versions/caps and stable digests.
-- Missing, extra, oversized, non-UTF-8, path-escaping, duplicate or incompatible assets fail closed without exposing prompt bodies.
-- Static checker proves manifest/schema/reference integrity and content cannot declare tools/capabilities or alter role/grant views；prerequisite Rust tests own prompt-layering mechanics。
-- Every capability slot and model-authored call uses one frozen `RoomQuery` / `RoomOperation` token；unknown aliases such as caller-named temp writes、unobserved approve-once or generic `recover` are rejected without treating ordinary adaptive prose as executable syntax。
-- SOP-read fixtures/checker require embedded bodies to use `ReadContent`、registered standard SOPs to carry `ArtifactId` and use `ReadArtifact`、temporary SOPs to carry `WorkflowDraftId` and use `ReadWorkflowDraft`；wrong/missing handle pairs and raw-path/implicit-copy fallback are rejected。
-- Template requires intent/participants/capabilities/proposal/evidence/failure/adaptation/resource/attempt/human/escalation/revision sections plus exactly one Mermaid flowchart; generated files retain no placeholder.
-- Checker rejects executable graph/control code, workflow-defined tools, claims that runtime/Mermaid/status/timeout selects a next action, agents described as disposable components, self-approval, direct technical work and standard writes without human promotion；it permits FIFO/hook/callback/receipt/wake settlement of already-authorized operations。
-- Standard SOPs keep mixed-family reviewers independent, use a separate author, collect all recommendations before author selection, repeat until all Ready, and require a later explicit Orchestrator-authorized hash-bound finalization rather than automatic status progression.
-- Static scenarios validate fact/model-turn/exact operation/settlement attribution for happy/failure paths、registered-standard `ReadArtifact` execution without draft creation、temp-draft `ReadWorkflowDraft` execution、wrong-handle denial、lease sequencing、all-spikes-failed handovers/lessons/reseed、human work、`BackgroundPending`/same-session continuation/later final、ordinary-final/post-settlement activity/artifact independence、exact idle-request `AbandonIdleRequest` → `Abandoned` recovery、hook readiness、steering、stale queue、`ObservePermissionPrompt` → fingerprint-bound `ApprovePermissionOnce` and pathless draft/promotion；they do not claim to execute a model or prove semantic quality。
-- The named production-smoke test subprocesses the prerequisite driver and checks bundle version/digest plus `unauthorized_workflow_operations=0`、`authorized_capability_settlements>0` and `live_provider_calls=0`。
+- The checked-in production tree passes：required manifest entry names and flat files exist, the workflow template has every required section and exactly one Mermaid flowchart, and each built-in SOP has exactly one Mermaid flowchart。
+- Temp-copy variants with a missing required entry, a missing template section, zero or two Mermaid flowcharts, or any removed prerequisite token in CamelCase or snake-case form each produce a diagnostic naming the file。
+- The checker does not parse Mermaid control flow, classify wording, execute a model, or duplicate `build.rs` schema/digest/cap validation。
 
 ### 测试文件：`scripts/test_skill_goal_ownership_check.py`
 
-- Each of six canonical skills has exactly one prerequisite-verifier-`Verified` `TRUSTED_ROOM_ASSIGNMENT_V1` branch；direct non-Bus standalone requires no frame + no discovery，and Bus-intent standalone requires verifier `Absent`。Any partial discovery、verifier call failure、malformed result or `Invalid` blocks。
-- Orchestrated coding-agent paths consume rather than rewrite Goal/Non-goals；plan/`.locked-goal` and `.locked-non-goals` exact match or fail closed；Orchestrator remains the room-level brief owner。
+- Each of six canonical skills routes through the shared consumer：`verified` is the orchestrated branch, local `NotInBusRoom` is the only standalone branch, and every other result blocks。
+- Orchestrated coding-agent paths consume rather than rewrite Goal/Non-goals；plan/`.locked-goal` and `.locked-non-goals` exact match or fail closed；Orchestrator remains the room-level brief owner through `ProposeRoomBrief` and Human confirmation。
 - Orchestrated `execute-plan` bypasses the standalone Python progression driver and performs only the bounded task/review/remediation/finalization operation selected by the room Orchestrator。
 - No duplicate orchestrator-only skill appears under top-level/discovery skill roots; every discovery link still resolves to canonical source.
 - Entry points remain under 250 lines; no severity/priority review labels or duplicate authority prose are introduced.
@@ -431,8 +489,8 @@ flowchart LR
 
 ### 测试文件：`scripts/test_room_assignment_context.py`、`skills/pr/scripts/test_pr_format_check.py`、`skills/review-pr/scripts/test_review_round.py`
 
-- Shared consumer returns `NotInBusRoom` without invoking anything only when outer frame and all four Bus discovery variables are absent。A frame or any discovery variable requires the complete scoped set and exact production-verifier invocation；partial/missing discovery、unavailable/timeout/nonzero verifier、malformed output and `Invalid` never fall back。It has no direct assignment-directory、record、pointer、token or authoritative Request reader and no second provenance validator。
-- `Verified` exposes the harness-validated payload for Goal/Non-goals precedence；verifier `Absent` returns a separately attributed standalone result。Fake-verifier fixtures prove discovery/result mapping without duplicating prerequisite frame/token/resume/replace validation。
+- Shared consumer returns `NotInBusRoom` without invoking the verifier only when the outer frame and all four Bus discovery variables are absent。A frame without complete discovery, discovery without a frame, or any partial discovery returns a blocker without invoking the verifier。
+- Frame plus complete discovery invokes exactly `BUS_BINARY` with `--bus assignment verify --frame <frame>`；`verified` exposes the harness-validated payload for Goal/Non-goals precedence, while `invalid`, `absent`, malformed output, executable unavailable, timeout and nonzero exit block。It has no direct assignment-directory、record、pointer、token or authoritative Request reader and no second provenance validator。
 - Create-plan copies trusted Goal/Non-goals verbatim；plan-bound skills exact-match them；planless PR context writes and reuses both `.locked-goal` and `.locked-non-goals`。Direct `review_round.py` tests prove matching pairs succeed and either lock missing/blank or plan mismatch fails closed；`test_pr_format_check.py` continues to own PR context production rather than standing in for review-pr consumption。
 
 ### 测试文件：`scripts/test_plan_review_finalization.py`
@@ -455,16 +513,27 @@ flowchart LR
 
 Rust tests live beside their owners or in the repository's existing test modules. Python helper tests use `unittest` or `pytest` according to the neighboring suite; integration assets use the existing Bun harness. For PTY, process, timing, or terminal behavior, state whether the proof uses a deterministic backend/clock or a controlled real process.
 
+#### 测试文件：`src/bus/orchestrator/tests.rs`
+
+```rust
+#[test]
+fn room_orchestrator_core_content_production_bundle_is_selectable_and_readable() {
+    let bundle = ContentLoader::test_bundle().load(ContentSelector::Production).unwrap();
+    assert_eq!(bundle.interface, ROOM_AGENT_CONTENT_INTERFACE_V1);
+    assert!(bundle.read("reference", "sop-execute-plan").is_ok());
+    assert_eq!(bundle.read("reference", "missing"), Err(ContentError::UnknownEntry));
+}
+```
+
 #### 测试文件：`scripts/test_orchestrator_content_check.py`
 
 ```python
 class CheckedInContentContractTests(unittest.TestCase):
-    def test_all_assets_and_standard_workflows_pass_fixed_harness_contract(self):
+    def test_checked_in_production_tree_passes_objective_checks(self):
         self.assertEqual(validate_repository(REPO), ())
 
-    def test_runtime_owned_flow_and_component_language_fail_closed(self):
-        self.assert_rejected("runtime-selects-next-action")
-        self.assert_rejected("agents-are-components")
+    def test_removed_capability_token_is_rejected(self):
+        self.assert_rejected(with_removed_token_in("execute-workflow.md"))
 ```
 
 #### 测试文件：`scripts/test_skill_goal_ownership_check.py`
@@ -489,7 +558,30 @@ class LockedRoomBriefContractTests(unittest.TestCase):
 > - 需要 Windows 证明时，按影响范围额外运行 `just windows-lint` 或 CI 的 Windows gate，并如实记录当前宿主无法完成的真实终端交互。
 > - 无法由 agent 完整运行的设备 / 视觉验收只进入「手动测试」。
 
-本计划保留 `just build`，因为 production content 必须通过 prerequisite packaging seam 进入 release binary。`scripts.test_orchestrator_content_check` subprocess prerequisite generic acceptance driver 的 exact closed production selector and validates its evidence artifact；该 module 与其余 new contract suites 进入 `maintenance-test`，所以 final `just test` 在任意 repair 后重放同一 production proof。不修改 driver、不使用 live paid DeepSeek 或真实 coding-agent terminal，因此无额外手动测试。
+本计划保留 `just build`，因为 `build.rs` 会把 production bundle 校验并打包进 release binary。新增 Python contract suites 进入 `maintenance-test`，Rust content tests 属于全量 `cargo nextest`，因此 final `just test` 在任意 repair 后重放同一 objective evidence；不存在 acceptance driver 或 replay target。Fixtures 不执行模型、不证明 semantic orchestration quality，所有自动 gate 的 live provider calls 为零。
+
+### 手动测试（仅在无法自动化时使用）
+
+提供详细的步骤说明，指导测试人员通过实际运行应用程序来验证功能的正确性和用户体验。
+
+**重要**
+
+- **大多数计划不需要此部分**。如果所有测试都可以通过自动化测试覆盖，应删除此部分。
+- 仅在确实需要人眼判断、主观评估或无法建立的 GUI 交互 Session 时才保留此部分。
+- 提供**逐步测试说明**，使用清晰、有序的要点。
+- 对于每个步骤，说明**测试者应该看到什么**或**正确的结果是什么**。
+- **步骤内描述一律用无序列表 `-`，禁止用 `1. 2. 3. 4.` 有序编号**：步骤本身用 `- [ ] 步骤 N` 标签编号即可，步骤内的操作与预期结果用 bullet（`-`），增删条目无需手动重排。
+- **注意**：开发者应在完成每个测试步骤时勾选对应的复选框。
+- 人工验证不能冒充自动测试；最终回复必须分别列出已验证证据和仍需人工检查的事项。
+
+#### 场景 1：开发者授权的 live DeepSeek production-content 端到端检查
+
+- [ ] **步骤 1**：开发者使用前置计划已交付的 Orchestrator settings 与 credential 入口提供自己的 DeepSeek key，并选择 `production` content。
+  - **预期结果**：Bus 正常启动 Orchestrator；这是本计划唯一的 live provider 使用，且只由开发者明确授权并手动发起。
+- [ ] **步骤 2**：在新 room 中向 Orchestrator 描述一个 bounded 需求。
+  - **预期结果**：Orchestrator 只提出 Room Brief proposal（Goal/Non-goals）；Human exact confirmation 前不读取 content、不写 draft，也不 dispatch coding agent。
+- [ ] **步骤 3**：确认 Room Brief 后继续协作该 workflow。
+  - **预期结果**：Orchestrator 按需以 `ReadContent` 读取 skills、template 或 built-in SOP，以 `SendMessage` 委派技术工作并以 room message 请求 Human 决策；记录观察结果与被检查的 tree，不把该人工检查当作自动 gate 证据。
 
 > **⚠️ 不可修改**：以下规则部分必须包含在每个计划文档中，AI 和开发者不得修改此部分。
 
