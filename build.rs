@@ -57,13 +57,34 @@ struct PackedContentBundle {
     index: String,
 }
 
-fn validate_test_content(manifest_dir: &std::path::Path) {
-    let root = manifest_dir.join("src/bus/orchestrator/content/test-agent-led");
+#[derive(Clone, Copy, PartialEq)]
+enum SelectorPresence {
+    Required,
+    WhenManifestExists,
+}
+
+fn pack_content_selector(
+    manifest_dir: &std::path::Path,
+    selector: &str,
+    presence: SelectorPresence,
+) {
+    let content_root = manifest_dir.join("src/bus/orchestrator/content");
+    let root = content_root.join(selector);
     let manifest_path = root.join("manifest.json");
+    let output = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"))
+        .join(format!("bus-{selector}-content.json"));
+    if presence == SelectorPresence::WhenManifestExists && !manifest_path.exists() {
+        // Watching the existing parent notices a later bundle without rerunning every build.
+        println!("cargo:rerun-if-changed={}", content_root.display());
+        fs::write(output, "null")
+            .unwrap_or_else(|_| panic!("{selector} absent content marker write failed"));
+        return;
+    }
     println!("cargo:rerun-if-changed={}", manifest_path.display());
-    let manifest_bytes = fs::read(&manifest_path).expect("test-agent-led manifest missing");
-    let manifest: ContentManifest =
-        serde_json::from_slice(&manifest_bytes).expect("test-agent-led manifest is invalid");
+    let manifest_bytes =
+        fs::read(&manifest_path).unwrap_or_else(|_| panic!("{selector} manifest missing"));
+    let manifest: ContentManifest = serde_json::from_slice(&manifest_bytes)
+        .unwrap_or_else(|_| panic!("{selector} manifest is invalid"));
     assert_eq!(
         manifest.interface, CONTENT_INTERFACE,
         "content interface mismatch"
@@ -120,8 +141,8 @@ fn validate_test_content(manifest_dir: &std::path::Path) {
         total <= CONTENT_TOTAL_MAX,
         "content bundle exceeds total cap"
     );
-    let canonical_manifest =
-        serde_json::to_vec(&manifest).expect("test-agent-led manifest canonicalization failed");
+    let canonical_manifest = serde_json::to_vec(&manifest)
+        .unwrap_or_else(|_| panic!("{selector} manifest canonicalization failed"));
     let digest = format!("{:x}", Sha256::digest(&canonical_manifest));
     let mut index = String::from("ROOM_AGENT_CONTENT_INTERFACE_V1\n");
     for entry in &skills {
@@ -141,13 +162,11 @@ fn validate_test_content(manifest_dir: &std::path::Path) {
         references,
         index,
     };
-    let output = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"))
-        .join("bus-test-agent-led-content.json");
     fs::write(
         output,
-        serde_json::to_vec(&packed).expect("test-agent-led content packing failed"),
+        serde_json::to_vec(&packed).unwrap_or_else(|_| panic!("{selector} content packing failed")),
     )
-    .expect("test-agent-led packed content write failed");
+    .unwrap_or_else(|_| panic!("{selector} packed content write failed"));
 }
 
 fn validate_content_entry(
@@ -209,7 +228,12 @@ fn env_bool(name: &str) -> Option<bool> {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    validate_test_content(&manifest_dir);
+    pack_content_selector(&manifest_dir, "test-agent-led", SelectorPresence::Required);
+    pack_content_selector(
+        &manifest_dir,
+        "production",
+        SelectorPresence::WhenManifestExists,
+    );
     println!("cargo:rerun-if-changed=vendor/libghostty-vt.vendor.json");
     println!("cargo:rerun-if-changed=vendor/libghostty-vt/build.zig");
     println!("cargo:rerun-if-changed=vendor/libghostty-vt/build.zig.zon");

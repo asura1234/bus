@@ -1,0 +1,47 @@
+{
+  "interface": "ROOM_AGENT_CONTENT_INTERFACE_V1",
+  "content_version": 1,
+  "compatibility": 1,
+  "system": {
+    "path": "system.md",
+    "sha256": "8b073b7249211a8adea1c9b5b2cebcd8525cd3c435f6118b1d0edaf27542357b"
+  },
+  "agent": {
+    "path": "agent.md",
+    "sha256": "101f4e7b57140b474623f4bee849c75749c29f6112790d058b2f41914cc72877"
+  },
+  "skills": [
+    {
+      "name": "create-workflow",
+      "path": "create-workflow.md",
+      "sha256": "6a631ae6bea16b17f039781c167594aa2922221dbd5202fb9106f8e89433d388"
+    },
+    {
+      "name": "execute-workflow",
+      "path": "execute-workflow.md",
+      "sha256": "c9d5d3110bfa33c0b492327bfcc91fa373e11492222bcc95030d0a6253f80c9c"
+    }
+  ],
+  "references": [
+    {
+      "name": "workflow-template",
+      "path": "workflow-template.md",
+      "sha256": "ec1fe215268fd8a3030d1f2b3ce1e4c5cb6213277e72dafbf1c6dfb8ba77ae9c"
+    },
+    {
+      "name": "sop-review-plan",
+      "path": "sop-review-plan.md",
+      "sha256": "5e20132ee9591cc0136b7fcbb5580072c29c01c476c7cea551e4aad2ed997c6e"
+    },
+    {
+      "name": "sop-review-pr",
+      "path": "sop-review-pr.md",
+      "sha256": "151a28e9ca91b4be7c384c06aecb48bd174d1d189b065e943be66221dd94c9b9"
+    },
+    {
+      "name": "sop-execute-plan",
+      "path": "sop-execute-plan.md",
+      "sha256": "00b8b18dd93c868a260fca375411c4db202374eaf2cb6472b2a06d5a221a2686"
+    }
+  ]
+}

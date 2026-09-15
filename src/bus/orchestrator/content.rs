@@ -61,29 +61,49 @@ impl ContentBundle {
 #[derive(Clone, Debug)]
 pub(crate) struct ContentLoader {
     test: ContentBundle,
+    production: Option<ContentBundle>,
 }
 
 impl ContentLoader {
+    // The runtime calls this for both selectors; it packs every validated embedded bundle.
     pub(crate) fn test_bundle() -> Self {
         let test = serde_json::from_str::<ContentBundle>(include_str!(concat!(
             env!("OUT_DIR"),
             "/bus-test-agent-led-content.json"
         )))
         .expect("build.rs validated and packed test-agent-led content");
-        Self { test }
+        let production = serde_json::from_str::<Option<ContentBundle>>(include_str!(concat!(
+            env!("OUT_DIR"),
+            "/bus-production-content.json"
+        )))
+        .expect("build.rs validated and packed production content or its absence");
+        Self { test, production }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn without_production(mut self) -> Self {
+        self.production = None;
+        self
     }
 
     pub(crate) fn load(&self, selector: ContentSelector) -> Result<ContentBundle, ContentError> {
         match selector {
-            ContentSelector::TestAgentLed
-                if self.test.interface == ROOM_AGENT_CONTENT_INTERFACE_V1
-                    && self.test.compatibility == 1
-                    && self.test.content_version > 0 =>
-            {
-                Ok(self.test.clone())
-            }
-            ContentSelector::TestAgentLed => Err(ContentError::MalformedBundle),
-            ContentSelector::Production => Err(ContentError::ProductionUnavailable),
+            ContentSelector::TestAgentLed => compatible(&self.test).cloned(),
+            ContentSelector::Production => match &self.production {
+                Some(bundle) => compatible(bundle).cloned(),
+                None => Err(ContentError::ProductionUnavailable),
+            },
         }
+    }
+}
+
+fn compatible(bundle: &ContentBundle) -> Result<&ContentBundle, ContentError> {
+    if bundle.interface == ROOM_AGENT_CONTENT_INTERFACE_V1
+        && bundle.compatibility == 1
+        && bundle.content_version > 0
+    {
+        Ok(bundle)
+    } else {
+        Err(ContentError::MalformedBundle)
     }
 }

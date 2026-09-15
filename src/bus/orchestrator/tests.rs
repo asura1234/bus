@@ -238,7 +238,61 @@ fn room_orchestrator_core_content_interface_is_closed_and_layered() {
     assert_eq!(bundle.read("agent", "agent").unwrap(), bundle.agent);
     assert_eq!(bundle.read("index", "index").unwrap(), bundle.index);
     assert!(bundle.read("skill", "missing").is_err());
-    assert!(loader.load(ContentSelector::Production).is_err());
+}
+
+#[test]
+fn room_orchestrator_core_content_production_bundle_is_selectable_and_readable() {
+    let loader = ContentLoader::test_bundle();
+    let bundle = loader.load(ContentSelector::Production).unwrap();
+    assert_eq!(bundle.interface, ROOM_AGENT_CONTENT_INTERFACE_V1);
+    assert_eq!(bundle.compatibility, 1);
+    assert!(bundle.content_version > 0);
+    assert_eq!(bundle.digest.len(), 64);
+    assert_ne!(
+        bundle.digest,
+        loader.load(ContentSelector::TestAgentLed).unwrap().digest
+    );
+    for (kind, name) in [
+        ("system", "system"),
+        ("agent", "agent"),
+        ("index", "index"),
+        ("skill", "create-workflow"),
+        ("skill", "execute-workflow"),
+        ("reference", "workflow-template"),
+        ("reference", "sop-review-plan"),
+        ("reference", "sop-review-pr"),
+        ("reference", "sop-execute-plan"),
+    ] {
+        assert!(
+            !bundle.read(kind, name).unwrap().is_empty(),
+            "{kind}/{name}"
+        );
+    }
+    assert_eq!(
+        bundle.read("reference", "missing"),
+        Err(ContentError::UnknownEntry)
+    );
+    assert_eq!(
+        bundle.read("reference", "sop-review-plan.md"),
+        Err(ContentError::UnknownEntry)
+    );
+}
+
+#[test]
+fn room_orchestrator_core_content_absent_production_is_typed_unavailable() {
+    let loader = ContentLoader::test_bundle().without_production();
+    assert_eq!(
+        loader.load(ContentSelector::Production),
+        Err(ContentError::ProductionUnavailable)
+    );
+    assert_eq!(
+        loader
+            .load(ContentSelector::TestAgentLed)
+            .unwrap()
+            .read("system", "system")
+            .unwrap(),
+        loader.load(ContentSelector::TestAgentLed).unwrap().system
+    );
 }
 
 #[test]
