@@ -14,7 +14,9 @@ test:
 
 # Run repository maintenance contract tests
 maintenance-test:
-    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_bus_dev_acceptance scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_sanitize_review_severity scripts.test_skill_migration_contract scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
+    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_bus_dev_acceptance scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_orchestrator_content_check scripts.test_package_windows_conpty scripts.test_plan_review_finalization scripts.test_preview scripts.test_room_assignment_context scripts.test_sanitize_review_severity scripts.test_skill_goal_ownership_check scripts.test_skill_migration_contract scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
+    {{python}} skills/pr/scripts/test_pr_format_check.py
+    {{python}} skills/review-pr/scripts/test_review_round.py
 
 # Run one nextest filter, e.g. `just test-one codex_stale_working`
 test-one filter:
