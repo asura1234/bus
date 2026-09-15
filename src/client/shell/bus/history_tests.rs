@@ -36,6 +36,276 @@ fn saved_history(ui: &mut BusUi, room: RoomId, agent: AgentId, count: usize) -> 
     requests
 }
 
+fn saved_exchange(
+    ui: &mut BusUi,
+    room: RoomId,
+    agent: AgentId,
+    prompt: &str,
+    reply: &str,
+) -> RequestId {
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    snapshot.state.set_draft_text(room, prompt).unwrap();
+    let request = snapshot.state.submit_draft(room, 1000).unwrap()[0];
+    let mut json = serde_json::to_value(&snapshot.state).unwrap();
+    let record = &mut json["requests"][request.0.to_string()];
+    record["phase"] = "completed".into();
+    record["completed_at_ms"] = 1500.into();
+    record["pending_final"] = serde_json::json!({
+        "callback_id": "final", "text": reply, "received_at_ms": 1500,
+        "provider_session_id": "session", "provider_turn_id": "turn"
+    });
+    snapshot.state = serde_json::from_value(json).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    request
+}
+
+#[test]
+fn agent_reply_markdown_is_rendered_while_prompt_stays_literal() {
+    use ratatui::{buffer::Buffer, layout::Rect, style::Modifier};
+
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        "**literal prompt**",
+        "# Heading\n\n- **bold** and `code`",
+    );
+    ui.compute_view(100, 40);
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 40));
+    ui.render(&mut buffer);
+    let screen: Vec<String> = (0..40)
+        .map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect();
+
+    assert!(
+        screen
+            .iter()
+            .any(|line| line.contains("**literal prompt**")),
+        "user-authored prompts stay literal"
+    );
+    assert!(!screen.iter().any(|line| line.contains("# Heading")));
+    assert!(!screen.iter().any(|line| line.contains("**bold**")));
+    assert!(!screen.iter().any(|line| line.contains("`code`")));
+
+    let (heading_y, heading_x) = screen
+        .iter()
+        .enumerate()
+        .find_map(|(y, line)| {
+            line.find("Heading").map(|x| {
+                (
+                    y as u16,
+                    unicode_width::UnicodeWidthStr::width(&line[..x]) as u16,
+                )
+            })
+        })
+        .expect("rendered heading");
+    assert!(
+        buffer[(heading_x, heading_y)]
+            .modifier
+            .contains(Modifier::BOLD),
+        "headings are visually distinct"
+    );
+    let (bold_y, bold_x) = screen
+        .iter()
+        .enumerate()
+        .find_map(|(y, line)| {
+            line.find("bold").map(|x| {
+                (
+                    y as u16,
+                    unicode_width::UnicodeWidthStr::width(&line[..x]) as u16,
+                )
+            })
+        })
+        .expect("rendered strong text");
+    assert!(
+        buffer[(bold_x, bold_y)].modifier.contains(Modifier::BOLD),
+        "strong text keeps its emphasis"
+    );
+    assert_eq!(
+        buffer[(bold_x, bold_y)].fg,
+        ratatui::style::Color::Rgb(222, 222, 226),
+        "Markdown styles preserve the room's ordinary foreground"
+    );
+    assert_eq!(
+        buffer[(bold_x, bold_y)].bg,
+        ratatui::style::Color::Rgb(24, 24, 28),
+        "Markdown styles preserve the room background"
+    );
+}
+
+#[test]
+fn selecting_a_rendered_agent_reply_copies_its_raw_markdown() {
+    use ratatui::{buffer::Buffer, layout::Rect, style::Color};
+
+    let (mut ui, room, agent) = fixture();
+    let markdown = "**bold** and [docs](https://example.com) and `code`";
+    saved_exchange(&mut ui, room, agent, "literal prompt", markdown);
+    ui.compute_view(100, 40);
+    let text = ui.view.history_text;
+    let (index, rendered) = ui
+        .history
+        .cached()
+        .iter()
+        .enumerate()
+        .find(|(_, line)| line.text.contains("bold and docs"))
+        .map(|(index, line)| (index, line.text.clone()))
+        .expect("rendered agent reply");
+    let row = text.y + (index - ui.main_scroll) as u16;
+
+    assert_eq!(
+        drag_copy(&mut ui, (text.x, row), (text.x + 1, row)).as_deref(),
+        Some(markdown)
+    );
+
+    ui.compute_view(100, 40);
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 40));
+    ui.render(&mut buffer);
+    for x in text.x..text.x + rendered.len() as u16 {
+        assert_eq!(
+            buffer[(x, row)].bg,
+            Color::Rgb(44, 88, 56),
+            "the visible selection covers the whole raw Markdown reply"
+        );
+    }
+}
+
+#[test]
+fn selection_stopping_before_markdown_keeps_the_selected_line_end_in_both_directions() {
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(&mut ui, room, agent, "literal prompt", "**raw reply**");
+    ui.compute_view(100, 40);
+    let prompt = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.text == "literal prompt")
+        .expect("prompt row");
+    let reply = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.raw_markdown.is_some())
+        .expect("first Markdown row");
+    let prompt_start = selection::Point {
+        line: prompt,
+        offset: 0,
+    };
+    let reply_start = selection::Point {
+        line: reply,
+        offset: 0,
+    };
+    let before_reply_end = selection::Point {
+        line: reply - 1,
+        offset: ui.history.cached()[reply - 1].text.len(),
+    };
+    ui.history_selection = Some((prompt_start, before_reply_end));
+    let expected = format!("{}\n", ui.selected_text().expect("text before reply"));
+
+    for selection in [(prompt_start, reply_start), (reply_start, prompt_start)] {
+        ui.history_selection = Some(selection);
+        assert_eq!(ui.selected_text().as_deref(), Some(expected.as_str()));
+        assert!(!expected.contains("raw reply"));
+    }
+}
+
+#[test]
+fn quote_keeps_the_agent_reply_as_raw_markdown() {
+    let (mut ui, room, agent) = fixture();
+    let markdown = "**bold** and [docs](https://example.com) and `code`";
+    let request = saved_exchange(&mut ui, room, agent, "literal prompt", markdown);
+    ui.compute_view(100, 40);
+    let action = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::Quote(request))
+        .expect("quote action for reply")
+        .action
+        .clone();
+
+    ui.action(action);
+
+    assert_eq!(
+        ui.locals[&room].text.text,
+        "author: \"**bold** and [docs](https://example.com) and `code`\"\n"
+    );
+}
+
+#[test]
+fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(&mut ui, room, agent, "literal prompt", "**cached reply**");
+    let snapshot = Arc::clone(&ui.snapshot);
+    let room = snapshot.state.room(room).expect("room");
+
+    ui.history
+        .lines(&snapshot.state, room, 80, snapshot.revision, 1_000);
+    let first = ui
+        .history
+        .cached()
+        .iter()
+        .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
+        .expect("rendered reply source");
+    ui.history
+        .lines(&snapshot.state, room, 80, snapshot.revision, 61_000);
+    let second = ui
+        .history
+        .cached()
+        .iter()
+        .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
+        .expect("rendered reply source after timestamp refresh");
+
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "timestamp refreshes reuse the immutable reply rendering"
+    );
+}
+
+#[test]
+fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
+    use ratatui::style::Modifier;
+
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        "literal prompt",
+        "## 日本語 👩‍💻\n\n**強調 text**\n\n| A | B |\n| - | - |\n| 甲 | 🙂 |",
+    );
+    let snapshot = Arc::clone(&ui.snapshot);
+    let room = snapshot.state.room(room).expect("room");
+    let rendered: Vec<_> = ui
+        .history
+        .lines(&snapshot.state, room, 12, snapshot.revision, 1_000)
+        .iter()
+        .filter(|line| line.raw_markdown.is_some())
+        .collect();
+    let text = rendered
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered
+        .iter()
+        .all(|line| { unicode_width::UnicodeWidthStr::width(line.text.as_str()) <= 12 }));
+    for expected in ["日本語", "👩‍💻", "強調", "甲", "🙂"] {
+        assert!(
+            text.contains(expected),
+            "missing {expected:?} from {text:?}"
+        );
+    }
+    assert!(rendered.iter().any(|line| {
+        line.styles
+            .iter()
+            .any(|(run, style)| run.contains("強調") && style.add_modifier.contains(Modifier::BOLD))
+    }));
+}
+
 #[test]
 fn saved_round_trips_scroll_oldest_to_newest_with_fixed_chrome() {
     let (mut ui, room, agent) = fixture();

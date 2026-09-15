@@ -1,8 +1,14 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
 use super::render::{display, provider, wrap, wrap_ranges, Action};
 use crate::bus::model::*;
+use markdown_ratatui::{DocumentRow, LayoutOptions, MarkdownView, Theme, ViewState};
+use ratatui::buffer::{Buffer, CellWidth};
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::StatefulWidget;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub(super) enum Tone {
@@ -12,11 +18,17 @@ pub(super) enum Tone {
     Agent(AgentId),
 }
 
+#[derive(Clone)]
 pub(super) struct Line {
     pub text: String,
     pub action: Option<Action>,
     pub tone: Tone,
     pub spans: Vec<(String, Tone)>,
+    pub styles: Vec<(String, Style)>,
+    /// Durable Markdown source for a rendered agent-reply row. Every row of
+    /// one reply shares the same allocation so selection can copy the source
+    /// once instead of reconstructing it from the display projection.
+    pub raw_markdown: Option<(RequestId, Arc<str>)>,
     /// Soft-wrapped continuation of the previous row, rejoined when copied.
     pub continued: bool,
 }
@@ -26,6 +38,14 @@ pub(super) struct History {
     key: Option<(u64, RoomId, u16, u64)>,
     source: Option<(u64, RoomId)>,
     signature: u64,
+    lines: Vec<Line>,
+    markdown: BTreeMap<RequestId, MarkdownReply>,
+}
+
+struct MarkdownReply {
+    source: Arc<str>,
+    view: Option<MarkdownView>,
+    width: Option<u16>,
     lines: Vec<Line>,
 }
 
@@ -116,6 +136,7 @@ impl History {
             );
         }
         let mut lines = Vec::new();
+        let mut active_markdown = BTreeSet::new();
         for message in messages.into_values() {
             let (header, text, files, quote) = match message {
                 Message::Prompt(prompt) => {
@@ -161,14 +182,28 @@ impl History {
                 }
             };
             lines.extend(wrap_header(header, width));
-            let rows = wrap_ranges(text, width);
-            lines.extend(rows.iter().enumerate().map(|(index, row)| Line {
-                text: display(&text[row.clone()]),
-                action: None,
-                tone: Tone::Text,
-                spans: Vec::new(),
-                continued: index > 0 && rows[index - 1].end == row.start,
-            }));
+            if let Some(request) = quote {
+                active_markdown.insert(request);
+                let markdown = self
+                    .markdown
+                    .entry(request)
+                    .or_insert_with(|| MarkdownReply::new(text));
+                if markdown.source.as_ref() != text {
+                    *markdown = MarkdownReply::new(text);
+                }
+                lines.extend(markdown.lines(width, request).iter().cloned());
+            } else {
+                let rows = wrap_ranges(text, width);
+                lines.extend(rows.iter().enumerate().map(|(index, row)| Line {
+                    text: display(&text[row.clone()]),
+                    action: None,
+                    tone: Tone::Text,
+                    spans: Vec::new(),
+                    styles: Vec::new(),
+                    raw_markdown: None,
+                    continued: index > 0 && rows[index - 1].end == row.start,
+                }));
+            }
             for path in files {
                 lines.push(Line {
                     text: format!(
@@ -178,6 +213,8 @@ impl History {
                     action: Some(Action::FileDetail(path.clone())),
                     tone: Tone::Muted,
                     spans: Vec::new(),
+                    styles: Vec::new(),
+                    raw_markdown: None,
                     continued: false,
                 });
             }
@@ -187,6 +224,8 @@ impl History {
                     action: Some(Action::Quote(request)),
                     tone: Tone::Muted,
                     spans: Vec::new(),
+                    styles: Vec::new(),
+                    raw_markdown: None,
                     continued: false,
                 });
             }
@@ -195,13 +234,181 @@ impl History {
                 action: None,
                 tone: Tone::Text,
                 spans: Vec::new(),
+                styles: Vec::new(),
+                raw_markdown: None,
                 continued: false,
             });
         }
+        self.markdown
+            .retain(|request, _| active_markdown.contains(request));
         self.key = Some(key);
         self.lines = lines;
         &self.lines
     }
+}
+
+impl MarkdownReply {
+    fn new(source: &str) -> Self {
+        let raw: Arc<str> = Arc::from(source);
+        let view = match MarkdownView::new(source) {
+            Ok(mut view) => {
+                view.set_options(LayoutOptions {
+                    theme: Theme {
+                        text: Style::default(),
+                        heading: Style::new().bold(),
+                        link: Style::new().fg(Color::Cyan).underlined(),
+                        code: Style::new().fg(Color::Cyan),
+                        muted: Style::new().add_modifier(Modifier::DIM),
+                        selected: Style::default(),
+                    },
+                    ..LayoutOptions::default()
+                });
+                Some(view)
+            }
+            Err(error) => {
+                tracing::warn!(event = "bus.markdown.parse_failed", %error);
+                None
+            }
+        };
+        Self {
+            source: raw,
+            view,
+            width: None,
+            lines: Vec::new(),
+        }
+    }
+
+    fn lines(&mut self, width: u16, request: RequestId) -> &[Line] {
+        if self.width == Some(width) {
+            return &self.lines;
+        }
+        self.lines = self
+            .view
+            .as_mut()
+            .and_then(|view| prepared_markdown_lines(view, width, request, &self.source))
+            .unwrap_or_else(|| literal_reply_lines(&self.source, width, request));
+        self.width = Some(width);
+        &self.lines
+    }
+}
+
+fn prepared_markdown_lines(
+    view: &mut MarkdownView,
+    width: u16,
+    request: RequestId,
+    source: &Arc<str>,
+) -> Option<Vec<Line>> {
+    let layout = match view.prepare(width) {
+        Ok(layout) => layout,
+        Err(error) => {
+            tracing::warn!(event = "bus.markdown.layout_failed", %error);
+            return None;
+        }
+    };
+    let line_count = layout.line_count();
+    let mut lines = Vec::with_capacity(line_count);
+    let mut first = 0;
+    while first < line_count {
+        // Bound the temporary cell buffer independently of reply length. The
+        // prepared layout remains cached; chunks only adapt its styled runs to
+        // the room history's existing row representation.
+        const MAX_BUFFER_CELLS: usize = 256 * 1024;
+        let rows_per_chunk = (MAX_BUFFER_CELLS / usize::from(width.max(1))).max(1);
+        let height = (line_count - first)
+            .min(rows_per_chunk)
+            .min(usize::from(u16::MAX)) as u16;
+        let area = Rect::new(0, 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        let mut state = ViewState::default();
+        state.scroll_to(DocumentRow::new(first));
+        layout.widget().render(area, &mut buffer, &mut state);
+        for offset in 0..height {
+            lines.push(line_from_buffer(
+                &buffer,
+                offset,
+                width,
+                request,
+                source,
+                first + usize::from(offset) > 0,
+            ));
+        }
+        first += usize::from(height);
+    }
+    Some(lines)
+}
+
+fn line_from_buffer(
+    buffer: &Buffer,
+    row: u16,
+    width: u16,
+    request: RequestId,
+    source: &Arc<str>,
+    continued: bool,
+) -> Line {
+    let mut text = String::new();
+    let mut styles: Vec<(String, Style)> = Vec::new();
+    let mut column = 0u16;
+    while column < width {
+        let cell = &buffer[(column, row)];
+        let symbol = cell.symbol();
+        let mut style = cell.style();
+        // A scratch buffer represents unspecified colors as Reset. Treat those
+        // as transparent so Markdown modifiers patch the Bus room palette
+        // instead of replacing it with the user's terminal defaults.
+        if style.fg == Some(Color::Reset) {
+            style.fg = None;
+        }
+        if style.bg == Some(Color::Reset) {
+            style.bg = None;
+        }
+        if style.underline_color == Some(Color::Reset) {
+            style.underline_color = None;
+        }
+        if !symbol.is_empty() {
+            text.push_str(symbol);
+            if let Some((run, _)) = styles.last_mut().filter(|(_, current)| *current == style) {
+                run.push_str(symbol);
+            } else {
+                styles.push((symbol.to_owned(), style));
+            }
+        }
+        column = column.saturating_add(cell.cell_width().max(1));
+    }
+    while text.ends_with(' ') {
+        text.pop();
+        if let Some((run, _)) = styles.last_mut() {
+            debug_assert!(run.ends_with(' '));
+            run.pop();
+            if run.is_empty() {
+                styles.pop();
+            }
+        }
+    }
+    Line {
+        text,
+        action: None,
+        tone: Tone::Text,
+        spans: Vec::new(),
+        styles,
+        raw_markdown: Some((request, Arc::clone(source))),
+        continued,
+    }
+}
+
+fn literal_reply_lines(source: &Arc<str>, width: u16, request: RequestId) -> Vec<Line> {
+    let rows = wrap_ranges(source, width);
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| Line {
+            text: display(&source[row.clone()]),
+            action: None,
+            tone: Tone::Text,
+            spans: Vec::new(),
+            styles: Vec::new(),
+            raw_markdown: Some((request, Arc::clone(source))),
+            continued: index > 0 && rows[index - 1].end == row.start,
+        })
+        .collect()
 }
 
 // Keep styling attached to header fields, not matches against arbitrary message
@@ -234,6 +441,8 @@ fn wrap_header(spans: Vec<(String, Tone)>, width: u16) -> Vec<Line> {
                 action: None,
                 tone: Tone::Muted,
                 spans,
+                styles: Vec::new(),
+                raw_markdown: None,
                 continued: index > 0,
             }
         })

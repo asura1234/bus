@@ -716,13 +716,15 @@ pub struct CellData {
 }
 
 impl CellData {
+    #[allow(deprecated)]
     pub(crate) fn from_ratatui_cell(cell: &ratatui::buffer::Cell) -> Self {
         Self {
             symbol: cell.symbol().to_owned(),
             fg: color_to_u32(cell.fg),
             bg: color_to_u32(cell.bg),
             modifier: modifier_to_u16(cell.modifier),
-            skip: cell.skip,
+            skip: matches!(cell.diff_option, ratatui::buffer::CellDiffOption::Skip)
+                || (cell.skip && matches!(cell.diff_option, ratatui::buffer::CellDiffOption::None)),
             hyperlink: None,
         }
     }
@@ -875,7 +877,11 @@ impl FrameData {
                 cell.fg = u32_to_color(cell_data.fg);
                 cell.bg = u32_to_color(cell_data.bg);
                 cell.modifier = u16_to_modifier(cell_data.modifier);
-                cell.skip = cell_data.skip;
+                cell.set_diff_option(if cell_data.skip {
+                    ratatui::buffer::CellDiffOption::Skip
+                } else {
+                    ratatui::buffer::CellDiffOption::None
+                });
             }
         }
 
@@ -3190,6 +3196,7 @@ mod tests {
     // ---- FrameData ↔ ratatui Buffer conversion ----
 
     #[test]
+    #[allow(deprecated)]
     fn frame_data_roundtrip_through_ratatui_buffer() {
         let area = ratatui::layout::Rect::new(0, 0, 5, 3);
         let mut buffer = ratatui::buffer::Buffer::filled(area, ratatui::buffer::Cell::new(" "));
@@ -3206,6 +3213,11 @@ mod tests {
         buffer.cell_mut((2, 0)).unwrap().set_symbol("!");
         buffer.cell_mut((2, 0)).unwrap().fg = Color::Rgb(255, 128, 0);
         buffer.cell_mut((2, 0)).unwrap().bg = Color::Indexed(220);
+        buffer
+            .cell_mut((3, 0))
+            .unwrap()
+            .set_diff_option(ratatui::buffer::CellDiffOption::Skip);
+        buffer.cell_mut((4, 0)).unwrap().set_skip(true);
 
         let cursor = CursorState {
             x: 1,
@@ -3233,6 +3245,8 @@ mod tests {
         assert_eq!(frame.cells[2].symbol, "!");
         assert_eq!(frame.cells[2].fg, color_to_u32(Color::Rgb(255, 128, 0)));
         assert_eq!(frame.cells[2].bg, color_to_u32(Color::Indexed(220)));
+        assert!(frame.cells[3].skip);
+        assert!(frame.cells[4].skip);
 
         let with_links = FrameData::from_ratatui_buffer_with_hyperlinks(
             &buffer,
@@ -3254,6 +3268,14 @@ mod tests {
         assert_eq!(restored.cell((1, 0)).unwrap().symbol(), "i");
         assert_eq!(restored.cell((2, 0)).unwrap().symbol(), "!");
         assert_eq!(restored.cell((2, 0)).unwrap().fg, Color::Rgb(255, 128, 0));
+        assert_eq!(
+            restored.cell((3, 0)).unwrap().diff_option,
+            ratatui::buffer::CellDiffOption::Skip
+        );
+        assert_eq!(
+            restored.cell((4, 0)).unwrap().diff_option,
+            ratatui::buffer::CellDiffOption::Skip
+        );
     }
 
     #[test]

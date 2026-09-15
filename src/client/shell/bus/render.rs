@@ -65,6 +65,7 @@ struct Row {
     muted: bool,
     color: Option<Color>,
     character_colors: Option<Vec<Color>>,
+    style: Option<Style>,
 }
 #[derive(Default)]
 pub(super) struct View {
@@ -136,6 +137,7 @@ impl View {
             muted,
             color: None,
             character_colors: None,
+            style: None,
         });
         if let Some(action) = action {
             self.hits.push(Hit { rect, action });
@@ -152,6 +154,13 @@ impl View {
         if rect.width > 0 && rect.height > 0 {
             if let Some(row) = self.rows.last_mut() {
                 row.character_colors = Some(colors);
+            }
+        }
+    }
+    fn style_last_row(&mut self, rect: Rect, style: Style) {
+        if rect.width > 0 && rect.height > 0 {
+            if let Some(row) = self.rows.last_mut() {
+                row.style = Some(style);
             }
         }
     }
@@ -896,9 +905,8 @@ impl BusUi {
             self.main_scroll.min(view.history_max_scroll)
         };
         view.history_text = Rect::new(x, history_y, width, view.history.height);
-        let selection = self
-            .history_selection
-            .map(|(anchor, head)| (anchor.min(head), anchor.max(head)));
+        let selection =
+            super::selection::normalize_history_selection(content, self.history_selection);
         for (index, line) in content
             .iter()
             .skip(self.main_scroll)
@@ -954,6 +962,19 @@ impl BusUi {
                     view.row(span_rect, text, None, false, false);
                     view.color_last_row(span_rect, color);
                 }
+                column = column.saturating_add(span_width);
+            }
+            let mut column = 0u16;
+            for (text, style) in &line.styles {
+                let span_width = unicode_width::UnicodeWidthStr::width(text.as_str()) as u16;
+                let span_rect = Rect::new(
+                    rect.x + column,
+                    rect.y,
+                    span_width.min(width.saturating_sub(column)),
+                    1,
+                );
+                view.row(span_rect, text, None, false, false);
+                view.style_last_row(span_rect, *style);
                 column = column.saturating_add(span_width);
             }
         }
@@ -1560,7 +1581,8 @@ impl BusUi {
                     Color::Rgb(46, 48, 58)
                 } else {
                     Color::Rgb(24, 24, 28)
-                });
+                })
+                .patch(row.style.unwrap_or_default());
             buffer.set_stringn(
                 row.x,
                 row.y,

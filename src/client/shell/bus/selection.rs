@@ -6,6 +6,7 @@ use super::*;
 use crate::client::shell::{ClientShellAction, ClientShellInput};
 use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
+use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Region {
@@ -19,6 +20,69 @@ pub(super) enum Region {
 pub(super) struct Point {
     pub line: usize,
     pub offset: usize,
+}
+
+/// Rendered Markdown does not have stable character offsets back into its
+/// source. Expand either endpoint that touches a rendered reply so the visible
+/// highlight describes the whole raw Markdown message copied to the clipboard.
+pub(super) fn normalize_history_selection(
+    lines: &[super::history::Line],
+    selection: Option<(Point, Point)>,
+) -> Option<(Point, Point)> {
+    let (anchor, head) = selection?;
+    let (mut start, mut end) = (anchor.min(head), anchor.max(head));
+    if start == end {
+        return Some((start, end));
+    }
+    if let Some((request, _)) = lines
+        .get(start.line)
+        .and_then(|line| line.raw_markdown.as_ref())
+    {
+        let mut last = start.line;
+        while lines
+            .get(last + 1)
+            .and_then(|line| line.raw_markdown.as_ref())
+            .is_some_and(|(candidate, _)| candidate == request)
+        {
+            last += 1;
+        }
+        if start.offset < lines[start.line].text.len() || start.line < last {
+            while start.line > 0
+                && lines[start.line - 1]
+                    .raw_markdown
+                    .as_ref()
+                    .is_some_and(|(candidate, _)| candidate == request)
+            {
+                start.line -= 1;
+            }
+            start.offset = 0;
+        }
+    }
+    if let Some((request, _)) = lines
+        .get(end.line)
+        .and_then(|line| line.raw_markdown.as_ref())
+    {
+        let mut first = end.line;
+        while first > 0
+            && lines[first - 1]
+                .raw_markdown
+                .as_ref()
+                .is_some_and(|(candidate, _)| candidate == request)
+        {
+            first -= 1;
+        }
+        if end.offset > 0 || end.line > first {
+            while lines
+                .get(end.line + 1)
+                .and_then(|line| line.raw_markdown.as_ref())
+                .is_some_and(|(candidate, _)| candidate == request)
+            {
+                end.line += 1;
+            }
+            end.offset = lines[end.line].text.len();
+        }
+    }
+    Some((start, end))
 }
 
 fn row_offset(text: &str, rect: Rect, column: u16, inclusive: bool) -> usize {
@@ -184,13 +248,13 @@ impl BusUi {
 
     /// Ordered history selection, if one is active.
     pub(super) fn history_selection_range(&self) -> Option<(Point, Point)> {
-        self.history_selection
-            .map(|(anchor, head)| (anchor.min(head), anchor.max(head)))
+        normalize_history_selection(self.history.cached(), self.history_selection)
     }
 
     pub(super) fn selected_text(&self) -> Option<String> {
         if let Some((start, end)) = self.history_selection_range() {
             let mut text = String::new();
+            let mut copied_markdown = BTreeSet::new();
             for (index, line) in self
                 .history
                 .cached()
@@ -205,6 +269,24 @@ impl BusUi {
                 } else {
                     line.text.len()
                 };
+                if let Some((request, source)) = &line.raw_markdown {
+                    if from < to && copied_markdown.insert(*request) {
+                        if index > start.line && !line.continued && !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(source);
+                    } else if index == end.line
+                        && to == 0
+                        && index > start.line
+                        && !line.continued
+                        && !text.is_empty()
+                    {
+                        // The visible selection includes the preceding hard
+                        // line end even though it stops before this reply.
+                        text.push('\n');
+                    }
+                    continue;
+                }
                 // Soft-wrapped rows rejoin; real line ends stay line ends.
                 if index > start.line && !line.continued {
                     text.push('\n');
