@@ -134,6 +134,15 @@ Treat `complete: true` from `message status` or `wait` as the settlement signal.
 A successful terminal write, a visually idle agent, or a queued focus change is
 not proof that the request completed.
 
+Both commands query the same persisted message status: `wait` owns no separate
+completion state, and the correlated result remains queryable after the waiting CLI process exits or Bus restarts.
+When Worker durably records that provider Request settlement, the same semantic fact wakes the room orchestrator.
+The orchestrator receives the factual reply
+and decides the next action; Bus does not interpret the reply or add a harness
+polling loop, workflow notifier, or content-owned notification path. A future
+`send --wait` convenience may only compose the existing durable `send` and
+`wait` primitives.
+
 ## Address one or many agents
 
 `--to` accepts a comma-separated list of agent names or numeric IDs:
@@ -175,16 +184,64 @@ Read the durable message history for a room:
 bus history --room "$room_id"
 ```
 
-Read the recent terminal output for one managed agent:
+Read the complete current terminal viewport for one managed agent:
 
 ```sh
-bus agent read "$agent_id"
+bus agent read "$agent_id" --source visible
 ```
 
-`agent read` returns up to 400 recent lines as text with ANSI styling removed.
-It verifies the managed terminal identity first and fails closed if the terminal
-changed. Use it for diagnosis or context, not as a substitute for message
-settlement.
+Or request exactly the amount of recent scrollback evidence you need:
+
+```sh
+bus agent read "$agent_id" --source recent --lines 80
+```
+
+The generic forms are `agent read AGENT --source visible` and
+`agent read AGENT --source recent --lines N`. Visible returns the complete
+current viewport and rejects `--lines`. Recent requires a positive caller-chosen
+`N`; Bus does not choose or silently clamp a default. Both forms verify the
+managed room, launch, terminal, session, and pane identity before and after the
+native read, and fail closed without returning uncorrelated text if that identity
+changes. Use terminal output as evidence for human or model judgment, never as a
+substitute for message settlement or an automatic workflow signal.
+
+When a managed coding agent is visibly waiting on a safe permission prompt,
+observe the exact factual fingerprint before approving it once:
+
+```sh
+bus agent permission "$agent_id"
+bus agent approve-once "$agent_id" \
+  --fingerprint "$fingerprint" \
+  --response allow-once
+```
+
+The generic forms are `agent permission AGENT` and
+`agent approve-once AGENT --fingerprint FINGERPRINT --response allow-once`.
+Approval is atomic, allowlisted, single-use, and identity-bound; stale, unknown,
+or risky prompts send no keys. This surface does not expose arbitrary keystrokes
+or grant reusable shell authority.
+
+If current facts prove an idle agent still owns a historically wedged request,
+the Human or an approved Orchestrator can invoke the same queue-preserving typed
+recovery after checking its identity and revision facts:
+
+```sh
+bus request recover "$request_id" --confirm
+```
+
+The generic form is `request recover REQUEST_ID --confirm`. It abandons only the
+exact confirmed current request and does not choose what happens to queued work.
+
+Coding-agent harnesses can verify a trusted assignment outer frame without
+using developer control:
+
+```sh
+bus assignment verify --frame "$frame"
+```
+
+The generic form is `assignment verify --frame FRAME`. A verified, absent, or
+invalid result is factual assignment evidence; it does not select a skill,
+fallback, or workflow action.
 
 The control CLI always emits raw JSON. Agent reply text returned by `wait`,
 `message status`, and `history` remains raw Markdown. The interactive room

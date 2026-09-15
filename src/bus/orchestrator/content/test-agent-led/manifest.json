@@ -1,0 +1,15 @@
+{
+  "interface": "ROOM_AGENT_CONTENT_INTERFACE_V1",
+  "content_version": 1,
+  "compatibility": 1,
+  "system": {
+    "path": "system.md",
+    "sha256": "71215a8e8de4704298eee42e06ad9104683d41ba6950a1e209367d8158d0dde8"
+  },
+  "agent": {
+    "path": "agent.md",
+    "sha256": "14281cb343cbab453fa4e18e8b54c2c362d25dd49dde9d0b5018742719bf4a28"
+  },
+  "skills": [],
+  "references": []
+}

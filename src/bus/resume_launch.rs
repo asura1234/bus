@@ -158,14 +158,17 @@ fn load(
         Provider::Cursor => project.join(".cursor/hooks.json"),
     };
     validate_hooks(&hook_path, agent.provider, binary)?;
+    let discovery = super::trusted_assignment::prepare_discovery(root, agent.id, launch)?;
+    let mut env = vec![
+        ("BUS_LAUNCH_ID".into(), launch.into()),
+        (
+            "BUS_CALLBACK_DIR".into(),
+            spool.to_string_lossy().into_owned(),
+        ),
+    ];
+    env.extend(discovery.env(binary));
     Ok(LaunchExtras {
-        env: vec![
-            ("BUS_LAUNCH_ID".into(), launch.into()),
-            (
-                "BUS_CALLBACK_DIR".into(),
-                spool.to_string_lossy().into_owned(),
-            ),
-        ],
+        env,
         args: if agent.provider == Provider::ClaudeCode {
             vec![
                 "--settings".into(),
@@ -306,7 +309,12 @@ mod tests {
     use super::*;
     use crate::bus::{callbacks, model::*, store::JsonStore};
     use serde_json::json;
-    use std::path::PathBuf;
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
     struct Fixture {
         root: PathBuf,
@@ -321,8 +329,12 @@ mod tests {
 
     impl Fixture {
         fn new(provider: Provider) -> Self {
-            let root =
-                std::env::temp_dir().join(format!("bus-resume-{}", crate::bus::io::now_ns()));
+            let root = std::env::temp_dir().join(format!(
+                "bus-resume-{}-{}-{}",
+                std::process::id(),
+                crate::bus::io::now_ns(),
+                NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
+            ));
             let project = root.join("project");
             std::fs::create_dir_all(&project).unwrap();
             let binary = std::env::current_exe().unwrap();
@@ -449,6 +461,41 @@ mod tests {
                 &self.binary,
             )
         }
+
+        /// Callback capture plus trusted-assignment discovery for the token the last load wrote.
+        fn expected_env(&self) -> Vec<(String, String)> {
+            let assignments = self
+                .root
+                .join("trusted-assignments")
+                .join(self.agent.0.to_string())
+                .join("owned-launch");
+            let token = std::fs::read_to_string(assignments.join(".read-token")).unwrap();
+            [
+                ("BUS_LAUNCH_ID", "owned-launch".to_owned()),
+                (
+                    "BUS_CALLBACK_DIR",
+                    self.root
+                        .join("callbacks/owned-launch")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                ("BUS_BINARY", self.binary.to_string_lossy().into_owned()),
+                (
+                    "BUS_TRUSTED_ASSIGNMENT_DIR",
+                    assignments.to_string_lossy().into_owned(),
+                ),
+                (
+                    "BUS_TRUSTED_ASSIGNMENT_ENDPOINT",
+                    assignments
+                        .join("active.json")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                ("BUS_TRUSTED_ASSIGNMENT_TOKEN", token),
+            ]
+            .map(|(key, value)| (key.to_owned(), value))
+            .into()
+        }
     }
 
     impl Drop for Fixture {
@@ -463,20 +510,7 @@ mod tests {
             let fixture = Fixture::new(provider);
             let original = fixture.plan.clone();
             let extras = fixture.load().unwrap();
-            assert_eq!(
-                extras.env,
-                vec![
-                    ("BUS_LAUNCH_ID".into(), "owned-launch".into()),
-                    (
-                        "BUS_CALLBACK_DIR".into(),
-                        fixture
-                            .root
-                            .join("callbacks/owned-launch")
-                            .to_string_lossy()
-                            .into_owned()
-                    ),
-                ]
-            );
+            assert_eq!(extras.env, fixture.expected_env());
             assert_eq!(
                 extras.args,
                 if provider == Provider::ClaudeCode {
@@ -551,7 +585,7 @@ mod tests {
         value["agents"][fixture.agent.0.to_string()]["hook_setup_confirmed"] = json!(false);
         fixture.state = serde_json::from_value(value).unwrap();
         fixture.save();
-        assert_eq!(fixture.load().unwrap().env.len(), 2);
+        assert_eq!(fixture.load().unwrap().env, fixture.expected_env());
         let saved = JsonStore::new(fixture.root.join("state.json"))
             .load()
             .unwrap()

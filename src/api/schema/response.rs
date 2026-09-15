@@ -107,6 +107,12 @@ pub enum ResponseResult {
     AgentList {
         agents: Vec<AgentInfo>,
     },
+    AgentPermission {
+        observation: super::agents::AgentPermissionObservation,
+    },
+    AgentApprovedOnce {
+        approval: super::agents::AgentApproveOnceResult,
+    },
     AgentView {
         active: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]

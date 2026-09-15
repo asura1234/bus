@@ -36,7 +36,7 @@ def read_agent_output(bus, agent_id, timeout=15):
     deadline = time.monotonic() + timeout
     while True:
         try:
-            output = bus("agent", "read", agent_id)["output"]
+            output = bus("agent", "read", agent_id, "--source", "recent", "--lines", "80")["text"]
             return output if isinstance(output, str) else json.dumps(output)
         except AssertionError as error:
             transient = "resource temporarily unavailable" in str(error).lower()

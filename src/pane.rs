@@ -3042,6 +3042,37 @@ impl PaneRuntime {
         self.terminal.visible_text()
     }
 
+    pub(crate) fn visible_text_snapshot_with_seq(&self) -> Option<(String, u64)> {
+        for _ in 0..3 {
+            let before = self.content_seq.load(Ordering::Acquire);
+            if !before.is_multiple_of(2) {
+                continue;
+            }
+            let text = self.terminal.visible_text();
+            let after = self.content_seq.load(Ordering::Acquire);
+            if before == after {
+                return Some((text, after));
+            }
+        }
+        None
+    }
+
+    pub(crate) fn visible_text_snapshot_with_dimensions(&self) -> Option<(String, u16, u16, u64)> {
+        for _ in 0..3 {
+            let before = self.content_seq.load(Ordering::Acquire);
+            if !before.is_multiple_of(2) {
+                continue;
+            }
+            let (rows, columns) = self.current_size();
+            let text = self.terminal.visible_text();
+            let after = self.content_seq.load(Ordering::Acquire);
+            if before == after {
+                return Some((text, rows, columns, after));
+            }
+        }
+        None
+    }
+
     pub fn visible_ansi(&self) -> String {
         self.terminal.visible_ansi()
     }
@@ -3152,6 +3183,32 @@ impl PaneRuntime {
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
         self.io.try_send_bytes(bytes)
+    }
+
+    /// Compare the live permission surface and emit one fixed response while
+    /// holding the same lock that serializes terminal content updates.
+    pub(crate) fn try_approve_permission_once(
+        &self,
+        expected_revision: u64,
+        expected_prompt_digest: &str,
+        response: Bytes,
+    ) -> Result<bool, mpsc::error::TrySendError<Bytes>> {
+        let _content_write_guard = match self.content_write_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let revision = self.content_seq.load(Ordering::Acquire);
+        if revision != expected_revision || !revision.is_multiple_of(2) {
+            return Ok(false);
+        }
+        let surface = self.terminal.visible_text();
+        if crate::api::schema::safe_permission_command(&surface).is_none()
+            || crate::api::schema::permission_prompt_digest(&surface) != expected_prompt_digest
+        {
+            return Ok(false);
+        }
+        self.io.try_send_bytes(response)?;
+        Ok(true)
     }
 
     pub fn queue_user_input_submission(

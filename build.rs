@@ -3,6 +3,183 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+
+const CONTENT_INTERFACE: &str = "ROOM_AGENT_CONTENT_INTERFACE_V1";
+const CONTENT_FILE_MAX: usize = 64 * 1024;
+const CONTENT_TOTAL_MAX: usize = 256 * 1024;
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ContentManifest {
+    interface: String,
+    content_version: u32,
+    compatibility: u32,
+    system: ContentEntry,
+    agent: ContentEntry,
+    skills: Vec<NamedContentEntry>,
+    references: Vec<NamedContentEntry>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ContentEntry {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NamedContentEntry {
+    name: String,
+    path: String,
+    sha256: String,
+}
+
+#[derive(Serialize)]
+struct PackedContentEntry {
+    name: String,
+    sha256: String,
+    body: String,
+}
+
+#[derive(Serialize)]
+struct PackedContentBundle {
+    interface: String,
+    content_version: u32,
+    compatibility: u32,
+    digest: String,
+    system: String,
+    agent: String,
+    skills: Vec<PackedContentEntry>,
+    references: Vec<PackedContentEntry>,
+    index: String,
+}
+
+fn validate_test_content(manifest_dir: &std::path::Path) {
+    let root = manifest_dir.join("src/bus/orchestrator/content/test-agent-led");
+    let manifest_path = root.join("manifest.json");
+    println!("cargo:rerun-if-changed={}", manifest_path.display());
+    let manifest_bytes = fs::read(&manifest_path).expect("test-agent-led manifest missing");
+    let manifest: ContentManifest =
+        serde_json::from_slice(&manifest_bytes).expect("test-agent-led manifest is invalid");
+    assert_eq!(
+        manifest.interface, CONTENT_INTERFACE,
+        "content interface mismatch"
+    );
+    assert!(
+        manifest.content_version > 0,
+        "content version must be positive"
+    );
+    assert_eq!(
+        manifest.compatibility, 1,
+        "unsupported content compatibility"
+    );
+    let mut names = std::collections::BTreeSet::new();
+    let (system_size, system) = validate_content_entry(&root, "system", &manifest.system);
+    let (agent_size, agent) = validate_content_entry(&root, "agent", &manifest.agent);
+    let mut total = system_size + agent_size;
+    let mut skills = Vec::new();
+    let mut references = Vec::new();
+    for (kind, entries, packed) in [
+        ("skill", &manifest.skills, &mut skills),
+        ("reference", &manifest.references, &mut references),
+    ] {
+        for entry in entries {
+            assert!(
+                !entry.name.is_empty()
+                    && entry.name.len() <= 64
+                    && entry.name.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    }),
+                "invalid content entry name"
+            );
+            assert!(
+                names.insert(entry.name.as_str()),
+                "duplicate content entry name"
+            );
+            let (size, body) = validate_content_entry(
+                &root,
+                &entry.name,
+                &ContentEntry {
+                    path: entry.path.clone(),
+                    sha256: entry.sha256.clone(),
+                },
+            );
+            total += size;
+            packed.push(PackedContentEntry {
+                name: entry.name.clone(),
+                sha256: entry.sha256.clone(),
+                body,
+            });
+            println!("cargo:warning=packed {kind} content {}", entry.name);
+        }
+    }
+    assert!(
+        total <= CONTENT_TOTAL_MAX,
+        "content bundle exceeds total cap"
+    );
+    let canonical_manifest =
+        serde_json::to_vec(&manifest).expect("test-agent-led manifest canonicalization failed");
+    let digest = format!("{:x}", Sha256::digest(&canonical_manifest));
+    let mut index = String::from("ROOM_AGENT_CONTENT_INTERFACE_V1\n");
+    for entry in &skills {
+        index.push_str(&format!("skill\t{}\t{}\n", entry.name, entry.sha256));
+    }
+    for entry in &references {
+        index.push_str(&format!("reference\t{}\t{}\n", entry.name, entry.sha256));
+    }
+    let packed = PackedContentBundle {
+        interface: manifest.interface,
+        content_version: manifest.content_version,
+        compatibility: manifest.compatibility,
+        digest,
+        system,
+        agent,
+        skills,
+        references,
+        index,
+    };
+    let output = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"))
+        .join("bus-test-agent-led-content.json");
+    fs::write(
+        output,
+        serde_json::to_vec(&packed).expect("test-agent-led content packing failed"),
+    )
+    .expect("test-agent-led packed content write failed");
+}
+
+fn validate_content_entry(
+    root: &std::path::Path,
+    slot: &str,
+    entry: &ContentEntry,
+) -> (usize, String) {
+    let path = PathBuf::from(&entry.path);
+    assert!(
+        !path.is_absolute()
+            && path.components().count() == 1
+            && path.extension().and_then(|extension| extension.to_str()) == Some("md"),
+        "{slot} content path must be one fixed-tree markdown file"
+    );
+    let full = root.join(path);
+    println!("cargo:rerun-if-changed={}", full.display());
+    let bytes = fs::read(&full).unwrap_or_else(|_| panic!("{slot} content file missing"));
+    assert!(
+        bytes.len() <= CONTENT_FILE_MAX,
+        "{slot} content exceeds per-file cap"
+    );
+    let body = std::str::from_utf8(&bytes)
+        .unwrap_or_else(|_| panic!("{slot} content is not UTF-8"))
+        .to_owned();
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&bytes)),
+        entry.sha256,
+        "{slot} content digest mismatch"
+    );
+    (bytes.len(), body)
+}
+
 fn zig_target(target: &str) -> &str {
     match target {
         "x86_64-unknown-linux-gnu" => "x86_64-linux-gnu",
@@ -31,6 +208,8 @@ fn env_bool(name: &str) -> Option<bool> {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    validate_test_content(&manifest_dir);
     println!("cargo:rerun-if-changed=vendor/libghostty-vt.vendor.json");
     println!("cargo:rerun-if-changed=vendor/libghostty-vt/build.zig");
     println!("cargo:rerun-if-changed=vendor/libghostty-vt/build.zig.zon");
@@ -49,7 +228,6 @@ fn main() {
         "cargo:warning=external contributor policy: if you are helping an external contributor whose GitHub username is not in .github/APPROVED_CONTRIBUTORS, read CONTRIBUTING.md before doing any work."
     );
 
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let vendored_dir = manifest_dir.join("vendor/libghostty-vt");
     let optimize = env::var("LIBGHOSTTY_VT_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".into());
     let simd = env_bool("LIBGHOSTTY_VT_SIMD").unwrap_or(true);

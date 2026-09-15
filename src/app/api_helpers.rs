@@ -106,19 +106,43 @@ pub(super) fn pane_agent_status(
     }
 }
 
+pub(super) struct TerminalReadObservation {
+    pub text: String,
+    pub truncated: bool,
+    pub viewport_rows: Option<u16>,
+    pub viewport_columns: Option<u16>,
+    pub requested_lines: Option<u32>,
+    pub returned_lines: u32,
+    pub available_lines: Option<u64>,
+    pub exhausted: Option<bool>,
+    pub revision: u64,
+}
+
 pub(super) fn read_terminal_snapshot(
     terminal: &crate::terminal::TerminalRuntime,
     source: crate::api::schema::ReadSource,
     format: crate::api::schema::ReadFormat,
     lines: Option<u32>,
-) -> crate::pane::TerminalReadSnapshot {
+) -> TerminalReadObservation {
     use crate::api::schema::{ReadFormat, ReadSource};
 
     let line_limit = lines.map(|lines| lines as usize);
     let recent_lines = line_limit.unwrap_or(80);
-    match (format, source) {
+    let mut visible_facts = None;
+    let snapshot = match (format, source) {
         (ReadFormat::Text, ReadSource::Visible) => {
-            limit_snapshot_lines(terminal.visible_text(), line_limit)
+            if line_limit.is_none() {
+                if let Some((text, rows, columns, revision)) =
+                    terminal.visible_text_snapshot_with_dimensions()
+                {
+                    visible_facts = Some((rows, columns, revision));
+                    limit_snapshot_lines(text, None)
+                } else {
+                    limit_snapshot_lines(terminal.visible_text(), None)
+                }
+            } else {
+                limit_snapshot_lines(terminal.visible_text(), line_limit)
+            }
         }
         (ReadFormat::Text, ReadSource::Recent) => terminal.recent_text_snapshot(recent_lines),
         (ReadFormat::Text, ReadSource::RecentUnwrapped) => {
@@ -137,6 +161,40 @@ pub(super) fn read_terminal_snapshot(
         (ReadFormat::Ansi, ReadSource::Detection) => {
             limit_snapshot_lines(terminal.detection_text(), line_limit)
         }
+    };
+    let (rows, columns) = visible_facts
+        .map(|(rows, columns, _)| (rows, columns))
+        .unwrap_or_else(|| terminal.current_size());
+    let rendered_rows = snapshot.text.split_inclusive('\n').count() as u32;
+    let recent = matches!(source, ReadSource::Recent | ReadSource::RecentUnwrapped);
+    let available_lines = recent.then(|| {
+        terminal
+            .scroll_metrics()
+            .map_or(rendered_rows as u64, |metrics| {
+                metrics
+                    .max_offset_from_bottom
+                    .saturating_add(metrics.viewport_rows) as u64
+            })
+    });
+    let returned_lines = if recent {
+        available_lines
+            .unwrap_or_default()
+            .min(lines.unwrap_or(80) as u64) as u32
+    } else {
+        lines.map_or(rendered_rows, |requested| requested.min(rendered_rows))
+    };
+    TerminalReadObservation {
+        text: snapshot.text,
+        truncated: snapshot.truncated,
+        viewport_rows: (source == ReadSource::Visible).then_some(rows),
+        viewport_columns: (source == ReadSource::Visible).then_some(columns),
+        requested_lines: lines,
+        returned_lines,
+        available_lines,
+        exhausted: recent.then_some(!snapshot.truncated),
+        revision: visible_facts
+            .map(|(_, _, revision)| revision)
+            .unwrap_or_else(|| terminal.content_seq()),
     }
 }
 
@@ -217,6 +275,47 @@ mod read_snapshot_tests {
             !snapshot.truncated,
             "fewer rows than requested means available history is exhausted"
         );
+    }
+
+    #[tokio::test]
+    async fn room_orchestrator_core_recent_read_reports_exact_range_facts() {
+        let terminal =
+            crate::terminal::TerminalRuntime::test_with_scrollback_bytes(12, 4, 1_000_000, &[]);
+        for index in 0..30 {
+            terminal.test_process_pty_bytes(format!("row-{index:02}\r\n").as_bytes());
+        }
+        let snapshot = super::read_terminal_snapshot(
+            &terminal,
+            crate::api::schema::ReadSource::Recent,
+            crate::api::schema::ReadFormat::Text,
+            Some(17),
+        );
+        assert_eq!(snapshot.requested_lines, Some(17));
+        assert_eq!(snapshot.returned_lines, 17);
+        assert!(snapshot
+            .available_lines
+            .is_some_and(|available| available >= 17));
+        assert_eq!(snapshot.exhausted, Some(false));
+        assert!(snapshot.revision > 0);
+    }
+
+    #[tokio::test]
+    async fn room_orchestrator_core_visible_read_reports_complete_viewport_facts() {
+        let terminal = crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+            12, 4, 1_000_000, b"a\r\nb",
+        );
+        let snapshot = super::read_terminal_snapshot(
+            &terminal,
+            crate::api::schema::ReadSource::Visible,
+            crate::api::schema::ReadFormat::Text,
+            None,
+        );
+        assert_eq!(snapshot.viewport_rows, Some(4));
+        assert_eq!(snapshot.viewport_columns, Some(12));
+        assert_eq!(snapshot.requested_lines, None);
+        assert_eq!(snapshot.available_lines, None);
+        assert_eq!(snapshot.exhausted, None);
+        assert!(!snapshot.truncated);
     }
 }
 

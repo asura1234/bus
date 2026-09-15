@@ -53,6 +53,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::AgentPrompt(_)
             | Method::AgentPromptIfIdle(_)
             | Method::AgentPromptIfUnbound(_)
+            | Method::AgentApproveOnce(_)
             | Method::AgentSendKeys(_)
             | Method::PaneSplit(_)
             | Method::PaneSwap(_)

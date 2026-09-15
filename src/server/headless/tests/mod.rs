@@ -2999,7 +2999,7 @@ fn connect_pending_terminal_client_with_control_rx(
 }
 
 #[test]
-fn explicit_agent_history_read_requires_idle_on_alternate_screen() {
+fn room_orchestrator_core_headless_explicit_agent_history_read_requires_idle_on_alternate_screen() {
     with_terminal_session_test_server(
         |server, terminal_id, _terminal_id_string, public_pane_id| {
             let terminal = server
@@ -3306,6 +3306,12 @@ fn terminal_control_rejects_attach_during_alt_screen_read() {
                     text: String::new(),
                     revision: 0,
                     truncated: false,
+                    viewport_rows: None,
+                    viewport_columns: None,
+                    requested_lines: Some(120),
+                    returned_lines: 0,
+                    available_lines: None,
+                    exhausted: None,
                 },
                 120,
                 false,

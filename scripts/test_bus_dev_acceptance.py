@@ -1,6 +1,7 @@
 """Acceptance-driver profiles and result validation; no live model calls."""
 import contextlib
 import io
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -79,13 +80,33 @@ class AcceptanceProfileTests(unittest.TestCase):
 
 
 class AcceptanceObservationTests(unittest.TestCase):
+    def test_public_guide_documents_explicit_reads_and_safe_room_recovery_surfaces(self):
+        guide = (Path(__file__).resolve().parents[1] / "docs/how-to-bus-cli.md").read_text()
+        self.assertIn("agent read AGENT --source visible", guide)
+        self.assertIn("agent read AGENT --source recent --lines N", guide)
+        self.assertNotIn("returns up to 400 recent lines", guide)
+        self.assertIn("agent permission AGENT", guide)
+        self.assertIn(
+            "agent approve-once AGENT --fingerprint FINGERPRINT --response allow-once",
+            guide,
+        )
+        self.assertIn("request recover REQUEST_ID --confirm", guide)
+        self.assertIn("assignment verify --frame FRAME", guide)
+        self.assertIn("same persisted message status", guide)
+        self.assertIn("waiting CLI process exits or Bus restarts", guide)
+        self.assertIn("wakes the room orchestrator", guide)
+        self.assertIn("does not interpret the reply", guide)
+        self.assertIn("send --wait", guide)
+
     def test_terminal_read_retries_transient_eagain(self):
+        calls = []
         outputs = iter([
             AssertionError({"error": {"message": "Resource temporarily unavailable (os error 35)"}}),
-            {"output": "TOKEN"},
+            {"text": "TOKEN"},
         ])
 
-        def bus(*_args, **_kwargs):
+        def bus(*args, **_kwargs):
+            calls.append(args)
             result = next(outputs)
             if isinstance(result, Exception):
                 raise result
@@ -94,6 +115,10 @@ class AcceptanceObservationTests(unittest.TestCase):
         with mock.patch.object(acceptance.time, "sleep") as sleep:
             self.assertEqual(acceptance.read_agent_output(bus, 3, timeout=1), "TOKEN")
         sleep.assert_called_once()
+        self.assertEqual(calls, [
+            ("agent", "read", 3, "--source", "recent", "--lines", "80"),
+            ("agent", "read", 3, "--source", "recent", "--lines", "80"),
+        ])
 
     def test_all_selector_requires_exact_owned_room_membership(self):
         self.assertTrue(hasattr(acceptance, "recipient_selector"))

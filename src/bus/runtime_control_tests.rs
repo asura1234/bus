@@ -13,7 +13,7 @@ fn fixture() -> (Worker, RoomId, AgentId, PathBuf) {
     let dir = std::env::temp_dir().join(format!(
         "bus-control-domain-{}-{}",
         std::process::id(),
-        super::super::super::io::now_ms()
+        super::super::super::io::now_ns()
     ));
     let mut worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
     worker.dev_enabled = true;
@@ -34,7 +34,7 @@ fn call(worker: &mut Worker, id: &str, method: &str, params: serde_json::Value) 
 }
 
 #[test]
-fn dev_send_preserves_draft_and_targets_exactly_one_agent() {
+fn room_orchestrator_core_cli_send_durably_queues_and_returns_message_request_identity() {
     let (mut worker, room, agent, dir) = fixture();
     let second = worker
         .state
@@ -188,7 +188,7 @@ fn dev_status_explains_gate_without_claiming_delivery() {
 }
 
 #[test]
-fn dev_recovery_abandons_an_idle_wedged_request_without_replacing_the_agent() {
+fn room_orchestrator_core_human_abandon_idle_request_preserves_the_agent_and_queue() {
     let (mut worker, _room, agent, dir) = fixture();
     worker
         .state
@@ -270,7 +270,7 @@ fn dev_recovery_abandons_an_idle_wedged_request_without_replacing_the_agent() {
 }
 
 #[test]
-fn dev_read_uses_native_pane_selector_not_internal_terminal_id() {
+fn room_orchestrator_core_worker_read_uses_native_public_pane_selector() {
     struct InspectTarget;
     impl Transport for InspectTarget {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
@@ -291,21 +291,27 @@ fn dev_read_uses_native_pane_selector_not_internal_terminal_id() {
         .set_agent_runtime_identity(
             agent,
             AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
                 pane_id: Some("w1:p2".into()),
                 terminal_id: Some("term_internal".into()),
-                ..Default::default()
+                session_id: Some("session".into()),
             },
         )
         .unwrap();
     worker.transport = Box::new(InspectTarget);
-    let result = call(&mut worker, "read", "agent.read", json!({"agent":"codex1"}));
+    let result = call(
+        &mut worker,
+        "read",
+        "agent.read",
+        json!({"agent":"codex1","source":"visible"}),
+    );
     assert_eq!(result.error.unwrap().message, "probe complete");
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn dev_read_visible_returns_bounded_snapshot_and_correlation_metadata() {
+fn room_orchestrator_core_worker_visible_read_returns_viewport_and_correlation_facts() {
     struct VisibleInspect;
     impl Transport for VisibleInspect {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
@@ -358,6 +364,12 @@ fn dev_read_visible_returns_bounded_snapshot_and_correlation_metadata() {
                             text: "complete viewport\nrow two".into(),
                             revision: 9,
                             truncated: false,
+                            viewport_rows: Some(24),
+                            viewport_columns: Some(80),
+                            requested_lines: None,
+                            returned_lines: 24,
+                            available_lines: None,
+                            exhausted: None,
                         },
                     })
                 }
@@ -411,18 +423,10 @@ fn dev_read_visible_returns_bounded_snapshot_and_correlation_metadata() {
     assert_eq!(result.result["runtime"]["terminal_id"], "term_internal");
     assert_eq!(result.result["capture"]["source"], "visible");
     assert_eq!(result.result["capture"]["truncated"], false);
-    assert_eq!(result.result["capture"]["more"], false);
     assert_eq!(result.result["capture"]["revision"], 9);
     assert!(result.result["capture"].get("lines").is_none());
     assert_eq!(result.result["capture"]["viewport"]["rows"], 24);
-    assert_eq!(
-        result.result["capture"]["viewport"]["offset_from_bottom"],
-        0
-    );
-    assert_eq!(
-        result.result["capture"]["viewport"]["max_offset_from_bottom"],
-        12
-    );
+    assert_eq!(result.result["capture"]["viewport"]["columns"], 80);
     let captured = result.result["capture"]["at_ms"].as_u64().unwrap();
     assert!(
         captured >= before && captured <= after,
@@ -472,7 +476,7 @@ fn owned_agent_info(pane_id: &str, name: &str, session: Option<&str>) -> schema:
 }
 
 #[test]
-fn dev_read_visible_fails_closed_for_missing_or_stale_runtime_identity() {
+fn room_orchestrator_core_worker_read_fails_closed_for_missing_or_stale_runtime_identity() {
     struct StaleInspect;
     impl Transport for StaleInspect {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
@@ -546,65 +550,20 @@ fn dev_read_visible_fails_closed_for_missing_or_stale_runtime_identity() {
 }
 
 #[test]
-fn dev_read_without_source_keeps_recent_output_contract() {
-    struct RecentInspect;
-    impl Transport for RecentInspect {
-        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
-            match method {
-                Method::AgentGet(params) => {
-                    assert_eq!(params.target, "w1:p2");
-                    Ok(ResponseResult::AgentInfo {
-                        agent: owned_agent_info("w1:p2", "bus-r1-a2", None),
-                    })
-                }
-                Method::AgentRead(params) => {
-                    assert_eq!(params.target, "w1:p2");
-                    assert_eq!(params.source, schema::ReadSource::Recent);
-                    assert_eq!(params.lines, Some(400));
-                    Ok(ResponseResult::PaneRead {
-                        read: schema::PaneReadResult {
-                            pane_id: "w1:p2".into(),
-                            workspace_id: "w1".into(),
-                            tab_id: "t1".into(),
-                            source: schema::ReadSource::Recent,
-                            format: schema::ReadFormat::Text,
-                            text: "recent history".into(),
-                            revision: 4,
-                            truncated: false,
-                        },
-                    })
-                }
-                other => panic!("unexpected native method: {other:?}"),
-            }
-        }
-    }
-    let (mut worker, _room, agent, dir) = fixture();
-    worker
-        .state
-        .set_agent_runtime_identity(
-            agent,
-            AgentRuntimeIdentity {
-                pane_id: Some("w1:p2".into()),
-                terminal_id: Some("term_internal".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    worker.transport = Box::new(RecentInspect);
+fn room_orchestrator_core_worker_recent_read_requires_explicit_lines_before_native_transport() {
+    let (mut worker, _room, _agent, dir) = fixture();
     let result = call(&mut worker, "read", "agent.read", json!({"agent":"codex1"}));
-    assert!(result.ok, "{result:?}");
-    assert_eq!(result.result["agent_id"], agent.0);
-    assert_eq!(result.result["runtime"]["pane_id"], "w1:p2");
-    assert_eq!(result.result["output"]["type"], "pane_read");
-    assert_eq!(result.result["output"]["read"]["text"], "recent history");
-    assert!(result.result.get("text").is_none() || result.result["text"].is_null());
-    assert!(result.result.get("capture").is_none() || result.result["capture"].is_null());
+    assert!(!result.ok, "{result:?}");
+    assert_eq!(
+        result.error.unwrap().message,
+        "Recent reads require an explicit positive lines value"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn dev_read_recent_uses_caller_selected_native_lines_and_reports_more() {
+fn room_orchestrator_core_worker_recent_read_forwards_selected_lines_and_reports_range() {
     struct RecentRange;
     impl Transport for RecentRange {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
@@ -612,7 +571,7 @@ fn dev_read_recent_uses_caller_selected_native_lines_and_reports_more() {
                 Method::AgentGet(params) => {
                     assert_eq!(params.target, "w1:p2");
                     Ok(ResponseResult::AgentInfo {
-                        agent: owned_agent_info("w1:p2", "bus-r1-a2", None),
+                        agent: owned_agent_info("w1:p2", "bus-r1-a2", Some("session")),
                     })
                 }
                 Method::AgentRead(params) => {
@@ -628,6 +587,12 @@ fn dev_read_recent_uses_caller_selected_native_lines_and_reports_more() {
                             text: "line 79\nline 80".into(),
                             revision: 11,
                             truncated: true,
+                            viewport_rows: None,
+                            viewport_columns: None,
+                            requested_lines: Some(80),
+                            returned_lines: 80,
+                            available_lines: Some(81),
+                            exhausted: Some(false),
                         },
                     })
                 }
@@ -641,9 +606,10 @@ fn dev_read_recent_uses_caller_selected_native_lines_and_reports_more() {
         .set_agent_runtime_identity(
             agent,
             AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
                 pane_id: Some("w1:p2".into()),
                 terminal_id: Some("term_internal".into()),
-                ..Default::default()
+                session_id: Some("session".into()),
             },
         )
         .unwrap();
@@ -658,12 +624,10 @@ fn dev_read_recent_uses_caller_selected_native_lines_and_reports_more() {
     assert_eq!(result.result["text"], "line 79\nline 80");
     assert_eq!(result.result["capture"]["source"], "recent");
     assert_eq!(result.result["capture"]["truncated"], true);
-    assert_eq!(result.result["capture"]["more"], true);
-    assert_eq!(result.result["capture"]["resumable"], true);
     assert_eq!(result.result["capture"]["revision"], 11);
-    assert_eq!(result.result["capture"]["lines"], 80);
     assert_eq!(result.result["capture"]["requested_lines"], 80);
-    assert_eq!(result.result["capture"]["returned_lines"], 2);
+    assert_eq!(result.result["capture"]["returned_lines"], 80);
+    assert_eq!(result.result["capture"]["available_lines"], 81);
     assert_eq!(result.result["capture"]["exhausted"], false);
     assert!(result.result["capture"].get("native_max_lines").is_none());
     assert!(result.result["capture"].get("limit").is_none());
@@ -672,13 +636,13 @@ fn dev_read_recent_uses_caller_selected_native_lines_and_reports_more() {
 }
 
 #[test]
-fn dev_read_recent_honors_caller_lines_above_one_thousand() {
+fn room_orchestrator_core_worker_recent_read_has_no_one_thousand_line_clamp() {
     struct UncappedRecent;
     impl Transport for UncappedRecent {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             match method {
                 Method::AgentGet(_) => Ok(ResponseResult::AgentInfo {
-                    agent: owned_agent_info("w1:p2", "bus-r1-a2", None),
+                    agent: owned_agent_info("w1:p2", "bus-r1-a2", Some("session")),
                 }),
                 Method::AgentRead(params) => {
                     assert_eq!(params.lines, Some(5000));
@@ -695,6 +659,12 @@ fn dev_read_recent_honors_caller_lines_above_one_thousand() {
                                 .join("\n"),
                             revision: 2,
                             truncated: false,
+                            viewport_rows: None,
+                            viewport_columns: None,
+                            requested_lines: Some(5000),
+                            returned_lines: 1200,
+                            available_lines: Some(1200),
+                            exhausted: Some(true),
                         },
                     })
                 }
@@ -708,9 +678,10 @@ fn dev_read_recent_honors_caller_lines_above_one_thousand() {
         .set_agent_runtime_identity(
             agent,
             AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
                 pane_id: Some("w1:p2".into()),
                 terminal_id: Some("term_internal".into()),
-                ..Default::default()
+                session_id: Some("session".into()),
             },
         )
         .unwrap();
@@ -723,14 +694,192 @@ fn dev_read_recent_honors_caller_lines_above_one_thousand() {
     );
     assert!(result.ok, "{result:?}");
     assert_eq!(result.result["capture"]["requested_lines"], 5000);
-    assert_eq!(result.result["capture"]["lines"], 5000);
     assert_eq!(result.result["capture"]["returned_lines"], 1200);
     assert_eq!(result.result["capture"]["truncated"], false);
-    assert_eq!(result.result["capture"]["more"], false);
     assert_eq!(result.result["capture"]["exhausted"], true);
-    assert_eq!(result.result["capture"]["resumable"], false);
     assert!(result.result["capture"].get("limit").is_none());
     assert!(result.result["capture"].get("native_max_lines").is_none());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn agent_approve_once_worker_rejects_stale_launch_before_native_then_persists_and_rejects_replay() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct PermissionTransport {
+        approvals: Arc<AtomicUsize>,
+    }
+    impl Transport for PermissionTransport {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::AgentPermissionObserve(params) => {
+                    assert_eq!(params.target, "w1:p2");
+                    Ok(ResponseResult::AgentPermission {
+                        observation: schema::AgentPermissionObservation {
+                            terminal_id: "term_internal".into(),
+                            pane_id: "w1:p2".into(),
+                            session_id: "session".into(),
+                            content_revision: 22,
+                            prompt_digest: "prompt-digest".into(),
+                            prompt_text: "Allow read-only command: rg --files".into(),
+                            eligibility: schema::PermissionEligibility::Allowlisted {
+                                action: schema::SafePermissionAction::ReadOnlyInspection,
+                                root: "/repo".into(),
+                            },
+                            allowed_responses: vec![schema::ApprovedPermissionResponse::AllowOnce],
+                        },
+                    })
+                }
+                Method::AgentApproveOnce(params) => {
+                    assert_eq!(params.expected_terminal_id, "term_internal");
+                    assert_eq!(params.expected_content_revision, 22);
+                    self.approvals.fetch_add(1, Ordering::SeqCst);
+                    Ok(ResponseResult::AgentApprovedOnce {
+                        approval: schema::AgentApproveOnceResult {
+                            written: true,
+                            reason: None,
+                            observation: schema::AgentPermissionObservation {
+                                terminal_id: "term_internal".into(),
+                                pane_id: "w1:p2".into(),
+                                session_id: "session".into(),
+                                content_revision: 22,
+                                prompt_digest: "prompt-digest".into(),
+                                prompt_text: "Allow read-only command: rg --files".into(),
+                                eligibility: schema::PermissionEligibility::Allowlisted {
+                                    action: schema::SafePermissionAction::ReadOnlyInspection,
+                                    root: "/repo".into(),
+                                },
+                                allowed_responses: vec![
+                                    schema::ApprovedPermissionResponse::AllowOnce,
+                                ],
+                            },
+                        },
+                    })
+                }
+                other => panic!("unexpected native method: {other:?}"),
+            }
+        }
+    }
+
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("term_internal".into()),
+                pane_id: Some("w1:p2".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    let sent = call(
+        &mut worker,
+        "send-permission",
+        "message.send",
+        json!({
+            "room":"test","to":["codex1"],"text":"inspect"
+        }),
+    );
+    let request = RequestId(sent.result["request_ids"][0].as_u64().unwrap());
+    worker.state.begin_submission(request, "launch", 1).unwrap();
+    worker
+        .state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn-1".into()),
+            },
+        )
+        .unwrap();
+    let approvals = Arc::new(AtomicUsize::new(0));
+    worker.transport = Box::new(PermissionTransport {
+        approvals: approvals.clone(),
+    });
+    let observed = call(
+        &mut worker,
+        "observe-permission",
+        "agent.permission.observe",
+        json!({"agent":"codex1"}),
+    );
+    assert!(observed.ok, "{observed:?}");
+    let fingerprint = observed.result["fingerprint"].as_str().unwrap().to_owned();
+    assert_eq!(observed.result["launch_id"], "launch");
+    assert_eq!(observed.result["current_request"], request.0);
+    assert_eq!(observed.result["provider_turn"], "turn-1");
+    let mut state = worker.state.clone();
+    state
+        .orchestrator_state_mut()
+        .grant(
+            _room,
+            crate::bus::orchestrator::ParticipantId::Human,
+            crate::bus::orchestrator::ParticipantId::Orchestrator,
+            crate::bus::orchestrator::Capability::ApprovePermissionOnce,
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("replacement-launch".into()),
+                terminal_id: Some("term_internal".into()),
+                pane_id: Some("w1:p2".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    let stale = worker.approve_permission_once(
+        crate::bus::orchestrator::ParticipantId::Orchestrator,
+        Some(agent),
+        crate::bus::orchestrator::ExactPermissionGrant {
+            fingerprint: fingerprint.clone(),
+            response: crate::bus::orchestrator::ApprovedPermissionResponse::AllowOnce,
+        },
+    );
+    assert!(stale.is_err());
+    assert_eq!(approvals.load(Ordering::SeqCst), 0);
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("term_internal".into()),
+                pane_id: Some("w1:p2".into()),
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    let approved = worker
+        .approve_permission_once(
+            crate::bus::orchestrator::ParticipantId::Orchestrator,
+            Some(agent),
+            crate::bus::orchestrator::ExactPermissionGrant {
+                fingerprint: fingerprint.clone(),
+                response: crate::bus::orchestrator::ApprovedPermissionResponse::AllowOnce,
+            },
+        )
+        .unwrap();
+    assert_eq!(approved["written"], true);
+    assert_eq!(approvals.load(Ordering::SeqCst), 1);
+    let replay = call(
+        &mut worker,
+        "replay-permission",
+        "agent.permission.approve_once",
+        json!({
+            "agent":"codex1","fingerprint":fingerprint,"response":"allow-once"
+        }),
+    );
+    assert!(!replay.ok);
+    assert_eq!(approvals.load(Ordering::SeqCst), 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

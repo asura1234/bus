@@ -25,7 +25,10 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   room focus ROOM
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks]
-  agent read AGENT [--source visible|recent] [--lines N]
+  agent read AGENT --source visible
+  agent read AGENT [--source recent] --lines N
+  agent permission AGENT
+  agent approve-once AGENT --fingerprint FINGERPRINT --response allow-once
   agent focus AGENT
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
@@ -215,6 +218,13 @@ fn cli() -> Command {
                                 .value_parser(clap::value_parser!(u32).range(1..)),
                         ),
                 )
+                .subcommand(subcommand("permission").arg(value_arg("agent").required(true)))
+                .subcommand(
+                    subcommand("approve-once")
+                        .arg(value_arg("agent").required(true))
+                        .arg(option("fingerprint"))
+                        .arg(option("response").value_parser(["allow-once"])),
+                )
                 .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
                 .subcommand(
                     subcommand("setup-confirm")
@@ -310,18 +320,38 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             ),
             Some(("read", args)) => {
                 let mut params = json!({"agent": required(args, "agent")?});
-                if let Some(source) = args.get_one::<String>("source") {
-                    params["source"] = json!(source);
-                }
-                if let Some(lines) = args.get_one::<u32>("lines") {
-                    params["lines"] = json!(lines);
-                }
-                if params.get("source") == Some(&json!("visible")) && params.get("lines").is_some()
-                {
-                    return Err("Visible reads return the complete viewport; omit --lines".into());
+                let source = args.get_one::<String>("source").map(String::as_str);
+                let lines = args.get_one::<u32>("lines").copied();
+                match (source, lines) {
+                    (Some("visible"), None) => params["source"] = json!("visible"),
+                    (Some("visible"), Some(_)) => {
+                        return Err(
+                            "Visible reads return the complete viewport; omit --lines".into()
+                        )
+                    }
+                    (None | Some("recent"), Some(lines)) => {
+                        params["source"] = json!("recent");
+                        params["lines"] = json!(lines);
+                    }
+                    (None | Some("recent"), None) => {
+                        return Err("Recent reads require an explicit positive --lines N".into())
+                    }
+                    (Some(_), _) => return Err("Unknown terminal read source".into()),
                 }
                 ("agent.read", params)
             }
+            Some(("permission", args)) => (
+                "agent.permission.observe",
+                json!({"agent": required(args, "agent")?}),
+            ),
+            Some(("approve-once", args)) => (
+                "agent.permission.approve_once",
+                json!({
+                    "agent": required(args, "agent")?,
+                    "fingerprint": required(args, "fingerprint")?,
+                    "response": required(args, "response")?,
+                }),
+            ),
             Some(("setup-confirm", args)) => (
                 "agent.setup-confirm",
                 json!({"agent": required(args, "agent")?, "confirm": args.get_flag("confirm")}),
@@ -451,11 +481,6 @@ mod tests {
                 json!({"room": "planning", "confirm": true}),
             ),
             (
-                &["agent", "read", "Claude Agent"],
-                "agent.read",
-                json!({"agent": "Claude Agent"}),
-            ),
-            (
                 &["agent", "read", "Claude Agent", "--source", "visible"],
                 "agent.read",
                 json!({"agent": "Claude Agent", "source": "visible"}),
@@ -489,7 +514,7 @@ mod tests {
             (
                 &["agent", "read", "Claude Agent", "--lines", "50"],
                 "agent.read",
-                json!({"agent": "Claude Agent", "lines": 50}),
+                json!({"agent": "Claude Agent", "source": "recent", "lines": 50}),
             ),
             (
                 &["agent", "setup-confirm", "2", "--confirm"],
@@ -573,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_is_a_bounded_message_status_query() {
+    fn room_orchestrator_core_cli_wait_is_a_bounded_message_status_query() {
         let parsed = command(&["wait", "--message", "19", "--timeout", "600"]).unwrap();
         assert_eq!(parsed.method, "message.status");
         assert_eq!(parsed.params, json!({"message": "19"}));
@@ -602,6 +627,8 @@ mod tests {
             &["room", "delete", "7"],
             &["agent", "delete", "9"],
             &["agent", "setup-confirm", "9"],
+            &["agent", "read", "Claude Agent"],
+            &["agent", "read", "Claude Agent", "--source", "recent"],
             &["agent", "read", "Claude Agent", "--source", "detection"],
             &[
                 "agent",
@@ -650,6 +677,70 @@ mod tests {
         for args in cases {
             assert!(command(args).is_err(), "must reject {args:?}");
         }
+    }
+
+    #[test]
+    fn room_orchestrator_core_bus_read_forms_require_model_selected_evidence_bounds() {
+        let visible = command(&["agent", "read", "Reviewer", "--source", "visible"]).unwrap();
+        assert_eq!(
+            visible.params,
+            json!({"agent":"Reviewer","source":"visible"})
+        );
+        let recent = command(&["agent", "read", "Reviewer", "--lines", "5001"]).unwrap();
+        assert_eq!(
+            recent.params,
+            json!({"agent":"Reviewer","source":"recent","lines":5001})
+        );
+        assert!(command(&["agent", "read", "Reviewer"]).is_err());
+        assert!(command(&["agent", "read", "Reviewer", "--source", "recent"]).is_err());
+        assert!(
+            command(&["agent", "read", "Reviewer", "--source", "visible", "--lines", "2"]).is_err()
+        );
+    }
+
+    #[test]
+    fn agent_approve_once_cli_exposes_only_fingerprint_and_fixed_response() {
+        let observe = command(&["agent", "permission", "Reviewer"]).unwrap();
+        assert_eq!(observe.method, "agent.permission.observe");
+        assert_eq!(observe.params, json!({"agent":"Reviewer"}));
+        let approve = command(&[
+            "agent",
+            "approve-once",
+            "Reviewer",
+            "--fingerprint",
+            "fp-abc",
+            "--response",
+            "allow-once",
+        ])
+        .unwrap();
+        assert_eq!(approve.method, "agent.permission.approve_once");
+        assert_eq!(
+            approve.params,
+            json!({
+                "agent":"Reviewer","fingerprint":"fp-abc","response":"allow-once"
+            })
+        );
+        assert!(command(&[
+            "agent",
+            "approve-once",
+            "Reviewer",
+            "--fingerprint",
+            " ",
+            "--response",
+            "allow-once",
+        ])
+        .is_err());
+        assert!(command(&[
+            "agent",
+            "approve-once",
+            "Reviewer",
+            "--fingerprint",
+            "fp",
+            "--response",
+            "yes",
+        ])
+        .is_err());
+        assert!(command(&["agent", "permission", "Reviewer", "--keys", "enter"]).is_err());
     }
 
     #[test]
@@ -762,7 +853,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_polls_fresh_status_until_complete_and_emits_only_final_response() {
+    fn room_orchestrator_core_cli_wait_polls_the_same_status_until_correlated_completion() {
         let statuses = [
             json!({"message_id": 19, "complete": false, "requests": [{
                 "request_id": 41, "agent_id": 7, "stage": "queued", "reason": null, "reply": null,
@@ -800,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_timeout_retains_last_status_for_diagnosis() {
+    fn room_orchestrator_core_cli_wait_timeout_retains_last_durable_status() {
         let status = json!({"message_id": 19, "complete": false, "requests": [{
             "request_id": 41, "agent_id": 7, "stage": "queued", "reason": "agent busy", "reply": null,
         }]});

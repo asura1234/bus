@@ -477,7 +477,7 @@ fn pane_wait_for_output_defaults_strip_ansi_to_true() {
 }
 
 #[test]
-fn pane_read_defaults_to_text_format() {
+fn room_orchestrator_core_pane_read_schema_preserves_native_optional_lines_and_fields() {
     let json = r#"
     {
         "id": "req_1",
@@ -677,6 +677,12 @@ fn subscription_event_envelope_round_trips() {
                 text: "auth: received\n".into(),
                 revision: 0,
                 truncated: false,
+                viewport_rows: None,
+                viewport_columns: None,
+                requested_lines: Some(20),
+                returned_lines: 1,
+                available_lines: Some(1),
+                exhausted: Some(true),
             },
         }),
     };
@@ -685,6 +691,87 @@ fn subscription_event_envelope_round_trips() {
     assert!(json.contains("\"event\":\"pane.output_matched\""));
     let restored: SubscriptionEventEnvelope = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, event);
+}
+
+#[test]
+fn agent_approve_once_schema_has_no_launch_or_arbitrary_keys() {
+    let request = Request {
+        id: "approve-1".into(),
+        method: Method::AgentApproveOnce(AgentApproveOnceParams {
+            target: "w1:p2".into(),
+            expected_terminal_id: "terminal-1".into(),
+            expected_pane_id: "w1:p2".into(),
+            expected_session_id: "session-1".into(),
+            expected_content_revision: 8,
+            expected_prompt_digest: "abc".into(),
+            response: ApprovedPermissionResponse::AllowOnce,
+        }),
+    };
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["method"], "agent.approve_once");
+    let params = &value["params"];
+    assert!(params.get("launch_id").is_none());
+    assert!(params.get("keys").is_none());
+    assert_eq!(params["response"], "allow-once");
+    assert!(serde_json::from_value::<Request>(serde_json::json!({
+        "id":"x","method":"agent.approve_once","params":{
+            "target":"w1:p2","expected_terminal_id":"terminal-1","expected_pane_id":"w1:p2",
+            "expected_session_id":"session-1","expected_content_revision":8,
+            "expected_prompt_digest":"abc","response":"allow-once","keys":["enter"]
+        }
+    }))
+    .is_err());
+}
+
+#[test]
+fn agent_approve_once_observation_round_trips_typed_eligibility() {
+    let observation = AgentPermissionObservation {
+        terminal_id: "terminal-1".into(),
+        pane_id: "w1:p2".into(),
+        session_id: "session-1".into(),
+        content_revision: 10,
+        prompt_digest: "digest".into(),
+        prompt_text: "Allow read-only command: rg --files".into(),
+        eligibility: PermissionEligibility::Allowlisted {
+            action: SafePermissionAction::ReadOnlyInspection,
+            root: "/repo".into(),
+        },
+        allowed_responses: vec![ApprovedPermissionResponse::AllowOnce],
+    };
+    let result = ResponseResult::AgentPermission { observation };
+    assert_eq!(
+        serde_json::from_str::<ResponseResult>(&serde_json::to_string(&result).unwrap()).unwrap(),
+        result
+    );
+}
+
+#[test]
+fn agent_approve_once_allowlist_rejects_read_commands_with_write_or_exec_modes() {
+    use super::safe_permission_command;
+
+    for safe in [
+        "Allow read-only command: pwd",
+        "Allow read-only command: rg --files",
+        "Allow read-only command: sed -n 1,20p src/lib.rs",
+    ] {
+        assert!(
+            safe_permission_command(safe).is_some(),
+            "expected safe: {safe}"
+        );
+    }
+    for unsafe_command in [
+        "Allow read-only command: sed -i s/old/new/ src/lib.rs",
+        "Allow read-only command: sed -n 1woutput.txt src/lib.rs",
+        "Allow read-only command: rg --pre helper pattern",
+        "Allow read-only command: git diff --output=report.txt",
+        "Allow read-only command: git diff --ext-diff",
+        "Allow read-only command: cat file | sh",
+    ] {
+        assert!(
+            safe_permission_command(unsafe_command).is_none(),
+            "expected rejection: {unsafe_command}"
+        );
+    }
 }
 
 #[test]

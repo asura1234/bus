@@ -22,6 +22,126 @@ pub struct AgentSendKeysParams {
     pub keys: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApprovedPermissionResponse {
+    AllowOnce,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SafePermissionAction {
+    ReadOnlyInspection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PermissionEligibility {
+    Allowlisted {
+        action: SafePermissionAction,
+        root: String,
+    },
+    Unknown,
+    Risky,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentApproveOnceParams {
+    pub target: String,
+    pub expected_terminal_id: String,
+    pub expected_pane_id: String,
+    pub expected_session_id: String,
+    pub expected_content_revision: u64,
+    pub expected_prompt_digest: String,
+    pub response: ApprovedPermissionResponse,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentPermissionObservation {
+    pub terminal_id: String,
+    pub pane_id: String,
+    pub session_id: String,
+    pub content_revision: u64,
+    pub prompt_digest: String,
+    pub prompt_text: String,
+    pub eligibility: PermissionEligibility,
+    pub allowed_responses: Vec<ApprovedPermissionResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentApproveOnceResult {
+    pub written: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub observation: AgentPermissionObservation,
+}
+
+pub(crate) fn safe_permission_command(surface: &str) -> Option<&str> {
+    const PREFIXES: &[&str] = &[
+        "Allow read-only command: ",
+        "Approve read-only command: ",
+        "Permission requested for read-only command: ",
+    ];
+    let command = surface
+        .lines()
+        .rev()
+        .find_map(|line| {
+            PREFIXES
+                .iter()
+                .find_map(|prefix| line.trim().strip_prefix(prefix))
+        })?
+        .trim();
+    if command.is_empty()
+        || command.contains([';', '|', '&', '`', '>', '<', '\n', '\r', '\\', '\'', '"'])
+        || command.contains("$(")
+    {
+        return None;
+    }
+    let words = command.split_ascii_whitespace().collect::<Vec<_>>();
+    let safe = match words.as_slice() {
+        ["pwd"] | ["pwd", "-L"] | ["pwd", "-P"] => true,
+        ["ls", rest @ ..] => rest.iter().all(|word| !matches!(*word, "--color=always")),
+        ["cat", rest @ ..] => !rest.is_empty() && rest.iter().all(|word| *word != "-"),
+        ["rg", rest @ ..] => {
+            !rest.is_empty()
+                && !rest.iter().any(|word| {
+                    matches!(*word, "--pre" | "--pre-glob" | "--hostname-bin")
+                        || word.starts_with("--pre=")
+                        || word.starts_with("--hostname-bin=")
+                })
+        }
+        ["sed", "-n", program, files @ ..] => {
+            !files.is_empty()
+                && program.ends_with('p')
+                && program[..program.len().saturating_sub(1)]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b',' | b'$'))
+        }
+        ["git", "status", rest @ ..] => rest.iter().all(|word| {
+            matches!(
+                *word,
+                "--short" | "--branch" | "--porcelain" | "--porcelain=v1" | "--porcelain=v2"
+            ) || word.starts_with("--untracked-files=")
+                || *word == "--"
+                || !word.starts_with('-')
+        }),
+        ["git", "diff", rest @ ..] => {
+            rest.contains(&"--no-ext-diff")
+                && !rest.iter().any(|word| {
+                    *word == "--ext-diff" || *word == "--output" || word.starts_with("--output=")
+                })
+        }
+        _ => false,
+    };
+    safe.then_some(command)
+}
+
+pub(crate) fn permission_prompt_digest(surface: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(surface.as_bytes()))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentWaitParams {
     pub target: String,

@@ -3,7 +3,7 @@ use std::{io, path::PathBuf};
 
 use super::local_sessions::{LocalSessionRegistry, ResumeTarget};
 
-const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last";
+const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last\n       bus assignment verify --frame FRAME";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Action {
@@ -13,6 +13,7 @@ enum Action {
     Paths,
     Help,
     Control(Vec<String>),
+    AssignmentVerify(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,6 +64,16 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 }
                 action = Some(Action::Resume(target.ok_or_else(|| USAGE.to_owned())?));
             }
+            "assignment"
+                if action.is_none()
+                    && args.get(index + 1).map(String::as_str) == Some("verify")
+                    && args.get(index + 2).map(String::as_str) == Some("--frame")
+                    && args.get(index + 3).is_some_and(|frame| !frame.is_empty())
+                    && index + 4 == args.len() =>
+            {
+                action = Some(Action::AssignmentVerify(args[index + 3].clone()));
+                index = args.len();
+            }
             value if action.is_none() && !value.starts_with('-') => {
                 action = Some(Action::Control(args[index..].to_vec()));
                 break;
@@ -88,6 +99,21 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     std::env::remove_var("BUS_DEV_EXISTING_SERVER");
     if invocation.action == Action::Help {
         print_help();
+        return Ok(());
+    }
+    if let Action::AssignmentVerify(frame) = &invocation.action {
+        let result = match super::trusted_assignment::verify_from_environment(frame) {
+            super::trusted_assignment::Verification::Verified(record) => {
+                serde_json::json!({"status":"verified","assignment":record})
+            }
+            super::trusted_assignment::Verification::Absent => {
+                serde_json::json!({"status":"absent"})
+            }
+            super::trusted_assignment::Verification::Invalid { reason } => {
+                serde_json::json!({"status":"invalid","reason":reason})
+            }
+        };
+        println!("{result}");
         return Ok(());
     }
 
@@ -129,7 +155,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             }
         },
         Action::Paths => (explicit_root.unwrap_or_else(|| base.clone()), None),
-        Action::Sessions | Action::Help => unreachable!(),
+        Action::Sessions | Action::Help | Action::AssignmentVerify(_) => unreachable!(),
     };
     if !root.is_absolute() {
         return Err(io::Error::other(
@@ -191,7 +217,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             );
             Ok(())
         }
-        Action::Sessions | Action::Help => unreachable!(),
+        Action::Sessions | Action::Help | Action::AssignmentVerify(_) => unreachable!(),
     }
 }
 

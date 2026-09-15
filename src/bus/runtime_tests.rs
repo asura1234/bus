@@ -9,8 +9,306 @@ use serde_json::json;
 use std::{
     collections::VecDeque,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
+
+static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone)]
+struct ScriptedRoomAdapter {
+    calls: Arc<
+        Mutex<
+            Vec<(
+                std::thread::ThreadId,
+                crate::bus::orchestrator::ModelRequest,
+            )>,
+        >,
+    >,
+    agent: AgentId,
+}
+
+impl crate::bus::orchestrator::ModelAdapter for ScriptedRoomAdapter {
+    fn complete(
+        &self,
+        request: crate::bus::orchestrator::ModelRequest,
+        _credential: crate::bus::credentials::CredentialGeneration,
+        _cancel: crate::bus::orchestrator::CancellationToken,
+    ) -> impl std::future::Future<
+        Output = Result<
+            crate::bus::orchestrator::ModelResponse,
+            crate::bus::orchestrator::ProviderError,
+        >,
+    > + Send {
+        let calls = Arc::clone(&self.calls);
+        let agent = self.agent;
+        async move {
+            let mut calls = calls.lock().unwrap();
+            calls.push((std::thread::current().id(), request));
+            let tool_calls = if calls.len() == 1 {
+                vec![
+                    crate::bus::orchestrator::ProviderToolCall {
+                        id: "read-content".into(),
+                        name: "read_content".into(),
+                        arguments: json!({"kind":"system","name":"system"}),
+                    },
+                    crate::bus::orchestrator::ProviderToolCall {
+                        id: "persist-draft".into(),
+                        name: "persist_workflow_draft".into(),
+                        arguments: json!({
+                            "draft_id":null,
+                            "expected_revision":null,
+                            "markdown":"# Recovery SOP\n\n## Observe\n\nRead current facts.\n"
+                        }),
+                    },
+                    crate::bus::orchestrator::ProviderToolCall {
+                        id: "read-draft".into(),
+                        name: "read_workflow_draft".into(),
+                        arguments: json!({
+                            "draft_id":"draft-0000000000000001",
+                            "max_bytes":4096
+                        }),
+                    },
+                    crate::bus::orchestrator::ProviderToolCall {
+                        id: "delegate".into(),
+                        name: "send_message".into(),
+                        arguments: json!({
+                            "to":{"agent":agent.0},
+                            "text":"Implement the bounded technical change",
+                            "work_id":11
+                        }),
+                    },
+                    crate::bus::orchestrator::ProviderToolCall {
+                        id: "inspect-delegated-work".into(),
+                        name: "inspect_work".into(),
+                        arguments: json!({"work_id":11}),
+                    },
+                ]
+            } else {
+                Vec::new()
+            };
+            Ok(crate::bus::orchestrator::ModelResponse {
+                content: None,
+                tool_calls,
+            })
+        }
+    }
+}
+
+#[test]
+fn room_orchestrator_core_worker_drives_model_loop_and_settles_content_and_workflow_operations() {
+    let (mut worker, _agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let adapter = ScriptedRoomAdapter {
+        calls: Arc::clone(&calls),
+        agent: _agent,
+    };
+    worker
+        .install_test_orchestrator(adapter, dir.clone())
+        .unwrap();
+    for _ in 0..20 {
+        worker.drive_orchestrator().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        calls.lock().unwrap().is_empty(),
+        "an installed model loop must remain dormant until a room fact changes"
+    );
+    let mut state = worker.state.clone();
+    state
+        .orchestrator_state_mut()
+        .grant(
+            room,
+            crate::bus::orchestrator::ParticipantId::Human,
+            crate::bus::orchestrator::ParticipantId::Orchestrator,
+            crate::bus::orchestrator::Capability::PersistWorkflowDraft,
+        )
+        .unwrap();
+    state
+        .orchestrator_state_mut()
+        .grant(
+            room,
+            crate::bus::orchestrator::ParticipantId::Human,
+            crate::bus::orchestrator::ParticipantId::Orchestrator,
+            crate::bus::orchestrator::Capability::Coordinate,
+        )
+        .unwrap();
+    state
+        .orchestrator_state_mut()
+        .grant(
+            room,
+            crate::bus::orchestrator::ParticipantId::Human,
+            crate::bus::orchestrator::ParticipantId::Orchestrator,
+            crate::bus::orchestrator::Capability::InspectRoom,
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    let (events, _) = mpsc::channel();
+    worker
+        .command(
+            BusCommand::SetDraftText(room, "Inspect the room and adapt the SOP".into()),
+            &events,
+        )
+        .unwrap();
+    worker
+        .command(BusCommand::SetRecipients(room, [_agent].into()), &events)
+        .unwrap();
+    worker.command(BusCommand::Submit(room), &events).unwrap();
+    assert!(worker
+        .state
+        .orchestrator_state()
+        .context(room)
+        .facts
+        .iter()
+        .any(|fact| matches!(
+            fact,
+            crate::bus::orchestrator::JournalFact::HumanMessage { .. }
+        )));
+
+    let worker_thread = std::thread::current().id();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while calls.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
+        worker.drive_orchestrator().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(
+        calls.len(),
+        2,
+        "tool settlement must wake the model with results"
+    );
+    assert_ne!(
+        calls[0].0, worker_thread,
+        "provider work must stay off Worker"
+    );
+    assert!(calls[0].1.messages.iter().any(|message| message
+        .content
+        .contains("test-only room process orchestrator")));
+    assert!(calls[1]
+        .1
+        .messages
+        .iter()
+        .any(|message| message.content.contains("read_content")
+            && message.content.contains("persist_workflow_draft")
+            && message.content.contains("# Recovery SOP")
+            && message.content.contains("provider_request_settlement")));
+    drop(calls);
+
+    let draft_dir = dir.join(".bus/temp").join(room.0.to_string());
+    let drafts = std::fs::read_dir(&draft_dir)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(drafts.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(drafts[0].path()).unwrap(),
+        "# Recovery SOP\n\n## Observe\n\nRead current facts.\n"
+    );
+    let delegated = worker
+        .state
+        .requests()
+        .find(|request| request.prompt.text == "Implement the bounded technical change")
+        .expect("model-authored coding-agent assignment must be durably queued");
+    assert_eq!(
+        delegated.prompt.author,
+        crate::bus::orchestrator::ParticipantId::Orchestrator
+    );
+    assert_eq!(
+        delegated.prompt.work_id,
+        Some(crate::bus::orchestrator::WorkId(11))
+    );
+    assert!(worker
+        .state
+        .orchestrator_state()
+        .operations()
+        .any(|operation| operation.kind == "persist_workflow_draft"
+            && operation.phase == crate::bus::orchestrator::OperationPhase::Settled
+            && matches!(
+                operation.result,
+                Some(crate::bus::orchestrator::OperationResult::Applied { .. })
+            )));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_orchestrator_core_approved_orchestrator_abandon_idle_request_matches_human_recovery() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    worker
+        .install_test_orchestrator(ScriptedRoomAdapter { calls, agent }, dir.clone())
+        .unwrap();
+    let mut state = worker.state.clone();
+    state
+        .orchestrator_state_mut()
+        .grant(
+            room,
+            crate::bus::orchestrator::ParticipantId::Human,
+            crate::bus::orchestrator::ParticipantId::Orchestrator,
+            crate::bus::orchestrator::Capability::AbandonIdleRequest,
+        )
+        .unwrap();
+    let first = state
+        .submit_message(
+            room,
+            Draft {
+                text: "historically wedged".into(),
+                files: Vec::new(),
+                recipient_ids: [agent].into_iter().collect(),
+            },
+            1,
+        )
+        .unwrap()[0];
+    let queued = state
+        .submit_message(
+            room,
+            Draft {
+                text: "must remain queued".into(),
+                files: Vec::new(),
+                recipient_ids: [agent].into_iter().collect(),
+            },
+            2,
+        )
+        .unwrap()[0];
+    state.begin_submission(first, "launch", 3).unwrap();
+    state
+        .record_submission(
+            first,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("turn-1".into()),
+            },
+        )
+        .unwrap();
+    state.observe_status(agent, RuntimeStatus::Idle, 4).unwrap();
+    worker.save(state).unwrap();
+    let semantic_revision = worker.state.orchestrator_state().wake_revision(room);
+
+    let result = worker
+        .settle_test_orchestrator_operation(
+            room,
+            crate::bus::orchestrator::RoomOperation::AbandonIdleRequest {
+                request_id: first,
+                expected_agent: agent,
+                expected_incarnation: 1,
+                expected_semantic_revision: semantic_revision,
+                expected_turn: Some("turn-1".into()),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(result["receipt"]["stage"], "abandoned");
+    assert_eq!(
+        worker.state.request(first).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(worker.state.queued_requests(agent), &[queued]);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
 #[path = "runtime_resume_tests.rs"]
 mod resume_tests;
@@ -234,7 +532,12 @@ fn fixture(
     PathBuf,
     Arc<Mutex<Vec<&'static str>>>,
 ) {
-    let dir = std::env::temp_dir().join(format!("bus-worker-{}", io::now_ns()));
+    let dir = std::env::temp_dir().join(format!(
+        "bus-worker-{}-{}-{}",
+        std::process::id(),
+        io::now_ns(),
+        NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
     let calls = Arc::new(Mutex::new(Vec::new()));
     let fake = FakeTransport {
         replies: replies.into(),
@@ -271,6 +574,1121 @@ fn fixture(
     )
     .unwrap();
     (worker, agent, room, dir, calls)
+}
+
+#[test]
+fn room_orchestrator_core_worker_confirms_exact_room_brief_with_durable_idempotent_receipt() {
+    let (mut worker, _agent, room, dir, _calls) = fixture(Provider::Codex, vec![]);
+    let proposal = RoomBrief {
+        goal: "Ship the reviewed room workflow".into(),
+        non_goals: "Do not implement repository changes in the orchestrator".into(),
+        revision: 3,
+        approved_revision: 0,
+        locked: false,
+    };
+    let proposal_digest = proposal.proposal_digest();
+    let mut state = worker.state.clone();
+    state.set_room_brief(room, proposal).unwrap();
+    worker.save(state).unwrap();
+
+    let stale_state = worker.state.clone();
+    assert!(worker
+        .command(
+            BusCommand::ConfirmRoomBriefProposal(
+                crate::bus::orchestrator::ConfirmRoomBriefProposal {
+                    room_id: room,
+                    expected_developer: crate::bus::orchestrator::ParticipantId::Human,
+                    expected_proposal_revision: 2,
+                    expected_proposal_digest: proposal_digest.clone(),
+                },
+            ),
+            &mpsc::channel().0,
+        )
+        .is_err());
+    assert_eq!(worker.state, stale_state);
+
+    let command = crate::bus::orchestrator::ConfirmRoomBriefProposal {
+        room_id: room,
+        expected_developer: crate::bus::orchestrator::ParticipantId::Human,
+        expected_proposal_revision: 3,
+        expected_proposal_digest: proposal_digest.clone(),
+    };
+    worker
+        .command(
+            BusCommand::ConfirmRoomBriefProposal(command.clone()),
+            &mpsc::channel().0,
+        )
+        .unwrap();
+    let receipt = worker
+        .state
+        .orchestrator_state()
+        .room_brief_confirmation(room)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        receipt.developer,
+        crate::bus::orchestrator::ParticipantId::Human
+    );
+    assert_eq!(receipt.approved_revision, 3);
+    assert_eq!(receipt.proposal_digest, proposal_digest);
+    assert_eq!(
+        worker
+            .state
+            .orchestrator_state()
+            .context(room)
+            .facts
+            .iter()
+            .filter(|fact| matches!(
+                fact,
+                crate::bus::orchestrator::JournalFact::RoomBriefConfirmed {
+                    confirmation_id
+                } if *confirmation_id == receipt.confirmation_id
+            ))
+            .count(),
+        1
+    );
+    let locked = &worker.state.room(room).unwrap().brief;
+    assert!(locked.locked);
+    assert_eq!(locked.approved_revision, locked.revision);
+    let mut forbidden_revision = worker.state.clone();
+    assert!(forbidden_revision
+        .set_room_brief(
+            room,
+            RoomBrief {
+                goal: "Replace the confirmed goal".into(),
+                non_goals: String::new(),
+                revision: 4,
+                approved_revision: 0,
+                locked: false,
+            },
+        )
+        .is_err());
+
+    let confirmed_state = worker.state.clone();
+    worker
+        .command(
+            BusCommand::ConfirmRoomBriefProposal(command.clone()),
+            &mpsc::channel().0,
+        )
+        .unwrap();
+    assert_eq!(worker.state, confirmed_state);
+    assert_eq!(
+        worker
+            .state
+            .orchestrator_state()
+            .room_brief_confirmation(room),
+        Some(&receipt)
+    );
+    let mut conflicting_retry = command.clone();
+    conflicting_retry.expected_proposal_digest = "conflicting-proposal".into();
+    assert!(worker
+        .command(
+            BusCommand::ConfirmRoomBriefProposal(conflicting_retry),
+            &mpsc::channel().0,
+        )
+        .is_err());
+    assert_eq!(worker.state, confirmed_state);
+
+    drop(worker);
+    let mut recovered = Worker::open(
+        dir.clone(),
+        Box::new(FakeTransport {
+            replies: VecDeque::new(),
+            calls: Arc::new(Mutex::new(Vec::new())),
+            state_path: dir.join("state.json"),
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        recovered
+            .state
+            .orchestrator_state()
+            .room_brief_confirmation(room),
+        Some(&receipt)
+    );
+    let recovered_state = recovered.state.clone();
+    recovered
+        .command(
+            BusCommand::ConfirmRoomBriefProposal(command),
+            &mpsc::channel().0,
+        )
+        .unwrap();
+    assert_eq!(recovered.state, recovered_state);
+    drop(recovered);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_orchestrator_core_worker_creates_exact_durable_workflow_approval_once() {
+    let (mut worker, agent, room, dir, _calls) = fixture(Provider::Codex, vec![]);
+    worker
+        .install_test_orchestrator(
+            ScriptedRoomAdapter {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                agent,
+            },
+            dir.clone(),
+        )
+        .unwrap();
+    let store = crate::bus::workflow_drafts::WorkflowDraftStore::new(dir.clone()).unwrap();
+    let mut state = worker.state.clone();
+    let draft = store
+        .persist(
+            state.orchestrator_state_mut().workflow_drafts_mut(),
+            room,
+            crate::bus::orchestrator::WorkflowDraftMutation {
+                draft_id: None,
+                expected_revision: None,
+                workflow_id: Some("release-sop".into()),
+                markdown: "# Release SOP\n\n## Verify\n\nRead the exact evidence.\n".into(),
+            },
+        )
+        .unwrap();
+    worker.save(state).unwrap();
+    let command = store
+        .promotion_review(
+            worker.state.orchestrator_state().workflow_drafts(),
+            room,
+            &draft.draft_id,
+        )
+        .unwrap()
+        .approval_command();
+
+    let mut stale = command.clone();
+    stale.reviewed_diff_digest = "stale-review".into();
+    let before_rejection = worker.state.clone();
+    assert!(worker
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(stale),
+            &mpsc::channel().0,
+        )
+        .is_err());
+    assert_eq!(durable(&worker.state), durable(&before_rejection));
+    assert_eq!(
+        worker
+            .state
+            .orchestrator_state()
+            .workflow_drafts()
+            .approvals()
+            .count(),
+        0
+    );
+
+    let mut wrong_developer = command.clone();
+    wrong_developer.expected_developer = crate::bus::orchestrator::ParticipantId::Orchestrator;
+    assert!(worker
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(wrong_developer),
+            &mpsc::channel().0,
+        )
+        .is_err());
+    assert_eq!(durable(&worker.state), durable(&before_rejection));
+
+    let standard_dir = dir.join(".bus/standard");
+    std::fs::create_dir_all(&standard_dir).unwrap();
+    std::fs::write(standard_dir.join("release-sop.md"), "# Changed base\n").unwrap();
+    assert!(worker
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(command.clone()),
+            &mpsc::channel().0,
+        )
+        .is_err());
+    assert_eq!(durable(&worker.state), durable(&before_rejection));
+    std::fs::remove_file(standard_dir.join("release-sop.md")).unwrap();
+
+    let draft_path = dir
+        .join(".bus/temp")
+        .join(room.0.to_string())
+        .join(format!("{}.md", draft.draft_id));
+    let draft_markdown = std::fs::read(&draft_path).unwrap();
+    std::fs::write(&draft_path, "# Tampered SOP\n\n## Step\n\nChanged.\n").unwrap();
+    assert!(worker
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(command.clone()),
+            &mpsc::channel().0,
+        )
+        .is_err());
+    assert_eq!(durable(&worker.state), durable(&before_rejection));
+    std::fs::write(draft_path, draft_markdown).unwrap();
+
+    worker
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(command.clone()),
+            &mpsc::channel().0,
+        )
+        .unwrap();
+    let approval = worker
+        .state
+        .orchestrator_state()
+        .workflow_drafts()
+        .approvals()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        approval.developer,
+        crate::bus::orchestrator::ParticipantId::Human
+    );
+    assert_eq!(approval.content_digest, command.content_digest);
+    assert_eq!(approval.standard_base_digest, command.standard_base_digest);
+    assert_eq!(approval.reviewed_diff_digest, command.reviewed_diff_digest);
+    assert_eq!(
+        worker
+            .state
+            .orchestrator_state()
+            .context(room)
+            .facts
+            .iter()
+            .filter(|fact| matches!(
+                fact,
+                crate::bus::orchestrator::JournalFact::WorkflowApprovalCreated {
+                    approval_id
+                } if approval_id == &approval.approval_id
+            ))
+            .count(),
+        1
+    );
+
+    let approved_state = worker.state.clone();
+    worker
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(command.clone()),
+            &mpsc::channel().0,
+        )
+        .unwrap();
+    assert_eq!(worker.state, approved_state);
+    assert_eq!(
+        worker
+            .state
+            .orchestrator_state()
+            .workflow_drafts()
+            .approvals()
+            .count(),
+        1
+    );
+
+    drop(worker);
+    let mut recovered = Worker::open(
+        dir.clone(),
+        Box::new(FakeTransport {
+            replies: VecDeque::new(),
+            calls: Arc::new(Mutex::new(Vec::new())),
+            state_path: dir.join("state.json"),
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        recovered
+            .state
+            .orchestrator_state()
+            .workflow_drafts()
+            .approval(&approval.approval_id),
+        Some(&approval)
+    );
+    recovered
+        .install_test_orchestrator(
+            ScriptedRoomAdapter {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                agent,
+            },
+            dir.clone(),
+        )
+        .unwrap();
+    let recovered_state = recovered.state.clone();
+    recovered
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(command),
+            &mpsc::channel().0,
+        )
+        .unwrap();
+    assert_eq!(recovered.state, recovered_state);
+    drop(recovered);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn durable(state: &BusState) -> serde_json::Value {
+    serde_json::to_value(state).unwrap()
+}
+
+fn grant_orchestrator(
+    worker: &mut Worker,
+    room: RoomId,
+    capabilities: &[crate::bus::orchestrator::Capability],
+) {
+    let mut state = worker.state.clone();
+    for capability in capabilities {
+        state
+            .orchestrator_state_mut()
+            .grant(
+                room,
+                crate::bus::orchestrator::ParticipantId::Human,
+                crate::bus::orchestrator::ParticipantId::Orchestrator,
+                *capability,
+            )
+            .unwrap();
+    }
+    worker.save(state).unwrap();
+}
+
+fn reopen(dir: &std::path::Path) -> Worker {
+    Worker::open(
+        dir.to_owned(),
+        Box::new(FakeTransport {
+            replies: VecDeque::new(),
+            calls: Arc::new(Mutex::new(Vec::new())),
+            state_path: dir.join("state.json"),
+        }),
+    )
+    .unwrap()
+}
+
+#[test]
+fn room_orchestrator_core_message_orchestrator_persists_exact_body_and_wakes_without_a_request() {
+    use crate::bus::orchestrator::{
+        HumanOrchestratorMessage, JournalFact, ParticipantId, RoomRecipient,
+    };
+
+    let (mut worker, agent, room, dir, transport_calls) = fixture(Provider::Codex, vec![]);
+    let (events, _) = mpsc::channel();
+    let body = "  Status check:\nwhich work is blocked?  ";
+    let message = |room_id: RoomId, body: &str| {
+        BusCommand::MessageOrchestrator(HumanOrchestratorMessage {
+            room_id,
+            body: body.into(),
+        })
+    };
+
+    let disabled = worker.state.clone();
+    assert!(worker
+        .command(message(room, body), &events)
+        .unwrap_err()
+        .contains("disabled"));
+    assert_eq!(worker.state, disabled);
+
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    worker
+        .install_test_orchestrator(
+            ScriptedRoomAdapter {
+                calls: Arc::clone(&calls),
+                agent,
+            },
+            dir.clone(),
+        )
+        .unwrap();
+    let before = worker.state.clone();
+    for rejected in [message(room, " \n\t"), message(RoomId(room.0 + 1000), body)] {
+        assert!(worker.command(rejected, &events).is_err());
+        assert_eq!(worker.state, before);
+    }
+
+    assert!(before.room(room).unwrap().draft.recipient_ids.is_empty());
+    let wake_before = before.orchestrator_state().wake_revision(room);
+    let transport_before = transport_calls.lock().unwrap().len();
+    worker.command(message(room, body), &events).unwrap();
+    let records = worker
+        .state
+        .room_messages(room)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].message.author, ParticipantId::Human);
+    assert_eq!(records[0].message.to, RoomRecipient::Orchestrator);
+    assert_eq!(records[0].message.text, body);
+    assert_eq!(
+        worker.state.orchestrator_state().wake_revision(room),
+        wake_before + 1
+    );
+    assert_eq!(
+        worker
+            .state
+            .orchestrator_state()
+            .context(room)
+            .facts
+            .iter()
+            .filter(|fact| matches!(
+                fact,
+                JournalFact::HumanMessage { message_id } if *message_id == records[0].message_id
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(worker.state.requests().count(), before.requests().count());
+    assert_eq!(
+        worker.state.queued_requests(agent),
+        before.queued_requests(agent)
+    );
+    assert_eq!(
+        worker.state.room(room).unwrap().latest_prompt,
+        before.room(room).unwrap().latest_prompt
+    );
+    assert_eq!(transport_calls.lock().unwrap().len(), transport_before);
+
+    let quoted_body = serde_json::to_string(body).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while calls.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+        worker.drive_orchestrator().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(
+        calls.lock().unwrap()[0]
+            .1
+            .messages
+            .iter()
+            .any(|message| message.content.contains(&quoted_body)),
+        "the Human message wake must carry the exact body into model context"
+    );
+
+    drop(worker);
+    let recovered = reopen(&dir);
+    assert_eq!(
+        recovered
+            .state
+            .room_messages(room)
+            .cloned()
+            .collect::<Vec<_>>(),
+        records
+    );
+    assert!(
+        serde_json::to_string(&recovered.state.orchestrator_state().context(room))
+            .unwrap()
+            .contains(&quoted_body)
+    );
+    drop(recovered);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_orchestrator_core_orchestrator_human_addressed_message_is_a_room_message_not_a_request() {
+    use crate::bus::orchestrator::{
+        Capability, ParticipantId, RoomMessage, RoomOperation, RoomRecipient,
+    };
+
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker
+        .install_test_orchestrator(
+            ScriptedRoomAdapter {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                agent,
+            },
+            dir.clone(),
+        )
+        .unwrap();
+    grant_orchestrator(&mut worker, room, &[Capability::Coordinate]);
+    let before = worker.state.clone();
+    let message = |to, text: &str| {
+        RoomOperation::SendMessage(RoomMessage {
+            author: ParticipantId::Orchestrator,
+            to,
+            text: text.into(),
+            work: None,
+        })
+    };
+
+    assert!(worker
+        .settle_test_orchestrator_operation(
+            room,
+            message(RoomRecipient::Orchestrator, "note to self")
+        )
+        .is_err());
+    assert_eq!(worker.state.room_messages(room).count(), 0);
+
+    let settled = worker
+        .settle_test_orchestrator_operation(
+            room,
+            message(RoomRecipient::Human, "Please verify the gesture manually."),
+        )
+        .unwrap();
+    let records = worker
+        .state
+        .room_messages(room)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].message.author, ParticipantId::Orchestrator);
+    assert_eq!(records[0].message.to, RoomRecipient::Human);
+    assert_eq!(
+        records[0].message.text,
+        "Please verify the gesture manually."
+    );
+    assert_eq!(settled["receipt"]["message_id"], records[0].message_id.0);
+    assert_eq!(worker.state.requests().count(), before.requests().count());
+    assert_eq!(
+        worker.state.queued_requests(agent),
+        before.queued_requests(agent)
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_orchestrator_core_worker_publishes_typed_workflow_promotion_review_for_exact_approval() {
+    use crate::bus::orchestrator::{
+        Capability, ParticipantId, RoomOperation, WorkflowDraftMutation,
+    };
+
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let adapter = || ScriptedRoomAdapter {
+        calls: Arc::new(Mutex::new(Vec::new())),
+        agent,
+    };
+    worker
+        .install_test_orchestrator(adapter(), dir.clone())
+        .unwrap();
+    grant_orchestrator(&mut worker, room, &[Capability::PersistWorkflowDraft]);
+    let (events, _) = mpsc::channel();
+    let persist = |draft_id: Option<&str>,
+                   expected_revision: Option<u64>,
+                   workflow_id: Option<&str>,
+                   markdown: &str| {
+        RoomOperation::PersistWorkflowDraft(WorkflowDraftMutation {
+            draft_id: draft_id.map(Into::into),
+            expected_revision,
+            workflow_id: workflow_id.map(Into::into),
+            markdown: markdown.into(),
+        })
+    };
+
+    worker
+        .settle_test_orchestrator_operation(
+            room,
+            persist(None, None, None, "# Local SOP\n\n## Step\n\nRoom only.\n"),
+        )
+        .unwrap();
+    assert!(worker.state.workflow_promotion_reviews(room).is_empty());
+
+    let created = worker
+        .settle_test_orchestrator_operation(
+            room,
+            persist(
+                None,
+                None,
+                Some("release-sop"),
+                "# Release SOP\n\n## Verify\n\nRead evidence.\n",
+            ),
+        )
+        .unwrap();
+    let draft_id = created["receipt"]["draft_id"].as_str().unwrap().to_owned();
+    let first = worker.state.workflow_promotion_reviews(room).to_vec();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].draft_id, draft_id);
+    assert_eq!(first[0].draft_revision, 1);
+    assert_eq!(first[0].workflow_id, "release-sop");
+    assert_eq!(first[0].expected_developer, ParticipantId::Human);
+    assert_eq!(first[0].standard_base_digest, None);
+    assert!(first[0].rendered_diff.contains("+# Release SOP\n"));
+
+    let retarget = worker.settle_test_orchestrator_operation(
+        room,
+        persist(
+            Some(&draft_id),
+            Some(1),
+            Some("other-sop"),
+            "# Release SOP\n\n## Verify\n\nRetargeted.\n",
+        ),
+    );
+    assert!(retarget.unwrap_err().contains("TargetImmutable"));
+    assert_eq!(
+        worker.state.workflow_promotion_reviews(room),
+        first.as_slice()
+    );
+
+    let displayed = first[0].approval_command();
+    worker
+        .settle_test_orchestrator_operation(
+            room,
+            persist(
+                Some(&draft_id),
+                Some(1),
+                None,
+                "# Release SOP\n\n## Verify\n\nRead revised evidence.\n",
+            ),
+        )
+        .unwrap();
+    let revised = worker.state.workflow_promotion_reviews(room).to_vec();
+    assert_eq!(revised[0].draft_revision, 2);
+    assert_eq!(revised[0].workflow_id, "release-sop");
+    let before_stale = durable(&worker.state);
+    assert!(worker
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(displayed),
+            &events
+        )
+        .unwrap_err()
+        .contains("StaleApproval"));
+    assert_eq!(durable(&worker.state), before_stale);
+
+    let standard = dir.join(".bus/standard");
+    std::fs::create_dir_all(&standard).unwrap();
+    std::fs::write(standard.join("release-sop.md"), "# Release SOP\n\n## Old\n").unwrap();
+    let before_base_change = durable(&worker.state);
+    assert!(worker
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(revised[0].approval_command()),
+            &events
+        )
+        .unwrap_err()
+        .contains("StaleApproval"));
+    assert_eq!(durable(&worker.state), before_base_change);
+    let current = worker.state.workflow_promotion_reviews(room)[0].clone();
+    assert!(current.standard_base_digest.is_some());
+    assert!(current.rendered_diff.contains("-## Old\n"));
+
+    worker
+        .command(
+            BusCommand::CreateDeveloperWorkflowApproval(current.approval_command()),
+            &events,
+        )
+        .unwrap();
+    let approval = worker.state.developer_workflow_approvals(room)[0].clone();
+    assert_eq!(worker.state.developer_workflow_approvals(room).len(), 1);
+    assert_eq!(
+        (
+            approval.draft_id.as_str(),
+            approval.draft_revision,
+            approval.content_digest.as_str(),
+            approval.workflow_id.as_str(),
+            approval.standard_base_digest.as_deref(),
+            approval.reviewed_diff_digest.as_str(),
+        ),
+        (
+            current.draft_id.as_str(),
+            current.draft_revision,
+            current.content_digest.as_str(),
+            current.workflow_id.as_str(),
+            current.standard_base_digest.as_deref(),
+            current.reviewed_diff_digest.as_str(),
+        )
+    );
+
+    drop(worker);
+    let mut recovered = reopen(&dir);
+    recovered
+        .install_test_orchestrator(adapter(), dir.clone())
+        .unwrap();
+    assert_eq!(
+        recovered.state.workflow_promotion_reviews(room),
+        std::slice::from_ref(&current)
+    );
+    drop(recovered);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_orchestrator_core_worker_rejects_displayed_brief_digest_after_same_revision_edit() {
+    let (mut worker, _agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let (events, _) = mpsc::channel();
+    let brief = |goal: &str| RoomBrief {
+        goal: goal.into(),
+        non_goals: "No orchestrator coding".into(),
+        revision: 3,
+        approved_revision: 0,
+        locked: false,
+    };
+    let mut state = worker.state.clone();
+    state
+        .set_room_brief(room, brief("Ship the reviewed workflow"))
+        .unwrap();
+    worker.save(state).unwrap();
+    let (displayed_revision, displayed_digest) = worker.state.room_brief_proposal(room).unwrap();
+    assert_eq!(displayed_revision, 3);
+
+    let mut state = worker.state.clone();
+    state
+        .set_room_brief(room, brief("Ship a different workflow"))
+        .unwrap();
+    worker.save(state).unwrap();
+    let (current_revision, current_digest) = worker.state.room_brief_proposal(room).unwrap();
+    assert_eq!(current_revision, displayed_revision);
+    assert_ne!(current_digest, displayed_digest);
+
+    let confirm = |digest: String| {
+        BusCommand::ConfirmRoomBriefProposal(crate::bus::orchestrator::ConfirmRoomBriefProposal {
+            room_id: room,
+            expected_developer: crate::bus::orchestrator::ParticipantId::Human,
+            expected_proposal_revision: displayed_revision,
+            expected_proposal_digest: digest,
+        })
+    };
+    let before = worker.state.clone();
+    assert!(worker.command(confirm(displayed_digest), &events).is_err());
+    assert_eq!(worker.state, before);
+    assert!(worker.state.room_brief_confirmation(room).is_none());
+
+    worker
+        .command(confirm(current_digest.clone()), &events)
+        .unwrap();
+    assert_eq!(worker.state.room_brief_proposal(room), None);
+    assert_eq!(
+        worker
+            .state
+            .room_brief_confirmation(room)
+            .unwrap()
+            .proposal_digest,
+        current_digest
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_orchestrator_core_test_worker_harness_publishes_real_handler_snapshots() {
+    use crate::bus::orchestrator::{
+        HumanOrchestratorMessage, RoomOperation, WorkflowDraftMutation,
+    };
+
+    let mut harness = super::test_harness::TestWorkerHarness::new();
+    let room = harness.room();
+    harness
+        .command(BusCommand::MessageOrchestrator(HumanOrchestratorMessage {
+            room_id: room,
+            body: "Where are we?".into(),
+        }))
+        .unwrap();
+    harness
+        .orchestrator_operation(RoomOperation::PersistWorkflowDraft(WorkflowDraftMutation {
+            draft_id: None,
+            expected_revision: None,
+            workflow_id: Some("triage-sop".into()),
+            markdown: "# Triage SOP\n\n## Observe\n\nRead facts.\n".into(),
+        }))
+        .unwrap();
+    harness
+        .orchestrator_operation(RoomOperation::ProposeRoomBrief {
+            expected_revision: 0,
+            goal: "Triage the room".into(),
+            non_goals: "No orchestrator coding".into(),
+        })
+        .unwrap();
+    let snapshot = harness.snapshot();
+    assert_eq!(snapshot.state.room_messages(room).count(), 1);
+    let proposal = snapshot.state.room_brief_proposal(room).unwrap();
+    assert_eq!(proposal.0, 1);
+    let review = snapshot.state.workflow_promotion_reviews(room)[0].clone();
+    harness
+        .command(BusCommand::CreateDeveloperWorkflowApproval(
+            review.approval_command(),
+        ))
+        .unwrap();
+    let rejected = harness.command(BusCommand::MessageOrchestrator(HumanOrchestratorMessage {
+        room_id: room,
+        body: " ".into(),
+    }));
+    assert!(rejected.is_err());
+    let before_restart = harness.snapshot();
+    assert!(before_restart.revision > snapshot.revision);
+    assert_eq!(before_restart.error, rejected.err());
+
+    harness.restart();
+    let restarted = harness.snapshot();
+    assert_eq!(restarted.state.room_messages(room).count(), 1);
+    assert_eq!(restarted.state.room_brief_proposal(room), Some(proposal));
+    assert_eq!(restarted.state.developer_workflow_approvals(room).len(), 1);
+    assert_eq!(
+        restarted.state.workflow_promotion_reviews(room),
+        std::slice::from_ref(&review)
+    );
+    assert_eq!(
+        restarted.state.agent(harness.agent()).unwrap().room_id,
+        room
+    );
+}
+
+#[test]
+fn room_orchestrator_core_propose_room_brief_allocates_revisions_without_confirming() {
+    use crate::bus::orchestrator::{ConfirmRoomBriefProposal, ParticipantId, RoomOperation};
+
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker
+        .install_test_orchestrator(
+            ScriptedRoomAdapter {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                agent,
+            },
+            dir.clone(),
+        )
+        .unwrap();
+    let propose =
+        |expected_revision: u64, goal: &str, non_goals: &str| RoomOperation::ProposeRoomBrief {
+            expected_revision,
+            goal: goal.into(),
+            non_goals: non_goals.into(),
+        };
+    let brief = |worker: &Worker| worker.state.room(room).unwrap().brief.clone();
+
+    let first = worker
+        .settle_test_orchestrator_operation(
+            room,
+            propose(0, "Ship the reviewed workflow", "No orchestrator coding"),
+        )
+        .unwrap();
+    let (revision, digest) = worker.state.room_brief_proposal(room).unwrap();
+    assert_eq!(revision, 1);
+    assert_eq!(first["receipt"]["revision"], 1);
+    assert_eq!(first["receipt"]["proposal_digest"], digest.as_str());
+    assert_eq!(
+        brief(&worker),
+        RoomBrief {
+            goal: "Ship the reviewed workflow".into(),
+            non_goals: "No orchestrator coding".into(),
+            revision: 1,
+            approved_revision: 0,
+            locked: false,
+        }
+    );
+    assert!(worker.state.room_brief_confirmation(room).is_none());
+
+    for rejected in [
+        propose(0, "Stale proposal", "Stale"),
+        propose(2, "Future proposal", "Future"),
+        propose(1, " \n\t", "No orchestrator coding"),
+        propose(1, "Ship", "  "),
+    ] {
+        let before = brief(&worker);
+        assert!(worker
+            .settle_test_orchestrator_operation(room, rejected)
+            .is_err());
+        assert_eq!(brief(&worker), before);
+    }
+
+    worker
+        .settle_test_orchestrator_operation(
+            room,
+            propose(1, "Ship the revised workflow", "No orchestrator coding"),
+        )
+        .unwrap();
+    let (revision, digest) = worker.state.room_brief_proposal(room).unwrap();
+    assert_eq!(revision, 2);
+    assert!(!brief(&worker).locked);
+    assert!(worker.state.room_brief_confirmation(room).is_none());
+
+    worker
+        .command(
+            BusCommand::ConfirmRoomBriefProposal(ConfirmRoomBriefProposal {
+                room_id: room,
+                expected_developer: ParticipantId::Human,
+                expected_proposal_revision: revision,
+                expected_proposal_digest: digest,
+            }),
+            &mpsc::channel().0,
+        )
+        .unwrap();
+    let locked = brief(&worker);
+    assert!(locked.locked);
+    assert!(worker
+        .settle_test_orchestrator_operation(room, propose(2, "Reopen the goal", "Anything"))
+        .is_err());
+    assert_eq!(brief(&worker), locked);
+
+    drop(worker);
+    assert_eq!(reopen(&dir).state.room(room).unwrap().brief, locked);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_orchestrator_core_room_brief_confirmation_activates_orchestrator_baseline_once() {
+    use crate::bus::orchestrator::{
+        Capability, ConfirmRoomBriefProposal, OrchestratorCommand, ParticipantId, RoomMessage,
+        RoomOperation, RoomQuery, RoomRecipient,
+    };
+
+    const BASELINE: [Capability; 7] = [
+        Capability::InspectRoom,
+        Capability::Coordinate,
+        Capability::AbandonIdleRequest,
+        Capability::PersistWorkflowDraft,
+        Capability::PromoteWorkflowDraft,
+        Capability::ApprovePermissionOnce,
+        Capability::ManageResourceLease,
+    ];
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker
+        .install_test_orchestrator(
+            ScriptedRoomAdapter {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                agent,
+            },
+            dir.clone(),
+        )
+        .unwrap();
+    let authorized = |worker: &Worker| {
+        BASELINE.map(|capability| {
+            worker.state.orchestrator_state().authorized(
+                room,
+                ParticipantId::Orchestrator,
+                capability,
+            )
+        })
+    };
+    let query = || {
+        OrchestratorCommand::Query(RoomQuery::WaitForChange {
+            after_revision: 0,
+            timeout_ms: 1,
+        })
+    };
+    let message = || {
+        OrchestratorCommand::Operation(RoomOperation::SendMessage(RoomMessage {
+            author: ParticipantId::Orchestrator,
+            to: RoomRecipient::Human,
+            text: "Please confirm the Room Brief".into(),
+            work: None,
+        }))
+    };
+    let lease = || {
+        OrchestratorCommand::Operation(RoomOperation::AcquireResource {
+            resource: "benchmark".into(),
+            ttl_ms: 1,
+        })
+    };
+    let assert_denied = |worker: &mut Worker, command: OrchestratorCommand| {
+        let before = worker.state.clone();
+        let settled = worker.settle_test_orchestrator_command(room, command);
+        assert_eq!(settled["ok"], false, "{settled}");
+        assert!(
+            settled["error"].as_str().unwrap().contains("capability"),
+            "{settled}"
+        );
+        assert_eq!(worker.state, before);
+    };
+
+    assert_eq!(authorized(&worker), [false; 7]);
+    for command in [query(), message(), lease()] {
+        assert_denied(&mut worker, command);
+    }
+    let proposed = worker.settle_test_orchestrator_command(
+        room,
+        OrchestratorCommand::Operation(RoomOperation::ProposeRoomBrief {
+            expected_revision: 0,
+            goal: "Ship the reviewed workflow".into(),
+            non_goals: "No orchestrator coding".into(),
+        }),
+    );
+    assert_eq!(proposed["ok"], true, "{proposed}");
+    assert_eq!(authorized(&worker), [false; 7]);
+    assert_denied(&mut worker, query());
+
+    let (revision, digest) = worker.state.room_brief_proposal(room).unwrap();
+    let confirm = BusCommand::ConfirmRoomBriefProposal(ConfirmRoomBriefProposal {
+        room_id: room,
+        expected_developer: ParticipantId::Human,
+        expected_proposal_revision: revision,
+        expected_proposal_digest: digest,
+    });
+    worker.command(confirm.clone(), &mpsc::channel().0).unwrap();
+    assert_eq!(authorized(&worker), [true; 7]);
+    let grants = durable(&worker.state)["orchestrator"]["grants"].clone();
+    assert_eq!(grants.as_array().unwrap().len(), BASELINE.len());
+    assert!(grants.as_array().unwrap().iter().all(|grant| {
+        grant["room_id"] == serde_json::to_value(room).unwrap()
+            && grant["participant"] == "orchestrator"
+            && grant["revision"] == 1
+            && grant["active"] == true
+    }));
+    let saved = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(durable(&saved)["orchestrator"]["grants"], grants);
+    assert!(saved.room_brief_confirmation(room).is_some());
+
+    let confirmed = worker.state.clone();
+    worker.command(confirm.clone(), &mpsc::channel().0).unwrap();
+    assert_eq!(worker.state, confirmed);
+    for command in [query(), message(), lease()] {
+        let settled = worker.settle_test_orchestrator_command(room, command);
+        assert_eq!(settled["ok"], true, "{settled}");
+    }
+
+    drop(worker);
+    let mut recovered = reopen(&dir);
+    assert_eq!(authorized(&recovered), [true; 7]);
+    assert_eq!(durable(&recovered.state)["orchestrator"]["grants"], grants);
+    let recovered_state = recovered.state.clone();
+    recovered.command(confirm, &mpsc::channel().0).unwrap();
+    assert_eq!(recovered.state, recovered_state);
+    drop(recovered);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn room_orchestrator_core_every_advertised_tool_settles_through_an_implemented_worker_path() {
+    use crate::bus::orchestrator::{Capability, ModelToolCall, OrchestratorToolRegistry};
+
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker
+        .install_test_orchestrator(
+            ScriptedRoomAdapter {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                agent,
+            },
+            dir.clone(),
+        )
+        .unwrap();
+    grant_orchestrator(
+        &mut worker,
+        room,
+        &[
+            Capability::InspectRoom,
+            Capability::Coordinate,
+            Capability::AbandonIdleRequest,
+            Capability::PersistWorkflowDraft,
+            Capability::PromoteWorkflowDraft,
+            Capability::ManageResourceLease,
+            Capability::ApprovePermissionOnce,
+        ],
+    );
+    let registry = OrchestratorToolRegistry;
+    for schema in registry.schemas() {
+        let arguments = match schema.name {
+            "inspect_work" => json!({"work_id": 1}),
+            "wait_for_change" => json!({"after_revision": 0, "timeout_ms": 1}),
+            "read_agent" => json!({"agent_id": agent.0, "source": "visible", "lines": null}),
+            "observe_permission_prompt" => json!({"agent_id": agent.0}),
+            "read_workflow_draft" => {
+                json!({"draft_id": "draft-0000000000000001", "max_bytes": 16})
+            }
+            "read_content" => json!({"kind": "system", "name": "system"}),
+            "send_message" => json!({"to": "human", "text": "Need a decision", "work_id": null}),
+            "propose_room_brief" => json!({
+                "expected_revision": 0,
+                "goal": "Ship the reviewed workflow",
+                "non_goals": "No orchestrator coding"
+            }),
+            "abandon_idle_request" => json!({
+                "request_id": 1,
+                "expected_agent": agent.0,
+                "expected_incarnation": 1,
+                "expected_semantic_revision": 0,
+                "expected_turn": null
+            }),
+            "persist_workflow_draft" => json!({
+                "draft_id": null,
+                "expected_revision": null,
+                "workflow_id": null,
+                "markdown": "# Sample SOP\n\n## Step\n\nRead facts.\n"
+            }),
+            "promote_workflow_draft" => json!({"approval_id": "approval-missing"}),
+            "acquire_resource" => json!({"resource": "benchmark", "ttl_ms": 1}),
+            "release_resource" => json!({"lease_id": 999}),
+            "approve_permission_once" => json!({"fingerprint": "forged", "response": "allow-once"}),
+            name => panic!("{name} needs a Worker-path settlement sample"),
+        };
+        let command = registry
+            .decode(ModelToolCall {
+                name: schema.name.into(),
+                arguments,
+            })
+            .unwrap();
+        let settled = worker.settle_test_orchestrator_command(room, command);
+        assert!(
+            !settled
+                .to_string()
+                .contains("unavailable on this runtime surface"),
+            "{}: {settled}",
+            schema.name
+        );
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 fn queue(worker: &mut Worker, room: RoomId, agent: AgentId, text: &str) -> RequestId {
@@ -932,7 +2350,8 @@ fn deferred_codex_start_and_final_survive_background_sessions_without_rebinding(
 }
 
 #[test]
-fn claude_background_stop_and_same_session_wakeup_settle_only_the_later_final() {
+fn room_orchestrator_core_claude_background_pending_and_trusted_continuation_update_work_settlement(
+) {
     let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
     let request = queue(&mut worker, room, agent, "review the plan");
     worker.submit_ready().unwrap();
@@ -954,6 +2373,17 @@ fn claude_background_stop_and_same_session_wakeup_settle_only_the_later_final() 
         RequestPhase::Active
     );
     assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+    let progress = worker.state.work_settlement(request).unwrap();
+    assert_eq!(
+        progress.provider_request_settlement,
+        crate::bus::orchestrator::ProviderRequestSettlement::Active
+    );
+    assert_eq!(
+        progress.callback_lineage.provider_turn.as_deref(),
+        Some("prompt-1")
+    );
+    assert!(!progress.has_final_reply);
+    let before_final_revision = worker.state.orchestrator_state().wake_revision(room);
 
     for value in [
         json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":"prompt-2","prompt":"<task-notification>reviewer-1 finished</task-notification>"}),
@@ -981,6 +2411,44 @@ fn claude_background_stop_and_same_session_wakeup_settle_only_the_later_final() 
     assert_eq!(
         worker.state.room(room).unwrap().latest_replies[&agent].text,
         "Ready"
+    );
+    let complete = worker.state.work_settlement(request).unwrap();
+    assert_eq!(
+        complete.provider_request_settlement,
+        crate::bus::orchestrator::ProviderRequestSettlement::Completed
+    );
+    assert_eq!(
+        complete.callback_lineage.provider_turn.as_deref(),
+        Some("prompt-2")
+    );
+    assert!(complete.has_final_reply);
+    let after_final_revision = worker.state.orchestrator_state().wake_revision(room);
+    assert!(
+        after_final_revision > before_final_revision,
+        "the durable provider Request settlement must wake the room orchestrator"
+    );
+    assert!(worker
+        .state
+        .orchestrator_state()
+        .context(room)
+        .facts
+        .iter()
+        .any(|fact| matches!(
+            fact,
+            crate::bus::orchestrator::JournalFact::RequestSettled {
+                request_id,
+                settlement: crate::bus::orchestrator::ProviderRequestSettlement::Completed,
+                ..
+            } if *request_id == request
+        )));
+    let reloaded = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        reloaded.orchestrator_state().wake_revision(room),
+        after_final_revision,
+        "settlement must remain queryable after the waiting CLI process exits or restarts"
     );
     assert!(callbacks::records(&dir.join("callbacks/launch"))
         .unwrap()

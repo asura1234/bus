@@ -1,7 +1,30 @@
 //! Dev commands execute on the existing single-writer coordinator.
 use super::*;
 use crate::bus::control::{Request as ControlRequest, Response};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PermissionFingerprintClaims {
+    room_id: RoomId,
+    agent_id: AgentId,
+    participant_incarnation: u64,
+    launch_id: String,
+    terminal_id: String,
+    session_id: String,
+    pane_id: String,
+    current_request: RequestId,
+    provider_turn: String,
+    content_revision: u64,
+    prompt_digest: String,
+}
+
+pub(super) struct PermissionCandidate {
+    claims: PermissionFingerprintClaims,
+    native: schema::AgentPermissionObservation,
+    fingerprint: String,
+}
 
 impl Worker {
     #[cfg(test)]
@@ -58,6 +81,8 @@ impl Worker {
             ),
             "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
             "agent.read" => (&["agent", "source", "lines"], false),
+            "agent.permission.observe" => (&["agent"], false),
+            "agent.permission.approve_once" => (&["agent", "fingerprint", "response"], true),
             "agent.focus" => (&["agent"], true),
             "message.send" => (&["room", "to", "text", "files"], true),
             "message.status" => (&["message"], false),
@@ -211,6 +236,25 @@ impl Worker {
                 optional_text(p, "source")?,
                 optional_u32(p, "lines")?,
             ),
+            "agent.permission.observe" => {
+                let agent = self.dev_agent(required(p, "agent")?, None)?;
+                let candidate = self.permission_candidate(agent)?;
+                Ok(permission_candidate_json(candidate))
+            }
+            "agent.permission.approve_once" => {
+                let agent_id = self.dev_agent(required(p, "agent")?, None)?;
+                if required(p, "response")? != "allow-once" {
+                    return Err("Response must be allow-once".into());
+                }
+                self.approve_permission_once(
+                    crate::bus::orchestrator::ParticipantId::Human,
+                    Some(agent_id),
+                    crate::bus::orchestrator::ExactPermissionGrant {
+                        fingerprint: required(p, "fingerprint")?.into(),
+                        response: crate::bus::orchestrator::ApprovedPermissionResponse::AllowOnce,
+                    },
+                )
+            }
             "message.send" => self.dev_send(p),
             "message.status" => {
                 let id = required(p, "message")?
@@ -389,21 +433,24 @@ impl Worker {
         )
     }
 
-    fn dev_read(
+    pub(super) fn dev_read(
         &mut self,
         id: AgentId,
         source: Option<&str>,
         lines: Option<u32>,
     ) -> Result<Value, String> {
         let read_source = match source {
-            None | Some("recent") => schema::ReadSource::Recent,
+            Some("recent") => schema::ReadSource::Recent,
             Some("visible") => schema::ReadSource::Visible,
+            None => return Err("Recent reads require an explicit positive lines value".into()),
             Some(_) => return Err("Source must be visible or recent".into()),
         };
         if read_source == schema::ReadSource::Visible && lines.is_some() {
             return Err("Visible reads return the complete viewport; omit lines".into());
         }
-        let inspect = source.is_some() || lines.is_some();
+        if read_source == schema::ReadSource::Recent && lines.is_none_or(|lines| lines == 0) {
+            return Err("Recent reads require an explicit positive lines value".into());
+        }
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let target = agent
             .runtime_identity
@@ -411,6 +458,13 @@ impl Worker {
             .clone()
             .ok_or("Agent has no terminal")?;
         let identity = agent.runtime_identity.clone();
+        if identity.launch_id.is_none()
+            || identity.terminal_id.is_none()
+            || identity.pane_id.is_none()
+            || identity.session_id.is_none()
+        {
+            return Err("Agent runtime identity is incomplete".into());
+        }
         let expected_name = format!("bus-r{}-a{}", agent.room_id.0, id.0);
         let name = agent.name.clone();
         let status = agent.status;
@@ -424,78 +478,73 @@ impl Worker {
         let ResponseResult::AgentInfo { agent: info } = response else {
             return Err("Unexpected native agent response".into());
         };
-        if Some(&info.terminal_id) != identity.terminal_id.as_ref()
-            || Some(&info.pane_id) != identity.pane_id.as_ref()
-            || info.name.as_deref() != Some(&expected_name)
-            || identity
-                .session_id
-                .as_ref()
-                .is_some_and(|s| info.agent_session.as_ref().is_none_or(|v| &v.value != s))
-        {
+        let identity_matches = |info: &schema::AgentInfo| {
+            Some(&info.terminal_id) == identity.terminal_id.as_ref()
+                && Some(&info.pane_id) == identity.pane_id.as_ref()
+                && info.name.as_deref() == Some(&expected_name)
+                && info
+                    .agent_session
+                    .as_ref()
+                    .map(|value| value.value.as_str())
+                    == identity.session_id.as_deref()
+        };
+        if !identity_matches(&info) {
             return Err("Agent terminal identity changed; inspect the owned session".into());
         }
-        const NATIVE_RECENT_COMPAT_LINES: u32 = 400;
         let native_lines = match read_source {
             schema::ReadSource::Visible => None,
-            schema::ReadSource::Recent if !inspect => Some(NATIVE_RECENT_COMPAT_LINES),
             schema::ReadSource::Recent => lines,
             _ => return Err("Source must be visible or recent".into()),
-        };
-        let viewport = if read_source == schema::ReadSource::Visible {
-            self.transport
-                .request(Method::PaneGet(schema::PaneTarget {
-                    pane_id: target.clone(),
-                }))
-                .ok()
-                .and_then(|response| match response {
-                    ResponseResult::PaneInfo { pane } => pane.scroll.map(|scroll| {
-                        json!({
-                            "rows": scroll.viewport_rows,
-                            "offset_from_bottom": scroll.offset_from_bottom,
-                            "max_offset_from_bottom": scroll.max_offset_from_bottom,
-                        })
-                    }),
-                    _ => None,
-                })
-        } else {
-            None
         };
         let output = self
             .transport
             .request(Method::AgentRead(schema::AgentReadParams {
-                target,
+                target: target.clone(),
                 source: read_source,
                 lines: native_lines,
                 format: schema::ReadFormat::Text,
                 strip_ansi: true,
             }))
             .map_err(|e| e.message)?;
-        if !inspect {
-            return Ok(json!({"agent_id":id,"runtime":info,"output":output}));
-        }
         let ResponseResult::PaneRead { read } = output else {
             return Err("Unexpected native read response".into());
         };
-        let returned_lines = snapshot_line_count(&read.text);
+        if read.pane_id != target
+            || read.source != read_source
+            || read.requested_lines != native_lines
+            || (read_source == schema::ReadSource::Visible
+                && (read.viewport_rows.is_none() || read.viewport_columns.is_none()))
+            || (read_source == schema::ReadSource::Recent
+                && (read.exhausted.is_none() || read.available_lines.is_none()))
+        {
+            return Err("Native terminal read facts did not match the requested surface".into());
+        }
+        let after = self
+            .transport
+            .request(Method::AgentGet(schema::AgentTarget { target }))
+            .map_err(|e| e.message)?;
+        let ResponseResult::AgentInfo { agent: after } = after else {
+            return Err("Unexpected native agent response".into());
+        };
+        if !identity_matches(&after) {
+            return Err("Agent terminal identity changed during read; text was discarded".into());
+        }
         let mut capture = json!({
             "at_ms": crate::bus::io::now_ms(),
             "source": if read_source == schema::ReadSource::Visible { "visible" } else { "recent" },
             "truncated": read.truncated,
-            "more": read.truncated,
             "revision": read.revision,
+            "returned_lines": read.returned_lines,
         });
         if read_source == schema::ReadSource::Visible {
-            if let Some(viewport) = viewport {
-                capture["viewport"] = viewport;
-            }
+            capture["viewport"] = json!({
+                "rows": read.viewport_rows,
+                "columns": read.viewport_columns,
+            });
         } else {
-            let exhausted = !read.truncated
-                && lines.is_some_and(|requested| returned_lines < u64::from(requested));
-            capture["requested_lines"] = json!(lines);
-            capture["lines"] = json!(native_lines);
-            capture["returned_lines"] = json!(returned_lines);
-            capture["exhausted"] = json!(exhausted);
-            capture["resumable"] = json!(read.truncated);
+            capture["requested_lines"] = json!(read.requested_lines);
+            capture["available_lines"] = json!(read.available_lines);
+            capture["exhausted"] = json!(read.exhausted);
         }
         Ok(json!({
             "agent_id": id,
@@ -512,6 +561,254 @@ impl Worker {
             "text": read.text,
         }))
     }
+
+    pub(super) fn approve_permission_once(
+        &mut self,
+        actor: crate::bus::orchestrator::ParticipantId,
+        expected_agent: Option<AgentId>,
+        grant: crate::bus::orchestrator::ExactPermissionGrant,
+    ) -> Result<Value, String> {
+        if grant.response != crate::bus::orchestrator::ApprovedPermissionResponse::AllowOnce {
+            return Err("Permission response is not allowlisted".into());
+        }
+        let claims = decode_permission_fingerprint(&grant.fingerprint)?;
+        if expected_agent.is_some_and(|agent| agent != claims.agent_id) {
+            return Err("Permission fingerprint targets another agent".into());
+        }
+        if !self.state.orchestrator_state().authorized(
+            claims.room_id,
+            actor.clone(),
+            crate::bus::orchestrator::Capability::ApprovePermissionOnce,
+        ) {
+            return Err("Participant lacks ApprovePermissionOnce capability".into());
+        }
+        let agent = self.state.agent(claims.agent_id).ok_or("Unknown agent")?;
+        let identity = &agent.runtime_identity;
+        let request = agent
+            .current_request
+            .ok_or("Agent has no current Request")?;
+        let turn = self
+            .state
+            .request(request)
+            .and_then(|request| request.provider_turn_id.as_deref())
+            .ok_or("Current Request has no provider turn")?;
+        if claims.room_id != agent.room_id
+            || claims.participant_incarnation != 1
+            || identity.launch_id.as_deref() != Some(claims.launch_id.as_str())
+            || identity.terminal_id.as_deref() != Some(claims.terminal_id.as_str())
+            || identity.session_id.as_deref() != Some(claims.session_id.as_str())
+            || identity.pane_id.as_deref() != Some(claims.pane_id.as_str())
+            || claims.current_request != request
+            || claims.provider_turn != turn
+        {
+            return Err("Permission fingerprint no longer matches Worker-owned room facts".into());
+        }
+        if self.state.orchestrator_state().has_operation_intent(
+            agent.room_id,
+            "approve_permission_once",
+            &grant.fingerprint,
+        ) {
+            return Err("Permission fingerprint was already used".into());
+        }
+        let room_id = agent.room_id;
+        let target = claims.pane_id.clone();
+        let mut intent_state = self.state.clone();
+        let intent = intent_state
+            .orchestrator_state_mut()
+            .begin_operation(
+                room_id,
+                actor,
+                "approve_permission_once",
+                &grant.fingerprint,
+            )
+            .map_err(|error| format!("Permission intent rejected: {error:?}"))?;
+        self.save(intent_state)?;
+        let native =
+            self.transport
+                .request(Method::AgentApproveOnce(schema::AgentApproveOnceParams {
+                    target,
+                    expected_terminal_id: claims.terminal_id,
+                    expected_pane_id: claims.pane_id,
+                    expected_session_id: claims.session_id,
+                    expected_content_revision: claims.content_revision,
+                    expected_prompt_digest: claims.prompt_digest,
+                    response: schema::ApprovedPermissionResponse::AllowOnce,
+                }));
+        let mut settled = self.state.clone();
+        match native {
+            Ok(ResponseResult::AgentApprovedOnce { approval }) if approval.written => {
+                settled
+                    .orchestrator_state_mut()
+                    .reconcile_operation(
+                        intent.operation_id,
+                        crate::bus::orchestrator::OperationResult::Applied {
+                            receipt_digest: grant.fingerprint,
+                        },
+                    )
+                    .map_err(|error| format!("Permission settlement failed: {error:?}"))?;
+                self.save(settled)?;
+                Ok(json!({
+                    "operation_id": intent.operation_id.0,
+                    "written": true,
+                    "single_use": true,
+                    "audit": approval,
+                }))
+            }
+            Ok(ResponseResult::AgentApprovedOnce { approval }) => {
+                settled
+                    .orchestrator_state_mut()
+                    .reconcile_operation(
+                        intent.operation_id,
+                        crate::bus::orchestrator::OperationResult::Rejected {
+                            code: approval
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| "not_written".into()),
+                        },
+                    )
+                    .map_err(|error| format!("Permission settlement failed: {error:?}"))?;
+                self.save(settled)?;
+                Err(format!(
+                    "Permission was not written: {}",
+                    approval.reason.unwrap_or_else(|| "prompt changed".into())
+                ))
+            }
+            Ok(_) => {
+                settled
+                    .orchestrator_state_mut()
+                    .mark_operation_uncertain(intent.operation_id, "unexpected native response")
+                    .map_err(|error| format!("Permission uncertainty failed: {error:?}"))?;
+                self.save(settled)?;
+                Err("Unexpected native permission response; outcome is uncertain".into())
+            }
+            Err(error) => {
+                settled
+                    .orchestrator_state_mut()
+                    .mark_operation_uncertain(intent.operation_id, &error.message)
+                    .map_err(|state_error| {
+                        format!("Permission uncertainty failed: {state_error:?}")
+                    })?;
+                self.save(settled)?;
+                Err(format!(
+                    "Permission outcome is uncertain: {}",
+                    error.message
+                ))
+            }
+        }
+    }
+
+    pub(super) fn permission_candidate(
+        &mut self,
+        id: AgentId,
+    ) -> Result<PermissionCandidate, String> {
+        let agent = self.state.agent(id).ok_or("Unknown agent")?;
+        let identity = agent.runtime_identity.clone();
+        let room_id = agent.room_id;
+        let current_request = agent
+            .current_request
+            .ok_or("Agent has no current Request")?;
+        let provider_turn = self
+            .state
+            .request(current_request)
+            .and_then(|request| request.provider_turn_id.clone())
+            .ok_or("Current Request has no provider turn")?;
+        let (Some(launch_id), Some(terminal_id), Some(session_id), Some(pane_id)) = (
+            identity.launch_id,
+            identity.terminal_id,
+            identity.session_id,
+            identity.pane_id,
+        ) else {
+            return Err("Agent runtime identity is incomplete".into());
+        };
+        let response = self
+            .transport
+            .request(Method::AgentPermissionObserve(schema::AgentTarget {
+                target: pane_id.clone(),
+            }))
+            .map_err(|error| error.message)?;
+        let ResponseResult::AgentPermission { observation } = response else {
+            return Err("Unexpected native permission response".into());
+        };
+        if observation.terminal_id != terminal_id
+            || observation.pane_id != pane_id
+            || observation.session_id != session_id
+            || !matches!(
+                observation.eligibility,
+                schema::PermissionEligibility::Allowlisted { .. }
+            )
+            || observation.allowed_responses != [schema::ApprovedPermissionResponse::AllowOnce]
+        {
+            return Err(
+                "Permission prompt is stale, unknown, risky, or outside the allowlist".into(),
+            );
+        }
+        let claims = PermissionFingerprintClaims {
+            room_id,
+            agent_id: id,
+            participant_incarnation: 1,
+            launch_id,
+            terminal_id,
+            session_id,
+            pane_id,
+            current_request,
+            provider_turn,
+            content_revision: observation.content_revision,
+            prompt_digest: observation.prompt_digest.clone(),
+        };
+        let fingerprint = encode_permission_fingerprint(&claims)?;
+        Ok(PermissionCandidate {
+            claims,
+            native: observation,
+            fingerprint,
+        })
+    }
+}
+
+fn encode_permission_fingerprint(claims: &PermissionFingerprintClaims) -> Result<String, String> {
+    use base64::Engine;
+    let payload = serde_json::to_vec(claims).map_err(|error| error.to_string())?;
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload);
+    let digest = format!("{:x}", Sha256::digest(&payload));
+    Ok(format!("v1.{encoded}.{digest}"))
+}
+
+fn decode_permission_fingerprint(value: &str) -> Result<PermissionFingerprintClaims, String> {
+    use base64::Engine;
+    let mut parts = value.split('.');
+    let (Some("v1"), Some(encoded), Some(expected), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err("Permission fingerprint is malformed".into());
+    };
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| "Permission fingerprint is malformed".to_owned())?;
+    let actual = format!("{:x}", Sha256::digest(&payload));
+    if actual != expected {
+        return Err("Permission fingerprint digest mismatch".into());
+    }
+    serde_json::from_slice(&payload).map_err(|_| "Permission fingerprint is malformed".into())
+}
+
+pub(super) fn permission_candidate_json(candidate: PermissionCandidate) -> Value {
+    json!({
+        "fingerprint": candidate.fingerprint,
+        "room_id": candidate.claims.room_id,
+        "agent_id": candidate.claims.agent_id,
+        "participant_incarnation": candidate.claims.participant_incarnation,
+        "launch_id": candidate.claims.launch_id,
+        "terminal_id": candidate.claims.terminal_id,
+        "session_id": candidate.claims.session_id,
+        "pane_id": candidate.claims.pane_id,
+        "current_request": candidate.claims.current_request,
+        "provider_turn": candidate.claims.provider_turn,
+        "content_revision": candidate.claims.content_revision,
+        "prompt_digest": candidate.claims.prompt_digest,
+        "prompt_text": candidate.native.prompt_text,
+        "eligibility": candidate.native.eligibility,
+        "allowed_responses": candidate.native.allowed_responses,
+        "observed_at_ms": crate::bus::io::now_ms(),
+    })
 }
 
 fn required<'a>(p: &'a Value, field: &str) -> Result<&'a str, String> {
@@ -540,13 +837,6 @@ fn optional_u32(p: &Value, field: &str) -> Result<Option<u32>, String> {
                 .ok_or_else(|| format!("Invalid {field}"))
         })
         .transpose()
-}
-fn snapshot_line_count(text: &str) -> u64 {
-    if text.is_empty() {
-        0
-    } else {
-        text.split_inclusive('\n').count() as u64
-    }
 }
 fn unique<T>(mut items: impl Iterator<Item = T>) -> Result<T, String> {
     let first = items.next().ok_or("No matching room or agent")?;

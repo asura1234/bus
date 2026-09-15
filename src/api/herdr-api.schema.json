@@ -1222,6 +1222,44 @@
     },
     "request": {
       "$defs": {
+        "AgentApproveOnceParams": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "expected_pane_id": {
+              "type": "string"
+            },
+            "expected_prompt_digest": {
+              "type": "string"
+            },
+            "expected_session_id": {
+              "type": "string"
+            },
+            "expected_terminal_id": {
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/schemas/request/$defs/ApprovedPermissionResponse"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "expected_terminal_id",
+            "expected_pane_id",
+            "expected_session_id",
+            "expected_content_revision",
+            "expected_prompt_digest",
+            "response"
+          ],
+          "type": "object"
+        },
         "AgentPromptIfIdleParams": {
           "description": "A separate method makes older servers reject the safety guard, never ignore it.",
           "properties": {
@@ -1748,6 +1786,12 @@
             "target"
           ],
           "type": "object"
+        },
+        "ApprovedPermissionResponse": {
+          "enum": [
+            "allow-once"
+          ],
+          "type": "string"
         },
         "ClientShellSurfaceSetParams": {
           "description": "Updates whether the requesting client shell receives and controls pane presentation.",
@@ -5431,6 +5475,38 @@
         {
           "properties": {
             "method": {
+              "const": "agent.permission.observe",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.approve_once",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentApproveOnceParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.explain",
               "type": "string"
             },
@@ -6605,11 +6681,39 @@
         },
         "PaneReadResult": {
           "properties": {
+            "available_lines": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "exhausted": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "format": {
               "$ref": "#/schemas/subscription_event/$defs/ReadFormat"
             },
             "pane_id": {
               "type": "string"
+            },
+            "requested_lines": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "returned_lines": {
+              "default": 0,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
             },
             "revision": {
               "format": "uint64",
@@ -6627,6 +6731,24 @@
             },
             "truncated": {
               "type": "boolean"
+            },
+            "viewport_columns": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "viewport_rows": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "workspace_id": {
               "type": "string"
@@ -6744,6 +6866,27 @@
     },
     "success_response": {
       "$defs": {
+        "AgentApproveOnceResult": {
+          "properties": {
+            "observation": {
+              "$ref": "#/schemas/success_response/$defs/AgentPermissionObservation"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "written": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "written",
+            "observation"
+          ],
+          "type": "object"
+        },
         "AgentInfo": {
           "properties": {
             "agent": {
@@ -6931,6 +7074,50 @@
           ],
           "type": "object"
         },
+        "AgentPermissionObservation": {
+          "properties": {
+            "allowed_responses": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/ApprovedPermissionResponse"
+              },
+              "type": "array"
+            },
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "eligibility": {
+              "$ref": "#/schemas/success_response/$defs/PermissionEligibility"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "prompt_digest": {
+              "type": "string"
+            },
+            "prompt_text": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "pane_id",
+            "session_id",
+            "content_revision",
+            "prompt_digest",
+            "prompt_text",
+            "eligibility",
+            "allowed_responses"
+          ],
+          "type": "object"
+        },
         "AgentSessionInfo": {
           "properties": {
             "agent": {
@@ -6968,6 +7155,12 @@
             "blocked",
             "done",
             "unknown"
+          ],
+          "type": "string"
+        },
+        "ApprovedPermissionResponse": {
+          "enum": [
+            "allow-once"
           ],
           "type": "string"
         },
@@ -8504,11 +8697,39 @@
         },
         "PaneReadResult": {
           "properties": {
+            "available_lines": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "exhausted": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "format": {
               "$ref": "#/schemas/success_response/$defs/ReadFormat"
             },
             "pane_id": {
               "type": "string"
+            },
+            "requested_lines": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "returned_lines": {
+              "default": 0,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
             },
             "revision": {
               "format": "uint64",
@@ -8526,6 +8747,24 @@
             },
             "truncated": {
               "type": "boolean"
+            },
+            "viewport_columns": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "viewport_rows": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "workspace_id": {
               "type": "string"
@@ -8742,6 +8981,54 @@
             "layout"
           ],
           "type": "object"
+        },
+        "PermissionEligibility": {
+          "oneOf": [
+            {
+              "properties": {
+                "action": {
+                  "$ref": "#/schemas/success_response/$defs/SafePermissionAction"
+                },
+                "kind": {
+                  "const": "allowlisted",
+                  "type": "string"
+                },
+                "root": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "action",
+                "root"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "unknown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
+                  "const": "risky",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
         },
         "PluginActionContext": {
           "enum": [
@@ -9668,6 +9955,38 @@
               "required": [
                 "type",
                 "agents"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "observation": {
+                  "$ref": "#/schemas/success_response/$defs/AgentPermissionObservation"
+                },
+                "type": {
+                  "const": "agent_permission",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "observation"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "approval": {
+                  "$ref": "#/schemas/success_response/$defs/AgentApproveOnceResult"
+                },
+                "type": {
+                  "const": "agent_approved_once",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "approval"
               ],
               "type": "object"
             },
@@ -10660,6 +10979,12 @@
               "type": "object"
             }
           ]
+        },
+        "SafePermissionAction": {
+          "enum": [
+            "read_only_inspection"
+          ],
+          "type": "string"
         },
         "ServerCapabilities": {
           "properties": {

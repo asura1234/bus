@@ -457,6 +457,16 @@ impl TerminalRuntime {
         self.0.try_send_bytes(bytes)
     }
 
+    pub(crate) fn try_approve_permission_once(
+        &self,
+        expected_revision: u64,
+        expected_prompt_digest: &str,
+        response: Bytes,
+    ) -> Result<bool, mpsc::error::TrySendError<Bytes>> {
+        self.0
+            .try_approve_permission_once(expected_revision, expected_prompt_digest, response)
+    }
+
     pub fn queue_user_input_submission(
         &self,
         text: Bytes,
@@ -509,6 +519,14 @@ impl TerminalRuntime {
             }
         }
         None
+    }
+
+    pub(crate) fn visible_text_snapshot_with_seq(&self) -> Option<(String, u64)> {
+        self.0.visible_text_snapshot_with_seq()
+    }
+
+    pub(crate) fn visible_text_snapshot_with_dimensions(&self) -> Option<(String, u16, u16, u64)> {
+        self.0.visible_text_snapshot_with_dimensions()
     }
 
     pub fn encode_mouse_button(

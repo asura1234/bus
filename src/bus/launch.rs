@@ -325,13 +325,15 @@ pub(crate) fn prepare(
         install_hooks(&settings, input.provider, binary)?;
         args.extend(["--settings".into(), settings.to_string_lossy().into_owned()]);
     }
-    let env = HashMap::from([
+    let discovery = super::trusted_assignment::prepare_discovery(data_dir, agent_id, &launch_id)?;
+    let mut env = HashMap::from([
         ("BUS_LAUNCH_ID".into(), launch_id),
         (
             "BUS_CALLBACK_DIR".into(),
             spool.to_string_lossy().into_owned(),
         ),
     ]);
+    env.extend(discovery.env(binary));
     Ok(PreparedLaunch {
         cwd,
         args,

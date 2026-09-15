@@ -6,6 +6,40 @@ use std::path::{Path, PathBuf};
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
+    pub(crate) orchestrator: OrchestratorSettings,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub(crate) struct OrchestratorSettings {
+    pub(crate) enabled: bool,
+    pub(crate) model: OrchestratorModelSetting,
+    pub(crate) content_selector: OrchestratorContentSetting,
+}
+
+impl Default for OrchestratorSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: OrchestratorModelSetting::DeepSeekV41Flash,
+            content_selector: OrchestratorContentSetting::Production,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum OrchestratorModelSetting {
+    #[default]
+    DeepSeekV41Flash,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum OrchestratorContentSetting {
+    TestAgentLed,
+    #[default]
+    Production,
 }
 
 /// Registry sessions share one file beside the registry; an explicit
@@ -62,6 +96,7 @@ mod tests {
 
         let enabled = BusSettings {
             color_blind_mode: true,
+            ..BusSettings::default()
         };
         save(&path, enabled).unwrap();
         assert_eq!(load(&path), Ok(enabled));

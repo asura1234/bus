@@ -770,4 +770,16 @@ pub struct PaneReadResult {
     pub text: String,
     pub revision: u64,
     pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport_rows: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport_columns: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_lines: Option<u32>,
+    #[serde(default)]
+    pub returned_lines: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_lines: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exhausted: Option<bool>,
 }

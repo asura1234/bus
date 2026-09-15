@@ -87,6 +87,54 @@ printf '%s\\n' "$@" > "$FAKE_HERDR_ARGS"
         self.assertEqual(result.returncode, 17)
         self.assertFalse(self.herdr_args.exists())
 
+    def test_dev_control_uses_existing_binary_without_building(self) -> None:
+        result = self._run("dev-control", "agent", "read", "3", "--source", "recent", "--lines", "5000")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.cargo_args.exists())
+        self.assertEqual(
+            self.herdr_args.read_text(encoding="utf-8").splitlines(),
+            ["--bus", "--dev", "agent", "read", "3", "--source", "recent", "--lines", "5000"],
+        )
+
+    def test_dev_control_preserves_typed_permission_cli_shape_without_raw_keys(self) -> None:
+        result = self._run(
+            "dev-control",
+            "agent",
+            "approve-once",
+            "3",
+            "--fingerprint",
+            "v1.bound.digest",
+            "--response",
+            "allow-once",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.cargo_args.exists())
+        self.assertEqual(
+            self.herdr_args.read_text(encoding="utf-8").splitlines(),
+            [
+                "--bus",
+                "--dev",
+                "agent",
+                "approve-once",
+                "3",
+                "--fingerprint",
+                "v1.bound.digest",
+                "--response",
+                "allow-once",
+            ],
+        )
+        self.assertNotIn("send-keys", self.herdr_args.read_text(encoding="utf-8"))
+
+    def test_dev_control_fails_closed_when_debug_binary_is_missing(self) -> None:
+        (self.root / "target" / "debug" / "herdr").unlink()
+        result = self._run("dev-control", "state")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("debug binary is missing", result.stderr)
+        self.assertFalse(self.cargo_args.exists())
+
     def test_old_build_dev_syntax_is_rejected_with_the_current_usage(self) -> None:
         result = self._run("build", "dev")
 

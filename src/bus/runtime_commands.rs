@@ -48,6 +48,18 @@ impl Worker {
                 let requests = state
                     .submit_draft(room, crate::bus::io::now_ms())
                     .map_err(|e| e.to_string())?;
+                if let Some(message_id) = requests
+                    .first()
+                    .and_then(|request| state.request(*request))
+                    .map(|request| request.prompt.id.0)
+                {
+                    state.orchestrator_state_mut().record_fact(
+                        room,
+                        crate::bus::orchestrator::JournalFact::HumanMessage {
+                            message_id: crate::bus::orchestrator::RoomMessageId(message_id),
+                        },
+                    );
+                }
                 self.save(state)?;
                 for id in requests {
                     super::super::diagnostics::request(
@@ -76,6 +88,29 @@ impl Worker {
                 } else {
                     state.set_agent_error(id,Some("Awaiting matching provider session-start hook. Trust all Bus hooks, then restart/resume normally.".into()))
                 }
+            }
+            BusCommand::ConfirmRoomBriefProposal(command) => {
+                let room_id = command.room_id;
+                let receipt = state
+                    .confirm_room_brief_proposal(command)
+                    .map_err(|error| error.to_string())?;
+                state.orchestrator_state_mut().record_fact(
+                    room_id,
+                    crate::bus::orchestrator::JournalFact::RoomBriefConfirmed {
+                        confirmation_id: receipt.confirmation_id,
+                    },
+                );
+                if state == self.state {
+                    return Ok(());
+                }
+                self.save(state)?;
+                return Ok(());
+            }
+            BusCommand::CreateDeveloperWorkflowApproval(command) => {
+                return self.create_developer_workflow_approval(command);
+            }
+            BusCommand::MessageOrchestrator(message) => {
+                return self.message_orchestrator(message);
             }
             BusCommand::Suggestions {
                 query_id,

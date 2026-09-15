@@ -3,8 +3,9 @@ use std::time::Duration;
 use bytes::Bytes;
 
 use crate::api::schema::{
-    AgentPromptParams, AgentRenameParams, AgentSendKeysParams, AgentStartParams, AgentTarget,
-    PaneReadResult, ResponseResult,
+    AgentApproveOnceParams, AgentPermissionObservation, AgentPromptParams, AgentRenameParams,
+    AgentSendKeysParams, AgentStartParams, AgentTarget, ApprovedPermissionResponse, PaneReadResult,
+    PermissionEligibility, ResponseResult, SafePermissionAction,
 };
 use crate::app::App;
 
@@ -408,8 +409,113 @@ impl App {
                     source: params.source,
                     format: params.format,
                     text: snapshot.text,
-                    revision: 0,
+                    revision: snapshot.revision,
                     truncated: snapshot.truncated,
+                    viewport_rows: snapshot.viewport_rows,
+                    viewport_columns: snapshot.viewport_columns,
+                    requested_lines: snapshot.requested_lines,
+                    returned_lines: snapshot.returned_lines,
+                    available_lines: snapshot.available_lines,
+                    exhausted: snapshot.exhausted,
+                },
+            },
+        )
+    }
+
+    pub(super) fn handle_agent_permission_observe(
+        &mut self,
+        id: String,
+        target: AgentTarget,
+    ) -> String {
+        self.reconcile_managed_agent_target(&target.target);
+        let agent = match self.agent_info_for_target(&target.target) {
+            Ok(agent) => agent,
+            Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
+        };
+        let resolved = match self.resolve_agent_target(&target.target) {
+            Ok(resolved) => resolved,
+            Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
+        };
+        let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
+            return agent_not_found(id, &target.target);
+        };
+        let Some(observation) = permission_observation(&agent, runtime) else {
+            return encode_error(
+                id,
+                "permission_observation_unavailable",
+                "Agent permission surface changed while it was being observed",
+            );
+        };
+        encode_success(id, ResponseResult::AgentPermission { observation })
+    }
+
+    pub(super) fn handle_agent_approve_once(
+        &mut self,
+        id: String,
+        params: AgentApproveOnceParams,
+    ) -> String {
+        self.reconcile_managed_agent_target(&params.target);
+        let agent = match self.agent_info_for_target(&params.target) {
+            Ok(agent) => agent,
+            Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
+        };
+        if agent.terminal_id != params.expected_terminal_id
+            || agent.pane_id != params.expected_pane_id
+            || agent
+                .agent_session
+                .as_ref()
+                .map(|session| session.value.as_str())
+                != Some(params.expected_session_id.as_str())
+            || params.expected_session_id.is_empty()
+        {
+            return encode_error(
+                id,
+                "agent_identity_changed",
+                "Agent terminal, pane, or session identity changed; no permission response was sent",
+            );
+        }
+        let resolved = match self.resolve_agent_target(&params.target) {
+            Ok(resolved) => resolved,
+            Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
+        };
+        let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
+            return agent_not_found(id, &params.target);
+        };
+        let response = match (agent.agent.as_deref(), params.response) {
+            (Some("codex"), ApprovedPermissionResponse::AllowOnce) => Bytes::from_static(b"1\r"),
+            (Some("claude" | "cursor"), ApprovedPermissionResponse::AllowOnce) => {
+                Bytes::from_static(b"\r")
+            }
+            _ => {
+                return encode_error(
+                    id,
+                    "unsupported_permission_response",
+                    "The active provider has no audited allow-once response",
+                )
+            }
+        };
+        let written = match runtime.try_approve_permission_once(
+            params.expected_content_revision,
+            &params.expected_prompt_digest,
+            response,
+        ) {
+            Ok(written) => written,
+            Err(error) => return encode_error(id, "permission_write_failed", error.to_string()),
+        };
+        let Some(observation) = permission_observation(&agent, runtime) else {
+            return encode_error(
+                id,
+                "permission_observation_unavailable",
+                "Agent permission surface changed while its result was being reported",
+            );
+        };
+        encode_success(
+            id,
+            ResponseResult::AgentApprovedOnce {
+                approval: crate::api::schema::AgentApproveOnceResult {
+                    written,
+                    reason: (!written).then(|| "stale_or_changed_prompt".into()),
+                    observation,
                 },
             },
         )
@@ -530,6 +636,48 @@ impl App {
 
         encode_success(id, ResponseResult::Ok {})
     }
+}
+
+fn permission_observation(
+    agent: &crate::api::schema::AgentInfo,
+    runtime: &crate::terminal::TerminalRuntime,
+) -> Option<AgentPermissionObservation> {
+    let (prompt_text, content_revision) = runtime.visible_text_snapshot_with_seq()?;
+    let session_id = agent.agent_session.as_ref()?.value.clone();
+    let command = crate::api::schema::safe_permission_command(&prompt_text);
+    let eligibility = command.map_or_else(
+        || {
+            if prompt_text.to_ascii_lowercase().contains("permission")
+                || prompt_text.to_ascii_lowercase().contains("allow")
+            {
+                PermissionEligibility::Risky
+            } else {
+                PermissionEligibility::Unknown
+            }
+        },
+        |_| PermissionEligibility::Allowlisted {
+            action: SafePermissionAction::ReadOnlyInspection,
+            root: agent
+                .foreground_cwd
+                .clone()
+                .or_else(|| agent.cwd.clone())
+                .unwrap_or_else(|| agent.workspace_id.clone()),
+        },
+    );
+    let allowed_responses = matches!(eligibility, PermissionEligibility::Allowlisted { .. })
+        .then_some(ApprovedPermissionResponse::AllowOnce)
+        .into_iter()
+        .collect();
+    Some(AgentPermissionObservation {
+        terminal_id: agent.terminal_id.clone(),
+        pane_id: agent.pane_id.clone(),
+        session_id,
+        content_revision,
+        prompt_digest: crate::api::schema::permission_prompt_digest(&prompt_text),
+        prompt_text,
+        eligibility,
+        allowed_responses,
+    })
 }
 
 fn agent_not_ready(id: String, target: &str) -> String {
@@ -1065,6 +1213,114 @@ mod tests {
         assert!(matches!(success.result, ResponseResult::Ok {}));
         assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\x1b[A\r"));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn agent_approve_once_safe_prompt_is_atomic_and_fixed_response() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_agent_name("reviewer".into());
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Blocked);
+        terminal.set_agent_session_ref(
+            "bus".into(),
+            "codex".into(),
+            crate::agent_resume::AgentSessionRef::id("session"),
+            Some(1),
+        );
+        let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        runtime.test_process_pty_bytes(b"Allow read-only command: rg --files");
+        app.state.insert_test_runtime(pane_id, runtime);
+        let info = app.agent_info(0, pane_id).unwrap();
+        let observed = app.handle_agent_permission_observe(
+            "observe".into(),
+            AgentTarget {
+                target: "reviewer".into(),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&observed).unwrap();
+        let ResponseResult::AgentPermission { observation } = success.result else {
+            panic!("unexpected observation response");
+        };
+        assert!(matches!(
+            observation.eligibility,
+            PermissionEligibility::Allowlisted { .. }
+        ));
+        let approved = app.handle_agent_approve_once(
+            "approve".into(),
+            AgentApproveOnceParams {
+                target: "reviewer".into(),
+                expected_terminal_id: info.terminal_id,
+                expected_pane_id: info.pane_id,
+                expected_session_id: "session".into(),
+                expected_content_revision: observation.content_revision,
+                expected_prompt_digest: observation.prompt_digest,
+                response: ApprovedPermissionResponse::AllowOnce,
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&approved).unwrap();
+        let ResponseResult::AgentApprovedOnce { approval } = success.result else {
+            panic!("unexpected approval response");
+        };
+        assert!(approval.written);
+        assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"1\r"));
+        assert!(writes.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn agent_approve_once_content_race_fails_closed_without_keys() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_agent_name("reviewer".into());
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Blocked);
+        terminal.set_agent_session_ref(
+            "bus".into(),
+            "codex".into(),
+            crate::agent_resume::AgentSessionRef::id("session"),
+            Some(1),
+        );
+        let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        runtime.test_process_pty_bytes(b"Allow read-only command: rg --files");
+        app.state.insert_test_runtime(pane_id, runtime);
+        let observed = app.handle_agent_permission_observe(
+            "observe".into(),
+            AgentTarget {
+                target: "reviewer".into(),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&observed).unwrap();
+        let ResponseResult::AgentPermission { observation } = success.result else {
+            panic!()
+        };
+        app.lookup_runtime_sender(0, pane_id)
+            .unwrap()
+            .test_process_pty_bytes(b"\r\nAllow shell command: rm -rf build");
+        let rejected = app.handle_agent_approve_once(
+            "approve".into(),
+            AgentApproveOnceParams {
+                target: "reviewer".into(),
+                expected_terminal_id: observation.terminal_id,
+                expected_pane_id: observation.pane_id,
+                expected_session_id: observation.session_id,
+                expected_content_revision: observation.content_revision,
+                expected_prompt_digest: observation.prompt_digest,
+                response: ApprovedPermissionResponse::AllowOnce,
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&rejected).unwrap();
+        let ResponseResult::AgentApprovedOnce { approval } = success.result else {
+            panic!()
+        };
+        assert!(!approval.written);
+        assert_eq!(approval.reason.as_deref(), Some("stale_or_changed_prompt"));
+        assert!(writes.try_recv().is_err());
     }
 
     #[tokio::test]

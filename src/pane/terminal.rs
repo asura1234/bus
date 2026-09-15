@@ -5382,7 +5382,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_text_snapshot_honors_line_requests_above_one_thousand() {
+    fn room_orchestrator_core_recent_text_snapshot_honors_requests_above_one_thousand() {
         let (tx, _rx) = mpsc::channel(4);
         let mut terminal = crate::ghostty::Terminal::new(80, 3, 10_000_000).unwrap();
         write_numbered_lines(&mut terminal, 1500);
@@ -5408,7 +5408,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_snapshots_report_omitted_rendered_rows() {
+    fn room_orchestrator_core_recent_snapshots_report_omitted_rendered_rows() {
         let (tx, _rx) = mpsc::channel(4);
         let mut terminal = crate::ghostty::Terminal::new(20, 3, 100).unwrap();
         terminal.write(b"one\r\ntwo\r\nthree\r\nfour");

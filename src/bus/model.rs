@@ -157,10 +157,20 @@ pub(crate) struct Draft {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Prompt {
     pub(crate) id: PromptId,
+    #[serde(default = "human_participant")]
+    pub(crate) author: crate::bus::orchestrator::ParticipantId,
+    #[serde(default)]
+    pub(crate) work_id: Option<crate::bus::orchestrator::WorkId>,
     pub(crate) text: String,
     pub(crate) files: Vec<PathBuf>,
     pub(crate) recipient_ids: AgentRecipients,
     pub(crate) submitted_at_ms: u64,
+    #[serde(default)]
+    pub(crate) trusted_assignment_frame: Option<String>,
+}
+
+fn human_participant() -> crate::bus::orchestrator::ParticipantId {
+    crate::bus::orchestrator::ParticipantId::Human
 }
 
 impl Prompt {
@@ -179,11 +189,15 @@ impl Prompt {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        match (text.is_empty(), quoted_files.is_empty()) {
+        let untrusted = match (text.is_empty(), quoted_files.is_empty()) {
             (false, false) => format!("{text}\n{quoted_files}"),
             (false, true) => text,
             (true, false) => quoted_files,
             (true, true) => String::new(),
+        };
+        match &self.trusted_assignment_frame {
+            Some(frame) => super::trusted_assignment::render_payload(frame, &untrusted),
+            None => untrusted,
         }
     }
 
@@ -219,6 +233,47 @@ pub(crate) struct Room {
     pub(crate) latest_replies: BTreeMap<AgentId, Reply>,
     #[serde(default)]
     pub(crate) deletion_pending: bool,
+    #[serde(default)]
+    pub(crate) brief: RoomBrief,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct RoomBrief {
+    pub(crate) goal: String,
+    pub(crate) non_goals: String,
+    pub(crate) revision: u64,
+    pub(crate) approved_revision: u64,
+    pub(crate) locked: bool,
+}
+
+impl RoomBrief {
+    pub(crate) fn proposal_digest(&self) -> String {
+        let mut canonical = b"ROOM_BRIEF_PROPOSAL_V1\0".to_vec();
+        canonical.extend_from_slice(&self.revision.to_be_bytes());
+        for field in [&self.goal, &self.non_goals] {
+            canonical.extend_from_slice(&(field.len() as u64).to_be_bytes());
+            canonical.extend_from_slice(field.as_bytes());
+        }
+        crate::bus::io::digest(&canonical)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ParticipantAssignmentFacts {
+    pub(crate) room_id: RoomId,
+    pub(crate) work_id: Option<u64>,
+    pub(crate) message_id: u64,
+    pub(crate) request_id: RequestId,
+    pub(crate) author: crate::bus::orchestrator::ParticipantId,
+    pub(crate) agent_id: AgentId,
+    pub(crate) recipient_incarnation: u64,
+    pub(crate) provider_launch_id: String,
+    pub(crate) brief_revision: u64,
+    pub(crate) approved_revision: u64,
+    pub(crate) locked: bool,
+    pub(crate) goal: String,
+    pub(crate) non_goals: String,
+    pub(crate) content_bundle_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -403,6 +458,13 @@ pub(crate) struct BusState {
     consumed_callback_ids: BTreeSet<String>,
     consumed_provider_turns: BTreeSet<String>,
     visible_room: Option<RoomId>,
+    /// Room-process facts share the Bus document and therefore the Worker writer.
+    #[serde(default)]
+    orchestrator: crate::bus::orchestrator::OrchestratorState,
+    /// Recomputed by the Worker from confined repository files; never persisted as a second SOT.
+    #[serde(skip)]
+    workflow_promotion_reviews:
+        BTreeMap<RoomId, Vec<crate::bus::workflow_drafts::WorkflowPromotionReview>>,
 }
 
 fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, Agent>, D::Error>
@@ -467,7 +529,95 @@ impl BusState {
             consumed_callback_ids: BTreeSet::new(),
             consumed_provider_turns: BTreeSet::new(),
             visible_room: None,
+            orchestrator: crate::bus::orchestrator::OrchestratorState::default(),
+            workflow_promotion_reviews: BTreeMap::new(),
         }
+    }
+
+    pub(crate) fn orchestrator_state(&self) -> &crate::bus::orchestrator::OrchestratorState {
+        &self.orchestrator
+    }
+
+    pub(crate) fn orchestrator_state_mut(
+        &mut self,
+    ) -> &mut crate::bus::orchestrator::OrchestratorState {
+        &mut self.orchestrator
+    }
+
+    pub(crate) fn room_brief_proposal(&self, room: RoomId) -> Option<(u64, String)> {
+        let brief = &self.rooms.get(&room)?.brief;
+        (!brief.locked && brief.revision > 0 && !brief.goal.trim().is_empty())
+            .then(|| (brief.revision, brief.proposal_digest()))
+    }
+
+    pub(crate) fn room_brief_confirmation(
+        &self,
+        room: RoomId,
+    ) -> Option<&crate::bus::orchestrator::RoomBriefConfirmationReceipt> {
+        self.orchestrator.room_brief_confirmation(room)
+    }
+
+    pub(crate) fn workflow_promotion_reviews(
+        &self,
+        room: RoomId,
+    ) -> &[crate::bus::workflow_drafts::WorkflowPromotionReview] {
+        self.workflow_promotion_reviews
+            .get(&room)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Returns whether the Worker-published review projection changed.
+    pub(crate) fn set_workflow_promotion_reviews(
+        &mut self,
+        reviews: BTreeMap<RoomId, Vec<crate::bus::workflow_drafts::WorkflowPromotionReview>>,
+    ) -> bool {
+        let changed = self.workflow_promotion_reviews != reviews;
+        self.workflow_promotion_reviews = reviews;
+        changed
+    }
+
+    pub(crate) fn developer_workflow_approvals(
+        &self,
+        room: RoomId,
+    ) -> Vec<&crate::bus::workflow_drafts::DeveloperWorkflowApproval> {
+        self.orchestrator
+            .workflow_drafts()
+            .approvals()
+            .filter(|approval| approval.room_id == room)
+            .collect()
+    }
+
+    pub(crate) fn room_messages(
+        &self,
+        room: RoomId,
+    ) -> impl Iterator<Item = &crate::bus::orchestrator::RoomMessageRecord> {
+        self.orchestrator.room_messages(room)
+    }
+
+    /// Records a room message that is not a coding-agent Request.
+    pub(crate) fn record_room_message(
+        &mut self,
+        room: RoomId,
+        message: crate::bus::orchestrator::RoomMessage,
+    ) -> Result<crate::bus::orchestrator::RoomMessageId, ModelError> {
+        let room_state = self.rooms.get(&room).ok_or(ModelError::UnknownRoom(room))?;
+        if room_state.deletion_pending {
+            return Err(ModelError::DeletionPending);
+        }
+        if message.text.trim().is_empty() {
+            return Err(ModelError::EmptyPrompt);
+        }
+        // Prompts and room messages share one identity space, so a HumanMessage wake
+        // for one can never deduplicate against the other.
+        let message_id = crate::bus::orchestrator::RoomMessageId(self.allocate_id());
+        self.orchestrator
+            .record_room_message(crate::bus::orchestrator::RoomMessageRecord {
+                room_id: room,
+                message_id,
+                message,
+            });
+        Ok(message_id)
     }
 
     fn allocate_id(&mut self) -> u64 {
@@ -490,6 +640,7 @@ impl BusState {
                 latest_prompt: None,
                 latest_replies: BTreeMap::new(),
                 deletion_pending: false,
+                brief: RoomBrief::default(),
             },
         );
         Ok(id)
@@ -697,6 +848,56 @@ impl BusState {
         self.requests.values()
     }
 
+    pub(crate) fn work_settlement(
+        &self,
+        request_id: RequestId,
+    ) -> Option<crate::bus::orchestrator::WorkSettlement> {
+        use crate::bus::orchestrator::{
+            CallbackLineage, ParticipantId, ProviderRequestSettlement, RoomMessageId,
+            WorkSettlement,
+        };
+
+        let request = self.requests.get(&request_id)?;
+        self.agents.get(&request.agent_id)?;
+        let provider_request_settlement = match request.phase {
+            RequestPhase::Queued => ProviderRequestSettlement::Queued,
+            RequestPhase::Submitting => ProviderRequestSettlement::Submitting,
+            RequestPhase::Active => ProviderRequestSettlement::Active,
+            RequestPhase::Completed => ProviderRequestSettlement::Completed,
+            RequestPhase::Abandoned => ProviderRequestSettlement::Abandoned,
+        };
+        let queue_position = self.queues.get(&request.agent_id).and_then(|queue| {
+            queue
+                .iter()
+                .position(|queued| *queued == request_id)
+                .map(|position| position as u64 + 1)
+        });
+        let has_final_reply = self
+            .rooms
+            .get(&request.room_id)
+            .and_then(|room| room.latest_replies.get(&request.agent_id))
+            .is_some_and(|reply| reply.request_id == request_id);
+        Some(WorkSettlement {
+            room_id: request.room_id,
+            work_id: request.prompt.work_id,
+            participant: ParticipantId::Agent(request.agent_id),
+            message_id: RoomMessageId(request.prompt.id.0),
+            request_id,
+            operation_id: None,
+            semantic_revision: self.orchestrator_state().wake_revision(request.room_id),
+            provider_request_settlement,
+            callback_lineage: CallbackLineage {
+                provider_session: request.provider_session_id.clone(),
+                provider_turn: request.provider_turn_id.clone(),
+                provider_prompt: request.provider_prompt_id.clone(),
+                trusted_start_bound: request.trusted_start_bound,
+            },
+            has_final_reply,
+            queue_position,
+            uncertain: request.uncertain_outcome,
+        })
+    }
+
     pub(crate) fn update_agent_runtime_metadata(
         &mut self,
         id: AgentId,
@@ -830,6 +1031,23 @@ impl BusState {
         draft: Draft,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
+        self.submit_message_from(
+            room,
+            draft,
+            crate::bus::orchestrator::ParticipantId::Human,
+            None,
+            now_ms,
+        )
+    }
+
+    pub(crate) fn submit_message_from(
+        &mut self,
+        room: RoomId,
+        draft: Draft,
+        author: crate::bus::orchestrator::ParticipantId,
+        work_id: Option<crate::bus::orchestrator::WorkId>,
+        now_ms: u64,
+    ) -> Result<Vec<RequestId>, ModelError> {
         let original = self
             .rooms
             .get(&room)
@@ -840,7 +1058,7 @@ impl BusState {
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
             .draft = draft;
-        let result = self.submit_draft(room, now_ms);
+        let result = self.submit_draft_from(room, author, work_id, now_ms);
         self.rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
@@ -851,6 +1069,21 @@ impl BusState {
     pub(crate) fn submit_draft(
         &mut self,
         room: RoomId,
+        now_ms: u64,
+    ) -> Result<Vec<RequestId>, ModelError> {
+        self.submit_draft_from(
+            room,
+            crate::bus::orchestrator::ParticipantId::Human,
+            None,
+            now_ms,
+        )
+    }
+
+    fn submit_draft_from(
+        &mut self,
+        room: RoomId,
+        author: crate::bus::orchestrator::ParticipantId,
+        work_id: Option<crate::bus::orchestrator::WorkId>,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
         let room_state = self.rooms.get(&room).ok_or(ModelError::UnknownRoom(room))?;
@@ -879,10 +1112,13 @@ impl BusState {
 
         let prompt = Prompt {
             id: PromptId(self.allocate_id()),
+            author,
+            work_id,
             text: draft.text,
             files: draft.files,
             recipient_ids: draft.recipient_ids,
             submitted_at_ms: now_ms,
+            trusted_assignment_frame: None,
         };
         let mut request_ids = Vec::with_capacity(prompt.recipient_ids.len());
         for agent_id in prompt.recipient_ids.iter().copied() {
@@ -918,6 +1154,161 @@ impl BusState {
         room_state.draft.text.clear();
         room_state.draft.files.clear();
         Ok(request_ids)
+    }
+
+    /// Stores the next unconfirmed proposal; only Human confirmation locks a Room Brief.
+    pub(crate) fn propose_room_brief(
+        &mut self,
+        room: RoomId,
+        expected_revision: u64,
+        goal: String,
+        non_goals: String,
+    ) -> Result<u64, ModelError> {
+        let brief = &mut self
+            .rooms
+            .get_mut(&room)
+            .ok_or(ModelError::UnknownRoom(room))?
+            .brief;
+        if brief.locked || brief.revision != expected_revision {
+            return Err(ModelError::InvalidTransition);
+        }
+        if goal.trim().is_empty() || non_goals.trim().is_empty() {
+            return Err(ModelError::EmptyPrompt);
+        }
+        let revision = expected_revision
+            .checked_add(1)
+            .ok_or(ModelError::InvalidTransition)?;
+        brief.goal = goal;
+        brief.non_goals = non_goals;
+        brief.revision = revision;
+        Ok(revision)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_room_brief(
+        &mut self,
+        room: RoomId,
+        brief: RoomBrief,
+    ) -> Result<(), ModelError> {
+        if brief.locked
+            && (brief.revision == 0
+                || brief.revision != brief.approved_revision
+                || brief.goal.trim().is_empty())
+        {
+            return Err(ModelError::InvalidTransition);
+        }
+        let room = self
+            .rooms
+            .get_mut(&room)
+            .ok_or(ModelError::UnknownRoom(room))?;
+        if room.brief.locked && room.brief != brief {
+            return Err(ModelError::InvalidTransition);
+        }
+        room.brief = brief;
+        Ok(())
+    }
+
+    pub(crate) fn confirm_room_brief_proposal(
+        &mut self,
+        command: crate::bus::orchestrator::ConfirmRoomBriefProposal,
+    ) -> Result<crate::bus::orchestrator::RoomBriefConfirmationReceipt, ModelError> {
+        if command.expected_developer != crate::bus::orchestrator::ParticipantId::Human {
+            return Err(ModelError::InvalidTransition);
+        }
+        let brief = &self
+            .rooms
+            .get(&command.room_id)
+            .ok_or(ModelError::UnknownRoom(command.room_id))?
+            .brief;
+        let current_digest = brief.proposal_digest();
+        if let Some(receipt) = self.orchestrator.room_brief_confirmation(command.room_id) {
+            if receipt.developer == command.expected_developer
+                && receipt.approved_revision == command.expected_proposal_revision
+                && receipt.proposal_digest == command.expected_proposal_digest
+                && brief.locked
+                && brief.approved_revision == receipt.approved_revision
+                && current_digest == receipt.proposal_digest
+            {
+                return Ok(receipt.clone());
+            }
+            return Err(ModelError::InvalidTransition);
+        }
+        if brief.locked
+            || brief.revision == 0
+            || brief.goal.trim().is_empty()
+            || brief.revision != command.expected_proposal_revision
+            || current_digest != command.expected_proposal_digest
+        {
+            return Err(ModelError::InvalidTransition);
+        }
+        let room = self
+            .rooms
+            .get_mut(&command.room_id)
+            .expect("room was verified above");
+        room.brief.approved_revision = room.brief.revision;
+        room.brief.locked = true;
+        // Only the first exact confirmation activates grants; replays returned above.
+        self.orchestrator
+            .activate_orchestrator_baseline(command.room_id);
+        Ok(self.orchestrator.insert_room_brief_confirmation(
+            command.room_id,
+            command.expected_developer,
+            command.expected_proposal_revision,
+            command.expected_proposal_digest,
+        ))
+    }
+
+    pub(crate) fn bind_trusted_assignment(
+        &mut self,
+        request: RequestId,
+        frame: String,
+    ) -> Result<(), ModelError> {
+        let request = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        if request.phase != RequestPhase::Queued
+            || request.prompt.trusted_assignment_frame.is_some()
+        {
+            return Err(ModelError::InvalidTransition);
+        }
+        request.prompt.trusted_assignment_frame = Some(frame);
+        Ok(())
+    }
+
+    pub(crate) fn assignment_facts(
+        &self,
+        request: RequestId,
+        launch_id: &str,
+        content_bundle_digest: &str,
+    ) -> Result<Option<ParticipantAssignmentFacts>, ModelError> {
+        let request = self
+            .requests
+            .get(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        let room = self
+            .rooms
+            .get(&request.room_id)
+            .ok_or(ModelError::UnknownRoom(request.room_id))?;
+        if !room.brief.locked {
+            return Ok(None);
+        }
+        Ok(Some(ParticipantAssignmentFacts {
+            room_id: request.room_id,
+            work_id: None,
+            message_id: request.prompt.id.0,
+            request_id: request.id,
+            author: request.prompt.author.clone(),
+            agent_id: request.agent_id,
+            recipient_incarnation: 1,
+            provider_launch_id: launch_id.into(),
+            brief_revision: room.brief.revision,
+            approved_revision: room.brief.approved_revision,
+            locked: room.brief.locked,
+            goal: room.brief.goal.clone(),
+            non_goals: room.brief.non_goals.clone(),
+            content_bundle_digest: content_bundle_digest.into(),
+        }))
     }
 
     pub(crate) fn begin_submission(
