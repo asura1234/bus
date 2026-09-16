@@ -7,9 +7,11 @@ Bus provides two ways to work with rooms and coding agents:
   an already-running Bus instance and receive JSON results.
 
 This guide covers both surfaces. It uses an installed `bus` command in examples.
-When working from this repository, use `./run dev` instead of `bus --dev`, and
-use `./run dev COMMAND` instead of `bus COMMAND`. The launcher rebuilds the
-development binary, enables developer control, and forwards the command.
+When working from this repository, launch a session with `./run dev` instead of
+`bus --dev`, and run every later control command with `./run dev-control COMMAND`
+instead of `bus COMMAND`. `./run dev` rebuilds the development binary and starts
+the session; `./run dev-control` reuses that binary and forwards the command to
+the running instance.
 
 ## Start or resume Bus
 
@@ -37,6 +39,65 @@ was opened last. `resume` cannot be combined with `BUS_DATA_DIR`.
 
 Use `bus --paths` to inspect Bus data, log, callback, configuration, and state
 locations without starting a session.
+
+## Protect developer control with a capability
+
+By default, any process that can reach the Bus data directory can issue developer
+control commands. `--orchestrator-control` adds an opt-in capability check to that
+protocol. The flag is valid only together with `--dev`, on a new session or a
+resume.
+
+Generate a fresh secret of at least 32 bytes:
+
+```sh
+token="$(openssl rand -base64 32)"
+```
+
+Launch Bus with the flag, supplying the variable only to that one launch:
+
+```sh
+BUS_ORCHESTRATOR_CONTROL_TOKEN="$token" bus --dev --orchestrator-control
+BUS_ORCHESTRATOR_CONTROL_TOKEN="$token" ./run dev --orchestrator-control
+```
+
+Bus reads the secret once at launch, keeps only its SHA-256 digest, and removes
+`BUS_ORCHESTRATOR_CONTROL_TOKEN` from its own environment. It also removes that
+variable from every managed pane and coding-agent launch, so no agent Bus starts
+inherits the secret or can ask for it. A missing or low-entropy secret fails the
+launch instead of starting an unprotected session.
+
+Then give the same value only to approved external orchestrator control commands:
+
+```sh
+BUS_ORCHESTRATOR_CONTROL_TOKEN="$token" bus state
+BUS_ORCHESTRATOR_CONTROL_TOKEN="$token" ./run dev-control state
+```
+
+Each control command reads the variable from its own environment and presents it
+with the request. A request that presents no capability is rejected with
+`capability_required`, and one that presents the wrong capability with
+`capability_invalid`. Both are refused before dispatch: Bus validates no
+parameters, records no retry receipt, and runs no command handler for an
+unauthorized request.
+
+The interactive TUI, provider callbacks, and `assignment verify` keep working
+without the secret. A person at the terminal and a provider hook are not control
+clients, so the capability never gates them.
+
+### What this protects, and what it does not
+
+This gates access to the Bus developer-control protocol: a process that does not
+hold the secret cannot drive your rooms and agents through that protocol.
+
+It is not an OS sandbox. Any process running as the same user that can read the
+secret — from your shell environment, a script that holds it, or the environment
+of a control command you run — can present it and will be accepted. Treat the flag
+as protocol access control, not as isolation from another same-user process that
+can steal the orchestrator secret.
+
+Launching without the flag keeps existing `--dev` behavior exactly as it was:
+control commands need no capability, and Bus neither reads nor removes
+`BUS_ORCHESTRATOR_CONTROL_TOKEN`.
 
 ## Target the intended running session
 
@@ -365,6 +426,9 @@ Common failure patterns:
 - **Control is unavailable:** confirm the intended Bus process is still running
   and was started with `--dev`, then verify every terminal uses the same
   `BUS_DATA_DIR` when an override is present.
+- **Control is rejected:** `capability_required` or `capability_invalid` means the
+  instance was launched with `--orchestrator-control`. Rerun the command with the
+  same `BUS_ORCHESTRATOR_CONTROL_TOKEN` value that was used for that launch.
 - **A selector is ambiguous:** rerun `state` and use the numeric room or agent
   ID instead of its name.
 - **Agent setup needs consent:** inspect the reported project hook path, then
