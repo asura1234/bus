@@ -492,10 +492,14 @@ impl BusUi {
             Action::Settings => {
                 self.settings_field = 0;
                 self.settings_key = Editor::default();
+                if self.credential_digest().is_some() {
+                    self.load_orchestrator_prompt();
+                }
                 self.open_form(Form::Settings);
             }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::ToggleOrchestrator => self.toggle_orchestrator_enabled(),
+            Action::ResetOrchestratorPrompt => self.reset_orchestrator_prompt(),
             Action::Coordination(action) => self.dispatch_coordination(action),
             Action::Cancel => {
                 if let Some(room) = self.room {
@@ -541,8 +545,12 @@ impl BusUi {
             return;
         }
         if let Some(form) = &mut self.form {
-            if matches!(form, Form::Settings) && self.settings_field == 2 {
-                self.settings_key.insert(text);
+            if matches!(form, Form::Settings) {
+                match self.settings_field {
+                    2 => self.settings_key.insert(text),
+                    3 => self.settings_prompt.insert(text),
+                    _ => {}
+                }
                 return;
             }
             if let Some(editor) = form.editor_mut() {
@@ -1030,13 +1038,31 @@ impl BusUi {
             return;
         }
         if matches!(self.form, Some(Form::Settings)) {
+            let prompt_available = self.credential_digest().is_some();
+            if self.settings_field == 3 && prompt_available {
+                match (code, modifiers) {
+                    (KeyCode::Char('s' | 'S'), KeyModifiers::CONTROL) => {
+                        self.save_orchestrator_prompt()
+                    }
+                    (KeyCode::Enter, _) => self.settings_prompt.insert("\n"),
+                    (KeyCode::Tab, _) => self.settings_field = 4,
+                    (KeyCode::BackTab, _) => self.settings_field = 2,
+                    _ => {
+                        self.settings_prompt.key(code, modifiers);
+                    }
+                }
+                return;
+            }
+            let last_field = if prompt_available { 4 } else { 2 };
             match code {
                 KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
-                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(2),
+                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(last_field),
                 KeyCode::Enter => match self.settings_field {
                     0 => self.toggle_color_blind_mode(),
                     1 => self.toggle_orchestrator_enabled(),
-                    _ => self.save_orchestrator_key(),
+                    2 => self.save_orchestrator_key(),
+                    4 => self.reset_orchestrator_prompt(),
+                    _ => {}
                 },
                 _ => {
                     if self.settings_field == 2 {

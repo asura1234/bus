@@ -21,6 +21,7 @@ pub(super) struct RoomOrchestratorRuntime {
     requests: mpsc::SyncSender<ModelLoopRequest>,
     results: mpsc::Receiver<Result<ModelLoopResult, ModelLoopError>>,
     content: ContentBundle,
+    settings_path: PathBuf,
     workflow_store: WorkflowDraftStore,
     in_flight: Option<InFlightModelRequest>,
     last_requested: BTreeMap<RoomId, u64>,
@@ -51,6 +52,7 @@ impl RoomOrchestratorRuntime {
             DeepSeekAdapter::default(),
             credentials,
             content,
+            settings_path,
             repository_root,
         )
         .map(Some)
@@ -60,6 +62,7 @@ impl RoomOrchestratorRuntime {
         adapter: A,
         credentials: crate::bus::credentials::CredentialStore,
         content: ContentBundle,
+        settings_path: PathBuf,
         repository_root: PathBuf,
     ) -> Result<Self, String>
     where
@@ -70,11 +73,21 @@ impl RoomOrchestratorRuntime {
             requests,
             results,
             content,
+            settings_path,
             workflow_store: WorkflowDraftStore::new(repository_root)
                 .map_err(|error| format!("Workflow repository unavailable: {error:?}"))?,
             in_flight: None,
             last_requested: BTreeMap::new(),
         })
+    }
+
+    fn system_prompt(&self) -> Result<String, String> {
+        let settings = crate::bus::settings::load(&self.settings_path)?;
+        Ok(settings
+            .orchestrator
+            .system_prompt_override
+            .filter(|prompt| !prompt.trim().is_empty())
+            .unwrap_or_else(|| self.content.system.clone()))
     }
 }
 
@@ -151,6 +164,7 @@ impl Worker {
             adapter,
             credentials,
             content,
+            self.data_dir.join("settings.json"),
             repository_root,
         )?);
         self.refresh_workflow_promotion_reviews();
@@ -345,7 +359,7 @@ impl Worker {
         let mut messages = vec![
             ModelMessage {
                 role: ModelRole::System,
-                content: runtime.content.system.clone(),
+                content: runtime.system_prompt()?,
             },
             ModelMessage {
                 role: ModelRole::System,
@@ -444,11 +458,18 @@ impl Worker {
                     "timeout_ms":timeout_ms,
                 }))
             }
-            RoomQuery::ReadContent { kind, name } => runtime
-                .content
-                .read(&kind, &name)
-                .map(|body| json!({"kind":kind,"name":name,"body":body}))
-                .map_err(|error| format!("Content read rejected: {error:?}")),
+            RoomQuery::ReadContent { kind, name } => {
+                let body = if kind == "system" && name == "system" {
+                    runtime.system_prompt()?
+                } else {
+                    runtime
+                        .content
+                        .read(&kind, &name)
+                        .map(str::to_owned)
+                        .map_err(|error| format!("Content read rejected: {error:?}"))?
+                };
+                Ok(json!({"kind":kind,"name":name,"body":body}))
+            }
             RoomQuery::ReadAgent {
                 agent_id,
                 selection,

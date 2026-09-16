@@ -2,19 +2,20 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
     pub(crate) orchestrator: OrchestratorSettings,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct OrchestratorSettings {
     pub(crate) enabled: bool,
     pub(crate) model: OrchestratorModelSetting,
     pub(crate) content_selector: OrchestratorContentSetting,
+    pub(crate) system_prompt_override: Option<String>,
 }
 
 impl Default for OrchestratorSettings {
@@ -23,6 +24,7 @@ impl Default for OrchestratorSettings {
             enabled: false,
             model: OrchestratorModelSetting::DeepSeekV41Flash,
             content_selector: OrchestratorContentSetting::Production,
+            system_prompt_override: None,
         }
     }
 }
@@ -69,7 +71,7 @@ pub(crate) fn load(path: &Path) -> Result<BusSettings, String> {
     }
 }
 
-pub(crate) fn save(path: &Path, settings: BusSettings) -> Result<(), String> {
+pub(crate) fn save(path: &Path, settings: &BusSettings) -> Result<(), String> {
     let failed = |error: &dyn std::fmt::Display| {
         format!("Could not save Bus settings to {}: {error}", path.display())
     };
@@ -98,14 +100,39 @@ mod tests {
             color_blind_mode: true,
             ..BusSettings::default()
         };
-        save(&path, enabled).unwrap();
-        assert_eq!(load(&path), Ok(enabled));
+        save(&path, &enabled).unwrap();
+        assert_eq!(load(&path), Ok(enabled.clone()));
 
         // Settings written by a newer Bus keep the fields this one knows.
         std::fs::write(&path, br#"{"color_blind_mode":true,"future":1}"#).unwrap();
         assert_eq!(load(&path), Ok(enabled));
         std::fs::write(&path, b"not json").unwrap();
         assert!(load(&path).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn orchestrator_system_prompt_override_round_trips_multiline_text() {
+        let root = std::env::temp_dir().join(format!(
+            "bus-settings-prompt-{}-{}",
+            std::process::id(),
+            super::super::io::now_ns()
+        ));
+        let path = root.join("settings.json");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            &path,
+            br#"{"orchestrator":{"system_prompt_override":"Custom conductor\nUse repo-native skills."}}"#,
+        )
+        .unwrap();
+
+        let loaded = load(&path).unwrap();
+        let encoded = serde_json::to_value(loaded).unwrap();
+        assert_eq!(
+            encoded["orchestrator"]["system_prompt_override"],
+            "Custom conductor\nUse repo-native skills."
+        );
+
         let _ = std::fs::remove_dir_all(root);
     }
 }

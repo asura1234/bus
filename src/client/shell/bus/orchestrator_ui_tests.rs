@@ -158,10 +158,45 @@ fn room_orchestrator_ui_settings_redacts_api_key_and_keeps_color_blind_toggle() 
     let screen = room_screen(&mut ui, 100, 30);
     assert!(!screen.contains("sk-live-secret-key"), "{screen}");
     assert!(screen.contains("stored digest"), "{screen}");
+    assert!(screen.contains("System prompt"), "{screen}");
+    assert!(screen.contains("You are the Orchestrator"), "{screen}");
     let stored = std::fs::read(root.join("private/orchestrator-credentials.json")).unwrap();
     assert!(String::from_utf8_lossy(&stored).contains("sk-live-secret-key"));
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+
+    ui.settings_prompt = editor::Editor::default();
+    ui.action(render::Action::Field(3));
+    ui.input(
+        &RawInputEvent::Paste("Custom conductor".into()),
+        false,
+        &mut Default::default(),
+    );
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    ui.input(
+        &RawInputEvent::Paste("Use repo-native skills.".into()),
+        false,
+        &mut Default::default(),
+    );
+    key(&mut ui, KeyCode::Char('s'), KeyModifiers::CONTROL);
+    assert_eq!(
+        crate::bus::settings::load(&path)
+            .unwrap()
+            .orchestrator
+            .system_prompt_override
+            .as_deref(),
+        Some("Custom conductor\nUse repo-native skills.")
+    );
+    assert!(room_screen(&mut ui, 100, 30).contains("System prompt (custom)"));
+
+    ui.action(render::Action::ResetOrchestratorPrompt);
+    assert!(crate::bus::settings::load(&path)
+        .unwrap()
+        .orchestrator
+        .system_prompt_override
+        .is_none());
+    assert!(ui.settings_prompt.text.contains("You are the Orchestrator"));
+    assert!(room_screen(&mut ui, 100, 30).contains("System prompt (bundle default)"));
+
+    ui.action(render::Action::Field(0));
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(ui.settings.color_blind_mode);
     let _ = std::fs::remove_dir_all(root);

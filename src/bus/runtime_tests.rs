@@ -108,6 +108,10 @@ fn room_orchestrator_core_worker_drives_model_loop_and_settles_content_and_workf
     worker
         .install_test_orchestrator(adapter, dir.clone())
         .unwrap();
+    let mut settings = crate::bus::settings::BusSettings::default();
+    settings.orchestrator.system_prompt_override =
+        Some("Live custom system prompt\nKeep permissions intact.".into());
+    crate::bus::settings::save(&dir.join("settings.json"), &settings).unwrap();
     for _ in 0..20 {
         worker.drive_orchestrator().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1));
@@ -184,14 +188,19 @@ fn room_orchestrator_core_worker_drives_model_loop_and_settles_content_and_workf
         calls[0].0, worker_thread,
         "provider work must stay off Worker"
     );
+    assert_eq!(
+        calls[0].1.messages[0].content,
+        "Live custom system prompt\nKeep permissions intact."
+    );
     assert!(calls[0].1.messages.iter().any(|message| message
         .content
-        .contains("test-only room process orchestrator")));
+        .contains("Remain high-level and process-focused")));
     assert!(calls[1]
         .1
         .messages
         .iter()
         .any(|message| message.content.contains("read_content")
+            && message.content.contains("Live custom system prompt")
             && message.content.contains("persist_workflow_draft")
             && message.content.contains("# Recovery SOP")
             && message.content.contains("provider_request_settlement")));

@@ -148,6 +148,7 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) settings_path: Option<std::path::PathBuf>,
     pub(super) settings_field: usize,
     pub(super) settings_key: super::editor::Editor,
+    pub(super) settings_prompt: super::editor::Editor,
 }
 
 #[derive(Clone, Debug)]
@@ -213,6 +214,7 @@ impl BusUi {
             settings_path: None,
             settings_field: 0,
             settings_key: super::editor::Editor::default(),
+            settings_prompt: super::editor::Editor::default(),
         }
     }
     /// Applies immediately; a failed save keeps the choice for this run only.
@@ -226,7 +228,7 @@ impl BusUi {
     }
     fn persist_settings(&mut self) {
         if let Some(path) = &self.settings_path {
-            if let Err(error) = crate::bus::settings::save(path, self.settings) {
+            if let Err(error) = crate::bus::settings::save(path, &self.settings) {
                 self.error = Some(error);
             }
         }
@@ -246,6 +248,7 @@ impl BusUi {
                 self.settings_key = super::editor::Editor::default();
                 self.settings.orchestrator.enabled = true;
                 self.persist_settings();
+                self.load_orchestrator_prompt();
             }
             Err(error) => self.error = Some(error),
         }
@@ -256,6 +259,55 @@ impl BusUi {
         crate::bus::credentials::CredentialStore::new(root)
             .load()
             .map(|credential| credential.digest)
+    }
+    pub(super) fn load_orchestrator_prompt(&mut self) {
+        let prompt = self
+            .settings
+            .orchestrator
+            .system_prompt_override
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| self.default_orchestrator_prompt());
+        match prompt {
+            Ok(prompt) => {
+                self.settings_prompt = super::editor::Editor::new(prompt);
+                self.settings_prompt.cursor = 0;
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+    pub(super) fn save_orchestrator_prompt(&mut self) {
+        if self.settings_prompt.text.trim().is_empty() {
+            self.error = Some(
+                "System prompt cannot be empty. Reset it to the bundle default instead.".into(),
+            );
+            return;
+        }
+        self.settings.orchestrator.system_prompt_override = Some(self.settings_prompt.text.clone());
+        self.error = None;
+        self.persist_settings();
+    }
+    pub(super) fn reset_orchestrator_prompt(&mut self) {
+        self.settings.orchestrator.system_prompt_override = None;
+        self.error = None;
+        self.persist_settings();
+        self.load_orchestrator_prompt();
+    }
+    fn default_orchestrator_prompt(&self) -> Result<String, String> {
+        use crate::bus::orchestrator::{ContentLoader, ContentSelector};
+
+        let selector = match self.settings.orchestrator.content_selector {
+            crate::bus::settings::OrchestratorContentSetting::TestAgentLed => {
+                ContentSelector::TestAgentLed
+            }
+            crate::bus::settings::OrchestratorContentSetting::Production => {
+                ContentSelector::Production
+            }
+        };
+        ContentLoader::test_bundle()
+            .load(selector)
+            .map(|content| content.system)
+            .map_err(|error| format!("Orchestrator system prompt unavailable: {error:?}"))
     }
     pub(super) fn toggle_recipient_entry(&mut self, entry: super::orchestrator_ui::RecipientEntry) {
         match entry {

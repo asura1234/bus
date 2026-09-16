@@ -50,6 +50,7 @@ pub(super) enum Action {
     Settings,
     ToggleColorBlindMode,
     ToggleOrchestrator,
+    ResetOrchestratorPrompt,
     Coordination(CoordinationAction),
     Cancel,
     Add,
@@ -528,7 +529,7 @@ fn agent_status(agent: &Agent) -> &'static str {
 }
 
 /// The agent's identity color for the current color vision setting.
-fn identity_color(agent: &Agent, settings: crate::bus::settings::BusSettings) -> Color {
+fn identity_color(agent: &Agent, settings: &crate::bus::settings::BusSettings) -> Color {
     let [r, g, b] = if settings.color_blind_mode {
         agent.accessible_color
     } else {
@@ -734,7 +735,7 @@ impl BusUi {
                     self.terminal == Some(agent.id),
                     false,
                 );
-                view.color_last_row(rect, identity_color(agent, self.settings));
+                view.color_last_row(rect, identity_color(agent, &self.settings));
             }
             let status_rect = at(
                 sidebar.width.saturating_sub(right.len() as u16 + 4),
@@ -1106,7 +1107,7 @@ impl BusUi {
                         .snapshot
                         .state
                         .agent(*id)
-                        .map(|agent| identity_color(agent, self.settings)),
+                        .map(|agent| identity_color(agent, &self.settings)),
                     _ => None,
                 };
                 if let Some(color) = color {
@@ -1176,7 +1177,7 @@ impl BusUi {
                 .snapshot
                 .state
                 .agent(chip.agent)
-                .map_or(ACCENT, |agent| identity_color(agent, self.settings));
+                .map_or(ACCENT, |agent| identity_color(agent, &self.settings));
             view.recipient_chips.push((rect, color));
             let label_rect = Rect::new(rect.x + 2, rect.y + 1, rect.width.saturating_sub(4), 1);
             view.row(label_rect, &chip.label, None, false, false);
@@ -1569,6 +1570,69 @@ impl BusUi {
                     self.settings_field == 2,
                     self.settings_key.text.is_empty(),
                 );
+                if self.credential_digest().is_some() {
+                    let error = self.visible_error();
+                    let close_y = main.bottom().saturating_sub(2);
+                    let reset_y = close_y.saturating_sub(2);
+                    let warning_y = reset_y.saturating_sub(if error.is_some() { 6 } else { 3 });
+                    let hint_y = warning_y.saturating_sub(1);
+                    let editor_y = 13;
+                    let editor_height = hint_y.saturating_sub(editor_y + 1);
+                    let source = if self.settings.orchestrator.system_prompt_override.is_some() {
+                        "custom"
+                    } else {
+                        "bundle default"
+                    };
+                    view.row(
+                        Rect::new(x, 12, width, 1),
+                        format!("System prompt ({source})"),
+                        Some(Action::Field(3)),
+                        self.settings_field == 3,
+                        false,
+                    );
+                    view.editor(
+                        Rect::new(x, editor_y, width, editor_height),
+                        &self.settings_prompt,
+                        Some(Action::Field(3)),
+                        self.settings_field == 3,
+                    );
+                    view.row(
+                        Rect::new(x, hint_y, width, 1),
+                        "Ctrl+S saves · Enter adds a line · Tab leaves the editor",
+                        None,
+                        false,
+                        true,
+                    );
+                    view.lines(
+                        Rect::new(x, warning_y, width, 2),
+                        "This changes Orchestrator behavior. Bus still enforces its permissions.",
+                        None,
+                        true,
+                    );
+                    if let Some(error) = error {
+                        view.lines(
+                            Rect::new(x, reset_y.saturating_sub(3), width, 2),
+                            error,
+                            None,
+                            false,
+                        );
+                    }
+                    view.row(
+                        Rect::new(x, reset_y, width, 1),
+                        "Reset to bundle default",
+                        Some(Action::ResetOrchestratorPrompt),
+                        self.settings_field == 4,
+                        false,
+                    );
+                    view.row(
+                        Rect::new(x, close_y, width, 1),
+                        "Close (Esc)",
+                        Some(Action::Cancel),
+                        false,
+                        true,
+                    );
+                    return;
+                }
                 view.row(
                     Rect::new(x, 12, width, 1),
                     "Close (Esc) · Enter toggles",
