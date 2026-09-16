@@ -526,6 +526,7 @@ mod tests {
                 id: "private".into(),
                 method: "state".into(),
                 params: serde_json::Value::Null,
+                capability: None,
             },
         );
         drop(server);

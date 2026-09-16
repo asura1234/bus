@@ -44,6 +44,24 @@ impl Worker {
                 "Start Bus with --dev to enable control",
             );
         }
+        // Authorization precedes every other gate, so no unauthorized request can
+        // validate parameters, record a receipt, or reach a command handler.
+        if let Some(expected) = &self.control_capability {
+            let Some(presented) = request.capability.as_deref() else {
+                return Response::failure(
+                    &request.id,
+                    "capability_required",
+                    "This instance runs with --orchestrator-control; set BUS_ORCHESTRATOR_CONTROL_TOKEN for the control client",
+                );
+            };
+            if !expected.matches(presented) {
+                return Response::failure(
+                    &request.id,
+                    "capability_invalid",
+                    "Control capability rejected",
+                );
+            }
+        }
         if request.id.is_empty() || request.id.len() > 128 {
             return Response::failure(
                 &request.id,
@@ -159,8 +177,11 @@ impl Worker {
         );
         if mutation {
             self.dev_receipt_bytes = self.dev_receipt_bytes.saturating_add(reserve);
+            // A receipt replays an outcome; it never retains the caller's secret.
+            let mut receipt = request.clone();
+            receipt.capability = None;
             self.dev_receipts
-                .insert(request.id.clone(), (request.clone(), response.clone()));
+                .insert(request.id.clone(), (receipt, response.clone()));
         }
         response
     }

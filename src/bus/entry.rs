@@ -3,7 +3,7 @@ use std::{io, path::PathBuf};
 
 use super::local_sessions::{LocalSessionRegistry, ResumeTarget};
 
-const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last\n       bus assignment verify --frame FRAME";
+const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last\n       bus --dev --orchestrator-control [resume <session-id> | resume --last]\n       bus assignment verify --frame FRAME";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Action {
@@ -19,6 +19,7 @@ enum Action {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Invocation {
     dev: bool,
+    orchestrator_control: bool,
     action: Action,
 }
 
@@ -28,12 +29,17 @@ pub(crate) fn data_dir() -> Option<PathBuf> {
 
 fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     let mut dev = false;
+    let mut orchestrator_control = false;
     let mut action = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--dev" if !dev => {
                 dev = true;
+                index += 1;
+            }
+            "--orchestrator-control" if !orchestrator_control => {
+                orchestrator_control = true;
                 index += 1;
             }
             "--paths" if action.is_none() => {
@@ -54,6 +60,9 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 while index < args.len() {
                     match args[index].as_str() {
                         "--dev" if !dev => dev = true,
+                        "--orchestrator-control" if !orchestrator_control => {
+                            orchestrator_control = true;
+                        }
                         "--last" if target.is_none() => target = Some(ResumeTarget::Last),
                         value if target.is_none() && !value.starts_with('-') => {
                             target = Some(ResumeTarget::Id(value.to_owned()));
@@ -81,10 +90,29 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
             _ => return Err(USAGE.to_owned()),
         }
     }
+    let action = action.unwrap_or(Action::Run);
+    // The control boundary is a developer session edge: it never applies to a client
+    // command, a listing, or a path query.
+    if orchestrator_control && (!dev || !matches!(action, Action::Run | Action::Resume(_))) {
+        return Err(USAGE.to_owned());
+    }
     Ok(Invocation {
         dev,
-        action: action.unwrap_or(Action::Run),
+        orchestrator_control,
+        action,
     })
+}
+
+/// Consumes the launch token exactly once, before anything is started. A protected
+/// launch fails closed; an ordinary launch never reads or disturbs the variable,
+/// which an external control client still needs.
+fn arm_orchestrator_control(
+    enabled: bool,
+) -> Result<Option<super::orchestrator_control::TokenDigest>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    super::orchestrator_control::arm_from_environment().map(Some)
 }
 
 pub(crate) fn run(args: &[String]) -> io::Result<()> {
@@ -97,6 +125,8 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         std::env::remove_var("BUS_DEV");
     }
     std::env::remove_var("BUS_DEV_EXISTING_SERVER");
+    let _capability =
+        arm_orchestrator_control(invocation.orchestrator_control).map_err(io::Error::other)?;
     if invocation.action == Action::Help {
         print_help();
         return Ok(());
@@ -247,6 +277,126 @@ mod tests {
             parse_invocation(&[]).unwrap(),
             Invocation {
                 dev: false,
+                orchestrator_control: false,
+                action: Action::Run,
+            }
+        );
+    }
+
+    #[test]
+    fn room_orchestrator_control_flag_is_opt_in_for_dev_run_and_resume() {
+        assert_eq!(
+            parse_invocation(&args(&["--dev", "--orchestrator-control"])).unwrap(),
+            Invocation {
+                dev: true,
+                orchestrator_control: true,
+                action: Action::Run,
+            }
+        );
+        assert_eq!(
+            parse_invocation(&args(&[
+                "--dev",
+                "--orchestrator-control",
+                "resume",
+                "--last"
+            ]))
+            .unwrap(),
+            Invocation {
+                dev: true,
+                orchestrator_control: true,
+                action: Action::Resume(ResumeTarget::Last),
+            }
+        );
+        assert_eq!(
+            parse_invocation(&args(&[
+                "--dev",
+                "resume",
+                "--last",
+                "--orchestrator-control"
+            ]))
+            .unwrap(),
+            Invocation {
+                dev: true,
+                orchestrator_control: true,
+                action: Action::Resume(ResumeTarget::Last),
+            }
+        );
+    }
+
+    #[test]
+    fn room_orchestrator_control_flag_requires_dev_and_a_session_action() {
+        for invalid in [
+            args(&["--orchestrator-control"]),
+            args(&["--orchestrator-control", "resume", "--last"]),
+            args(&["--dev", "--orchestrator-control", "--orchestrator-control"]),
+            args(&["--dev", "--orchestrator-control", "sessions"]),
+            args(&["--dev", "--orchestrator-control", "--paths"]),
+            args(&["--dev", "--orchestrator-control", "agent", "read", "Codex1"]),
+        ] {
+            assert_eq!(
+                parse_invocation(&invalid).unwrap_err(),
+                USAGE,
+                "accepted {invalid:?}"
+            );
+        }
+    }
+
+    const CONTROL_TOKEN: &str = "Rk9vQmFyOTdaeDNRd0x1TnBFc1R2MmhKZGtDeQ";
+
+    #[test]
+    fn room_orchestrator_control_launch_hashes_the_token_and_scrubs_the_raw_secret() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let variable = super::super::orchestrator_control::TOKEN_ENV_VAR;
+        std::env::set_var(variable, CONTROL_TOKEN);
+
+        let digest = super::arm_orchestrator_control(true)
+            .unwrap()
+            .expect("launch capability");
+
+        assert_eq!(
+            digest.hex(),
+            super::super::io::digest(CONTROL_TOKEN.as_bytes())
+        );
+        assert!(
+            std::env::var_os(variable).is_none(),
+            "raw token survived launch"
+        );
+    }
+
+    #[test]
+    fn room_orchestrator_control_launch_fails_closed_on_a_missing_or_weak_token() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let variable = super::super::orchestrator_control::TOKEN_ENV_VAR;
+        std::env::remove_var(variable);
+        assert!(super::arm_orchestrator_control(true).is_err());
+
+        std::env::set_var(variable, "short-and-guessable");
+        assert!(super::arm_orchestrator_control(true).is_err());
+        assert!(
+            std::env::var_os(variable).is_none(),
+            "a rejected token must still be scrubbed"
+        );
+    }
+
+    #[test]
+    fn room_orchestrator_control_legacy_launch_never_reads_or_scrubs_the_token() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let variable = super::super::orchestrator_control::TOKEN_ENV_VAR;
+        std::env::set_var(variable, CONTROL_TOKEN);
+
+        assert!(super::arm_orchestrator_control(false).unwrap().is_none());
+
+        assert_eq!(std::env::var(variable).unwrap(), CONTROL_TOKEN);
+        std::env::remove_var(variable);
+    }
+
+    #[test]
+    fn room_orchestrator_control_absent_flag_keeps_legacy_dev_behavior() {
+        assert_eq!(
+            parse_invocation(&args(&["--dev"])).unwrap(),
+            Invocation {
+                dev: true,
+                orchestrator_control: false,
                 action: Action::Run,
             }
         );
@@ -258,6 +408,7 @@ mod tests {
             parse_invocation(&args(&["--dev", "resume", "0123456789abcdef"])).unwrap(),
             Invocation {
                 dev: true,
+                orchestrator_control: false,
                 action: Action::Resume(ResumeTarget::Id("0123456789abcdef".into())),
             }
         );
@@ -265,6 +416,7 @@ mod tests {
             parse_invocation(&args(&["resume", "--last", "--dev"])).unwrap(),
             Invocation {
                 dev: true,
+                orchestrator_control: false,
                 action: Action::Resume(ResumeTarget::Last),
             }
         );
@@ -287,6 +439,7 @@ mod tests {
             parse_invocation(&args(&["--dev", "agent", "read", "Codex1"])).unwrap(),
             Invocation {
                 dev: true,
+                orchestrator_control: false,
                 action: Action::Control(args(&["agent", "read", "Codex1"])),
             }
         );

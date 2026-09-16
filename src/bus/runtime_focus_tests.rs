@@ -47,6 +47,7 @@ fn request(id: &str, method: &str, params: Value) -> ControlRequest {
         id: id.into(),
         method: method.into(),
         params,
+        capability: None,
     }
 }
 

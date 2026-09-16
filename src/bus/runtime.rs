@@ -129,6 +129,7 @@ impl BusHandle {
     pub(crate) fn start(data_dir: PathBuf, target: ConnectionTarget) -> Result<Self, String> {
         let mut worker = Worker::open(data_dir.clone(), Box::new(HerdrTransport::new(target)))?;
         worker.dev_enabled = super::diagnostics::dev_enabled();
+        worker.adopt_launch_capability();
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
         let (commands, receiver) = mpsc::sync_channel(256);
         let dev_control = super::control::start(worker.dev_enabled, &data_dir, commands.clone())?;
@@ -177,6 +178,9 @@ struct Worker {
     branch_checks: BTreeMap<AgentId, std::time::Instant>,
     delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
     dev_enabled: bool,
+    /// Present only under --orchestrator-control; every control request must then
+    /// present the matching launch capability.
+    control_capability: Option<super::orchestrator_control::TokenDigest>,
     dev_receipts: BTreeMap<String, (super::control::Request, super::control::Response)>,
     dev_receipt_bytes: usize,
     room_orchestrator: Option<orchestrator_runtime::RoomOrchestratorRuntime>,
@@ -215,12 +219,18 @@ impl Worker {
             branch_checks: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
             dev_enabled: false,
+            control_capability: None,
             dev_receipts: BTreeMap::new(),
             dev_receipt_bytes: 0,
             room_orchestrator,
         };
         worker.refresh_workflow_promotion_reviews();
         Ok(worker)
+    }
+
+    /// Adopts the capability armed at launch, as dev mode is adopted at startup.
+    fn adopt_launch_capability(&mut self) {
+        self.control_capability = super::orchestrator_control::take_armed();
     }
 
     fn snapshot(&self) -> BusSnapshot {

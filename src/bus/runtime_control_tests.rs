@@ -30,7 +30,291 @@ fn call(worker: &mut Worker, id: &str, method: &str, params: serde_json::Value) 
         id: id.into(),
         method: method.into(),
         params,
+        capability: None,
     })
+}
+
+const CONTROL_TOKEN: &str = "Rk9vQmFyOTdaeDNRd0x1TnBFc1R2MmhKZGtDeQ";
+
+fn call_with_capability(
+    worker: &mut Worker,
+    id: &str,
+    method: &str,
+    params: serde_json::Value,
+    capability: Option<&str>,
+) -> Response {
+    worker.dev_response(&ControlRequest {
+        id: id.into(),
+        method: method.into(),
+        params,
+        capability: capability.map(str::to_owned),
+    })
+}
+
+fn protected_fixture() -> (Worker, RoomId, AgentId, PathBuf) {
+    let (mut worker, room, agent, dir) = fixture();
+    worker.control_capability =
+        Some(crate::bus::orchestrator_control::validate_and_hash(CONTROL_TOKEN).unwrap());
+    (worker, room, agent, dir)
+}
+
+#[test]
+fn room_orchestrator_control_protected_server_rejects_a_missing_capability() {
+    let (mut worker, _room, _agent, dir) = protected_fixture();
+    let before = worker.state.rooms().count();
+
+    let response = call(
+        &mut worker,
+        "unauthorized-1",
+        "room.create",
+        json!({"name":"x"}),
+    );
+
+    assert!(!response.ok, "{response:?}");
+    assert_eq!(response.error.unwrap().code, "capability_required");
+    assert_eq!(
+        worker.state.rooms().count(),
+        before,
+        "unauthorized request mutated state"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn room_orchestrator_control_protected_server_rejects_a_wrong_capability_without_leaking_it() {
+    let (mut worker, _room, _agent, dir) = protected_fixture();
+    let before = worker.state.rooms().count();
+
+    let response = call_with_capability(
+        &mut worker,
+        "unauthorized-2",
+        "room.create",
+        json!({"name":"x"}),
+        Some("Rk9vQmFyOTdaeDNRd0x1TnBFc1R2MmhKZGtDeX"),
+    );
+
+    assert!(!response.ok, "{response:?}");
+    let error = response.error.unwrap();
+    assert_eq!(error.code, "capability_invalid");
+    assert!(!error.message.contains(CONTROL_TOKEN), "{error:?}");
+    assert!(!error.message.contains("Rk9vQmFy"), "{error:?}");
+    assert_eq!(
+        worker.state.rooms().count(),
+        before,
+        "unauthorized request mutated state"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn room_orchestrator_control_rejects_an_unauthorized_request_before_method_dispatch() {
+    let (mut worker, room, _agent, dir) = protected_fixture();
+    let name = worker.state.room(room).unwrap().name.clone();
+
+    // Authorization precedes every later gate: a missing --confirm would otherwise
+    // answer confirmation_required, and an unknown method unknown_method.
+    let deletion = call(
+        &mut worker,
+        "unauthorized-3",
+        "room.delete",
+        json!({"room": name, "confirm": false}),
+    );
+    let unknown = call(&mut worker, "unauthorized-4", "room.detonate", json!({}));
+
+    assert_eq!(deletion.error.unwrap().code, "capability_required");
+    assert_eq!(unknown.error.unwrap().code, "capability_required");
+    assert!(worker.state.room(room).is_some(), "room was deleted");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn room_orchestrator_control_protected_server_accepts_the_launch_capability() {
+    let (mut worker, _room, _agent, dir) = protected_fixture();
+    let before = worker.state.rooms().count();
+
+    let response = call_with_capability(
+        &mut worker,
+        "authorized-1",
+        "room.create",
+        json!({"name":"authorized"}),
+        Some(CONTROL_TOKEN),
+    );
+
+    assert!(response.ok, "{response:?}");
+    assert_eq!(worker.state.rooms().count(), before + 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn room_orchestrator_control_rejection_leaves_no_receipt_for_a_later_authorized_retry() {
+    let (mut worker, _room, _agent, dir) = protected_fixture();
+
+    let rejected = call(
+        &mut worker,
+        "retry-1",
+        "room.create",
+        json!({"name":"retry"}),
+    );
+    let accepted = call_with_capability(
+        &mut worker,
+        "retry-1",
+        "room.create",
+        json!({"name":"retry"}),
+        Some(CONTROL_TOKEN),
+    );
+
+    assert!(!rejected.ok, "{rejected:?}");
+    assert!(accepted.ok, "{accepted:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn room_orchestrator_control_only_the_first_worker_adopts_the_launch_capability() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    std::env::set_var(
+        crate::bus::orchestrator_control::TOKEN_ENV_VAR,
+        CONTROL_TOKEN,
+    );
+    crate::bus::orchestrator_control::arm_from_environment().unwrap();
+
+    let (mut first, _first_room, _first_agent, first_dir) = fixture();
+    first.adopt_launch_capability();
+    let (mut second, _second_room, _second_agent, second_dir) = fixture();
+    second.adopt_launch_capability();
+
+    let protected = call(&mut first, "once-1", "room.create", json!({"name":"x"}));
+    let not_inherited = call(&mut second, "once-2", "room.create", json!({"name":"y"}));
+
+    assert_eq!(protected.error.unwrap().code, "capability_required");
+    assert!(
+        not_inherited.ok,
+        "a second worker inherited the launch capability: {not_inherited:?}"
+    );
+
+    crate::bus::orchestrator_control::disarm_for_test();
+    std::env::remove_var(crate::bus::orchestrator_control::TOKEN_ENV_VAR);
+    let _ = std::fs::remove_dir_all(first_dir);
+    let _ = std::fs::remove_dir_all(second_dir);
+}
+
+#[test]
+fn room_orchestrator_control_receipts_never_retain_the_presented_secret() {
+    let (mut worker, _room, _agent, dir) = protected_fixture();
+
+    let accepted = call_with_capability(
+        &mut worker,
+        "receipt-1",
+        "room.create",
+        json!({"name":"kept"}),
+        Some(CONTROL_TOKEN),
+    );
+    assert!(accepted.ok, "{accepted:?}");
+    let rooms = worker.state.rooms().count();
+
+    let (stored, _) = worker
+        .dev_receipts
+        .get("receipt-1")
+        .expect("a mutation records a receipt");
+    assert!(
+        stored.capability.is_none(),
+        "receipt retained the caller's raw capability"
+    );
+
+    // The receipt still replays a duplicate request instead of mutating twice.
+    let replay = call_with_capability(
+        &mut worker,
+        "receipt-1",
+        "room.create",
+        json!({"name":"kept"}),
+        Some(CONTROL_TOKEN),
+    );
+    assert!(replay.ok, "{replay:?}");
+    assert_eq!(worker.state.rooms().count(), rooms);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn room_orchestrator_control_worker_adopts_the_armed_launch_capability() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    std::env::set_var(
+        crate::bus::orchestrator_control::TOKEN_ENV_VAR,
+        CONTROL_TOKEN,
+    );
+    crate::bus::orchestrator_control::arm_from_environment().unwrap();
+    let (mut worker, _room, _agent, dir) = fixture();
+    worker.adopt_launch_capability();
+
+    let rejected = call(&mut worker, "adopt-1", "room.create", json!({"name":"x"}));
+    let accepted = call_with_capability(
+        &mut worker,
+        "adopt-2",
+        "room.create",
+        json!({"name":"y"}),
+        Some(CONTROL_TOKEN),
+    );
+
+    assert_eq!(rejected.error.unwrap().code, "capability_required");
+    assert!(accepted.ok, "{accepted:?}");
+    crate::bus::orchestrator_control::disarm_for_test();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn room_orchestrator_control_protected_instance_keeps_human_and_callback_paths_open() {
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let (mut worker, _room, agent, dir) = protected_fixture();
+    let (events, _received) = mpsc::channel();
+    let spool = dir.join("callbacks").join("launch");
+    std::fs::create_dir_all(&spool).unwrap();
+
+    // The Human at the TUI and the provider callbacks never present a capability.
+    let created = worker.command(BusCommand::CreateRoom("human".into()), &events);
+    let callbacks = worker.consume_callbacks(agent, &spool);
+
+    assert!(created.is_ok(), "{created:?}");
+    assert!(callbacks.is_ok(), "{callbacks:?}");
+
+    // Assignment verification reads provider discovery, never the control boundary.
+    std::env::set_var(
+        crate::bus::orchestrator_control::TOKEN_ENV_VAR,
+        CONTROL_TOKEN,
+    );
+    crate::bus::orchestrator_control::arm_from_environment().unwrap();
+    let armed = crate::bus::trusted_assignment::verify_from_environment("frame");
+    crate::bus::orchestrator_control::disarm_for_test();
+    let unarmed = crate::bus::trusted_assignment::verify_from_environment("frame");
+
+    assert_eq!(
+        std::mem::discriminant(&armed),
+        std::mem::discriminant(&unarmed),
+        "assignment verify changed under --orchestrator-control"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn room_orchestrator_control_unprotected_instance_keeps_legacy_requests_working() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let before = worker.state.rooms().count();
+
+    let legacy = call(
+        &mut worker,
+        "legacy-1",
+        "room.create",
+        json!({"name":"legacy"}),
+    );
+    let ignored_extra = call_with_capability(
+        &mut worker,
+        "legacy-2",
+        "room.create",
+        json!({"name":"legacy-two"}),
+        Some(CONTROL_TOKEN),
+    );
+
+    assert!(legacy.ok, "{legacy:?}");
+    assert!(ignored_extra.ok, "{ignored_extra:?}");
+    assert_eq!(worker.state.rooms().count(), before + 2);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
