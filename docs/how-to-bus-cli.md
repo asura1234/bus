@@ -114,6 +114,12 @@ started or replied. `wait` polls every 200 milliseconds until every recipient
 has replied or the timeout expires. Its timeout can be 1–600 seconds and
 defaults to 60 seconds.
 
+The `send` receipt also includes the initial per-recipient request status. When
+an earlier request still owns that agent, the new request reports
+`reason: prior_request_active` and the exact `blocked_by_request_id`. The same
+fields remain available from `message status`, so callers do not have to infer
+the head-of-line blocker from a generic `queued` stage.
+
 For non-blocking inspection, read the same state once:
 
 ```sh
@@ -129,6 +135,13 @@ The per-agent `stage` explains how far delivery progressed:
 | `awaiting_start` | Submission occurred, but no trusted provider turn start is bound yet. |
 | `delivered` | A trusted provider turn started and Bus is awaiting its final reply. |
 | `replied` | Bus recorded the final reply for that recipient. |
+| `abandoned` | Bus settled the request without publishing a reply; inspect `reason` and `detail`. |
+
+For Cursor, a completed turn whose `beforeSubmitPrompt` callback never produces
+a matching trusted binding settles as `abandoned` with
+`reason: cursor_submit_hook_unbound` after Cursor becomes idle. Bus does not
+publish the unbound reply, but it releases the agent FIFO so later queued work
+is not silently blocked forever.
 
 Treat `complete: true` from `message status` or `wait` as the settlement signal.
 A successful terminal write, a visually idle agent, or a queued focus change is
@@ -370,7 +383,8 @@ Common failure patterns:
 - **Agent setup needs consent:** inspect the reported project hook path, then
   use `--consent-hooks` or `agent setup-confirm ... --confirm` only if intended.
 - **A request remains queued:** inspect its `reason` and the agent entry in
-  `diagnostics`; the agent may be busy, blocked, or have an actionable error.
+  `diagnostics`; `prior_request_active` includes `blocked_by_request_id`, while
+  other reasons identify a busy, blocked, unavailable, or unready agent.
 - **A request remains `awaiting_start`:** submission alone did not establish a
   trusted provider turn. Inspect diagnostics and recent agent output before
   deciding whether to retry.

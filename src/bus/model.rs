@@ -139,6 +139,20 @@ pub(crate) enum RequestPhase {
     Abandoned,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RequestAbandonReason {
+    CursorSubmitHookUnbound,
+}
+
+impl RequestAbandonReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::CursorSubmitHookUnbound => "cursor_submit_hook_unbound",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct AgentRuntimeIdentity {
     pub(crate) launch_id: Option<String>,
@@ -330,6 +344,8 @@ pub(crate) struct Request {
     pub(crate) uncertain_outcome: bool,
     pub(crate) pending_final: Option<PendingFinal>,
     pub(crate) completed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) abandon_reason: Option<RequestAbandonReason>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1141,6 +1157,7 @@ impl BusState {
                     uncertain_outcome: false,
                     pending_final: None,
                     completed_at_ms: None,
+                    abandon_reason: None,
                 },
             );
             self.queues.entry(agent_id).or_default().push(request_id);
@@ -1656,6 +1673,47 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = None;
         agent.actionable_error = None;
+        Ok(())
+    }
+
+    pub(crate) fn abandon_unbound_cursor_completion(
+        &mut self,
+        request: RequestId,
+        completed_at_ms: u64,
+    ) -> Result<(), ModelError> {
+        let request_state = self
+            .requests
+            .get(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        let agent_id = request_state.agent_id;
+        let agent = self
+            .agents
+            .get(&agent_id)
+            .ok_or(ModelError::UnknownAgent(agent_id))?;
+        if !matches!(
+            request_state.phase,
+            RequestPhase::Submitting | RequestPhase::Active
+        ) || request_state.trusted_start_bound
+            || agent.provider != Provider::Cursor
+            || agent.status != RuntimeStatus::Idle
+            || agent.current_request != Some(request)
+        {
+            return Err(ModelError::InvalidTransition);
+        }
+        let request_state = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        request_state.phase = RequestPhase::Abandoned;
+        request_state.pending_final = None;
+        request_state.completed_at_ms = Some(completed_at_ms);
+        request_state.abandon_reason = Some(RequestAbandonReason::CursorSubmitHookUnbound);
+        let agent = self
+            .agents
+            .get_mut(&agent_id)
+            .ok_or(ModelError::UnknownAgent(agent_id))?;
+        agent.current_request = None;
+        agent.actionable_error = Some("Cursor completed without a matching beforeSubmitPrompt binding; Bus discarded the unbound reply, abandoned this request, and released queued messages.".into());
         Ok(())
     }
 

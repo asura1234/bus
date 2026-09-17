@@ -97,6 +97,8 @@ class AcceptanceObservationTests(unittest.TestCase):
         self.assertIn("wakes the room orchestrator", guide)
         self.assertIn("does not interpret the reply", guide)
         self.assertIn("send --wait", guide)
+        self.assertIn("blocked_by_request_id", guide)
+        self.assertIn("cursor_submit_hook_unbound", guide)
 
     def test_terminal_read_retries_transient_eagain(self):
         calls = []

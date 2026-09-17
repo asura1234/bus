@@ -432,6 +432,105 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
     }
 }
 
+#[test]
+fn cursor_completion_without_matching_submit_hook_abandons_only_that_request_and_releases_fifo() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Cursor, vec![]);
+    let request = queue(&mut worker, room, agent, "first prompt");
+    let next = queue(&mut worker, room, agent, "next prompt");
+    worker.submit_ready().unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Working, 3)
+        .unwrap();
+
+    for value in [
+        json!({
+            "hook_event_name": "beforeSubmitPrompt",
+            "conversation_id": "session",
+            "generation_id": "turn",
+            "prompt": "different prompt"
+        }),
+        json!({
+            "hook_event_name": "afterAgentResponse",
+            "conversation_id": "session",
+            "generation_id": "turn",
+            "text": "untrusted final"
+        }),
+        json!({
+            "hook_event_name": "stop",
+            "conversation_id": "session",
+            "generation_id": "turn",
+            "status": "completed"
+        }),
+    ] {
+        record(&dir, Provider::Cursor, value);
+    }
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(request)
+    );
+    assert_eq!(
+        callbacks::records(&dir.join("callbacks/launch"))
+            .unwrap()
+            .len(),
+        2
+    );
+
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 4)
+        .unwrap();
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(
+        worker.state.request(request).unwrap().abandon_reason,
+        Some(RequestAbandonReason::CursorSubmitHookUnbound)
+    );
+    assert_eq!(
+        worker
+            .store
+            .load()
+            .unwrap()
+            .unwrap()
+            .request(request)
+            .unwrap()
+            .abandon_reason,
+        Some(RequestAbandonReason::CursorSubmitHookUnbound)
+    );
+    assert_eq!(worker.state.next_queued_request(agent), Some(next));
+    assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
+    assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+    assert!(worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .actionable_error
+        .as_deref()
+        .is_some_and(|message| {
+            message.contains("beforeSubmitPrompt") && message.contains("released")
+        }));
+    assert!(callbacks::records(&dir.join("callbacks/launch"))
+        .unwrap()
+        .is_empty());
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 struct FakeTransport {
     replies: VecDeque<Result<ResponseResult, TransportError>>,
     calls: Arc<Mutex<Vec<&'static str>>>,

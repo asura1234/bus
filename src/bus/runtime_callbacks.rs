@@ -300,6 +300,33 @@ impl Worker {
                                 && callback.sequence > r.submission_boundary.unwrap_or(u64::MAX)
                         })
                 {
+                    let request = state.agent(id).and_then(|agent| agent.current_request);
+                    let cursor_finished_idle = state.agent(id).is_some_and(|agent| {
+                        agent.provider == Provider::Cursor && agent.status == RuntimeStatus::Idle
+                    });
+                    if cursor_finished_idle {
+                        let request = request.ok_or("Cursor completion lost its active request")?;
+                        state
+                            .abandon_unbound_cursor_completion(request, callback.occurred_at_ms)
+                            .map_err(|error| error.to_string())?;
+                        tracing::warn!(
+                            event = "bus.callback.unbound_completion",
+                            reason = "cursor_submit_hook_unbound",
+                            request_id = request.0,
+                            "Unbound Cursor completion abandoned without publishing its reply"
+                        );
+                        self.save(state)?;
+                        for path in remove {
+                            match std::fs::remove_file(path) {
+                                Ok(()) => {}
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                                Err(error) => return Err(error.to_string()),
+                            }
+                        }
+                        crate::platform::sync_parent_directory(dir)
+                            .map_err(|error| error.to_string())?;
+                        continue;
+                    }
                     tracing::debug!(
                         event = "bus.callback.deferred",
                         reason = "trusted_start_missing",

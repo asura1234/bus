@@ -80,6 +80,81 @@ fn room_orchestrator_core_cli_send_durably_queues_and_returns_message_request_id
 }
 
 #[test]
+fn dev_send_and_status_name_the_active_request_blocking_a_queued_message() {
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                session_id: Some("session".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    worker.state.confirm_hook_setup(agent).unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 1)
+        .unwrap();
+
+    let first = call(
+        &mut worker,
+        "send-first",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"first"}),
+    );
+    let active = RequestId(first.result["request_ids"][0].as_u64().unwrap());
+    worker.state.begin_submission(active, "launch", 10).unwrap();
+    worker
+        .state
+        .record_submission(
+            active,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: None,
+            },
+        )
+        .unwrap();
+
+    let queued = call(
+        &mut worker,
+        "send-next",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"next"}),
+    );
+    assert!(queued.ok, "{queued:?}");
+    assert_eq!(
+        queued.result["requests"][0]["reason"],
+        "prior_request_active"
+    );
+    assert_eq!(
+        queued.result["requests"][0]["blocked_by_request_id"],
+        active.0
+    );
+
+    let status = call(
+        &mut worker,
+        "status-next",
+        "message.status",
+        json!({"message":queued.result["message_id"].as_u64().unwrap().to_string()}),
+    );
+    assert!(status.ok, "{status:?}");
+    assert_eq!(
+        status.result["requests"][0]["reason"],
+        "prior_request_active"
+    );
+    assert_eq!(
+        status.result["requests"][0]["blocked_by_request_id"],
+        active.0
+    );
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dev_send_and_history_preserve_explicit_recipient_order() {
     let (mut worker, room, codex, dir) = fixture();
     let claude = worker

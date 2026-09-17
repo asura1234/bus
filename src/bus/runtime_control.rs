@@ -405,7 +405,12 @@ impl Worker {
         for id in &ids {
             crate::bus::diagnostics::request(&self.state, *id, "bus.message.queued", "persisted");
         }
-        Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
+        let requests = ids
+            .iter()
+            .filter_map(|id| self.state.request(*id))
+            .map(|request| self.dev_request_status(request))
+            .collect::<Vec<_>>();
+        Ok(json!({"message_id":message,"request_ids":ids,"requests":requests,"stage":"queued"}))
     }
 
     fn dev_message(&self, message: PromptId) -> Result<Value, String> {
@@ -424,13 +429,46 @@ impl Worker {
                 .position(|id| *id == request.agent_id)
                 .unwrap_or(usize::MAX)
         });
-        Ok(
-            json!({"message_id":message,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"requests":requests.iter().map(|r| {
-            let agent = self.state.agent(r.agent_id);
-            let stage = match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" };
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"reason":if r.phase==RequestPhase::Queued {agent.and_then(crate::bus::diagnostics::wait_reason)}else{None},"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
-        }).collect::<Vec<_>>()}),
-        )
+        Ok(json!({
+            "message_id":message,
+            "complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),
+            "requests":requests.iter().map(|request| self.dev_request_status(request)).collect::<Vec<_>>()
+        }))
+    }
+
+    fn dev_request_status(&self, request: &Request) -> Value {
+        let agent = self.state.agent(request.agent_id);
+        let stage = match request.phase {
+            RequestPhase::Queued => "queued",
+            RequestPhase::Submitting => "submitting",
+            RequestPhase::Active if request.trusted_start_bound => "delivered",
+            RequestPhase::Active => "awaiting_start",
+            RequestPhase::Completed => "replied",
+            RequestPhase::Abandoned => "abandoned",
+        };
+        let reason = match request.phase {
+            RequestPhase::Queued => agent.and_then(crate::bus::diagnostics::wait_reason),
+            RequestPhase::Abandoned => request.abandon_reason.map(RequestAbandonReason::as_str),
+            _ => None,
+        };
+        let blocked_by_request_id = (reason == Some("prior_request_active"))
+            .then(|| agent.and_then(|agent| agent.current_request))
+            .flatten();
+        json!({
+            "request_id":request.id,
+            "agent_id":request.agent_id,
+            "agent_name":agent.map(|agent|&agent.name),
+            "stage":stage,
+            "reason":reason,
+            "blocked_by_request_id":blocked_by_request_id,
+            "detail":agent.and_then(|agent|agent.actionable_error.as_deref()),
+            "status":agent.map(|agent|agent.status),
+            "uncertain_outcome":request.uncertain_outcome,
+            "session_id":request.provider_session_id,
+            "turn_id":request.provider_turn_id,
+            "start_bound":request.trusted_start_bound,
+            "reply":if request.phase==RequestPhase::Completed {request.pending_final.as_ref()}else{None},
+        })
     }
 
     pub(super) fn dev_read(
