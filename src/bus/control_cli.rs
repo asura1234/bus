@@ -17,52 +17,6 @@ use super::control::{self, Request, Response};
 #[path = "control_focus_cli_tests.rs"]
 mod focus_tests;
 
-#[cfg(test)]
-mod capability_tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-
-    const TOKEN: &str = "Rk9vQmFyOTdaeDNRd0x1TnBFc1R2MmhKZGtDeQ";
-
-    fn sent_request(args: &[&str]) -> Request {
-        let args = args
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect::<Vec<_>>();
-        let seen = Arc::new(Mutex::new(None));
-        let sink = Arc::clone(&seen);
-        let mut output = Vec::new();
-        run_with(&args, &mut output, move |request, _| {
-            *sink.lock().unwrap() = Some(request.clone());
-            Ok(Response::success(&request.id, serde_json::Value::Null))
-        })
-        .unwrap();
-        let request = seen.lock().unwrap().clone();
-        request.expect("a developer command must reach the transport")
-    }
-
-    #[test]
-    fn room_orchestrator_control_cli_attaches_the_capability_from_its_environment() {
-        let _guard = crate::config::test_config_env_lock().lock().unwrap();
-        std::env::set_var(crate::bus::orchestrator_control::TOKEN_ENV_VAR, TOKEN);
-
-        let request = sent_request(&["state"]);
-
-        assert_eq!(request.capability.as_deref(), Some(TOKEN));
-        std::env::remove_var(crate::bus::orchestrator_control::TOKEN_ENV_VAR);
-    }
-
-    #[test]
-    fn room_orchestrator_control_cli_omits_the_capability_for_an_unprotected_instance() {
-        let _guard = crate::config::test_config_env_lock().lock().unwrap();
-        std::env::remove_var(crate::bus::orchestrator_control::TOKEN_ENV_VAR);
-
-        let request = sent_request(&["state"]);
-
-        assert!(request.capability.is_none(), "{request:?}");
-    }
-}
-
 pub const HELP: &str = "Developer commands (require an already running Bus --dev instance):
   state
   room create NAME
@@ -157,7 +111,6 @@ fn execute(
         id: id.clone(),
         method: command.method.into(),
         params: command.params,
-        capability: super::orchestrator_control::capability_from_environment(),
     };
     let mut last_status = Value::Null;
     loop {

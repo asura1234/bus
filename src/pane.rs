@@ -144,9 +144,6 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }
-    // The Orchestrator control secret never reaches a managed pane or coding agent,
-    // whether it was inherited from the launch process or named by the caller.
-    cmd.env_remove(crate::bus::orchestrator_control::TOKEN_ENV_VAR);
     cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
     crate::integration::apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
@@ -3479,26 +3476,6 @@ impl PaneRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pane_launch_env_removes_the_orchestrator_control_token() {
-        let token_var = crate::bus::orchestrator_control::TOKEN_ENV_VAR;
-        let mut inherited = CommandBuilder::new("shell");
-        inherited.env(token_var, "inherited-secret");
-
-        apply_pane_launch_env(&mut inherited, &PaneLaunchEnv::default());
-
-        assert!(inherited.get_env(token_var).is_none());
-
-        // A managed launch environment must not be able to reintroduce the secret.
-        let mut requested = CommandBuilder::new("shell");
-        apply_pane_launch_env(
-            &mut requested,
-            &PaneLaunchEnv::from_extra(vec![(token_var.to_owned(), "requested-secret".to_owned())]),
-        );
-
-        assert!(requested.get_env(token_var).is_none());
-    }
 
     #[test]
     fn pane_launch_env_removes_outer_codex_thread_id() {

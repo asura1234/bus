@@ -81,23 +81,6 @@ printf '%s\\n' "$@" > "$FAKE_HERDR_ARGS"
             ["--bus", "--dev", "resume", "--last"],
         )
 
-    def test_dev_forwards_the_orchestrator_control_flag_unchanged(self) -> None:
-        result = self._run("dev", "--orchestrator-control", "resume", "--last")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            self.herdr_args.read_text(encoding="utf-8").splitlines(),
-            ["--bus", "--dev", "--orchestrator-control", "resume", "--last"],
-        )
-
-    def test_dev_control_forwards_arguments_without_injecting_a_capability(self) -> None:
-        result = self._run("dev-control", "state")
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        forwarded = self.herdr_args.read_text(encoding="utf-8")
-        self.assertEqual(forwarded.splitlines(), ["--bus", "--dev", "state"])
-        self.assertNotIn("BUS_ORCHESTRATOR_CONTROL_TOKEN", forwarded)
-
     def test_dev_never_launches_an_existing_binary_after_a_failed_build(self) -> None:
         result = self._run("dev", cargo_exit=17)
 

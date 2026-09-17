@@ -24,32 +24,12 @@ const WORKER_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
 const DEV_COMMAND_BIT: u64 = 1 << 63;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Request {
     pub id: String,
     pub method: String,
     #[serde(default)]
     pub params: Value,
-    /// Present only when the instance was launched with --orchestrator-control;
-    /// omitted on the wire so unprotected instances stay byte-compatible.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capability: Option<String>,
-}
-
-/// Diagnostics keep the request identity and parameters, never the caller's secret.
-impl std::fmt::Debug for Request {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Request")
-            .field("id", &self.id)
-            .field("method", &self.method)
-            .field("params", &self.params)
-            .field(
-                "capability",
-                &self.capability.as_ref().map(|_| "[REDACTED]"),
-            )
-            .finish()
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -570,63 +550,7 @@ mod tests {
             id: id.into(),
             method: "state.get".into(),
             params: Value::Null,
-            capability: None,
         }
-    }
-
-    #[test]
-    fn room_orchestrator_control_request_debug_redacts_the_capability() {
-        let secret = "Rk9vQmFyOTdaeDNRd0x1TnBFc1R2MmhKZGtDeQ";
-        let mut request = Request {
-            id: "debug-1".into(),
-            method: "room.create".into(),
-            params: serde_json::json!({"name": "visible-room"}),
-            capability: Some(secret.into()),
-        };
-
-        let rendered = format!("{request:?}");
-
-        assert!(!rendered.contains(secret), "{rendered}");
-        assert!(!rendered.contains("Rk9vQmFy"), "{rendered}");
-        assert!(rendered.contains("REDACTED"), "{rendered}");
-        // Diagnostics that carry no secret stay readable.
-        assert!(rendered.contains("debug-1"), "{rendered}");
-        assert!(rendered.contains("room.create"), "{rendered}");
-        assert!(rendered.contains("visible-room"), "{rendered}");
-
-        // A DevCall carries the request into coordinator diagnostics.
-        let (reply, _receiver) = mpsc::sync_channel(1);
-        let call = DevCall {
-            request: request.clone(),
-            reply,
-        };
-        assert!(!format!("{call:?}").contains(secret));
-
-        request.capability = None;
-        let unprotected = format!("{request:?}");
-        assert!(!unprotected.contains("REDACTED"), "{unprotected}");
-        assert!(unprotected.contains("debug-1"), "{unprotected}");
-    }
-
-    #[test]
-    fn room_orchestrator_control_request_stays_wire_compatible_without_a_capability() {
-        let legacy: Request =
-            serde_json::from_str(r#"{"id":"legacy-1","method":"state","params":{}}"#).unwrap();
-        assert_eq!(legacy.id, "legacy-1");
-        assert_eq!(legacy.method, "state");
-        assert!(legacy.capability.is_none());
-
-        let encoded = serde_json::to_string(&legacy).unwrap();
-        assert!(
-            !encoded.contains("capability"),
-            "unprotected request must stay byte-compatible: {encoded}"
-        );
-
-        let mut protected = legacy.clone();
-        protected.capability = Some("presented-secret".into());
-        let round_trip: Request =
-            serde_json::from_str(&serde_json::to_string(&protected).unwrap()).unwrap();
-        assert_eq!(round_trip.capability.as_deref(), Some("presented-secret"));
     }
 
     fn read_response(mut stream: ipc::LocalStream) -> Response {
