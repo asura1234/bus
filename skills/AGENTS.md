@@ -17,10 +17,7 @@ workflow layering, artifact lifecycle, and agent communication conventions.
 - Treat `origin` as the Bus fork and `upstream` as the Herdr source. A workflow
   must not push to `upstream` or open an upstream PR unless the user explicitly
   requests it and repository policy permits it.
-- `CONTRIBUTING.md` is inherited from Herdr. Its approved-contributor rule and
-  reference to a root `AGENTS.md` apply when submitting to `herdrdev/herdr`, not
-  to ordinary work in `asura1234/bus`. The Bus fork intentionally has no root
-  `AGENTS.md` or root `CLAUDE.md`.
+- The Bus fork intentionally has no root `AGENTS.md` or root `CLAUDE.md`.
 - The Bus integration base is `origin/master`. Never infer a base from a
   remote's symbolic HEAD.
 - Preserve unrelated and pre-existing worktree changes. Stage explicit paths,

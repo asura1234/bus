@@ -23,8 +23,6 @@ HIDDEN_SUBJECTS = (
     "docs: publish release distribution",
     "docs: update website manifest",
     "docs: update preview manifest",
-    "chore: approve contributor",
-    "chore: approve merged contributor",
 )
 TYPE_HEADINGS = {
     "feat": "Added",
