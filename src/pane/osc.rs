@@ -24,6 +24,24 @@ impl DefaultColorQuery {
     }
 }
 
+/// String terminator a child used to end an OSC sequence. Replies must repeat
+/// the terminator the query arrived with: clients that scan for one form drop a
+/// reply that ends with the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OscTerminator {
+    Bel,
+    St,
+}
+
+impl OscTerminator {
+    pub(super) fn as_bytes(self) -> &'static [u8] {
+        match self {
+            Self::Bel => b"\x07",
+            Self::St => b"\x1b\\",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DefaultColorEvent {
     Query(DefaultColorQuery),
@@ -36,6 +54,7 @@ pub(super) enum DefaultColorEvent {
 pub(super) struct DefaultColorTrackedEvent {
     pub(super) end_offset: usize,
     pub(super) event: DefaultColorEvent,
+    pub(super) terminator: OscTerminator,
 }
 
 #[derive(Debug, Default)]
@@ -180,7 +199,7 @@ impl DefaultColorEventTracker {
                 }
                 DefaultColorOscTrackerState::OscBody => match byte {
                     0x07 => {
-                        self.finalize(index + 1);
+                        self.finalize(index + 1, OscTerminator::Bel);
                         self.state = DefaultColorOscTrackerState::Ground;
                     }
                     0x1b => self.state = DefaultColorOscTrackerState::OscEscape,
@@ -188,7 +207,7 @@ impl DefaultColorEventTracker {
                 },
                 DefaultColorOscTrackerState::OscEscape => {
                     if byte == b'\\' {
-                        self.finalize(index + 1);
+                        self.finalize(index + 1, OscTerminator::St);
                         self.state = DefaultColorOscTrackerState::Ground;
                     } else {
                         self.body.push(0x1b);
@@ -231,11 +250,15 @@ impl DefaultColorEventTracker {
         }
     }
 
-    fn finalize(&mut self, end_offset: usize) {
+    fn finalize(&mut self, end_offset: usize, terminator: OscTerminator) {
         self.pending.extend(
             parse_default_color_events(&self.body)
                 .into_iter()
-                .map(|event| DefaultColorTrackedEvent { end_offset, event }),
+                .map(|event| DefaultColorTrackedEvent {
+                    end_offset,
+                    event,
+                    terminator,
+                }),
         );
         self.body.clear();
     }
@@ -1249,6 +1272,32 @@ mod tests {
                 DefaultColorEvent::PaletteQuery(0),
                 DefaultColorEvent::Set(DefaultColorQuery::Foreground),
                 DefaultColorEvent::Reset(DefaultColorQuery::Background),
+            ]
+        );
+    }
+
+    #[test]
+    fn default_color_event_tracker_records_the_terminator_each_query_used() {
+        let mut tracker = DefaultColorEventTracker::default();
+
+        tracker.observe(b"\x1b]10;?\x07\x1b]11;?\x1b\\\x1b]4;7;?\x07");
+
+        assert_eq!(
+            tracker
+                .drain_pending()
+                .into_iter()
+                .map(|event| (event.event, event.terminator))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    DefaultColorEvent::Query(DefaultColorQuery::Foreground),
+                    OscTerminator::Bel
+                ),
+                (
+                    DefaultColorEvent::Query(DefaultColorQuery::Background),
+                    OscTerminator::St
+                ),
+                (DefaultColorEvent::PaletteQuery(7), OscTerminator::Bel),
             ]
         );
     }

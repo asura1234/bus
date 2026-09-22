@@ -4,6 +4,7 @@
 
 ### Fixed
 - Ctrl+C now waits for in-flight host palette replies before restoring terminal echo, preventing raw OSC color data from appearing at the shell prompt.
+- Panes now always answer a program's `OSC 10`/`11`/`12` default-color queries, instead of staying silent when Herdr has not learned its own terminal's colors. Terminal UIs that wait for that report no longer stall at startup. Replies also repeat the string terminator the query used, so a `BEL`-terminated query gets a `BEL`-terminated reply.
 
 ## [0.9.0] - 2026-09-07
 

@@ -191,6 +191,7 @@ pub const MODE_COLOR_SCHEME_REPORT: u16 = 2031;
 // These are documented in vendor/libghostty-vt/include/ghostty/vt/terminal.h,
 // but the generated bindings do not currently expose named constants for them.
 const TERMINAL_DATA_COLOR_FOREGROUND: ffi::GhosttyTerminalData = 18;
+const TERMINAL_DATA_COLOR_BACKGROUND: ffi::GhosttyTerminalData = 19;
 const TERMINAL_DATA_COLOR_CURSOR: ffi::GhosttyTerminalData = 20;
 
 const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
@@ -1462,6 +1463,10 @@ impl Terminal {
 
     pub fn effective_foreground_color(&self) -> Result<Option<RgbColor>, Error> {
         self.get_optional_rgb_color(TERMINAL_DATA_COLOR_FOREGROUND)
+    }
+
+    pub fn effective_background_color(&self) -> Result<Option<RgbColor>, Error> {
+        self.get_optional_rgb_color(TERMINAL_DATA_COLOR_BACKGROUND)
     }
 
     pub fn effective_cursor_color(&self) -> Result<Option<RgbColor>, Error> {

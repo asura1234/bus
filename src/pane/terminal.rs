@@ -33,7 +33,7 @@ use super::{
         maybe_filter_primary_screen_scrollback_clear, parse_reported_cwd,
         restore_host_terminal_theme_if_needed, write_host_terminal_theme_selective,
         AgentOscStateTracker, DefaultColorEvent, DefaultColorEventTracker, DefaultColorOscTracker,
-        DefaultColorQuery, DefaultColorTrackedEvent, OscDebugTracker,
+        DefaultColorQuery, DefaultColorTrackedEvent, OscDebugTracker, OscTerminator,
     },
     xtgettcap::{XtgettcapQueryTracker, XtgettcapResponse},
 };
@@ -1497,7 +1497,8 @@ impl GhosttyPaneTerminal {
             }
             match event {
                 OrderedPtyResponseEvent::DefaultColor(event) => {
-                    let replacement = respond_to_default_color_event(core, event.event);
+                    let replacement =
+                        respond_to_default_color_event(core, event.event, event.terminator);
                     if replacement.is_some() {
                         remove_last_matching_libghostty_color_reply(
                             &mut libghostty_responses,
@@ -1518,7 +1519,7 @@ impl GhosttyPaneTerminal {
             core.terminal.write(&bytes[written..]);
             let mut libghostty_responses = self.drain_pending_pty_responses();
             if let Some(event) = in_progress_default_color_event {
-                if default_color_event_response(core, event).is_some() {
+                if default_color_event_color(core, event).is_some() {
                     remove_last_matching_libghostty_color_reply(&mut libghostty_responses, event);
                 }
             }
@@ -3222,10 +3223,11 @@ fn is_matching_libghostty_color_reply(response: &Bytes, event: DefaultColorEvent
 fn respond_to_default_color_event(
     core: &mut GhosttyPaneCore,
     event: DefaultColorEvent,
+    terminator: OscTerminator,
 ) -> Option<Bytes> {
     match event {
         DefaultColorEvent::Query(_) | DefaultColorEvent::PaletteQuery(_) => {
-            default_color_event_response(core, event)
+            default_color_event_response(core, event, terminator)
         }
         DefaultColorEvent::Set(query) => {
             mark_child_default_color_changed(core, query, true);
@@ -3242,78 +3244,114 @@ fn respond_to_default_color_event(
 fn default_color_event_response(
     core: &mut GhosttyPaneCore,
     event: DefaultColorEvent,
+    terminator: OscTerminator,
 ) -> Option<Bytes> {
+    let command = default_color_event_command(event)?;
+    let color = default_color_event_color(core, event)?;
+    Some(osc_rgb_response(&command, color, terminator))
+}
+
+fn default_color_event_command(event: DefaultColorEvent) -> Option<String> {
     match event {
-        DefaultColorEvent::Query(query) => default_color_query_response(query, core),
-        DefaultColorEvent::PaletteQuery(index) => palette_color_query_response(index, core),
+        DefaultColorEvent::Query(query) => Some(query.osc_number().to_string()),
+        DefaultColorEvent::PaletteQuery(index) => Some(format!("4;{index}")),
         DefaultColorEvent::Set(_) | DefaultColorEvent::Reset(_) => None,
     }
 }
 
-fn default_color_query_response(
+fn default_color_event_color(
+    core: &mut GhosttyPaneCore,
+    event: DefaultColorEvent,
+) -> Option<crate::ghostty::RgbColor> {
+    match event {
+        DefaultColorEvent::Query(query) => default_color_query_color(query, core),
+        DefaultColorEvent::PaletteQuery(index) => palette_color_query_color(index, core),
+        DefaultColorEvent::Set(_) | DefaultColorEvent::Reset(_) => None,
+    }
+}
+
+/// Answers an OSC 10/11/12 query. A child that asks the terminal for its default
+/// colors can block until it is answered, and libghostty only reports a slot it
+/// was explicitly told about, so every query has to resolve to a color here: the
+/// host terminal theme when Bus knows it and the child has not overridden that
+/// slot, then the value the child itself installed, and finally the color Bus
+/// actually paints the pane with.
+fn default_color_query_color(
     query: DefaultColorQuery,
     core: &mut GhosttyPaneCore,
-) -> Option<Bytes> {
-    let color = match query {
-        DefaultColorQuery::Foreground if !core.child_default_foreground_changed => core
-            .host_terminal_theme
-            .foreground
-            .map(host_theme_color_to_ghostty),
-        DefaultColorQuery::Background if !core.child_default_background_changed => core
-            .host_terminal_theme
-            .background
-            .map(host_theme_color_to_ghostty),
+) -> Option<crate::ghostty::RgbColor> {
+    match query {
+        DefaultColorQuery::Foreground => {
+            if !core.child_default_foreground_changed {
+                if let Some(color) = core.host_terminal_theme.foreground {
+                    return Some(host_theme_color_to_ghostty(color));
+                }
+            }
+            if let Some(color) = core.terminal.effective_foreground_color().ok().flatten() {
+                return Some(color);
+            }
+            rendered_colors(core).map(|colors| colors.foreground)
+        }
+        DefaultColorQuery::Background => {
+            if !core.child_default_background_changed {
+                if let Some(color) = core.host_terminal_theme.background {
+                    return Some(host_theme_color_to_ghostty(color));
+                }
+            }
+            if let Some(color) = core.terminal.effective_background_color().ok().flatten() {
+                return Some(color);
+            }
+            rendered_colors(core).map(|colors| colors.background)
+        }
         DefaultColorQuery::Cursor => cursor_color_query_color(core),
-        _ => None,
-    }?;
-    Some(osc_rgb_response(
-        &query.osc_number().to_string(),
-        color.r,
-        color.g,
-        color.b,
-    ))
+    }
 }
 
 fn cursor_color_query_color(core: &mut GhosttyPaneCore) -> Option<crate::ghostty::RgbColor> {
-    let host_foreground = core.host_terminal_theme.foreground;
-    let child_foreground_changed = core.child_default_foreground_changed;
-    core.terminal
-        .effective_cursor_color()
-        .ok()
-        .flatten()
-        .or_else(|| {
-            if child_foreground_changed {
-                core.terminal.effective_foreground_color().ok().flatten()
-            } else {
-                host_foreground
-                    .map(host_theme_color_to_ghostty)
-                    .or_else(|| core.terminal.effective_foreground_color().ok().flatten())
-            }
-        })
+    if let Some(color) = core.terminal.effective_cursor_color().ok().flatten() {
+        return Some(color);
+    }
+    if !core.child_default_foreground_changed {
+        if let Some(color) = core.host_terminal_theme.foreground {
+            return Some(host_theme_color_to_ghostty(color));
+        }
+    }
+    if let Some(color) = core.terminal.effective_foreground_color().ok().flatten() {
+        return Some(color);
+    }
+    rendered_colors(core).map(|colors| colors.foreground)
 }
 
-fn palette_color_query_response(index: u8, core: &mut GhosttyPaneCore) -> Option<Bytes> {
+fn palette_color_query_color(
+    index: u8,
+    core: &mut GhosttyPaneCore,
+) -> Option<crate::ghostty::RgbColor> {
+    rendered_colors(core).map(|colors| colors.palette[usize::from(index)])
+}
+
+/// The colors this pane is currently painted with, which is what a child that
+/// asks the terminal about its own colors needs to hear.
+fn rendered_colors(core: &mut GhosttyPaneCore) -> Option<crate::ghostty::RenderColors> {
     let GhosttyPaneCore {
         terminal,
         render_state,
         ..
     } = core;
     render_state.update(terminal).ok()?;
-    let colors = render_state.colors().ok()?;
-    let color = colors.palette[usize::from(index)];
-    Some(osc_rgb_response(
-        &format!("4;{index}"),
-        color.r,
-        color.g,
-        color.b,
-    ))
+    render_state.colors().ok()
 }
 
-fn osc_rgb_response(command: &str, r: u8, g: u8, b: u8) -> Bytes {
-    let r = u16::from(r) * 257;
-    let g = u16::from(g) * 257;
-    let b = u16::from(b) * 257;
-    Bytes::from(format!("\x1b]{command};rgb:{r:04x}/{g:04x}/{b:04x}\x1b\\"))
+fn osc_rgb_response(
+    command: &str,
+    color: crate::ghostty::RgbColor,
+    terminator: OscTerminator,
+) -> Bytes {
+    let r = u16::from(color.r) * 257;
+    let g = u16::from(color.g) * 257;
+    let b = u16::from(color.b) * 257;
+    let mut response = format!("\x1b]{command};rgb:{r:04x}/{g:04x}/{b:04x}").into_bytes();
+    response.extend_from_slice(terminator.as_bytes());
+    Bytes::from(response)
 }
 
 fn host_theme_color_to_ghostty(color: crate::terminal_theme::RgbColor) -> crate::ghostty::RgbColor {
@@ -3937,11 +3975,28 @@ mod tests {
         render_state.colors().unwrap().palette[usize::from(index)]
     }
 
-    fn expected_osc_rgb_response(command: &str, color: crate::ghostty::RgbColor) -> Bytes {
+    fn current_default_colors(pane: &GhosttyPaneTerminal) -> crate::ghostty::RenderColors {
+        let mut core = pane.core.lock().unwrap();
+        let GhosttyPaneCore {
+            terminal,
+            render_state,
+            ..
+        } = &mut *core;
+        render_state.update(terminal).unwrap();
+        render_state.colors().unwrap()
+    }
+
+    fn expected_osc_rgb_response(
+        command: &str,
+        color: crate::ghostty::RgbColor,
+        terminator: &str,
+    ) -> Bytes {
         let r = u16::from(color.r) * 257;
         let g = u16::from(color.g) * 257;
         let b = u16::from(color.b) * 257;
-        Bytes::from(format!("\x1b]{command};rgb:{r:04x}/{g:04x}/{b:04x}\x1b\\"))
+        Bytes::from(format!(
+            "\x1b]{command};rgb:{r:04x}/{g:04x}/{b:04x}{terminator}"
+        ))
     }
 
     #[test]
@@ -6036,7 +6091,7 @@ mod tests {
             result.terminal_responses,
             vec![
                 expected_xtgettcap_response("5463", None),
-                Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x1b\\"),
+                Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x07"),
             ]
         );
         assert!(rx.try_recv().is_err());
@@ -6093,7 +6148,7 @@ mod tests {
         let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]11;?\x07", &tx);
         assert_eq!(
             result.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]11;rgb:aaaa/bbbb/cccc\x1b\\")]
+            vec![Bytes::from_static(b"\x1b]11;rgb:aaaa/bbbb/cccc\x07")]
         );
         assert!(rx.try_recv().is_err());
     }
@@ -6222,7 +6277,7 @@ mod tests {
         assert_eq!(result.terminal_responses.len(), 2);
         assert_eq!(
             result.terminal_responses[0],
-            Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x1b\\")
+            Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x07")
         );
         assert!(String::from_utf8_lossy(&result.terminal_responses[1]).contains('c'));
         assert!(rx.try_recv().is_err());
@@ -6249,7 +6304,7 @@ mod tests {
 
         assert_eq!(
             result.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]4;0;rgb:1111/2222/3333\x1b\\")]
+            vec![Bytes::from_static(b"\x1b]4;0;rgb:1111/2222/3333\x07")]
         );
         assert!(rx.try_recv().is_err());
     }
@@ -6282,11 +6337,11 @@ mod tests {
         assert_eq!(result.terminal_responses.len(), 256);
         assert_eq!(
             result.terminal_responses[0],
-            Bytes::from_static(b"\x1b]4;0;rgb:0000/2222/3333\x1b\\")
+            Bytes::from_static(b"\x1b]4;0;rgb:0000/2222/3333\x07")
         );
         assert_eq!(
             result.terminal_responses[255],
-            Bytes::from_static(b"\x1b]4;255;rgb:ffff/2222/3333\x1b\\")
+            Bytes::from_static(b"\x1b]4;255;rgb:ffff/2222/3333\x07")
         );
     }
 
@@ -6350,7 +6405,7 @@ mod tests {
 
         assert_eq!(
             result.terminal_responses,
-            vec![expected_osc_rgb_response("4;255", color)]
+            vec![expected_osc_rgb_response("4;255", color, "\x1b\\")]
         );
         assert!(rx.try_recv().is_err());
     }
@@ -6403,11 +6458,11 @@ mod tests {
         assert_eq!(result.terminal_responses.len(), 3);
         assert_eq!(
             result.terminal_responses[0],
-            expected_osc_rgb_response("4;0", color)
+            expected_osc_rgb_response("4;0", color, "\x07")
         );
         assert_eq!(
             result.terminal_responses[1],
-            Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x1b\\")
+            Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x07")
         );
         assert!(String::from_utf8_lossy(&result.terminal_responses[2]).contains('c'));
         assert!(rx.try_recv().is_err());
@@ -6433,8 +6488,92 @@ mod tests {
 
         assert_eq!(
             result.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x1b\\")]
+            vec![Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x07")]
         );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn process_pty_bytes_answers_default_color_queries_without_a_host_theme() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        let colors = current_default_colors(&pane);
+
+        // Bus has not learned its own host terminal's colors, which is the
+        // normal case under a detached multiplexer. The pane still has to
+        // answer, with the colors it paints, or a child that waits on the
+        // report never draws.
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\", &tx);
+
+        assert_eq!(
+            result.terminal_responses,
+            vec![
+                expected_osc_rgb_response("10", colors.foreground, "\x1b\\"),
+                expected_osc_rgb_response("11", colors.background, "\x1b\\"),
+            ]
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn process_pty_bytes_mirrors_query_terminator_in_default_color_reply() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        let colors = current_default_colors(&pane);
+
+        let bel = pane.process_pty_bytes(pane_id, 0, b"\x1b]11;?\x07", &tx);
+        assert_eq!(
+            bel.terminal_responses,
+            vec![expected_osc_rgb_response("11", colors.background, "\x07")]
+        );
+
+        let st = pane.process_pty_bytes(pane_id, 0, b"\x1b]11;?\x1b\\", &tx);
+        assert_eq!(
+            st.terminal_responses,
+            vec![expected_osc_rgb_response("11", colors.background, "\x1b\\")]
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn process_pty_bytes_answers_every_tui_startup_capability_query() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let terminal = crate::ghostty::Terminal::new(120, 30, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        let colors = current_default_colors(&pane);
+
+        // The startup preamble a Codex-style TUI writes: mode sets that need no
+        // answer, then cursor position, both default colors, the Kitty keyboard
+        // flags and primary device attributes, which all do.
+        let result = pane.process_pty_bytes(
+            pane_id,
+            0,
+            b"\x1b[?2004h\x1b[>4;0m\x1b[>5u\x1b[?1004h\x1b[6n\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[?u\x1b[c",
+            &tx,
+        );
+
+        let replies: Vec<String> = result
+            .terminal_responses
+            .iter()
+            .map(|response| String::from_utf8_lossy(response).into_owned())
+            .collect();
+        assert_eq!(replies.len(), 5, "unanswered startup query: {replies:?}");
+        assert!(replies[0].ends_with('R'), "no cursor position report");
+        assert_eq!(
+            result.terminal_responses[1],
+            expected_osc_rgb_response("10", colors.foreground, "\x1b\\")
+        );
+        assert_eq!(
+            result.terminal_responses[2],
+            expected_osc_rgb_response("11", colors.background, "\x1b\\")
+        );
+        assert!(replies[3].ends_with('u'), "no Kitty keyboard flags report");
+        assert!(replies[4].ends_with('c'), "no device attributes report");
         assert!(rx.try_recv().is_err());
     }
 
@@ -6561,7 +6700,7 @@ mod tests {
 
         assert_eq!(
             result.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]12;rgb:6565/7b7b/8383\x1b\\")]
+            vec![Bytes::from_static(b"\x1b]12;rgb:6565/7b7b/8383\x07")]
         );
         assert!(rx.try_recv().is_err());
     }
@@ -6587,7 +6726,7 @@ mod tests {
 
         assert_eq!(
             result.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]12;rgb:1111/2222/3333\x1b\\")]
+            vec![Bytes::from_static(b"\x1b]12;rgb:1111/2222/3333\x07")]
         );
         assert!(rx.try_recv().is_err());
     }
@@ -6613,7 +6752,7 @@ mod tests {
 
         assert_eq!(
             result.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]12;rgb:1111/2222/3333\x1b\\")]
+            vec![Bytes::from_static(b"\x1b]12;rgb:1111/2222/3333\x07")]
         );
         assert!(rx.try_recv().is_err());
     }
@@ -6644,9 +6783,9 @@ mod tests {
         assert_eq!(
             result.terminal_responses,
             vec![
-                Bytes::from_static(b"\x1b]10;rgb:6565/7b7b/8383\x1b\\"),
-                Bytes::from_static(b"\x1b]11;rgb:fdfd/f6f6/e3e3\x1b\\"),
-                Bytes::from_static(b"\x1b]12;rgb:6565/7b7b/8383\x1b\\"),
+                Bytes::from_static(b"\x1b]10;rgb:6565/7b7b/8383\x07"),
+                Bytes::from_static(b"\x1b]11;rgb:fdfd/f6f6/e3e3\x07"),
+                Bytes::from_static(b"\x1b]12;rgb:6565/7b7b/8383\x07"),
             ]
         );
         assert!(rx.try_recv().is_err());
@@ -6741,7 +6880,7 @@ mod tests {
         let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]111\x07\x1b]11;?\x07", &tx);
         assert_eq!(
             result.terminal_responses,
-            vec![Bytes::from_static(b"\x1b]11;rgb:fdfd/f6f6/e3e3\x1b\\")]
+            vec![Bytes::from_static(b"\x1b]11;rgb:fdfd/f6f6/e3e3\x07")]
         );
         assert!(rx.try_recv().is_err());
     }
