@@ -131,6 +131,25 @@ fn claude_stop_with_live_background_work_is_progress_not_a_final_reply() {
     ));
 }
 
+/// Claude Code 2.1.x reports a long terminal paste to `UserPromptSubmit` as
+/// `\n\n<pasted_content id="ID">\n{text}\n</pasted_content id="ID">\n` rather
+/// than the text it submits to the model. Bus submits each request as one paste
+/// with nothing typed around it, so only a prompt that is exactly one such block
+/// is unwrapped; anything else is kept verbatim and must match exactly.
+fn unwrap_claude_paste(prompt: String) -> String {
+    let unwrapped = (|| {
+        let framed = prompt.trim_matches(|c: char| c.is_ascii_whitespace());
+        let rest = framed.strip_prefix("<pasted_content id=\"")?;
+        let (id, rest) = rest.split_once("\">\n")?;
+        if id.is_empty() || id.contains(['"', '<', '>', '\n']) {
+            return None;
+        }
+        rest.strip_suffix(&format!("\n</pasted_content id=\"{id}\">"))
+            .map(str::to_owned)
+    })();
+    unwrapped.unwrap_or(prompt)
+}
+
 pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String> {
     let event = field(value, "hook_event_name")?;
     // Codex's title/memory background sessions inherit hooks but have no
@@ -171,11 +190,18 @@ pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String>
         },
     )?;
     match event.as_str() {
-        "UserPromptSubmit" if !cursor => Ok(Parsed::Started {
-            session,
-            turn,
-            prompt: field(value, "prompt")?,
-        }),
+        "UserPromptSubmit" if !cursor => {
+            let prompt = field(value, "prompt")?;
+            Ok(Parsed::Started {
+                session,
+                turn,
+                prompt: if provider == Provider::ClaudeCode {
+                    unwrap_claude_paste(prompt)
+                } else {
+                    prompt
+                },
+            })
+        }
         "beforeSubmitPrompt" if cursor => Ok(Parsed::Started {
             session,
             turn,
@@ -397,6 +423,40 @@ mod tests {
         )
         .is_err());
         assert_eq!(parse(Provider::Codex, &json!({"hook_event_name":"UserPromptSubmit","session_id":"s","turn_id":"t","prompt":"same","transcript_path":"/tmp/interactive.jsonl"})).unwrap(), Parsed::Started {session:"s".into(),turn:"t".into(),prompt:"same".into()});
+    }
+
+    #[test]
+    fn claude_long_paste_framing_is_unwrapped_to_the_submitted_text() {
+        let text = "Reply with just: pong\n\n- one\n- two\n\nDone.";
+        let started = |prompt: String| {
+            parse(
+                Provider::ClaudeCode,
+                &json!({"hook_event_name":"UserPromptSubmit","session_id":"s","prompt_id":"p","prompt":prompt}),
+            )
+            .unwrap()
+        };
+        let expected = |prompt: &str| Parsed::Started {
+            session: "s".into(),
+            turn: "p".into(),
+            prompt: prompt.into(),
+        };
+        // Shape captured from Claude Code 2.1.281 for a 1227-byte Bus paste.
+        let framed =
+            format!("\n\n<pasted_content id=\"b603\">\n{text}\n</pasted_content id=\"b603\">\n");
+        assert_eq!(started(framed), expected(text));
+        // Mismatched ids, typed text around the block and short prompts stay verbatim.
+        let mismatched = format!("<pasted_content id=\"a1\">\n{text}\n</pasted_content id=\"b2\">");
+        assert_eq!(started(mismatched.clone()), expected(&mismatched));
+        let typed =
+            format!("note\n\n<pasted_content id=\"a1\">\n{text}\n</pasted_content id=\"a1\">");
+        assert_eq!(started(typed.clone()), expected(&typed));
+        assert_eq!(started(text.into()), expected(text));
+        // Codex prompts are never unwrapped.
+        let framed = format!("<pasted_content id=\"a1\">\n{text}\n</pasted_content id=\"a1\">");
+        assert_eq!(
+            parse(Provider::Codex, &json!({"hook_event_name":"UserPromptSubmit","session_id":"s","turn_id":"t","prompt":framed,"transcript_path":"/tmp/i.jsonl"})).unwrap(),
+            Parsed::Started { session: "s".into(), turn: "t".into(), prompt: framed.clone() }
+        );
     }
 
     #[test]
