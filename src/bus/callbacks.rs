@@ -117,17 +117,42 @@ fn claude_stop_with_live_background_work_is_progress_not_a_final_reply() {
         );
     }
 
-    let settled = serde_json::json!({
+    // Shape captured from Claude Code 2.1.281: a shell left running by an
+    // earlier turn is listed on every later Stop and must not hold the reply.
+    for background_tasks in [
+        serde_json::json!([]),
+        serde_json::json!([
+            {"id":"bi0m87z1r","type":"shell","status":"running","command":"find / -name x | head -3","description":"Find source"},
+            {"id":"bl9tk0sxp","type":"shell","status":"running","command":"sleep 240","description":"Sleep"}
+        ]),
+    ] {
+        let settled = serde_json::json!({
+            "hook_event_name":"Stop",
+            "session_id":"claude-session",
+            "prompt_id":"prompt-1",
+            "last_assistant_message":"Final review",
+            "background_tasks":background_tasks,
+            "session_crons":[]
+        });
+        assert!(matches!(
+            parse(Provider::ClaudeCode, &settled).unwrap(),
+            Parsed::Final { text, .. } if text == "Final review"
+        ));
+    }
+    let agent_beside_shell = serde_json::json!({
         "hook_event_name":"Stop",
         "session_id":"claude-session",
         "prompt_id":"prompt-1",
-        "last_assistant_message":"Final review",
-        "background_tasks":[],
+        "last_assistant_message":"Waiting for reviewers",
+        "background_tasks":[
+            {"id":"shell-1","type":"shell","status":"running"},
+            {"id":"agent-1","type":"local_agent","status":"running"}
+        ],
         "session_crons":[]
     });
     assert!(matches!(
-        parse(Provider::ClaudeCode, &settled).unwrap(),
-        Parsed::Final { text, .. } if text == "Final review"
+        parse(Provider::ClaudeCode, &agent_beside_shell).unwrap(),
+        Parsed::BackgroundPending { .. }
     ));
 }
 
@@ -148,6 +173,22 @@ fn unwrap_claude_paste(prompt: String) -> String {
             .map(str::to_owned)
     })();
     unwrapped.unwrap_or(prompt)
+}
+
+/// Whether a Claude `Stop` pauses for background work that will wake the turn
+/// with the real reply. Background agents and session crons do; background
+/// shells do not: Claude reports the turn "done" while they run, and a shell
+/// left running (for example a hung `find /`) is still listed by every later
+/// `Stop` of the session, so holding on it would stall this and every later
+/// request forever. A shell that later completes starts its own wake-up turn.
+fn claude_turn_awaits_background(value: &Value) -> bool {
+    let listed = |key: &str| value.get(key).and_then(Value::as_array);
+    listed("session_crons").is_some_and(|crons| !crons.is_empty())
+        || listed("background_tasks").is_some_and(|tasks| {
+            tasks
+                .iter()
+                .any(|task| task.get("type").and_then(Value::as_str) != Some("shell"))
+        })
 }
 
 pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String> {
@@ -207,15 +248,7 @@ pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String>
             turn,
             prompt: field(value, "prompt")?,
         }),
-        "Stop"
-            if provider == Provider::ClaudeCode
-                && ["background_tasks", "session_crons"].iter().any(|key| {
-                    value
-                        .get(*key)
-                        .and_then(Value::as_array)
-                        .is_some_and(|items| !items.is_empty())
-                }) =>
-        {
+        "Stop" if provider == Provider::ClaudeCode && claude_turn_awaits_background(value) => {
             Ok(Parsed::BackgroundPending { session, turn })
         }
         "Stop" if !cursor => Ok(Parsed::Final {
