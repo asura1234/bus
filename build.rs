@@ -213,6 +213,49 @@ fn zig_target(target: &str) -> &str {
     }
 }
 
+const VENDORED_INPUTS: &[&str] = &[
+    "build.zig",
+    "build.zig.zon",
+    "include",
+    "pkg",
+    "src",
+    "VERSION",
+];
+
+fn newest_mtime(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    let metadata = fs::metadata(path).ok()?;
+    let own = metadata.modified().ok();
+    if !metadata.is_dir() {
+        return own;
+    }
+    fs::read_dir(path)
+        .ok()?
+        .filter_map(|entry| newest_mtime(&entry.ok()?.path()))
+        .chain(own)
+        .max()
+}
+
+/// Zig re-resolves every dependency from the network on each run, so skip it when the
+/// previous output was built with the same arguments and no vendored input is newer.
+fn vendored_lib_is_fresh(
+    vendored_dir: &std::path::Path,
+    stamp: &std::path::Path,
+    key: &str,
+) -> bool {
+    let Ok(recorded) = fs::read_to_string(stamp) else {
+        return false;
+    };
+    let Some(built) = fs::metadata(stamp).and_then(|m| m.modified()).ok() else {
+        return false;
+    };
+    recorded == key
+        && VENDORED_INPUTS
+            .iter()
+            .map(|input| vendored_dir.join(input))
+            .chain([vendored_dir.with_extension("vendor.json")])
+            .all(|input| newest_mtime(&input).is_some_and(|mtime| mtime <= built))
+}
+
 fn env_bool(name: &str) -> Option<bool> {
     match env::var(name) {
         Ok(value) => match value.to_ascii_lowercase().as_str() {
@@ -261,6 +304,7 @@ fn main() {
 
     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
     let mut command = Command::new(&zig);
+    command.current_dir(&vendored_dir);
     command
         .arg("build")
         .arg("-Demit-lib-vt")
@@ -273,27 +317,14 @@ fn main() {
         command.arg("--system").arg(system_dir);
     }
 
-    let status = command
-        .current_dir(&vendored_dir)
-        .status()
-        .unwrap_or_else(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                panic!(
-                    "zig executable not found (looked for {zig:?}; set the ZIG \
-                     environment variable to point at the zig binary). Building \
-                     the vendored libghostty-vt requires Zig 0.15.2: on macOS run \
-                     `brew install zig@0.15`, elsewhere install it from \
-                     https://ziglang.org/download/, then retry the build"
-                );
-            }
-            panic!("failed to execute zig build for vendored libghostty-vt: {err}");
-        });
-    assert!(
-        status.success(),
-        "zig build for vendored libghostty-vt failed: {status}"
-    );
-
     let lib_dir = vendored_dir.join("zig-out/lib");
+    let stamp = lib_dir.join(".herdr-build-stamp");
+    let stamp_key = format!("{zig} {:?}", command.get_args().collect::<Vec<_>>());
+    if !vendored_lib_is_fresh(&vendored_dir, &stamp, &stamp_key) {
+        build_vendored_lib(command, &zig);
+        fs::write(&stamp, &stamp_key).expect("failed to write libghostty-vt build stamp");
+    }
+
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     if target.contains("apple-darwin") {
         let static_lib = lib_dir.join("libghostty-vt.a");
@@ -303,4 +334,23 @@ fn main() {
     } else {
         println!("cargo:rustc-link-lib=static=ghostty-vt");
     }
+}
+
+fn build_vendored_lib(mut command: Command, zig: &str) {
+    let status = command.status().unwrap_or_else(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            panic!(
+                "zig executable not found (looked for {zig:?}; set the ZIG \
+                     environment variable to point at the zig binary). Building \
+                     the vendored libghostty-vt requires Zig 0.15.2: on macOS run \
+                     `brew install zig@0.15`, elsewhere install it from \
+                     https://ziglang.org/download/, then retry the build"
+            );
+        }
+        panic!("failed to execute zig build for vendored libghostty-vt: {err}");
+    });
+    assert!(
+        status.success(),
+        "zig build for vendored libghostty-vt failed: {status}"
+    );
 }
