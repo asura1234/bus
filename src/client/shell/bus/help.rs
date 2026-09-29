@@ -41,7 +41,7 @@ Ctrl+Shift+R   Add a room
 Ctrl+N         Add an agent
 F2             Rename selected room or agent
 Double-click   Rename a room or agent name
-× beside name  Delete room / agent after confirmation
+× beside name  Delete open room / any agent after confirmation
 Esc / Enter    Cancel / OK in the delete warning
 F6             Return from terminal to room
 

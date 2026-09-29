@@ -691,13 +691,15 @@ impl BusUi {
                     false,
                 );
             }
-            view.row(
-                at(sidebar.width.saturating_sub(3), y - 1, 1),
-                "×",
-                Some(Action::Delete(DeleteTarget::Room(room.id))),
-                false,
-                true,
-            );
+            if Some(room.id) == self.room {
+                view.row(
+                    at(sidebar.width.saturating_sub(3), y - 1, 1),
+                    "×",
+                    Some(Action::Delete(DeleteTarget::Room(room.id))),
+                    false,
+                    true,
+                );
+            }
         }
         view.sidebar_divider = at(1, y, sw);
         y += 1;

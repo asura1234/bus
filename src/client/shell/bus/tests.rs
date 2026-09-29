@@ -2716,6 +2716,28 @@ fn mouse(ui: &mut BusUi, kind: crossterm::event::MouseEventKind, column: u16, ro
 }
 
 #[test]
+fn only_the_selected_room_offers_a_delete_button() {
+    let (mut ui, first, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let second = snapshot.state.create_room("second").unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    for selected in [first, second] {
+        ui.open_room(selected);
+        ui.compute_view(100, 30);
+        let deletable: Vec<_> = ui
+            .view
+            .hits
+            .iter()
+            .filter_map(|hit| match hit.action {
+                render::Action::Delete(super::deletion::DeleteTarget::Room(room)) => Some(room),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deletable, [selected]);
+    }
+}
+
+#[test]
 fn overflow_rooms_remain_reachable_after_early_selection_and_restart() {
     use crossterm::event::MouseEventKind::{ScrollDown, ScrollUp};
     let (mut ui, first, _) = fixture();
