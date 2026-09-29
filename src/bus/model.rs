@@ -2270,6 +2270,71 @@ mod tests {
     }
 
     #[test]
+    fn claude_long_paste_with_attached_file_binds_its_trusted_start() {
+        let (mut state, room, _, claude) = state_with_room_and_agents();
+        let text = "Please read the attached brief and reply for EACH of F1, F2, F3 with \
+                    your recommended option and a 2-4 sentence rationale (file:line). "
+            .repeat(8);
+        let file = "/private/tmp/scratchpad/pr1131-review/r1-flags.md";
+        state.set_draft_text(room, &text).expect("draft text");
+        state
+            .attach_file(room, PathBuf::from(file))
+            .expect("attach");
+        state
+            .set_draft_recipients(room, [claude])
+            .expect("recipients");
+        let request = state.submit_draft(room, 10).expect("submit")[0];
+        state
+            .begin_submission(request, "launch-claude", 15)
+            .expect("begin");
+        state
+            .record_submission(
+                request,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: None,
+                    provider_turn_id: None,
+                },
+            )
+            .expect("confirmed");
+
+        // Shape captured from Claude Code 2.1.284 for a Bus paste of text plus
+        // one quoted attachment path: the whole paste is framed, path included.
+        let hook = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "claude-session",
+            "prompt_id": "claude-prompt",
+            "prompt": format!(
+                "\n\n<pasted_content id=\"dff1\">\n{text}\n\"{file}\"\n</pasted_content id=\"dff1\">\n"
+            ),
+        });
+        let crate::bus::callbacks::Parsed::Started {
+            session,
+            turn,
+            prompt,
+        } = crate::bus::callbacks::parse(Provider::ClaudeCode, &hook).expect("parse")
+        else {
+            panic!("UserPromptSubmit must parse as a start");
+        };
+
+        assert_eq!(
+            state.accept_callback(ProviderCallback {
+                callback_id: "claude-framed-start".into(),
+                sequence: 16,
+                occurred_at_ms: 16,
+                agent_id: claude,
+                launch_id: "launch-claude".into(),
+                provider_session_id: Some(session),
+                provider_turn_id: Some(turn.clone()),
+                provider_prompt_id: Some(turn),
+                prompt_payload: Some(prompt),
+                kind: CallbackEventKind::PromptStarted,
+            }),
+            CallbackDisposition::AcceptedBinding
+        );
+        assert!(state.request(request).expect("request").trusted_start_bound);
+    }
+
+    #[test]
     fn room_notes_drafts_and_names_are_room_local_and_ids_survive_renames() {
         let (mut state, first, agent, _) = state_with_room_and_agents();
         let second = state.create_room("second").expect("second room");
