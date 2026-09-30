@@ -1738,16 +1738,45 @@ fn delete_agent_stops_terminal_before_removing_persisted_work() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+fn identity_changed() -> Result<ResponseResult, TransportError> {
+    Err(TransportError {
+        message: "identity changed".into(),
+        code: Some("terminal_identity_changed".into()),
+        definitely_rejected: true,
+    })
+}
+
+/// The fixture's terminal as `agent.list` reports it, with or without the Bus managed name.
+fn native_agents(managed_name: Option<String>) -> Result<ResponseResult, TransportError> {
+    let info = serde_json::from_value(json!({
+        "terminal_id":"terminal", "name":managed_name, "agent":"codex", "agent_status":"idle",
+        "workspace_id":"workspace", "tab_id":"tab", "pane_id":"pane",
+        "focused":false, "revision":1
+    }))
+    .unwrap();
+    Ok(ResponseResult::AgentList { agents: vec![info] })
+}
+
 #[test]
 fn delete_failure_suspends_delivery_across_restart_and_allows_retry() {
-    let (mut worker, agent, room, dir, calls) = fixture(
-        Provider::Codex,
-        vec![Err(TransportError {
-            message: "identity changed".into(),
-            code: Some("terminal_identity_changed".into()),
-            definitely_rejected: true,
-        })],
-    );
+    for ownership_lookup in [
+        native_agents(Some("bus-r1-a2".into())),
+        Err(TransportError {
+            message: "server busy".into(),
+            code: None,
+            definitely_rejected: false,
+        }),
+    ] {
+        delete_failure_suspends_while_native_ownership_is_unproven(ownership_lookup);
+    }
+}
+
+fn delete_failure_suspends_while_native_ownership_is_unproven(
+    ownership_lookup: Result<ResponseResult, TransportError>,
+) {
+    let (mut worker, agent, room, dir, calls) =
+        fixture(Provider::Codex, vec![identity_changed(), ownership_lookup]);
+    assert_eq!((room.0, agent.0), (1, 2), "native_agents names this agent");
     let request = queue(
         &mut worker,
         room,
@@ -1761,7 +1790,10 @@ fn delete_failure_suspends_delivery_across_restart_and_allows_retry() {
     assert!(worker.state.agent(agent).unwrap().deletion_pending);
     assert!(worker.state.request(request).is_some());
     worker.submit_ready().unwrap();
-    assert_eq!(*calls.lock().unwrap(), vec!["pane.close_if_identity"]);
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["pane.close_if_identity", "agent.list"]
+    );
     drop(worker);
     let fake = FakeTransport {
         replies: VecDeque::new(),
@@ -1774,7 +1806,7 @@ fn delete_failure_suspends_delivery_across_restart_and_allows_retry() {
         .observe_status(agent, RuntimeStatus::Idle, 10)
         .unwrap();
     recovered.submit_ready().unwrap();
-    assert_eq!(calls.lock().unwrap().len(), 1);
+    assert_eq!(calls.lock().unwrap().len(), 2);
     recovered
         .command(BusCommand::DeleteAgent(agent), &events)
         .unwrap();
@@ -1782,6 +1814,64 @@ fn delete_failure_suspends_delivery_across_restart_and_allows_retry() {
     assert!(recovered.state.request(request).is_none());
     drop(recovered);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Regression: a Codex agent whose pane respawned after a Bus restart lost its
+/// native managed name, so every guarded close answered
+/// `terminal_identity_changed` and deletion stayed suspended forever.
+#[test]
+fn delete_finishes_and_reports_terminal_left_open_when_native_ownership_was_released() {
+    for delete_room in [false, true] {
+        let (mut worker, agent, room, dir, calls) = fixture(
+            Provider::Codex,
+            vec![identity_changed(), native_agents(None)],
+        );
+        let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+        identity.session_id = None;
+        worker
+            .state
+            .set_agent_runtime_identity(agent, identity)
+            .unwrap();
+        worker.save(worker.state.clone()).unwrap();
+        let request = queue(&mut worker, room, agent, "stranded at awaiting_start");
+        let (events, received) = mpsc::channel();
+        let command = if delete_room {
+            BusCommand::DeleteRoom(room)
+        } else {
+            BusCommand::DeleteAgent(agent)
+        };
+        worker.command(command, &events).unwrap();
+        assert!(worker.state.agent(agent).is_none());
+        assert!(worker.state.request(request).is_none());
+        assert_eq!(worker.state.room(room).is_none(), delete_room);
+        // Never a second, unguarded close: the pane now holds foreign work.
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["pane.close_if_identity", "agent.list"]
+        );
+        let left_open = vec![LeftOpenTerminal {
+            agent_id: agent,
+            agent_name: "author".into(),
+            pane_id: "pane".into(),
+            terminal_id: "terminal".into(),
+        }];
+        assert!(received
+            .try_iter()
+            .any(|event| matches!(&event, BusEvent::TerminalsLeftOpen(t) if *t == left_open)));
+        let report = worker.snapshot().error.unwrap();
+        assert!(
+            report.contains("\"author\"") && report.contains("pane pane, terminal"),
+            "{report}"
+        );
+        drop(worker);
+        let recovered = JsonStore::new(dir.join("state.json"))
+            .load()
+            .unwrap()
+            .unwrap();
+        assert!(recovered.agent(agent).is_none());
+        assert!(recovered.request(request).is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[test]
@@ -1888,6 +1978,15 @@ struct NativeBoundClose {
 
 impl Transport for NativeBoundClose {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        if matches!(method, Method::AgentList(_)) {
+            // The native server bound a session, but the terminal is still Bus-owned.
+            let saved = JsonStore::new(self.state_path.clone())
+                .load()
+                .unwrap()
+                .unwrap();
+            let agent = saved.agents().next().unwrap();
+            return native_agents(Some(format!("bus-r{}-a{}", agent.room_id.0, agent.id.0)));
+        }
         let Method::PaneCloseIfIdentity(params) = method else {
             panic!("Deletion must not report native sessions or deliver prompts: {method:?}");
         };

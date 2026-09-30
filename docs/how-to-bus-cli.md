@@ -345,6 +345,13 @@ bus room delete "$room_id" --confirm
 Deleting a room or agent is destructive. Resolve the target with `state`, prefer
 its numeric ID, and pass `--confirm` only after checking it.
 
+Deletion closes an agent's terminal only while the running server still
+attributes it to that agent. If the server has already released it, for
+example after the provider exited and its pane respawned a shell, Bus still
+deletes the agent and its messages, leaves that terminal open, and lists it
+under `terminals_left_open` in the result. Close it yourself if it is no longer
+needed.
+
 ## Diagnose failures
 
 Start with the durable control state and diagnostics:

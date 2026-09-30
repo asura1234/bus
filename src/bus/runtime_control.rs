@@ -321,6 +321,9 @@ impl Worker {
                         notice.path.display()
                     ))
                 }
+                BusEvent::TerminalsLeftOpen(terminals) => {
+                    return Ok(json!({"updated":true,"terminals_left_open":terminals}))
+                }
                 _ => {}
             }
         }

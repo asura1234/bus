@@ -17,8 +17,8 @@ impl Worker {
             }
             BusCommand::RenameRoom(id, name) => state.rename_room(id, &name),
             BusCommand::RenameAgent(id, name) => state.rename_agent(id, &name),
-            BusCommand::DeleteRoom(id) => return self.delete_room(id),
-            BusCommand::DeleteAgent(id) => return self.delete_agent(id),
+            BusCommand::DeleteRoom(id) => return self.delete_room(id, events),
+            BusCommand::DeleteAgent(id) => return self.delete_agent(id, events),
             BusCommand::SelectRoom(id) => state.select_room(id),
             BusCommand::LeaveRoom => {
                 state.leave_room_view();
@@ -151,20 +151,20 @@ impl Worker {
         self.save(state)
     }
 
-    fn delete_agent(&mut self, id: AgentId) -> Result<(), String> {
+    fn delete_agent(&mut self, id: AgentId, events: &mpsc::Sender<BusEvent>) -> Result<(), String> {
         let mut state = self.state.clone();
         state.prepare_delete_agent(id).map_err(|e| e.to_string())?;
         self.save(state)?;
-        self.stop_agent_terminal(id)?;
+        let left_open: Vec<_> = self.stop_agent_terminal(id)?.into_iter().collect();
         let mut state = self.state.clone();
         state.delete_agent(id).map_err(|e| e.to_string())?;
         self.save(state)?;
         self.branch_checks.remove(&id);
-        self.error = None;
+        self.finish_deletion(left_open, events);
         Ok(())
     }
 
-    fn delete_room(&mut self, id: RoomId) -> Result<(), String> {
+    fn delete_room(&mut self, id: RoomId, events: &mpsc::Sender<BusEvent>) -> Result<(), String> {
         let mut state = self.state.clone();
         state.prepare_delete_room(id).map_err(|e| e.to_string())?;
         self.save(state)?;
@@ -174,8 +174,9 @@ impl Worker {
             .filter(|agent| agent.room_id == id)
             .map(|agent| agent.id)
             .collect();
+        let mut left_open = Vec::new();
         for agent in &agents {
-            self.stop_agent_terminal(*agent)?;
+            left_open.extend(self.stop_agent_terminal(*agent)?);
         }
         let mut state = self.state.clone();
         state.delete_room(id).map_err(|e| e.to_string())?;
@@ -183,48 +184,91 @@ impl Worker {
         for agent in agents {
             self.branch_checks.remove(&agent);
         }
-        self.error = None;
+        self.finish_deletion(left_open, events);
         Ok(())
     }
 
-    fn stop_agent_terminal(&mut self, id: AgentId) -> Result<(), String> {
+    /// A completed deletion clears the previous failure. A terminal Bus no
+    /// longer owns stays open and is reported rather than silently forgotten.
+    fn finish_deletion(
+        &mut self,
+        left_open: Vec<LeftOpenTerminal>,
+        events: &mpsc::Sender<BusEvent>,
+    ) {
+        self.error = (!left_open.is_empty()).then(|| {
+            left_open
+                .iter()
+                .map(|terminal| {
+                    format!(
+                        "Deleted agent \"{}\". Bus no longer owns its terminal (pane {}, {}), so it was left open; close it yourself if it is no longer needed.",
+                        terminal.agent_name, terminal.pane_id, terminal.terminal_id
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+        if !left_open.is_empty() {
+            let _ = events.send(BusEvent::TerminalsLeftOpen(left_open));
+        }
+    }
+
+    /// Returns the terminal that was left open because the native server no
+    /// longer attributes any terminal to this agent's managed name.
+    fn stop_agent_terminal(&mut self, id: AgentId) -> Result<Option<LeftOpenTerminal>, String> {
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let identity = &agent.runtime_identity;
         let (Some(pane), Some(terminal)) = (&identity.pane_id, &identity.terminal_id) else {
             if identity == &AgentRuntimeIdentity::default() {
-                return Ok(());
+                return Ok(None);
             }
-            return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into());
+            return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into()).map(|()| None);
+        };
+        let managed_name = format!("bus-r{}-a{}", agent.room_id.0, id.0);
+        let left_open = LeftOpenTerminal {
+            agent_id: id,
+            agent_name: agent.name.clone(),
+            pane_id: pane.clone(),
+            terminal_id: terminal.clone(),
         };
         let result = self.transport.request(Method::PaneCloseIfIdentity(
             schema::PaneCloseIfIdentityParams {
                 pane_id: pane.clone(),
                 expected_terminal_id: terminal.clone(),
                 expected_agent: launch::provider_kind(agent.provider).into(),
-                expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, id.0),
+                expected_managed_name: managed_name.clone(),
                 expected_session_id: identity.session_id.clone(),
             },
         ));
         match result {
-            Ok(ResponseResult::Ok {}) => Ok(()),
+            Ok(ResponseResult::Ok {}) => Ok(None),
             Ok(other) => {
                 if super::super::diagnostics::dev_enabled() {
                     tracing::debug!(event = "bus.deletion.close_unconfirmed", agent_id = id.0,
                         response = ?other, "Unexpected guarded terminal close response");
                 }
-                self.agent_error(id, "Terminal close could not be confirmed. The agent and messages were kept. Retry deletion after checking its terminal.".into())
+                self.agent_error(id, "Terminal close could not be confirmed. The agent and messages were kept. Retry deletion after checking its terminal.".into()).map(|()| None)
             }
             Err(error) => {
                 if super::super::diagnostics::dev_enabled() {
                     tracing::debug!(event = "bus.deletion.close_failed", agent_id = id.0,
                         code = ?error.code, detail = %error.message, "Guarded terminal close failed");
                 }
-                if error.code.as_deref() == Some("terminal_identity_changed")
-                    && self.reconcile_deleting_initial_session(id)?
-                {
-                    // The first session binding is now durable. Retry the exact
-                    // same native guard; a different/rebound session still fails.
-                    return self.stop_agent_terminal(id);
+                if error.code.as_deref() == Some("terminal_identity_changed") {
+                    if self.reconcile_deleting_initial_session(id)? {
+                        // The first session binding is now durable. Retry the exact
+                        // same native guard; a different/rebound session still fails.
+                        return self.stop_agent_terminal(id);
+                    }
+                    if self.native_ownership_released(&managed_name) {
+                        // The native server cleared this launch's managed name, e.g.
+                        // after the provider exited and the pane respawned a shell.
+                        // Nothing Bus-owned remains to close and no retry can ever
+                        // pass the guard; what runs in that pane now is not ours.
+                        tracing::info!(event = "bus.deletion.terminal_released", agent_id = id.0,
+                            pane_id = %left_open.pane_id, terminal_id = %left_open.terminal_id,
+                            "Native terminal no longer carries the Bus managed name; left open");
+                        return Ok(Some(left_open));
+                    }
                 }
                 let message = if matches!(
                     error.code.as_deref(),
@@ -236,9 +280,20 @@ impl Worker {
                 } else {
                     "The terminal could not be closed. The agent and messages were kept. Check its terminal, then retry deletion.".into()
                 };
-                self.agent_error(id, message)
+                self.agent_error(id, message).map(|()| None)
             }
         }
+    }
+
+    /// `agent.list` includes every terminal carrying a managed name, even with
+    /// no detected provider, so absence is a native fact. A failed lookup
+    /// proves nothing and keeps deletion suspended.
+    fn native_ownership_released(&mut self, managed_name: &str) -> bool {
+        matches!(
+            self.transport.request(Method::AgentList(schema::EmptyParams {})),
+            Ok(ResponseResult::AgentList { agents })
+                if !agents.iter().any(|info| info.name.as_deref() == Some(managed_name))
+        )
     }
 
     fn add_agent(

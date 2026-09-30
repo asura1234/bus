@@ -89,6 +89,17 @@ pub(crate) enum BusEvent {
         input: AddAgent,
         notice: launch::SetupNotice,
     },
+    /// A deletion finished, but these terminals were no longer Bus-owned and were left open.
+    TerminalsLeftOpen(Vec<LeftOpenTerminal>),
+}
+
+/// The native terminal a deleted agent was last bound to, left untouched.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct LeftOpenTerminal {
+    pub(crate) agent_id: AgentId,
+    pub(crate) agent_name: String,
+    pub(crate) pane_id: String,
+    pub(crate) terminal_id: String,
 }
 
 #[derive(Clone, Debug)]
