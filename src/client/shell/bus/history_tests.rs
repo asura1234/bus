@@ -750,11 +750,11 @@ fn outgoing_header_is_green_and_recent_time_is_local_24h() {
 }
 
 #[test]
-fn old_prompts_and_replies_show_relative_day_label() {
+fn old_prompts_show_relative_day_label_but_replies_do_not() {
     let (mut ui, room, agent) = fixture();
     saved_history(&mut ui, room, agent, 1);
     let screen = room_screen(&mut ui, 100, 40);
-    assert_eq!(screen.matches("> 1 day").count(), 2);
+    assert_eq!(screen.matches("> 1 day").count(), 1);
 }
 
 #[test]

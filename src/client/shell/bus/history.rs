@@ -217,44 +217,17 @@ impl History {
                     .is_none()
                     .then(|| room.latest_replies.get(agent_id))
                     .flatten();
-                let (text, at, quote) = if let Some(reply) = final_reply {
-                    (
-                        reply.text.as_str(),
-                        Some(reply.received_at_ms),
-                        request.map(|request| request.id),
-                    )
+                let (text, quote) = if let Some(reply) = final_reply {
+                    (reply.text.as_str(), request.map(|request| request.id))
                 } else if let Some(reply) = legacy_reply {
-                    (
-                        reply.text.as_str(),
-                        Some(reply.received_at_ms),
-                        Some(reply.request_id),
-                    )
+                    (reply.text.as_str(), Some(reply.request_id))
                 } else {
-                    ("…", None, None)
+                    ("…", None)
                 };
-                let mut reply_header = vec![
+                let reply_header = vec![
                     (agent.name.clone(), Tone::Agent(agent.id)),
                     (format!("  {}", provider(agent.provider)), Tone::Muted),
                 ];
-                if let Some(request) = request {
-                    if let Some(settlement) = state.work_settlement(request.id) {
-                        reply_header.push((
-                            format!(
-                                "  {}",
-                                super::orchestrator_ui::settlement_label(
-                                    super::orchestrator_ui::settlement_reason(&settlement)
-                                )
-                            ),
-                            Tone::Muted,
-                        ));
-                        if let Some(turn) = settlement.callback_lineage.provider_turn {
-                            reply_header.push((format!("  {turn}"), Tone::Muted));
-                        }
-                    }
-                }
-                if let Some(at) = at {
-                    reply_header.push((format!("  {}", timestamp(at, now)), Tone::Muted));
-                }
                 lines.extend(wrap_header(
                     reply_header,
                     width,

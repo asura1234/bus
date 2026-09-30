@@ -1,12 +1,11 @@
 use super::*;
 use crate::bus::orchestrator::{
-    ConfirmRoomBriefProposal, HumanOrchestratorMessage, ParticipantId, ProviderRequestSettlement,
-    RoomMessage, RoomOperation, RoomRecipient, WorkflowDraftMutation,
+    ConfirmRoomBriefProposal, HumanOrchestratorMessage, ParticipantId, RoomMessage, RoomOperation,
+    RoomRecipient, WorkflowDraftMutation,
 };
 use crate::bus::runtime::test_harness::TestWorkerHarness;
 use crate::client::shell::bus::orchestrator_ui::{
-    author_label, phase_reason, recipient_entries, redact_secret, settlement_label,
-    settlement_reason, CoordinationAction, RecipientEntry, SettlementReason,
+    author_label, recipient_entries, redact_secret, CoordinationAction, RecipientEntry,
 };
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
@@ -842,50 +841,16 @@ fn room_orchestrator_ui_restart_renders_proposal_and_workflow_receipts_from_work
 }
 
 #[test]
-fn room_orchestrator_ui_abandoned_settlement_is_labeled_abandoned_not_wedged() {
-    let labels = [
-        ProviderRequestSettlement::Queued,
-        ProviderRequestSettlement::Submitting,
-        ProviderRequestSettlement::Active,
-        ProviderRequestSettlement::Completed,
-        ProviderRequestSettlement::Abandoned,
-    ]
-    .map(|phase| settlement_label(phase_reason(phase, false, true)));
-    assert_eq!(
-        labels,
-        ["queued", "launching", "active", "settled", "abandoned"]
-    );
-    assert_eq!(
-        phase_reason(ProviderRequestSettlement::Abandoned, false, true),
-        SettlementReason::Abandoned
-    );
-    assert_eq!(
-        settlement_label(phase_reason(
-            ProviderRequestSettlement::Active,
-            false,
-            false
-        )),
-        "hook"
-    );
-    assert_eq!(
-        settlement_label(phase_reason(
-            ProviderRequestSettlement::Completed,
-            true,
-            true
-        )),
-        "uncertain"
-    );
-
+fn room_orchestrator_ui_reply_header_shows_only_agent_name_and_provider() {
     let mut harness = TestWorkerHarness::new();
     submit_to_agent(&mut harness, "label source");
     let mut ui = open(&harness);
     drain(&mut ui, &mut harness);
     let request = ui.snapshot.state.requests().next().unwrap().id;
-    let settlement = ui.snapshot.state.work_settlement(request).unwrap();
-    assert_eq!(settlement_label(settlement_reason(&settlement)), "queued");
+    assert!(ui.snapshot.state.work_settlement(request).is_some());
     let screen = room_screen(&mut ui, 120, 40);
-    assert!(screen.contains("  queued"), "{screen}");
-    assert!(!screen.contains("wedged"), "{screen}");
+    assert!(screen.contains("      agent  Codex      "), "{screen}");
+    assert!(!screen.contains("Codex  queued"), "{screen}");
 }
 
 #[test]
