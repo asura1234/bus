@@ -144,6 +144,9 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) settings: crate::bus::settings::BusSettings,
     /// None keeps toggles in memory only.
     pub(super) settings_path: Option<std::path::PathBuf>,
+    /// Settings focus: 0 is color blind mode, then one row per sound room.
+    pub(super) settings_field: usize,
+    pub(super) settings_scroll: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -213,6 +216,8 @@ impl BusUi {
             last_esc: None,
             settings: crate::bus::settings::BusSettings::default(),
             settings_path: None,
+            settings_field: 0,
+            settings_scroll: 0,
         }
     }
     /// Applies immediately; a failed save keeps the choice for this run only.

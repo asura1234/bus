@@ -124,6 +124,17 @@ impl BusUi {
                     outcome.repaint = true;
                     return true;
                 }
+                if matches!(self.form, Some(Form::Settings))
+                    && mouse.column >= self.view.sidebar.right()
+                {
+                    self.settings_scroll = if mouse.kind == MouseEventKind::ScrollDown {
+                        (self.settings_scroll + 3).min(self.view.settings_max_scroll)
+                    } else {
+                        self.settings_scroll.saturating_sub(3)
+                    };
+                    outcome.repaint = true;
+                    return true;
+                }
                 if self.terminal.is_none()
                     && self.form.is_none()
                     && self
@@ -294,6 +305,33 @@ impl BusUi {
             } else {
                 offset.min(maximum).saturating_sub(lines)
             });
+        }
+    }
+    fn toggle_room_sound(&mut self, room: RoomId) {
+        if let Some(enabled) = self
+            .snapshot
+            .state
+            .room(room)
+            .map(|room| room.sound_enabled())
+        {
+            self.queue(BusCommand::SetRoomSound(room, !enabled), Effect::None);
+        }
+    }
+    /// Keeps the keyboard-focused sound row inside the scrolled Settings list.
+    fn reveal_settings_field(&mut self) {
+        let Some(line) = self.sound_settings_lines().iter().position(|line| {
+            matches!(line, super::render::SoundSettingsLine::Room { field, .. } if *field == self.settings_field)
+        }) else {
+            self.settings_scroll = 0;
+            return;
+        };
+        // Bring the group heading into view along with its first room.
+        let line = if self.settings_field <= 1 { 0 } else { line };
+        let height = usize::from(self.view.settings_list.height.max(1));
+        if line < self.settings_scroll {
+            self.settings_scroll = line;
+        } else if line >= self.settings_scroll + height {
+            self.settings_scroll = line + 1 - height;
         }
     }
     fn scroll_help(&mut self, forward: bool, lines: usize) {
@@ -534,7 +572,17 @@ impl BusUi {
                 self.suggestions.selected = index;
                 self.complete_path();
             }
-            Action::Settings => self.open_form(Form::Settings),
+            Action::Settings => {
+                self.settings_field = 0;
+                self.settings_scroll = 0;
+                self.open_form(Form::Settings);
+            }
+            Action::ToggleRoomSound(room) => {
+                if let Some(index) = self.sound_settings_rooms().iter().position(|r| *r == room) {
+                    self.settings_field = index + 1;
+                }
+                self.toggle_room_sound(room);
+            }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::Cancel => {
                 if let Some(room) = self.room {
@@ -1058,9 +1106,22 @@ impl BusUi {
             return;
         }
         if matches!(self.form, Some(Form::Settings)) {
-            if code == KeyCode::Enter {
-                self.toggle_color_blind_mode();
+            let rooms = self.sound_settings_rooms();
+            match code {
+                KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
+                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(rooms.len()),
+                // Enter alone toggles (Space is deliberately inert in Settings).
+                KeyCode::Enter => match self.settings_field {
+                    0 => self.toggle_color_blind_mode(),
+                    field => {
+                        if let Some(room) = rooms.get(field - 1) {
+                            self.toggle_room_sound(*room);
+                        }
+                    }
+                },
+                _ => {}
             }
+            self.reveal_settings_field();
             return;
         }
         if matches!(self.form, Some(Form::Help { .. })) {

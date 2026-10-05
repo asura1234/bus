@@ -48,6 +48,7 @@ pub(super) enum Action {
     Suggestion(usize),
     Settings,
     ToggleColorBlindMode,
+    ToggleRoomSound(RoomId),
     Cancel,
     Add,
 }
@@ -95,6 +96,9 @@ pub(super) struct View {
     pub help: Rect,
     pub help_scroll: usize,
     pub help_max_scroll: usize,
+    /// The scrollable sound-notification rows of the Settings form.
+    pub settings_list: Rect,
+    pub settings_max_scroll: usize,
     rows: Vec<Row>,
     pub cursor: Option<crate::protocol::CursorState>,
     pub notes: Rect,
@@ -492,6 +496,58 @@ fn animated_agent_status_colors(agent: &Agent, phase: u8) -> Option<Vec<Color>> 
         _ => None,
     }
 }
+/// One row of the Settings form's sound-notification list.
+pub(super) enum SoundSettingsLine {
+    Heading(&'static str),
+    Empty(&'static str),
+    /// `field` is the row's Settings focus index; color blind mode is field 0.
+    Room {
+        room: RoomId,
+        field: usize,
+    },
+}
+
+impl BusUi {
+    /// MASTER in its own group first, then every work room, in sidebar order.
+    pub(super) fn sound_settings_rooms(&self) -> Vec<RoomId> {
+        let state = &self.snapshot.state;
+        state
+            .master_room()
+            .into_iter()
+            .chain(
+                state
+                    .rooms()
+                    .filter(|room| room.kind == RoomKind::Work && !room.deletion_pending),
+            )
+            .map(|room| room.id)
+            .collect()
+    }
+
+    pub(super) fn sound_settings_lines(&self) -> Vec<SoundSettingsLine> {
+        let rooms = self.sound_settings_rooms();
+        let master = self.snapshot.state.master_room().map(|room| room.id);
+        let mut lines = Vec::new();
+        let mut work = rooms.iter().copied().enumerate().peekable();
+        if let Some((index, room)) = work.next_if(|(_, room)| Some(*room) == master) {
+            lines.push(SoundSettingsLine::Heading("MASTER"));
+            lines.push(SoundSettingsLine::Room {
+                room,
+                field: index + 1,
+            });
+            lines.push(SoundSettingsLine::Empty(""));
+        }
+        lines.push(SoundSettingsLine::Heading("ROOMS"));
+        if work.peek().is_none() {
+            lines.push(SoundSettingsLine::Empty("No rooms yet"));
+        }
+        lines.extend(work.map(|(index, room)| SoundSettingsLine::Room {
+            room,
+            field: index + 1,
+        }));
+        lines
+    }
+}
+
 /// Rows taken by the MASTER header, its room, and the gap before ROOMS.
 const MASTER_SECTION_ROWS: usize = 4;
 
@@ -1411,7 +1467,7 @@ impl BusUi {
                         }
                     ),
                     Some(Action::ToggleColorBlindMode),
-                    true,
+                    self.settings_field == 0,
                     false,
                 );
                 view.lines(
@@ -1422,14 +1478,67 @@ impl BusUi {
                 );
                 view.row(
                     Rect::new(x, 8, width, 1),
-                    "Close (Esc) · Enter toggles",
+                    "Sound notifications",
+                    None,
+                    false,
+                    false,
+                );
+                let footer = main.bottom().saturating_sub(2);
+                let error = self.visible_error().map(str::to_owned);
+                let list_bottom = footer.saturating_sub(if error.is_some() { 4 } else { 1 });
+                view.settings_list = Rect::new(x, 10, width, list_bottom.saturating_sub(10));
+                let lines = self.sound_settings_lines();
+                view.settings_max_scroll = lines
+                    .len()
+                    .saturating_sub(usize::from(view.settings_list.height));
+                let scroll = self.settings_scroll.min(view.settings_max_scroll);
+                for (index, line) in lines
+                    .iter()
+                    .skip(scroll)
+                    .take(usize::from(view.settings_list.height))
+                    .enumerate()
+                {
+                    let rect = Rect::new(x, 10 + index as u16, width, 1);
+                    match line {
+                        SoundSettingsLine::Heading(text) => {
+                            view.row(rect, *text, None, false, true);
+                        }
+                        SoundSettingsLine::Empty(text) => {
+                            view.row(rect, *text, None, false, true);
+                        }
+                        SoundSettingsLine::Room { room, field } => {
+                            let Some(room) = self.snapshot.state.room(*room) else {
+                                continue;
+                            };
+                            view.row(
+                                rect,
+                                format!(
+                                    "[{}] # {}",
+                                    if room.sound_enabled() { "x" } else { " " },
+                                    room.name
+                                ),
+                                Some(Action::ToggleRoomSound(room.id)),
+                                self.settings_field == *field,
+                                false,
+                            );
+                        }
+                    }
+                }
+                if let Some(error) = error {
+                    view.lines(
+                        Rect::new(x, footer.saturating_sub(4), width, 3),
+                        &error,
+                        None,
+                        false,
+                    );
+                }
+                view.row(
+                    Rect::new(x, footer, width, 1),
+                    "Close (Esc) · ↑↓ move · Enter toggles",
                     Some(Action::Cancel),
                     false,
                     true,
                 );
-                if let Some(error) = self.visible_error() {
-                    view.lines(Rect::new(x, 10, width, 3), error, None, false);
-                }
                 return;
             }
             Form::Room(editor) => {

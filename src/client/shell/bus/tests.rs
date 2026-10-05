@@ -12,6 +12,8 @@ mod history_tests;
 mod keys_tests;
 #[path = "master_tests.rs"]
 mod master_tests;
+#[path = "sound_tests.rs"]
+mod sound_tests;
 fn fixture() -> (BusUi, RoomId, AgentId) {
     let mut state = BusState::default();
     let room = state.create_room("room").unwrap();
