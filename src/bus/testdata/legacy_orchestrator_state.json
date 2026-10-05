@@ -1,0 +1,265 @@
+{
+  "state": {
+    "agents": {
+      "2": {
+        "accessible_color": [
+          221,
+          51,
+          255
+        ],
+        "actionable_error": null,
+        "branch": "main",
+        "color": [
+          221,
+          0,
+          255
+        ],
+        "current_request": null,
+        "cwd": "/repo",
+        "deletion_pending": false,
+        "details_disclosed": false,
+        "hook_setup_confirmed": false,
+        "id": 2,
+        "name": "builder",
+        "provider": "codex",
+        "room_id": 1,
+        "runtime_identity": {
+          "launch_id": null,
+          "pane_id": null,
+          "session_id": null,
+          "terminal_id": null
+        },
+        "session_binding_invalidated": false,
+        "status": "launching",
+        "status_revision": 0
+      }
+    },
+    "consumed_callback_ids": [],
+    "consumed_provider_turns": [],
+    "next_id": 10,
+    "next_status_revision": 1,
+    "orchestrator": {
+      "grants": [
+        {
+          "active": true,
+          "capability": "inspect_room",
+          "participant": "orchestrator",
+          "revision": 1,
+          "room_id": 1
+        },
+        {
+          "active": true,
+          "capability": "coordinate",
+          "participant": "orchestrator",
+          "revision": 1,
+          "room_id": 1
+        },
+        {
+          "active": true,
+          "capability": "abandon_idle_request",
+          "participant": "orchestrator",
+          "revision": 1,
+          "room_id": 1
+        },
+        {
+          "active": true,
+          "capability": "persist_workflow_draft",
+          "participant": "orchestrator",
+          "revision": 1,
+          "room_id": 1
+        },
+        {
+          "active": true,
+          "capability": "promote_workflow_draft",
+          "participant": "orchestrator",
+          "revision": 1,
+          "room_id": 1
+        },
+        {
+          "active": true,
+          "capability": "approve_permission_once",
+          "participant": "orchestrator",
+          "revision": 1,
+          "room_id": 1
+        },
+        {
+          "active": true,
+          "capability": "manage_resource_lease",
+          "participant": "orchestrator",
+          "revision": 1,
+          "room_id": 1
+        }
+      ],
+      "journal": [
+        {
+          "fact": {
+            "HumanMessage": {
+              "message_id": 3
+            }
+          },
+          "revision": 1,
+          "room_id": 1
+        }
+      ],
+      "leases": {},
+      "next_id": 2,
+      "operations": {},
+      "room_brief_confirmations": {
+        "1": {
+          "approved_revision": 1,
+          "confirmation_id": 1,
+          "developer": "human",
+          "proposal_digest": "e0a18573b11519226108ec47832da504ec3efb57a7fdf1e00f394172cc17f534",
+          "room_id": 1
+        }
+      },
+      "room_messages": [
+        {
+          "message": {
+            "author": "orchestrator",
+            "text": "status",
+            "to": "human",
+            "work": 7
+          },
+          "message_id": 9,
+          "room_id": 1
+        }
+      ],
+      "workflow_drafts": {
+        "approvals": {},
+        "drafts": {},
+        "next_id": 0
+      }
+    },
+    "queues": {
+      "2": [
+        4,
+        6,
+        8
+      ]
+    },
+    "requests": {
+      "4": {
+        "agent_id": 2,
+        "completed_at_ms": null,
+        "expected_launch_id": null,
+        "id": 4,
+        "pending_final": null,
+        "phase": "queued",
+        "prompt": {
+          "author": "orchestrator",
+          "files": [],
+          "id": 3,
+          "recipient_ids": [
+            2
+          ],
+          "submitted_at_ms": 1,
+          "text": "from orchestrator",
+          "trusted_assignment_frame": "TRUSTED_ROOM_ASSIGNMENT_V1.e30",
+          "work_id": 7
+        },
+        "provider_prompt_id": null,
+        "provider_session_id": null,
+        "provider_turn_id": null,
+        "room_id": 1,
+        "submission_boundary": null,
+        "submission_status_revision": 0,
+        "trusted_start_bound": false,
+        "uncertain_outcome": false
+      },
+      "6": {
+        "agent_id": 2,
+        "completed_at_ms": null,
+        "expected_launch_id": null,
+        "id": 6,
+        "pending_final": null,
+        "phase": "queued",
+        "prompt": {
+          "author": {
+            "agent": 2
+          },
+          "files": [],
+          "id": 5,
+          "recipient_ids": [
+            2
+          ],
+          "submitted_at_ms": 2,
+          "text": "from agent",
+          "trusted_assignment_frame": null,
+          "work_id": null
+        },
+        "provider_prompt_id": null,
+        "provider_session_id": null,
+        "provider_turn_id": null,
+        "room_id": 1,
+        "submission_boundary": null,
+        "submission_status_revision": 0,
+        "trusted_start_bound": false,
+        "uncertain_outcome": false
+      },
+      "8": {
+        "agent_id": 2,
+        "completed_at_ms": null,
+        "expected_launch_id": null,
+        "id": 8,
+        "pending_final": null,
+        "phase": "queued",
+        "prompt": {
+          "files": [],
+          "id": 7,
+          "recipient_ids": [
+            2
+          ],
+          "submitted_at_ms": 3,
+          "text": "from human",
+          "trusted_assignment_frame": null,
+          "work_id": null
+        },
+        "provider_prompt_id": null,
+        "provider_session_id": null,
+        "provider_turn_id": null,
+        "room_id": 1,
+        "submission_boundary": null,
+        "submission_status_revision": 0,
+        "trusted_start_bound": false,
+        "uncertain_outcome": false
+      }
+    },
+    "rooms": {
+      "1": {
+        "brief": {
+          "approved_revision": 1,
+          "goal": "goal",
+          "locked": true,
+          "non_goals": "non-goals",
+          "revision": 1
+        },
+        "deletion_pending": false,
+        "draft": {
+          "files": [],
+          "recipient_ids": [],
+          "text": ""
+        },
+        "id": 1,
+        "latest_prompt": {
+          "author": "human",
+          "files": [],
+          "id": 7,
+          "recipient_ids": [
+            2
+          ],
+          "submitted_at_ms": 3,
+          "text": "from human",
+          "trusted_assignment_frame": null,
+          "work_id": null
+        },
+        "latest_replies": {},
+        "name": "legacy",
+        "notes": "",
+        "unread_count": 0
+      }
+    },
+    "visible_room": null
+  },
+  "version": 1
+}

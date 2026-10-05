@@ -331,4 +331,50 @@ mod tests {
         );
         fs::remove_dir_all(dir).expect("cleanup");
     }
+
+    #[test]
+    fn state_saved_with_the_retired_orchestrator_still_loads() {
+        use crate::bus::model::{PromptId, RequestId};
+        use crate::bus::orchestrator::ParticipantId;
+
+        // Written by the orchestrator-era build: orchestrator journal, grants and drafts,
+        // a locked room brief, work ids, a trusted assignment frame, and every author shape
+        // ("orchestrator", {"agent":N}, and a prompt saved before authors existed).
+        let dir = temp_dir("legacy-orchestrator");
+        let path = dir.join("state.json");
+        fs::write(
+            &path,
+            include_str!("testdata/legacy_orchestrator_state.json"),
+        )
+        .expect("fixture");
+        let store = JsonStore::new(path);
+        let state = store.load().expect("load").expect("state");
+
+        let author = |id| {
+            state
+                .request(RequestId(id))
+                .expect("request")
+                .prompt
+                .author
+                .clone()
+        };
+        assert_eq!(author(4), ParticipantId::Orchestrator);
+        assert_eq!(
+            author(6),
+            ParticipantId::Agent(crate::bus::model::AgentId(2))
+        );
+        assert_eq!(author(8), ParticipantId::Human);
+        assert_eq!(
+            state.request(RequestId(8)).expect("request").prompt.id,
+            PromptId(7)
+        );
+        assert_eq!(
+            state.next_queued_request(crate::bus::model::AgentId(2)),
+            Some(RequestId(4))
+        );
+
+        store.save(&state).expect("save");
+        assert_eq!(store.load().expect("reload").expect("state"), state);
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
 }
