@@ -469,6 +469,9 @@ impl std::fmt::Display for ModelError {
                 "Room {} is already orchestrated by agent {}; unassign it first",
                 room.0, agent.0
             ),
+            Self::EmptyPrompt => write!(formatter, "The message has no text or files"),
+            Self::NoRecipients => write!(formatter, "Choose at least one recipient"),
+            Self::DeletionPending => write!(formatter, "That room or agent is being deleted"),
             _ => write!(formatter, "Bus model operation failed: {self:?}"),
         }
     }
@@ -846,8 +849,10 @@ impl BusState {
             }
         }
         self.requests.retain(|_, request| request.room_id != id);
+        // Match the UI, which falls back to the first room (MASTER) at once,
+        // so `state` never shows a gap between the delete and the next view.
         if self.visible_room == Some(id) {
-            self.visible_room = None;
+            self.visible_room = self.rooms.keys().next().copied();
         }
         Ok(())
     }
@@ -2067,7 +2072,9 @@ mod tests {
         state.select_room(room).unwrap();
         state.delete_room(room).unwrap();
         assert!(state.agent(other).is_none());
-        assert_eq!(state.visible_room, None);
+        let fallback = state.rooms().next().map(|room| room.id);
+        assert!(fallback.is_some());
+        assert_eq!(state.visible_room, fallback);
         assert!(state.room(unrelated_room).is_some());
         let new_room = state.create_room("new").unwrap();
         assert!(new_room.0 > unrelated_room.0);

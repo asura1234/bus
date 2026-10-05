@@ -424,11 +424,20 @@ impl Worker {
             .collect::<Result<Vec<_>, _>>()?;
         let recipients: AgentRecipients = if selectors == ["all"] {
             // An agent's broadcast goes to everyone else in the room.
-            self.state
+            let recipients: AgentRecipients = self
+                .state
                 .agents()
                 .filter(|a| a.room_id == room && Some(a.id) != author)
                 .map(|a| a.id)
-                .collect()
+                .collect();
+            if recipients.is_empty() {
+                return Err(if author.is_some() {
+                    "No recipients besides the author: the room has no other agents".into()
+                } else {
+                    "No recipients: the room has no agents".into()
+                });
+            }
+            recipients
         } else {
             let recipients = selectors
                 .into_iter()

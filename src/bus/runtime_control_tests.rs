@@ -1401,8 +1401,35 @@ fn dev_send_as_the_only_room_agent_to_all_has_no_recipients() {
         "message.send",
         json!({"room":"test","to":["all"],"text":"x","as":"codex1"}),
     );
-    assert!(!sent.ok, "{sent:?}");
+    assert!(
+        error_message(&sent).starts_with("No recipients besides the author"),
+        "{sent:?}"
+    );
     assert_eq!(worker.state.requests().count(), 0);
+    let empty = worker.state.create_room("empty").unwrap();
+    let nobody = call(
+        &mut worker,
+        "all-empty",
+        "message.send",
+        json!({"room":"empty","to":["all"],"text":"x"}),
+    );
+    assert_eq!(
+        error_message(&nobody),
+        "No recipients: the room has no agents"
+    );
+
+    // Deleting the visible room moves the view where the UI goes: MASTER.
+    worker.state.select_room(empty).unwrap();
+    let deleted = call(
+        &mut worker,
+        "delete-visible",
+        "room.delete",
+        json!({"room":"empty","confirm":true}),
+    );
+    assert!(deleted.ok, "{deleted:?}");
+    let state = call(&mut worker, "state-after-delete", "state", json!({}));
+    assert_eq!(state.result["visible_room"], state.result["master_room"]);
+    assert!(!state.result["visible_room"].is_null());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
