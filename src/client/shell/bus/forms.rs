@@ -18,6 +18,8 @@ pub(super) enum Form {
         cwd: Editor,
         args: Box<Editor>,
         field: usize,
+        /// Present only when adding a MASTER agent: the work room it will orchestrate.
+        orchestrates: Option<Orchestrates>,
     },
     Files(Editor),
     Consent {
@@ -51,6 +53,26 @@ impl Form {
             Self::Files(editor) => Some((editor.text.clone(), false)),
             Self::Agent { cwd, field: 2, .. } => Some((cwd.text.clone(), true)),
             _ => None,
+        }
+    }
+}
+
+/// The MASTER agent form's choice; `None` adds an unassigned orchestrator.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct Orchestrates(pub Option<RoomId>);
+
+/// The field index of the MASTER-only Orchestrates choice.
+pub(super) const ORCHESTRATES_FIELD: usize = 4;
+
+impl Form {
+    /// How many fields Tab cycles through in the agent form.
+    pub fn agent_field_count(&self) -> usize {
+        match self {
+            Self::Agent {
+                orchestrates: Some(_),
+                ..
+            } => ORCHESTRATES_FIELD + 1,
+            _ => ORCHESTRATES_FIELD,
         }
     }
 }

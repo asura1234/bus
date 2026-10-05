@@ -20,6 +20,12 @@ pub(super) struct DeleteDialog {
 
 impl BusUi {
     pub(super) fn start_delete(&mut self, target: DeleteTarget) {
+        if let DeleteTarget::Room(id) = target {
+            if self.is_master_room(id) {
+                self.error = Some(ModelError::MasterRoomFixed.to_string());
+                return;
+            }
+        }
         let exists = match target {
             DeleteTarget::Room(id) => self.snapshot.state.room(id).is_some(),
             DeleteTarget::Agent(id) => self.snapshot.state.agent(id).is_some(),

@@ -1,7 +1,7 @@
 use super::*;
 use super::{
     editor::Editor,
-    forms::{Form, Rename, RenameTarget},
+    forms::{Form, Orchestrates, Rename, RenameTarget, ORCHESTRATES_FIELD},
     render::Action,
 };
 use crate::bus::{launch::AddAgent, model::*, runtime::BusCommand};
@@ -319,14 +319,9 @@ impl BusUi {
     }
     pub fn open_room(&mut self, room: RoomId) {
         self.clear_selection();
-        if let Some(index) = self
-            .snapshot
-            .state
-            .rooms()
-            .position(|r| r.id == room)
+        if let Some(row) = super::render::sidebar_room_row(&self.snapshot.state, room)
             .filter(|_| self.view.sidebar_body.height > 0)
         {
-            let row = index + 3;
             let capacity = usize::from(self.view.sidebar_body.height.max(1));
             if row < self.sidebar_scroll {
                 self.sidebar_scroll = row;
@@ -375,7 +370,47 @@ impl BusUi {
         self.recipient_menu = false;
         self.text_changed(room);
     }
+    /// Steps the MASTER agent form through no room and each work room still unorchestrated.
+    fn cycle_orchestrates(&mut self, forward: bool) {
+        let state = &self.snapshot.state;
+        let mut choices = vec![None];
+        choices.extend(
+            state
+                .rooms()
+                .filter(|room| {
+                    room.kind == RoomKind::Work
+                        && !room.deletion_pending
+                        && state.orchestrator_of(room.id).is_none()
+                })
+                .map(|room| Some(room.id)),
+        );
+        if let Some(Form::Agent {
+            orchestrates: Some(choice),
+            ..
+        }) = &mut self.form
+        {
+            let index = choices.iter().position(|c| *c == choice.0).unwrap_or(0);
+            let next = if forward {
+                (index + 1) % choices.len()
+            } else {
+                (index + choices.len() - 1) % choices.len()
+            };
+            choice.0 = choices[next];
+        }
+    }
+    pub(super) fn is_master_room(&self, room: RoomId) -> bool {
+        self.snapshot
+            .state
+            .room(room)
+            .is_some_and(|room| room.kind == RoomKind::Master)
+    }
     fn start_rename(&mut self, target: RenameTarget) {
+        if let RenameTarget::Room(id) = target {
+            if self.is_master_room(id) {
+                self.error = Some(ModelError::MasterRoomFixed.to_string());
+                return;
+            }
+        }
         let name = match target {
             RenameTarget::Room(id) => self.snapshot.state.room(id).map(|r| r.name.clone()),
             RenameTarget::Agent(id) => self.snapshot.state.agent(id).map(|a| a.name.clone()),
@@ -419,14 +454,27 @@ impl BusUi {
             Action::Room(room) => self.open_room(room),
             Action::Agent(agent) => self.open_terminal(agent),
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
-            Action::NewAgent => self.open_form(Form::Agent {
-                name: Editor::default(),
-                provider: None,
-                provider_cursor: Provider::Codex,
-                cwd: Editor::new("~/".into()),
-                args: Box::new(Editor::default()),
-                field: 0,
-            }),
+            Action::NewAgent => {
+                let orchestrates = self
+                    .room
+                    .filter(|room| self.is_master_room(*room))
+                    .map(|_| Orchestrates::default());
+                self.open_form(Form::Agent {
+                    name: Editor::default(),
+                    provider: None,
+                    provider_cursor: Provider::Codex,
+                    cwd: Editor::new("~/".into()),
+                    args: Box::new(Editor::default()),
+                    field: 0,
+                    orchestrates,
+                })
+            }
+            Action::Orchestrates => {
+                if let Some(Form::Agent { field, .. }) = &mut self.form {
+                    *field = ORCHESTRATES_FIELD;
+                }
+                self.cycle_orchestrates(true);
+            }
             Action::Notes => {
                 self.notes_focus = true;
                 self.recipient_menu = false;
@@ -1079,6 +1127,22 @@ impl BusUi {
             self.query_paths();
             return;
         }
+        if matches!(
+            self.form,
+            Some(Form::Agent {
+                field: ORCHESTRATES_FIELD,
+                ..
+            })
+        ) && matches!(
+            code,
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Char(' ')
+        ) {
+            self.cycle_orchestrates(matches!(
+                code,
+                KeyCode::Right | KeyCode::Down | KeyCode::Char(' ')
+            ));
+            return;
+        }
         if code == KeyCode::Enter && matches!(self.form, Some(Form::Agent { .. })) {
             self.add();
             return;
@@ -1092,11 +1156,12 @@ impl BusUi {
             return;
         }
         if code == KeyCode::Tab || code == KeyCode::BackTab || code == KeyCode::Enter {
+            let count = self.form.as_ref().map_or(0, Form::agent_field_count);
             if let Some(Form::Agent { field, .. }) = &mut self.form {
                 *field = if code == KeyCode::BackTab {
-                    (*field + 3) % 4
+                    (*field + count - 1) % count
                 } else {
-                    (*field + 1) % 4
+                    (*field + 1) % count
                 };
                 self.query_paths();
                 return;
@@ -1190,6 +1255,7 @@ impl BusUi {
                 provider,
                 cwd,
                 args,
+                orchestrates,
                 ..
             } => {
                 let mut missing = Vec::new();
@@ -1215,17 +1281,19 @@ impl BusUi {
                 }
                 self.error = None;
                 if let Some(room) = self.room {
-                    self.queue(
-                        BusCommand::AddAgent(AddAgent {
-                            room,
-                            name: name.text,
-                            provider: provider.expect("validated provider"),
-                            cwd: cwd.text,
-                            extra_args: args.text,
-                            consent_project_hooks: false,
-                        }),
-                        Effect::None,
-                    );
+                    let input = AddAgent {
+                        room,
+                        name: name.text,
+                        provider: provider.expect("validated provider"),
+                        cwd: cwd.text,
+                        extra_args: args.text,
+                        consent_project_hooks: false,
+                    };
+                    let command = match orchestrates.and_then(|choice| choice.0) {
+                        Some(target) => BusCommand::AddOrchestrator(input, target),
+                        None => BusCommand::AddAgent(input),
+                    };
+                    self.queue(command, Effect::None);
                 }
             }
             Form::Files(editor) => {

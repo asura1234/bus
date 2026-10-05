@@ -44,6 +44,7 @@ pub(super) enum Action {
     Quote(crate::bus::model::RequestId),
     Field(usize),
     Provider(Provider),
+    Orchestrates,
     Suggestion(usize),
     Settings,
     ToggleColorBlindMode,
@@ -491,6 +492,48 @@ fn animated_agent_status_colors(agent: &Agent, phase: u8) -> Option<Vec<Color>> 
         _ => None,
     }
 }
+/// Rows taken by the MASTER header, its room, and the gap before ROOMS.
+const MASTER_SECTION_ROWS: usize = 4;
+
+/// The logical sidebar row of a room: MASTER sits alone above the ROOMS list.
+pub(super) fn sidebar_room_row(state: &BusState, room: RoomId) -> Option<usize> {
+    let master = state.master_room().map(|master| master.id);
+    if master == Some(room) {
+        return Some(3);
+    }
+    let first = if master.is_some() {
+        3 + MASTER_SECTION_ROWS
+    } else {
+        3
+    };
+    state
+        .rooms()
+        .filter(|candidate| candidate.kind == RoomKind::Work)
+        .position(|candidate| candidate.id == room)
+        .map(|index| first + index)
+}
+
+/// Marks a work room that has an orchestrator, then its unread count.
+pub(super) fn room_label(state: &BusState, room: &Room) -> String {
+    let mut label = format!("# {}", room.name);
+    if room.kind == RoomKind::Work && state.orchestrator_of(room.id).is_some() {
+        label.push_str(" ◆");
+    }
+    if room.unread_count > 0 {
+        label.push_str(&format!("  {}", room.unread_count));
+    }
+    label
+}
+
+/// The line under an agent's name: its provider, then the room it orchestrates.
+/// The name row's status column leaves no room for the target there.
+pub(super) fn agent_detail(state: &BusState, agent: &Agent) -> String {
+    match agent.orchestrates.and_then(|room| state.room(room)) {
+        Some(room) => format!("{} → {}", provider(agent.provider), room.name),
+        None => provider(agent.provider).into(),
+    }
+}
+
 impl BusUi {
     pub fn cursor(&self) -> Option<crate::protocol::CursorState> {
         self.view.cursor.clone()
@@ -525,8 +568,15 @@ impl BusUi {
                 (agent, paths, height)
             })
             .collect();
-        let content_height =
-            6 + rooms.len() + agents.iter().map(|(_, _, height)| height).sum::<usize>();
+        let master_header_rows = if self.snapshot.state.master_room().is_some() {
+            MASTER_SECTION_ROWS - 1
+        } else {
+            0
+        };
+        let content_height = 6
+            + master_header_rows
+            + rooms.len()
+            + agents.iter().map(|(_, _, height)| height).sum::<usize>();
         let notices = if self.force_exit_available {
             2
         } else {
@@ -546,26 +596,31 @@ impl BusUi {
                 Rect::default()
             }
         };
-        view.row(at(1, 1, sw), "ROOMS", None, false, true);
+        let rooms_header = if self.snapshot.state.master_room().is_some() {
+            view.row(at(1, 1, sw), "MASTER", None, false, true);
+            1 + MASTER_SECTION_ROWS
+        } else {
+            1
+        };
+        view.row(at(1, rooms_header, sw), "ROOMS", None, false, true);
         view.row(
-            at(sidebar.width.saturating_sub(3), 1, 1),
+            at(sidebar.width.saturating_sub(3), rooms_header, 1),
             "+",
             Some(Action::NewRoom),
             false,
             false,
         );
-        let mut y = 3usize;
+        let mut y = rooms_header + 2;
         for room in &rooms {
-            let rect = at(1, y, sw.saturating_sub(2));
-            y += 1;
+            let Some(row) = sidebar_room_row(&self.snapshot.state, room.id) else {
+                continue;
+            };
+            y = y.max(row + 1);
+            let rect = at(1, row, sw.saturating_sub(2));
             if rect.height == 0 {
                 continue;
             }
-            let label = if room.unread_count > 0 {
-                format!("# {}  {}", room.name, room.unread_count)
-            } else {
-                format!("# {}", room.name)
-            };
+            let label = room_label(&self.snapshot.state, room);
             if let Some(rename) = self
                 .rename
                 .as_ref()
@@ -581,9 +636,10 @@ impl BusUi {
                     false,
                 );
             }
-            if Some(room.id) == self.room {
+            // MASTER is permanent, so it never offers a delete button.
+            if Some(room.id) == self.room && room.kind == RoomKind::Work {
                 view.row(
-                    at(sidebar.width.saturating_sub(3), y - 1, 1),
+                    at(sidebar.width.saturating_sub(3), row, 1),
                     "×",
                     Some(Action::Delete(DeleteTarget::Room(room.id))),
                     false,
@@ -654,7 +710,7 @@ impl BusUi {
             y += 1;
             view.row(
                 at(1, y, sw.saturating_sub(2)),
-                provider(agent.provider),
+                agent_detail(&self.snapshot.state, agent),
                 Some(Action::Agent(agent.id)),
                 false,
                 true,
@@ -1406,6 +1462,7 @@ impl BusUi {
                 cwd,
                 args,
                 field,
+                orchestrates,
             } => {
                 for (index, label, editor) in [
                     (0, "Name", Some(name)),
@@ -1437,6 +1494,28 @@ impl BusUi {
                             false,
                         );
                     }
+                    y += 2;
+                }
+                if let Some(choice) = orchestrates {
+                    view.row(
+                        Rect::new(x, y, width, 1),
+                        "Orchestrates room",
+                        Some(Action::Field(super::forms::ORCHESTRATES_FIELD)),
+                        false,
+                        true,
+                    );
+                    y += 1;
+                    let target = choice
+                        .0
+                        .and_then(|room| self.snapshot.state.room(room))
+                        .map_or("none", |room| room.name.as_str());
+                    view.row(
+                        Rect::new(x, y, width, 1),
+                        format!("< {target} >"),
+                        Some(Action::Orchestrates),
+                        *field == super::forms::ORCHESTRATES_FIELD,
+                        false,
+                    );
                     y += 2;
                 }
             }

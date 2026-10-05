@@ -10,6 +10,8 @@ use std::sync::Arc;
 mod history_tests;
 #[path = "keys_tests.rs"]
 mod keys_tests;
+#[path = "master_tests.rs"]
+mod master_tests;
 fn fixture() -> (BusUi, RoomId, AgentId) {
     let mut state = BusState::default();
     let room = state.create_room("room").unwrap();
@@ -1424,6 +1426,7 @@ fn agent_enter_adds_from_non_model_fields_with_its_own_directory_and_escape_canc
             cwd: editor::Editor::new("/projects/frontend".into()),
             args: Box::new(editor::Editor::new("--model sonnet".into())),
             field,
+            orchestrates: None,
         });
         // Suggestions must not hijack Enter; Tab remains path completion.
         ui.suggestions
