@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate check for /execute-plan: deterministic, agent-free pre-flight validation.
+"""Plan execution-readiness gate: deterministic, agent-free pre-flight validation.
 
 Uses the plan status as the sole review-readiness signal, then validates the
 mechanical execution contract:
@@ -32,7 +32,7 @@ Exit codes:
   2 — usage error (bad args or plan file not found); message on stderr
 
 Usage:
-    python3 skills/execute-plan/scripts/plan_execution_gate.py <plan.md>
+    python3 skills/review-plan/scripts/plan_execution_gate.py <plan.md>
 """
 
 import datetime
@@ -85,7 +85,7 @@ def check_status(text: str) -> str | None:
     status = m.group(1)
     if status not in ALLOWED_STATUSES:
         return (
-            f"**状态** = '{status}'。/execute-plan 仅接受 "
+            f"**状态** = '{status}'。计划执行仅接受 "
             "'review-plan-complete'（计划审查通过后写入）或 "
             "'plan-execution-in-progress'（恢复执行）"
         )

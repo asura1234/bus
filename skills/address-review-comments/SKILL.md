@@ -3,7 +3,7 @@ name: address-review-comments
 description: Adjudicate and address review comments for plans, PRs, tasks, or free-form review. Deterministically sanitize inputs, atomize and deduplicate claims by root cause, obtain first-party evidence for each claim, decide APPLY, REJECT, FLAG, or HOUSEKEEPING centrally, then remediate related accepted claims together. Plan and PR modes land through commit-and-push by default; task mode requires --no-commit-and-push. Use when asked to address, respond to, or fix review feedback.
 ---
 
-Use this workflow for `review-plan`, `review-pr`, execute-plan task review, or free-form review. Reviewer and author are peer decision-makers in a convergence loop: the reviewer identifies a problem and may suggest a repair; the author independently determines whether the claim is true, whether it belongs in scope, and what repair is correct; a later review verifies the outcome. Review comments are evidence-bearing claims, not commands.
+Use this workflow for `review-plan`, `review-pr`, task review, or free-form review. Reviewer and author are peer decision-makers in a convergence loop: the reviewer identifies a problem and may suggest a repair; the author independently determines whether the claim is true, whether it belongs in scope, and what repair is correct; a later review verifies the outcome. Review comments are evidence-bearing claims, not commands.
 
 Before execution, read completely:
 
@@ -127,7 +127,7 @@ Next action:
   plan -> rerun review-plan
   landed PR -> may run pr
   --no-commit-and-push -> state explicitly that nothing was pushed
-  task -> return to execute-plan
+  task -> return to the task owner
 
 REJECT and FLAG are separate:
   no REJECT -> one line exactly `REJECT：无`

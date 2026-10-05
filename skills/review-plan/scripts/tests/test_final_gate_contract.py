@@ -9,7 +9,6 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from final_gate_contract import (  # noqa: E402
-    GATE_ORDER,
     DeclaredFinalGate,
     FinalGateContractError,
     declared_final_gates,
@@ -89,24 +88,6 @@ class FinalGateContractTest(unittest.TestCase):
             [gate.kind for gate in declared_final_gates(plan)],
             ["lint", "unit"],
         )
-
-    def test_run_final_choices_track_the_contract(self) -> None:
-        import execute_plan
-
-        parser = execute_plan._parser()
-        run_final = next(
-            action
-            for action in parser._subparsers._group_actions[0].choices.values()
-            if any(
-                option == "--kind"
-                for parser_action in action._actions
-                for option in parser_action.option_strings
-            )
-        )
-        kind_action = next(
-            action for action in run_final._actions if "--kind" in action.option_strings
-        )
-        self.assertEqual(tuple(kind_action.choices), GATE_ORDER)
 
     def test_finalizer_accepts_declared_commands_verbatim(self) -> None:
         for kind, command in (

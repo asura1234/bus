@@ -30,9 +30,7 @@ workflow layering, artifact lifecycle, and agent communication conventions.
   corresponding direct Cargo, Python, and Bun gates and records every exact
   command in the round artifact.
 - Keep skill entrypoints under 250 lines and fail closed around destructive or
-  publishing operations. `execute-plan` preserves the canonical evidence/state
-  machinery but adapts Desktop-specific gates to `just lint`, `just test`, and
-  optional `just build`.
+  publishing operations.
 - Only `skills/pr/scripts/pr_goal_context.py` produces review Goal/Non-goals
   locks.
 

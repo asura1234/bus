@@ -1,6 +1,6 @@
 # Review Response Guide (Author Side)
 
-`review-plan`, `review-pr`, and execute-plan task review produce evidence-backed findings. PR reviewers may also leave uncommitted red probe tests. This guide governs the other side of that process: the author verifies, adjudicates, groups, and remediates one or more compatible review artifacts.
+`review-plan`, `review-pr`, and task review produce evidence-backed findings. PR reviewers may also leave uncommitted red probe tests. This guide governs the other side of that process: the author verifies, adjudicates, groups, and remediates one or more compatible review artifacts.
 
 Reviewer and author are peer decision-makers with different responsibilities. A reviewer identifies a problem and may suggest a repair. The author independently decides whether the claim is true, whether it belongs in scope, and what repair is correct, then owns the actual patch. A later review validates the result. Review is input, not command; convergence is measured by evidence and final behavior, not by literal compliance with a proposed fix.
 

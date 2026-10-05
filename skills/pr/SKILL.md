@@ -11,7 +11,7 @@ plans = every plan path supplied by the developer for this invocation, in argume
 
 RULES
 - Code narrative uses only the current repository, feature branch, and actual changes as facts. Plans lock goal and non-goals only.
-- Prior create-plan, execute-plan, review-plan, or review-pr invocation is not required.
+- Prior review-plan or review-pr invocation is not required.
 - Do not inspect or infer another skill's private control state, callbacks, or temporary artifacts. The sole cross-skill handoff is `.locked-goal` and `.locked-non-goals`, written and returned by pr_goal_context.py.
 - PR title and narrative content are English. Canonical fixed headings and machine tokens remain byte-compatible with references/pr-template.md. Both the initial Draft and final body must pass pr_format_check.py with the matching phase.
 - Every commit and push is delegated to commit-and-push. Every rebase is delegated to rebase-origin-main. Do not duplicate their Git protocols.

@@ -66,8 +66,7 @@ Python can prove structure and state transitions. It cannot prove that a model p
 Every artifact consumed across agents, rounds, or skills has a separate format source of truth, such as:
 
 - `review-format.md`
-- `task-agent-report-format.md`
-- `execute-plan-action-format.md`
+- `consumer-fallout-format.md`
 
 The format fixes:
 

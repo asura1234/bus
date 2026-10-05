@@ -27,7 +27,7 @@ Exit codes:
   2 — usage error (bad args or files not found); stderr message
 
 Usage:
-    python3 skills/execute-plan/scripts/plan_template_check.py <plan.md>
+    python3 skills/review-plan/scripts/plan_template_check.py <plan.md>
 
 Also importable: `from plan_template_check import check_template_match`.
 """

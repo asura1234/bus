@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""全局 EXIT CHECK 与 execute-plan finalizer 共用的命令语法。"""
+"""计划全局 EXIT CHECK 的命令语法。"""
 
 from __future__ import annotations
 

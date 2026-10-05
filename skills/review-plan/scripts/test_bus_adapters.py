@@ -49,7 +49,7 @@ def test_legacy_plan_gets_one_actionable_migration_failure() -> None:
 
     assert len(failures) == 1
     assert "legacy plan" in failures[0]
-    assert "create-plan" in failures[0]
+    assert "plan-template.md" in failures[0]
 
 
 def test_check_only_accepts_finalized_review_plan_status() -> None:

@@ -85,8 +85,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
-# Shared deterministic checks live in the execute-plan skill — import, don't duplicate.
-sys.path.insert(0, str(REPO_ROOT / "skills" / "execute-plan" / "scripts"))
+# Shared deterministic plan checks live beside this module.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plan_execution_gate import (  # noqa: E402
     STATUS_RE,
     check_decisions_empty,
@@ -195,7 +195,7 @@ def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
     if STATUS_RE.search(text) is None and LEGACY_STATUS_RE.search(text):
         return [
             "检测到 migration 前的 legacy plan 格式。历史内容不会被自动改写；"
-            "请显式调用 create-plan，以 docs/templates/plan-template.md 新建 canonical successor 后再 review-plan"
+            "请以 docs/templates/plan-template.md 新建 canonical successor 后再 review-plan"
         ]
 
     allowed = ALLOWED_STATUSES | (
@@ -236,7 +236,7 @@ def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
     decisions_body = extract_section_body(text, "需要决策的事项")
     if decisions_body and check_decisions_empty(decisions_body) is not None:
         failures.append(
-            "『需要决策的事项』仍有未解决项——决策由开发者在 create-plan 阶段解决"
+            "『需要决策的事项』仍有未解决项——决策由开发者在计划撰写阶段解决"
             "（计划正文在决策解决前不会生成），解决后再提交审查"
         )
 

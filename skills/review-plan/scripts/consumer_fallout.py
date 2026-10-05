@@ -15,7 +15,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-GRAPH_SCRIPTS = REPO_ROOT / "skills" / "execute-plan" / "scripts"
+GRAPH_SCRIPTS = Path(__file__).resolve().parent
 if str(GRAPH_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(GRAPH_SCRIPTS))
 

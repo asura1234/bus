@@ -7,9 +7,8 @@ Read [guide.md](./guide.md) for workflow principles. The source of truth for mac
 
 Plans written before this migration remain historical inputs but are not
 silently coerced into the new machine contract. The prologue identifies the
-legacy status form and stops with one migration instruction: explicitly invoke
-`create-plan` to build a canonical successor from
-`docs/templates/plan-template.md`, preserving the developer-owned goal,
+legacy status form and stops with one migration instruction: write a canonical
+successor from `docs/templates/plan-template.md`, preserving the developer-owned goal,
 non-goals, and decisions. `review-plan` stays read-only and never rewrites the
 historical file itself.
 

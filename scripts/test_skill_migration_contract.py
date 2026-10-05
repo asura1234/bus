@@ -9,9 +9,7 @@ SKILLS = REPO / "skills"
 CANONICAL_SKILLS = {
     "address-review-comments",
     "commit-and-push",
-    "create-plan",
     "delete-dead-code",
-    "execute-plan",
     "gate-and-fix",
     "pr",
     "rebase-origin-main",
@@ -70,9 +68,6 @@ class SkillMigrationContractTest(unittest.TestCase):
             "docs/guides/code-review-guide.md",
             "docs/guides/review-response-guide.md",
             "docs/guides/task-review-guide.md",
-            "docs/guides/plan-execution-guide.md",
-            "docs/guides/task-agent-report-format.md",
-            "docs/guides/execute-plan-action-format.md",
             "docs/templates/plan-template.md",
             "docs/templates/module-agents-template.md",
             "cli_extensions/review_artifact.py",
@@ -114,11 +109,10 @@ class SkillMigrationContractTest(unittest.TestCase):
     def test_template_and_format_inventory_is_complete(self) -> None:
         expected = {
             "docs/guides/consumer-fallout-format.md",
-            "docs/guides/execute-plan-action-format.md",
             "docs/guides/review-format.md",
-            "docs/guides/task-agent-report-format.md",
             "docs/templates/module-agents-template.md",
             "docs/templates/plan-template.md",
+            "docs/templates/workflow-template.md",
             "skills/delete-dead-code/references/dead-code-findings-format.md",
             "skills/gate-and-fix/references/gate-round-format.md",
             "skills/pr/references/pr-template.md",
