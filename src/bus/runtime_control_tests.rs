@@ -1776,3 +1776,44 @@ fn dev_send_as_an_ambiguous_room_agent_name_never_falls_back_to_the_orchestrator
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dev_send_as_counts_the_agent_message_as_unread_in_a_room_out_of_view() {
+    let (mut worker, room, codex, dir) = fixture();
+    let claude = worker
+        .state
+        .create_agent(room, "claude1", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    assert_ne!(worker.state.visible_room(), Some(room));
+    let human = call(
+        &mut worker,
+        "unread-human",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"from the human"}),
+    );
+    assert!(human.ok, "{human:?}");
+    assert_eq!(worker.state.room(room).unwrap().unread_count, 0);
+
+    let agent = call(
+        &mut worker,
+        "unread-agent",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"from claude","as":"claude1"}),
+    );
+    assert!(agent.ok, "{agent:?}");
+    assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
+
+    // A visible room stays read, as it does for replies.
+    worker.state.select_room(room).unwrap();
+    worker.state.mark_room_seen(room).unwrap();
+    let seen = call(
+        &mut worker,
+        "unread-visible",
+        "message.send",
+        json!({"room":"test","to":[codex.0.to_string()],"text":"again","as":claude.0.to_string()}),
+    );
+    assert!(seen.ok, "{seen:?}");
+    assert_eq!(worker.state.room(room).unwrap().unread_count, 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

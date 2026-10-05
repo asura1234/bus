@@ -1176,6 +1176,10 @@ impl BusState {
             .rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?;
+        // An agent's message is news for the Human, like a reply; their own is not.
+        if prompt.author != Author::Human && self.visible_room != Some(room) {
+            room_state.unread_count = room_state.unread_count.saturating_add(1);
+        }
         room_state.latest_prompt = Some(prompt);
         room_state.draft.text.clear();
         room_state.draft.files.clear();
