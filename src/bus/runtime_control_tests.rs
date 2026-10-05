@@ -1406,3 +1406,79 @@ fn dev_send_as_the_only_room_agent_to_all_has_no_recipients() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dev_send_as_allows_only_the_rooms_own_master_orchestrator_from_outside() {
+    let (mut worker, room, codex, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    let other = worker.state.create_room("other").unwrap();
+    let orchestrator = worker
+        .state
+        .create_agent(
+            master,
+            "claude-orch",
+            Provider::ClaudeCode,
+            dir.clone(),
+            None,
+        )
+        .unwrap();
+    worker
+        .state
+        .set_agent_orchestrates(orchestrator, Some(room))
+        .unwrap();
+    let elsewhere = worker
+        .state
+        .create_agent(master, "codex-orch", Provider::Codex, dir.clone(), None)
+        .unwrap();
+    worker
+        .state
+        .set_agent_orchestrates(elsewhere, Some(other))
+        .unwrap();
+    worker
+        .state
+        .create_agent(master, "idle-orch", Provider::Codex, dir.clone(), None)
+        .unwrap();
+
+    let sent = call(
+        &mut worker,
+        "orch-as",
+        "message.send",
+        json!({"room":"test","to":["all"],"text":"plan","as":"claude-orch"}),
+    );
+    assert!(sent.ok, "{sent:?}");
+    let requests = worker.state.requests().collect::<Vec<_>>();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].agent_id, codex);
+    assert_eq!(requests[0].prompt.author, Author::Agent(orchestrator));
+
+    // By ID too, and an orchestrator can address the MASTER room it lives in.
+    let by_id = call(
+        &mut worker,
+        "orch-as-id",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"x","as":orchestrator.0.to_string()}),
+    );
+    assert!(by_id.ok, "{by_id:?}");
+    let in_master = call(
+        &mut worker,
+        "orch-in-master",
+        "message.send",
+        json!({"room":"master","to":["idle-orch"],"text":"x","as":"claude-orch"}),
+    );
+    assert!(in_master.ok, "{in_master:?}");
+
+    for (id, author) in [("orch-other", "codex-orch"), ("orch-none", "idle-orch")] {
+        let rejected = call(
+            &mut worker,
+            id,
+            "message.send",
+            json!({"room":"test","to":["codex1"],"text":"x","as":author}),
+        );
+        assert!(
+            error_message(&rejected).contains("in this room or its orchestrator"),
+            "{id}: {rejected:?}"
+        );
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -48,7 +48,8 @@ ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) 
 MASTER room. Only MASTER agents orchestrate, each at most one work room: use
 agent add --room master --orchestrates ROOM, or agent orchestrate to reassign or unassign.
 Use --to all explicitly for all room agents.
-send --as records the message as written by that room agent; --to all then skips it.
+send --as records the message as written by that room agent or the room's MASTER
+orchestrator; --to all then skips it.
 room seen clears a room's unread count without changing the visible Bus view.
 state includes each agent's compactions and per-provider usage (5-hour and weekly used %).
 Usage status \"unknown\" means Bus has no data yet, never that the allowance is unused.

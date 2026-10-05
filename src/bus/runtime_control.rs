@@ -383,12 +383,24 @@ impl Worker {
         let author = match p.get("as") {
             None => None,
             Some(selector) => {
-                let id = self.dev_agent(
-                    selector
-                        .as_str()
-                        .ok_or("Author must be an agent name or ID")?,
-                    Some(room),
-                )?;
+                let selector = selector
+                    .as_str()
+                    .ok_or("Author must be an agent name or ID")?;
+                // A MASTER orchestrator writes into the room it orchestrates
+                // without being a member; no other cross-room author is allowed.
+                let id = match self.dev_agent(selector, Some(room)) {
+                    Ok(id) => id,
+                    Err(error) => self
+                        .state
+                        .orchestrator_of(room)
+                        .filter(|o| selector == o.id.0.to_string() || selector == o.name)
+                        .map(|o| o.id)
+                        .ok_or_else(|| {
+                            format!(
+                                "{error}: --as must name an agent in this room or its orchestrator"
+                            )
+                        })?,
+                };
                 if self.state.agent(id).is_some_and(|a| a.deletion_pending) {
                     return Err("Author agent is being deleted".into());
                 }
