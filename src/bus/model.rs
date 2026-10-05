@@ -241,6 +241,9 @@ pub(crate) struct Room {
     /// kind: MASTER rings, work rooms stay silent. Read it with `sound_enabled`.
     #[serde(default)]
     pub(crate) sound: Option<bool>,
+    /// Read-only: the retired Room Brief, folded into `notes` on load and never saved.
+    #[serde(default, rename = "brief", skip_serializing)]
+    legacy_brief: Option<serde_json::Value>,
 }
 
 impl Room {
@@ -494,6 +497,10 @@ pub(crate) struct BusState {
     /// Approve-once fingerprints already sent to a native prompt; each is single-use.
     #[serde(default)]
     consumed_permission_fingerprints: BTreeSet<String>,
+    /// Read-only: the retired orchestrator ledger, whose approve-once digests are
+    /// folded into `consumed_permission_fingerprints` on load and never saved.
+    #[serde(default, rename = "orchestrator", skip_serializing)]
+    legacy_orchestrator: Option<serde_json::Value>,
 }
 
 fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, Agent>, D::Error>
@@ -559,6 +566,61 @@ impl BusState {
             consumed_provider_turns: BTreeSet::new(),
             visible_room: None,
             consumed_permission_fingerprints: BTreeSet::new(),
+            legacy_orchestrator: None,
+        }
+    }
+
+    /// Carries what the orchestrator build saved forward without the retired
+    /// features: approve-once fingerprints it already sent stay consumed, and a
+    /// Room Brief's goal and non-goals are appended once to the room notes.
+    /// Malformed legacy data is ignored rather than failing the load.
+    pub(crate) fn absorb_legacy_fields(&mut self) {
+        if let Some(operations) = self
+            .legacy_orchestrator
+            .take()
+            .as_ref()
+            .and_then(|ledger| ledger.get("operations"))
+            .and_then(serde_json::Value::as_object)
+        {
+            for operation in operations.values() {
+                if operation.get("kind").and_then(serde_json::Value::as_str)
+                    == Some("approve_permission_once")
+                {
+                    if let Some(digest) = operation
+                        .get("intent_digest")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        self.consumed_permission_fingerprints
+                            .insert(digest.to_owned());
+                    }
+                }
+            }
+        }
+        for room in self.rooms.values_mut() {
+            let Some(brief) = room.legacy_brief.take() else {
+                continue;
+            };
+            let field = |name: &str| {
+                brief
+                    .get(name)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_owned)
+            };
+            let text = [("Goal", field("goal")), ("Non-goals", field("non_goals"))]
+                .into_iter()
+                .filter_map(|(label, text)| text.map(|text| format!("{label}: {text}")))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if text.is_empty() || room.notes.contains(&text) {
+                continue;
+            }
+            room.notes = if room.notes.trim().is_empty() {
+                text
+            } else {
+                format!("{}\n\n{text}", room.notes.trim_end())
+            };
         }
     }
 
@@ -592,6 +654,7 @@ impl BusState {
                 deletion_pending: false,
                 kind: RoomKind::Work,
                 sound: None,
+                legacy_brief: None,
             },
         );
         Ok(id)
@@ -637,6 +700,7 @@ impl BusState {
                         deletion_pending: false,
                         kind: RoomKind::Master,
                         sound: None,
+                        legacy_brief: None,
                     },
                 );
                 MASTER_ROOM_ID
@@ -1713,6 +1777,45 @@ mod tests {
         let loaded: BusState = serde_json::from_value(document).unwrap();
         assert!(loaded.room(master).unwrap().sound_enabled());
         assert!(!loaded.room(work).unwrap().sound_enabled());
+    }
+
+    #[test]
+    fn legacy_briefs_join_existing_notes_once_and_malformed_ledgers_are_ignored() {
+        let mut state = BusState::new();
+        let kept = state.create_room("kept").unwrap();
+        let repeated = state.create_room("repeated").unwrap();
+        let empty = state.create_room("empty").unwrap();
+        let odd = state.create_room("odd").unwrap();
+        state.set_room_notes(kept, "My notes\n").unwrap();
+        state
+            .set_room_notes(repeated, "Goal: ship\nNon-goals: none")
+            .unwrap();
+        let mut document = serde_json::to_value(&state).unwrap();
+        let brief = serde_json::json!({"goal": "ship", "non_goals": "none", "locked": true});
+        for room in [kept, repeated] {
+            document["rooms"][room.0.to_string()]["brief"] = brief.clone();
+        }
+        document["rooms"][empty.0.to_string()]["brief"] =
+            serde_json::json!({"goal": " ", "non_goals": ""});
+        document["rooms"][odd.0.to_string()]["brief"] = serde_json::json!(5);
+        document["orchestrator"] = serde_json::json!({"operations": "not a map"});
+
+        let mut loaded: BusState = serde_json::from_value(document).unwrap();
+        loaded.absorb_legacy_fields();
+
+        assert_eq!(
+            loaded.room(kept).unwrap().notes,
+            "My notes\n\nGoal: ship\nNon-goals: none"
+        );
+        assert_eq!(
+            loaded.room(repeated).unwrap().notes,
+            "Goal: ship\nNon-goals: none"
+        );
+        assert_eq!(loaded.room(empty).unwrap().notes, "");
+        assert_eq!(loaded.room(odd).unwrap().notes, "");
+        let saved = serde_json::to_value(&loaded).unwrap();
+        assert!(saved.get("orchestrator").is_none());
+        assert!(saved["rooms"][kept.0.to_string()].get("brief").is_none());
     }
 
     #[test]

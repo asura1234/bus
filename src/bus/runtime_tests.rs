@@ -1925,7 +1925,11 @@ fn orchestrator_era_work_room_named_master_keeps_its_data_beside_the_new_master(
     assert_eq!(legacy.kind, RoomKind::Work);
     // Renamed once so MASTER keeps a unique name; everything else is kept.
     assert_eq!(legacy.name, "Master (old)");
-    assert_eq!(legacy.notes, "legacy notes");
+    // The fixture room's legacy brief is folded in after its own notes.
+    assert_eq!(
+        legacy.notes,
+        "legacy notes\n\nGoal: goal\nNon-goals: non-goals"
+    );
     // The name selector reaches the real MASTER; the legacy room stays reachable by id.
     worker.dev_enabled = true;
     let sound = |worker: &mut Worker, room: &str, on: bool| {
@@ -1986,6 +1990,31 @@ fn master_session_saved_before_sound_and_compactions_keeps_its_orchestrators() {
     let agent = worker.state.agent(orchestrator).unwrap();
     assert_eq!(agent.orchestrates, Some(work));
     assert_eq!(agent.compactions.count, 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn orchestrator_era_consumed_approve_once_fingerprint_stays_consumed() {
+    let fingerprint = "v1.eyJhIjoxfQ.0000";
+    let mut document = orchestrator_era_document();
+    document["state"]["orchestrator"]["operations"] = json!({
+        "1": {
+            "operation_id": 1,
+            "room_id": 1,
+            "actor": "orchestrator",
+            "kind": "approve_permission_once",
+            "intent_digest": fingerprint,
+            "phase": "applied",
+            "uncertainty": null,
+            "result": {"Applied": {"receipt_digest": fingerprint}}
+        }
+    });
+    let (worker, dir) = open_saved_document(document);
+    assert!(
+        worker.state.permission_fingerprint_consumed(fingerprint),
+        "an approve-once fingerprint consumed by the orchestrator build is replayable after upgrade"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

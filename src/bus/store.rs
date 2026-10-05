@@ -117,7 +117,9 @@ impl JsonStore {
                 source,
             }
         })?;
-        Ok(Some(document.state))
+        let mut state = document.state;
+        state.absorb_legacy_fields();
+        Ok(Some(state))
     }
 
     pub(crate) fn save(&self, state: &BusState) -> Result<(), StoreError> {
@@ -454,6 +456,69 @@ mod tests {
                 .filter(|room| room.kind == RoomKind::Master)
                 .count(),
             1
+        );
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn applied_approve_once_fingerprint_stays_consumed_after_load() {
+        let dir = temp_dir("legacy-fingerprint");
+        let path = dir.join("state.json");
+        let mut document: serde_json::Value =
+            serde_json::from_str(include_str!("testdata/legacy_orchestrator_state.json"))
+                .expect("fixture");
+        document["state"]["orchestrator"]["operations"]["1"] = serde_json::json!({
+            "operation_id": 1,
+            "room_id": 1,
+            "actor": "human",
+            "kind": "approve_permission_once",
+            "intent_digest": "fp-already-sent",
+            "phase": "Settled",
+            "uncertainty": null,
+            "result": {"Applied": {"receipt_digest": "fp-already-sent"}}
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&document).expect("encode")).expect("write");
+        let state = JsonStore::new(path).load().expect("load").expect("state");
+        assert!(
+            state.permission_fingerprint_consumed("fp-already-sent"),
+            "a fingerprint already sent before this build can be approved again"
+        );
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn legacy_room_brief_is_folded_into_the_room_notes_once() {
+        let dir = temp_dir("legacy-brief");
+        let path = dir.join("state.json");
+        fs::write(
+            &path,
+            include_str!("testdata/legacy_orchestrator_state.json"),
+        )
+        .expect("fixture");
+        let store = JsonStore::new(path.clone());
+        let mut state = store.load().expect("load").expect("state");
+        state.ensure_master_room();
+        store.save(&state).expect("save");
+        // The brief feature is gone; its text lives on in the room notes, once.
+        let notes = |state: &BusState| {
+            state
+                .rooms()
+                .find(|room| room.name == "legacy")
+                .expect("legacy room")
+                .notes
+                .clone()
+        };
+        let reloaded = store.load().expect("reload").expect("state");
+        assert_eq!(notes(&reloaded), "Goal: goal\nNon-goals: non-goals");
+        let saved = fs::read_to_string(&path).expect("reread");
+        assert!(
+            !saved.contains("\"brief\""),
+            "the brief itself is not saved: {saved}"
+        );
+        store.save(&reloaded).expect("save again");
+        assert_eq!(
+            notes(&store.load().expect("third load").expect("state")),
+            "Goal: goal\nNon-goals: non-goals"
         );
         fs::remove_dir_all(dir).expect("cleanup");
     }
