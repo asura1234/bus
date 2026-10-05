@@ -914,6 +914,8 @@ fn agent_approve_once_worker_rejects_stale_launch_before_native_then_persists_an
     );
     assert!(!replay.ok);
     assert_eq!(approvals.load(Ordering::SeqCst), 1);
+    let saved = worker.store.load().unwrap().unwrap();
+    assert!(saved.permission_fingerprint_consumed(&fingerprint));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

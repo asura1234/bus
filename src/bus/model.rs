@@ -444,6 +444,9 @@ pub(crate) struct BusState {
     consumed_callback_ids: BTreeSet<String>,
     consumed_provider_turns: BTreeSet<String>,
     visible_room: Option<RoomId>,
+    /// Approve-once fingerprints already sent to a native prompt; each is single-use.
+    #[serde(default)]
+    consumed_permission_fingerprints: BTreeSet<String>,
     /// Room-process facts share the Bus document and therefore the Worker writer.
     #[serde(default)]
     orchestrator: crate::bus::orchestrator::OrchestratorState,
@@ -515,6 +518,7 @@ impl BusState {
             consumed_callback_ids: BTreeSet::new(),
             consumed_provider_turns: BTreeSet::new(),
             visible_room: None,
+            consumed_permission_fingerprints: BTreeSet::new(),
             orchestrator: crate::bus::orchestrator::OrchestratorState::default(),
             workflow_promotion_reviews: BTreeMap::new(),
         }
@@ -604,6 +608,14 @@ impl BusState {
                 message,
             });
         Ok(message_id)
+    }
+
+    pub(crate) fn permission_fingerprint_consumed(&self, fingerprint: &str) -> bool {
+        self.consumed_permission_fingerprints.contains(fingerprint)
+    }
+
+    pub(crate) fn consume_permission_fingerprint(&mut self, fingerprint: String) {
+        self.consumed_permission_fingerprints.insert(fingerprint);
     }
 
     fn allocate_id(&mut self) -> u64 {

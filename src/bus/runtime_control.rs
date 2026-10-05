@@ -611,26 +611,17 @@ impl Worker {
         {
             return Err("Permission fingerprint no longer matches Worker-owned room facts".into());
         }
-        if self.state.orchestrator_state().has_operation_intent(
-            agent.room_id,
-            "approve_permission_once",
-            &grant.fingerprint,
-        ) {
+        if self
+            .state
+            .permission_fingerprint_consumed(&grant.fingerprint)
+        {
             return Err("Permission fingerprint was already used".into());
         }
-        let room_id = agent.room_id;
         let target = claims.pane_id.clone();
-        let mut intent_state = self.state.clone();
-        let intent = intent_state
-            .orchestrator_state_mut()
-            .begin_operation(
-                room_id,
-                actor,
-                "approve_permission_once",
-                &grant.fingerprint,
-            )
-            .map_err(|error| format!("Permission intent rejected: {error:?}"))?;
-        self.save(intent_state)?;
+        // Consume before the native write so a lost response can never be replayed.
+        let mut consumed = self.state.clone();
+        consumed.consume_permission_fingerprint(grant.fingerprint.clone());
+        self.save(consumed)?;
         let native =
             self.transport
                 .request(Method::AgentApproveOnce(schema::AgentApproveOnceParams {
@@ -642,66 +633,21 @@ impl Worker {
                     expected_prompt_digest: claims.prompt_digest,
                     response: schema::ApprovedPermissionResponse::AllowOnce,
                 }));
-        let mut settled = self.state.clone();
         match native {
-            Ok(ResponseResult::AgentApprovedOnce { approval }) if approval.written => {
-                settled
-                    .orchestrator_state_mut()
-                    .reconcile_operation(
-                        intent.operation_id,
-                        crate::bus::orchestrator::OperationResult::Applied {
-                            receipt_digest: grant.fingerprint,
-                        },
-                    )
-                    .map_err(|error| format!("Permission settlement failed: {error:?}"))?;
-                self.save(settled)?;
-                Ok(json!({
-                    "operation_id": intent.operation_id.0,
-                    "written": true,
-                    "single_use": true,
-                    "audit": approval,
-                }))
-            }
-            Ok(ResponseResult::AgentApprovedOnce { approval }) => {
-                settled
-                    .orchestrator_state_mut()
-                    .reconcile_operation(
-                        intent.operation_id,
-                        crate::bus::orchestrator::OperationResult::Rejected {
-                            code: approval
-                                .reason
-                                .clone()
-                                .unwrap_or_else(|| "not_written".into()),
-                        },
-                    )
-                    .map_err(|error| format!("Permission settlement failed: {error:?}"))?;
-                self.save(settled)?;
-                Err(format!(
-                    "Permission was not written: {}",
-                    approval.reason.unwrap_or_else(|| "prompt changed".into())
-                ))
-            }
-            Ok(_) => {
-                settled
-                    .orchestrator_state_mut()
-                    .mark_operation_uncertain(intent.operation_id, "unexpected native response")
-                    .map_err(|error| format!("Permission uncertainty failed: {error:?}"))?;
-                self.save(settled)?;
-                Err("Unexpected native permission response; outcome is uncertain".into())
-            }
-            Err(error) => {
-                settled
-                    .orchestrator_state_mut()
-                    .mark_operation_uncertain(intent.operation_id, &error.message)
-                    .map_err(|state_error| {
-                        format!("Permission uncertainty failed: {state_error:?}")
-                    })?;
-                self.save(settled)?;
-                Err(format!(
-                    "Permission outcome is uncertain: {}",
-                    error.message
-                ))
-            }
+            Ok(ResponseResult::AgentApprovedOnce { approval }) if approval.written => Ok(json!({
+                "written": true,
+                "single_use": true,
+                "audit": approval,
+            })),
+            Ok(ResponseResult::AgentApprovedOnce { approval }) => Err(format!(
+                "Permission was not written: {}",
+                approval.reason.unwrap_or_else(|| "prompt changed".into())
+            )),
+            Ok(_) => Err("Unexpected native permission response; outcome is uncertain".into()),
+            Err(error) => Err(format!(
+                "Permission outcome is uncertain: {}",
+                error.message
+            )),
         }
     }
 

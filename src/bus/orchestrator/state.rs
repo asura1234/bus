@@ -322,14 +322,7 @@ impl OrchestratorState {
             .unwrap_or(0)
     }
 
-    pub(crate) fn has_operation_intent(&self, room_id: RoomId, kind: &str, digest: &str) -> bool {
-        self.operations.values().any(|operation| {
-            operation.room_id == room_id
-                && operation.kind == kind
-                && operation.intent_digest == digest
-        })
-    }
-
+    #[cfg(test)]
     pub(crate) fn mark_operation_uncertain(
         &mut self,
         operation_id: OperationId,
