@@ -528,13 +528,13 @@ impl Worker {
             .clone()
             .ok_or("Agent has no terminal")?;
         let identity = agent.runtime_identity.clone();
-        if identity.launch_id.is_none()
-            || identity.terminal_id.is_none()
-            || identity.pane_id.is_none()
-            || identity.session_id.is_none()
-        {
+        if identity.launch_id.is_none() || identity.terminal_id.is_none() {
             return Err("Agent runtime identity is incomplete".into());
         }
+        // A launching agent has a pane before its provider session starts, and
+        // its terminal may be waiting on a prompt such as Claude's trust dialog.
+        // Reading is still allowed then; only the session check is skipped.
+        let session_verified = identity.session_id.is_some();
         let expected_name = format!("bus-r{}-a{}", agent.room_id.0, id.0);
         let name = agent.name.clone();
         let status = agent.status;
@@ -552,11 +552,12 @@ impl Worker {
             Some(&info.terminal_id) == identity.terminal_id.as_ref()
                 && Some(&info.pane_id) == identity.pane_id.as_ref()
                 && info.name.as_deref() == Some(&expected_name)
-                && info
-                    .agent_session
-                    .as_ref()
-                    .map(|value| value.value.as_str())
-                    == identity.session_id.as_deref()
+                && (!session_verified
+                    || info
+                        .agent_session
+                        .as_ref()
+                        .map(|value| value.value.as_str())
+                        == identity.session_id.as_deref())
         };
         if !identity_matches(&info) {
             return Err("Agent terminal identity changed; inspect the owned session".into());
@@ -624,6 +625,7 @@ impl Worker {
             "runtime": {
                 "launch_id": identity.launch_id,
                 "session_id": identity.session_id,
+                "session_verified": session_verified,
                 "pane_id": identity.pane_id,
                 "terminal_id": identity.terminal_id,
             },

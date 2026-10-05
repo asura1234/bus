@@ -1524,3 +1524,79 @@ fn dev_room_sound_toggles_each_room_and_state_reports_it() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dev_visible_read_works_while_launching_but_keeps_terminal_identity_checks() {
+    struct LaunchingInspect {
+        pane: &'static str,
+    }
+    impl Transport for LaunchingInspect {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                // The native pane may already report a session Bus has not bound yet.
+                Method::AgentGet(_) => Ok(ResponseResult::AgentInfo {
+                    agent: owned_agent_info(self.pane, "bus-r1-a2", Some("unbound")),
+                }),
+                Method::AgentRead(params) => Ok(ResponseResult::PaneRead {
+                    read: schema::PaneReadResult {
+                        pane_id: params.target,
+                        workspace_id: "w1".into(),
+                        tab_id: "t1".into(),
+                        source: schema::ReadSource::Visible,
+                        format: schema::ReadFormat::Text,
+                        text: "Is this a project you trust?".into(),
+                        revision: 1,
+                        truncated: false,
+                        viewport_rows: Some(50),
+                        viewport_columns: Some(171),
+                        requested_lines: None,
+                        returned_lines: 50,
+                        available_lines: None,
+                        exhausted: None,
+                    },
+                }),
+                other => panic!("unexpected native method: {other:?}"),
+            }
+        }
+    }
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                session_id: None,
+                pane_id: Some("w1:p2".into()),
+                terminal_id: Some("term_internal".into()),
+            },
+        )
+        .unwrap();
+    worker.transport = Box::new(LaunchingInspect { pane: "w1:p2" });
+    let read = call(
+        &mut worker,
+        "read-launching",
+        "agent.read",
+        json!({"agent":"codex1","source":"visible"}),
+    );
+    assert!(read.ok, "{read:?}");
+    assert_eq!(read.result["status"], "launching");
+    assert_eq!(read.result["text"], "Is this a project you trust?");
+    assert_eq!(read.result["runtime"]["session_id"], Value::Null);
+    assert_eq!(read.result["runtime"]["session_verified"], false);
+
+    // A different pane behind the same target is still refused.
+    worker.transport = Box::new(LaunchingInspect { pane: "w1:other" });
+    let stale = call(
+        &mut worker,
+        "read-launching-stale",
+        "agent.read",
+        json!({"agent":"codex1","source":"visible"}),
+    );
+    assert_eq!(
+        stale.error.unwrap().message,
+        "Agent terminal identity changed; inspect the owned session"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
