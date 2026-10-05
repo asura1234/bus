@@ -175,7 +175,7 @@ fn load(
                 hook_path.to_string_lossy().into_owned(),
             ]
         } else {
-            vec![]
+            super::launch::runtime_args(agent.provider)
         },
     })
 }
@@ -513,13 +513,15 @@ mod tests {
             assert_eq!(extras.env, fixture.expected_env());
             assert_eq!(
                 extras.args,
-                if provider == Provider::ClaudeCode {
-                    vec![
-                        "--settings".into(),
+                match provider {
+                    Provider::ClaudeCode => vec![
+                        "--settings".to_owned(),
                         fixture.hook_path().to_string_lossy().into_owned(),
-                    ]
-                } else {
-                    vec![]
+                    ],
+                    // The shared app-server daemon runs hooks with the env of
+                    // whichever pane started it, misrouting this launch's callbacks.
+                    Provider::Codex => vec!["--no-daemon".to_owned()],
+                    Provider::Cursor => vec![],
                 }
             );
             assert_eq!(fixture.plan, original);

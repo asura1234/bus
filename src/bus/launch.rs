@@ -54,6 +54,17 @@ pub(crate) fn executable(provider: Provider) -> &'static str {
     }
 }
 
+/// Bus-owned provider arguments shared by fresh launches and native resumes.
+pub(crate) fn runtime_args(provider: Provider) -> Vec<String> {
+    match provider {
+        // Codex otherwise attaches to a shared app-server daemon that runs hooks
+        // with the env of whichever pane first started it, so BUS_LAUNCH_ID and
+        // BUS_CALLBACK_DIR would route every agent's callbacks to that launch.
+        Provider::Codex => vec!["--no-daemon".into()],
+        Provider::ClaudeCode | Provider::Cursor => Vec::new(),
+    }
+}
+
 pub(crate) fn canonical_directory(input: &str) -> Result<PathBuf, String> {
     let path = if input == "~" || input.starts_with("~/") {
         let home = std::env::home_dir().ok_or("Home directory unavailable")?;
@@ -285,6 +296,7 @@ pub(crate) fn prepare(
     }
     let mut args = super::files::parse_path_tokens(&input.extra_args).map_err(|e| e.to_string())?;
     validate_args(input.provider, &args)?;
+    args.extend(runtime_args(input.provider));
     let available = std::env::var_os("PATH").is_some_and(|path| {
         std::env::split_paths(&path).any(|dir| dir.join(executable(input.provider)).is_file())
     });
@@ -506,6 +518,18 @@ mod tests {
                 "accepted {provider:?}: {input}"
             );
         }
+    }
+
+    #[test]
+    fn codex_launches_host_their_own_runtime_so_hooks_inherit_launch_env() {
+        assert_eq!(
+            runtime_args(Provider::Codex),
+            vec!["--no-daemon".to_owned()]
+        );
+        assert!(runtime_args(Provider::ClaudeCode).is_empty());
+        assert!(runtime_args(Provider::Cursor).is_empty());
+        // Bus owns this flag; a user-supplied copy stays outside the allowlist.
+        assert!(validate_args(Provider::Codex, &["--no-daemon".into()]).is_err());
     }
 
     #[test]
