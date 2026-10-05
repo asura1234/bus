@@ -25,6 +25,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   room delete ROOM --confirm
   room focus ROOM
   room seen ROOM
+  room sound ROOM (--on | --off)
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks] [--orchestrates ROOM]
   agent orchestrate AGENT (--room ROOM | --none)
@@ -51,6 +52,7 @@ Use --to all explicitly for all room agents.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
 room seen clears a room's unread count without changing the visible Bus view.
+room sound turns that room's new-message sound on or off; MASTER starts on, work rooms off.
 state includes each agent's compactions and per-provider usage (5-hour and weekly used %).
 Usage status \"unknown\" means Bus has no data yet, never that the allowance is unused.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
@@ -195,6 +197,12 @@ fn cli() -> Command {
                 .subcommand(subcommand("focus").arg(value_arg("room").required(true)))
                 .subcommand(subcommand("seen").arg(value_arg("room").required(true)))
                 .subcommand(
+                    subcommand("sound")
+                        .arg(value_arg("room").required(true))
+                        .arg(flag("on").conflicts_with("off"))
+                        .arg(flag("off")),
+                )
+                .subcommand(
                     subcommand("rename")
                         .arg(value_arg("room").required(true))
                         .arg(value_arg("name").required(true)),
@@ -333,6 +341,17 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         "room" => match args.subcommand() {
             Some(("focus", args)) => ("room.focus", json!({"room": required(args, "room")?})),
             Some(("seen", args)) => ("room.seen", json!({"room": required(args, "room")?})),
+            Some(("sound", args)) => {
+                let on = match (args.get_flag("on"), args.get_flag("off")) {
+                    (true, false) => true,
+                    (false, true) => false,
+                    _ => return Err("room sound needs exactly one of --on or --off".into()),
+                };
+                (
+                    "room.sound",
+                    json!({"room": required(args, "room")?, "on": on}),
+                )
+            }
             Some(("create", args)) => ("room.create", json!({"name": required(args, "name")?})),
             Some(("rename", args)) => (
                 "room.rename",
@@ -529,6 +548,19 @@ mod tests {
     }
 
     #[test]
+    fn room_sound_requires_exactly_one_of_on_or_off() {
+        for args in [
+            &["room", "sound", "7"][..],
+            &["room", "sound", "7", "--on", "--off"][..],
+            &["room", "sound", "--on"][..],
+            &["room", "sound", "7", "8", "--on"][..],
+        ] {
+            assert!(command(args).is_err(), "{args:?}");
+        }
+        assert!(HELP.contains("room sound ROOM (--on | --off)"));
+    }
+
+    #[test]
     fn agent_orchestrate_requires_exactly_one_target() {
         for args in [
             &["agent", "orchestrate", "claude-orch"][..],
@@ -644,6 +676,16 @@ mod tests {
                 &["agent", "orchestrate", "claude-orch", "--none"],
                 "agent.orchestrate",
                 json!({"agent": "claude-orch", "room": null}),
+            ),
+            (
+                &["room", "sound", "master", "--off"],
+                "room.sound",
+                json!({"room": "master", "on": false}),
+            ),
+            (
+                &["room", "sound", "7", "--on"],
+                "room.sound",
+                json!({"room": "7", "on": true}),
             ),
             (
                 &["room", "seen", "Planning"],

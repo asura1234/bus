@@ -1482,3 +1482,45 @@ fn dev_send_as_allows_only_the_rooms_own_master_orchestrator_from_outside() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dev_room_sound_toggles_each_room_and_state_reports_it() {
+    let (mut worker, room, _agent, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    let state = call(&mut worker, "sound-state-1", "state", json!({}));
+    assert_eq!(state.result["rooms"][0]["sound"], true);
+    assert_eq!(state.result["rooms"][1]["sound"], false);
+
+    let on = call(
+        &mut worker,
+        "sound-on",
+        "room.sound",
+        json!({"room":"test","on":true}),
+    );
+    assert!(on.ok, "{on:?}");
+    let off = call(
+        &mut worker,
+        "sound-off",
+        "room.sound",
+        json!({"room":"MASTER","on":false}),
+    );
+    assert!(off.ok, "{off:?}");
+    assert!(worker.state.room(room).unwrap().sound_enabled());
+    assert!(!worker.state.room(master).unwrap().sound_enabled());
+    let saved = worker.store.load().unwrap().unwrap();
+    assert!(saved.room(room).unwrap().sound_enabled());
+
+    let state = call(&mut worker, "sound-state-2", "state", json!({}));
+    assert_eq!(state.result["rooms"][0]["sound"], false);
+    assert_eq!(state.result["rooms"][1]["sound"], true);
+    let invalid = call(
+        &mut worker,
+        "sound-bad",
+        "room.sound",
+        json!({"room":"test","on":"yes"}),
+    );
+    assert!(!invalid.ok);
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

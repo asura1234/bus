@@ -392,6 +392,12 @@ mod tests {
             1
         );
         assert!(!rooms_before.contains(&master));
+        // Old rooms load silent; the migrated MASTER rings.
+        assert!(state
+            .rooms()
+            .filter(|room| room.id != master)
+            .all(|room| !room.sound_enabled()));
+        assert!(state.room(master).expect("master").sound_enabled());
         assert!(state
             .agents()
             .all(|agent| agent.orchestrates.is_none() && agent.room_id != master));

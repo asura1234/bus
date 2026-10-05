@@ -29,6 +29,7 @@ use std::{
 pub(crate) enum BusCommand {
     CreateRoom(String),
     RenameRoom(RoomId, String),
+    SetRoomSound(RoomId, bool),
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),
     DeleteAgent(AgentId),

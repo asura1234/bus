@@ -237,6 +237,16 @@ pub(crate) struct Room {
     pub(crate) deletion_pending: bool,
     #[serde(default)]
     pub(crate) kind: RoomKind,
+    /// The Human's per-room sound notification choice. Unset rooms follow their
+    /// kind: MASTER rings, work rooms stay silent. Read it with `sound_enabled`.
+    #[serde(default)]
+    pub(crate) sound: Option<bool>,
+}
+
+impl Room {
+    pub(crate) fn sound_enabled(&self) -> bool {
+        self.sound.unwrap_or(self.kind == RoomKind::Master)
+    }
 }
 
 /// A session's rooms are units of work plus exactly one MASTER room, where the
@@ -578,6 +588,7 @@ impl BusState {
                 latest_replies: BTreeMap::new(),
                 deletion_pending: false,
                 kind: RoomKind::Work,
+                sound: None,
             },
         );
         Ok(id)
@@ -601,6 +612,7 @@ impl BusState {
                         latest_replies: BTreeMap::new(),
                         deletion_pending: false,
                         kind: RoomKind::Master,
+                        sound: None,
                     },
                 );
                 MASTER_ROOM_ID
@@ -674,6 +686,14 @@ impl BusState {
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?
             .orchestrates = room;
+        Ok(())
+    }
+
+    pub(crate) fn set_room_sound(&mut self, id: RoomId, on: bool) -> Result<(), ModelError> {
+        self.rooms
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownRoom(id))?
+            .sound = Some(on);
         Ok(())
     }
 
@@ -1631,6 +1651,38 @@ mod tests {
         assert_eq!(work, RoomId(1));
         assert_eq!(state.rooms().next().map(|room| room.id), Some(master));
         assert!(state.has_work());
+    }
+
+    #[test]
+    fn sound_rings_by_default_only_in_master_until_the_human_chooses() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        assert!(state.room(master).unwrap().sound_enabled());
+        assert!(!state.room(work).unwrap().sound_enabled());
+
+        state.set_room_sound(master, false).unwrap();
+        state.set_room_sound(work, true).unwrap();
+        assert!(!state.room(master).unwrap().sound_enabled());
+        assert!(state.room(work).unwrap().sound_enabled());
+        assert_eq!(
+            state.set_room_sound(RoomId(999), true),
+            Err(ModelError::UnknownRoom(RoomId(999)))
+        );
+
+        // A MASTER room saved before the sound field existed still rings.
+        let mut document = serde_json::to_value(&state).unwrap();
+        let rooms = document["rooms"].as_object_mut().unwrap();
+        rooms.get_mut(&master.0.to_string()).unwrap()["sound"] = serde_json::Value::Null;
+        rooms
+            .get_mut(&work.0.to_string())
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("sound");
+        let loaded: BusState = serde_json::from_value(document).unwrap();
+        assert!(loaded.room(master).unwrap().sound_enabled());
+        assert!(!loaded.room(work).unwrap().sound_enabled());
     }
 
     #[test]
