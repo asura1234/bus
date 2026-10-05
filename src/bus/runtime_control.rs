@@ -443,18 +443,21 @@ impl Worker {
                     .ok_or("Author must be an agent name or ID")?;
                 // A MASTER orchestrator writes into the room it orchestrates
                 // without being a member; no other cross-room author is allowed.
-                let id = match self.dev_agent(selector, Some(room)) {
-                    Ok(id) => id,
-                    Err(error) => self
-                        .state
+                // Fall back only when nothing in the room matches; an ambiguous
+                // in-room name must fail rather than resolve to the orchestrator.
+                let in_room = self.state.agents().any(|a| {
+                    a.room_id == room && (selector == a.id.0.to_string() || selector == a.name)
+                });
+                let id = if in_room {
+                    self.dev_agent(selector, Some(room))?
+                } else {
+                    self.state
                         .orchestrator_of(room)
                         .filter(|o| selector == o.id.0.to_string() || selector == o.name)
                         .map(|o| o.id)
-                        .ok_or_else(|| {
-                            format!(
-                                "{error}: --as must name an agent in this room or its orchestrator"
-                            )
-                        })?,
+                        .ok_or(
+                            "No matching room or agent: --as must name an agent in this room or its orchestrator",
+                        )?
                 };
                 if self.state.agent(id).is_some_and(|a| a.deletion_pending) {
                     return Err("Author agent is being deleted".into());
