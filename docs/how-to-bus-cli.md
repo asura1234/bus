@@ -232,17 +232,6 @@ bus request recover "$request_id" --confirm
 The generic form is `request recover REQUEST_ID --confirm`. It abandons only the
 exact confirmed current request and does not choose what happens to queued work.
 
-Coding-agent harnesses can verify a trusted assignment outer frame without
-using developer control:
-
-```sh
-bus assignment verify --frame "$frame"
-```
-
-The generic form is `assignment verify --frame FRAME`. A verified, absent, or
-invalid result is factual assignment evidence; it does not select a skill,
-fallback, or workflow action.
-
 The control CLI always emits raw JSON. Agent reply text returned by `wait`,
 `message status`, and `history` remains raw Markdown. The interactive room
 history renders Markdown styling for agent replies only; human prompts remain

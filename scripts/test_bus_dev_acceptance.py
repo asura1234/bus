@@ -91,7 +91,7 @@ class AcceptanceObservationTests(unittest.TestCase):
             guide,
         )
         self.assertIn("request recover REQUEST_ID --confirm", guide)
-        self.assertIn("assignment verify --frame FRAME", guide)
+        self.assertNotIn("assignment verify", guide)
         self.assertIn("same persisted message status", guide)
         self.assertIn("waiting CLI process exits or Bus restarts", guide)
         self.assertIn("wakes the room orchestrator", guide)

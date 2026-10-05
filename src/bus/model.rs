@@ -175,8 +175,6 @@ pub(crate) struct Prompt {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) recipient_ids: AgentRecipients,
     pub(crate) submitted_at_ms: u64,
-    #[serde(default)]
-    pub(crate) trusted_assignment_frame: Option<String>,
 }
 
 fn human_author() -> Author {
@@ -199,15 +197,11 @@ impl Prompt {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        let untrusted = match (text.is_empty(), quoted_files.is_empty()) {
+        match (text.is_empty(), quoted_files.is_empty()) {
             (false, false) => format!("{text}\n{quoted_files}"),
             (false, true) => text,
             (true, false) => quoted_files,
             (true, true) => String::new(),
-        };
-        match &self.trusted_assignment_frame {
-            Some(frame) => super::trusted_assignment::render_payload(frame, &untrusted),
-            None => untrusted,
         }
     }
 
@@ -266,24 +260,6 @@ impl RoomBrief {
         }
         crate::bus::io::digest(&canonical)
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ParticipantAssignmentFacts {
-    pub(crate) room_id: RoomId,
-    pub(crate) work_id: Option<u64>,
-    pub(crate) message_id: u64,
-    pub(crate) request_id: RequestId,
-    pub(crate) author: Author,
-    pub(crate) agent_id: AgentId,
-    pub(crate) recipient_incarnation: u64,
-    pub(crate) provider_launch_id: String,
-    pub(crate) brief_revision: u64,
-    pub(crate) approved_revision: u64,
-    pub(crate) locked: bool,
-    pub(crate) goal: String,
-    pub(crate) non_goals: String,
-    pub(crate) content_bundle_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1117,7 +1093,6 @@ impl BusState {
             files: draft.files,
             recipient_ids: draft.recipient_ids,
             submitted_at_ms: now_ms,
-            trusted_assignment_frame: None,
         };
         let mut request_ids = Vec::with_capacity(prompt.recipient_ids.len());
         for agent_id in prompt.recipient_ids.iter().copied() {
@@ -1255,59 +1230,6 @@ impl BusState {
             command.expected_proposal_revision,
             command.expected_proposal_digest,
         ))
-    }
-
-    pub(crate) fn bind_trusted_assignment(
-        &mut self,
-        request: RequestId,
-        frame: String,
-    ) -> Result<(), ModelError> {
-        let request = self
-            .requests
-            .get_mut(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        if request.phase != RequestPhase::Queued
-            || request.prompt.trusted_assignment_frame.is_some()
-        {
-            return Err(ModelError::InvalidTransition);
-        }
-        request.prompt.trusted_assignment_frame = Some(frame);
-        Ok(())
-    }
-
-    pub(crate) fn assignment_facts(
-        &self,
-        request: RequestId,
-        launch_id: &str,
-        content_bundle_digest: &str,
-    ) -> Result<Option<ParticipantAssignmentFacts>, ModelError> {
-        let request = self
-            .requests
-            .get(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        let room = self
-            .rooms
-            .get(&request.room_id)
-            .ok_or(ModelError::UnknownRoom(request.room_id))?;
-        if !room.brief.locked {
-            return Ok(None);
-        }
-        Ok(Some(ParticipantAssignmentFacts {
-            room_id: request.room_id,
-            work_id: None,
-            message_id: request.prompt.id.0,
-            request_id: request.id,
-            author: request.prompt.author.clone(),
-            agent_id: request.agent_id,
-            recipient_incarnation: 1,
-            provider_launch_id: launch_id.into(),
-            brief_revision: room.brief.revision,
-            approved_revision: room.brief.approved_revision,
-            locked: room.brief.locked,
-            goal: room.brief.goal.clone(),
-            non_goals: room.brief.non_goals.clone(),
-            content_bundle_digest: content_bundle_digest.into(),
-        }))
     }
 
     pub(crate) fn begin_submission(

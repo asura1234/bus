@@ -636,23 +636,6 @@ impl Worker {
                 continue;
             };
             let mut state = self.state.clone();
-            if let Some(facts) = state
-                .assignment_facts(
-                    request,
-                    launch,
-                    &super::io::digest(
-                        super::orchestrator::ROOM_AGENT_CONTENT_INTERFACE_V1.as_bytes(),
-                    ),
-                )
-                .map_err(|error| error.to_string())?
-            {
-                let discovery =
-                    super::trusted_assignment::open_discovery(&self.data_dir, agent.id, launch)?;
-                let frame = super::trusted_assignment::publish(&discovery, facts)?;
-                state
-                    .bind_trusted_assignment(request, frame)
-                    .map_err(|error| error.to_string())?;
-            }
             let text = state
                 .request(request)
                 .ok_or("Missing queued request")?
