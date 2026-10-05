@@ -70,3 +70,17 @@ fn dev_room_focus_returns_to_room_without_replacing_drafts_or_persistent_state()
     assert_eq!(ui.locals[&first].text.text, "unsaved local draft");
     assert_eq!(serde_json::to_value(&ui.snapshot.state).unwrap(), before);
 }
+
+#[test]
+fn dev_quit_runs_the_ui_save_and_quit_and_dev_settings_apply() {
+    let (mut ui, _first, _second, _a, _b) = fixture();
+    assert!(ui.quitting.is_none());
+    ui.receive_event(BusEvent::DevQuitRequested);
+    assert!(ui.quitting.is_some());
+    ui.receive_event(BusEvent::DevSettingsChanged(
+        crate::bus::settings::BusSettings {
+            color_blind_mode: true,
+        },
+    ));
+    assert!(ui.settings.color_blind_mode);
+}

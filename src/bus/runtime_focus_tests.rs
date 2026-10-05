@@ -124,3 +124,65 @@ fn dev_focus_rejects_normal_mode_missing_target_and_disconnected_ui() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dev_quit_and_settings_reach_the_ui_and_state_reports_them() {
+    let (mut worker, _room, agent, dir) = fixture();
+    let (events, receiver) = mpsc::channel();
+    let quit = request("quit", "bus.quit", json!({}));
+    let response = worker.dev_response_with_events(&quit, Some(&events));
+    assert_eq!(response.result, json!({"stage":"queued"}));
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        BusEvent::DevQuitRequested
+    ));
+    worker.dev_response_with_events(&quit, Some(&events));
+    assert!(receiver.try_recv().is_err(), "a retry must not quit twice");
+    let unavailable =
+        worker.dev_response_with_events(&request("quit-2", "bus.quit", json!({})), None);
+    assert!(!unavailable.ok);
+
+    let path = dir.join("settings").join("settings.json");
+    let state = |worker: &mut Worker, id: &str| {
+        worker
+            .dev_response_with_events(&request(id, "state", json!({})), None)
+            .result
+    };
+    assert_eq!(state(&mut worker, "s0")["settings"], Value::Null);
+    worker.settings_path = Some(path.clone());
+    assert_eq!(
+        state(&mut worker, "s1")["settings"]["color_blind_mode"],
+        false
+    );
+    let on = worker.dev_response_with_events(
+        &request("cb-on", "settings.color_blind", json!({"on": true})),
+        Some(&events),
+    );
+    assert!(on.ok, "{on:?}");
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        BusEvent::DevSettingsChanged(settings) if settings.color_blind_mode
+    ));
+    assert!(crate::bus::settings::load(&path).unwrap().color_blind_mode);
+    assert_eq!(
+        state(&mut worker, "s2")["settings"]["color_blind_mode"],
+        true
+    );
+
+    let details = worker.dev_response_with_events(
+        &request(
+            "details",
+            "agent.details",
+            json!({"agent":"cursor1","on":true}),
+        ),
+        Some(&events),
+    );
+    assert!(details.ok, "{details:?}");
+    assert!(worker.state.agent(agent).unwrap().details_disclosed);
+    assert!(
+        receiver.try_recv().is_err(),
+        "details is a model command, not a UI event"
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

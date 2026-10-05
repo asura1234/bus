@@ -69,6 +69,10 @@ pub(crate) enum BusEvent {
         room: RoomId,
         agent: Option<AgentId>,
     },
+    /// Dev `quit`: run the UI's own save-and-quit, as Ctrl+Q does.
+    DevQuitRequested,
+    /// Dev `settings`: the coordinator already saved these; the UI applies them.
+    DevSettingsChanged(super::settings::BusSettings),
     /// Outcome of this exact command, independent of later snapshot acknowledgements.
     CommandFinished {
         command_id: u64,
@@ -140,6 +144,7 @@ impl BusHandle {
     pub(crate) fn start(data_dir: PathBuf, target: ConnectionTarget) -> Result<Self, String> {
         let mut worker = Worker::open(data_dir.clone(), Box::new(HerdrTransport::new(target)))?;
         worker.dev_enabled = super::diagnostics::dev_enabled();
+        worker.settings_path = super::settings::path();
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
         let (commands, receiver) = mpsc::sync_channel(256);
         let dev_control = super::control::start(worker.dev_enabled, &data_dir, commands.clone())?;
@@ -192,6 +197,8 @@ struct Worker {
     dev_receipt_bytes: usize,
     /// Provider allowance for dev `state`; in memory only, never persisted.
     usage: super::usage::Usage,
+    /// The UI's settings file; set only for a real launch so tests never touch it.
+    settings_path: Option<PathBuf>,
 }
 
 impl Worker {
@@ -230,6 +237,7 @@ impl Worker {
             dev_receipts: BTreeMap::new(),
             dev_receipt_bytes: 0,
             usage: super::usage::Usage::default(),
+            settings_path: None,
         })
     }
 

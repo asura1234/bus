@@ -35,6 +35,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent approve-once AGENT --fingerprint FINGERPRINT --response allow-once
   agent focus AGENT
   agent rename AGENT NAME
+  agent details AGENT (--on | --off)
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
   send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT]
@@ -42,6 +43,8 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   request recover REQUEST_ID --confirm
   wait --message MESSAGE_ID [--timeout SECONDS]
   history --room ROOM
+  settings color-blind (--on | --off)
+  quit
   diagnostics
 
 Every command accepts --request-id STRING and emits one JSON response.
@@ -57,6 +60,10 @@ state includes each agent's compactions and per-provider usage (5-hour and weekl
 Usage status \"unknown\" means Bus has no data yet, never that the allowance is unused.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.
+agent read also works while an agent is launching (e.g. to see a provider trust prompt);
+runtime.session_verified is false until its provider session starts.
+agent details and settings color-blind set the TUI toggles; state shows both.
+quit queues the TUI's save-and-quit (as Ctrl+Q); its receipt only attests queuing.
 Commands only connect to the existing instance in BUS_DATA_DIR; they never start or enable it.";
 
 pub fn run(data_dir: &Path, args: &[String]) -> io::Result<()> {
@@ -189,6 +196,12 @@ fn cli() -> Command {
         .subcommand_required(true)
         .arg(value_arg("request-id").long("request-id").global(true))
         .subcommand(subcommand("state"))
+        .subcommand(subcommand("quit"))
+        .subcommand(
+            subcommand("settings")
+                .subcommand_required(true)
+                .subcommand(toggle("color-blind")),
+        )
         .subcommand(subcommand("diagnostics"))
         .subcommand(
             subcommand("room")
@@ -196,12 +209,7 @@ fn cli() -> Command {
                 .subcommand(subcommand("create").arg(value_arg("name").required(true)))
                 .subcommand(subcommand("focus").arg(value_arg("room").required(true)))
                 .subcommand(subcommand("seen").arg(value_arg("room").required(true)))
-                .subcommand(
-                    subcommand("sound")
-                        .arg(value_arg("room").required(true))
-                        .arg(flag("on").conflicts_with("off"))
-                        .arg(flag("off")),
-                )
+                .subcommand(toggle("sound").arg(value_arg("room").required(true)))
                 .subcommand(
                     subcommand("rename")
                         .arg(value_arg("room").required(true))
@@ -264,6 +272,7 @@ fn cli() -> Command {
                         .arg(option("response").value_parser(["allow-once"])),
                 )
                 .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
+                .subcommand(toggle("details").arg(value_arg("agent").required(true)))
                 .subcommand(
                     subcommand("rename")
                         .arg(value_arg("agent").required(true))
@@ -319,6 +328,20 @@ fn required<'a>(matches: &'a ArgMatches, name: &str) -> Result<&'a str, String> 
         .ok_or_else(|| format!("missing required argument: {name}"))
 }
 
+fn on_off(args: &ArgMatches, command: &str) -> Result<bool, String> {
+    match (args.get_flag("on"), args.get_flag("off")) {
+        (true, false) => Ok(true),
+        (false, true) => Ok(false),
+        _ => Err(format!("{command} needs exactly one of --on or --off")),
+    }
+}
+
+fn toggle(name: &'static str) -> Command {
+    subcommand(name)
+        .arg(flag("on").conflicts_with("off"))
+        .arg(flag("off"))
+}
+
 /// Destructive commands name the missing flag instead of clap's generic error.
 fn confirmed(args: &ArgMatches) -> Result<bool, String> {
     if args.get_flag("confirm") {
@@ -346,21 +369,22 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
     let mut wait_timeout = None;
     let (method, params) = match name {
         "state" => ("state", json!({})),
+        "quit" => ("bus.quit", json!({})),
+        "settings" => match args.subcommand() {
+            Some(("color-blind", args)) => (
+                "settings.color_blind",
+                json!({"on": on_off(args, "settings color-blind")?}),
+            ),
+            _ => return Err("unknown settings command".into()),
+        },
         "diagnostics" => ("diagnostics", json!({})),
         "room" => match args.subcommand() {
             Some(("focus", args)) => ("room.focus", json!({"room": required(args, "room")?})),
             Some(("seen", args)) => ("room.seen", json!({"room": required(args, "room")?})),
-            Some(("sound", args)) => {
-                let on = match (args.get_flag("on"), args.get_flag("off")) {
-                    (true, false) => true,
-                    (false, true) => false,
-                    _ => return Err("room sound needs exactly one of --on or --off".into()),
-                };
-                (
-                    "room.sound",
-                    json!({"room": required(args, "room")?, "on": on}),
-                )
-            }
+            Some(("sound", args)) => (
+                "room.sound",
+                json!({"room": required(args, "room")?, "on": on_off(args, "room sound")?}),
+            ),
             Some(("create", args)) => ("room.create", json!({"name": required(args, "name")?})),
             Some(("rename", args)) => (
                 "room.rename",
@@ -381,6 +405,10 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         },
         "agent" => match args.subcommand() {
             Some(("focus", args)) => ("agent.focus", json!({"agent": required(args, "agent")?})),
+            Some(("details", args)) => (
+                "agent.details",
+                json!({"agent": required(args, "agent")?, "on": on_off(args, "agent details")?}),
+            ),
             Some(("rename", args)) => (
                 "agent.rename",
                 json!({"agent": required(args, "agent")?, "name": required(args, "name")?}),
@@ -589,6 +617,17 @@ mod tests {
     }
 
     #[test]
+    fn toggles_require_exactly_one_of_on_or_off() {
+        for args in [
+            &["agent", "details", "2"][..],
+            &["settings", "color-blind"],
+            &["agent", "details", "2", "--on", "--off"],
+        ] {
+            assert!(command(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
     fn destructive_commands_without_confirm_name_the_flag() {
         for args in [
             &["room", "delete", "planning"][..],
@@ -708,6 +747,17 @@ mod tests {
                 &["room", "sound", "7", "--on"],
                 "room.sound",
                 json!({"room": "7", "on": true}),
+            ),
+            (&["quit"], "bus.quit", json!({})),
+            (
+                &["settings", "color-blind", "--on"],
+                "settings.color_blind",
+                json!({"on": true}),
+            ),
+            (
+                &["agent", "details", "2", "--off"],
+                "agent.details",
+                json!({"agent": "2", "on": false}),
             ),
             (
                 &["room", "seen", "Planning"],

@@ -359,6 +359,8 @@ impl BusUi {
     }
     pub fn receive_event(&mut self, event: BusEvent) {
         match event {
+            BusEvent::DevQuitRequested => self.request_quit(),
+            BusEvent::DevSettingsChanged(settings) => self.settings = settings,
             BusEvent::DevFocusRequested { room, agent } => {
                 if let Some(agent) = agent {
                     // Show this agent's room in the sidebar without marking the

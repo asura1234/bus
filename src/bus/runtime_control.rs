@@ -72,6 +72,9 @@ impl Worker {
             "room.seen" => (&["room"], true),
             "room.sound" => (&["room", "on"], true),
             "agent.rename" => (&["agent", "name"], true),
+            "agent.details" => (&["agent", "on"], true),
+            "settings.color_blind" => (&["on"], true),
+            "bus.quit" => (&[], true),
             "agent.add" => (
                 &[
                     "room",
@@ -202,7 +205,7 @@ impl Worker {
                 Ok(result)
             }
             "state" => Ok(
-                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"sound":r.sound_enabled(),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>(),"usage":self.usage.state_json()}),
+                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"sound":r.sound_enabled(),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json()}),
             ),
             "diagnostics" => Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"dev":true,"storage_failed":self.storage_failed,"coordinator_error":self.error,"data_dir":self.data_dir,"logs":self.data_dir.join("herdr-config/sessions/bus"),"callback_logs":self.data_dir.join("callbacks"),"agents":self.state.agents().map(|a|json!({"agent_id":a.id,"name":a.name,"status":a.status,"reason":crate::bus::diagnostics::wait_reason(a),"detail":a.actionable_error,"identity":a.runtime_identity,"current_request":a.current_request})).collect::<Vec<_>>()}),
@@ -225,6 +228,39 @@ impl Worker {
                     .and_then(Value::as_bool)
                     .ok_or("Sound must be on or off")?,
             )),
+            "agent.details" => self.dev_command(BusCommand::SetDetails(
+                self.dev_agent(required(p, "agent")?, None)?,
+                p.get("on")
+                    .and_then(Value::as_bool)
+                    .ok_or("Details must be on or off")?,
+            )),
+            "settings.color_blind" => {
+                let on = p
+                    .get("on")
+                    .and_then(Value::as_bool)
+                    .ok_or("Color-blind mode must be on or off")?;
+                let events = events.ok_or("Bus UI event channel unavailable")?;
+                let path = self
+                    .settings_path
+                    .as_ref()
+                    .ok_or("Bus settings location unavailable")?;
+                // Start from the saved file, as the UI does, and keep other fields.
+                let mut settings = crate::bus::settings::load(path)?;
+                settings.color_blind_mode = on;
+                crate::bus::settings::save(path, &settings)?;
+                events
+                    .send(BusEvent::DevSettingsChanged(settings))
+                    .map_err(|_| "Bus UI event channel disconnected")?;
+                Ok(json!({"updated":true,"color_blind_mode":on}))
+            }
+            "bus.quit" => {
+                // Same as Ctrl+Q: the UI saves drafts, then shuts the coordinator down.
+                events
+                    .ok_or("Bus UI event channel unavailable")?
+                    .send(BusEvent::DevQuitRequested)
+                    .map_err(|_| "Bus UI event channel disconnected")?;
+                Ok(json!({"stage":"queued"}))
+            }
             "agent.rename" => self.dev_command(BusCommand::RenameAgent(
                 self.dev_agent(required(p, "agent")?, None)?,
                 required(p, "name")?.into(),
@@ -332,6 +368,18 @@ impl Worker {
                 )
             }
             _ => Err("Unknown method".into()),
+        }
+    }
+
+    fn settings_json(&self) -> Value {
+        match self
+            .settings_path
+            .as_deref()
+            .map(crate::bus::settings::load)
+        {
+            Some(Ok(settings)) => json!(settings),
+            Some(Err(error)) => json!({"error": error}),
+            None => Value::Null,
         }
     }
 
