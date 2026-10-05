@@ -223,3 +223,94 @@ mod ring_decisions {
         assert!(ui.ringer.allow(Instant::now() + STARTUP_GRACE));
     }
 }
+
+mod ring_coalescing {
+    use super::super::super::ring::new_message_should_ring;
+    use super::*;
+
+    #[test]
+    fn an_agent_message_rings_even_when_the_human_sends_before_the_next_snapshot() {
+        let mut state = BusState::default();
+        state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        let author = state
+            .create_agent(work, "builder", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        let reviewer = state
+            .create_agent(work, "reviewer", Provider::ClaudeCode, "/repo".into(), None)
+            .unwrap();
+        state.set_room_sound(work, true).unwrap();
+        let draft = |to| Draft {
+            text: "next step".into(),
+            files: Vec::new(),
+            recipient_ids: AgentRecipients::from([to]),
+        };
+        // The UI reads only the latest snapshot, so both sends can land between two reads.
+        let mut next = state.clone();
+        next.submit_message_from(work, draft(reviewer), Author::Agent(author), 5)
+            .unwrap();
+        next.submit_message_from(work, draft(author), Author::Human, 6)
+            .unwrap();
+        assert!(new_message_should_ring(&state, &next));
+    }
+
+    #[test]
+    fn an_agent_reply_still_rings_when_a_human_prompt_is_newer_in_the_same_snapshot() {
+        let mut state = BusState::default();
+        state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        let author = state
+            .create_agent(work, "builder", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        let reviewer = state
+            .create_agent(work, "reviewer", Provider::ClaudeCode, "/repo".into(), None)
+            .unwrap();
+        state.set_room_sound(work, true).unwrap();
+        let mut next = state.clone();
+        let mut document = serde_json::to_value(&next).unwrap();
+        document["rooms"][work.0.to_string()]["latest_replies"][author.0.to_string()] = serde_json::json!({
+            "request_id": 40,
+            "agent_id": author.0,
+            "text": "done",
+            "received_at_ms": 1
+        });
+        next = serde_json::from_value(document).unwrap();
+        next.submit_message_from(
+            work,
+            Draft {
+                text: "ack".into(),
+                files: Vec::new(),
+                recipient_ids: AgentRecipients::from([reviewer]),
+            },
+            Author::Human,
+            6,
+        )
+        .unwrap();
+        assert!(new_message_should_ring(&state, &next));
+    }
+
+    #[test]
+    fn an_agent_message_still_rings_when_the_human_writes_in_a_different_room() {
+        let mut state = BusState::default();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        let worker = state
+            .create_agent(work, "builder", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        let orchestrator = state
+            .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
+            .unwrap();
+        state.set_room_sound(work, true).unwrap();
+        let draft = |to| Draft {
+            text: "next step".into(),
+            files: Vec::new(),
+            recipient_ids: AgentRecipients::from([to]),
+        };
+        let mut next = state.clone();
+        next.submit_message_from(work, draft(worker), Author::Agent(orchestrator), 5)
+            .unwrap();
+        next.submit_message_from(master, draft(orchestrator), Author::Human, 6)
+            .unwrap();
+        assert!(new_message_should_ring(&state, &next));
+    }
+}
