@@ -30,7 +30,11 @@ pub(crate) struct Record {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Parsed {
-    Session(String),
+    /// `source` is the provider's start reason, e.g. `startup`, `resume` or `compact`.
+    Session {
+        session: String,
+        source: Option<String>,
+    },
     Started {
         session: String,
         turn: String,
@@ -65,7 +69,7 @@ pub(crate) enum Parsed {
 impl Parsed {
     pub(crate) fn kind(&self) -> &'static str {
         match self {
-            Self::Session(_) => "session",
+            Self::Session { .. } => "session",
             Self::Started { .. } => "started",
             Self::Final { .. } => "final",
             Self::BackgroundPending { .. } => "background_pending",
@@ -220,7 +224,13 @@ pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String>
         },
     )?;
     if (!cursor && event == "SessionStart") || (cursor && event == "sessionStart") {
-        return Ok(Parsed::Session(session));
+        return Ok(Parsed::Session {
+            session,
+            source: value
+                .get("source")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        });
     }
     let turn = field(
         value,
@@ -543,7 +553,21 @@ mod tests {
                 &json!({"hook_event_name":"sessionStart","conversation_id":"s"})
             )
             .unwrap(),
-            Parsed::Session("s".into())
+            Parsed::Session {
+                session: "s".into(),
+                source: None
+            }
+        );
+        assert_eq!(
+            parse(
+                Provider::Codex,
+                &json!({"hook_event_name":"SessionStart","session_id":"s","source":"compact","transcript_path":"/tmp/r.jsonl"})
+            )
+            .unwrap(),
+            Parsed::Session {
+                session: "s".into(),
+                source: Some("compact".into())
+            }
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -282,6 +282,16 @@ pub(crate) struct Agent {
     /// Set only on MASTER agents: the work room this agent orchestrates.
     #[serde(default)]
     pub(crate) orchestrates: Option<RoomId>,
+    #[serde(default)]
+    pub(crate) compactions: Compactions,
+}
+
+/// Context compactions reported by the provider's SessionStart hook
+/// (`source: "compact"`). Cursor sends no such hook, so it stays at zero.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct Compactions {
+    pub(crate) count: u32,
+    pub(crate) last_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -722,10 +732,22 @@ impl BusState {
                 session_binding_invalidated: false,
                 deletion_pending: false,
                 orchestrates: None,
+                compactions: Compactions::default(),
             },
         );
         self.queues.insert(id, Vec::new());
         Ok(id)
+    }
+
+    pub(crate) fn record_compaction(&mut self, id: AgentId, at_ms: u64) -> Result<(), ModelError> {
+        let compactions = &mut self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .compactions;
+        compactions.count = compactions.count.saturating_add(1);
+        compactions.last_at_ms = Some(at_ms);
+        Ok(())
     }
 
     pub(crate) fn rename_agent(&mut self, id: AgentId, name: &str) -> Result<(), ModelError> {

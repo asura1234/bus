@@ -1728,3 +1728,42 @@ fn worker_open_gives_every_session_exactly_one_master_room() {
     drop(reopened);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn compact_session_start_counts_one_compaction_per_hook() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    // Each batch is consumed before the next, as the worker does between
+    // compactions; identical payloads still spooled together collapse to one.
+    for batch in [
+        &["startup", "compact", "compact"][..],
+        &["resume"],
+        &["compact"],
+    ] {
+        for source in batch {
+            record(
+                &dir,
+                Provider::ClaudeCode,
+                json!({"hook_event_name":"SessionStart","session_id":"session","source":source}),
+            );
+        }
+        // A missing source (older providers) is not a compaction.
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            json!({"hook_event_name":"SessionStart","session_id":"session"}),
+        );
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+    }
+    let compactions = worker.state.agent(agent).unwrap().compactions;
+    assert_eq!(compactions.count, 2);
+    assert!(compactions.last_at_ms.is_some());
+    drop(worker);
+    let saved = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.agent(agent).unwrap().compactions, compactions);
+    std::fs::remove_dir_all(dir).unwrap();
+}

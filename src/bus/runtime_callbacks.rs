@@ -23,7 +23,8 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         let mut sessions = BTreeSet::new();
         for (_, record) in records {
-            let Ok(Parsed::Session(session)) = callbacks::parse(agent.provider, &record.value)
+            let Ok(Parsed::Session { session, .. }) =
+                callbacks::parse(agent.provider, &record.value)
             else {
                 continue;
             };
@@ -63,7 +64,7 @@ impl Worker {
         records.sort_by_key(|(_, r)| {
             (
                 match callbacks::parse(r.manifest.provider, &r.value) {
-                    Ok(Parsed::Session(_)) => 0,
+                    Ok(Parsed::Session { .. }) => 0,
                     Ok(Parsed::Started { .. }) => 1,
                     _ => 2,
                 },
@@ -124,7 +125,7 @@ impl Worker {
             );
             let mut state = self.state.clone();
             let callback_session = match &parsed {
-                Parsed::Session(session)
+                Parsed::Session { session, .. }
                 | Parsed::Started { session, .. }
                 | Parsed::Final { session, .. }
                 | Parsed::BackgroundPending { session, .. }
@@ -147,7 +148,7 @@ impl Worker {
                     );
                     // Retain the attested identity even on uncertain sends. Clearing
                     // it would let a repeated foreign SessionStart silently rebind.
-                    if matches!(parsed, Parsed::Session(_)) {
+                    if matches!(parsed, Parsed::Session { .. }) {
                         state
                             .invalidate_agent_session(id)
                             .map_err(|e| e.to_string())?;
@@ -162,7 +163,7 @@ impl Worker {
                     continue;
                 }
                 if agent.runtime_identity.session_id.is_none()
-                    && !matches!(parsed, Parsed::Session(_))
+                    && !matches!(parsed, Parsed::Session { .. })
                 {
                     tracing::debug!(
                         event = "bus.callback.deferred",
@@ -176,7 +177,7 @@ impl Worker {
             }
             let mut remove = vec![path.clone()];
             let callback = match parsed {
-                Parsed::Session(session) => {
+                Parsed::Session { session, source } => {
                     let mut identity = agent.runtime_identity.clone();
                     let pane = identity
                         .pane_id
@@ -202,6 +203,12 @@ impl Worker {
                     state
                         .set_agent_runtime_identity(id, identity)
                         .map_err(|e| e.to_string())?;
+                    // Identical hooks share one spool file, so a hook retry counts once.
+                    if source.as_deref() == Some("compact") {
+                        state
+                            .record_compaction(id, record.at_ms)
+                            .map_err(|e| e.to_string())?;
+                    }
                     if agent.current_request.is_none() {
                         state
                             .set_agent_error(
