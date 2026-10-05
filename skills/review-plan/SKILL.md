@@ -3,7 +3,7 @@ name: review-plan
 description: Iteratively and read-only review a plan created from the project template. Round 1 verifies architecture, completeness, validation, and task-graph safety; Round 2+ reconciles the prior round and reviews only the current delta and its direct consequences. Supports stable reviewer lanes, author triage ledgers, adversarial posture, narrow subagent fan-out, and deterministic review rendering. Use when asked to review or re-review a plan under plans/.
 ---
 
-Read [guide.md](./guide.md) for workflow principles. The source of truth for macro findings, task-graph safety, admissibility, and verdicts is [plan-review-guide.md](../../docs/guides/plan-review-guide.md). This file defines only executable control flow. Input must follow the canonical project plan template; it does not require a private create-plan session.
+Read [guide.md](./guide.md) for workflow principles. The source of truth for macro findings, task-graph safety, admissibility, and verdicts is [plan-review-guide.md](../../docs/guides/plan-review-guide.md). This file defines only executable control flow. Input must follow the canonical project plan template; it does not require the session that wrote the plan.
 
 Plans written before this migration remain historical inputs but are not
 silently coerced into the new machine contract. The prologue identifies the

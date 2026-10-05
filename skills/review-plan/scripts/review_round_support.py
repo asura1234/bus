@@ -12,10 +12,10 @@ What it does:
      - normal review rounds accept **状态** ∈
        {create-plan-complete, review-plan-in-progress}
      - read-only ``--check`` additionally accepts create-plan-in-progress for
-       create-plan preflight and review-plan-complete for publication checks
+       the plan author's preflight and review-plan-complete for publication checks
        (plan-execution-* 已进执行阶段 / abandoned 一律拒绝)
      - 需要决策的事项 has NO open items — decisions are resolved by the developer
-       with the plan author during create-plan (per plan-template 计划生成规则,
+       with the plan author while writing the plan (per plan-template 计划生成规则,
        the plan body isn't even generated until they are); open items mean the
        plan isn't review-ready, not that a special review mode should run
 
@@ -188,7 +188,7 @@ def detect_branch_plan_docs() -> list[Path]:
 
 def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
     # check_only=True 是不创建 review round 的只读结构/状态验证：
-    #   - create-plan 在 still-in-progress 状态下预检，只有 PASS 才 flip 到 complete；
+    #   - 计划作者在 still-in-progress 状态下预检，只有 PASS 才 flip 到 complete；
     #   - commit/publish 在 review-plan-complete 状态下复验 finalized plan。
     # 真正的 /review-plan 门禁（check_only=False）仍只接受 create-plan-complete /
     # review-plan-in-progress，不能重新打开已完成评审的计划。
@@ -240,7 +240,7 @@ def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
             "（计划正文在决策解决前不会生成），解决后再提交审查"
         )
 
-    # 目标是 create-plan 阶段就应填好的散文陈述（同 当前状态分析 / 参考资料），
+    # 目标是计划撰写阶段就应填好的散文陈述（同 当前状态分析 / 参考资料），
     # review 时必须已声明单一目标：新计划必须含 `## 目标`（旧计划按创建日期豁免），且不得占位或空
     if err := check_goal_required(text):
         failures.append(err)

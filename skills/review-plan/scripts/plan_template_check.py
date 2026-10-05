@@ -59,7 +59,7 @@ def detect_template(plan_text: str) -> tuple[str, Path]:
 # Sections the gate does NOT require of a plan. Two reasons a section lands here:
 #   - added to the template AFTER plans were already in flight — a newly-required H2
 #     must not invalidate every historical plan (plans are immutable snapshots tied to
-#     a base commit; see module docstring). New plans still get it via create-plan; its
+#     a base commit; see module docstring). New plans still get it from the template; its
 #     CONTENT (when present) is validated by the OTHER gates — check_goal_section /
 #     check_goal_required in plan_execution_gate — NOT by this structure-matcher.
 #   - intentionally OPTIONAL for all plans (e.g. 非目标: 缺省即无非目标；开发者不声明就没有，

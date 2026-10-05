@@ -29,7 +29,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--reviewer", default=None)
     parser.add_argument("--devils-advocate", action="store_true", dest="devils_advocate")
     # --check：只跑结构/状态门禁，read-only、不建轮次、不写 .last-plan。
-    #   既供 create-plan 在置 create-plan-complete 前自检，也供 commit/publish 在
+    #   既供计划作者在置 create-plan-complete 前自检，也供 commit/publish 在
     #   review-plan-complete 后复验 finalized plan；真正的 review round 仍拒绝 completed 状态。
     parser.add_argument("--check", action="store_true")
     try:
