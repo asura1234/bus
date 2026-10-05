@@ -50,6 +50,8 @@ agent add --room master --orchestrates ROOM, or agent orchestrate to reassign or
 Use --to all explicitly for all room agents.
 send --as records the message as written by that room agent; --to all then skips it.
 room seen clears a room's unread count without changing the visible Bus view.
+state includes each agent's compactions and per-provider usage (5-hour and weekly used %).
+Usage status \"unknown\" means Bus has no data yet, never that the allowance is unused.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.
 Commands only connect to the existing instance in BUS_DATA_DIR; they never start or enable it.";
