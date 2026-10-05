@@ -21,6 +21,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   state
   room create NAME
   room rename ROOM NAME
+  room notes ROOM --text TEXT
   room delete ROOM --confirm
   room focus ROOM
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
@@ -187,6 +188,16 @@ fn cli() -> Command {
                         .arg(value_arg("name").required(true)),
                 )
                 .subcommand(
+                    subcommand("notes")
+                        .arg(value_arg("room").required(true))
+                        .arg(
+                            Arg::new("text")
+                                .long("text")
+                                .required(true)
+                                .allow_hyphen_values(true),
+                        ),
+                )
+                .subcommand(
                     subcommand("delete")
                         .arg(value_arg("room").required(true))
                         .arg(flag("confirm").required(true)),
@@ -300,6 +311,13 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             Some(("rename", args)) => (
                 "room.rename",
                 json!({"room": required(args, "room")?, "name": required(args, "name")?}),
+            ),
+            Some(("notes", args)) => (
+                "room.notes",
+                json!({
+                    "room": required(args, "room")?,
+                    "text": args.get_one::<String>("text").map(String::as_str).unwrap_or(""),
+                }),
             ),
             Some(("delete", args)) => (
                 "room.delete",
@@ -476,6 +494,16 @@ mod tests {
                 json!({"room": "7", "name": "Planning"}),
             ),
             (
+                &["room", "notes", "Planning", "--text", "Goal\n- ship notes"],
+                "room.notes",
+                json!({"room": "Planning", "text": "Goal\n- ship notes"}),
+            ),
+            (
+                &["room", "notes", "7", "--text", ""],
+                "room.notes",
+                json!({"room": "7", "text": ""}),
+            ),
+            (
                 &["room", "delete", "planning", "--confirm"],
                 "room.delete",
                 json!({"room": "planning", "confirm": true}),
@@ -624,6 +652,7 @@ mod tests {
             &["state", "extra"],
             &["room", "create"],
             &["room", "rename", "7"],
+            &["room", "notes", "7"],
             &["room", "delete", "7"],
             &["agent", "delete", "9"],
             &["agent", "setup-confirm", "9"],

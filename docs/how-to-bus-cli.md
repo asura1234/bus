@@ -334,6 +334,15 @@ bus agent focus "$agent_id"
 A successful focus response means the UI event was queued, not that a frame was
 rendered.
 
+Replace a room's notes, the free-text box under the room name in the UI. The
+text replaces the whole field; pass `--text ""` to clear it. `state` returns each
+room's current notes:
+
+```sh
+bus room notes "$room_id" --text "Goal: ship notes
+Non-goals: UI changes"
+```
+
 Rename rooms or delete resources explicitly:
 
 ```sh

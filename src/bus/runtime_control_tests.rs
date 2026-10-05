@@ -134,6 +134,40 @@ fn dev_send_and_history_preserve_explicit_recipient_order() {
 }
 
 #[test]
+fn dev_room_notes_replace_and_clear_the_room_notes() {
+    let (mut worker, room, _agent, dir) = fixture();
+    let set = call(
+        &mut worker,
+        "notes-1",
+        "room.notes",
+        json!({"room":"test","text":"Goal\nNon-goals"}),
+    );
+    assert!(set.ok, "{set:?}");
+    assert_eq!(worker.state.room(room).unwrap().notes, "Goal\nNon-goals");
+    let state = call(&mut worker, "state-1", "state", json!({}));
+    assert_eq!(state.result["rooms"][0]["notes"], "Goal\nNon-goals");
+    let cleared = call(
+        &mut worker,
+        "notes-2",
+        "room.notes",
+        json!({"room":room.0.to_string(),"text":""}),
+    );
+    assert!(cleared.ok, "{cleared:?}");
+    assert_eq!(worker.state.room(room).unwrap().notes, "");
+    let missing = call(&mut worker, "notes-3", "room.notes", json!({"room":"test"}));
+    assert!(!missing.ok);
+    let unknown = call(
+        &mut worker,
+        "notes-4",
+        "room.notes",
+        json!({"room":"nope","text":"x"}),
+    );
+    assert!(!unknown.ok);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dev_selectors_confirmation_and_normal_mode_fail_closed() {
     let (mut worker, room, _agent, dir) = fixture();
     let other = worker.state.create_room("other").unwrap();
