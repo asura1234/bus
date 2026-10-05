@@ -554,10 +554,7 @@ fn wrap_header(
 // identity/settlement metadata, not their potentially large text, when a
 // global poll/draft revision arrives. Only a changed room history, names,
 // width, or age label requires sorting and wrapping those immutable bodies.
-fn participant_label(
-    state: &BusState,
-    participant: &crate::bus::orchestrator::ParticipantId,
-) -> String {
+fn participant_label(state: &BusState, participant: &crate::bus::model::Author) -> String {
     super::orchestrator_ui::author_label(participant, |id| {
         state
             .agent(id)
@@ -566,11 +563,11 @@ fn participant_label(
     })
 }
 
-fn participant_tone(participant: &crate::bus::orchestrator::ParticipantId) -> Tone {
+fn participant_tone(participant: &crate::bus::model::Author) -> Tone {
     match participant {
-        crate::bus::orchestrator::ParticipantId::Agent(id) => Tone::Agent(*id),
-        crate::bus::orchestrator::ParticipantId::Human => Tone::You,
-        crate::bus::orchestrator::ParticipantId::Orchestrator => Tone::Muted,
+        crate::bus::model::Author::Agent(id) => Tone::Agent(*id),
+        crate::bus::model::Author::Human => Tone::You,
+        crate::bus::model::Author::Orchestrator => Tone::Muted,
     }
 }
 

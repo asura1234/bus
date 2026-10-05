@@ -252,7 +252,7 @@ impl Worker {
                     return Err("Response must be allow-once".into());
                 }
                 self.approve_permission_once(
-                    crate::bus::orchestrator::ParticipantId::Human,
+                    crate::bus::model::Author::Human,
                     Some(agent_id),
                     crate::bus::orchestrator::ExactPermissionGrant {
                         fingerprint: required(p, "fingerprint")?.into(),
@@ -572,7 +572,7 @@ impl Worker {
 
     pub(super) fn approve_permission_once(
         &mut self,
-        actor: crate::bus::orchestrator::ParticipantId,
+        actor: crate::bus::model::Author,
         expected_agent: Option<AgentId>,
         grant: crate::bus::orchestrator::ExactPermissionGrant,
     ) -> Result<Value, String> {

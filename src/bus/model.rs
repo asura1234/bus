@@ -18,6 +18,16 @@ id_type!(AgentId);
 id_type!(PromptId);
 id_type!(RequestId);
 
+/// Who wrote a prompt. Saved JSON is `"human"`, `"orchestrator"` or `{"agent":N}`;
+/// `Orchestrator` survives only in sessions saved by the retired built-in orchestrator.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Author {
+    Human,
+    Orchestrator,
+    Agent(AgentId),
+}
+
 /// Unique recipients in the order the sender selected them.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -157,8 +167,8 @@ pub(crate) struct Draft {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Prompt {
     pub(crate) id: PromptId,
-    #[serde(default = "human_participant")]
-    pub(crate) author: crate::bus::orchestrator::ParticipantId,
+    #[serde(default = "human_author")]
+    pub(crate) author: Author,
     #[serde(default)]
     pub(crate) work_id: Option<crate::bus::orchestrator::WorkId>,
     pub(crate) text: String,
@@ -169,8 +179,8 @@ pub(crate) struct Prompt {
     pub(crate) trusted_assignment_frame: Option<String>,
 }
 
-fn human_participant() -> crate::bus::orchestrator::ParticipantId {
-    crate::bus::orchestrator::ParticipantId::Human
+fn human_author() -> Author {
+    Author::Human
 }
 
 impl Prompt {
@@ -264,7 +274,7 @@ pub(crate) struct ParticipantAssignmentFacts {
     pub(crate) work_id: Option<u64>,
     pub(crate) message_id: u64,
     pub(crate) request_id: RequestId,
-    pub(crate) author: crate::bus::orchestrator::ParticipantId,
+    pub(crate) author: Author,
     pub(crate) agent_id: AgentId,
     pub(crate) recipient_incarnation: u64,
     pub(crate) provider_launch_id: String,
@@ -1031,20 +1041,14 @@ impl BusState {
         draft: Draft,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_message_from(
-            room,
-            draft,
-            crate::bus::orchestrator::ParticipantId::Human,
-            None,
-            now_ms,
-        )
+        self.submit_message_from(room, draft, Author::Human, None, now_ms)
     }
 
     pub(crate) fn submit_message_from(
         &mut self,
         room: RoomId,
         draft: Draft,
-        author: crate::bus::orchestrator::ParticipantId,
+        author: Author,
         work_id: Option<crate::bus::orchestrator::WorkId>,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
@@ -1071,18 +1075,13 @@ impl BusState {
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(
-            room,
-            crate::bus::orchestrator::ParticipantId::Human,
-            None,
-            now_ms,
-        )
+        self.submit_draft_from(room, Author::Human, None, now_ms)
     }
 
     fn submit_draft_from(
         &mut self,
         room: RoomId,
-        author: crate::bus::orchestrator::ParticipantId,
+        author: Author,
         work_id: Option<crate::bus::orchestrator::WorkId>,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
@@ -1212,7 +1211,7 @@ impl BusState {
         &mut self,
         command: crate::bus::orchestrator::ConfirmRoomBriefProposal,
     ) -> Result<crate::bus::orchestrator::RoomBriefConfirmationReceipt, ModelError> {
-        if command.expected_developer != crate::bus::orchestrator::ParticipantId::Human {
+        if command.expected_developer != Author::Human {
             return Err(ModelError::InvalidTransition);
         }
         let brief = &self

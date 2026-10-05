@@ -334,8 +334,8 @@ mod tests {
 
     #[test]
     fn state_saved_with_the_retired_orchestrator_still_loads() {
+        use crate::bus::model::Author;
         use crate::bus::model::{PromptId, RequestId};
-        use crate::bus::orchestrator::ParticipantId;
 
         // Written by the orchestrator-era build: orchestrator journal, grants and drafts,
         // a locked room brief, work ids, a trusted assignment frame, and every author shape
@@ -358,12 +358,9 @@ mod tests {
                 .author
                 .clone()
         };
-        assert_eq!(author(4), ParticipantId::Orchestrator);
-        assert_eq!(
-            author(6),
-            ParticipantId::Agent(crate::bus::model::AgentId(2))
-        );
-        assert_eq!(author(8), ParticipantId::Human);
+        assert_eq!(author(4), Author::Orchestrator);
+        assert_eq!(author(6), Author::Agent(crate::bus::model::AgentId(2)));
+        assert_eq!(author(8), Author::Human);
         assert_eq!(
             state.request(RequestId(8)).expect("request").prompt.id,
             PromptId(7)

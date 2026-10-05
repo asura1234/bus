@@ -18,13 +18,7 @@ numeric_id!(OperationId);
 numeric_id!(ArtifactId);
 numeric_id!(LeaseId);
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ParticipantId {
-    Human,
-    Orchestrator,
-    Agent(AgentId),
-}
+pub(crate) use crate::bus::model::Author as ParticipantId;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct ConfirmRoomBriefProposal {
