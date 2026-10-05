@@ -36,7 +36,9 @@ bus resume --last --dev
 ```
 
 `bus sessions` prints session IDs, room names, recent activity, and which session
-was opened last. `resume` cannot be combined with `BUS_DATA_DIR`.
+was opened last. `resume` cannot be combined with `BUS_DATA_DIR`. A missing
+`BUS_DATA_DIR` root is created owner-only (`0700`), as Bus's private control
+socket requires.
 
 Use `bus --paths` to inspect Bus data, log, callback, configuration, and state
 locations without starting a session.
@@ -225,22 +227,25 @@ bus state | jq '.result | {master_room, visible_room}'
 bus state | jq '.result.rooms[] | {id, name, kind, unread_count, orchestrator}'
 bus state | jq '.result.agents[] | {id, name, room_id, orchestrates, compactions}'
 bus state | jq '.result.usage'
+bus state | jq '.result.settings'
 ```
 
 - `master_room` is the MASTER room's ID. `visible_room` is the room open in the
-  UI, or `null`.
+  UI, or `null` while a terminal or form is open instead. Deleting the visible
+  room moves it to the room the UI falls back to, MASTER.
 - Each room has `id`, `name`, `kind` (`master` or `work`), `notes`,
   `unread_count`, `sound`, `deletion_pending`, and `orchestrator`: the ID of
   the MASTER agent orchestrating it, or `null`.
-- Each agent includes `room_id`, `status`, `orchestrates` (the work room it
-  orchestrates, or `null`), and `compactions`: `count` and `last_at_ms` of the
-  provider context compactions Bus observed for that agent.
+- Each agent includes `room_id`, `status`, `details_disclosed`, `orchestrates`
+  (the work room it orchestrates, or `null`), and `compactions`: `count` and
+  `last_at_ms` of the provider context compactions Bus observed for that agent.
 - `usage` has one entry per provider: `claude`, `codex`, and `cursor`. An
   `observed` entry reports `five_hour` and `weekly` windows with
   `used_percent`, `resets_at`, and `window_minutes`, plus `read_at_ms` and
   `observed_by_agent`. Codex usage is read after each Codex turn. Claude and
   Cursor usage is not collected yet. Status `unknown`, with a `reason`, means
   Bus has no data, never that the allowance is unused.
+- `settings` holds the UI preferences, currently `color_blind_mode`.
 
 ## Sound notifications
 
@@ -288,7 +293,13 @@ current viewport and rejects `--lines`. Recent requires a positive caller-chosen
 `N`; Bus does not choose or silently clamp a default. Both forms verify the
 managed room, launch, terminal, session, and pane identity before and after the
 native read, and fail closed without returning uncorrelated text if that identity
-changes. Use terminal output as evidence for human or model judgment, never as a
+changes.
+
+An agent that is still `launching` can be read too, for example to see a
+provider prompt such as Claude's "Do you trust this folder?" dialog that keeps
+it from becoming ready. Its provider session has not started yet, so Bus checks
+everything except the session and reports `runtime.session_verified: false`.
+The CLI cannot answer such a prompt; use the terminal in the UI. Use terminal output as evidence for human or model judgment, never as a
 substitute for message settlement or an automatic workflow signal.
 
 When a managed coding agent is visibly waiting on a safe permission prompt,
@@ -418,6 +429,18 @@ bus room notes "$room_id" --text "Goal: ship notes
 Non-goals: UI changes"
 ```
 
+Show or hide an agent's details in the sidebar, and switch the UI's color-blind
+palette, the same toggles as in the UI:
+
+```sh
+bus agent details "$agent_id" --on
+bus settings color-blind --off
+```
+
+The generic forms are `agent details AGENT (--on | --off)` and
+`settings color-blind (--on | --off)`. `state` reports `details_disclosed` and
+`settings.color_blind_mode`.
+
 Clear a room's unread count without changing the room open in the UI:
 
 ```sh
@@ -435,6 +458,16 @@ bus room delete "$room_id" --confirm
 
 Deleting a room or agent is destructive. Resolve the target with `state`, prefer
 its numeric ID, and pass `--confirm` only after checking it.
+
+Save and quit the interactive Bus, as Ctrl+Q does in the UI:
+
+```sh
+bus quit
+```
+
+A successful `quit` means the request was queued for the UI, which then saves
+unsent drafts and shuts the session down. It does not wait for the exit.
+A destructive command without `--confirm` fails and names the missing flag.
 
 Deletion closes an agent's terminal only while the running server still
 attributes it to that agent. If the server has already released it, for
