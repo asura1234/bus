@@ -361,6 +361,15 @@ mod tests {
         assert_eq!(author(4), Author::Orchestrator);
         assert_eq!(author(6), Author::Agent(crate::bus::model::AgentId(2)));
         assert_eq!(author(8), Author::Human);
+        // The retired trusted assignment frame no longer wraps delivery.
+        assert_eq!(
+            state
+                .request(RequestId(4))
+                .expect("request")
+                .prompt
+                .rendered_payload(),
+            "from orchestrator"
+        );
         assert_eq!(
             state.request(RequestId(8)).expect("request").prompt.id,
             PromptId(7)

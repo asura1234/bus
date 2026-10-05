@@ -251,14 +251,7 @@ impl Worker {
                 if required(p, "response")? != "allow-once" {
                     return Err("Response must be allow-once".into());
                 }
-                self.approve_permission_once(
-                    crate::bus::model::Author::Human,
-                    Some(agent_id),
-                    crate::bus::orchestrator::ExactPermissionGrant {
-                        fingerprint: required(p, "fingerprint")?.into(),
-                        response: crate::bus::orchestrator::ApprovedPermissionResponse::AllowOnce,
-                    },
-                )
+                self.approve_permission_once(Some(agent_id), required(p, "fingerprint")?.into())
             }
             "message.send" => self.dev_send(p),
             "message.status" => {
@@ -572,23 +565,12 @@ impl Worker {
 
     pub(super) fn approve_permission_once(
         &mut self,
-        actor: crate::bus::model::Author,
         expected_agent: Option<AgentId>,
-        grant: crate::bus::orchestrator::ExactPermissionGrant,
+        fingerprint: String,
     ) -> Result<Value, String> {
-        if grant.response != crate::bus::orchestrator::ApprovedPermissionResponse::AllowOnce {
-            return Err("Permission response is not allowlisted".into());
-        }
-        let claims = decode_permission_fingerprint(&grant.fingerprint)?;
+        let claims = decode_permission_fingerprint(&fingerprint)?;
         if expected_agent.is_some_and(|agent| agent != claims.agent_id) {
             return Err("Permission fingerprint targets another agent".into());
-        }
-        if !self.state.orchestrator_state().authorized(
-            claims.room_id,
-            actor.clone(),
-            crate::bus::orchestrator::Capability::ApprovePermissionOnce,
-        ) {
-            return Err("Participant lacks ApprovePermissionOnce capability".into());
         }
         let agent = self.state.agent(claims.agent_id).ok_or("Unknown agent")?;
         let identity = &agent.runtime_identity;
@@ -611,16 +593,13 @@ impl Worker {
         {
             return Err("Permission fingerprint no longer matches Worker-owned room facts".into());
         }
-        if self
-            .state
-            .permission_fingerprint_consumed(&grant.fingerprint)
-        {
+        if self.state.permission_fingerprint_consumed(&fingerprint) {
             return Err("Permission fingerprint was already used".into());
         }
         let target = claims.pane_id.clone();
         // Consume before the native write so a lost response can never be replayed.
         let mut consumed = self.state.clone();
-        consumed.consume_permission_fingerprint(grant.fingerprint.clone());
+        consumed.consume_permission_fingerprint(fingerprint);
         self.save(consumed)?;
         let native =
             self.transport

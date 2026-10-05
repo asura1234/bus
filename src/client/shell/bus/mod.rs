@@ -4,7 +4,6 @@ mod forms;
 mod help;
 mod history;
 mod input;
-mod orchestrator_ui;
 mod recipients;
 mod render;
 mod selection;

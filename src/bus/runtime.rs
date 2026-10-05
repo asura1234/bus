@@ -5,8 +5,6 @@ mod callback_runtime;
 mod commands;
 #[path = "runtime_control.rs"]
 mod dev_control;
-#[path = "runtime_orchestrator.rs"]
-mod orchestrator_runtime;
 #[path = "runtime_resume.rs"]
 mod resume;
 use super::{
@@ -51,9 +49,6 @@ pub(crate) enum BusCommand {
     AddAgent(AddAgent),
     FocusTerminal(AgentId),
     CompleteHookSetup(AgentId),
-    ConfirmRoomBriefProposal(crate::bus::orchestrator::ConfirmRoomBriefProposal),
-    CreateDeveloperWorkflowApproval(crate::bus::orchestrator::CreateDeveloperWorkflowApproval),
-    MessageOrchestrator(crate::bus::orchestrator::HumanOrchestratorMessage),
     Suggestions {
         query_id: u64,
         input: String,
@@ -190,7 +185,6 @@ struct Worker {
     dev_enabled: bool,
     dev_receipts: BTreeMap<String, (super::control::Request, super::control::Response)>,
     dev_receipt_bytes: usize,
-    room_orchestrator: Option<orchestrator_runtime::RoomOrchestratorRuntime>,
 }
 
 impl Worker {
@@ -211,9 +205,7 @@ impl Worker {
                 .map_err(|e| e.to_string())?;
         }
         store.save(&state).map_err(|e| e.to_string())?;
-        let room_orchestrator =
-            orchestrator_runtime::RoomOrchestratorRuntime::production(&data_dir)?;
-        let mut worker = Self {
+        Ok(Self {
             state,
             store,
             data_dir,
@@ -228,10 +220,7 @@ impl Worker {
             dev_enabled: false,
             dev_receipts: BTreeMap::new(),
             dev_receipt_bytes: 0,
-            room_orchestrator,
-        };
-        worker.refresh_workflow_promotion_reviews();
-        Ok(worker)
+        })
     }
 
     fn snapshot(&self) -> BusSnapshot {
@@ -243,47 +232,7 @@ impl Worker {
         }
     }
 
-    fn save(&mut self, mut state: BusState) -> Result<(), String> {
-        let newly_settled = state
-            .requests()
-            .filter_map(|request| {
-                let settlement = match request.phase {
-                    RequestPhase::Completed => {
-                        crate::bus::orchestrator::ProviderRequestSettlement::Completed
-                    }
-                    RequestPhase::Abandoned => {
-                        crate::bus::orchestrator::ProviderRequestSettlement::Abandoned
-                    }
-                    _ => return None,
-                };
-                if self.state.request(request.id).is_some_and(|previous| {
-                    matches!(
-                        previous.phase,
-                        RequestPhase::Completed | RequestPhase::Abandoned
-                    )
-                }) {
-                    return None;
-                }
-                Some((
-                    request.room_id,
-                    crate::bus::orchestrator::JournalFact::RequestSettled {
-                        request_id: request.id,
-                        message_id: crate::bus::orchestrator::RoomMessageId(request.prompt.id.0),
-                        participant: crate::bus::orchestrator::ParticipantId::Agent(
-                            request.agent_id,
-                        ),
-                        settlement,
-                        reply_digest: request
-                            .pending_final
-                            .as_ref()
-                            .map(|final_reply| crate::bus::io::digest(final_reply.text.as_bytes())),
-                    },
-                ))
-            })
-            .collect::<Vec<_>>();
-        for (room_id, fact) in newly_settled {
-            state.orchestrator_state_mut().record_fact(room_id, fact);
-        }
+    fn save(&mut self, state: BusState) -> Result<(), String> {
         if let Err(error) = self.store.save(&state) {
             self.storage_failed = true;
             tracing::error!(
@@ -431,13 +380,6 @@ impl Worker {
                     })?;
             }
         }
-        self.drive_orchestrator().inspect_err(|_| {
-            tracing::warn!(
-                event = "bus.orchestrator.failed",
-                stage = "drive",
-                "Room orchestrator drive failed without choosing a recovery action"
-            );
-        })?;
         self.submit_ready_while(can_deliver).inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",
@@ -737,10 +679,6 @@ fn branch_for(cwd: &Path) -> Option<String> {
     let branch = String::from_utf8(output.stdout).ok()?.trim().to_owned();
     (!branch.is_empty()).then_some(branch)
 }
-
-#[cfg(test)]
-#[path = "runtime_test_harness.rs"]
-pub(crate) mod test_harness;
 
 #[cfg(test)]
 #[path = "runtime_tests.rs"]

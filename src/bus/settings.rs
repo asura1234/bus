@@ -6,42 +6,6 @@ use std::path::{Path, PathBuf};
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
-    pub(crate) orchestrator: OrchestratorSettings,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default)]
-pub(crate) struct OrchestratorSettings {
-    pub(crate) enabled: bool,
-    pub(crate) model: OrchestratorModelSetting,
-    pub(crate) content_selector: OrchestratorContentSetting,
-    pub(crate) system_prompt_override: Option<String>,
-}
-
-impl Default for OrchestratorSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            model: OrchestratorModelSetting::DeepSeekV41Flash,
-            content_selector: OrchestratorContentSetting::Production,
-            system_prompt_override: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum OrchestratorModelSetting {
-    #[default]
-    DeepSeekV41Flash,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum OrchestratorContentSetting {
-    TestAgentLed,
-    #[default]
-    Production,
 }
 
 /// Registry sessions share one file beside the registry; an explicit
@@ -98,7 +62,6 @@ mod tests {
 
         let enabled = BusSettings {
             color_blind_mode: true,
-            ..BusSettings::default()
         };
         save(&path, &enabled).unwrap();
         assert_eq!(load(&path), Ok(enabled.clone()));
@@ -112,9 +75,9 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_system_prompt_override_round_trips_multiline_text() {
+    fn settings_saved_with_the_retired_orchestrator_still_load() {
         let root = std::env::temp_dir().join(format!(
-            "bus-settings-prompt-{}-{}",
+            "bus-settings-legacy-{}-{}",
             std::process::id(),
             super::super::io::now_ns()
         ));
@@ -122,17 +85,16 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(
             &path,
-            br#"{"orchestrator":{"system_prompt_override":"Custom conductor\nUse repo-native skills."}}"#,
+            br#"{"color_blind_mode":true,"orchestrator":{"enabled":true,"model":"deep-seek-v41-flash","content_selector":"production","system_prompt_override":"Custom"}}"#,
         )
         .unwrap();
 
-        let loaded = load(&path).unwrap();
-        let encoded = serde_json::to_value(loaded).unwrap();
         assert_eq!(
-            encoded["orchestrator"]["system_prompt_override"],
-            "Custom conductor\nUse repo-native skills."
+            load(&path),
+            Ok(BusSettings {
+                color_blind_mode: true
+            })
         );
-
         let _ = std::fs::remove_dir_all(root);
     }
 }

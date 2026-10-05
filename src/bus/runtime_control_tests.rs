@@ -847,17 +847,6 @@ fn agent_approve_once_worker_rejects_stale_launch_before_native_then_persists_an
     assert_eq!(observed.result["launch_id"], "launch");
     assert_eq!(observed.result["current_request"], request.0);
     assert_eq!(observed.result["provider_turn"], "turn-1");
-    let mut state = worker.state.clone();
-    state
-        .orchestrator_state_mut()
-        .grant(
-            _room,
-            crate::bus::orchestrator::ParticipantId::Human,
-            crate::bus::orchestrator::ParticipantId::Orchestrator,
-            crate::bus::orchestrator::Capability::ApprovePermissionOnce,
-        )
-        .unwrap();
-    worker.save(state).unwrap();
     worker
         .state
         .set_agent_runtime_identity(
@@ -870,14 +859,7 @@ fn agent_approve_once_worker_rejects_stale_launch_before_native_then_persists_an
             },
         )
         .unwrap();
-    let stale = worker.approve_permission_once(
-        crate::bus::orchestrator::ParticipantId::Orchestrator,
-        Some(agent),
-        crate::bus::orchestrator::ExactPermissionGrant {
-            fingerprint: fingerprint.clone(),
-            response: crate::bus::orchestrator::ApprovedPermissionResponse::AllowOnce,
-        },
-    );
+    let stale = worker.approve_permission_once(Some(agent), fingerprint.clone());
     assert!(stale.is_err());
     assert_eq!(approvals.load(Ordering::SeqCst), 0);
     worker
@@ -893,14 +875,7 @@ fn agent_approve_once_worker_rejects_stale_launch_before_native_then_persists_an
         )
         .unwrap();
     let approved = worker
-        .approve_permission_once(
-            crate::bus::orchestrator::ParticipantId::Orchestrator,
-            Some(agent),
-            crate::bus::orchestrator::ExactPermissionGrant {
-                fingerprint: fingerprint.clone(),
-                response: crate::bus::orchestrator::ApprovedPermissionResponse::AllowOnce,
-            },
-        )
+        .approve_permission_once(Some(agent), fingerprint.clone())
         .unwrap();
     assert_eq!(approved["written"], true);
     assert_eq!(approvals.load(Ordering::SeqCst), 1);

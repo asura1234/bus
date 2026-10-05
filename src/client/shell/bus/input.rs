@@ -440,7 +440,6 @@ impl BusUi {
                 self.notes_focus = false;
             }
             Action::Recipient(id) => self.toggle_recipient(id),
-            Action::RecipientEntry(entry) => self.toggle_recipient_entry(entry),
             Action::Files => self.open_form(Form::Files(Editor::new("~/".into()))),
             Action::RemoveFile(path) => {
                 if let Some(room) = self.room {
@@ -464,9 +463,7 @@ impl BusUi {
             }
             Action::Quote(agent) => self.quote(agent),
             Action::Field(index) => {
-                if matches!(self.form, Some(Form::Settings)) {
-                    self.settings_field = index;
-                } else if let Some(Form::Agent { field, .. }) = &mut self.form {
+                if let Some(Form::Agent { field, .. }) = &mut self.form {
                     *field = index;
                 }
                 self.query_paths();
@@ -489,18 +486,8 @@ impl BusUi {
                 self.suggestions.selected = index;
                 self.complete_path();
             }
-            Action::Settings => {
-                self.settings_field = 0;
-                self.settings_key = Editor::default();
-                if self.credential_digest().is_some() {
-                    self.load_orchestrator_prompt();
-                }
-                self.open_form(Form::Settings);
-            }
+            Action::Settings => self.open_form(Form::Settings),
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
-            Action::ToggleOrchestrator => self.toggle_orchestrator_enabled(),
-            Action::ResetOrchestratorPrompt => self.reset_orchestrator_prompt(),
-            Action::Coordination(action) => self.dispatch_coordination(action),
             Action::Cancel => {
                 if let Some(room) = self.room {
                     self.open_room(room);
@@ -511,19 +498,17 @@ impl BusUi {
             Action::Add => self.add(),
         }
     }
-    pub(super) fn toggle_recipient(&mut self, id: Option<AgentId>) {
+    fn toggle_recipient(&mut self, id: Option<AgentId>) {
         let Some(room) = self.room else {
             return;
         };
-        let all: AgentRecipients = super::orchestrator_ui::all_coding_agents(
-            self.snapshot
-                .state
-                .agents()
-                .filter(|a| a.room_id == room)
-                .map(|a| a.id),
-        )
-        .into_iter()
-        .collect();
+        let all: AgentRecipients = self
+            .snapshot
+            .state
+            .agents()
+            .filter(|a| a.room_id == room)
+            .map(|a| a.id)
+            .collect();
         if let Some(local) = self.locals.get_mut(&room) {
             if let Some(id) = id {
                 if !local.recipients.remove(&id) {
@@ -545,14 +530,6 @@ impl BusUi {
             return;
         }
         if let Some(form) = &mut self.form {
-            if matches!(form, Form::Settings) {
-                match self.settings_field {
-                    2 => self.settings_key.insert(text),
-                    3 => self.settings_prompt.insert(text),
-                    _ => {}
-                }
-                return;
-            }
             if let Some(editor) = form.editor_mut() {
                 editor.insert(text);
             }
@@ -623,20 +600,15 @@ impl BusUi {
                 .filter(|a| Some(a.room_id) == self.room)
                 .map(|a| a.id)
                 .collect();
-            let entries = super::orchestrator_ui::recipient_entries(
-                self.settings.orchestrator.enabled,
-                ids.iter().copied(),
-            );
-            let last = entries.len().saturating_sub(1);
             match code {
                 KeyCode::Esc | KeyCode::Tab => self.recipient_menu = false,
                 KeyCode::Up => self.recipient_index = self.recipient_index.saturating_sub(1),
-                KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(last),
-                KeyCode::Enter | KeyCode::Char(' ') => {
-                    if let Some(entry) = entries.get(self.recipient_index).cloned() {
-                        self.toggle_recipient_entry(entry);
-                    }
-                }
+                KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(ids.len()),
+                KeyCode::Enter | KeyCode::Char(' ') => self.toggle_recipient(
+                    self.recipient_index
+                        .checked_sub(1)
+                        .and_then(|i| ids.get(i).copied()),
+                ),
                 _ => {}
             }
             return;
@@ -1038,37 +1010,8 @@ impl BusUi {
             return;
         }
         if matches!(self.form, Some(Form::Settings)) {
-            let prompt_available = self.credential_digest().is_some();
-            if self.settings_field == 3 && prompt_available {
-                match (code, modifiers) {
-                    (KeyCode::Char('s' | 'S'), KeyModifiers::CONTROL) => {
-                        self.save_orchestrator_prompt()
-                    }
-                    (KeyCode::Enter, _) => self.settings_prompt.insert("\n"),
-                    (KeyCode::Tab, _) => self.settings_field = 4,
-                    (KeyCode::BackTab, _) => self.settings_field = 2,
-                    _ => {
-                        self.settings_prompt.key(code, modifiers);
-                    }
-                }
-                return;
-            }
-            let last_field = if prompt_available { 4 } else { 2 };
-            match code {
-                KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
-                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(last_field),
-                KeyCode::Enter => match self.settings_field {
-                    0 => self.toggle_color_blind_mode(),
-                    1 => self.toggle_orchestrator_enabled(),
-                    2 => self.save_orchestrator_key(),
-                    4 => self.reset_orchestrator_prompt(),
-                    _ => {}
-                },
-                _ => {
-                    if self.settings_field == 2 {
-                        self.settings_key.key(code, modifiers);
-                    }
-                }
+            if code == KeyCode::Enter {
+                self.toggle_color_blind_mode();
             }
             return;
         }
