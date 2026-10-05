@@ -3,6 +3,11 @@
 //! Nothing reads these values any more. `launch.rs` and `resume_launch.rs` still call
 //! [`prepare_discovery`] and export [`AssignmentDiscovery::env`]; this module keeps that
 //! surface byte-identical until those call sites are removed.
+//!
+//! TODO(bus-simplify): every launch still writes
+//! `trusted-assignments/<agent>/<launch>/.read-token` under the session root.
+//! Delete this module, those writes, and the exported env together once
+//! `launch.rs` and `resume_launch.rs` stop calling it.
 use std::path::{Path, PathBuf};
 
 use super::{io, model::AgentId};

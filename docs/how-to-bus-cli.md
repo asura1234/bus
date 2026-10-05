@@ -148,8 +148,8 @@ bus wait --message "$message_id" --timeout 600
 ```
 
 To record the message as written by a room agent instead of the human, add
-`--as AGENT`. The author must be an agent in the same room and cannot also be a
-recipient; `--to all` skips it. The generic form is
+`--as AGENT`. The author must be an agent in the same room, or the room's MASTER
+orchestrator, and cannot also be a recipient; `--to all` skips it. The generic form is
 `send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT]`.
 
 `send` confirms that the message was durably queued. It does not mean the agent
@@ -475,6 +475,20 @@ example after the provider exited and its pane respawned a shell, Bus still
 deletes the agent and its messages, leaves that terminal open, and lists it
 under `terminals_left_open` in the result. Close it yourself if it is no longer
 needed.
+
+## Upgrading from the orchestrator build
+
+Sessions saved by the build that had the built-in room orchestrator open
+normally, with these changes:
+
+- Each session gains the MASTER room. A work room already named MASTER, in any
+  case, is renamed once to `Master (old)` and keeps all its data.
+- A room's Room Brief goal and non-goals are appended once to its notes.
+- The orchestrator's own transcript, workflow drafts, and capability grants are
+  dropped, because those features no longer exist. Approve-once fingerprints it
+  already sent stay single-use.
+- `<root>/private/orchestrator-credentials.json` is no longer read. Delete it
+  yourself if you no longer need the API key it holds.
 
 ## Diagnose failures
 
