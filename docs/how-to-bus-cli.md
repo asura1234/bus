@@ -230,8 +230,8 @@ bus state | jq '.result.usage'
 - `master_room` is the MASTER room's ID. `visible_room` is the room open in the
   UI, or `null`.
 - Each room has `id`, `name`, `kind` (`master` or `work`), `notes`,
-  `unread_count`, `deletion_pending`, and `orchestrator`: the ID of the MASTER
-  agent orchestrating it, or `null`.
+  `unread_count`, `sound`, `deletion_pending`, and `orchestrator`: the ID of
+  the MASTER agent orchestrating it, or `null`.
 - Each agent includes `room_id`, `status`, `orchestrates` (the work room it
   orchestrates, or `null`), and `compactions`: `count` and `last_at_ms` of the
   provider context compactions Bus observed for that agent.
@@ -241,6 +241,26 @@ bus state | jq '.result.usage'
   `observed_by_agent`. Codex usage is read after each Codex turn. Claude and
   Cursor usage is not collected yet. Status `unknown`, with a `reason`, means
   Bus has no data, never that the allowance is unused.
+
+## Sound notifications
+
+Bus can ding when a new message lands in a room, like a group chat. A room rings
+for an agent's final reply or a message an agent sent with `send --as`, never
+for the human's own sends. Nothing rings for the first two seconds after start
+or resume, and one ding covers a burst of messages.
+
+MASTER starts with sound on; work rooms start off. Toggle a room from Settings
+in the UI or with the CLI:
+
+```sh
+bus room sound "$room_id" --on
+bus room sound master --off
+```
+
+The generic form is `room sound ROOM (--on | --off)`. `state` reports each
+room's `sound`. Bus plays herdr's done sound once, from the client running the
+session, and honors a custom `[ui.sound]` `path` or `done_path`.
+`HERDR_DISABLE_SOUND` silences it.
 
 ## Inspect rooms, replies, and terminals
 
