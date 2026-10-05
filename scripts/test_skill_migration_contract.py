@@ -67,12 +67,10 @@ class SkillMigrationContractTest(unittest.TestCase):
             "docs/guides/plan-review-guide.md",
             "docs/guides/code-review-guide.md",
             "docs/guides/review-response-guide.md",
-            "docs/guides/task-review-guide.md",
             "docs/templates/plan-template.md",
             "docs/templates/module-agents-template.md",
             "cli_extensions/review_artifact.py",
             "cli_extensions/review_artifact_parser.py",
-            "cli_extensions/review_artifact_task.py",
             "cli_extensions/review_artifact_types.py",
         )
         for relative in required:
@@ -86,9 +84,8 @@ class SkillMigrationContractTest(unittest.TestCase):
             {"可执行（Ready）", "需要完善（Needs Refinement）", "废弃（Abandon）"},
         )
         self.assertEqual(verdicts["pr"], {"Ready", "Needs Refinement", "Abandon"})
-        self.assertEqual(
-            verdicts["task"], {"Ready", "Needs Refinement", "Plan Repair Required"}
-        )
+        # Task review left with execute-plan; only plan and PR reviews remain.
+        self.assertEqual(set(verdicts), {"plan", "pr"})
         markdown = "\n".join(
             path.read_text(encoding="utf-8")
             for root in (SKILLS, REPO / "docs")

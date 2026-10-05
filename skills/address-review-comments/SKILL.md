@@ -1,17 +1,17 @@
 ---
 name: address-review-comments
-description: Adjudicate and address review comments for plans, PRs, tasks, or free-form review. Deterministically sanitize inputs, atomize and deduplicate claims by root cause, obtain first-party evidence for each claim, decide APPLY, REJECT, FLAG, or HOUSEKEEPING centrally, then remediate related accepted claims together. Plan and PR modes land through commit-and-push by default; task mode requires --no-commit-and-push. Use when asked to address, respond to, or fix review feedback.
+description: Adjudicate and address review comments for plans, PRs, or free-form review. Deterministically sanitize inputs, atomize and deduplicate claims by root cause, obtain first-party evidence for each claim, decide APPLY, REJECT, FLAG, or HOUSEKEEPING centrally, then remediate related accepted claims together. Plan and PR modes land through commit-and-push by default. Use when asked to address, respond to, or fix review feedback.
 ---
 
-Use this workflow for `review-plan`, `review-pr`, task review, or free-form review. Reviewer and author are peer decision-makers in a convergence loop: the reviewer identifies a problem and may suggest a repair; the author independently determines whether the claim is true, whether it belongs in scope, and what repair is correct; a later review verifies the outcome. Review comments are evidence-bearing claims, not commands.
+Use this workflow for `review-plan`, `review-pr`, or free-form review. Reviewer and author are peer decision-makers in a convergence loop: the reviewer identifies a problem and may suggest a repair; the author independently determines whether the claim is true, whether it belongs in scope, and what repair is correct; a later review verifies the outcome. Review comments are evidence-bearing claims, not commands.
 
 Before execution, read completely:
 
 - [Review Response Guide](../../docs/guides/review-response-guide.md), the source of truth for verification and dispositions;
-- only the mode-specific judgment sections named by that guide from `plan-review-guide.md`, `code-review-guide.md`, or `task-review-guide.md`. Those are reviewer-side documents; do not import their full review-production workflow or issue a reviewer verdict from the author side.
+- only the mode-specific judgment sections named by that guide from `plan-review-guide.md` or `code-review-guide.md`. Those are reviewer-side documents; do not import their full review-production workflow or issue a reviewer verdict from the author side.
 
 ```text
-INPUT = [plan | pr | task] [--round latest|N] [--review-file <path>]...
+INPUT = [plan | pr] [--round latest|N] [--review-file <path>]...
         [--free-form-file <path>]... [--label <name>]... [--no-commit-and-push]
 
 HARD RULES
@@ -22,7 +22,7 @@ HARD RULES
 - The main agent chooses whether to verify serially, delegate read-only bounded fact questions, or mix both according to claim count and shared context. The workflow does not prescribe parallelism.
 - No writes occur until every canonical claim has first-party truth evidence and the main agent has completed one unified adjudication barrier.
 - Run only diff-scoped validation in this workflow. Full repository gates belong to gate-and-fix.
-- Plan and PR modes land through commit-and-push by default. Task mode requires --no-commit-and-push and changes only its owner scope.
+- Plan and PR modes land through commit-and-push by default.
 
 ========== PASS 0: RESOLVE AND SANITIZE ==========
 
@@ -31,12 +31,11 @@ The caller or developer supplies the locked goal exactly as below.
 IF --review-file or --free-form-file is explicit:
   canonicalize in argument order and deduplicate.
 ELSE:
-  only legacy plan/PR lane discovery is allowed;
-  task mode requires explicit mode and --review-file.
+  only legacy plan/PR lane discovery is allowed.
 
 Run:
   python3 skills/address-review-comments/scripts/prepare_review_input.py \
-    [--review-file <path>...] [--free-form-file <path>...] [--mode plan|pr|task] \
+    [--review-file <path>...] [--free-form-file <path>...] [--mode plan|pr] \
     [--label <name>...] --output <run-root>/sanitized.md
 
 IF exit != 0:
@@ -52,15 +51,14 @@ new parser.
 
 Read only `新问题与建议` plus the complete `同步清单（CONSISTENCY drift，非阻塞）` from sanitized output.
 
-- Structured lanes must agree on mode, target, base, locked goal, plan/task identity, and task SCOPE_HASH when applicable. Any mismatch stops the run.
-- Free-form input requires explicit mode. Its round is `n/a`. Plan/PR SCOPE_HASH is `n/a`. Locked goal must come from the caller or developer and cannot be inferred from diff, commits, or PR prose.
+- Structured lanes must agree on mode, target, base, locked goal, and plan identity. Any mismatch stops the run.
+- Free-form input requires explicit mode. Its round is `n/a`. Locked goal must come from the caller or developer and cannot be inferred from diff, commits, or PR prose.
 - Free-form input has no mechanical round provenance, so closed-world gate (d) cannot be evaluated. Record exactly one triage line noting that gate (d) is indeterminate for free-form input.
-- Plan mode reads the complete plan and archived decisions. PR mode reads `<base>...HEAD`, locked goal, optional plan context, provenance, complete claim-relevant files, and direct dependencies. Task mode reads only the task contract, snapshot, owner, SCOPE_HASH, and gate evidence.
-- Task mode requires --no-commit-and-push. Plan/PR mode delegates landing to commit-and-push; direct `master` landing is legal only when the developer explicitly requested it.
+- Plan mode reads the complete plan and archived decisions. PR mode reads `<base>...HEAD`, locked goal, optional plan context, provenance, complete claim-relevant files, and direct dependencies.
+- Plan/PR mode delegates landing to commit-and-push; direct `master` landing is legal only when the developer explicitly requested it.
 
 Run root:
   plan/pr = temp/address-review-comments/<slug>/<YYYYMMDD-HHmmss>/
-  task    = temp/address-review-comments/__task__/<full-plan-slug>/<task-id-name>/<timestamp>/
 
 IF mode == pr:
   identify reviewer-created test files and newly added cases in existing tests;
@@ -111,7 +109,7 @@ Group APPLY claims by related root cause, touched files, and dependency order. C
 
 For PR mode, include accepted reviewer tests or test hunks in the allowlist. Run those tests and narrow direct regressions after the repair. Landing must include every adopted new test, including untracked files.
 
-The main agent implements serially when groups are small, overlap, or are trivial. Writers are justified only for materially independent groups with disjoint allowlists and no dependency. Plan mode has one writer for one plan. Task mode has one owner and never lands.
+The main agent implements serially when groups are small, overlap, or are trivial. Writers are justified only for materially independent groups with disjoint allowlists and no dependency. Plan mode has one writer for one plan.
 
 After delegated writers return, the main agent verifies actual status against the union of allowlists, unique file ownership, real green evidence, and no reopened FLAG or conflict. Unresolved red or out-of-scope changes are handled centrally or converted to FLAG; never use destructive rollback.
 
@@ -127,7 +125,6 @@ Next action:
   plan -> rerun review-plan
   landed PR -> may run pr
   --no-commit-and-push -> state explicitly that nothing was pushed
-  task -> return to the task owner
 
 REJECT and FLAG are separate:
   no REJECT -> one line exactly `REJECT：无`

@@ -56,7 +56,7 @@ PreparationError = ReviewArtifactError
 
 # free-form review 没有 lane/round 身份，统一挂在这个前缀下，与结构化 lane 不会撞名。
 FREE_FORM_LANE_PREFIX = "external:"
-_VALID_MODES = ("plan", "pr", "task")
+_VALID_MODES = ("plan", "pr")
 _REVISION_DECORATED_REF = re.compile(
     r"^(?P<ref>.+) @ (?P<revision>[0-9a-f]{7,64})$"
 )
@@ -192,8 +192,6 @@ def _load_free_form(
         finding_ids=(),
         previous_summary=None,
         verdict="",
-        recovery_reason=None,
-        producer_task_id=None,
         text=text,
         headings=(),
     )
@@ -249,7 +247,7 @@ def prepare_review_input(
     if free_form_paths and mode is None:
         raise PreparationError(
             "free-form review 没有可解析的身份，必须显式提供 --mode "
-            "plan|pr|task"
+            "plan|pr"
         )
 
     try:
@@ -273,7 +271,7 @@ def prepare_review_input(
         if mode is None:
             raise PreparationError(
                 "free-form review 没有可解析的身份，必须显式提供 --mode "
-                "plan|pr|task"
+                "plan|pr"
             )
         resolved_mode = mode
         target = {}

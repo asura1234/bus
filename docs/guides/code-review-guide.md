@@ -6,8 +6,6 @@ Code review evaluates the committed implementation against one locked purpose. F
 
 PR review normally follows implementation validation. Existing runtime behavior is therefore treated as a manually or mechanically verified baseline unless positive evidence shows that a reachable input produces a wrong result. A true suspicion does not automatically authorize a risky behavioral rewrite. Preserve verified behavior, strengthen it with a regression test when appropriate, and escalate genuine product or architecture choices to the developer.
 
-Task review during plan execution does not inherit this assumption; task work has not yet reached final validation.
-
 ## Review scope
 
 Review the committed diff against the explicit base, the complete current contents of eligible touched files, direct callers and consumers needed to reason about those changes, relevant tests, and applicable architecture sources of truth. Exclude uncommitted user work and plan-document changes from PR findings.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Round prologue for /review-plan: deterministic prereq check + round bookkeeping.
 
-No agent judgment, and — unlike plan_execution_gate.py — NO plan mutation:
+No agent judgment and NO plan mutation:
 状态 writes are out of scope for /review-plan (the developer asks for them
 explicitly).
 
@@ -113,10 +113,10 @@ from verify_task_graph import (  # noqa: E402
 ALLOWED_STATUSES = frozenset({"create-plan-complete", "review-plan-in-progress"})
 LEGACY_STATUS_RE = re.compile(r"(?m)^-\s*Status:\s*\S+")
 TRIAGE_MODE_FIELD_RE = re.compile(
-    r"(?im)^\s*(?:\*\*)?(?:review type|review mode|审查类型|模式)(?:\*\*)?\s*[:：]\s*(plan|pr|code|task)\b"
+    r"(?im)^\s*(?:\*\*)?(?:review type|review mode|审查类型|模式)(?:\*\*)?\s*[:：]\s*(plan|pr|code)\b"
 )
-TRIAGE_MODE_TITLE_RE = re.compile(r"(?im)^#.*?[（(]\s*(plan|pr|code|task)\s*模式")
-TRIAGE_MODE_ALIASES = {"plan": "plan", "pr": "pr", "code": "pr", "task": "task"}
+TRIAGE_MODE_TITLE_RE = re.compile(r"(?im)^#.*?[（(]\s*(plan|pr|code)\s*模式")
+TRIAGE_MODE_ALIASES = {"plan": "plan", "pr": "pr", "code": "pr"}
 
 
 def rel(path: Path) -> str:

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Plan execution-readiness gate: deterministic, agent-free pre-flight validation.
+"""Plan execution-readiness checks: deterministic and agent-free.
 
-Uses the plan status as the sole review-readiness signal, then validates the
-mechanical execution contract:
+A library for review-plan; it has no command line and never edits a plan.
+`gate(text)` validates the mechanical execution contract of a reviewed plan:
 
   0. Plan was generated from the canonical template (delegated to
-     plan_template_check.check_template_match — catches users who try to
-     execute against a custom / homegrown template).
+     plan_template_check.check_template_match).
   1. **状态** field exists and is one of {review-plan-complete,
      plan-execution-in-progress}.
   2. 参考资料 is non-empty (must contain at least one list item / link /
@@ -18,21 +17,7 @@ mechanical execution contract:
   5. Task ids, dependencies, owner paths, and graph cycles pass the shared
      verify_task_graph validator.
 
-Side effect: on PASS, this script also bumps **状态** in the plan file from
-`review-plan-complete` → `plan-execution-in-progress`. This makes the gate
-atomic — there's no window where a caller can forget to record that execution
-started. Idempotent: if 状态 is already `plan-execution-in-progress` (resume
-case), the file is left untouched.
-
-Exit codes:
-  0 — all checks pass; stdout is "PASS" (and a one-line note if the file was
-      bumped to plan-execution-in-progress)
-  1 — at least one check failed; stdout is "FAIL" followed by one
-      "- <reason>" line per failure. Plan file is NOT modified.
-  2 — usage error (bad args or plan file not found); message on stderr
-
-Usage:
-    python3 skills/review-plan/scripts/plan_execution_gate.py <plan.md>
+It returns one failure string per broken rule, or an empty list.
 """
 
 import datetime
@@ -281,41 +266,3 @@ def gate(text: str) -> list[str]:
         failures.append(err)
 
     return failures
-
-
-def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print(
-            "usage: plan_execution_gate.py <plan.md>",
-            file=sys.stderr,
-        )
-        return 2
-    plan_path = Path(argv[1])
-    if not plan_path.is_file():
-        print(f"error: {plan_path} not found", file=sys.stderr)
-        return 2
-
-    text = plan_path.read_text()
-    failures = gate(text)
-    if failures:
-        print("FAIL")
-        for f in failures:
-            print(f"- {f}")
-        return 1
-
-    # Atomic side effect: gate-pass also marks the plan as in-execution.
-    status_match = STATUS_RE.search(text)
-    current_status = status_match.group(1) if status_match else None
-    if current_status == "review-plan-complete":
-        new_text = STATUS_RE.sub("**状态**：plan-execution-in-progress", text, count=1)
-        plan_path.write_text(new_text)
-        print("PASS")
-        print("- 状态：review-plan-complete → plan-execution-in-progress")
-    else:
-        # current_status == "plan-execution-in-progress" (resume case); no bump needed.
-        print("PASS")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv))

@@ -13,7 +13,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from review_artifact_task import parse_task_recovery
 from review_artifact_types import (
     EMPTY_PREVIOUS_SUMMARY,
     EXPECTED_H2_TITLES,
@@ -27,7 +26,6 @@ from review_artifact_types import (
     PREVIOUS_STATUSES,
     PREVIOUS_TABLE_HEADER,
     PREVIOUS_TABLE_SEPARATOR,
-    ROUND_PATH_RE,
     SUBSTANTIVE_HEADING,
     SUMMARY_RE,
     SYNC_HEADING,
@@ -81,7 +79,6 @@ def _parse_title(lines: list[tuple[int, str]], path: Path) -> tuple[ReviewMode, 
     label_to_mode: Mapping[str, ReviewMode] = {
         "计划审查": "plan",
         "代码审查": "pr",
-        "任务验收": "task",
     }
     return label_to_mode[match.group("label")], int(match.group("round"))
 
@@ -227,18 +224,6 @@ def _require_field(fields: Mapping[str, str], key: str, path: Path) -> str:
     return value
 
 
-def _round_from_output_lane(output_lane: str, path: Path) -> tuple[int, str]:
-    normalized = output_lane.replace("\\", "/").rstrip("/")
-    match = ROUND_PATH_RE.search(normalized)
-    if match is None:
-        raise ReviewArtifactError(f"task 输出 lane 缺少明确 round-NN/review.md: {path}")
-    round_number = int(match.group("round"))
-    lane = normalized[: match.start()].rstrip("/")
-    if not lane:
-        raise ReviewArtifactError(f"task 输出 lane identity 为空: {path}")
-    return round_number, lane
-
-
 def _target_and_lane(
     mode: ReviewMode,
     fields: Mapping[str, str],
@@ -254,18 +239,7 @@ def _target_and_lane(
             "plan": _require_field(fields, "计划（如有）", path),
             "locked_goal": _require_field(fields, "锁定目标", path),
         }, _require_field(fields, "审查者", path)
-    output_lane = _require_field(fields, "输出 lane", path)
-    output_round, lane = _round_from_output_lane(output_lane, path)
-    if output_round != title_round:
-        raise ReviewArtifactError(f"task lane round 与 title round 不一致: {path}")
-    scope_hash = _require_field(fields, "SCOPE_HASH", path)
-    if not re.fullmatch(r"[0-9a-f]{64}", scope_hash):
-        raise ReviewArtifactError(f"SCOPE_HASH 格式不合法: {path}")
-    return {
-        "plan": _require_field(fields, "计划", path),
-        "task": _require_field(fields, "任务", path),
-        "scope_hash": scope_hash,
-    }, lane
+    raise ReviewArtifactError(f"不支持的 review mode: {mode} ({path})")
 
 
 def _validate_path_round(path: Path, title_round: int) -> None:
@@ -420,12 +394,6 @@ def parse_review_artifact(path: Path) -> ReviewArtifact:
     ]
     if len(verdicts) != 1 or verdicts[0] not in LEGAL_VERDICTS[mode]:
         raise ReviewArtifactError(f"{mode} review 缺少唯一合法最终判定: {resolved}")
-    recovery_reason, producer_task_id = parse_task_recovery(
-        mode,
-        verdicts[0],
-        outside_fence_lines(verdict_body, resolved),
-        resolved,
-    )
     return ReviewArtifact(
         path=resolved,
         mode=mode,
@@ -437,8 +405,6 @@ def parse_review_artifact(path: Path) -> ReviewArtifact:
         finding_ids=_finding_ids(substantive, resolved),
         previous_summary=previous_summary,
         verdict=verdicts[0],
-        recovery_reason=recovery_reason,
-        producer_task_id=producer_task_id,
         text=text,
         headings=headings,
     )
@@ -454,8 +420,6 @@ def validate_compatible(artifacts: Sequence[ReviewArtifact]) -> None:
         "base": "base",
         "plan": "plan",
         "locked_goal": "locked goal",
-        "task": "task",
-        "scope_hash": "SCOPE_HASH",
     }
     for artifact in artifacts:
         if artifact.mode != first.mode:

@@ -1,6 +1,6 @@
 # Review Artifact Format
 
-This document is the shared format source of truth for plan reviews, PR code reviews, and task acceptance reviews. Final artifacts are agent-anonymous. Findings state verifiable facts and never carry severity or disposition labels.
+This document is the shared format source of truth for plan reviews and PR code reviews. Final artifacts are agent-anonymous. Findings state verifiable facts and never carry severity or disposition labels.
 
 ## Shared output discipline
 
@@ -8,9 +8,9 @@ This document is the shared format source of truth for plan reviews, PR code rev
 - After writing `review.md`, every mode must run `python3 cli_extensions/review_artifact.py render-response`. The script validates the complete artifact, condenses the Round 2+ reconciliation table into its existing summary sentence, removes `本轮探索区域`, and generates the only valid `chat-response.md`. Return that file verbatim.
 - An empty section contains only `无。`.
 - An unresolved prior-round finding keeps its original source number in the reconciliation table and is restated completely, using current evidence, under `新问题与建议`. Never reopen the same root cause under a new title.
-- In Round 2+, when the preceding round had no findings, keep only the fixed reconciliation table header and separator and use exactly `> 总结：前轮无待核销 finding。`. When the table has data rows, that empty summary is forbidden. This rule is shared by plan, PR, and task modes.
+- In Round 2+, when the preceding round had no findings, keep only the fixed reconciliation table header and separator and use exactly `> 总结：前轮无待核销 finding。`. When the table has data rows, that empty summary is forbidden. This rule is shared by plan and PR modes.
 - Reconciliation states are fixed: `satisfactory` means the root cause is resolved; `rejected` means the author rejected it with sound evidence; `withdrawn` means the reviewer withdrew a false positive; `partially-addressed` means changes were made but the root cause remains; `not-addressed` means it was not handled and no valid reason was supplied; `disputed` means the author rejected it without sufficient evidence and developer adjudication is needed. The final three remain open.
-- A finding is organized as location, observation, evidence, impact, and optional remediation. PR findings also name a code-review dimension. Task findings do not reuse the PR nine-dimension vocabulary.
+- A finding is organized as location, observation, evidence, impact, and optional remediation. PR findings also name a code-review dimension.
 - Findings must not contain disposition or severity labels such as `阻断`, `建议采纳`, `critical`, `high`, `medium`, or `low`. Severity influences only the mode's single final verdict.
 
 ## Fixed actionable sections
@@ -142,70 +142,3 @@ Write the artifact to `temp/review-pr/<branch>/<reviewer>/round-NN/review.md`. T
 ```
 
 The PR verdict meaning is defined only by `code-review-guide.md`; this template fixes the legal enum and output structure without creating another readiness rule.
-
-## Task-acceptance round format
-
-Write the artifact to the `--output` path under `temp/review-task/<full-plan-slug>/task-<id>-<name>/round-NN/review.md`. The full plan slug derives from the complete repository-relative plan path without its extension. Task review verifies only that task's completion, plan adherence, file isolation, direct contracts, and gate evidence; it is not final PR review.
-
-```markdown
-# Review Round <N> — 任务验收
-
-**计划**：<plans/xxx.md>
-**任务**：任务<id>：<unique plan task name>
-**实际触及文件**：<N> files；canonical list: <SCOPE_INPUTS>#files
-**Task report**：<generation-NN/report.md>
-**GATE_EVIDENCE_HASH**：<review_round.py output hash>
-**SCOPE_HASH**：<review_round.py output hash>
-**输出 lane**：<temp/review-task/.../round-NN/review.md>
-**日期**：<YYYY-MM-DD>
-
-## 前轮问题核销
-
-<!-- Round 1 writes `无。`. From Round 2 onward reconcile only findings from this
-     task lane. Follow the shared empty-ledger rule. -->
-
-| # | 来源 | 问题 | 核销状态 | 证据 / 去向 |
-|---|------|------|----------|-------------|
-| 1 | R<round>-<index> | <summary> | satisfactory / rejected / withdrawn / partially-addressed / not-addressed / disputed | <task delta / path:line / author rationale; open items say `见新问题 N`> |
-
-> 总结：<group source identifiers by reconciliation state; point open items to the corresponding new finding>。
-
-## 任务契约对照
-
-- **目标与约束**：<status and evidence>
-- **拥有文件与实际触及文件**：<all inside owner | out-of-scope paths and evidence>
-- **produces / consumes**：<direct upstream/downstream contract status | 无>
-- **验收闸门**：<verification of exact command/workspace/exit/test count/coverage/log hash>
-- **计划偏差**：<plan statement / actual result / reason | 无>
-
-## 新问题与建议
-
-### <number. title><!-- append `(承 R<round>-<index>)` when carrying a prior finding -->
-- **位置**：<task field / actual path:line / gate evidence>
-- **观察**：<fact>
-- **证据**：<task contract / code / test output / direct dependency, with path or command>
-- **影响**：<why this task cannot be accepted independently>
-- **可能的修复 / 选项**（可选）：<owner-local correction; explain when the task graph must reopen>
-
-<!-- With no SUBSTANTIVE finding, write only `无。`. -->
-
-## 同步清单（CONSISTENCY drift，非阻塞）
-
-- <task-contract or owner-document wording drift> | 无。
-
-## 验收证据
-
-- 实际触及文件：<N> files；已按 SCOPE_HASH 核对 <SCOPE_INPUTS>#files
-- Task report / gate logs：<report path, evidence hash, commands, and results>
-- Reviewer 窄复现：<not run | exact command and reason/result>
-- 读取的直接上游产物：<path or contract | 无>
-
-## 任务就绪状态
-
-- **判定**：Ready | Needs Refinement | Plan Repair Required
-- **修复原因**：无 | upstream-contract | owner-graph-contract | developer-decision
-- **上游任务**：无 | 任务 N
-- **收敛趋势**：<only the count and scope trend of `新问题与建议`; Round 1 uses `首轮`>
-```
-
-Task verdicts are fixed: `Ready` requires the goal, constraints, owner, direct contracts, and gate evidence to hold, with no current finding and all prior SUBSTANTIVE findings closed at root cause. Owner-local repairs yield `Needs Refinement`. A broken upstream contract, incomplete owner/dependency/task contract, or required developer decision yields `Plan Repair Required` with the structured reason. Only `upstream-contract` may name an upstream task. Consistency drift does not block or trigger another round.

@@ -85,10 +85,10 @@ from pr_goal_context import build_context  # noqa: E402
 
 
 TRIAGE_MODE_FIELD_RE = re.compile(
-    r"(?im)^\s*(?:\*\*)?(?:review type|review mode|审查类型|模式)(?:\*\*)?\s*[:：]\s*(plan|pr|code|task)\b"
+    r"(?im)^\s*(?:\*\*)?(?:review type|review mode|审查类型|模式)(?:\*\*)?\s*[:：]\s*(plan|pr|code)\b"
 )
-TRIAGE_MODE_TITLE_RE = re.compile(r"(?im)^#.*?[（(]\s*(plan|pr|code|task)\s*模式")
-TRIAGE_MODE_ALIASES = {"plan": "plan", "pr": "pr", "code": "pr", "task": "task"}
+TRIAGE_MODE_TITLE_RE = re.compile(r"(?im)^#.*?[（(]\s*(plan|pr|code)\s*模式")
+TRIAGE_MODE_ALIASES = {"plan": "plan", "pr": "pr", "code": "pr"}
 LOCKED_GOAL_NAME = ".locked-goal"
 LOCKED_NON_GOALS_NAME = ".locked-non-goals"
 

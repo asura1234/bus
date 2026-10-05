@@ -1,6 +1,6 @@
 # Review Response Guide (Author Side)
 
-`review-plan`, `review-pr`, and task review produce evidence-backed findings. PR reviewers may also leave uncommitted red probe tests. This guide governs the other side of that process: the author verifies, adjudicates, groups, and remediates one or more compatible review artifacts.
+`review-plan` and `review-pr` produce evidence-backed findings. PR reviewers may also leave uncommitted red probe tests. This guide governs the other side of that process: the author verifies, adjudicates, groups, and remediates one or more compatible review artifacts.
 
 Reviewer and author are peer decision-makers with different responsibilities. A reviewer identifies a problem and may suggest a repair. The author independently decides whether the claim is true, whether it belongs in scope, and what repair is correct, then owns the actual patch. A later review validates the result. Review is input, not command; convergence is measured by evidence and final behavior, not by literal compliance with a proposed fix.
 
@@ -16,8 +16,8 @@ Every finding is checked against first-party reality before disposition:
 2. Multiple lanes reporting the same claim increase investigation priority but never replace verification; they can share the same misread.
 3. Separate the problem claim from the proposed remediation. Independently establish root cause, postcondition, behavior owner, upper-level invariants, and regression evidence. Then evaluate the reviewer's suggestion as one candidate that may be accepted, narrowed, broadened, or replaced. A patch that removes a local symptom while breaking lifecycle, visibility, ownership, or adjacent transitions is wrong even when the finding is true.
 4. Resolve conflicts by authority: current source and tests; repository/module SOT and authoritative documentation; plan/PR/commit prose; review wording.
-5. Repository writes are allowed only for APPLY. REJECT, FLAG, and HOUSEKEEPING never modify repository content. Plan and PR modes land by default; task mode always uses `--no-commit-and-push` and leaves owner-local changes for execute-plan's final landing.
-6. A true claim is not necessarily a safe behavior change. PR mode usually follows manual or automated validation, so existing behavior is a protected baseline. Changing it requires positive evidence: a reachable input and wrong output that prior validation missed. Without that evidence, strengthen the current contract with a test or FLAG the behavior choice. Task mode occurs before final validation and does not inherit this protected-baseline assumption.
+5. Repository writes are allowed only for APPLY. REJECT, FLAG, and HOUSEKEEPING never modify repository content. Plan and PR modes land by default; `--no-commit-and-push` leaves the accepted changes unlanded.
+6. A true claim is not necessarily a safe behavior change. PR mode usually follows manual or automated validation, so existing behavior is a protected baseline. Changing it requires positive evidence: a reachable input and wrong output that prior validation missed. Without that evidence, strengthen the current contract with a test or FLAG the behavior choice.
 7. Every deduplicated finding and consistency item passes the goal/scope gate before repair design:
    - work outside the locked goal -> `scope-change`;
    - work toward an explicit non-goal -> `scope-change`;
@@ -46,11 +46,11 @@ Read enough source, callers, and contracts to establish the claimed behavior, it
 
 Do not expand verification into exhaustive input enumeration, unrelated bug discovery, or repair design. When evidence is insufficient, record `INCONCLUSIVE` and the missing evidence. Preserve truth and scope separately: `SUPPORTED + out-of-goal repair = REJECT(scope-change)`. A genuine unresolved product or architecture choice is `requires-developer-decision`; known out-of-goal work is not promoted to FLAG merely because it would be useful.
 
-## Input sanitation, consistency drift, and task isolation
+## Input sanitation and consistency drift
 
 - Run `prepare_review_input.py` before reading review content. It validates mode and target identity and emits only the two actionable sections. Structured review may come from these skills; free-form review is also valid with `--free-form-file` and explicit mode. Free-form input lacks round provenance and SCOPE_HASH, so it cannot be classified as `review-scope-violation`; its locked goal must be supplied explicitly.
 - The non-blocking consistency list is still actionable input. A verified in-scope wording, naming, comment, or documentation item is APPLY-SAFE. False or out-of-scope drift receives the same fixed disposition discipline. It does not change the prior review verdict or trigger another round by itself.
-- Triage metadata begins with `**模式**：plan|pr|task`. Task triage also records exact plan and task identity and lives under the task namespace. Task APPLY stays within the declared owner; repairs that require another owner return to execute-plan for task-graph repair.
+- Triage metadata begins with `**模式**：plan|pr`.
 
 ## Dispositions: each claim receives exactly one
 
@@ -64,10 +64,9 @@ Read only the named judgment sections from reviewer guides. Do not import their 
 | `over-engineering` | code-review KISS/YAGNI/dimension 8/nit boundary; plan-review over-spec boundary |
 | `scope-change` | code-review goal-relevance admission and dimension 6; plan-review multi-purpose rule |
 | `already-addressed` | code-review scope; in plan mode, current plan and archived decisions |
-| `review-scope-violation` | closed-world convergence rules in plan/code/task guides |
+| `review-scope-violation` | closed-world convergence rules in plan/code guides |
 | `violates-stated-goal` | plan-review locked workflow and goal rules |
 | `implementation-detail` | plan-review admissibility stop rule; code-review nit boundary |
-| task evidence and owner rules | task-review evidence and file-isolation sections |
 
 ### APPLY: automatic remediation
 
@@ -143,5 +142,4 @@ Every plan-review lane returning Ready is a fact, not a state transition. Review
 - Land only verified APPLY claims and fix root causes rather than copying proposed patches.
 - Never land FLAG automatically.
 - A repair must not reactivate flagged/merged claims, introduce conflict, or expand change surface unnecessarily.
-- Task-mode “landing” means owner-local worktree changes and refreshed gate evidence only; Git landing remains forbidden.
 - Plan and PR modes use the repository's commit-and-push workflow when landing is enabled. Respect the current Bus branch policy and use an explicit refspec.
