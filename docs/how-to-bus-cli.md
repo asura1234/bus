@@ -6,6 +6,9 @@ Bus provides two ways to work with rooms and coding agents:
 - Developer control commands, which let a person, script, or another agent drive
   an already-running Bus instance and receive JSON results.
 
+If you are an agent orchestrating a room, also read the
+[Orchestrator guide](orchestrator-guide.md).
+
 This guide covers both surfaces. It uses an installed `bus` command in examples.
 When working from this repository, use `./run dev` instead of `bus --dev`, and
 use `./run dev COMMAND` instead of `bus COMMAND`. The launcher rebuilds the
@@ -95,6 +98,39 @@ bus agent setup-confirm "$agent_id" --confirm
 
 The `--confirm` flag is deliberately required for setup approval and deletion.
 
+## Use the MASTER room
+
+Every session has exactly one MASTER room. It holds orchestrator agents: one
+per work room at most, each assigned to the room it orchestrates. The human
+chats with all orchestrators in MASTER. MASTER cannot be renamed or deleted, and
+no work room can take its name. Old sessions gain MASTER when they are opened.
+
+Any ROOM selector accepts `master`, in any case, for the MASTER room. Add an
+orchestrator and assign it a work room in one step:
+
+```sh
+orchestrator_id=$(bus agent add \
+  --room master \
+  --name "claude-orch" \
+  --provider claude \
+  --pwd "$(pwd)" \
+  --orchestrates "$room_id" \
+  | jq -r '.result.agent_id')
+```
+
+Reassign or unassign it later:
+
+```sh
+bus agent orchestrate "$orchestrator_id" --room "$other_room_id"
+bus agent orchestrate "$orchestrator_id" --none
+```
+
+The generic forms are `agent add ... --orchestrates ROOM` and
+`agent orchestrate AGENT (--room ROOM | --none)`. Only agents in MASTER can
+orchestrate. Assigning a second orchestrator to the same room fails until the
+first is unassigned. Deleting a work room leaves its orchestrator in MASTER,
+unassigned.
+
 ## Send work and wait for the reply
 
 Send a task to one agent and retain the returned message ID:
@@ -108,6 +144,11 @@ message_id=$(bus send \
 
 bus wait --message "$message_id" --timeout 600
 ```
+
+To record the message as written by a room agent instead of the human, add
+`--as AGENT`. The author must be an agent in the same room and cannot also be a
+recipient; `--to all` skips it. The generic form is
+`send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT]`.
 
 `send` confirms that the message was durably queued. It does not mean the agent
 started or replied. `wait` polls every 200 milliseconds until every recipient
@@ -174,6 +215,32 @@ bus send \
 ```
 
 Bus validates attachments before queuing the message.
+
+## Read session state
+
+`state` returns the whole session in one JSON object:
+
+```sh
+bus state | jq '.result | {master_room, visible_room}'
+bus state | jq '.result.rooms[] | {id, name, kind, unread_count, orchestrator}'
+bus state | jq '.result.agents[] | {id, name, room_id, orchestrates, compactions}'
+bus state | jq '.result.usage'
+```
+
+- `master_room` is the MASTER room's ID. `visible_room` is the room open in the
+  UI, or `null`.
+- Each room has `id`, `name`, `kind` (`master` or `work`), `notes`,
+  `unread_count`, `deletion_pending`, and `orchestrator`: the ID of the MASTER
+  agent orchestrating it, or `null`.
+- Each agent includes `room_id`, `status`, `orchestrates` (the work room it
+  orchestrates, or `null`), and `compactions`: `count` and `last_at_ms` of the
+  provider context compactions Bus observed for that agent.
+- `usage` has one entry per provider: `claude`, `codex`, and `cursor`. An
+  `observed` entry reports `five_hour` and `weekly` windows with
+  `used_percent`, `resets_at`, and `window_minutes`, plus `read_at_ms` and
+  `observed_by_agent`. Codex usage is read after each Codex turn. Claude and
+  Cursor usage is not collected yet. Status `unknown`, with a `reason`, means
+  Bus has no data, never that the allowance is unused.
 
 ## Inspect rooms, replies, and terminals
 
@@ -331,10 +398,17 @@ bus room notes "$room_id" --text "Goal: ship notes
 Non-goals: UI changes"
 ```
 
-Rename rooms or delete resources explicitly:
+Clear a room's unread count without changing the room open in the UI:
+
+```sh
+bus room seen "$room_id"
+```
+
+Rename rooms and agents, or delete resources explicitly:
 
 ```sh
 bus room rename "$room_id" "verification"
+bus agent rename "$agent_id" "Code Reviewer"
 bus agent delete "$agent_id" --confirm
 bus room delete "$room_id" --confirm
 ```
