@@ -408,9 +408,14 @@ impl BusUi {
         self.recipient_menu = false;
         self.text_changed(room);
     }
-    /// Steps the MASTER agent form through no room and each work room still unorchestrated.
+    /// Steps an orchestrated-room choice through no room and each work room
+    /// that no other agent orchestrates.
     fn cycle_orchestrates(&mut self, forward: bool) {
         let state = &self.snapshot.state;
+        let editing = match &self.form {
+            Some(Form::Orchestrate { agent, .. }) => Some(*agent),
+            _ => None,
+        };
         let mut choices = vec![None];
         choices.extend(
             state
@@ -418,15 +423,21 @@ impl BusUi {
                 .filter(|room| {
                     room.kind == RoomKind::Work
                         && !room.deletion_pending
-                        && state.orchestrator_of(room.id).is_none()
+                        && state
+                            .orchestrator_of(room.id)
+                            .is_none_or(|other| Some(other.id) == editing)
                 })
                 .map(|room| Some(room.id)),
         );
-        if let Some(Form::Agent {
-            orchestrates: Some(choice),
-            ..
-        }) = &mut self.form
-        {
+        let choice = match &mut self.form {
+            Some(Form::Agent {
+                orchestrates: Some(choice),
+                ..
+            })
+            | Some(Form::Orchestrate { choice, .. }) => Some(choice),
+            _ => None,
+        };
+        if let Some(choice) = choice {
             let index = choices.iter().position(|c| *c == choice.0).unwrap_or(0);
             let next = if forward {
                 (index + 1) % choices.len()
@@ -512,6 +523,14 @@ impl BusUi {
                     *field = ORCHESTRATES_FIELD;
                 }
                 self.cycle_orchestrates(true);
+            }
+            Action::Reassign(agent) => {
+                if let Some(current) = self.snapshot.state.agent(agent).map(|a| a.orchestrates) {
+                    self.open_form(Form::Orchestrate {
+                        agent,
+                        choice: Orchestrates(current),
+                    });
+                }
             }
             Action::Notes => {
                 self.notes_focus = true;
@@ -1204,6 +1223,17 @@ impl BusUi {
             ));
             return;
         }
+        if matches!(self.form, Some(Form::Orchestrate { .. })) {
+            match code {
+                KeyCode::Left | KeyCode::Up => self.cycle_orchestrates(false),
+                KeyCode::Right | KeyCode::Down | KeyCode::Char(' ') => {
+                    self.cycle_orchestrates(true)
+                }
+                KeyCode::Enter => self.add(),
+                _ => {}
+            }
+            return;
+        }
         if code == KeyCode::Enter && matches!(self.form, Some(Form::Agent { .. })) {
             self.add();
             return;
@@ -1308,6 +1338,10 @@ impl BusUi {
         };
         match form {
             Form::Help { .. } | Form::Settings => {}
+            Form::Orchestrate { agent, choice } => {
+                self.queue(BusCommand::SetOrchestrates(agent, choice.0), Effect::None);
+                self.form = None;
+            }
             Form::Room(editor) => {
                 self.queue(BusCommand::CreateRoom(editor.text), Effect::None);
             }

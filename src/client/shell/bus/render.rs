@@ -45,6 +45,7 @@ pub(super) enum Action {
     Field(usize),
     Provider(Provider),
     Orchestrates,
+    Reassign(AgentId),
     Suggestion(usize),
     Settings,
     ToggleColorBlindMode,
@@ -581,11 +582,16 @@ pub(super) fn room_label(state: &BusState, room: &Room) -> String {
     label
 }
 
-/// The line under an agent's name: its provider, then the room it orchestrates.
-/// The name row's status column leaves no room for the target there.
+/// The line under an agent's name: its provider, then for a MASTER agent the
+/// room it orchestrates (or `none`). The name row's status column leaves no
+/// room for the target there.
 pub(super) fn agent_detail(state: &BusState, agent: &Agent) -> String {
+    let in_master = state
+        .master_room()
+        .is_some_and(|master| master.id == agent.room_id);
     match agent.orchestrates.and_then(|room| state.room(room)) {
         Some(room) => format!("{} → {}", provider(agent.provider), room.name),
+        None if in_master => format!("{} → none", provider(agent.provider)),
         None => provider(agent.provider).into(),
     }
 }
@@ -764,10 +770,21 @@ impl BusUi {
                 true,
             );
             y += 1;
+            // A MASTER agent's detail line opens its orchestrated-room picker.
+            let detail_action = if self
+                .snapshot
+                .state
+                .master_room()
+                .is_some_and(|master| master.id == agent.room_id)
+            {
+                Action::Reassign(agent.id)
+            } else {
+                Action::Agent(agent.id)
+            };
             view.row(
                 at(1, y, sw.saturating_sub(2)),
                 agent_detail(&self.snapshot.state, agent),
-                Some(Action::Agent(agent.id)),
+                Some(detail_action),
                 false,
                 true,
             );
@@ -1539,6 +1556,49 @@ impl BusUi {
                     false,
                     true,
                 );
+                return;
+            }
+            Form::Orchestrate { agent, choice } => {
+                let name = self
+                    .snapshot
+                    .state
+                    .agent(*agent)
+                    .map_or("agent", |agent| agent.name.as_str());
+                view.row(
+                    Rect::new(x, 1, width, 1),
+                    format!("{name} orchestrates"),
+                    None,
+                    false,
+                    false,
+                );
+                let target = choice
+                    .0
+                    .and_then(|room| self.snapshot.state.room(room))
+                    .map_or("none", |room| room.name.as_str());
+                view.row(
+                    Rect::new(x, 3, width, 1),
+                    format!("< {target} >"),
+                    Some(Action::Orchestrates),
+                    true,
+                    false,
+                );
+                view.row(
+                    Rect::new(x, 5, 14.min(width), 1),
+                    "Cancel (Esc)",
+                    Some(Action::Cancel),
+                    false,
+                    true,
+                );
+                view.row(
+                    Rect::new(x + 16, 5, 24.min(width.saturating_sub(16)), 1),
+                    "Save (Enter)",
+                    Some(Action::Add),
+                    false,
+                    false,
+                );
+                if let Some(error) = self.visible_error() {
+                    view.lines(Rect::new(x, 7, width, 3), error, None, false);
+                }
                 return;
             }
             Form::Room(editor) => {

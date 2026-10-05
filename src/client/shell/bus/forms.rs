@@ -22,6 +22,11 @@ pub(super) enum Form {
         orchestrates: Option<Orchestrates>,
     },
     Files(Editor),
+    /// Reassigns or unassigns the room a MASTER agent orchestrates.
+    Orchestrate {
+        agent: AgentId,
+        choice: Orchestrates,
+    },
     Consent {
         input: AddAgent,
         orchestrates: Option<RoomId>,

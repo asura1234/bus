@@ -153,3 +153,91 @@ fn work_room_agent_forms_have_no_orchestrates_choice() {
     ));
     assert!(!room_screen(&mut ui, 100, 30).contains("Orchestrates room"));
 }
+
+fn queued_orchestrates(ui: &BusUi) -> Vec<(AgentId, Option<RoomId>)> {
+    ui.pending
+        .iter()
+        .filter_map(|p| match p.command {
+            BusCommand::SetOrchestrates(agent, room) => Some((agent, room)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_orchestrators_detail_line_reassigns_or_unassigns_it() {
+    let (mut ui, master, pr, other, orchestrator) = master_fixture();
+    ui.open_room(master);
+    sidebar_rows(&mut ui);
+    // The detail line is the button; the name still opens the terminal.
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::Reassign(orchestrator)));
+    ui.action(render::Action::Reassign(orchestrator));
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(screen.contains("claude-orch orchestrates"), "{screen}");
+    assert!(screen.contains("< pr-123 >"), "{screen}");
+
+    // Its own room stays a choice; the cycle runs pr-123 → pr-456 → none.
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    assert!(room_screen(&mut ui, 100, 30).contains("< pr-456 >"));
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(ui.form.is_none());
+    assert_eq!(queued_orchestrates(&ui), [(orchestrator, Some(other))]);
+
+    ui.action(render::Action::Reassign(orchestrator));
+    key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(queued_orchestrates(&ui).last(), Some(&(orchestrator, None)));
+
+    ui.action(render::Action::Reassign(orchestrator));
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(ui.form.is_none());
+    assert_eq!(queued_orchestrates(&ui).len(), 2);
+    let _ = pr;
+}
+
+#[test]
+fn unassigned_master_agents_show_none_and_work_agents_keep_their_detail_action() {
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    let idle = state
+        .create_agent(master, "spare", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    let builder = state
+        .create_agent(work, "builder", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    let mut ui = BusUi::new(Arc::new(BusSnapshot {
+        state,
+        revision: 0,
+        last_command_id: 0,
+        error: None,
+    }));
+    ui.open_room(master);
+    let rows = sidebar_rows(&mut ui);
+    assert!(
+        rows.iter().any(|row| row.starts_with("Codex → none")),
+        "{rows:?}"
+    );
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::Reassign(idle)));
+
+    ui.open_room(work);
+    let rows = sidebar_rows(&mut ui);
+    assert!(
+        rows.iter()
+            .any(|row| row.starts_with("Codex") && !row.contains('→')),
+        "{rows:?}"
+    );
+    assert!(!ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::Reassign(builder)));
+}
