@@ -17,3 +17,4 @@ pub(crate) mod settings;
 pub(crate) mod store;
 pub(crate) mod transport;
 pub(crate) mod trusted_assignment;
+mod usage;

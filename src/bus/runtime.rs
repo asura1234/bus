@@ -189,6 +189,8 @@ struct Worker {
     dev_enabled: bool,
     dev_receipts: BTreeMap<String, (super::control::Request, super::control::Response)>,
     dev_receipt_bytes: usize,
+    /// Provider allowance for dev `state`; in memory only, never persisted.
+    usage: super::usage::Usage,
 }
 
 impl Worker {
@@ -226,6 +228,7 @@ impl Worker {
             dev_enabled: false,
             dev_receipts: BTreeMap::new(),
             dev_receipt_bytes: 0,
+            usage: super::usage::Usage::default(),
         })
     }
 

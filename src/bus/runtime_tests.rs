@@ -1767,3 +1767,74 @@ fn compact_session_start_counts_one_compaction_per_hook() {
     assert_eq!(saved.agent(agent).unwrap().compactions, compactions);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn codex_final_refreshes_usage_from_its_rollout_and_state_reports_it() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker.dev_enabled = true;
+    let state = |worker: &mut Worker| {
+        worker
+            .dev_response_with_events(
+                &crate::bus::control::Request {
+                    id: format!("state-{}", io::now_ns()),
+                    method: "state".into(),
+                    params: json!({}),
+                },
+                None,
+            )
+            .result
+    };
+    assert_eq!(state(&mut worker)["usage"]["codex"]["status"], "unknown");
+    assert_eq!(state(&mut worker)["usage"]["claude"]["status"], "unknown");
+
+    let rollout = dir.join("rollout-2026-10-05T00-00-00-x.jsonl");
+    std::fs::write(
+        &rollout,
+        json!({"type":"event_msg","payload":{"type":"token_count","rate_limits":{
+            "primary":{"used_percent":12.0,"window_minutes":10080,"resets_at":1791788174},
+            "secondary":{"used_percent":55.5,"window_minutes":300,"resets_at":1791700000}}}})
+        .to_string(),
+    )
+    .unwrap();
+    queue(&mut worker, room, agent, "work");
+    worker.submit_ready().unwrap();
+    let transcript = rollout.display().to_string();
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"session","turn_id":"turn","prompt":"work","transcript_path":transcript}),
+    );
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"Stop","session_id":"session","turn_id":"turn","last_assistant_message":"done","transcript_path":transcript}),
+    );
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+
+    let usage = &state(&mut worker)["usage"]["codex"];
+    assert_eq!(usage["status"], "observed");
+    assert_eq!(usage["five_hour"]["used_percent"], 55.5);
+    assert_eq!(usage["weekly"]["used_percent"], 12.0);
+    assert_eq!(usage["weekly"]["resets_at"], 1791788174);
+    assert_eq!(usage["observed_by_agent"], json!(agent));
+    assert!(usage["read_at_ms"].as_u64().is_some());
+
+    // A later unreadable rollout keeps the last snapshot instead of erroring.
+    std::fs::remove_file(&rollout).unwrap();
+    record(
+        &dir,
+        Provider::Codex,
+        json!({"hook_event_name":"Stop","session_id":"session","turn_id":"turn2","last_assistant_message":"again","transcript_path":transcript}),
+    );
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    assert_eq!(
+        state(&mut worker)["usage"]["codex"]["weekly"]["used_percent"],
+        12.0
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

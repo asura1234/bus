@@ -59,6 +59,7 @@ impl Worker {
     }
 
     pub(super) fn consume_callbacks(&mut self, id: AgentId, dir: &Path) -> Result<(), String> {
+        let mut rollout = None;
         let mut records = callbacks::records(dir).map_err(|e| e.to_string())?;
         // Companion hooks can reach the spool in either order, including after reconnect.
         records.sort_by_key(|(_, r)| {
@@ -174,6 +175,11 @@ impl Worker {
                     // which provider session owns the terminal.
                     continue;
                 }
+            }
+            if agent.provider == Provider::Codex && matches!(parsed, Parsed::Final { .. }) {
+                rollout = crate::bus::usage::codex_rollout_path(&record.value)
+                    .map(Path::to_path_buf)
+                    .or(rollout);
             }
             let mut remove = vec![path.clone()];
             let callback = match parsed {
@@ -342,6 +348,34 @@ impl Worker {
             }
             crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
         }
+        if let Some(path) = rollout {
+            self.refresh_codex_usage(id, &path);
+        }
         Ok(())
+    }
+
+    /// Codex writes rate limits into its rollout after each turn. Usage is
+    /// advisory: a failed read keeps the previous snapshot and never errors.
+    fn refresh_codex_usage(&mut self, id: AgentId, path: &Path) {
+        match crate::bus::usage::read_codex_rollout(path) {
+            Ok(Some(windows)) => {
+                self.usage.codex = Some(crate::bus::usage::UsageSnapshot {
+                    windows,
+                    read_at_ms: crate::bus::io::now_ms(),
+                    observed_by_agent: id,
+                });
+            }
+            Ok(None) => tracing::debug!(
+                event = "bus.usage.unavailable",
+                agent_id = id.0,
+                "Codex rollout has no rate limits yet"
+            ),
+            Err(error) => tracing::debug!(
+                event = "bus.usage.unavailable",
+                agent_id = id.0,
+                %error,
+                "Codex rollout unreadable"
+            ),
+        }
     }
 }
