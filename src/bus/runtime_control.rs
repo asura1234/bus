@@ -66,6 +66,7 @@ impl Worker {
             "state" | "diagnostics" => (&[], false),
             "room.create" => (&["name"], true),
             "room.rename" => (&["room", "name"], true),
+            "room.notes" => (&["room", "text"], true),
             "room.delete" => (&["room", "confirm"], true),
             "room.focus" => (&["room"], true),
             "agent.add" => (
@@ -205,6 +206,10 @@ impl Worker {
             "room.rename" => self.dev_command(BusCommand::RenameRoom(
                 self.dev_room(required(p, "room")?)?,
                 required(p, "name")?.into(),
+            )),
+            "room.notes" => self.dev_command(BusCommand::SetNotes(
+                self.dev_room(required(p, "room")?)?,
+                optional_text(p, "text")?.ok_or("Missing text")?.into(),
             )),
             "room.delete" => {
                 self.dev_command(BusCommand::DeleteRoom(self.dev_room(required(p, "room")?)?))
