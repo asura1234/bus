@@ -9,6 +9,8 @@ __pycache__/
 .DS_Store
 
 /docs/*
+!/docs/how-to-bus-cli.md
+!/docs/orchestrator-guide.md
 !/docs/guides/
 !/docs/guides/**
 !/docs/next/
