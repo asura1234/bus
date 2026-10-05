@@ -24,6 +24,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   room notes ROOM --text TEXT
   room delete ROOM --confirm
   room focus ROOM
+  room seen ROOM
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks] [--orchestrates ROOM]
   agent orchestrate AGENT (--room ROOM | --none)
@@ -32,6 +33,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent permission AGENT
   agent approve-once AGENT --fingerprint FINGERPRINT --response allow-once
   agent focus AGENT
+  agent rename AGENT NAME
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
   send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...]
@@ -46,6 +48,7 @@ ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) 
 MASTER room. Only MASTER agents orchestrate, each at most one work room: use
 agent add --room master --orchestrates ROOM, or agent orchestrate to reassign or unassign.
 Use --to all explicitly for all room agents.
+room seen clears a room's unread count without changing the visible Bus view.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.
 Commands only connect to the existing instance in BUS_DATA_DIR; they never start or enable it.";
@@ -186,6 +189,7 @@ fn cli() -> Command {
                 .subcommand_required(true)
                 .subcommand(subcommand("create").arg(value_arg("name").required(true)))
                 .subcommand(subcommand("focus").arg(value_arg("room").required(true)))
+                .subcommand(subcommand("seen").arg(value_arg("room").required(true)))
                 .subcommand(
                     subcommand("rename")
                         .arg(value_arg("room").required(true))
@@ -248,6 +252,11 @@ fn cli() -> Command {
                         .arg(option("response").value_parser(["allow-once"])),
                 )
                 .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
+                .subcommand(
+                    subcommand("rename")
+                        .arg(value_arg("agent").required(true))
+                        .arg(value_arg("name").required(true)),
+                )
                 .subcommand(
                     subcommand("setup-confirm")
                         .arg(value_arg("agent").required(true))
@@ -318,6 +327,7 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         "diagnostics" => ("diagnostics", json!({})),
         "room" => match args.subcommand() {
             Some(("focus", args)) => ("room.focus", json!({"room": required(args, "room")?})),
+            Some(("seen", args)) => ("room.seen", json!({"room": required(args, "room")?})),
             Some(("create", args)) => ("room.create", json!({"name": required(args, "name")?})),
             Some(("rename", args)) => (
                 "room.rename",
@@ -338,6 +348,10 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         },
         "agent" => match args.subcommand() {
             Some(("focus", args)) => ("agent.focus", json!({"agent": required(args, "agent")?})),
+            Some(("rename", args)) => (
+                "agent.rename",
+                json!({"agent": required(args, "agent")?, "name": required(args, "name")?}),
+            ),
             Some(("add", args)) => {
                 let mut params = json!({
                     "room": required(args, "room")?, "name": required(args, "name")?,
@@ -623,6 +637,16 @@ mod tests {
                 &["agent", "orchestrate", "claude-orch", "--none"],
                 "agent.orchestrate",
                 json!({"agent": "claude-orch", "room": null}),
+            ),
+            (
+                &["room", "seen", "Planning"],
+                "room.seen",
+                json!({"room": "Planning"}),
+            ),
+            (
+                &["agent", "rename", "2", "Code Reviewer"],
+                "agent.rename",
+                json!({"agent": "2", "name": "Code Reviewer"}),
             ),
             (
                 &["agent", "setup-confirm", "2", "--confirm"],

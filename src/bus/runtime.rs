@@ -34,7 +34,7 @@ pub(crate) enum BusCommand {
     DeleteAgent(AgentId),
     SelectRoom(RoomId),
     LeaveRoom,
-    #[allow(dead_code)] // Optional worker API; the shell marks seen with SelectRoom.
+    /// Dev `room seen`; the shell marks rooms seen with SelectRoom.
     MarkRoomSeen(RoomId),
     SetNotes(RoomId, String),
     SetDraftText(RoomId, String),

@@ -69,6 +69,8 @@ impl Worker {
             "room.notes" => (&["room", "text"], true),
             "room.delete" => (&["room", "confirm"], true),
             "room.focus" => (&["room"], true),
+            "room.seen" => (&["room"], true),
+            "agent.rename" => (&["agent", "name"], true),
             "agent.add" => (
                 &[
                     "room",
@@ -199,7 +201,7 @@ impl Worker {
                 Ok(result)
             }
             "state" => Ok(
-                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>()}),
+                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>()}),
             ),
             "diagnostics" => Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"dev":true,"storage_failed":self.storage_failed,"coordinator_error":self.error,"data_dir":self.data_dir,"logs":self.data_dir.join("herdr-config/sessions/bus"),"callback_logs":self.data_dir.join("callbacks"),"agents":self.state.agents().map(|a|json!({"agent_id":a.id,"name":a.name,"status":a.status,"reason":crate::bus::diagnostics::wait_reason(a),"detail":a.actionable_error,"identity":a.runtime_identity,"current_request":a.current_request})).collect::<Vec<_>>()}),
@@ -212,6 +214,13 @@ impl Worker {
             "room.notes" => self.dev_command(BusCommand::SetNotes(
                 self.dev_room(required(p, "room")?)?,
                 optional_text(p, "text")?.ok_or("Missing text")?.into(),
+            )),
+            "room.seen" => self.dev_command(BusCommand::MarkRoomSeen(
+                self.dev_room(required(p, "room")?)?,
+            )),
+            "agent.rename" => self.dev_command(BusCommand::RenameAgent(
+                self.dev_agent(required(p, "agent")?, None)?,
+                required(p, "name")?.into(),
             )),
             "room.delete" => {
                 self.dev_command(BusCommand::DeleteRoom(self.dev_room(required(p, "room")?)?))

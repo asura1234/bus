@@ -1481,6 +1481,10 @@ impl BusState {
         Ok(())
     }
 
+    pub(crate) fn visible_room(&self) -> Option<RoomId> {
+        self.visible_room
+    }
+
     pub(crate) fn leave_room_view(&mut self) {
         self.visible_room = None;
     }

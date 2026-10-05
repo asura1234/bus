@@ -1254,3 +1254,49 @@ fn dev_agent_add_rejects_an_orchestrator_outside_master_before_launching() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dev_agent_rename_and_room_seen_match_tui_commands() {
+    let (mut worker, room, agent, dir) = fixture();
+    let renamed = call(
+        &mut worker,
+        "rename-1",
+        "agent.rename",
+        json!({"agent":"codex1","name":"Reviewer"}),
+    );
+    assert!(renamed.ok, "{renamed:?}");
+    assert_eq!(worker.state.agent(agent).unwrap().name, "Reviewer");
+    let blank = call(
+        &mut worker,
+        "rename-2",
+        "agent.rename",
+        json!({"agent":"Reviewer","name":"  "}),
+    );
+    assert_eq!(blank.error.unwrap().code, "command_failed");
+
+    // Replies arrive through the full callback path; inject the count directly.
+    let mut saved = serde_json::to_value(&worker.state).unwrap();
+    saved["rooms"][room.0.to_string()]["unread_count"] = json!(3);
+    worker.state = serde_json::from_value(saved).unwrap();
+    let state = call(&mut worker, "state-1", "state", json!({}));
+    let reported = state.result["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == json!(room))
+        .unwrap();
+    assert_eq!(reported["unread_count"], 3);
+    assert_eq!(state.result["visible_room"], serde_json::Value::Null);
+
+    let seen = call(&mut worker, "seen-1", "room.seen", json!({"room":"test"}));
+    assert!(seen.ok, "{seen:?}");
+    assert_eq!(worker.state.room(room).unwrap().unread_count, 0);
+    // Marking seen is not navigation: the human's view is unchanged.
+    assert_eq!(worker.state.visible_room(), None);
+
+    worker.state.select_room(room).unwrap();
+    let state = call(&mut worker, "state-2", "state", json!({}));
+    assert_eq!(state.result["visible_room"], json!(room));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
