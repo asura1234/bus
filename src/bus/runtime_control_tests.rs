@@ -1300,3 +1300,109 @@ fn dev_agent_rename_and_room_seen_match_tui_commands() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dev_send_as_records_agent_author_and_skips_it_for_all() {
+    let (mut worker, room, codex, dir) = fixture();
+    let claude = worker
+        .state
+        .create_agent(room, "claude1", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    let other_room = worker.state.create_room("other").unwrap();
+    worker
+        .state
+        .create_agent(other_room, "outsider", Provider::Codex, dir.clone(), None)
+        .unwrap();
+
+    let sent = call(
+        &mut worker,
+        "as-all",
+        "message.send",
+        json!({"room":"test","to":["all"],"text":"done","as":"codex1"}),
+    );
+    assert!(sent.ok, "{sent:?}");
+    let requests = worker.state.requests().collect::<Vec<_>>();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].agent_id, claude);
+    assert_eq!(requests[0].prompt.author, Author::Agent(codex));
+    let status = call(
+        &mut worker,
+        "as-history",
+        "room.history",
+        json!({"room":"test"}),
+    );
+    assert_eq!(
+        status.result["messages"][0]["prompt"]["author"],
+        json!({"agent": codex})
+    );
+
+    let human = call(
+        &mut worker,
+        "as-default",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"hi"}),
+    );
+    assert!(human.ok, "{human:?}");
+    let message = PromptId(human.result["message_id"].as_u64().unwrap());
+    assert!(worker
+        .state
+        .requests()
+        .filter(|r| r.prompt.id == message)
+        .all(|r| r.prompt.author == Author::Human));
+
+    for (id, to, author, expected) in [
+        (
+            "as-self",
+            json!(["codex1"]),
+            "codex1",
+            "cannot send a message to itself",
+        ),
+        (
+            "as-self-mixed",
+            json!(["claude1", "codex1"]),
+            "codex1",
+            "cannot send a message to itself",
+        ),
+        (
+            "as-outsider",
+            json!(["claude1"]),
+            "outsider",
+            "No matching room or agent",
+        ),
+    ] {
+        let failed = call(
+            &mut worker,
+            id,
+            "message.send",
+            json!({"room":"test","to":to,"text":"x","as":author}),
+        );
+        let message = failed.error.unwrap().message;
+        assert!(message.contains(expected), "{id}: {message}");
+    }
+
+    worker.state.prepare_delete_agent(codex).unwrap();
+    let deleting = call(
+        &mut worker,
+        "as-deleting",
+        "message.send",
+        json!({"room":"test","to":["claude1"],"text":"x","as":"codex1"}),
+    );
+    assert!(deleting.error.unwrap().message.contains("being deleted"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dev_send_as_the_only_room_agent_to_all_has_no_recipients() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let sent = call(
+        &mut worker,
+        "as-alone",
+        "message.send",
+        json!({"room":"test","to":["all"],"text":"x","as":"codex1"}),
+    );
+    assert!(!sent.ok, "{sent:?}");
+    assert_eq!(worker.state.requests().count(), 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -36,7 +36,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent rename AGENT NAME
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
-  send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...]
+  send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT]
   message status MESSAGE_ID
   request recover REQUEST_ID --confirm
   wait --message MESSAGE_ID [--timeout SECONDS]
@@ -48,6 +48,7 @@ ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) 
 MASTER room. Only MASTER agents orchestrate, each at most one work room: use
 agent add --room master --orchestrates ROOM, or agent orchestrate to reassign or unassign.
 Use --to all explicitly for all room agents.
+send --as records the message as written by that room agent; --to all then skips it.
 room seen clears a room's unread count without changing the visible Bus view.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.
@@ -273,7 +274,8 @@ fn cli() -> Command {
                 .arg(option("room"))
                 .arg(option("to"))
                 .arg(option("text"))
-                .arg(value_arg("file").long("file").action(ArgAction::Append)),
+                .arg(value_arg("file").long("file").action(ArgAction::Append))
+                .arg(value_arg("as").long("as")),
         )
         .subcommand(
             subcommand("message")
@@ -433,14 +435,16 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
                     "--to requires a nonempty selector in every comma-separated entry".into(),
                 );
             }
-            (
-                "message.send",
-                json!({
-                    "room": required(args, "room")?, "to": recipients,
-                    "text": required(args, "text")?,
-                    "files": args.get_many::<String>("file").map(|values| values.cloned().collect::<Vec<_>>()).unwrap_or_default(),
-                }),
-            )
+            let mut params = json!({
+                "room": required(args, "room")?, "to": recipients,
+                "text": required(args, "text")?,
+                "files": args.get_many::<String>("file").map(|values| values.cloned().collect::<Vec<_>>()).unwrap_or_default(),
+            });
+            // Omitted rather than defaulted so Human sends keep their request shape.
+            if args.contains_id("as") {
+                params["as"] = json!(required(args, "as")?);
+            }
+            ("message.send", params)
         }
         "message" => match args.subcommand() {
             Some(("status", args)) => (
@@ -647,6 +651,13 @@ mod tests {
                 &["agent", "rename", "2", "Code Reviewer"],
                 "agent.rename",
                 json!({"agent": "2", "name": "Code Reviewer"}),
+            ),
+            (
+                &[
+                    "send", "--room", "7", "--to", "all", "--text", "hi", "--as", "codex1",
+                ],
+                "message.send",
+                json!({"room": "7", "to": ["all"], "text": "hi", "files": [], "as": "codex1"}),
             ),
             (
                 &["agent", "setup-confirm", "2", "--confirm"],

@@ -1007,15 +1007,6 @@ impl BusState {
     }
 
     /// Queue an automation prompt without changing the room's human-owned draft.
-    pub(crate) fn submit_message(
-        &mut self,
-        room: RoomId,
-        draft: Draft,
-        now_ms: u64,
-    ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_message_from(room, draft, Author::Human, now_ms)
-    }
-
     pub(crate) fn submit_message_from(
         &mut self,
         room: RoomId,

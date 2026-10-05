@@ -89,7 +89,7 @@ impl Worker {
             "agent.permission.observe" => (&["agent"], false),
             "agent.permission.approve_once" => (&["agent", "fingerprint", "response"], true),
             "agent.focus" => (&["agent"], true),
-            "message.send" => (&["room", "to", "text", "files"], true),
+            "message.send" => (&["room", "to", "text", "files", "as"], true),
             "message.status" => (&["message"], false),
             "request.recover" => (&["request", "confirm"], true),
             "room.history" => (&["room"], false),
@@ -380,6 +380,21 @@ impl Worker {
 
     fn dev_send(&mut self, p: &Value) -> Result<Value, String> {
         let room = self.dev_room(required(p, "room")?)?;
+        let author = match p.get("as") {
+            None => None,
+            Some(selector) => {
+                let id = self.dev_agent(
+                    selector
+                        .as_str()
+                        .ok_or("Author must be an agent name or ID")?,
+                    Some(room),
+                )?;
+                if self.state.agent(id).is_some_and(|a| a.deletion_pending) {
+                    return Err("Author agent is being deleted".into());
+                }
+                Some(id)
+            }
+        };
         let selected = p
             .get("to")
             .and_then(Value::as_array)
@@ -388,17 +403,22 @@ impl Worker {
             .iter()
             .map(|v| v.as_str().ok_or("Recipient must be a name or ID"))
             .collect::<Result<Vec<_>, _>>()?;
-        let recipients = if selectors == ["all"] {
+        let recipients: AgentRecipients = if selectors == ["all"] {
+            // An agent's broadcast goes to everyone else in the room.
             self.state
                 .agents()
-                .filter(|a| a.room_id == room)
+                .filter(|a| a.room_id == room && Some(a.id) != author)
                 .map(|a| a.id)
                 .collect()
         } else {
-            selectors
+            let recipients = selectors
                 .into_iter()
                 .map(|s| self.dev_agent(s, Some(room)))
-                .collect::<Result<AgentRecipients, _>>()?
+                .collect::<Result<AgentRecipients, _>>()?;
+            if author.is_some_and(|author| recipients.contains(&author)) {
+                return Err("An agent cannot send a message to itself".into());
+            }
+            recipients
         };
         let mut files = Vec::new();
         if let Some(value) = p.get("files") {
@@ -416,13 +436,14 @@ impl Worker {
         }
         let mut state = self.state.clone();
         let ids = state
-            .submit_message(
+            .submit_message_from(
                 room,
                 Draft {
                     text: optional_text(p, "text")?.unwrap_or_default().into(),
                     files,
                     recipient_ids: recipients,
                 },
+                author.map_or(Author::Human, Author::Agent),
                 crate::bus::io::now_ms(),
             )
             .map_err(|e| e.to_string())?;
