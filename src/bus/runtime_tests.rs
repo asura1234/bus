@@ -1838,3 +1838,154 @@ fn codex_final_refreshes_usage_from_its_rollout_and_state_reports_it() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn open_saved_document(document: serde_json::Value) -> (Worker, PathBuf) {
+    let dir = std::env::temp_dir().join(format!(
+        "bus-worker-saved-{}-{}-{}",
+        std::process::id(),
+        io::now_ns(),
+        NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("state.json"),
+        serde_json::to_vec_pretty(&document).unwrap(),
+    )
+    .unwrap();
+    let worker = reopen_saved(&dir);
+    (worker, dir)
+}
+
+fn reopen_saved(dir: &std::path::Path) -> Worker {
+    Worker::open(
+        dir.to_path_buf(),
+        Box::new(FakeTransport {
+            replies: VecDeque::new(),
+            calls: Arc::new(Mutex::new(Vec::new())),
+            state_path: dir.join("state.json"),
+        }),
+    )
+    .unwrap()
+}
+
+fn orchestrator_era_document() -> serde_json::Value {
+    serde_json::from_str(include_str!("testdata/legacy_orchestrator_state.json")).unwrap()
+}
+
+#[test]
+fn orchestrator_era_session_opens_with_master_and_reopens_unchanged() {
+    let (worker, dir) = open_saved_document(orchestrator_era_document());
+    let master = worker.state.master_room().expect("MASTER added").id;
+    let legacy = worker
+        .state
+        .rooms()
+        .find(|room| room.name == "legacy")
+        .expect("legacy room kept");
+    assert_eq!(legacy.kind, RoomKind::Work);
+    assert!(!legacy.sound_enabled());
+    assert!(worker.state.room(master).unwrap().sound_enabled());
+    assert_eq!(worker.state.requests().count(), 3);
+    // Every open re-observes agents as unavailable (bumping status revisions);
+    // everything else must survive a second open unchanged.
+    let durable = |state: &BusState| {
+        (
+            state.rooms().cloned().collect::<Vec<_>>(),
+            state.requests().cloned().collect::<Vec<_>>(),
+            state
+                .agents()
+                .map(|agent| {
+                    (
+                        agent.id,
+                        agent.room_id,
+                        agent.name.clone(),
+                        agent.orchestrates,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+    let first = durable(&worker.state);
+    drop(worker);
+
+    let reopened = reopen_saved(&dir);
+    assert_eq!(durable(&reopened.state), first);
+    drop(reopened);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn orchestrator_era_work_room_named_master_keeps_its_data_beside_the_new_master() {
+    let mut document = orchestrator_era_document();
+    document["state"]["rooms"]["1"]["name"] = json!("MASTER");
+    document["state"]["rooms"]["1"]["notes"] = json!("legacy notes");
+    let (mut worker, dir) = open_saved_document(document);
+    let master = worker.state.master_room().expect("MASTER added").id;
+    assert_ne!(master, RoomId(1));
+    let legacy = worker.state.room(RoomId(1)).expect("legacy room kept");
+    assert_eq!(legacy.kind, RoomKind::Work);
+    // Renamed once so MASTER keeps a unique name; everything else is kept.
+    assert_eq!(legacy.name, "Master (old)");
+    assert_eq!(legacy.notes, "legacy notes");
+    // The name selector reaches the real MASTER; the legacy room stays reachable by id.
+    worker.dev_enabled = true;
+    let sound = |worker: &mut Worker, room: &str, on: bool| {
+        worker
+            .dev_response_with_events(
+                &crate::bus::control::Request {
+                    id: format!("sound-{room}-{on}-{}", io::now_ns()),
+                    method: "room.sound".into(),
+                    params: json!({"room": room, "on": on}),
+                },
+                None,
+            )
+            .ok
+    };
+    assert!(sound(&mut worker, "MASTER", false));
+    assert_eq!(worker.state.room(master).unwrap().sound, Some(false));
+    assert_eq!(worker.state.room(RoomId(1)).unwrap().sound, None);
+    assert!(sound(&mut worker, "1", true));
+    assert_eq!(worker.state.room(RoomId(1)).unwrap().sound, Some(true));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn master_session_saved_before_sound_and_compactions_keeps_its_orchestrators() {
+    let mut state = BusState::new();
+    let master = state.ensure_master_room();
+    let work = state.create_room("pr-1").unwrap();
+    let orchestrator = state
+        .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
+        .unwrap();
+    state
+        .set_agent_orchestrates(orchestrator, Some(work))
+        .unwrap();
+    let mut value = serde_json::to_value(&state).unwrap();
+    for room in value["rooms"].as_object_mut().unwrap().values_mut() {
+        room.as_object_mut().unwrap().remove("sound");
+    }
+    for agent in value["agents"].as_object_mut().unwrap().values_mut() {
+        agent.as_object_mut().unwrap().remove("compactions");
+    }
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("consumed_permission_fingerprints");
+    let (worker, dir) = open_saved_document(json!({"version": 1, "state": value}));
+    assert_eq!(worker.state.master_room().map(|room| room.id), Some(master));
+    assert_eq!(
+        worker
+            .state
+            .rooms()
+            .filter(|room| room.kind == RoomKind::Master)
+            .count(),
+        1
+    );
+    assert!(worker.state.room(master).unwrap().sound_enabled());
+    assert!(!worker.state.room(work).unwrap().sound_enabled());
+    let agent = worker.state.agent(orchestrator).unwrap();
+    assert_eq!(agent.orchestrates, Some(work));
+    assert_eq!(agent.compactions.count, 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

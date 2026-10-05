@@ -1627,3 +1627,119 @@ fn dev_visible_read_works_while_launching_but_keeps_terminal_identity_checks() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn opening_a_session_with_a_legacy_work_room_named_master_keeps_the_name_unique() {
+    let dir = std::env::temp_dir().join(format!(
+        "bus-control-legacy-master-{}-{}-{}",
+        std::process::id(),
+        super::super::super::io::now_ns(),
+        NEXT_FIXTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    super::super::super::io::private_dir(&dir).unwrap();
+    // Before MASTER existed, any room name was accepted.
+    let mut legacy = BusState::default();
+    let room = legacy.create_room("plans").unwrap();
+    let mut saved = serde_json::to_value(&legacy).unwrap();
+    saved["rooms"][room.0.to_string()]["name"] = json!("Master");
+    let legacy: BusState = serde_json::from_value(saved).unwrap();
+    JsonStore::new(dir.join("state.json"))
+        .save(&legacy)
+        .unwrap();
+
+    let mut worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
+    worker.dev_enabled = true;
+    let named_master = worker
+        .state
+        .rooms()
+        .filter(|r| r.name.eq_ignore_ascii_case(MASTER_ROOM_NAME))
+        .count();
+    assert_eq!(
+        named_master,
+        1,
+        "only the MASTER room may carry its name: {:?}",
+        worker
+            .state
+            .rooms()
+            .map(|r| (&r.name, r.kind))
+            .collect::<Vec<_>>()
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn deleting_an_orchestrated_room_frees_the_orchestrator_for_another_room() {
+    let (mut worker, room, _codex, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    let next = worker.state.create_room("next").unwrap();
+    let orchestrator = worker
+        .state
+        .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    worker
+        .state
+        .set_agent_orchestrates(orchestrator, Some(room))
+        .unwrap();
+    worker.state.delete_room(room).unwrap();
+    assert_eq!(worker.state.agent(orchestrator).unwrap().orchestrates, None);
+    assert_eq!(worker.state.agent(orchestrator).unwrap().room_id, master);
+    let assigned = call(
+        &mut worker,
+        "orch-after-delete",
+        "agent.orchestrate",
+        json!({"agent":"orch","room":"next"}),
+    );
+    assert!(assigned.ok, "{assigned:?}");
+    assert_eq!(
+        worker.state.orchestrator_of(next).map(|a| a.id),
+        Some(orchestrator)
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn saved_work_room_named_master_keeps_its_notes_when_addressed_by_name() {
+    let dir = std::env::temp_dir().join(format!(
+        "bus-control-named-master-{}-{}-{}",
+        std::process::id(),
+        super::super::super::io::now_ns(),
+        NEXT_FIXTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    super::super::super::io::private_dir(&dir).unwrap();
+    let mut legacy = BusState::default();
+    let room = legacy.create_room("plans").unwrap();
+    legacy.set_room_notes(room, "keep-notes").unwrap();
+    legacy.set_draft_text(room, "keep-draft").unwrap();
+    let mut saved = serde_json::to_value(&legacy).unwrap();
+    saved["rooms"][room.0.to_string()]["name"] = json!("Master");
+    saved["rooms"][room.0.to_string()]["unread_count"] = json!(4);
+    let legacy: BusState = serde_json::from_value(saved).unwrap();
+    JsonStore::new(dir.join("state.json"))
+        .save(&legacy)
+        .unwrap();
+
+    let mut worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
+    worker.dev_enabled = true;
+    assert_eq!(worker.state.room(room).unwrap().notes, "keep-notes");
+    assert_eq!(worker.state.room(room).unwrap().draft.text, "keep-draft");
+    assert_eq!(worker.state.room(room).unwrap().unread_count, 4);
+    assert_eq!(worker.state.room(room).unwrap().kind, RoomKind::Work);
+    assert_eq!(
+        worker
+            .state
+            .rooms()
+            .filter(|r| r.name.eq_ignore_ascii_case(MASTER_ROOM_NAME))
+            .count(),
+        1,
+        "a saved work room named Master must not share that name with MASTER: {:?}",
+        worker
+            .state
+            .rooms()
+            .map(|r| (&r.name, r.kind))
+            .collect::<Vec<_>>()
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

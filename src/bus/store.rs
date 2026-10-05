@@ -406,4 +406,55 @@ mod tests {
         assert_eq!(store.load().expect("reload").expect("state"), state);
         fs::remove_dir_all(dir).expect("cleanup");
     }
+
+    #[test]
+    fn saved_sound_orchestrator_compactions_notes_and_draft_reload() {
+        use crate::bus::model::RoomKind;
+
+        let dir = temp_dir("compat-fields");
+        let store = JsonStore::new(dir.join("state.json"));
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").expect("room");
+        state.set_room_notes(work, "keep-notes").expect("notes");
+        state.set_draft_text(work, "keep-draft").expect("draft");
+        state.set_room_sound(master, false).expect("master sound");
+        state.set_room_sound(work, true).expect("work sound");
+        let agent = state
+            .create_agent(
+                master,
+                "orch",
+                Provider::ClaudeCode,
+                PathBuf::from("/repo"),
+                None,
+            )
+            .expect("agent");
+        state
+            .set_agent_orchestrates(agent, Some(work))
+            .expect("assign");
+        state.record_compaction(agent, 50).expect("compaction");
+        store.save(&state).expect("save");
+
+        let mut loaded = store.load().expect("load").expect("state");
+        assert_eq!(loaded.room(work).expect("work").notes, "keep-notes");
+        assert_eq!(loaded.room(work).expect("work").draft.text, "keep-draft");
+        assert!(!loaded.room(master).expect("master").sound_enabled());
+        assert!(loaded.room(work).expect("work").sound_enabled());
+        assert_eq!(loaded.agent(agent).expect("agent").orchestrates, Some(work));
+        assert_eq!(loaded.agent(agent).expect("agent").compactions.count, 1);
+        assert_eq!(
+            loaded.agent(agent).expect("agent").compactions.last_at_ms,
+            Some(50)
+        );
+        loaded.ensure_master_room();
+        assert_eq!(loaded.agent(agent).expect("agent").orchestrates, Some(work));
+        assert_eq!(
+            loaded
+                .rooms()
+                .filter(|room| room.kind == RoomKind::Master)
+                .count(),
+            1
+        );
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
 }

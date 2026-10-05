@@ -600,6 +600,27 @@ impl BusState {
     /// Gives a session its MASTER room if it lacks one, and drops orchestrator
     /// assignments that no longer satisfy the MASTER invariants.
     pub(crate) fn ensure_master_room(&mut self) -> RoomId {
+        // Sessions saved before MASTER accepted any name; keep its name unique.
+        let clashing: Vec<_> = self
+            .rooms
+            .values()
+            .filter(|room| {
+                room.kind == RoomKind::Work && room.name.eq_ignore_ascii_case(MASTER_ROOM_NAME)
+            })
+            .map(|room| room.id)
+            .collect();
+        for id in clashing {
+            let name = (1..)
+                .map(|n| match n {
+                    1 => "Master (old)".to_owned(),
+                    n => format!("Master (old {n})"),
+                })
+                .find(|name| self.rooms.values().all(|room| &room.name != name))
+                .expect("an unused name exists");
+            if let Some(room) = self.rooms.get_mut(&id) {
+                room.name = name;
+            }
+        }
         let master = match self.master_room() {
             Some(room) => room.id,
             None => {
