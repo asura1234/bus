@@ -220,7 +220,7 @@ fn cli() -> Command {
                 .subcommand(
                     subcommand("delete")
                         .arg(value_arg("room").required(true))
-                        .arg(flag("confirm").required(true)),
+                        .arg(flag("confirm")),
                 ),
         )
         .subcommand(
@@ -272,12 +272,12 @@ fn cli() -> Command {
                 .subcommand(
                     subcommand("setup-confirm")
                         .arg(value_arg("agent").required(true))
-                        .arg(flag("confirm").required(true)),
+                        .arg(flag("confirm")),
                 )
                 .subcommand(
                     subcommand("delete")
                         .arg(value_arg("agent").required(true))
-                        .arg(flag("confirm").required(true)),
+                        .arg(flag("confirm")),
                 ),
         )
         .subcommand(
@@ -297,7 +297,7 @@ fn cli() -> Command {
             subcommand("request").subcommand_required(true).subcommand(
                 subcommand("recover")
                     .arg(value_arg("request").required(true))
-                    .arg(flag("confirm").required(true)),
+                    .arg(flag("confirm")),
             ),
         )
         .subcommand(
@@ -317,6 +317,15 @@ fn required<'a>(matches: &'a ArgMatches, name: &str) -> Result<&'a str, String> 
         .map(String::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| format!("missing required argument: {name}"))
+}
+
+/// Destructive commands name the missing flag instead of clap's generic error.
+fn confirmed(args: &ArgMatches) -> Result<bool, String> {
+    if args.get_flag("confirm") {
+        Ok(true)
+    } else {
+        Err("This command changes or removes work; add --confirm to proceed".into())
+    }
 }
 
 fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
@@ -366,7 +375,7 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             ),
             Some(("delete", args)) => (
                 "room.delete",
-                json!({"room": required(args, "room")?, "confirm": args.get_flag("confirm")}),
+                json!({"room": required(args, "room")?, "confirm": confirmed(args)?}),
             ),
             _ => return Err("unknown room command".into()),
         },
@@ -439,11 +448,11 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             ),
             Some(("setup-confirm", args)) => (
                 "agent.setup-confirm",
-                json!({"agent": required(args, "agent")?, "confirm": args.get_flag("confirm")}),
+                json!({"agent": required(args, "agent")?, "confirm": confirmed(args)?}),
             ),
             Some(("delete", args)) => (
                 "agent.delete",
-                json!({"agent": required(args, "agent")?, "confirm": args.get_flag("confirm")}),
+                json!({"agent": required(args, "agent")?, "confirm": confirmed(args)?}),
             ),
             _ => return Err("unknown agent command".into()),
         },
@@ -478,7 +487,7 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         "request" => match args.subcommand() {
             Some(("recover", args)) => (
                 "request.recover",
-                json!({"request": required(args, "request")?, "confirm": args.get_flag("confirm")}),
+                json!({"request": required(args, "request")?, "confirm": confirmed(args)?}),
             ),
             _ => return Err("unknown request command".into()),
         },
@@ -577,6 +586,19 @@ mod tests {
         }
         assert!(HELP.contains("agent orchestrate AGENT (--room ROOM | --none)"));
         assert!(HELP.contains("[--orchestrates ROOM]"));
+    }
+
+    #[test]
+    fn destructive_commands_without_confirm_name_the_flag() {
+        for args in [
+            &["room", "delete", "planning"][..],
+            &["agent", "delete", "2"],
+            &["agent", "setup-confirm", "2"],
+            &["request", "recover", "64"],
+        ] {
+            let error = command(args).unwrap_err();
+            assert!(error.contains("--confirm"), "{args:?}: {error}");
+        }
     }
 
     #[test]
