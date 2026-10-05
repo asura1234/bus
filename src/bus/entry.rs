@@ -136,6 +136,11 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             "BUS_DATA_DIR must be an absolute directory",
         ));
     }
+    if matches!(invocation.action, Action::Run) {
+        // Herdr's session setup would otherwise create a missing explicit root
+        // with default permissions, which Bus's private control socket rejects.
+        super::io::private_dir(&root)?;
+    }
     std::env::set_var("BUS_DATA_DIR", &root);
     match &local_session_id {
         Some(id) => std::env::set_var("BUS_SESSION_ID", id),
