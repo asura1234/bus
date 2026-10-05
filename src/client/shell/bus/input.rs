@@ -1237,9 +1237,17 @@ impl BusUi {
                     self.open_room(room);
                 }
             }
-            Form::Consent { mut input, .. } => {
+            Form::Consent {
+                mut input,
+                orchestrates,
+                ..
+            } => {
                 input.consent_project_hooks = true;
-                self.queue(BusCommand::AddAgent(input), Effect::None);
+                let command = match orchestrates {
+                    Some(room) => BusCommand::AddOrchestrator(input, room),
+                    None => BusCommand::AddAgent(input),
+                };
+                self.queue(command, Effect::None);
             }
         }
     }

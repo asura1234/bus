@@ -145,7 +145,8 @@ fn dev_room_notes_replace_and_clear_the_room_notes() {
     assert!(set.ok, "{set:?}");
     assert_eq!(worker.state.room(room).unwrap().notes, "Goal\nNon-goals");
     let state = call(&mut worker, "state-1", "state", json!({}));
-    assert_eq!(state.result["rooms"][0]["notes"], "Goal\nNon-goals");
+    // MASTER is listed first; the fixture room follows.
+    assert_eq!(state.result["rooms"][1]["notes"], "Goal\nNon-goals");
     let cleared = call(
         &mut worker,
         "notes-2",

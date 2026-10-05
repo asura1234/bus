@@ -47,6 +47,8 @@ pub(crate) enum BusCommand {
     Submit(RoomId),
     SetDetails(AgentId, bool),
     AddAgent(AddAgent),
+    /// Adds a MASTER agent that orchestrates the given work room.
+    AddOrchestrator(AddAgent, RoomId),
     FocusTerminal(AgentId),
     CompleteHookSetup(AgentId),
     Suggestions {
@@ -82,6 +84,7 @@ pub(crate) enum BusEvent {
     },
     SetupRequired {
         input: AddAgent,
+        orchestrates: Option<RoomId>,
         notice: launch::SetupNotice,
     },
     /// A deletion finished, but these terminals were no longer Bus-owned and were left open.
@@ -195,6 +198,8 @@ impl Worker {
         })?;
         let store = JsonStore::new(data_dir.join("state.json"));
         let mut state = store.load().map_err(|e| e.to_string())?.unwrap_or_default();
+        // Sessions saved before MASTER existed gain it here, once, before any client sees them.
+        state.ensure_master_room();
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.

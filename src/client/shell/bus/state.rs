@@ -155,7 +155,13 @@ pub(super) struct HistorySearch {
 
 impl BusUi {
     pub fn new(snapshot: Arc<BusSnapshot>) -> Self {
-        let room = snapshot.state.rooms().next().map(|r| r.id);
+        // Land in the first work room; MASTER is the fallback, not the default.
+        let room = snapshot
+            .state
+            .rooms()
+            .find(|r| r.kind == RoomKind::Work)
+            .or_else(|| snapshot.state.rooms().next())
+            .map(|r| r.id);
         let locals = snapshot
             .state
             .rooms()
@@ -389,10 +395,18 @@ impl BusUi {
                     Err(error) => self.error = Some(error),
                 }
             }
-            BusEvent::SetupRequired { input, notice } => {
+            BusEvent::SetupRequired {
+                input,
+                orchestrates,
+                notice,
+            } => {
                 self.suggestions.entries.clear();
                 self.suggestions.query_id += 1;
-                self.form = Some(Form::Consent { input, notice });
+                self.form = Some(Form::Consent {
+                    input,
+                    orchestrates,
+                    notice,
+                });
             }
             _ => {}
         }

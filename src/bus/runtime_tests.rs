@@ -840,7 +840,16 @@ fn delete_last_room_stays_empty_after_restart_and_ignores_late_callbacks() {
     };
     let mut recovered = Worker::open(dir.clone(), Box::new(fake)).unwrap();
     recovered.tick().unwrap();
-    assert_eq!(recovered.state.rooms().count(), 0);
+    // Only the undeletable MASTER room remains.
+    assert_eq!(
+        recovered
+            .state
+            .rooms()
+            .map(|room| room.kind)
+            .collect::<Vec<_>>(),
+        [RoomKind::Master]
+    );
+    assert!(!recovered.state.has_work());
     assert_eq!(recovered.state.agents().count(), 0);
     assert_eq!(recovered.state.requests().count(), 0);
     assert!(!recovered.state.is_pristine());
@@ -1679,5 +1688,43 @@ fn claude_background_pending_reply_stays_active_until_its_trusted_continuation_s
         .is_empty());
 
     drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn worker_open_gives_every_session_exactly_one_master_room() {
+    let (worker, _agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let master = worker
+        .state
+        .master_room()
+        .expect("new session has MASTER")
+        .id;
+    assert_ne!(master, room);
+    let saved = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.master_room().map(|room| room.id), Some(master));
+    drop(worker);
+
+    let reopened = Worker::open(
+        dir.clone(),
+        Box::new(FakeTransport {
+            replies: VecDeque::new(),
+            calls,
+            state_path: dir.join("state.json"),
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        reopened
+            .state
+            .rooms()
+            .filter(|room| room.kind == RoomKind::Master)
+            .map(|room| room.id)
+            .collect::<Vec<_>>(),
+        [master]
+    );
+    drop(reopened);
     std::fs::remove_dir_all(dir).unwrap();
 }

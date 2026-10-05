@@ -111,13 +111,17 @@ impl LocalSessionRegistry {
             let Ok(Some(state)) = self.read_state(&session) else {
                 continue;
             };
-            let room_names = state
-                .rooms()
-                .map(|room| room.name.clone())
-                .collect::<Vec<_>>();
-            if room_names.is_empty() {
+            if !state.has_work() {
                 continue;
             }
+            let room_names = state
+                .rooms()
+                .filter(|room| {
+                    room.kind == super::model::RoomKind::Work
+                        || state.agents().any(|agent| agent.room_id == room.id)
+                })
+                .map(|room| room.name.clone())
+                .collect::<Vec<_>>();
             let metadata = self.load_metadata(&id)?;
             let last_activity_ms = std::fs::metadata(session.root.join("state.json"))
                 .and_then(|metadata| metadata.modified())
@@ -145,7 +149,7 @@ impl LocalSessionRegistry {
         let session = self.load(id)?;
         Ok(self
             .read_state(&session)?
-            .is_none_or(|state| state.rooms().next().is_none()))
+            .is_none_or(|state| !state.has_work()))
     }
 
     pub(crate) fn discard_if_empty(&self, id: &str) -> Result<bool, String> {
@@ -158,7 +162,7 @@ impl LocalSessionRegistry {
         let session = self.load(id)?;
         if self
             .read_state(&session)?
-            .is_some_and(|state| state.rooms().next().is_some())
+            .is_some_and(|state| state.has_work())
         {
             return Ok(false);
         }

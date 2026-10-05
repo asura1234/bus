@@ -88,7 +88,10 @@ impl Worker {
                 });
                 return Ok(());
             }
-            BusCommand::AddAgent(input) => return self.add_agent(input, events),
+            BusCommand::AddAgent(input) => return self.add_agent(input, None, events),
+            BusCommand::AddOrchestrator(input, room) => {
+                return self.add_agent(input, Some(room), events)
+            }
             BusCommand::FocusTerminal(id) => {
                 let agent = state.agent(id).ok_or("Unknown agent")?;
                 let target = agent
@@ -264,19 +267,30 @@ impl Worker {
     fn add_agent(
         &mut self,
         input: AddAgent,
+        orchestrates: Option<RoomId>,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let cwd = launch::canonical_directory(&input.cwd)?;
+        let mut state = self.state.clone();
+        let id = state
+            .create_agent(input.room, &input.name, input.provider, cwd.clone(), None)
+            .map_err(|e| e.to_string())?;
+        // Validate the assignment before any consent prompt or launch side effect.
+        if orchestrates.is_some() {
+            state
+                .set_agent_orchestrates(id, orchestrates)
+                .map_err(|e| e.to_string())?;
+        }
         if !input.consent_project_hooks {
             if let Some(notice) = launch::setup_notice(input.provider, &cwd) {
-                let _ = events.send(BusEvent::SetupRequired { input, notice });
+                let _ = events.send(BusEvent::SetupRequired {
+                    input,
+                    orchestrates,
+                    notice,
+                });
                 return Ok(());
             }
         }
-        let mut state = self.state.clone();
-        let id = state
-            .create_agent(input.room, &input.name, input.provider, cwd, None)
-            .map_err(|e| e.to_string())?;
         let prepared = launch::prepare(
             &input,
             id,

@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn state_saved_with_the_retired_orchestrator_still_loads() {
         use crate::bus::model::Author;
-        use crate::bus::model::{PromptId, RequestId};
+        use crate::bus::model::{PromptId, RequestId, RoomKind};
 
         // Written by the orchestrator-era build: orchestrator journal, grants and drafts,
         // a locked room brief, work ids, a trusted assignment frame, and every author shape
@@ -378,6 +378,23 @@ mod tests {
             state.next_queued_request(crate::bus::model::AgentId(2)),
             Some(RequestId(4))
         );
+
+        // The session predates MASTER: opening it adds exactly one, renumbering nothing.
+        let mut state = state;
+        let rooms_before = state.rooms().map(|room| room.id).collect::<Vec<_>>();
+        let master = state.ensure_master_room();
+        assert_eq!(state.ensure_master_room(), master);
+        assert_eq!(
+            state
+                .rooms()
+                .filter(|room| room.kind == RoomKind::Master)
+                .count(),
+            1
+        );
+        assert!(!rooms_before.contains(&master));
+        assert!(state
+            .agents()
+            .all(|agent| agent.orchestrates.is_none() && agent.room_id != master));
 
         store.save(&state).expect("save");
         assert_eq!(store.load().expect("reload").expect("state"), state);

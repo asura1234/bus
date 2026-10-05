@@ -36,7 +36,8 @@ impl super::ClientShellState {
         }
         if let Some(room) = bus.room {
             bus.open_room(room);
-        } else if bus.seed_first_room {
+        }
+        if bus.seed_first_room {
             bus.queue(
                 crate::bus::runtime::BusCommand::CreateRoom("bus".into()),
                 Effect::None,

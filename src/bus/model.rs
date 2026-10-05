@@ -235,7 +235,24 @@ pub(crate) struct Room {
     pub(crate) latest_replies: BTreeMap<AgentId, Reply>,
     #[serde(default)]
     pub(crate) deletion_pending: bool,
+    #[serde(default)]
+    pub(crate) kind: RoomKind,
 }
+
+/// A session's rooms are units of work plus exactly one MASTER room, where the
+/// orchestrator agents of those rooms live and talk to the Human.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RoomKind {
+    #[default]
+    Work,
+    Master,
+}
+
+pub(crate) const MASTER_ROOM_NAME: &str = "MASTER";
+/// Never produced by the ID allocator, which starts at 1, so adding MASTER to a
+/// saved session neither collides with nor renumbers anything.
+const MASTER_ROOM_ID: RoomId = RoomId(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Agent {
@@ -262,6 +279,9 @@ pub(crate) struct Agent {
     pub(crate) session_binding_invalidated: bool,
     #[serde(default)]
     pub(crate) deletion_pending: bool,
+    /// Set only on MASTER agents: the work room this agent orchestrates.
+    #[serde(default)]
+    pub(crate) orchestrates: Option<RoomId>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -397,11 +417,40 @@ pub(crate) enum ModelError {
     LaunchIdentityMismatch,
     DeletionPending,
     AgentNotIdle,
+    MasterRoomFixed,
+    ReservedRoomName,
+    OrchestratorOutsideMaster(AgentId),
+    NotOrchestratable(RoomId),
+    RoomAlreadyOrchestrated { room: RoomId, agent: AgentId },
 }
 
 impl std::fmt::Display for ModelError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "Bus model operation failed: {self:?}")
+        match self {
+            Self::MasterRoomFixed => {
+                write!(formatter, "The MASTER room cannot be renamed or deleted")
+            }
+            Self::ReservedRoomName => write!(
+                formatter,
+                "The name {MASTER_ROOM_NAME} is reserved for the master room"
+            ),
+            Self::OrchestratorOutsideMaster(agent) => write!(
+                formatter,
+                "Agent {} is not in the MASTER room; only MASTER agents orchestrate rooms",
+                agent.0
+            ),
+            Self::NotOrchestratable(room) => write!(
+                formatter,
+                "Room {} cannot be orchestrated; choose an existing work room",
+                room.0
+            ),
+            Self::RoomAlreadyOrchestrated { room, agent } => write!(
+                formatter,
+                "Room {} is already orchestrated by agent {}; unassign it first",
+                room.0, agent.0
+            ),
+            _ => write!(formatter, "Bus model operation failed: {self:?}"),
+        }
     }
 }
 
@@ -505,7 +554,7 @@ impl BusState {
     }
 
     pub(crate) fn create_room(&mut self, name: &str) -> Result<RoomId, ModelError> {
-        let name = normalized_name(name)?;
+        let name = work_room_name(name)?;
         let id = RoomId(self.allocate_id());
         self.rooms.insert(
             id,
@@ -518,17 +567,113 @@ impl BusState {
                 latest_prompt: None,
                 latest_replies: BTreeMap::new(),
                 deletion_pending: false,
+                kind: RoomKind::Work,
             },
         );
         Ok(id)
     }
 
-    pub(crate) fn rename_room(&mut self, id: RoomId, name: &str) -> Result<(), ModelError> {
-        let name = normalized_name(name)?;
+    /// Gives a session its MASTER room if it lacks one, and drops orchestrator
+    /// assignments that no longer satisfy the MASTER invariants.
+    pub(crate) fn ensure_master_room(&mut self) -> RoomId {
+        let master = match self.master_room() {
+            Some(room) => room.id,
+            None => {
+                self.rooms.insert(
+                    MASTER_ROOM_ID,
+                    Room {
+                        id: MASTER_ROOM_ID,
+                        name: MASTER_ROOM_NAME.into(),
+                        notes: String::new(),
+                        draft: Draft::default(),
+                        unread_count: 0,
+                        latest_prompt: None,
+                        latest_replies: BTreeMap::new(),
+                        deletion_pending: false,
+                        kind: RoomKind::Master,
+                    },
+                );
+                MASTER_ROOM_ID
+            }
+        };
+        let mut claimed = BTreeSet::new();
+        for agent in self.agents.values_mut() {
+            let valid = agent.orchestrates.is_some_and(|room| {
+                agent.room_id == master
+                    && self
+                        .rooms
+                        .get(&room)
+                        .is_some_and(|room| room.kind == RoomKind::Work)
+                    && claimed.insert(room)
+            });
+            if !valid {
+                agent.orchestrates = None;
+            }
+        }
+        master
+    }
+
+    /// Whether the session holds anything beyond its MASTER room.
+    pub(crate) fn has_work(&self) -> bool {
+        !self.agents.is_empty() || self.rooms.values().any(|room| room.kind == RoomKind::Work)
+    }
+
+    pub(crate) fn master_room(&self) -> Option<&Room> {
         self.rooms
+            .values()
+            .find(|room| room.kind == RoomKind::Master)
+    }
+
+    /// The MASTER agent orchestrating `room`, if any.
+    pub(crate) fn orchestrator_of(&self, room: RoomId) -> Option<&Agent> {
+        self.agents
+            .values()
+            .find(|agent| agent.orchestrates == Some(room))
+    }
+
+    /// Assigns (or with `None` unassigns) the work room a MASTER agent orchestrates.
+    pub(crate) fn set_agent_orchestrates(
+        &mut self,
+        id: AgentId,
+        room: Option<RoomId>,
+    ) -> Result<(), ModelError> {
+        let agent = self.agents.get(&id).ok_or(ModelError::UnknownAgent(id))?;
+        if self
+            .rooms
+            .get(&agent.room_id)
+            .is_none_or(|home| home.kind != RoomKind::Master)
+        {
+            return Err(ModelError::OrchestratorOutsideMaster(id));
+        }
+        if let Some(room) = room {
+            if self
+                .rooms
+                .get(&room)
+                .is_none_or(|target| target.kind != RoomKind::Work || target.deletion_pending)
+            {
+                return Err(ModelError::NotOrchestratable(room));
+            }
+            if let Some(other) = self.orchestrator_of(room).filter(|other| other.id != id) {
+                return Err(ModelError::RoomAlreadyOrchestrated {
+                    room,
+                    agent: other.id,
+                });
+            }
+        }
+        self.agents
             .get_mut(&id)
-            .ok_or(ModelError::UnknownRoom(id))?
-            .name = name;
+            .ok_or(ModelError::UnknownAgent(id))?
+            .orchestrates = room;
+        Ok(())
+    }
+
+    pub(crate) fn rename_room(&mut self, id: RoomId, name: &str) -> Result<(), ModelError> {
+        let name = work_room_name(name)?;
+        let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
+        if room.kind == RoomKind::Master {
+            return Err(ModelError::MasterRoomFixed);
+        }
+        room.name = name;
         Ok(())
     }
 
@@ -576,6 +721,7 @@ impl BusState {
                 hook_setup_confirmed: false,
                 session_binding_invalidated: false,
                 deletion_pending: false,
+                orchestrates: None,
             },
         );
         self.queues.insert(id, Vec::new());
@@ -605,10 +751,11 @@ impl BusState {
     }
 
     pub(crate) fn prepare_delete_room(&mut self, id: RoomId) -> Result<(), ModelError> {
-        self.rooms
-            .get_mut(&id)
-            .ok_or(ModelError::UnknownRoom(id))?
-            .deletion_pending = true;
+        let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
+        if room.kind == RoomKind::Master {
+            return Err(ModelError::MasterRoomFixed);
+        }
+        room.deletion_pending = true;
         let agents: Vec<_> = self
             .agents
             .values()
@@ -635,8 +782,10 @@ impl BusState {
     }
 
     pub(crate) fn delete_room(&mut self, id: RoomId) -> Result<(), ModelError> {
-        if !self.rooms.contains_key(&id) {
-            return Err(ModelError::UnknownRoom(id));
+        match self.rooms.get(&id) {
+            None => return Err(ModelError::UnknownRoom(id)),
+            Some(room) if room.kind == RoomKind::Master => return Err(ModelError::MasterRoomFixed),
+            Some(_) => {}
         }
         let agents: Vec<_> = self
             .agents
@@ -648,6 +797,12 @@ impl BusState {
             self.delete_agent(agent)?;
         }
         self.rooms.remove(&id);
+        // The orchestrator stays in MASTER, unassigned.
+        for agent in self.agents.values_mut() {
+            if agent.orchestrates == Some(id) {
+                agent.orchestrates = None;
+            }
+        }
         self.requests.retain(|_, request| request.room_id != id);
         if self.visible_room == Some(id) {
             self.visible_room = None;
@@ -1397,6 +1552,14 @@ impl BusState {
     }
 }
 
+fn work_room_name(name: &str) -> Result<String, ModelError> {
+    let name = normalized_name(name)?;
+    if name.eq_ignore_ascii_case(MASTER_ROOM_NAME) {
+        return Err(ModelError::ReservedRoomName);
+    }
+    Ok(name)
+}
+
 fn normalized_name(name: &str) -> Result<String, ModelError> {
     let name = name.trim();
     if name.is_empty() {
@@ -1425,6 +1588,165 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    fn master_agent(state: &mut BusState, name: &str) -> AgentId {
+        let master = state.ensure_master_room();
+        state
+            .create_agent(master, name, Provider::ClaudeCode, "/repo".into(), None)
+            .expect("master agent")
+    }
+
+    #[test]
+    fn master_room_is_added_once_without_consuming_ids() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        assert_eq!(state.ensure_master_room(), master);
+        let masters = state
+            .rooms()
+            .filter(|room| room.kind == RoomKind::Master)
+            .collect::<Vec<_>>();
+        assert_eq!(masters.len(), 1);
+        assert_eq!(masters[0].name, MASTER_ROOM_NAME);
+        // Seeding the first work room still sees a pristine session.
+        assert!(state.is_pristine());
+        assert!(!state.has_work());
+        let work = state.create_room("work").unwrap();
+        assert_eq!(work, RoomId(1));
+        assert_eq!(state.rooms().next().map(|room| room.id), Some(master));
+        assert!(state.has_work());
+    }
+
+    #[test]
+    fn master_room_cannot_be_renamed_or_deleted_and_its_name_is_reserved() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        assert_eq!(
+            state.rename_room(master, "other"),
+            Err(ModelError::MasterRoomFixed)
+        );
+        assert_eq!(
+            state.prepare_delete_room(master),
+            Err(ModelError::MasterRoomFixed)
+        );
+        assert_eq!(state.delete_room(master), Err(ModelError::MasterRoomFixed));
+        assert!(!state.room(master).unwrap().deletion_pending);
+        for name in ["MASTER", "master", " Master "] {
+            assert_eq!(state.create_room(name), Err(ModelError::ReservedRoomName));
+        }
+        let work = state.create_room("work").unwrap();
+        assert_eq!(
+            state.rename_room(work, "master"),
+            Err(ModelError::ReservedRoomName)
+        );
+        assert_eq!(
+            ModelError::MasterRoomFixed.to_string(),
+            "The MASTER room cannot be renamed or deleted"
+        );
+    }
+
+    #[test]
+    fn each_work_room_has_at_most_one_master_orchestrator() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let pr = state.create_room("pr-123").unwrap();
+        let other = state.create_room("pr-456").unwrap();
+        let first = master_agent(&mut state, "claude-orch");
+        let second = master_agent(&mut state, "codex-orch");
+
+        state.set_agent_orchestrates(first, Some(pr)).unwrap();
+        assert_eq!(state.orchestrator_of(pr).map(|agent| agent.id), Some(first));
+        let taken = state.set_agent_orchestrates(second, Some(pr));
+        assert_eq!(
+            taken,
+            Err(ModelError::RoomAlreadyOrchestrated {
+                room: pr,
+                agent: first
+            })
+        );
+        assert!(taken
+            .unwrap_err()
+            .to_string()
+            .contains("already orchestrated by agent"));
+        // Reassigning the same agent, moving it, and unassigning all succeed.
+        state.set_agent_orchestrates(first, Some(pr)).unwrap();
+        state.set_agent_orchestrates(first, Some(other)).unwrap();
+        state.set_agent_orchestrates(second, Some(pr)).unwrap();
+        state.set_agent_orchestrates(second, None).unwrap();
+        assert!(state.orchestrator_of(pr).is_none());
+
+        assert_eq!(
+            state.set_agent_orchestrates(first, Some(master)),
+            Err(ModelError::NotOrchestratable(master))
+        );
+        assert_eq!(
+            state.set_agent_orchestrates(first, Some(RoomId(999))),
+            Err(ModelError::NotOrchestratable(RoomId(999)))
+        );
+        state.prepare_delete_room(pr).unwrap();
+        assert_eq!(
+            state.set_agent_orchestrates(second, Some(pr)),
+            Err(ModelError::NotOrchestratable(pr))
+        );
+    }
+
+    #[test]
+    fn only_master_agents_orchestrate_rooms() {
+        let mut state = BusState::new();
+        state.ensure_master_room();
+        let pr = state.create_room("pr-123").unwrap();
+        let worker = state
+            .create_agent(pr, "builder", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        assert_eq!(
+            state.set_agent_orchestrates(worker, Some(pr)),
+            Err(ModelError::OrchestratorOutsideMaster(worker))
+        );
+        assert_eq!(state.agent(worker).unwrap().orchestrates, None);
+    }
+
+    #[test]
+    fn deleting_an_orchestrated_room_leaves_its_orchestrator_unassigned_in_master() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let pr = state.create_room("pr-123").unwrap();
+        let orchestrator = master_agent(&mut state, "claude-orch");
+        state
+            .set_agent_orchestrates(orchestrator, Some(pr))
+            .unwrap();
+
+        state.prepare_delete_room(pr).unwrap();
+        state.delete_room(pr).unwrap();
+
+        let agent = state.agent(orchestrator).expect("orchestrator survives");
+        assert_eq!(agent.room_id, master);
+        assert_eq!(agent.orchestrates, None);
+        assert!(!agent.deletion_pending);
+    }
+
+    #[test]
+    fn ensure_master_room_drops_assignments_that_break_the_invariants() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let pr = state.create_room("pr-123").unwrap();
+        let first = master_agent(&mut state, "first");
+        let second = master_agent(&mut state, "second");
+        let outsider = state
+            .create_agent(pr, "builder", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        // Hand-edited or corrupt saved state can carry assignments the API refuses.
+        state.agents.get_mut(&first).unwrap().orchestrates = Some(pr);
+        state.agents.get_mut(&second).unwrap().orchestrates = Some(pr);
+        state.agents.get_mut(&outsider).unwrap().orchestrates = Some(pr);
+        let lost = master_agent(&mut state, "lost");
+        state.agents.get_mut(&lost).unwrap().orchestrates = Some(master);
+
+        state.ensure_master_room();
+
+        assert_eq!(state.agent(first).unwrap().orchestrates, Some(pr));
+        assert_eq!(state.agent(second).unwrap().orchestrates, None);
+        assert_eq!(state.agent(outsider).unwrap().orchestrates, None);
+        assert_eq!(state.agent(lost).unwrap().orchestrates, None);
+    }
 
     fn serialized_agent_color(state: &BusState, id: AgentId) -> [u8; 3] {
         let document = serde_json::to_value(state).expect("serialize state");

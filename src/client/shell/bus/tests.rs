@@ -2666,6 +2666,7 @@ fn hook_consent_clears_old_pwd_suggestions_before_enter_can_confirm() {
             extra_args: String::new(),
             consent_project_hooks: false,
         },
+        orchestrates: None,
         notice: crate::bus::launch::SetupNotice {
             path: "/project/.codex/hooks.json".into(),
             message: "review hooks".into(),

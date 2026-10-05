@@ -22,6 +22,7 @@ pub(super) enum Form {
     Files(Editor),
     Consent {
         input: AddAgent,
+        orchestrates: Option<RoomId>,
         notice: SetupNotice,
     },
 }
