@@ -77,9 +77,11 @@ impl Worker {
                     "cwd",
                     "extra_args",
                     "consent_project_hooks",
+                    "orchestrates",
                 ],
                 true,
             ),
+            "agent.orchestrate" => (&["agent", "room"], true),
             "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
             "agent.read" => (&["agent", "source", "lines"], false),
             "agent.permission.observe" => (&["agent"], false),
@@ -197,7 +199,7 @@ impl Worker {
                 Ok(result)
             }
             "state" => Ok(
-                json!({"revision":self.revision,"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"notes":r.notes,"deletion_pending":r.deletion_pending})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>()}),
+                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>()}),
             ),
             "diagnostics" => Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"dev":true,"storage_failed":self.storage_failed,"coordinator_error":self.error,"data_dir":self.data_dir,"logs":self.data_dir.join("herdr-config/sessions/bus"),"callback_logs":self.data_dir.join("callbacks"),"agents":self.state.agents().map(|a|json!({"agent_id":a.id,"name":a.name,"status":a.status,"reason":crate::bus::diagnostics::wait_reason(a),"detail":a.actionable_error,"identity":a.runtime_identity,"current_request":a.current_request})).collect::<Vec<_>>()}),
@@ -227,14 +229,27 @@ impl Worker {
                     "cursor" => Provider::Cursor,
                     _ => return Err("Provider must be claude, codex, or cursor".into()),
                 };
-                self.dev_command(BusCommand::AddAgent(AddAgent {
+                let input = AddAgent {
                     room: self.dev_room(required(p, "room")?)?,
                     name: required(p, "name")?.into(),
                     provider,
                     cwd: required(p, "cwd")?.into(),
                     extra_args: optional_text(p, "extra_args")?.unwrap_or_default().into(),
                     consent_project_hooks: optional_bool(p, "consent_project_hooks")?,
-                }))
+                };
+                self.dev_command(match optional_text(p, "orchestrates")? {
+                    Some(room) => BusCommand::AddOrchestrator(input, self.dev_room(room)?),
+                    None => BusCommand::AddAgent(input),
+                })
+            }
+            "agent.orchestrate" => {
+                let agent = self.dev_agent(required(p, "agent")?, None)?;
+                let room = match p.get("room") {
+                    Some(Value::Null) => None,
+                    Some(Value::String(room)) => Some(self.dev_room(room)?),
+                    _ => return Err("Room must be a room selector or null".into()),
+                };
+                self.dev_command(BusCommand::SetOrchestrates(agent, room))
             }
             "agent.read" => self.dev_read(
                 self.dev_agent(required(p, "agent")?, None)?,
@@ -329,6 +344,11 @@ impl Worker {
     }
 
     fn dev_room(&self, selector: &str) -> Result<RoomId, String> {
+        if selector.eq_ignore_ascii_case(crate::bus::model::MASTER_ROOM_NAME) {
+            if let Some(master) = self.state.master_room() {
+                return Ok(master.id);
+            }
+        }
         unique(
             self.state
                 .rooms()

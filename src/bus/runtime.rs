@@ -49,6 +49,7 @@ pub(crate) enum BusCommand {
     AddAgent(AddAgent),
     /// Adds a MASTER agent that orchestrates the given work room.
     AddOrchestrator(AddAgent, RoomId),
+    SetOrchestrates(AgentId, Option<RoomId>),
     FocusTerminal(AgentId),
     CompleteHookSetup(AgentId),
     Suggestions {

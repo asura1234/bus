@@ -25,7 +25,8 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   room delete ROOM --confirm
   room focus ROOM
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
-            [--args STRING] [--consent-hooks]
+            [--args STRING] [--consent-hooks] [--orchestrates ROOM]
+  agent orchestrate AGENT (--room ROOM | --none)
   agent read AGENT --source visible
   agent read AGENT [--source recent] --lines N
   agent permission AGENT
@@ -41,7 +42,10 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   diagnostics
 
 Every command accepts --request-id STRING and emits one JSON response.
-ROOM and AGENT accept a name or numeric ID. Use --to all explicitly for all room agents.
+ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) for the
+MASTER room. Only MASTER agents orchestrate, each at most one work room: use
+agent add --room master --orchestrates ROOM, or agent orchestrate to reassign or unassign.
+Use --to all explicitly for all room agents.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.
 Commands only connect to the existing instance in BUS_DATA_DIR; they never start or enable it.";
@@ -213,7 +217,14 @@ fn cli() -> Command {
                         .arg(option("provider").value_parser(["claude", "codex", "cursor"]))
                         .arg(option("pwd"))
                         .arg(Arg::new("args").long("args").allow_hyphen_values(true))
-                        .arg(flag("consent-hooks")),
+                        .arg(flag("consent-hooks"))
+                        .arg(value_arg("orchestrates").long("orchestrates")),
+                )
+                .subcommand(
+                    subcommand("orchestrate")
+                        .arg(value_arg("agent").required(true))
+                        .arg(value_arg("room").long("room").conflicts_with("none"))
+                        .arg(flag("none")),
                 )
                 .subcommand(
                     subcommand("read")
@@ -327,15 +338,33 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         },
         "agent" => match args.subcommand() {
             Some(("focus", args)) => ("agent.focus", json!({"agent": required(args, "agent")?})),
-            Some(("add", args)) => (
-                "agent.add",
-                json!({
+            Some(("add", args)) => {
+                let mut params = json!({
                     "room": required(args, "room")?, "name": required(args, "name")?,
                     "provider": required(args, "provider")?, "cwd": required(args, "pwd")?,
                     "extra_args": args.get_one::<String>("args").map(String::as_str).unwrap_or(""),
                     "consent_project_hooks": args.get_flag("consent-hooks"),
-                }),
-            ),
+                });
+                if let Some(room) = args.get_one::<String>("orchestrates") {
+                    params["orchestrates"] = json!(room);
+                }
+                ("agent.add", params)
+            }
+            Some(("orchestrate", args)) => {
+                let room = match (args.get_one::<String>("room"), args.get_flag("none")) {
+                    (Some(room), false) => json!(room),
+                    (None, true) => Value::Null,
+                    _ => {
+                        return Err(
+                            "agent orchestrate needs exactly one of --room ROOM or --none".into(),
+                        )
+                    }
+                };
+                (
+                    "agent.orchestrate",
+                    json!({"agent": required(args, "agent")?, "room": room}),
+                )
+            }
             Some(("read", args)) => {
                 let mut params = json!({"agent": required(args, "agent")?});
                 let source = args.get_one::<String>("source").map(String::as_str);
@@ -479,6 +508,25 @@ mod tests {
     }
 
     #[test]
+    fn agent_orchestrate_requires_exactly_one_target() {
+        for args in [
+            &["agent", "orchestrate", "claude-orch"][..],
+            &[
+                "agent",
+                "orchestrate",
+                "claude-orch",
+                "--room",
+                "pr-123",
+                "--none",
+            ][..],
+        ] {
+            assert!(command(args).is_err(), "{args:?}");
+        }
+        assert!(HELP.contains("agent orchestrate AGENT (--room ROOM | --none)"));
+        assert!(HELP.contains("[--orchestrates ROOM]"));
+    }
+
+    #[test]
     fn commands_route_to_exact_methods_with_string_selectors() {
         let cases: &[(&[&str], &str, Value)] = &[
             (&["state"], "state", json!({})),
@@ -543,6 +591,38 @@ mod tests {
                 &["agent", "read", "Claude Agent", "--lines", "50"],
                 "agent.read",
                 json!({"agent": "Claude Agent", "source": "recent", "lines": 50}),
+            ),
+            (
+                &[
+                    "agent",
+                    "add",
+                    "--room",
+                    "master",
+                    "--name",
+                    "claude-orch",
+                    "--provider",
+                    "claude",
+                    "--pwd",
+                    "/repo",
+                    "--orchestrates",
+                    "pr-123",
+                ],
+                "agent.add",
+                json!({
+                    "room": "master", "name": "claude-orch", "provider": "claude",
+                    "cwd": "/repo", "extra_args": "", "consent_project_hooks": false,
+                    "orchestrates": "pr-123"
+                }),
+            ),
+            (
+                &["agent", "orchestrate", "claude-orch", "--room", "pr-123"],
+                "agent.orchestrate",
+                json!({"agent": "claude-orch", "room": "pr-123"}),
+            ),
+            (
+                &["agent", "orchestrate", "claude-orch", "--none"],
+                "agent.orchestrate",
+                json!({"agent": "claude-orch", "room": null}),
             ),
             (
                 &["agent", "setup-confirm", "2", "--confirm"],

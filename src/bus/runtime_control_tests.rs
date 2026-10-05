@@ -9,11 +9,15 @@ impl Transport for NoTransport {
     }
 }
 
+static NEXT_FIXTURE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 fn fixture() -> (Worker, RoomId, AgentId, PathBuf) {
+    // Parallel tests can share a nanosecond; the counter keeps each coordinator lock unique.
     let dir = std::env::temp_dir().join(format!(
-        "bus-control-domain-{}-{}",
+        "bus-control-domain-{}-{}-{}",
         std::process::id(),
-        super::super::super::io::now_ns()
+        super::super::super::io::now_ns(),
+        NEXT_FIXTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let mut worker = Worker::open(dir.clone(), Box::new(NoTransport)).unwrap();
     worker.dev_enabled = true;
@@ -1068,6 +1072,185 @@ fn dev_recipient_sets_and_failed_sends_never_modify_draft_or_broadcast_implicitl
         "storage_unavailable"
     );
     assert!(call(&mut worker, "diag", "diagnostics", json!({})).ok);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn error_message(response: &Response) -> String {
+    response
+        .error
+        .as_ref()
+        .map(|error| error.message.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn dev_master_room_is_selectable_listed_and_fixed() {
+    let (mut worker, room, _agent, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    let state = call(&mut worker, "state-master", "state", json!({}));
+    assert_eq!(state.result["master_room"], json!(master));
+    assert_eq!(state.result["rooms"][0]["kind"], "master");
+    assert_eq!(state.result["rooms"][1]["kind"], "work");
+    assert_eq!(state.result["rooms"][1]["id"], json!(room));
+
+    for (id, selector) in [("focus-a", "master"), ("focus-b", "MASTER")] {
+        let notes = call(
+            &mut worker,
+            id,
+            "room.notes",
+            json!({"room": selector, "text": "orchestrators"}),
+        );
+        assert!(notes.ok, "{notes:?}");
+    }
+    assert_eq!(worker.state.room(master).unwrap().notes, "orchestrators");
+
+    let rename = call(
+        &mut worker,
+        "rename-master",
+        "room.rename",
+        json!({"room":"master","name":"other"}),
+    );
+    assert!(!rename.ok);
+    assert_eq!(
+        error_message(&rename),
+        "The MASTER room cannot be renamed or deleted"
+    );
+    let delete = call(
+        &mut worker,
+        "delete-master",
+        "room.delete",
+        json!({"room":"master","confirm":true}),
+    );
+    assert!(!delete.ok);
+    assert_eq!(
+        error_message(&delete),
+        "The MASTER room cannot be renamed or deleted"
+    );
+    assert!(worker.state.master_room().is_some());
+    let reserved = call(
+        &mut worker,
+        "create-master",
+        "room.create",
+        json!({"name":"Master"}),
+    );
+    assert!(
+        error_message(&reserved).contains("reserved"),
+        "{reserved:?}"
+    );
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dev_agent_orchestrate_assigns_rejects_a_second_orchestrator_and_unassigns() {
+    let (mut worker, room, agent, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    let first = worker
+        .state
+        .create_agent(
+            master,
+            "claude-orch",
+            Provider::ClaudeCode,
+            dir.clone(),
+            None,
+        )
+        .unwrap();
+    let second = worker
+        .state
+        .create_agent(master, "codex-orch", Provider::Codex, dir.clone(), None)
+        .unwrap();
+
+    let assigned = call(
+        &mut worker,
+        "orch-1",
+        "agent.orchestrate",
+        json!({"agent":"claude-orch","room":"test"}),
+    );
+    assert!(assigned.ok, "{assigned:?}");
+    assert_eq!(worker.state.agent(first).unwrap().orchestrates, Some(room));
+    let state = call(&mut worker, "state-orch", "state", json!({}));
+    assert_eq!(state.result["rooms"][1]["orchestrator"], json!(first));
+    let listed = state.result["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|listed| listed["id"] == json!(first))
+        .unwrap()
+        .clone();
+    assert_eq!(listed["orchestrates"], json!(room));
+
+    let taken = call(
+        &mut worker,
+        "orch-2",
+        "agent.orchestrate",
+        json!({"agent":"codex-orch","room":"test"}),
+    );
+    assert!(!taken.ok);
+    assert!(
+        error_message(&taken).contains("already orchestrated by agent"),
+        "{taken:?}"
+    );
+    assert_eq!(worker.state.agent(second).unwrap().orchestrates, None);
+
+    let outside = call(
+        &mut worker,
+        "orch-3",
+        "agent.orchestrate",
+        json!({"agent":"codex1","room":"test"}),
+    );
+    assert!(
+        error_message(&outside).contains("not in the MASTER room"),
+        "{outside:?}"
+    );
+    assert_eq!(worker.state.agent(agent).unwrap().orchestrates, None);
+
+    let cleared = call(
+        &mut worker,
+        "orch-4",
+        "agent.orchestrate",
+        json!({"agent":"claude-orch","room":null}),
+    );
+    assert!(cleared.ok, "{cleared:?}");
+    assert_eq!(worker.state.agent(first).unwrap().orchestrates, None);
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dev_agent_add_rejects_an_orchestrator_outside_master_before_launching() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let agents_before = worker.state.agents().count();
+    let rejected = call(
+        &mut worker,
+        "add-orch",
+        "agent.add",
+        json!({
+            "room":"test","name":"orch","provider":"codex",
+            "cwd": dir.to_string_lossy(), "orchestrates":"test"
+        }),
+    );
+    assert!(!rejected.ok);
+    assert!(
+        error_message(&rejected).contains("not in the MASTER room"),
+        "{rejected:?}"
+    );
+    assert_eq!(worker.state.agents().count(), agents_before);
+
+    let unknown = call(
+        &mut worker,
+        "add-orch-unknown",
+        "agent.add",
+        json!({
+            "room":"master","name":"orch","provider":"codex",
+            "cwd": dir.to_string_lossy(), "orchestrates":"missing"
+        }),
+    );
+    assert!(!unknown.ok, "{unknown:?}");
+    assert_eq!(worker.state.agents().count(), agents_before);
+
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

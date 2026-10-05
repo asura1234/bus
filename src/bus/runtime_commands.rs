@@ -92,6 +92,7 @@ impl Worker {
             BusCommand::AddOrchestrator(input, room) => {
                 return self.add_agent(input, Some(room), events)
             }
+            BusCommand::SetOrchestrates(agent, room) => state.set_agent_orchestrates(agent, room),
             BusCommand::FocusTerminal(id) => {
                 let agent = state.agent(id).ok_or("Unknown agent")?;
                 let target = agent
