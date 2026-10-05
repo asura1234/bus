@@ -13,11 +13,6 @@ from pr_goal_context import (  # noqa: E402
     locked_context_paths,
     prepare_context,
 )
-from room_assignment_context import (  # noqa: E402
-    OrchestratedContext,
-    StandaloneContext,
-    render_context as render_assignment_context,
-)
 
 
 TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "references" / "pr-template.md"
@@ -386,87 +381,11 @@ class PrFormatCheckTest(unittest.TestCase):
                 "无\n",
             )
 
-    def write_assignment_context(self, root: Path, context) -> Path:
-        path = root / "assignment-context.json"
-        path.write_text(render_assignment_context(context), encoding="utf-8")
-        return path
-
-    def test_prepare_context_uses_verified_room_brief_when_planless(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            context = self.write_assignment_context(
-                root,
-                OrchestratedContext(
-                    goal="房间目标\n- 逐字保留",
-                    non_goals="不做 X",
-                    assignment={"request_id": 4},
-                ),
-            )
-            output = root / "pr-goal-context.md"
-
-            locked = prepare_context(
-                branch="feat/room",
-                output_path=output,
-                repo_root=root,
-                assignment_context_path=context,
-            )
-
-            goal_lock, non_goals_lock = locked_context_paths(root, "feat/room")
-            self.assertEqual(locked, goal_lock)
-            self.assertEqual(
-                output.read_text(encoding="utf-8"),
-                "## 目标\n\n房间目标\n- 逐字保留\n\n## 非目标\n\n不做 X\n",
-            )
-            self.assertEqual(goal_lock.read_text(encoding="utf-8"), "房间目标\n- 逐字保留\n")
-            self.assertEqual(non_goals_lock.read_text(encoding="utf-8"), "不做 X\n")
-
-    def test_prepare_context_requires_plan_to_match_verified_room_brief(self) -> None:
+    def test_prepare_context_rejects_mixed_plan_and_authored_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             plan = root / "plan.md"
             plan.write_text("## 目标\n\n计划目标\n\n## 非目标\n\n计划非目标\n", encoding="utf-8")
-            output = root / "pr-goal-context.md"
-            matching = self.write_assignment_context(
-                root, OrchestratedContext(goal="计划目标", non_goals="计划非目标")
-            )
-            prepare_context(
-                branch="feat/room",
-                output_path=output,
-                repo_root=root,
-                plan_paths=[plan],
-                assignment_context_path=matching,
-            )
-            goal_lock, non_goals_lock = locked_context_paths(root, "feat/room")
-            self.assertEqual(non_goals_lock.read_text(encoding="utf-8"), "计划非目标\n")
-
-            goal_lock.unlink()
-            non_goals_lock.unlink()
-            drifted = self.write_assignment_context(
-                root, OrchestratedContext(goal="计划目标", non_goals="房间另有非目标")
-            )
-            with self.assertRaisesRegex(ValueError, "不一致"):
-                prepare_context(
-                    branch="feat/room",
-                    output_path=output,
-                    repo_root=root,
-                    plan_paths=[plan],
-                    assignment_context_path=drifted,
-                )
-            self.assertFalse(goal_lock.exists())
-            self.assertFalse(non_goals_lock.exists())
-
-    def test_prepare_context_rejects_standalone_context_and_mixed_authored_input(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            output = root / "pr-goal-context.md"
-            standalone = self.write_assignment_context(root, StandaloneContext())
-            with self.assertRaisesRegex(ValueError, "verified"):
-                prepare_context(
-                    branch="feat/room",
-                    output_path=output,
-                    repo_root=root,
-                    assignment_context_path=standalone,
-                )
             goal = root / "goal.md"
             non_goal = root / "non-goal.md"
             goal.write_text("目标\n", encoding="utf-8")
@@ -474,11 +393,11 @@ class PrFormatCheckTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "混用"):
                 prepare_context(
                     branch="feat/room",
-                    output_path=output,
+                    output_path=root / "pr-goal-context.md",
                     repo_root=root,
+                    plan_paths=[plan],
                     goal_path=goal,
                     non_goal_path=non_goal,
-                    assignment_context_path=standalone,
                 )
             self.assertFalse(locked_context_paths(root, "feat/room")[0].exists())
 

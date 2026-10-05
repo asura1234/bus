@@ -94,7 +94,7 @@ class AcceptanceObservationTests(unittest.TestCase):
         self.assertNotIn("assignment verify", guide)
         self.assertIn("same persisted message status", guide)
         self.assertIn("waiting CLI process exits or Bus restarts", guide)
-        self.assertIn("wakes the room orchestrator", guide)
+        self.assertNotIn("room orchestrator", guide)
         self.assertIn("does not interpret the reply", guide)
         self.assertIn("send --wait", guide)
 

@@ -72,21 +72,7 @@ draft_commits = git log <baseline>..<draft_head> --oneline
 
 ========== LOCK PR INTENT ==========
 
-Read(docs/guides/orchestrated-room-brief.md) completely, then run:
-  python3 cli_extensions/room_assignment_context.py [--frame "<frame>"] \
-    --output "<ignored-temp-assignment-context>"
-IF exit != 0:
-  STOP and return stdout verbatim as blocker evidence.
-ORIGIN = ASSIGNMENT_ORIGIN
-
-IF ORIGIN == verified:
-  Run:
-    python3 skills/pr/scripts/pr_goal_context.py \
-      --branch "<branch>" --output "<ignored-temp-goal-context>" \
-      --assignment-context "<ignored-temp-assignment-context>" \
-      [--plan "<path>" ... in supplied order]
-  Supplied plans must match the verified Room Brief exactly; the script fails closed otherwise.
-ELSE IF ORIGIN == NotInBusRoom AND plans nonempty:
+IF plans nonempty:
   Run:
     python3 skills/pr/scripts/pr_goal_context.py \
       --branch "<branch>" --output "<ignored-temp-goal-context>" \

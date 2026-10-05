@@ -53,19 +53,6 @@ UNPROVEN SUSPICION:
 
 ========== 2. DETERMINISTIC PROLOGUE ==========
 
-Read(docs/guides/orchestrated-room-brief.md) completely, then run:
-  python3 cli_extensions/room_assignment_context.py [--frame "<frame>"] \
-    --output temp/review-pr/room-assignment-context.json
-IF exit != 0:
-  reproduce stdout verbatim as blocker evidence and STOP.
-ORIGIN = ASSIGNMENT_ORIGIN
-IF ORIGIN == verified:
-  Run:
-    python3 skills/pr/scripts/pr_goal_context.py \
-      --branch "<current branch>" --output temp/review-pr/goal-context.md \
-      --assignment-context temp/review-pr/room-assignment-context.json [--plan <plan-file>]
-  IF it fails: reproduce stderr verbatim as blocker evidence and STOP.
-
 Run:
   python3 skills/review-pr/scripts/review_round.py \
     --base <ref> [--reviewer <lane>] [--devils-advocate] [--plan <plan-file>]
@@ -80,12 +67,10 @@ IF exit != 0 AND output says a bare invocation is ambiguous because multiple or 
   ELSE:
     reproduce stdout/stderr verbatim, request the exact lane, and STOP.
 ELSE IF exit != 0 AND FAIL names missing, blank, or mismatched locked Goal/Non-goals:
-  IF ORIGIN == verified:
-    reproduce stdout verbatim as blocker evidence and STOP.
-  IF ORIGIN == NotInBusRoom AND --plan was supplied:
+  IF --plan was supplied:
     run pr_goal_context.py --branch <branch> --output temp/review-pr/goal-context.md --plan <plan-file>;
     rerun the prologue once; reproduce any remaining FAIL verbatim and STOP.
-  IF ORIGIN == NotInBusRoom AND no plan was supplied:
+  IF no plan was supplied:
     ask the developer for the PR's one-sentence Goal and its explicit Non-goals (`无` when none);
     save each reply verbatim to ignored temp goal and non-goal files, trimming only leading/trailing whitespace;
     do not infer either from the diff, commits, or PR description;

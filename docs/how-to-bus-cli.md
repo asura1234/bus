@@ -136,10 +136,9 @@ not proof that the request completed.
 
 Both commands query the same persisted message status: `wait` owns no separate
 completion state, and the correlated result remains queryable after the waiting CLI process exits or Bus restarts.
-When Worker durably records that provider Request settlement, the same semantic fact wakes the room orchestrator.
-The orchestrator receives the factual reply
-and decides the next action; Bus does not interpret the reply or add a harness
-polling loop, workflow notifier, or content-owned notification path. A future
+The agent that sent the message reads the factual reply and decides the next
+action; Bus does not interpret the reply or add a polling loop or workflow
+notifier. A future
 `send --wait` convenience may only compose the existing durable `send` and
 `wait` primitives.
 
@@ -222,7 +221,7 @@ or risky prompts send no keys. This surface does not expose arbitrary keystrokes
 or grant reusable shell authority.
 
 If current facts prove an idle agent still owns a historically wedged request,
-the Human or an approved Orchestrator can invoke the same queue-preserving typed
+the Human or an orchestrating agent can invoke the same queue-preserving typed
 recovery after checking its identity and revision facts:
 
 ```sh
