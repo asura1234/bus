@@ -109,3 +109,117 @@ fn settings_sound_list_scrolls_to_keep_the_focused_room_visible() {
         "{rows:#?}"
     );
 }
+
+mod ring_decisions {
+    use super::super::super::ring::{
+        new_message_should_ring, Ringer, RING_COOLDOWN, STARTUP_GRACE,
+    };
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn rooms_with_agents() -> (BusState, RoomId, RoomId, AgentId, AgentId) {
+        let mut state = BusState::default();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        let orchestrator = state
+            .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
+            .unwrap();
+        let worker = state
+            .create_agent(work, "builder", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        (state, master, work, orchestrator, worker)
+    }
+
+    /// Replies only land through provider callbacks, so tests write the saved shape.
+    fn with_reply(state: &BusState, room: RoomId, agent: AgentId, request: u64) -> BusState {
+        let mut document = serde_json::to_value(state).unwrap();
+        document["rooms"][room.0.to_string()]["latest_replies"][agent.0.to_string()] = serde_json::json!({
+            "request_id": request, "agent_id": agent, "text": "done", "received_at_ms": 1
+        });
+        serde_json::from_value(document).unwrap()
+    }
+
+    fn draft(to: AgentId) -> Draft {
+        Draft {
+            text: "next step".into(),
+            files: Vec::new(),
+            recipient_ids: AgentRecipients::from([to]),
+        }
+    }
+
+    #[test]
+    fn an_agent_reply_rings_once_in_an_enabled_room() {
+        let (state, master, _, orchestrator, _) = rooms_with_agents();
+        let replied = with_reply(&state, master, orchestrator, 40);
+        assert!(new_message_should_ring(&state, &replied));
+        // The same reply seen again is not new.
+        assert!(!new_message_should_ring(&replied, &replied));
+        let again = with_reply(&replied, master, orchestrator, 41);
+        assert!(new_message_should_ring(&replied, &again));
+    }
+
+    #[test]
+    fn disabled_rooms_stay_silent_until_the_human_enables_them() {
+        let (mut state, _, work, _, worker) = rooms_with_agents();
+        assert!(!new_message_should_ring(
+            &state,
+            &with_reply(&state, work, worker, 40)
+        ));
+        state.set_room_sound(work, true).unwrap();
+        assert!(new_message_should_ring(
+            &state,
+            &with_reply(&state, work, worker, 40)
+        ));
+    }
+
+    #[test]
+    fn agent_authored_messages_ring_and_the_humans_own_never_do() {
+        let (mut state, _, work, orchestrator, worker) = rooms_with_agents();
+        state.set_room_sound(work, true).unwrap();
+        let mut human = state.clone();
+        human
+            .submit_message_from(work, draft(worker), Author::Human, 5)
+            .unwrap();
+        assert!(!new_message_should_ring(&state, &human));
+
+        let mut agent = state.clone();
+        agent
+            .submit_message_from(work, draft(worker), Author::Agent(orchestrator), 5)
+            .unwrap();
+        assert!(new_message_should_ring(&state, &agent));
+        assert!(!new_message_should_ring(&agent, &agent));
+    }
+
+    #[test]
+    fn ringer_is_silent_while_starting_and_collapses_a_burst() {
+        let start = Instant::now();
+        let mut ringer = Ringer::new(start);
+        assert!(!ringer.allow(start));
+        assert!(!ringer.allow(start + STARTUP_GRACE - Duration::from_millis(1)));
+        let first = start + STARTUP_GRACE;
+        assert!(ringer.allow(first));
+        assert!(!ringer.allow(first + Duration::from_millis(10)));
+        assert!(!ringer.allow(first + RING_COOLDOWN - Duration::from_millis(1)));
+        assert!(ringer.allow(first + RING_COOLDOWN));
+    }
+
+    #[test]
+    fn bus_ui_without_a_sound_config_never_rings() {
+        let (state, master, _, orchestrator, _) = rooms_with_agents();
+        let mut ui = BusUi::new(Arc::new(BusSnapshot {
+            state: state.clone(),
+            revision: 0,
+            last_command_id: 0,
+            error: None,
+        }));
+        assert!(ui.sound_config.is_none());
+        ui.receive_snapshot(Arc::new(BusSnapshot {
+            state: with_reply(&state, master, orchestrator, 40),
+            revision: 1,
+            last_command_id: 0,
+            error: None,
+        }));
+        // The cooldown was never consumed because nothing played.
+        assert!(ui.ringer.allow(Instant::now() + STARTUP_GRACE));
+    }
+}

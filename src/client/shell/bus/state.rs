@@ -147,6 +147,9 @@ pub(in crate::client::shell) struct BusUi {
     /// Settings focus: 0 is color blind mode, then one row per sound room.
     pub(super) settings_field: usize,
     pub(super) settings_scroll: usize,
+    /// Set only by the coordinator-owning client; `None` never plays a sound.
+    pub(super) sound_config: Option<crate::config::SoundConfig>,
+    pub(super) ringer: super::ring::Ringer,
 }
 
 #[derive(Clone, Debug)]
@@ -218,6 +221,8 @@ impl BusUi {
             settings_path: None,
             settings_field: 0,
             settings_scroll: 0,
+            sound_config: None,
+            ringer: super::ring::Ringer::new(std::time::Instant::now()),
         }
     }
     /// Applies immediately; a failed save keeps the choice for this run only.
@@ -434,6 +439,13 @@ impl BusUi {
             }
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        if let Some(config) = &self.sound_config {
+            if super::ring::new_message_should_ring(&previous.state, &self.snapshot.state)
+                && self.ringer.allow(std::time::Instant::now())
+            {
+                crate::sound::play(crate::sound::Sound::Done, config);
+            }
+        }
         self.reconcile_deleted_targets(&previous.state);
         self.sync_toast();
     }

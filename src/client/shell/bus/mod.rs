@@ -6,6 +6,7 @@ mod history;
 mod input;
 mod recipients;
 mod render;
+mod ring;
 mod selection;
 mod state;
 #[cfg(test)]
@@ -14,7 +15,9 @@ pub(super) use render::layout;
 pub(super) use state::*;
 
 impl super::ClientShellState {
-    pub(crate) fn start_bus(&mut self) -> Result<(), String> {
+    /// `sound` is the user's `[ui.sound]`, used only for custom sound paths; Bus
+    /// rooms decide on their own whether to ring.
+    pub(crate) fn start_bus(&mut self, sound: &crate::config::SoundConfig) -> Result<(), String> {
         let Some(root) = crate::bus::entry::data_dir() else {
             return Ok(());
         };
@@ -27,6 +30,8 @@ impl super::ClientShellState {
         let snapshot = handle.snapshot().ok_or("Bus initial state unavailable")?;
         let mut bus = BusUi::new(snapshot);
         bus.handle = Some(handle);
+        // Only the client that owns the coordinator plays room sounds, so each rings once.
+        bus.sound_config = Some(sound.clone());
         bus.settings_path = crate::bus::settings::path();
         if let Some(path) = &bus.settings_path {
             match crate::bus::settings::load(path) {
