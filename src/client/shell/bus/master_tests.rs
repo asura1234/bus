@@ -87,7 +87,7 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
         rows[3].starts_with("ROOMS") && rows[3].ends_with('+'),
         "{rows:?}"
     );
-    assert!(rows[5].starts_with("# pr-123 ◆"), "{rows:?}");
+    assert_eq!(rows[5], "# pr-123           Idle ×", "{rows:?}");
     assert_eq!(rows[6], "# pr-456           Idle", "{rows:?}");
     assert!(rows[7].starts_with('─'), "{rows:?}");
     assert!(
@@ -134,7 +134,7 @@ fn master_sidebar_lists_its_agents_before_rooms() {
         rows[10].starts_with("ROOMS") && rows[10].ends_with('+'),
         "{rows:?}"
     );
-    assert!(rows[12].starts_with("# pr-123 ◆"), "{rows:?}");
+    assert_eq!(rows[12], "# pr-123           Idle", "{rows:?}");
     assert_eq!(rows[13], "# pr-456           Idle", "{rows:?}");
     // The open MASTER room never offers deletion.
     assert!(deletable_rooms(&ui).is_empty());
@@ -202,7 +202,7 @@ fn master_agents_show_three_lines_without_an_expand_control() {
 }
 
 #[test]
-fn room_rows_show_status_and_keep_marker_and_unread_count_readable() {
+fn room_rows_show_status_and_truncate_long_names() {
     let (ui, master, pr, other, orchestrator) = master_fixture();
     let mut snapshot = (*ui.snapshot).clone();
     let worker = snapshot
@@ -219,6 +219,7 @@ fn room_rows_show_status_and_keep_marker_and_unread_count_readable() {
     snapshot.state.observe_dialog(worker, true).unwrap();
     let mut value = serde_json::to_value(&snapshot.state).unwrap();
     value["rooms"][pr.0.to_string()]["name"] = serde_json::json!("a-very-long-room-name");
+    // Neither the orchestrated-room marker nor an unread count is drawn.
     value["rooms"][pr.0.to_string()]["unread_count"] = serde_json::json!(7);
     snapshot.state = serde_json::from_value(value).unwrap();
     snapshot.revision += 1;
@@ -227,8 +228,8 @@ fn room_rows_show_status_and_keep_marker_and_unread_count_readable() {
     let rows = sidebar_rows(&mut ui);
 
     assert_eq!(rows[1], "# MASTER        Working", "{rows:?}");
-    // The name gives way so the marker, unread count and status all fit.
-    assert_eq!(rows[5], "# a-very-lon… ◆  7 Idle", "{rows:?}");
+    // The name gives way so the status fits.
+    assert_eq!(rows[5], "# a-very-long-roo… Idle", "{rows:?}");
     assert_eq!(rows[6], "# pr-456        Blocked ×", "{rows:?}");
 
     let status_hit = |room: RoomId| {

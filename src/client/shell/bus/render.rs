@@ -614,17 +614,9 @@ pub(super) fn sidebar_room_row(
         .map(|index| first + index)
 }
 
-/// Marks a work room that has an orchestrator, then its unread count. The
-/// name is truncated so the marker and count fit in `width` cells.
-pub(super) fn room_label(state: &BusState, room: &Room, width: usize) -> String {
-    let mut suffix = String::new();
-    if room.kind == RoomKind::Work && state.orchestrator_of(room.id).is_some() {
-        suffix.push_str(" ◆");
-    }
-    if room.unread_count > 0 {
-        suffix.push_str(&format!("  {}", room.unread_count));
-    }
-    let room_width = width.saturating_sub(2 + cells(&suffix));
+/// A room's sidebar label, its name truncated to fit in `width` cells.
+pub(super) fn room_label(room: &Room, width: usize) -> String {
+    let room_width = width.saturating_sub(2);
     let name = if cells(&room.name) <= room_width {
         room.name.clone()
     } else {
@@ -640,7 +632,7 @@ pub(super) fn room_label(state: &BusState, room: &Room, width: usize) -> String 
         name.push('…');
         name
     };
-    format!("# {name}{suffix}")
+    format!("# {name}")
 }
 
 /// The MASTER line under an agent's provider: the room it orchestrates, or
@@ -773,7 +765,7 @@ impl BusUi {
             if rect.height == 0 {
                 continue;
             }
-            let label = room_label(&self.snapshot.state, room, usize::from(name_width));
+            let label = room_label(room, usize::from(name_width));
             if let Some(rename) = self
                 .rename
                 .as_ref()
