@@ -693,8 +693,8 @@ just e2e
 just e2e --providers claude,codex --cases single,resume
 ```
 
-Each run starts its own Bus from `target/debug/bus` (or `target/debug/herdr`,
-or `--binary PATH`) in a pseudo-terminal with a fresh owner-only
+Each run starts its own Bus from `target/debug/bus` (or `--binary PATH`)
+in a pseudo-terminal with a fresh owner-only
 `BUS_DATA_DIR` under `temp/e2e/<timestamp>/`, after removing every inherited
 `BUS_*`, `HERDR_*` and `CLAUDE_CODE_*` variable, so it never touches another
 Bus. It drives that Bus only through these control commands, and the agents
