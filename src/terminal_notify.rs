@@ -64,8 +64,8 @@ pub fn split_message(message: &str) -> (&str, Option<&str>) {
 
 fn build_osc9_notification(title: &str, body: Option<&str>) -> Vec<u8> {
     let message = sanitize_text(match body {
-        Some(body) if !body.is_empty() => format!("{title}: {body}"),
-        _ => title.to_string(),
+        Some(body) => format!("{title}: {body}"),
+        None => title.to_string(),
     });
     format!("\x1b]9;{message}\x1b\\").into_bytes()
 }
@@ -73,11 +73,11 @@ fn build_osc9_notification(title: &str, body: Option<&str>) -> Vec<u8> {
 fn build_osc99_notification(title: &str, body: Option<&str>) -> Vec<u8> {
     let title = sanitize_text(title);
     match body {
-        Some(body) if !body.is_empty() => {
+        Some(body) => {
             let body = sanitize_text(body);
             format!("\x1b]99;i=1:d=0;{title}\x1b\\\x1b]99;i=1:p=body;{body}\x1b\\").into_bytes()
         }
-        _ => format!("\x1b]99;;{title}\x1b\\").into_bytes(),
+        None => format!("\x1b]99;;{title}\x1b\\").into_bytes(),
     }
 }
 
