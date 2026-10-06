@@ -1,12 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 mod actions;
-mod agent_sidebar;
 mod bus;
 mod composition;
 mod config;
 mod endpoint_agent_state;
-mod endpoint_agents;
 mod endpoint_notices;
 mod endpoints;
 pub(super) use endpoints::*;

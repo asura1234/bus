@@ -1,6 +1,5 @@
 mod activation;
 mod control;
-mod health;
 mod message_policy;
 mod registry;
 mod writer;
@@ -17,10 +16,6 @@ pub(crate) enum ClientEndpointId {
 }
 
 impl ClientEndpointId {
-    pub(crate) fn is_local(&self) -> bool {
-        matches!(self, Self::Local)
-    }
-
     pub(crate) fn storage_key(&self) -> String {
         match self {
             Self::Local => "local".into(),

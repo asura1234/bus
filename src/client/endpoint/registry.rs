@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::time::Instant;
 
-use super::health::{EndpointHealth, HealthAction};
 use super::ClientEndpointId;
 use crate::protocol::ClientMessage;
 
@@ -49,10 +48,6 @@ impl EndpointNegotiation {
             )
             && self.supports_method("client_shell.surface.set")
     }
-
-    pub(crate) fn supports_health_check(&self) -> bool {
-        self.supports_capability(crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY)
-    }
 }
 
 pub(crate) struct EndpointConnection {
@@ -60,7 +55,6 @@ pub(crate) struct EndpointConnection {
     pub(crate) generation: u64,
     pub(crate) surface_active: bool,
     pub(crate) negotiation: EndpointNegotiation,
-    health: Option<EndpointHealth>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,8 +137,6 @@ impl EndpointRegistry {
         negotiation: EndpointNegotiation,
         surface_active: bool,
     ) {
-        let health = (!endpoint_id.is_local() && negotiation.supports_health_check())
-            .then(|| EndpointHealth::new(Instant::now()));
         if let Some(mut previous) = self.connections.insert(
             endpoint_id,
             EndpointConnection {
@@ -152,7 +144,6 @@ impl EndpointRegistry {
                 generation,
                 surface_active,
                 negotiation,
-                health,
             },
         ) {
             previous.transport.disconnect();
@@ -163,71 +154,6 @@ impl EndpointRegistry {
         self.connections
             .get(endpoint_id)
             .is_some_and(|connection| connection.generation == generation)
-    }
-
-    pub(crate) fn received(
-        &mut self,
-        endpoint_id: &ClientEndpointId,
-        generation: u64,
-        now: Instant,
-    ) {
-        if let Some(health) = self
-            .connections
-            .get_mut(endpoint_id)
-            .filter(|connection| connection.generation == generation)
-            .and_then(|connection| connection.health.as_mut())
-        {
-            health.received(now);
-        }
-    }
-
-    pub(crate) fn mark_ready(&mut self, endpoint_id: &ClientEndpointId, generation: u64) {
-        if let Some(health) = self
-            .connections
-            .get_mut(endpoint_id)
-            .filter(|connection| connection.generation == generation)
-            .and_then(|connection| connection.health.as_mut())
-        {
-            health.ready();
-        }
-    }
-
-    pub(crate) fn tick_health(&mut self, now: Instant) {
-        let actions = self
-            .connections
-            .iter()
-            .filter_map(|(endpoint_id, connection)| {
-                connection
-                    .health
-                    .as_ref()
-                    .map(|health| (endpoint_id.clone(), health.action(now)))
-            })
-            .filter(|(_, action)| *action != HealthAction::None)
-            .collect::<Vec<_>>();
-        for (endpoint_id, action) in actions {
-            match action {
-                HealthAction::None => {}
-                HealthAction::Ping => {
-                    let ping = ClientMessage::EndpointControl {
-                        kind: crate::protocol::endpoint::HEALTH_PING_KIND.into(),
-                        data: String::new(),
-                    };
-                    if self.send_to(&endpoint_id, &ping) == EndpointSendOutcome::Sent {
-                        if let Some(health) = self
-                            .connections
-                            .get_mut(&endpoint_id)
-                            .and_then(|connection| connection.health.as_mut())
-                        {
-                            health.ping_sent(now);
-                        }
-                    }
-                }
-                HealthAction::Expired => self.record_failure(
-                    endpoint_id,
-                    io::Error::new(io::ErrorKind::TimedOut, "endpoint health check timed out"),
-                ),
-            }
-        }
     }
 
     pub(crate) fn set_active(&mut self, endpoint_id: &ClientEndpointId) -> bool {
@@ -369,35 +295,13 @@ mod tests {
             vec![
                 crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY.into(),
                 crate::protocol::endpoint::PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
-                crate::protocol::endpoint::HEALTH_CHECK_CAPABILITY.into(),
             ],
         )
     }
 
     #[test]
-    fn recovered_local_uses_transport_failure_not_remote_health_probes() {
-        let mut registry = EndpointRegistry::empty();
-        let sent = Arc::new(Mutex::new(Vec::new()));
-        registry.insert(
-            ClientEndpointId::Local,
-            FakeTransport {
-                sent: sent.clone(),
-                error: None,
-            },
-            2,
-            negotiation(),
-            false,
-        );
-        registry.tick_health(Instant::now() + std::time::Duration::from_secs(300));
-        assert!(registry.connection(&ClientEndpointId::Local).is_some());
-        assert!(sent.lock().unwrap().is_empty());
-        assert!(registry.take_failures().is_empty());
-    }
-
-    #[test]
     fn negotiated_surface_interest_requires_capability_and_method() {
         assert!(negotiation().supports_surface_interest());
-        assert!(negotiation().supports_health_check());
         assert!(
             !EndpointNegotiation::new(vec!["client_shell.surface.set".into()], Vec::new())
                 .supports_surface_interest()
