@@ -53,6 +53,15 @@ asked:
 bus send --room "$room_id" --as claude-orch --to claude-dev --text "..."
 ```
 
+### Move an existing session into MASTER
+
+A conversation that already runs as Claude Code, Codex or Cursor can become an
+orchestrator without losing its context. The human quits it, then adds it to
+MASTER with its session ID in the launch args (`--resume SESSION_ID`, or
+`resume SESSION_ID` for Codex) and its original PWD. Bus resumes that session,
+binds it to the new agent and still delivers the orchestrator prompt; see
+"Move an existing session into MASTER" in [How to use the Bus CLI](how-to-bus-cli.md).
+
 ## The workflow file
 
 Each room has a workflow file, a living plan the orchestrator keeps. Follow

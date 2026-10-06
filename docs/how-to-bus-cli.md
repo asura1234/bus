@@ -152,6 +152,39 @@ bus agent orchestrate "$orchestrator_id" --none
 The system prompt is fixed at launch, so Bus sends the orchestrator a message
 naming its new room, or saying it has none.
 
+Additional launch args (`--args`, or the form's Args field) work for MASTER
+agents exactly as in any room and combine with the Bus-owned prompt arguments.
+
+### Move an existing session into MASTER
+
+An agent can adopt an existing provider session instead of starting a new one,
+for example to turn a Claude Code conversation into an orchestrator. Pass the
+session's ID (a UUID) in the launch args, in the provider's resume form:
+
+| Provider | Launch args | Where to find the ID |
+| --- | --- | --- |
+| Claude Code | `--resume SESSION_ID` | `/status` in the session |
+| Codex | `resume SESSION_ID` (first) | `/status` in the session |
+| Cursor | `--resume SESSION_ID` | `cursor-agent ls` |
+
+```sh
+bus agent add --room master --name claude-orch --provider claude \
+  --pwd /path/the/session/ran/in --orchestrates "$room_id" \
+  --args "--resume 160d1f8b-9023-44b8-9bc7-24333effb185"
+```
+
+- Quit the session wherever it runs first; two processes must not share it.
+- Use the session's original PWD: Claude Code finds sessions by directory.
+- Bus rejects anything but one UUID: no picker, `--continue`, `--last` or
+  `--fork-session`, and a session already bound to another Bus agent.
+- The provider's session-start hook binds the session to the new agent, so
+  callbacks, delivery and resume after a restart work as for a fresh agent.
+- The orchestrator prompt still applies. Claude Code gets
+  `--system-prompt-snapshot off` with the prompt file, because a resumed
+  conversation otherwise replays the system prompt it started with. A resumed
+  Codex thread keeps its original developer instructions, so Bus sends the
+  prompt as its first message, as for Cursor.
+
 The generic forms are `agent add --room master ... [--orchestrates ROOM]
 [--system-prompt TEXT | --system-prompt-file PATH]` and
 `agent orchestrate AGENT (--room ROOM | --none)`. Only agents in MASTER can
@@ -268,9 +301,17 @@ bus state | jq '.result.settings'
 - `usage` has one entry per provider: `claude`, `codex`, and `cursor`. An
   `observed` entry reports `five_hour` and `weekly` windows with
   `used_percent`, `resets_at`, and `window_minutes`, plus `read_at_ms` and
-  `observed_by_agent`. Codex usage is read after each Codex turn. Claude and
-  Cursor usage is not collected yet. Status `unknown`, with a `reason`, means
-  Bus has no data, never that the allowance is unused.
+  `observed_by_agent`. Codex usage is read after each Codex turn. Claude usage
+  comes from its status-line payload, checked at most once per second. Bus
+  preserves the configured status-line command, including claude-hud, with
+  unchanged stdin and stdout and a two-second execution limit. User, project,
+  and project-local status-line settings are captured when the agent launches;
+  the same settings are reused on resume. Without a configured command, Bus
+  shows a minimal status line. Managed settings can override the tap.
+  Claude windows become `null` after their reported reset time, and observations
+  expire after 15 minutes. Missing or expired data reports `unknown` with a
+  `reason`; it never means the allowance is unused. After Bus restarts, Claude
+  must emit a fresh observation. Cursor usage is not collected yet.
 - `settings` holds the UI preferences, currently `color_blind_mode`.
 
 ## Sound notifications
