@@ -133,7 +133,7 @@ def test_unknown_base_fails_closed(tmp_path: Path) -> None:
 # --- plan_batches ------------------------------------------------------------
 
 
-def test_batches_use_the_fewest_rounds(tmp_path: Path) -> None:
+def test_batches_use_the_fewest_rounds() -> None:
     modules = [Module(name=f"m{i}", file_count=1) for i in range(12)]
     batches = plan_batches(modules, 5)
     assert len(batches) == 3
@@ -141,7 +141,7 @@ def test_batches_use_the_fewest_rounds(tmp_path: Path) -> None:
     assert all(len(batch) <= 5 for batch in batches)
 
 
-def test_batches_spread_the_largest_modules_across_rounds(tmp_path: Path) -> None:
+def test_batches_spread_the_largest_modules_across_rounds() -> None:
     # Rounds are serial and a round takes as long as its largest module: two giant modules must land in different rounds.
     modules = [
         Module(name="huge-a", file_count=100),
@@ -155,16 +155,16 @@ def test_batches_spread_the_largest_modules_across_rounds(tmp_path: Path) -> Non
     assert not any({"huge-a", "huge-b"} <= names for names in names_per_round)
 
 
-def test_single_module_is_one_round(tmp_path: Path) -> None:
+def test_single_module_is_one_round() -> None:
     assert plan_batches([Module(name="only", file_count=3)], 5) == [[Module(name="only", file_count=3)]]
 
 
-def test_zero_parallelism_fails_closed(tmp_path: Path) -> None:
+def test_zero_parallelism_fails_closed() -> None:
     with pytest.raises(DeadCodeScopeError, match="must be >= 1"):
         plan_batches([Module(name="m", file_count=1)], 0)
 
 
-def test_no_modules_fails_closed(tmp_path: Path) -> None:
+def test_no_modules_fails_closed() -> None:
     with pytest.raises(DeadCodeScopeError, match="no modules to plan"):
         plan_batches([], 5)
 
