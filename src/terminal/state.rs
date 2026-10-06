@@ -1322,7 +1322,8 @@ impl TerminalState {
                 "herdr:codex",
                 "codex",
                 Some("startup" | "clear" | "resume" | "compact")
-            ) | ("herdr:mastracode", "mastracode", Some("startup"))
+            ) | ("herdr:cursor", "cursor", Some("new"))
+                | ("herdr:mastracode", "mastracode", Some("startup"))
                 | ("herdr:hermes", "hermes", Some("startup" | "new" | "resume"))
                 | ("herdr:opencode", "opencode", Some("select"))
                 | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
@@ -4544,6 +4545,45 @@ mod tests {
                 "{session_start_source} should store the replacement session"
             );
         }
+    }
+
+    #[test]
+    fn cursor_new_chat_session_ref_replaces_existing_session_ref() {
+        let mut terminal = test_terminal();
+        terminal
+            .set_agent_session_ref(
+                "herdr:cursor".into(),
+                "cursor".into(),
+                crate::agent_resume::AgentSessionRef::id("cursor-chat"),
+                Some(20),
+            )
+            .expect("initial session should be accepted");
+        assert!(terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:cursor".into(),
+                "cursor".into(),
+                crate::agent_resume::AgentSessionRef::id("cursor-startup-chat"),
+                Some(21),
+                Some("startup".into()),
+            )
+            .is_none());
+        let mutation = terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:cursor".into(),
+                "cursor".into(),
+                crate::agent_resume::AgentSessionRef::id("cursor-new-chat"),
+                Some(22),
+                Some("new".into()),
+            )
+            .expect("a new chat replaces the session");
+        assert!(mutation.session_ref_changed);
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("cursor-new-chat")
+        );
     }
 
     #[test]
