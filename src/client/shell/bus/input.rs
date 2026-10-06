@@ -155,6 +155,17 @@ impl BusUi {
                     return true;
                 }
                 if self.terminal.is_none()
+                    && self.form.is_none()
+                    && self
+                        .view
+                        .notes_box
+                        .contains((mouse.column, mouse.row).into())
+                {
+                    self.scroll_notes(mouse.kind == MouseEventKind::ScrollDown, 1);
+                    outcome.repaint = true;
+                    return true;
+                }
+                if self.terminal.is_none()
                     && !self.recipient_menu
                     && self
                         .view
@@ -303,6 +314,26 @@ impl BusUi {
                 .composer_rows
                 .saturating_sub(usize::from(self.view.composer.height));
             local.composer_scroll = Some(if forward {
+                offset.saturating_add(lines).min(maximum)
+            } else {
+                offset.min(maximum).saturating_sub(lines)
+            });
+        }
+    }
+    /// Starting to edit the notes brings their caret back into view.
+    fn reveal_notes_caret(&mut self) {
+        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
+            local.notes_scroll = None;
+        }
+    }
+    fn scroll_notes(&mut self, forward: bool, lines: usize) {
+        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
+            let offset = local.notes_scroll.unwrap_or(self.view.notes_scroll);
+            let maximum = self
+                .view
+                .notes_rows
+                .saturating_sub(usize::from(self.view.notes.height));
+            local.notes_scroll = Some(if forward {
                 offset.saturating_add(lines).min(maximum)
             } else {
                 offset.min(maximum).saturating_sub(lines)
@@ -580,6 +611,9 @@ impl BusUi {
                 }
             }
             Action::Notes => {
+                if !self.notes_focus {
+                    self.reveal_notes_caret();
+                }
                 self.notes_focus = true;
                 self.recipient_menu = false;
             }
@@ -805,7 +839,12 @@ impl BusUi {
                     self.start_rename(RenameTarget::Room(id));
                 }
             }
-            (KeyCode::F(3), _) => self.notes_focus = !self.notes_focus,
+            (KeyCode::F(3), _) => {
+                if !self.notes_focus {
+                    self.reveal_notes_caret();
+                }
+                self.notes_focus = !self.notes_focus;
+            }
             (KeyCode::Char('e' | 'E'), modifiers)
                 if modifiers.contains(KeyModifiers::CONTROL)
                     && modifiers.contains(KeyModifiers::SHIFT)
@@ -821,6 +860,12 @@ impl BusUi {
                         ComposerSize::Full
                     };
                 }
+            }
+            (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) if self.notes_focus => {
+                self.scroll_notes(
+                    code == KeyCode::PageDown,
+                    usize::from(self.view.notes.height.saturating_sub(1).max(1)),
+                );
             }
             (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) if !self.notes_focus => {
                 self.scroll_composer(
@@ -884,7 +929,9 @@ impl BusUi {
             _ => {
                 if let Some(room) = self.room {
                     if let Some(local) = self.locals.get_mut(&room) {
-                        if !self.notes_focus {
+                        if self.notes_focus {
+                            local.notes_scroll = None;
+                        } else {
                             local.composer_scroll = None;
                         }
                         let editor = if self.notes_focus {

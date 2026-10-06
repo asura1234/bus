@@ -26,8 +26,8 @@ Mouse drag     Select notes, history or draft text and copy it
 @              Choose agents (Shift+2 on US keyboards)
 + / Ctrl+F     Add files (Shift+= on US keyboards)
 Ctrl+Shift+E   Toggle full-height / compact composer
-Page Up/Down   Scroll the draft without moving the caret
-Mouse wheel    Scroll sidebar, history, recipients or draft under the pointer
+Page Up/Down   Scroll the draft, or the notes while editing (F3)
+Mouse wheel    Scroll sidebar, notes, history, recipients or draft under the pointer
 F3             Switch notes / composer
 /help + Enter  Open this guide locally
 

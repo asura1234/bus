@@ -92,7 +92,7 @@ pub(super) struct View {
     pub composer_rows: usize,
     composer_box: Rect,
     composer_divider: Rect,
-    notes_box: Rect,
+    pub notes_box: Rect,
     history_divider: Rect,
     dialog: Rect,
     dialog_rows_start: usize,
@@ -106,6 +106,8 @@ pub(super) struct View {
     pub cursor: Option<crate::protocol::CursorState>,
     pub notes: Rect,
     pub notes_scroll: usize,
+    /// Wrapped rows of the room notes, of which `notes` shows a window.
+    pub notes_rows: usize,
     /// Text columns of the visible history rows.
     pub history_text: Rect,
     /// Selected cells, painted after the rows they cover.
@@ -1001,27 +1003,56 @@ impl BusUi {
                 false,
             );
         }
-        let note_height = 3.min(composer_y.saturating_sub(5));
+        // The notes box grows with its text up to a quarter of the window,
+        // keeps one row for the F3 prompt, and scrolls beyond that. History
+        // takes the rows below it.
+        let note_lines = wrap(&local.notes.text, width).len().max(1);
+        let note_height = (note_lines.min(usize::from((main.height / 4).max(1))) as u16)
+            .min(composer_y.saturating_sub(5));
         if note_height > 0 {
             view.notes_box =
                 Rect::new(main.x + 1, 2, main.width.saturating_sub(2), note_height + 2);
         }
         // The expanded draft may hide the top section. Never paint a history
         // separator over its editor or reserve rows from full-screen editing.
-        let history_y = 8;
+        let history_y = 5 + note_height.max(1);
         if history_y - 1 < view.composer_box.y {
             view.history_divider =
                 Rect::new(main.x + 1, history_y - 1, main.width.saturating_sub(2), 1);
         }
         view.notes = Rect::new(x, 3, width, note_height);
-        (view.notes_scroll, _) = view.editor_scrolled(
+        (view.notes_scroll, view.notes_rows) = view.editor_scrolled(
             view.notes,
             &local.notes,
             Some(Action::Notes),
             self.notes_focus,
-            None,
+            // Read unfocused notes from the top unless the wheel moved them.
+            local.notes_scroll.or((!self.notes_focus).then_some(0)),
             self.view.notes_scroll,
         );
+        // Mark hidden notes on the box's top and bottom borders.
+        let notes_box = view.notes_box;
+        if note_height > 0 && notes_box.width > 12 {
+            let more_x = notes_box.right().saturating_sub(9);
+            if view.notes_scroll > 0 {
+                view.row(
+                    Rect::new(more_x, notes_box.y, 7, 1),
+                    "↑ more",
+                    None,
+                    false,
+                    true,
+                );
+            }
+            if view.notes_scroll + usize::from(note_height) < view.notes_rows {
+                view.row(
+                    Rect::new(more_x, notes_box.bottom() - 1, 7, 1),
+                    "↓ more",
+                    None,
+                    false,
+                    true,
+                );
+            }
+        }
         if note_height > 0 && local.notes.text.is_empty() {
             view.row(
                 Rect::new(x, 3, width, 1),

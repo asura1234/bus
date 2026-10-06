@@ -392,7 +392,7 @@ fn room_chrome_uses_shared_phosphor_green() {
         (1, 4, "─"),                       // Rooms/agents separator.
         (27, 0, "│"),                      // Column separator.
         (29, 2, "┌"),                      // Notes box.
-        (29, 7, "─"),                      // History separator.
+        (29, 5, "─"),                      // History separator under one-row notes.
         (editor.x - 1, editor.y - 3, "┌"), // Composer box.
         (editor.x, editor.y - 1, "─"),     // Composer toolbar separator.
     ] {
@@ -1088,19 +1088,20 @@ fn room_notes_have_a_box_and_top_section_is_separated_from_history() {
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
     ui.render(&mut buffer);
     let color = buffer[(27, 0)].fg;
-    for (x, y, symbol) in [(29, 2, "┌"), (98, 2, "┐"), (29, 6, "└"), (98, 6, "┘")] {
+    // One line of notes gets a one-row box; history starts right below it.
+    for (x, y, symbol) in [(29, 2, "┌"), (98, 2, "┐"), (29, 4, "└"), (98, 4, "┘")] {
         assert_eq!(buffer[(x, y)].symbol(), symbol);
         assert_eq!(buffer[(x, y)].fg, color);
     }
     for x in 30..98 {
-        for y in [2, 6, 7] {
+        for y in [2, 4, 5] {
             assert_eq!(buffer[(x, y)].symbol(), "─");
             assert_eq!(buffer[(x, y)].fg, color);
         }
     }
     assert_eq!(buffer[(30, 3)].symbol(), "R");
-    assert_eq!(buffer[(30, 8)].symbol(), "Y");
-    assert_eq!(buffer[(30, 9)].symbol(), "h");
+    assert_eq!(buffer[(30, 6)].symbol(), "Y");
+    assert_eq!(buffer[(30, 7)].symbol(), "h");
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     key(&mut ui, KeyCode::Char('!'), KeyModifiers::NONE);
     assert_eq!(ui.locals[&room].notes.text, "Room notes!");
@@ -2936,4 +2937,118 @@ fn pasted_images_are_saved_once_under_the_bus_data_dir() {
     assert_eq!(first, again, "one image pasted twice is one file");
     assert_ne!(first, other);
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+fn screen_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
+    ui.compute_view(cols, rows);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
+    ui.render(&mut buffer);
+    (0..rows)
+        .map(|y| (0..cols).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+fn checklist(lines: usize) -> String {
+    (1..=lines)
+        .map(|line| format!("- [ ] item {line:02}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn room_notes_grow_to_a_quarter_of_the_window_and_history_takes_the_rest() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().notes = editor::Editor::new(checklist(30));
+    let rows = screen_rows(&mut ui, 100, 30);
+    // 30 rows / 4 = 7 note rows inside the box's borders.
+    assert_eq!(ui.view.notes.height, 7);
+    assert_eq!(ui.view.notes_box, ratatui::layout::Rect::new(29, 2, 70, 9));
+    assert_eq!(ui.view.history_text.y, 12, "history starts under the box");
+    assert!(rows[1].contains("# "), "the room name keeps its row");
+    assert!(rows[3].contains("item 01") && rows[9].contains("item 07"));
+    assert!(rows[10].contains("↓ more"), "{:?}", rows[10]);
+    assert!(!rows[2].contains("↑ more"));
+
+    for (cols, height, notes) in [(100, 40, 10), (100, 24, 6), (60, 24, 6)] {
+        screen_rows(&mut ui, cols, height);
+        assert_eq!(ui.view.notes.height, notes, "{cols}x{height}");
+        assert!(ui.view.notes_box.bottom() < ui.view.history_text.y);
+        assert!(
+            ui.view.history_text.height >= 1,
+            "{cols}x{height}: history keeps a row"
+        );
+    }
+
+    // Short notes shrink the box back; empty notes keep the F3 prompt row.
+    ui.locals.get_mut(&room).unwrap().notes = editor::Editor::new("two\nlines".into());
+    screen_rows(&mut ui, 100, 30);
+    assert_eq!(ui.view.notes.height, 2);
+    assert_eq!(ui.view.history_text.y, 7);
+    ui.locals.get_mut(&room).unwrap().notes = editor::Editor::new(String::new());
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert_eq!(ui.view.notes.height, 1);
+    assert!(rows[3].contains("Add notes… (F3)"));
+}
+
+#[test]
+fn room_notes_scroll_with_the_wheel_and_page_keys_and_keep_the_caret_visible() {
+    use crossterm::event::MouseEventKind::{ScrollDown, ScrollUp};
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().notes = editor::Editor::new(checklist(30));
+    screen_rows(&mut ui, 100, 30);
+    let notes = ui.view.notes;
+
+    // The wheel over the box scrolls only the notes.
+    mouse(&mut ui, ScrollDown, notes.x + 2, notes.y + 1);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(rows[3].contains("item 02"), "{:?}", rows[3]);
+    assert!(rows[2].contains("↑ more") && rows[10].contains("↓ more"));
+    assert_eq!(ui.main_scroll, ui.view.history_max_scroll);
+    for _ in 0..40 {
+        mouse(&mut ui, ScrollDown, notes.x + 2, notes.y + 1);
+    }
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(rows[9].contains("item 30") && !rows[10].contains("↓ more"));
+    mouse(&mut ui, ScrollUp, notes.x + 2, notes.y + 1);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(rows[9].contains("item 29"));
+
+    // While editing, the caret starts in view, PgDn/PgUp page, and typing or
+    // arrows bring the caret back into view.
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(
+        rows[9].contains("item 30"),
+        "F3 brings the end caret into view"
+    );
+    ui.locals.get_mut(&room).unwrap().notes.cursor = 0;
+    screen_rows(&mut ui, 100, 30);
+    let visible = |ui: &BusUi| {
+        ui.cursor()
+            .is_some_and(|cursor| ui.view.notes.contains((cursor.x, cursor.y).into()))
+    };
+    assert!(visible(&ui));
+    key(&mut ui, KeyCode::PageDown, KeyModifiers::NONE);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(
+        rows[3].contains("item 07"),
+        "a page keeps one row of context"
+    );
+    assert!(!visible(&ui), "paging scrolls without moving the caret");
+    key(&mut ui, KeyCode::PageUp, KeyModifiers::NONE);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(rows[3].contains("item 01"));
+    for _ in 0..20 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+        screen_rows(&mut ui, 100, 30);
+        assert!(visible(&ui), "arrow keys keep the caret visible");
+    }
+    key(&mut ui, KeyCode::PageUp, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::PageUp, KeyModifiers::NONE);
+    screen_rows(&mut ui, 100, 30);
+    assert!(!visible(&ui));
+    key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
+    screen_rows(&mut ui, 100, 30);
+    assert!(visible(&ui), "typing scrolls back to the caret");
+    assert!(ui.locals[&room].notes.text.contains("x- [ ] item 21"));
 }

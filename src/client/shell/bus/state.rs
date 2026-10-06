@@ -32,6 +32,8 @@ pub(super) struct LocalRoom {
     pub composer_size: ComposerSize,
     // None follows the caret; Some is an independently scrolled viewport.
     pub composer_scroll: Option<usize>,
+    // The notes box scrolls the same way: None follows the caret.
+    pub notes_scroll: Option<usize>,
     pub recall: Vec<String>,
     pub stash: Vec<String>,
     pub history_index: Option<usize>,
@@ -51,6 +53,7 @@ impl From<&Room> for LocalRoom {
             recipients: room.draft.recipient_ids.clone(),
             composer_size: ComposerSize::Auto,
             composer_scroll: None,
+            notes_scroll: None,
             recall: Vec::new(),
             stash: Vec::new(),
             history_index: None,
@@ -648,6 +651,8 @@ impl BusUi {
     }
     pub fn notes_changed(&mut self, room: RoomId) {
         if let Some(local) = self.locals.get_mut(&room) {
+            // Editing brings the caret back into view.
+            local.notes_scroll = None;
             local.notes_generation += 1;
             let (text, generation) = (local.notes.text.clone(), local.notes_generation);
             self.queue(
