@@ -811,69 +811,6 @@ fn decode_clipboard_payload_rejects_invalid_base64() {
 }
 
 #[test]
-fn terminal_control_input_command_accepts_text() {
-    let action =
-        terminal_control_command_from_json(r#"{"type":"terminal.input","text":"hello"}"#).unwrap();
-    let ClientMessage::Input { data } = action else {
-        panic!("expected input command");
-    };
-    assert_eq!(data, b"hello");
-}
-
-#[test]
-fn terminal_control_input_command_accepts_base64_bytes() {
-    let action =
-        terminal_control_command_from_json(r#"{"type":"terminal.input","bytes":"G1tB"}"#).unwrap();
-    let ClientMessage::Input { data } = action else {
-        panic!("expected input command");
-    };
-    assert_eq!(data, b"\x1b[A");
-}
-
-#[test]
-fn terminal_control_resize_command_maps_to_client_resize() {
-    let action = terminal_control_command_from_json(
-        r#"{"type":"terminal.resize","cols":100,"rows":30,"cell_width_px":8,"cell_height_px":16}"#,
-    )
-    .unwrap();
-    let ClientMessage::Resize {
-        cols,
-        rows,
-        cell_width_px,
-        cell_height_px,
-        pixel_mouse,
-    } = action
-    else {
-        panic!("expected resize command");
-    };
-    assert_eq!(
-        (cols, rows, cell_width_px, cell_height_px),
-        (100, 30, 8, 16)
-    );
-    assert!(!pixel_mouse);
-}
-
-#[test]
-fn terminal_control_scroll_command_maps_to_attach_scroll() {
-    let action = terminal_control_command_from_json(
-        r#"{"type":"terminal.scroll","direction":"up","lines":3}"#,
-    )
-    .unwrap();
-    let ClientMessage::AttachScroll {
-        source,
-        direction,
-        lines,
-        ..
-    } = action
-    else {
-        panic!("expected scroll command");
-    };
-    assert_eq!(source, AttachScrollSource::Wheel);
-    assert_eq!(direction, AttachScrollDirection::Up);
-    assert_eq!(lines, 3);
-}
-
-#[test]
 fn forward_clipboard_uses_local_clipboard_path() {
     unsafe {
         std::env::set_var("SSH_CONNECTION", "1 2 3 4");

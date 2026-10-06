@@ -33,7 +33,6 @@ mod shell_runtime;
 mod startup;
 mod state;
 mod terminal_geometry;
-mod terminal_sessions;
 mod terminal_setup;
 mod timer;
 mod transport;
@@ -52,8 +51,7 @@ use transport::*;
 
 #[cfg(test)]
 pub(crate) use shell::{ClientShellConfig, ClientShellState};
-pub use startup::{run_client, run_terminal_attach};
-pub use terminal_sessions::{run_terminal_session_control, run_terminal_session_observe};
+pub use startup::run_client;
 
 #[cfg(not(windows))]
 use terminal_geometry::query_host_terminal_appearance;
@@ -113,8 +111,6 @@ use handshake::{
 use notifications::{handle_notify, handle_shell_notification_effects};
 #[cfg(test)]
 use notifications::{handle_notify_with_notifiers, sound_from_notify_message};
-#[cfg(test)]
-use terminal_sessions::terminal_control_command_from_json;
 
 #[cfg(unix)]
 use std::collections::HashMap;
@@ -131,9 +127,9 @@ use tracing::{debug, info, warn};
 
 use crate::ipc::LocalStream;
 use crate::protocol::render_ansi;
-use crate::protocol::{self, ClientMessage, FrameData, ServerMessage, MAX_GRAPHICS_FRAME_SIZE};
 #[cfg(test)]
-use crate::protocol::{AttachScrollDirection, AttachScrollSource, NotifyKind};
+use crate::protocol::NotifyKind;
+use crate::protocol::{self, ClientMessage, FrameData, ServerMessage, MAX_GRAPHICS_FRAME_SIZE};
 use crate::server::socket_paths::client_socket_path;
 
 #[derive(Clone, Default)]

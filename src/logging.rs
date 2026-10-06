@@ -77,14 +77,6 @@ pub(crate) fn init_file_logging_at(dir: PathBuf, file_name: &str) {
         .try_init();
 }
 
-pub(crate) fn help_log_paths_summary() -> String {
-    let dir = crate::session::data_dir();
-    format!(
-        "{} (plus herdr-client.log, herdr-server.log)",
-        dir.join("herdr.log").display()
-    )
-}
-
 pub(crate) fn startup(role: &'static str) {
     tracing::info!(
         event = "app.startup",

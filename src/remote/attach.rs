@@ -79,62 +79,6 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     run_client_process(&local_socket, &reattach_command, remote.keybindings)
 }
 
-pub(crate) fn prepare_saved_ssh(target: &str, session_name: &str) -> io::Result<()> {
-    super::validate_remote_target(target)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    crate::session::validate_name(session_name)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let manage_ssh_config = crate::config::Config::load()
-        .config
-        .remote
-        .manage_ssh_config;
-    let ssh = RemoteSsh::new(
-        target.to_owned(),
-        manage_ssh_config,
-        session_name.to_owned(),
-    );
-    let prepared = prepare_remote_herdr(&ssh, false, true)?;
-    ensure_remote_server_ready(
-        &ssh,
-        &prepared.remote_herdr,
-        prepared.stop_after_install_approved,
-        false,
-        true,
-    )?;
-
-    // The bridge already owns daemon startup. EOF closes only this temporary attachment,
-    // leaving the named server running even when no local TUI is open yet.
-    let output = ssh.sh_output(&format!(
-        "{} </dev/null",
-        remote_bridge_command(&prepared.remote_herdr, session_name)
-    ))?;
-    if !output.status.success() {
-        return Err(command_failed("remote server startup failed", &output));
-    }
-    match remote_server_status(&ssh, &prepared.remote_herdr, true)? {
-        RemoteServerStatus::Running {
-            endpoint_protocol_generation,
-            surface_interest,
-            health_check,
-            detached_server_daemon,
-            ..
-        } if remote_server_restart_reason(
-            endpoint_protocol_generation,
-            detached_server_daemon,
-            true,
-            surface_interest,
-            health_check,
-        )
-        .is_none() =>
-        {
-            Ok(())
-        }
-        _ => Err(io::Error::other(
-            "remote server is not ready for saved machines",
-        )),
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemotePlatform {
     os: &'static str,

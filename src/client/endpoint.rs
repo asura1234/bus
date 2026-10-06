@@ -1,6 +1,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use sha2::{Digest as _, Sha256};
 
 mod activation;
@@ -39,6 +40,7 @@ impl ProfileId {
         Ok(Self(value))
     }
 
+    #[cfg(test)]
     pub(crate) fn generate() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);

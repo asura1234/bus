@@ -17,6 +17,7 @@ const MIN_SOCKET_TIMEOUT: Duration = Duration::from_millis(1);
 
 static EXPLICIT_SESSION_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(any(unix, test))]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SessionInfo {
     pub name: String,
@@ -184,6 +185,7 @@ pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
     data_dir_for(name).join("herdr-client.sock")
 }
 
+#[cfg(any(unix, test))]
 pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
     let mut sessions = vec![session_info(None)];
     let sessions_dir = crate::config::config_dir().join("sessions");
@@ -211,6 +213,7 @@ pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
     Ok(sessions)
 }
 
+#[cfg(any(unix, test))]
 pub fn session_info(name: Option<&str>) -> SessionInfo {
     let default = name.is_none();
     let display_name = name.unwrap_or(DEFAULT_SESSION_NAME).to_string();
@@ -225,14 +228,6 @@ pub fn session_info(name: Option<&str>) -> SessionInfo {
     }
 }
 
-pub fn parse_target_name(name: &str) -> Result<Option<String>, String> {
-    normalize_name(name)
-}
-
-pub fn stop_session(name: Option<&str>) -> Result<SessionInfo, String> {
-    stop_session_with_timeout(name, STOP_WAIT_TIMEOUT)
-}
-
 pub(crate) fn stop_active_server() -> Result<(), String> {
     let socket_path = active_api_socket_path();
     let client_socket_path = crate::server::socket_paths::client_socket_path();
@@ -242,19 +237,6 @@ pub(crate) fn stop_active_server() -> Result<(), String> {
         STOP_WAIT_TIMEOUT,
         "server",
     )
-}
-
-fn stop_session_with_timeout(name: Option<&str>, timeout: Duration) -> Result<SessionInfo, String> {
-    let socket_path = api_socket_path_for(name);
-    let client_socket_path = client_socket_path_for(name);
-    let label = format!("session {}", name.unwrap_or(DEFAULT_SESSION_NAME));
-    stop_socket_with_timeout(
-        socket_path.clone(),
-        vec![socket_path, client_socket_path],
-        timeout,
-        &label,
-    )?;
-    Ok(session_info(name))
 }
 
 fn stop_socket_with_timeout(
@@ -294,26 +276,6 @@ fn stop_socket_with_timeout(
         ));
     }
     Ok(())
-}
-
-pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
-    if name == DEFAULT_SESSION_NAME {
-        return Err("deleting the default session is not supported".to_string());
-    }
-    validate_name(name)?;
-    let socket_path = api_socket_path_for(Some(name));
-    if is_running_at(&socket_path) {
-        return Err(format!(
-            "session {name} is running; stop it before deleting"
-        ));
-    }
-    let info = session_info(Some(name));
-    let dir = data_dir_for(Some(name));
-    match std::fs::remove_dir_all(&dir) {
-        Ok(()) => Ok(info),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(info),
-        Err(err) => Err(err.to_string()),
-    }
 }
 
 fn send_stop_request(
@@ -566,55 +528,6 @@ mod tests {
             None
         );
         assert!(handle.join().unwrap().contains("server.stop"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn stop_session_times_out_when_socket_stays_open_without_response() {
-        let _guard = env_lock().lock().unwrap();
-        let config_home = PathBuf::from(format!("/tmp/hs-stop-open-{}", std::process::id()));
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
-        let session_name = "silent";
-        let socket_path = api_socket_path_for(Some(session_name));
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
-        let _ = std::fs::remove_file(&socket_path);
-        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let keep_running_for_thread = keep_running.clone();
-        let handle = std::thread::spawn(move || {
-            let mut held_streams = Vec::new();
-            while keep_running_for_thread.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        if let Ok(reader_stream) = stream.try_clone() {
-                            let mut request = String::new();
-                            match BufReader::new(reader_stream).read_line(&mut request) {
-                                Ok(0) => continue,
-                                Ok(_) if request.contains("server.stop") => {
-                                    held_streams.push(stream)
-                                }
-                                Ok(_) => {}
-                                Err(_) => continue,
-                            }
-                        }
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        let err = stop_session_with_timeout(Some(session_name), Duration::from_millis(75))
-            .expect_err("silent session should fail after timeout");
-
-        assert!(err.contains("did not stop"), "{err}");
-        keep_running.store(false, Ordering::Relaxed);
-        handle.join().unwrap();
-        let _ = std::fs::remove_dir_all(&config_home);
-        std::env::remove_var("XDG_CONFIG_HOME");
     }
 
     #[test]
@@ -962,75 +875,12 @@ mod tests {
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn stop_session_fails_when_socket_remains_reachable_after_timeout() {
-        let _guard = env_lock().lock().unwrap();
-        let config_home = PathBuf::from(format!("/tmp/hs-stop-{}", std::process::id()));
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
-        let session_name = "slow";
-        let socket_path = api_socket_path_for(Some(session_name));
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
-        let _ = std::fs::remove_file(&socket_path);
-        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let keep_running_for_thread = keep_running.clone();
-        let handle = std::thread::spawn(move || {
-            while keep_running_for_thread.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        if let Ok(reader_stream) = stream.try_clone() {
-                            let mut request = String::new();
-                            match BufReader::new(reader_stream).read_line(&mut request) {
-                                Ok(0) => continue,
-                                Ok(_) if request.trim().is_empty() => continue,
-                                Ok(_) => {}
-                                Err(_) => continue,
-                            }
-                        }
-                        let _ = stream.write_all(b"{\"id\":\"cli:session:stop\",\"result\":{}}\n");
-                        let _ = stream.flush();
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        let err = stop_session_with_timeout(Some(session_name), Duration::from_millis(75))
-            .expect_err("still-running session should fail");
-
-        assert!(err.contains("did not stop"), "{err}");
-        assert!(
-            err.contains(socket_path.to_string_lossy().as_ref()),
-            "{err}"
-        );
-        keep_running.store(false, Ordering::Relaxed);
-        handle.join().unwrap();
-        let _ = std::fs::remove_dir_all(&config_home);
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
-
     #[test]
     fn invalid_names_are_rejected() {
         let _guard = env_lock().lock().unwrap();
         assert!(validate_name("../prod").is_err());
         assert!(validate_name("").is_err());
         assert!(validate_name("work session").is_err());
-    }
-
-    #[test]
-    fn parse_default_target_name_maps_to_default_session() {
-        assert_eq!(parse_target_name(DEFAULT_SESSION_NAME).unwrap(), None);
-        assert_eq!(parse_target_name("work").unwrap(), Some("work".to_string()));
-    }
-
-    #[test]
-    fn delete_default_session_is_rejected() {
-        assert!(delete_session(DEFAULT_SESSION_NAME).is_err());
     }
 
     #[test]

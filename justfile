@@ -87,6 +87,3 @@ integration-assets-test:
 build-libghostty-vt:
     scripts/build_vendored_libghostty_vt.sh
 
-# Print default config
-default-config:
-    cargo run --release --locked -- --default-config

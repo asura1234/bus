@@ -370,6 +370,7 @@ pub fn detect_with_osc(agent: Agent, input: DetectionInput<'_>) -> AgentDetectio
     evaluate_loaded_manifest(agent, input, loaded, false).into_detection()
 }
 
+#[cfg(test)]
 pub fn explain(agent: Agent, screen_content: &str) -> DetectionExplain {
     explain_with_input(
         agent,
@@ -386,32 +387,6 @@ pub fn explain_with_input(agent: Agent, input: DetectionInput<'_>) -> DetectionE
         return fallback_explain(Some(agent), None, true);
     };
     evaluate_loaded_manifest(agent, input, loaded, true)
-}
-
-pub fn explain_for_label(agent_label: &str, screen_content: &str) -> DetectionExplain {
-    let Some(agent) = parse_agent_label(agent_label) else {
-        return DetectionExplain {
-            agent: Some(agent_label.to_string()),
-            state: AgentState::Unknown,
-            source: None,
-            matched_rule: None,
-            screen_detection_skipped: false,
-            visible_idle: false,
-            visible_blocker: false,
-            visible_working: false,
-            skip_state_update: false,
-            skipped_update_reason: None,
-            fallback_reason: Some("unknown_agent".to_string()),
-            evaluated_rules: Vec::new(),
-            warning: None,
-            manifest_version: None,
-            cached_remote_version: None,
-            local_override_shadowing_remote: false,
-            remote_update_status: None,
-            remote_update_error: None,
-        };
-    };
-    explain(agent, screen_content)
 }
 
 pub fn should_skip_state_update(agent: Agent, screen_content: &str) -> bool {
