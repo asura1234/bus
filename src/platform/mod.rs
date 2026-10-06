@@ -201,6 +201,7 @@ pub struct ClipboardImage {
     pub extension: &'static str,
 }
 
+#[cfg(any(unix, test))]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum LimitedRead {
     Empty,
@@ -208,6 +209,7 @@ pub(crate) enum LimitedRead {
     Oversized,
 }
 
+#[cfg(any(unix, test))]
 pub(crate) fn read_limited_reader(
     mut reader: impl std::io::Read,
     max_bytes: usize,
@@ -245,17 +247,10 @@ pub(crate) fn read_limited_reader(
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct RemoteSshConfigPaths {
-    pub(crate) user_config: Option<std::path::PathBuf>,
-    pub(crate) system_config: Option<std::path::PathBuf>,
-    pub(crate) multiplexing: bool,
-}
-
 #[cfg(unix)]
 mod unix_common;
 #[cfg(unix)]
-pub(crate) use unix_common::{begin_cli_output, RemoteBridgeWake};
+pub(crate) use unix_common::begin_cli_output;
 
 mod client_state;
 pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};

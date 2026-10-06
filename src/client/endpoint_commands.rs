@@ -240,23 +240,6 @@ impl EndpointCommands {
             result,
         }))
     }
-
-    /// Disconnecting an endpoint also cancels its shell-pending requests. Connection generation
-    /// rejection handles any late wire response after the lane itself is removed.
-    pub(super) fn disconnect(&mut self, endpoint_id: &ClientEndpointId) -> Vec<String> {
-        let Some(lane) = self.lanes.remove(endpoint_id) else {
-            return Vec::new();
-        };
-        let mut request_ids = lane
-            .queued
-            .into_iter()
-            .map(|command| command.request.id)
-            .collect::<Vec<_>>();
-        if let Some(command) = lane.in_flight {
-            request_ids.push(command.request_id);
-        }
-        request_ids
-    }
 }
 
 pub(super) fn parse_response(
@@ -439,132 +422,6 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_lanes_complete_independently() {
-        let remote = ClientEndpointId::Ssh(
-            crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
-        );
-        let mut commands = commands_with_in_flight();
-        commands.lanes.insert(
-            remote.clone(),
-            EndpointCommandLane {
-                in_flight: Some(InFlightCommand {
-                    generation: 2,
-                    boot_id: "boot-b".into(),
-                    request_id: "request-b".into(),
-                    response: Vec::new(),
-                    sent_at: Instant::now(),
-                }),
-                ..EndpointCommandLane::default()
-            },
-        );
-        let response = serde_json::to_vec(&SuccessResponse {
-            id: "request-b".into(),
-            result: ResponseResult::Ok {},
-        })
-        .unwrap();
-
-        let completed = commands
-            .receive_chunk(&remote, 2, "boot-b", "request-b", true, response)
-            .unwrap()
-            .expect("remote response");
-
-        assert_eq!(completed.endpoint_id, remote);
-        assert!(has_in_flight(&commands));
-        assert!(commands
-            .lanes
-            .get(&completed.endpoint_id)
-            .is_some_and(|lane| lane.in_flight.is_none()));
-    }
-
-    #[test]
-    fn retiring_complete_source_lane_cancels_queued_ids_and_keeps_other_lanes() {
-        let remote = ClientEndpointId::Ssh(
-            crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
-        );
-        let mut commands = commands_with_in_flight();
-        commands
-            .lanes
-            .get_mut(&endpoint())
-            .unwrap()
-            .queued
-            .push_back(QueuedCommand {
-                generation: 1,
-                boot_id: "boot-a".into(),
-                request: Box::new(Request {
-                    id: "queued-source".into(),
-                    method: crate::api::schema::Method::WorkspaceList(
-                        crate::api::schema::EmptyParams::default(),
-                    ),
-                }),
-            });
-        commands.lanes.insert(
-            remote.clone(),
-            EndpointCommandLane {
-                queued: VecDeque::from([QueuedCommand {
-                    generation: 2,
-                    boot_id: "boot-b".into(),
-                    request: Box::new(Request {
-                        id: "request-b".into(),
-                        method: crate::api::schema::Method::WorkspaceList(
-                            crate::api::schema::EmptyParams::default(),
-                        ),
-                    }),
-                }]),
-                ..EndpointCommandLane::default()
-            },
-        );
-
-        assert_eq!(
-            commands.retire_lane(&endpoint()),
-            vec!["request-a", "queued-source"]
-        );
-        assert!(!has_in_flight(&commands));
-        assert!(commands
-            .lanes
-            .get(&endpoint())
-            .is_some_and(|lane| lane.queued.is_empty()));
-        assert!(commands
-            .lanes
-            .get(&remote)
-            .is_some_and(|lane| !lane.queued.is_empty()));
-
-        let late_response = serde_json::to_vec(&SuccessResponse {
-            id: "request-a".into(),
-            result: ResponseResult::Ok {},
-        })
-        .unwrap();
-        assert!(commands
-            .receive_chunk(&endpoint(), 1, "boot-a", "request-a", true, late_response)
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn disconnect_returns_every_request_that_must_be_discarded() {
-        let mut commands = commands_with_in_flight();
-        commands
-            .lanes
-            .get_mut(&endpoint())
-            .unwrap()
-            .queued
-            .push_back(QueuedCommand {
-                generation: 1,
-                boot_id: "boot-a".into(),
-                request: Box::new(Request {
-                    id: "queued-a".into(),
-                    method: crate::api::schema::Method::WorkspaceList(
-                        crate::api::schema::EmptyParams::default(),
-                    ),
-                }),
-            });
-        assert_eq!(
-            commands.disconnect(&endpoint()),
-            vec!["queued-a", "request-a"]
-        );
-        assert!(!commands.lanes.contains_key(&endpoint()));
-    }
-
-    #[test]
     fn retired_request_tombstones_are_bounded() {
         let mut lane = EndpointCommandLane::default();
         for serial in 0..MAX_RETIRED_REQUESTS_PER_ENDPOINT + 10 {
@@ -579,27 +436,5 @@ mod tests {
             "boot".into(),
             format!("request-{}", MAX_RETIRED_REQUESTS_PER_ENDPOINT + 9)
         )));
-    }
-
-    #[test]
-    fn stale_or_unknown_responses_do_not_damage_the_live_lane() {
-        let mut commands = commands_with_in_flight();
-        let unknown = ClientEndpointId::Ssh(
-            crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
-        );
-
-        assert!(commands
-            .receive_chunk(&endpoint(), 2, "boot-a", "request-a", true, b"{}".to_vec())
-            .unwrap()
-            .is_none());
-        assert!(commands
-            .receive_chunk(&endpoint(), 1, "boot-b", "request-a", true, b"{}".to_vec())
-            .unwrap()
-            .is_none());
-        assert!(commands
-            .receive_chunk(&unknown, 1, "boot-a", "request-a", true, b"{}".to_vec())
-            .unwrap()
-            .is_none());
-        assert!(has_in_flight(&commands));
     }
 }

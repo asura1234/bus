@@ -14,45 +14,17 @@ use crate::protocol::endpoint::{
     ENDPOINT_PROTOCOL_GENERATION, ENDPOINT_WELCOME_KIND, INPUT_CODEC_V1, SNAPSHOT_CODEC_V1,
     SURFACE_CODEC_V1,
 };
-use crate::protocol::{
-    self, ClientMessage, RenderEncoding, ServerMessage, MAX_FRAME_SIZE, PROTOCOL_VERSION,
-};
+use crate::protocol::{self, ClientMessage, ServerMessage, MAX_FRAME_SIZE, PROTOCOL_VERSION};
 
 #[cfg(unix)]
 use super::terminal_setup::is_ssh_session;
-use super::{shell, ClientError};
+use super::ClientError;
 
 /// Time to wait for the server's Welcome reply during the handshake.
-///
-/// A local client talks to an already-connected server, so 5s is plenty. The
-/// remote bridge client (`herdr --remote`) sits behind a fresh per-attach ssh
-/// connection whose cold-connect (TCP + key exchange + auth) happens inside this
-/// window; on a high-latency link that easily exceeds 5s, so it gets a far
-/// larger budget. See issue #753.
 pub(super) const LOCAL_HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(5);
-pub(super) const REMOTE_HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(60);
-
-pub(super) fn is_remote_client_process() -> bool {
-    std::env::var(crate::remote::REMOTE_KEYBINDINGS_ENV_VAR).is_ok()
-}
-
-pub(super) fn client_shell_keybinding_source() -> shell::ClientShellKeybindingSource {
-    match std::env::var(crate::remote::REMOTE_KEYBINDINGS_ENV_VAR)
-        .ok()
-        .as_deref()
-    {
-        Some("server") => shell::ClientShellKeybindingSource::Endpoint,
-        Some(_) => shell::ClientShellKeybindingSource::RemoteLocal,
-        None => shell::ClientShellKeybindingSource::Local,
-    }
-}
-
-pub(super) fn handshake_read_timeout() -> Duration {
-    if is_remote_client_process() {
-        return REMOTE_HANDSHAKE_READ_TIMEOUT;
-    }
-    LOCAL_HANDSHAKE_READ_TIMEOUT
-}
+/// A client that is not yet the active surface may wait for the server to finish
+/// handing the surface over, so it gets a larger budget.
+pub(super) const INACTIVE_SURFACE_HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[cfg(any(unix, test))]
 pub(super) fn direct_graphics_profile_values(
@@ -77,10 +49,7 @@ fn direct_graphics_profile_allowed() -> bool {
         &term_program,
         &term,
         std::env::var_os("KITTY_WINDOW_ID").is_some(),
-        is_remote_client_process()
-            || is_ssh_session()
-            || std::env::var_os("TMUX").is_some()
-            || std::env::var_os("STY").is_some(),
+        is_ssh_session() || std::env::var_os("TMUX").is_some() || std::env::var_os("STY").is_some(),
         io::stdin().is_terminal() && io::stdout().is_terminal(),
     )
 }
@@ -119,31 +88,8 @@ fn set_handshake_recv_timeout(
 
 #[derive(Debug)]
 pub(super) struct HandshakeResult {
-    pub(super) encoding: RenderEncoding,
     pub(super) endpoint_methods: Option<Vec<String>>,
     pub(super) endpoint_capabilities: Option<Vec<String>>,
-}
-
-pub(crate) fn probe_endpoint_negotiation(
-    stream: &mut LocalStream,
-) -> io::Result<super::endpoint::EndpointNegotiation> {
-    let handshake = do_handshake(
-        stream,
-        80,
-        24,
-        0,
-        0,
-        false,
-        Some(crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 }),
-        false,
-        false,
-        false,
-    )
-    .map_err(io::Error::other)?;
-    Ok(super::endpoint::EndpointNegotiation::new(
-        handshake.endpoint_methods.unwrap_or_default(),
-        handshake.endpoint_capabilities.unwrap_or_default(),
-    ))
 }
 
 /// Performs the client→server handshake.
@@ -207,9 +153,9 @@ pub(super) fn do_handshake(
         .map_err(|e| ClientError::ConnectionFailed(io::Error::other(e.to_string())))?;
 
     let read_timeout = if endpoint_shell && !surface_active {
-        REMOTE_HANDSHAKE_READ_TIMEOUT
+        INACTIVE_SURFACE_HANDSHAKE_READ_TIMEOUT
     } else {
-        handshake_read_timeout()
+        LOCAL_HANDSHAKE_READ_TIMEOUT
     };
     set_handshake_recv_timeout(
         stream,
@@ -266,7 +212,6 @@ pub(super) fn do_handshake(
             "endpoint handshake succeeded"
         );
         return Ok(HandshakeResult {
-            encoding: RenderEncoding::SemanticFrame,
             endpoint_methods: Some(welcome.methods),
             endpoint_capabilities: Some(welcome.capabilities),
         });
@@ -283,7 +228,6 @@ pub(super) fn do_handshake(
             }
             info!(version, ?encoding, "handshake succeeded");
             Ok(HandshakeResult {
-                encoding,
                 endpoint_methods: None,
                 endpoint_capabilities: None,
             })

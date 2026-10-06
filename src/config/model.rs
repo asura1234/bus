@@ -310,7 +310,6 @@ pub struct Config {
     pub worktrees: WorktreesConfig,
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
-    pub remote: RemoteConfig,
 }
 
 #[derive(Debug)]
@@ -372,8 +371,6 @@ pub struct KeysConfig {
     pub next_agent: BindingConfig,
     /// Focus an agent by index 1-9. Unset by default.
     pub focus_agent: BindingConfig,
-    /// Local-client shortcut that sends a clipboard image to a remote Herdr session. Default: "ctrl+v".
-    pub remote_image_paste: String,
     /// Create a new tab in the active workspace. Default: "prefix+c"
     pub new_tab: BindingConfig,
     /// Rename the active tab. Default: "prefix+shift+t".
@@ -504,8 +501,6 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     focus_agent: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    remote_image_paste: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     new_tab: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rename_tab: Option<BindingConfig>,
@@ -625,7 +620,6 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(previous_agent);
         apply_field!(next_agent);
         apply_field!(focus_agent);
-        apply_field!(remote_image_paste);
         apply_field!(new_tab);
         apply_field!(rename_tab);
         apply_field!(previous_tab);
@@ -729,7 +723,6 @@ impl KeysConfig {
         copy_effective_action_field!(previous_agent, keybinds.previous_agent);
         copy_effective_action_field!(next_agent, keybinds.next_agent);
         copy_effective_indexed_field!(focus_agent, keybinds.focus_agent);
-        copy_user_field!(remote_image_paste);
         copy_effective_action_field!(new_tab, keybinds.new_tab);
         copy_effective_action_field!(rename_tab, keybinds.rename_tab);
         copy_effective_action_field!(previous_tab, keybinds.previous_tab);
@@ -1008,22 +1001,6 @@ pub struct AdvancedConfig {
     pub scrollback_limit_bytes: usize,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(default)]
-pub struct RemoteConfig {
-    /// Add keepalive fallbacks and private connection reuse for `herdr --remote`.
-    /// Set false to run plain ssh unchanged. Default: true.
-    pub manage_ssh_config: bool,
-}
-
-impl Default for RemoteConfig {
-    fn default() -> Self {
-        Self {
-            manage_ssh_config: true,
-        }
-    }
-}
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ExperimentalConfig {
@@ -1097,7 +1074,6 @@ impl Default for KeysConfig {
             previous_agent: BindingConfig::empty(),
             next_agent: BindingConfig::empty(),
             focus_agent: BindingConfig::empty(),
-            remote_image_paste: "ctrl+v".into(),
             new_tab: BindingConfig::one("prefix+c"),
             rename_tab: BindingConfig::one("prefix+shift+t"),
             previous_tab: BindingConfig::one("prefix+p"),

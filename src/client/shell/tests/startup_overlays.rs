@@ -615,19 +615,6 @@ fn endpoint_reload_result_does_not_override_snapshot_diagnostic_authority() {
 }
 
 #[test]
-fn endpoint_keybindings_hide_only_local_keybinding_diagnostics() {
-    let config = ClientShellConfig::from_config(&Config::default())
-        .with_keybinding_source(ClientShellKeybindingSource::Endpoint);
-    let diagnostics = vec![
-        "unsafe direct keybinding: keys.close_pane would intercept typing".into(),
-        "theme warning".into(),
-    ];
-
-    assert!(config.local_config_diagnostic(&diagnostics[..1]).is_none());
-    assert!(config.local_config_diagnostic(&diagnostics).is_some());
-}
-
-#[test]
 fn live_client_config_keeps_sound_diagnostics() {
     let mut shell_config = ClientShellConfig::from_config(&Config::default());
     let mut config = Config::default();

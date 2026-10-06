@@ -212,7 +212,6 @@ mod agents_worktrees_notifications;
 mod chrome_context;
 mod copy;
 mod endpoint_requests;
-mod endpoints;
 #[path = "input.rs"]
 mod input_domain;
 mod keybindings_settings;

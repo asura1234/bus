@@ -34,10 +34,6 @@ impl EndpointNegotiation {
         }
     }
 
-    pub(crate) fn methods(&self) -> Vec<String> {
-        self.methods.iter().cloned().collect()
-    }
-
     pub(crate) fn supports_method(&self, method: &str) -> bool {
         self.methods.contains(method)
     }
@@ -125,11 +121,6 @@ impl EndpointRegistry {
                 .connections
                 .get(&self.active)
                 .is_some_and(|connection| connection.surface_active)
-    }
-
-    pub(crate) fn select_unavailable_local(&mut self) {
-        self.active = ClientEndpointId::Local;
-        self.freeze_input();
     }
 
     pub(crate) fn freeze_input(&mut self) {
@@ -288,14 +279,6 @@ impl EndpointRegistry {
         }
     }
 
-    pub(crate) fn disconnect(&mut self, endpoint_id: &ClientEndpointId) {
-        self.failures
-            .retain(|failure| &failure.endpoint_id != endpoint_id);
-        if let Some(mut connection) = self.connections.remove(endpoint_id) {
-            connection.transport.disconnect();
-        }
-    }
-
     pub(crate) fn fail(&mut self, endpoint_id: &ClientEndpointId, error: io::Error) {
         self.record_failure(endpoint_id.clone(), error);
     }
@@ -391,87 +374,6 @@ mod tests {
         )
     }
 
-    fn profile() -> crate::client::endpoint::ProfileId {
-        crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap()
-    }
-
-    #[test]
-    fn endpoint_failures_do_not_remove_other_connections() {
-        let local_sent = Arc::new(Mutex::new(Vec::new()));
-        let mut registry = EndpointRegistry::new(
-            FakeTransport {
-                sent: local_sent.clone(),
-                error: None,
-            },
-            1,
-            negotiation(),
-        );
-        let ssh_id = ClientEndpointId::Ssh(profile());
-        registry.insert(
-            ssh_id.clone(),
-            FakeTransport {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                error: Some(io::ErrorKind::BrokenPipe),
-            },
-            2,
-            negotiation(),
-            true,
-        );
-        assert!(registry.set_active(&ssh_id));
-
-        assert_eq!(
-            registry.send(&ClientMessage::ClientShellFocus { focused: true }),
-            EndpointSendOutcome::NotSent
-        );
-        assert!(registry.connection(&ssh_id).is_none());
-        assert!(registry.connection(&ClientEndpointId::Local).is_some());
-        assert_eq!(registry.take_failures()[0].endpoint_id, ssh_id);
-
-        assert!(registry.set_active(&ClientEndpointId::Local));
-        assert_eq!(
-            registry.send(&ClientMessage::ClientShellFocus { focused: true }),
-            EndpointSendOutcome::Sent
-        );
-        assert_eq!(local_sent.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn reconnecting_active_identity_does_not_count_as_an_active_surface() {
-        let mut registry = EndpointRegistry::new(
-            FakeTransport {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                error: None,
-            },
-            1,
-            negotiation(),
-        );
-        let ssh_id = ClientEndpointId::Ssh(profile());
-        registry.insert(
-            ssh_id.clone(),
-            FakeTransport {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                error: None,
-            },
-            2,
-            negotiation(),
-            true,
-        );
-        assert!(registry.set_active(&ssh_id));
-        assert!(registry.active_surface_available());
-        registry.disconnect(&ssh_id);
-        registry.insert(
-            ssh_id,
-            FakeTransport {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                error: None,
-            },
-            3,
-            negotiation(),
-            false,
-        );
-        assert!(!registry.active_surface_available());
-    }
-
     #[test]
     fn recovered_local_uses_transport_failure_not_remote_health_probes() {
         let mut registry = EndpointRegistry::empty();
@@ -493,72 +395,6 @@ mod tests {
     }
 
     #[test]
-    fn negotiated_remote_health_probe_expires_the_connection() {
-        let mut registry = EndpointRegistry::new(
-            FakeTransport {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                error: None,
-            },
-            1,
-            negotiation(),
-        );
-        let ssh_id = ClientEndpointId::Ssh(profile());
-        let sent = Arc::new(Mutex::new(Vec::new()));
-        registry.insert(
-            ssh_id.clone(),
-            FakeTransport {
-                sent: sent.clone(),
-                error: None,
-            },
-            2,
-            negotiation(),
-            false,
-        );
-        let now = Instant::now();
-        registry.tick_health(now + super::super::health::HEARTBEAT_INTERVAL);
-        assert!(matches!(
-            sent.lock().unwrap().as_slice(),
-            [ClientMessage::EndpointControl { kind, .. }]
-                if kind == crate::protocol::endpoint::HEALTH_PING_KIND
-        ));
-
-        registry.tick_health(
-            now + super::super::health::HEARTBEAT_INTERVAL
-                + super::super::health::HEARTBEAT_TIMEOUT,
-        );
-        assert!(registry.connection(&ssh_id).is_none());
-        assert_eq!(registry.take_failures()[0].kind, io::ErrorKind::TimedOut);
-    }
-
-    #[test]
-    fn a_ready_endpoint_can_stay_connected_after_the_initial_deadline() {
-        let mut registry = EndpointRegistry::new(
-            FakeTransport {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                error: None,
-            },
-            1,
-            negotiation(),
-        );
-        let ssh_id = ClientEndpointId::Ssh(profile());
-        registry.insert(
-            ssh_id.clone(),
-            FakeTransport {
-                sent: Arc::new(Mutex::new(Vec::new())),
-                error: None,
-            },
-            2,
-            negotiation(),
-            false,
-        );
-        let now = Instant::now();
-        registry.mark_ready(&ssh_id, 2);
-        registry.received(&ssh_id, 2, now + super::super::health::HEARTBEAT_INTERVAL);
-        registry.tick_health(now + super::super::health::HEARTBEAT_TIMEOUT);
-        assert!(registry.connection(&ssh_id).is_some());
-    }
-
-    #[test]
     fn negotiated_surface_interest_requires_capability_and_method() {
         assert!(negotiation().supports_surface_interest());
         assert!(negotiation().supports_health_check());
@@ -576,41 +412,6 @@ mod tests {
             vec![crate::protocol::endpoint::SURFACE_INTEREST_CAPABILITY.into()]
         )
         .supports_surface_interest());
-    }
-
-    #[test]
-    fn dropping_registry_detaches_every_connected_endpoint() {
-        let local_sent = Arc::new(Mutex::new(Vec::new()));
-        let remote_sent = Arc::new(Mutex::new(Vec::new()));
-        let mut registry = EndpointRegistry::new(
-            FakeTransport {
-                sent: local_sent.clone(),
-                error: None,
-            },
-            1,
-            negotiation(),
-        );
-        registry.insert(
-            ClientEndpointId::Ssh(profile()),
-            FakeTransport {
-                sent: remote_sent.clone(),
-                error: None,
-            },
-            2,
-            negotiation(),
-            false,
-        );
-
-        drop(registry);
-
-        assert!(matches!(
-            local_sent.lock().unwrap().as_slice(),
-            [ClientMessage::Detach]
-        ));
-        assert!(matches!(
-            remote_sent.lock().unwrap().as_slice(),
-            [ClientMessage::Detach]
-        ));
     }
 
     #[test]

@@ -1940,18 +1940,6 @@ fn is_mise_managed_install() -> bool {
     is_mise_managed_exe_path_following_links(&current_exe)
 }
 
-#[cfg(unix)]
-pub(crate) fn is_package_manager_managed_exe_path(path: &Path) -> bool {
-    is_homebrew_managed_exe_path_following_links(path)
-        || is_mise_managed_exe_path_following_links(path)
-        || is_nix_store_exe_path_following_links(path)
-}
-
-#[cfg(not(unix))]
-pub(crate) fn is_package_manager_managed_exe_path(_path: &Path) -> bool {
-    false
-}
-
 fn is_homebrew_managed_exe_path_following_links(path: &Path) -> bool {
     if is_homebrew_managed_exe_path(path) {
         return true;
@@ -2575,58 +2563,6 @@ mod tests {
         let path = Path::new("/home/user/.local/bin/herdr");
 
         assert!(!is_mise_managed_exe_path(path));
-    }
-
-    #[test]
-    fn package_manager_path_detection_follows_homebrew_symlink() {
-        #[cfg(unix)]
-        {
-            let root = std::env::temp_dir().join(format!(
-                "herdr-homebrew-symlink-test-{}",
-                std::process::id()
-            ));
-            let cellar_bin = root.join("Cellar/herdr/0.6.2/bin");
-            let opt_bin = root.join("opt/herdr/bin");
-            fs::create_dir_all(&cellar_bin).unwrap();
-            fs::create_dir_all(&opt_bin).unwrap();
-            let cellar_binary = cellar_bin.join("herdr");
-            let opt_binary = opt_bin.join("herdr");
-            fs::write(&cellar_binary, b"").unwrap();
-            std::os::unix::fs::symlink(&cellar_binary, &opt_binary).unwrap();
-
-            assert!(is_package_manager_managed_exe_path(&opt_binary));
-
-            let _ = fs::remove_dir_all(root);
-        }
-    }
-
-    #[test]
-    fn package_manager_path_detection_follows_mise_symlink() {
-        #[cfg(unix)]
-        {
-            let root = std::env::temp_dir()
-                .join(format!("herdr-mise-symlink-test-{}", std::process::id()));
-            let version_bin = root.join("installs/herdr/0.6.2/bin");
-            let latest_bin = root.join("installs/herdr/latest/bin");
-            fs::create_dir_all(&version_bin).unwrap();
-            fs::create_dir_all(&latest_bin).unwrap();
-            let version_binary = version_bin.join("herdr");
-            let latest_binary = latest_bin.join("herdr");
-            fs::write(&version_binary, b"").unwrap();
-            std::os::unix::fs::symlink(&version_binary, &latest_binary).unwrap();
-
-            assert!(is_package_manager_managed_exe_path(&latest_binary));
-
-            let _ = fs::remove_dir_all(root);
-        }
-    }
-
-    #[test]
-    fn nix_store_path_is_detected() {
-        let path = Path::new("/nix/store/abc123-herdr-0.6.1/bin/herdr");
-
-        assert!(is_nix_store_exe_path(path));
-        assert!(is_package_manager_managed_exe_path(path));
     }
 
     #[test]

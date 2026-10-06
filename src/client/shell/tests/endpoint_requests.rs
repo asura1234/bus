@@ -1,5 +1,5 @@
 use super::*;
-use crate::client::endpoint::{ClientEndpointId, ClientEndpointStatus};
+use crate::client::endpoint::ClientEndpointId;
 
 fn pending_popup() -> (ClientShellState, Vec<ClientShellAction>) {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -30,28 +30,6 @@ fn pending_popup() -> (ClientShellState, Vec<ClientShellAction>) {
     (state, outcome.actions)
 }
 
-fn pending_worktree() -> (ClientShellState, Vec<ClientShellAction>) {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    let mut outcome = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorktree),
-        &mut outcome,
-    );
-    let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
-        panic!("expected worktree preparation");
-    };
-    state.handle_endpoint_result("boot-1", &request.id, Ok(worktree_list_result(None)));
-    state.handle_input_bytes(b"feature/reconnect");
-    let outcome = state.handle_input_bytes(b"\r");
-    assert!(matches!(
-        &state.overlay,
-        Some(ClientShellOverlay::WorktreeCreate(create)) if create.creating
-    ));
-    (state, outcome.actions)
-}
-
 fn request_id(actions: &[ClientShellAction]) -> &str {
     let [ClientShellAction::Endpoint { request, .. }] = actions else {
         panic!("expected one endpoint request");
@@ -74,27 +52,6 @@ fn cancelling_popup_request_unblocks_input_and_ignores_late_success() {
     assert!(!state.handle_input_bytes(b"x").requests.is_empty());
 }
 
-#[test]
-fn disconnect_cancels_worktree_dialog_before_same_server_reconnect() {
-    let (mut state, _) = pending_worktree();
-    state.mark_endpoint_disconnected(&ClientEndpointId::Local);
-    assert!(state.pending_requests.is_empty());
-    assert!(matches!(
-        &state.overlay,
-        Some(ClientShellOverlay::WorktreeCreate(create)) if !create.creating
-    ));
-    state.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Online);
-    state.set_endpoint_snapshot(&ClientEndpointId::Local, Box::new(snapshot()));
-    assert!(state.activate_endpoint_projection(&ClientEndpointId::Local));
-    state.set_pane_surface(surface());
-    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
-        KeyCode::Esc,
-        KeyModifiers::NONE,
-    ))]);
-    assert!(state.overlay.is_none());
-    assert!(!state.handle_input_bytes(b"x").requests.is_empty());
-}
-
 struct TestTransport {
     fail: bool,
 }
@@ -106,45 +63,6 @@ impl crate::client::endpoint::EndpointTransport for TestTransport {
         } else {
             Ok(())
         }
-    }
-}
-
-#[test]
-fn dispatcher_cancels_worktree_requests_on_frozen_surface_or_failed_send() {
-    use crate::client::endpoint::{EndpointNegotiation, EndpointRegistry};
-    use crate::client::endpoint_commands::EndpointCommands;
-
-    for fail_send in [false, true] {
-        let (mut state, actions) = pending_worktree();
-        let mut endpoints = EndpointRegistry::new(
-            TestTransport { fail: fail_send },
-            1,
-            EndpointNegotiation::default(),
-        );
-        endpoints.set_surface_active(&ClientEndpointId::Local, fail_send);
-        let mut commands = EndpointCommands::default();
-        let (tx, _rx) = tokio::sync::mpsc::channel(16);
-        let (replay, repaint) = crate::client::shell_runtime::dispatch_client_shell_actions(
-            actions,
-            &mut commands,
-            &mut endpoints,
-            Some(&mut state),
-            &mut Vec::new(),
-            &tx,
-        )
-        .unwrap();
-        assert!(repaint);
-        assert!(replay.is_empty());
-        assert!(state.pending_requests.is_empty());
-        assert!(matches!(
-            &state.overlay,
-            Some(ClientShellOverlay::WorktreeCreate(create)) if !create.creating
-        ));
-        assert!(state
-            .visible_endpoint_notice
-            .as_ref()
-            .is_some_and(|notice| { notice.title == "Action interrupted" }));
-        assert!(commands.disconnect(&ClientEndpointId::Local).is_empty());
     }
 }
 
@@ -287,15 +205,4 @@ fn cancelled_link_activation_does_not_replay_mouse_input() {
     );
     assert!(actions.is_empty());
     assert!(state.url_click_consumes_until_up);
-}
-
-#[test]
-fn another_machine_disconnect_does_not_cancel_active_popup() {
-    let (mut state, _) = pending_popup();
-    let remote = ClientEndpointId::Ssh(
-        crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
-    );
-    state.mark_endpoint_disconnected(&remote);
-    assert!(state.popup_pending);
-    assert_eq!(state.pending_requests.len(), 1);
 }

@@ -24,25 +24,6 @@ pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::C
     }
 }
 
-pub(crate) struct RemoteBridgeWake;
-
-impl RemoteBridgeWake {
-    pub(crate) fn new() -> std::io::Result<Self> {
-        Ok(Self)
-    }
-
-    pub(crate) fn cancel(&self) -> std::io::Result<()> {
-        // The named-pipe reader checks its cancellation flag between peeks.
-        Ok(())
-    }
-
-    pub(crate) fn wait(&self, _stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
-        // Synchronous named pipes still use peek-before-read polling on Windows.
-        std::thread::sleep(Duration::from_millis(1));
-        Ok(())
-    }
-}
-
 pub(crate) fn wait_client_stream_readable(
     _stream: &crate::ipc::LocalStream,
 ) -> std::io::Result<()> {
@@ -207,35 +188,6 @@ static PROCESS_RUNTIME_MARKER_CACHE: LazyLock<Mutex<HashMap<u32, CachedProcessRu
 static GIT_BASH_PROCESS_CACHE: LazyLock<Mutex<HashMap<u32, CachedGitBashProcess>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
-    super::RemoteSshConfigPaths {
-        user_config: std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .map(|home| home.join(".ssh").join("config")),
-        system_config: std::env::var_os("PROGRAMDATA")
-            .map(PathBuf::from)
-            .map(|dir| dir.join("ssh").join("ssh_config")),
-        multiplexing: false,
-    }
-}
-
-pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::io::Result<PathBuf> {
-    let base = remote_private_temp_base();
-    std::fs::create_dir_all(&base)?;
-    for attempt in 0..100 {
-        let dir = base.join(format!("ssh-{}-{attempt}", std::process::id()));
-        match create_remote_private_dir(&dir) {
-            Ok(()) => return Ok(dir),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "failed to create private herdr ssh config directory",
-    ))
-}
-
 pub(crate) fn create_remote_ssh_config_file(
     path: &std::path::Path,
 ) -> std::io::Result<std::fs::File> {
@@ -289,14 +241,6 @@ fn extended_length_path(path: &std::path::Path) -> std::io::Result<Vec<u16>> {
     Ok(extended)
 }
 
-pub(crate) fn remote_private_temp_base() -> PathBuf {
-    crate::config::state_dir().join("remote")
-}
-
-pub(crate) fn remote_bridge_endpoint_path(_readable_name: &str, short_name: &str) -> PathBuf {
-    remote_private_temp_base().join(short_name)
-}
-
 pub(crate) fn remote_reattach_program(program: &str) -> String {
     let path = std::env::current_exe()
         .ok()
@@ -308,7 +252,7 @@ pub(crate) fn remote_reattach_program(program: &str) -> String {
     )
 }
 
-pub(crate) fn remote_reattach_argument(value: &str) -> String {
+fn remote_reattach_argument(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 

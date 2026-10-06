@@ -42,7 +42,6 @@ mod protocol;
 mod pty;
 mod raw_input;
 mod release_notes;
-mod remote;
 mod render_prof;
 mod render_signal;
 mod selection;
@@ -122,14 +121,6 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
-    let (args, remote_launch) = match remote::extract_remote_args(&args) {
-        Ok(parsed) => parsed,
-        Err(err) => {
-            eprintln!("error: {err}");
-            std::process::exit(2);
-        }
-    };
-
     match args.get(1).map(String::as_str) {
         None => {}
         // Hidden entry the client spawns for the persistent daemon.
@@ -139,9 +130,6 @@ fn main() -> io::Result<()> {
             let loaded_config = config::Config::load();
             exit_if_nested_disabled(&loaded_config.config);
             return client::run_client();
-        }
-        Some("remote-client-bridge") if args.len() == 2 => {
-            return remote::run_remote_client_bridge();
         }
         Some("update") => {
             let options = match update::parse_self_update_args(&args[2..]) {
@@ -179,22 +167,10 @@ fn main() -> io::Result<()> {
         }
     }
 
-    if let Some(remote_launch) = remote_launch {
-        let remote_target = remote_launch.target.clone();
-        if let Err(err) = remote::run_remote(remote_launch) {
-            eprintln!("error: {err}");
-            remote::print_remote_error_hint(&err, &remote_target);
-            std::process::exit(1);
-        }
-        return Ok(());
-    }
-
     let loaded_config = config::Config::load();
     exit_if_nested_disabled(&loaded_config.config);
 
-    let saved_federation =
-        client::endpoint::EndpointCatalog::load().is_ok_and(|catalog| catalog.has_enabled_ssh());
-    if let Err(err) = server::autodetect::auto_detect_launch(saved_federation) {
+    if let Err(err) = server::autodetect::auto_detect_launch(false) {
         eprintln!("herdr: {err}");
         std::process::exit(1);
     }

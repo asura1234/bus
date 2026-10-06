@@ -115,7 +115,6 @@ impl Config {
         prefix_diag
             .into_iter()
             .chain(keybind_diags)
-            .chain(self.remote_image_paste_key().err())
             .chain(self.theme.diagnostics())
             .chain(self.ui.sound.diagnostics())
             .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
@@ -153,16 +152,6 @@ impl Config {
             })
     }
 
-    pub(crate) fn remote_image_paste_key(&self) -> Result<Option<(KeyCode, KeyModifiers)>, String> {
-        let raw = self.keys.remote_image_paste.trim();
-        if raw.is_empty() {
-            return Ok(None);
-        }
-        parse_key_combo(raw).map(Some).ok_or_else(|| {
-            format!("invalid keybinding: keys.remote_image_paste = {raw:?}; disabling binding")
-        })
-    }
-
     pub(crate) fn live_keybinds_with_diagnostics(
         &self,
     ) -> Result<(LiveKeybindConfig, Vec<String>), Vec<String>> {
@@ -184,15 +173,6 @@ impl Config {
         keys.set_prefix(format_key_combo(self.prefix_key()));
         toml::to_string_pretty(&KeysProfile { keys })
     }
-}
-
-pub(crate) fn keybindings_from_profile_toml(profile: &str) -> Result<LiveKeybindConfig, String> {
-    let config = toml::from_str::<Config>(profile)
-        .map_err(|err| format!("invalid keybinding profile: {err}"))?;
-    config
-        .live_keybinds_with_diagnostics()
-        .map(|(keybinds, _diagnostics)| keybinds)
-        .map_err(|diagnostics| diagnostics.join("; "))
 }
 
 #[cfg(test)]
@@ -222,23 +202,6 @@ command = "lazygit"
         assert!(!profile.contains("lazygit"));
         assert!(!profile.contains("command ="));
         assert!(!profile.contains("[[keys.command]]"));
-    }
-
-    #[test]
-    fn local_keybindings_profile_publishes_the_effective_prefix_fallback() {
-        let config: Config = toml::from_str(
-            r#"
-[keys]
-prefix = "ctrl+"
-"#,
-        )
-        .unwrap();
-
-        let profile = config.local_keybindings_profile_toml().unwrap();
-        let keybinds = keybindings_from_profile_toml(&profile).unwrap();
-
-        assert!(profile.contains("prefix = \"ctrl+b\""));
-        assert_eq!(keybinds.prefix, config.prefix_key());
     }
 
     #[test]
@@ -379,21 +342,6 @@ command = "echo one"
         assert!(switch_tab_labels
             .iter()
             .all(|label| label.starts_with("prefix+")));
-    }
-
-    #[test]
-    fn remote_image_paste_key_defaults_to_ctrl_v() {
-        let config = Config::default();
-        assert_eq!(
-            config.remote_image_paste_key().unwrap(),
-            Some((KeyCode::Char('v'), KeyModifiers::CONTROL))
-        );
-    }
-
-    #[test]
-    fn remote_image_paste_key_can_be_disabled() {
-        let config: Config = toml::from_str("[keys]\nremote_image_paste = ''\n").unwrap();
-        assert_eq!(config.remote_image_paste_key().unwrap(), None);
     }
 
     #[test]

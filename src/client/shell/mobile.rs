@@ -206,9 +206,6 @@ fn mobile_endpoint_state(status: ClientEndpointStatus) -> &'static str {
     match status {
         ClientEndpointStatus::Connecting => "connecting",
         ClientEndpointStatus::Online => "online",
-        ClientEndpointStatus::Reconnecting => "reconnecting",
-        ClientEndpointStatus::Attention => "attention",
-        ClientEndpointStatus::Disabled => "disabled",
     }
 }
 

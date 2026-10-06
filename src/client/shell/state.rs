@@ -61,13 +61,6 @@ fn selection_cells_unchanged(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ClientShellKeybindingSource {
-    Local,
-    RemoteLocal,
-    Endpoint,
-}
-
 pub(crate) struct ClientShellConfig {
     pub(super) sidebar_width: u16,
     pub(super) sidebar_min_width: u16,
@@ -93,7 +86,6 @@ pub(crate) struct ClientShellConfig {
     pub(super) palette: Palette,
     pub(super) keybinds: LiveKeybindConfig,
     pub(super) local_keys: crate::config::KeysConfig,
-    pub(super) keybinding_source: ClientShellKeybindingSource,
     pub(super) prompt_new_tab_name: bool,
     pub(super) prompt_new_workspace_name: bool,
     pub(super) confirm_close: bool,
@@ -1283,30 +1275,11 @@ impl ClientShellState {
                         left.binding_labels != right.binding_labels || left.action != right.action
                     })
         });
-        let endpoint_profile_changed = self.snapshot.as_ref().is_none_or(|current| {
-            current.server_keybindings_toml != snapshot.server_keybindings_toml
-        });
-        let snapshot_keybindings_changed = match self.config.keybinding_source {
-            ClientShellKeybindingSource::Local => self
-                .snapshot
-                .as_ref()
-                .is_none_or(|current| current.commands != snapshot.commands),
-            ClientShellKeybindingSource::Endpoint => {
-                endpoint_profile_changed
-                    || self
-                        .snapshot
-                        .as_ref()
-                        .is_none_or(|current| current.commands != snapshot.commands)
-            }
-            ClientShellKeybindingSource::RemoteLocal => false,
-        };
-        let active_keymap_changed = match self.config.keybinding_source {
-            ClientShellKeybindingSource::Local => command_bindings_changed,
-            ClientShellKeybindingSource::Endpoint => {
-                endpoint_profile_changed || command_bindings_changed
-            }
-            ClientShellKeybindingSource::RemoteLocal => false,
-        };
+        let snapshot_keybindings_changed = self
+            .snapshot
+            .as_ref()
+            .is_none_or(|current| current.commands != snapshot.commands);
+        let active_keymap_changed = command_bindings_changed;
         self.config_diagnostic = super::config::merged_config_diagnostic(
             self.local_config_diagnostic.as_deref(),
             snapshot.config_diagnostic.as_deref(),
@@ -1335,10 +1308,7 @@ impl ClientShellState {
             self.previous_pane_id = Some(previous.clone());
         }
         if snapshot_keybindings_changed {
-            if let Err(err) = self.config.apply_snapshot_keybindings(
-                snapshot.server_keybindings_toml.as_deref(),
-                &snapshot.commands,
-            ) {
+            if let Err(err) = self.config.apply_snapshot_keybindings(&snapshot.commands) {
                 self.endpoint_error = Some(err);
             } else if active_keymap_changed
                 && matches!(

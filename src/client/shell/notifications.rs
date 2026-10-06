@@ -384,31 +384,6 @@ mod tests {
     }
 
     #[test]
-    fn retiring_one_endpoint_preserves_other_endpoint_notifications() {
-        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-        let mut local = notification();
-        local.event.title = "local".into();
-        let remote_id = ClientEndpointId::Ssh(
-            crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
-        );
-        let mut remote = notification();
-        remote.endpoint_id = remote_id.clone();
-        remote.event.title = "remote".into();
-        state.visible_notification = Some(local);
-        state.queued_notifications.push_back(remote);
-
-        state.retire_endpoint_notifications(&ClientEndpointId::Local);
-
-        assert_eq!(
-            state
-                .visible_notification
-                .as_ref()
-                .map(|notification| (&notification.endpoint_id, notification.event.title.as_str())),
-            Some((&remote_id, "remote"))
-        );
-    }
-
-    #[test]
     fn concurrent_endpoint_notifications_are_queued_in_arrival_order() {
         let mut config = Config::default();
         config.ui.toast.delivery = crate::config::ToastDelivery::Herdr;

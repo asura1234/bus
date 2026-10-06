@@ -214,10 +214,6 @@ impl PendingEndpointActivation {
             || (self.target.endpoint_id == *endpoint_id && self.target.generation == generation)
     }
 
-    pub(crate) fn involves_endpoint(&self, endpoint_id: &ClientEndpointId) -> bool {
-        self.source.endpoint_id == *endpoint_id || self.target.endpoint_id == *endpoint_id
-    }
-
     pub(crate) fn accepts_response(
         &self,
         endpoint_id: &ClientEndpointId,
@@ -266,30 +262,6 @@ impl PendingEndpointActivation {
 
     pub(crate) fn expired(&self, now: Instant) -> bool {
         now >= self.deadline
-    }
-
-    #[cfg(test)]
-    pub(crate) fn receive_response(
-        &mut self,
-        endpoint_id: &ClientEndpointId,
-        generation: u64,
-        request_id: &str,
-        data: &[u8],
-        endpoints: &mut EndpointRegistry,
-    ) -> SurfaceActivationProgress {
-        let boot_id = if self.source.endpoint_id == *endpoint_id {
-            self.source.boot_id.clone()
-        } else {
-            self.target.boot_id.clone()
-        };
-        self.receive_response_for_boot(
-            endpoint_id,
-            generation,
-            &boot_id,
-            request_id,
-            data,
-            endpoints,
-        )
     }
 
     pub(crate) fn receive_response_for_boot(
@@ -673,76 +645,6 @@ impl PendingEndpointActivation {
             ActivationPhase::ActivatingTarget { evidence, .. }
             | ActivationPhase::RestoringSource { evidence, .. } => evidence.invalidate_surface(),
             _ => {}
-        }
-    }
-
-    /// Losing the source revokes its surface and removes the rollback destination; it must not
-    /// cancel a healthy target. Losing the target restores the source when it is still available.
-    pub(crate) fn endpoint_disconnected(
-        &mut self,
-        endpoints: &mut EndpointRegistry,
-        endpoint_id: &ClientEndpointId,
-        error: String,
-    ) -> ActivationRollback {
-        self.rollback_error = Some(error.clone());
-        if self.target.endpoint_id == *endpoint_id && self.source.endpoint_id != *endpoint_id {
-            return match self.phase {
-                ActivationPhase::RestoringSource { .. } => ActivationRollback::Pending,
-                _ => match self.start_source_restore(endpoints, self.resize.clone()) {
-                    Ok(()) => ActivationRollback::Pending,
-                    Err(restore_error) => ActivationRollback::Unavailable(format!(
-                        "{error}; source endpoint could not be restored safely: {restore_error}"
-                    )),
-                },
-            };
-        }
-        if self.source.endpoint_id != *endpoint_id {
-            return ActivationRollback::Unavailable(error);
-        }
-        self.source_available = false;
-        if self.source.endpoint_id != self.target.endpoint_id {
-            match &self.phase {
-                ActivationPhase::ReleasingSource { .. } => {
-                    return match self.start_target(endpoints, self.resize.clone()) {
-                        Ok(()) => ActivationRollback::Pending,
-                        Err(message) => ActivationRollback::Unavailable(message),
-                    };
-                }
-                ActivationPhase::ActivatingTarget { .. } => return ActivationRollback::Pending,
-                ActivationPhase::SynchronizingPresentation { lease, .. }
-                | ActivationPhase::AwaitingPresentationEffects { lease, .. }
-                    if lease.endpoint_id == self.target.endpoint_id =>
-                {
-                    return ActivationRollback::Pending
-                }
-                _ => {}
-            }
-        }
-        match self.phase {
-            ActivationPhase::ReleasingSource { .. } => ActivationRollback::Unavailable(error),
-            ActivationPhase::ActivatingTarget { .. } => {
-                match self.start_target_release(endpoints) {
-                    Ok(()) => ActivationRollback::Pending,
-                    Err(release_error) => ActivationRollback::Unavailable(format!(
-                        "{error}; target endpoint could not be released safely: {release_error}"
-                    )),
-                }
-            }
-            ActivationPhase::ReleasingTargetForRollback { .. } => ActivationRollback::Pending,
-            ActivationPhase::RestoringSource { .. } => ActivationRollback::Unavailable(error),
-            ActivationPhase::SynchronizingPresentation { ref lease, .. }
-            | ActivationPhase::AwaitingPresentationEffects { ref lease, .. } => {
-                if lease.endpoint_id == self.target.endpoint_id {
-                    match self.start_target_release(endpoints) {
-                        Ok(()) => ActivationRollback::Pending,
-                        Err(release_error) => ActivationRollback::Unavailable(format!(
-                            "{error}; target endpoint could not be released safely: {release_error}"
-                        )),
-                    }
-                } else {
-                    ActivationRollback::Unavailable(error)
-                }
-            }
         }
     }
 

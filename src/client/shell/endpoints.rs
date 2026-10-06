@@ -26,85 +26,6 @@ pub(crate) enum ClientEndpointFocusTarget {
 }
 
 impl ClientShellState {
-    pub(crate) fn set_endpoint_catalog(&mut self, profiles: &[SavedSshEndpoint]) {
-        let mut next = Vec::with_capacity(profiles.len().saturating_add(1));
-        let local = self
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.endpoint_id.is_local())
-            .cloned()
-            .unwrap_or_else(local_endpoint);
-        next.push(local);
-        for profile in profiles {
-            let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
-            let previous = self
-                .endpoints
-                .iter()
-                .find(|endpoint| endpoint.endpoint_id == endpoint_id)
-                .filter(|endpoint| {
-                    profile.enabled && endpoint.status != ClientEndpointStatus::Disabled
-                });
-            next.push(ClientShellEndpoint {
-                endpoint_id,
-                label: profile.label.clone(),
-                status: previous.map_or(
-                    if profile.enabled {
-                        ClientEndpointStatus::Connecting
-                    } else {
-                        ClientEndpointStatus::Disabled
-                    },
-                    |endpoint| endpoint.status,
-                ),
-                snapshot: previous.and_then(|endpoint| endpoint.snapshot.clone()),
-                snapshot_generation: previous.and_then(|endpoint| endpoint.snapshot_generation),
-                agent_recency: previous
-                    .map(|endpoint| endpoint.agent_recency.clone())
-                    .unwrap_or_default(),
-                agent_presentation: previous
-                    .map(|endpoint| endpoint.agent_presentation.clone())
-                    .unwrap_or_default(),
-                methods: previous.and_then(|endpoint| endpoint.methods.clone()),
-            });
-        }
-
-        if !next
-            .iter()
-            .any(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
-        {
-            self.select_unavailable_local();
-        }
-        self.collapsed_endpoints.retain(|endpoint_id| {
-            next.iter()
-                .any(|endpoint| &endpoint.endpoint_id == endpoint_id)
-        });
-        self.endpoints = next;
-    }
-
-    pub(crate) fn select_unavailable_local(&mut self) {
-        self.reset_endpoint_projection();
-        self.active_endpoint_id = ClientEndpointId::Local;
-        self.mode = ClientShellMode::Terminal;
-        self.snapshot = None;
-        self.graphics.set_scope("local:unavailable");
-        self.reconcile_input_source();
-    }
-
-    pub(crate) fn retire_endpoint(&mut self, endpoint_id: &ClientEndpointId) {
-        self.retire_endpoint_notifications(endpoint_id);
-        if let Some(endpoint) = self
-            .endpoints
-            .iter_mut()
-            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
-        {
-            endpoint.status = ClientEndpointStatus::Disabled;
-            endpoint.snapshot = None;
-            endpoint.snapshot_generation = None;
-            endpoint.methods = None;
-            endpoint.agent_recency.clear();
-            endpoint.agent_presentation = Default::default();
-        }
-    }
-
     pub(crate) fn set_endpoint_status(
         &mut self,
         endpoint_id: &ClientEndpointId,
@@ -116,19 +37,6 @@ impl ClientShellState {
             .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
         {
             endpoint.status = status;
-        }
-    }
-
-    pub(crate) fn mark_endpoint_disconnected(&mut self, endpoint_id: &ClientEndpointId) {
-        self.set_endpoint_status(endpoint_id, ClientEndpointStatus::Reconnecting);
-        if endpoint_id == &self.active_endpoint_id {
-            let pending = self.pending_requests.keys().cloned().collect::<Vec<_>>();
-            for request_id in pending {
-                self.cancel_endpoint_request(&request_id);
-            }
-            self.pending_integration_installs = 0;
-            self.pane_scroll_in_flight.clear();
-            self.pane_scroll_queued.clear();
         }
     }
 
@@ -486,9 +394,6 @@ pub(super) fn endpoint_status_presentation(
     match status {
         ClientEndpointStatus::Connecting => ("◐", "connecting", palette.yellow),
         ClientEndpointStatus::Online => ("●", "online", palette.green),
-        ClientEndpointStatus::Reconnecting => ("◐", "reconnecting", palette.yellow),
-        ClientEndpointStatus::Attention => ("!", "attention", palette.red),
-        ClientEndpointStatus::Disabled => ("·", "disabled", palette.overlay0),
     }
 }
 

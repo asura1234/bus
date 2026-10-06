@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::ChildExitReason {
     if status.signal().is_some() {
@@ -27,50 +27,6 @@ pub(crate) fn wait_client_stream_readable(stream: &crate::ipc::LocalStream) -> s
     Ok(())
 }
 
-pub(crate) struct RemoteBridgeWake {
-    reader: std::os::unix::net::UnixStream,
-    writer: std::os::unix::net::UnixStream,
-}
-
-impl RemoteBridgeWake {
-    pub(crate) fn new() -> std::io::Result<Self> {
-        let (reader, writer) = std::os::unix::net::UnixStream::pair()?;
-        Ok(Self { reader, writer })
-    }
-
-    pub(crate) fn cancel(&self) -> std::io::Result<()> {
-        // EOF stays readable, including when cancellation precedes the wait.
-        self.writer.shutdown(std::net::Shutdown::Write)
-    }
-
-    pub(crate) fn wait(&self, stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
-        use std::os::fd::{AsFd as _, AsRawFd as _};
-        let crate::ipc::LocalStream::UdSocket(stream) = stream;
-        let mut descriptors = [
-            libc::pollfd {
-                fd: stream.as_fd().as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: self.reader.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        loop {
-            // SAFETY: both descriptors remain borrowed and the array has two entries.
-            if unsafe { libc::poll(descriptors.as_mut_ptr(), 2, -1) } >= 0 {
-                return Ok(());
-            }
-            let error = std::io::Error::last_os_error();
-            if error.kind() != std::io::ErrorKind::Interrupted {
-                return Err(error);
-            }
-        }
-    }
-}
-
 pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
     crossterm::terminal::window_size().map(|size| (size.columns, size.rows))
 }
@@ -90,63 +46,6 @@ pub(crate) fn begin_cli_output() {
     set_sigpipe_disposition(libc::SIG_DFL);
 }
 
-pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
-    super::RemoteSshConfigPaths {
-        user_config: std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .map(|home| home.join(".ssh").join("config")),
-        system_config: Some(PathBuf::from("/etc/ssh/ssh_config")),
-        multiplexing: true,
-    }
-}
-
-pub(crate) fn create_remote_ssh_config_dir(control_socket_name: &str) -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::DirBuilderExt;
-
-    let mut bases = vec![std::env::temp_dir()];
-    let short_tmp = PathBuf::from("/tmp");
-    if bases.first() != Some(&short_tmp) {
-        bases.push(short_tmp);
-    }
-
-    let mut last_error = None;
-    let mut path_fits = false;
-    for base in bases {
-        for attempt in 0..100 {
-            let dir = base.join(format!("herdr-ssh-{}-{attempt}", std::process::id()));
-            if !fits_unix_socket_path(&dir.join(control_socket_name)) {
-                continue;
-            }
-            path_fits = true;
-            match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
-                Ok(()) => return Ok(dir),
-                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(err) => {
-                    last_error = Some(err);
-                    break;
-                }
-            }
-        }
-    }
-
-    if let Some(err) = last_error {
-        return Err(err);
-    }
-    let message = if path_fits {
-        "failed to create private herdr ssh config directory"
-    } else {
-        "SSH control socket path exceeds the Unix socket length limit"
-    };
-    Err(std::io::Error::new(
-        if path_fits {
-            std::io::ErrorKind::AlreadyExists
-        } else {
-            std::io::ErrorKind::InvalidInput
-        },
-        message,
-    ))
-}
-
 pub(crate) fn create_remote_ssh_config_file(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -163,29 +62,8 @@ pub(crate) fn create_remote_private_dir(path: &Path) -> std::io::Result<()> {
     std::fs::DirBuilder::new().mode(0o700).create(path)
 }
 
-pub(crate) fn remote_private_temp_base() -> PathBuf {
-    std::env::temp_dir()
-}
-
-pub(crate) fn remote_bridge_endpoint_path(readable_name: &str, short_name: &str) -> PathBuf {
-    let tmp = std::env::temp_dir();
-    let readable = tmp.join(readable_name);
-    if fits_unix_socket_path(&readable) {
-        return readable;
-    }
-    let short = tmp.join(short_name);
-    if fits_unix_socket_path(&short) {
-        return short;
-    }
-    PathBuf::from("/tmp").join(short_name)
-}
-
 pub(crate) fn remote_reattach_program(program: &str) -> String {
     shell_quote(if program.is_empty() { "herdr" } else { program })
-}
-
-pub(crate) fn remote_reattach_argument(value: &str) -> String {
-    shell_quote(value)
 }
 
 fn shell_quote(value: &str) -> String {
@@ -201,12 +79,6 @@ fn shell_quote(value: &str) -> String {
         return value.to_string();
     }
     format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn fits_unix_socket_path(path: &Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-
-    path.as_os_str().as_bytes().len() <= 103
 }
 
 /// The machine's node name, as shown by tmux's `#h`.
@@ -302,15 +174,4 @@ fn datetime_from_tm(value: &libc::tm) -> Option<time::PrimitiveDateTime> {
     )
     .ok()?;
     Some(time::PrimitiveDateTime::new(date, time))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn remote_ssh_config_dir_rejects_overlong_control_socket_name() {
-        let err = create_remote_ssh_config_dir(&"x".repeat(200)).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-    }
 }
