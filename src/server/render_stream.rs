@@ -130,7 +130,6 @@ impl ClientRenderState {
                     && last.splits == surface.splits
                     && last.popup == surface.popup
                     && last.graphics.placements == surface.graphics.placements
-                    && last.graphics.retained_assets == surface.graphics.retained_assets
             })
         {
             return None;

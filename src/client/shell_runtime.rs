@@ -301,14 +301,6 @@ pub(super) fn complete_endpoint_activation(
         completion,
         endpoint::ActivationCompletion::AwaitingPresentationSync { .. }
     ) {
-        #[cfg(unix)]
-        if let endpoint::ActivationCompletion::AwaitingPresentationSync { previous, endpoint } =
-            &completion
-        {
-            if previous != endpoint {
-                state.retire_endpoint_graphics(previous);
-            }
-        }
         // The coherent target frame can replace the frozen source now, but the registry keeps
         // pane input disabled until a second projection epoch has replayed host modes/effects.
         state.unfreeze_presentation();

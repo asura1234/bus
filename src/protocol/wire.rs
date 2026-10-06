@@ -1123,10 +1123,8 @@ pub enum SurfaceGraphicsSource {
         target: SurfaceGraphicsTarget,
         image_id: u32,
     },
-    PaneLayer {
-        pane_id: String,
-        layer_id: String,
-    },
+    /// Retired pane image layer; kept so `shell.surface.v1` frames keep their layout.
+    PaneLayer { pane_id: String, layer_id: String },
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -1178,8 +1176,8 @@ pub struct SurfaceGraphicsPlacement {
 pub struct SurfaceGraphicsScene {
     pub assets: Vec<SurfaceGraphicsAsset>,
     pub placements: Vec<SurfaceGraphicsPlacement>,
-    /// Direct-uploaded assets that remain live for this client even while their
-    /// pane is outside the selected scene.
+    /// Always empty since the pane image API was removed; kept for the
+    /// `shell.surface.v1` wire layout.
     pub retained_assets: Vec<SurfaceGraphicsAssetKey>,
 }
 

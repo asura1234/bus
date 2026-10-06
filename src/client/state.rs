@@ -25,13 +25,6 @@ pub(super) struct ClientState {
     pub(super) kitty_graphics_enabled: bool,
     pub(super) pixel_geometry_enabled: bool,
     pub(super) pixel_geometry_exact: bool,
-    #[cfg(unix)]
-    pub(super) direct_graphics_response: Arc<Mutex<direct_graphics::ResponseMatcher>>,
-    #[cfg(unix)]
-    pub(super) retired_direct_graphics: Option<(endpoint::ClientEndpointId, u64, u32)>,
-    #[cfg(unix)]
-    pub(super) pending_surface_graphics:
-        HashMap<(endpoint::ClientEndpointId, u64, u32), crate::protocol::SurfaceGraphicsAssetKey>,
     pub(super) attach_escape: Option<AttachEscapeState>,
     #[cfg(unix)]
     pub(super) mouse_scroll_lines: usize,
@@ -178,30 +171,6 @@ impl ClientState {
             "client_surface_patch.fallback.commit"
         });
         Ok(committed)
-    }
-
-    #[cfg(unix)]
-    pub(super) fn retire_endpoint_graphics(&mut self, endpoint_id: &endpoint::ClientEndpointId) {
-        let transfer_ids = self
-            .pending_surface_graphics
-            .keys()
-            .filter(|(owner, _, _)| owner == endpoint_id)
-            .map(|(_, transfer_id, _)| *transfer_id)
-            .collect::<Vec<_>>();
-        self.pending_surface_graphics
-            .retain(|(owner, _, _), _| owner != endpoint_id);
-        if self
-            .retired_direct_graphics
-            .as_ref()
-            .is_some_and(|(owner, _, _)| owner == endpoint_id)
-        {
-            self.retired_direct_graphics = None;
-        }
-        if let Ok(mut matcher) = self.direct_graphics_response.lock() {
-            for transfer_id in transfer_ids {
-                matcher.retire(transfer_id);
-            }
-        }
     }
 
     pub(super) fn present_frame(&mut self, frame_data: FrameData) {

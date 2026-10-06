@@ -361,8 +361,7 @@ impl HeadlessServer {
             let mut changed_panes = Vec::with_capacity(collected.len());
             let mut patch_rows = Vec::new();
             let mut metadata_changed = false;
-            let mut refresh_graphics = !surface.graphics.placements.is_empty()
-                || !surface.graphics.retained_assets.is_empty();
+            let mut refresh_graphics = !surface.graphics.placements.is_empty();
             for collected_pane in &collected {
                 let Some(pane) = surface
                     .panes
@@ -433,7 +432,6 @@ impl HeadlessServer {
                         target,
                         client.cell_size,
                         &client.shell_graphics_delivery,
-                        client_id,
                     )
                 else {
                     fallback!("graphics_geometry");

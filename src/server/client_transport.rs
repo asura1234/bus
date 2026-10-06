@@ -130,11 +130,6 @@ impl ClientWriter {
     }
 
     #[cfg(test)]
-    pub(crate) fn test_fill_render(&self, data: Vec<u8>) {
-        self.render.try_send(data).unwrap();
-    }
-
-    #[cfg(test)]
     pub(crate) fn test_close(&self) {
         self.render.queue.close_writer();
     }
@@ -237,10 +232,6 @@ impl ClientRenderWriter {
         }
         self.queue.try_send_render(data)
     }
-
-    pub(crate) fn send_ordered(&self, data: Vec<u8>) -> Result<(), TrySendError<Vec<u8>>> {
-        self.queue.send_ordered(data)
-    }
 }
 
 #[derive(Debug)]
@@ -316,22 +307,6 @@ impl ClientWriterQueue {
         self.ready.notify_all();
     }
 
-    fn send_ordered(&self, data: Vec<u8>) -> Result<(), TrySendError<Vec<u8>>> {
-        let mut state = self.lock_state();
-        if !state.writer_alive {
-            return Err(TrySendError::Disconnected(data));
-        }
-        if !state.ordered.is_empty() {
-            return Err(TrySendError::Full(data));
-        }
-        if let Some(older) = state.render.take() {
-            state.ordered.push_back(older);
-        }
-        state.ordered.push_back(data);
-        self.ready.notify_one();
-        Ok(())
-    }
-
     fn recv(&self) -> Option<ClientWriteItem> {
         let mut state = self.lock_state();
         loop {
@@ -399,18 +374,6 @@ pub(crate) enum ServerEvent {
     },
     /// A client sent an input message.
     ClientInput { client_id: u64, data: Vec<u8> },
-    /// A client reported the one armed Kitty regular-file response.
-    GraphicsTransmissionResult {
-        client_id: u64,
-        transfer_id: u64,
-        image_id: u32,
-        success: bool,
-    },
-    GraphicsTransmissionStarted {
-        client_id: u64,
-        transfer_id: u64,
-        image_id: u32,
-    },
     /// A fully decoded interactive paste exceeded the text-input limit.
     ClientPasteRejected {
         client_id: u64,
@@ -1036,24 +999,9 @@ fn client_read_loop_with_endpoint_controls(
                     takeover,
                 }
             }
-            ClientMessage::GraphicsTransmissionResult {
-                transfer_id,
-                image_id,
-                success,
-            } => ServerEvent::GraphicsTransmissionResult {
-                client_id,
-                transfer_id,
-                image_id,
-                success,
-            },
-            ClientMessage::GraphicsTransmissionStarted {
-                transfer_id,
-                image_id,
-            } => ServerEvent::GraphicsTransmissionStarted {
-                client_id,
-                transfer_id,
-                image_id,
-            },
+            // Direct pane image transfers were removed; older clients may still acknowledge one.
+            ClientMessage::GraphicsTransmissionResult { .. }
+            | ClientMessage::GraphicsTransmissionStarted { .. } => continue,
             ClientMessage::ClipboardImage {
                 target,
                 extension,
@@ -1490,30 +1438,6 @@ mod tests {
         assert!(matches!(
             writer.render.try_send(second),
             Err(TrySendError::Full(_))
-        ));
-    }
-
-    #[test]
-    fn ordered_direct_follows_older_render_and_stays_bounded() {
-        let (writer, queue) = test_queue_writer();
-        writer.render.try_send(b"old".to_vec()).unwrap();
-        writer.render.send_ordered(b"direct".to_vec()).unwrap();
-        assert!(matches!(
-            writer.render.send_ordered(b"second".to_vec()),
-            Err(TrySendError::Full(_))
-        ));
-        writer.render.try_send(b"new".to_vec()).unwrap();
-
-        for expected in [b"old".as_slice(), b"direct", b"new"] {
-            assert_eq!(
-                queue.recv(),
-                Some(ClientWriteItem::Render(expected.to_vec()))
-            );
-        }
-        queue.close_writer();
-        assert!(matches!(
-            writer.render.send_ordered(b"closed".to_vec()),
-            Err(TrySendError::Disconnected(_))
         ));
     }
 

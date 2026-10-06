@@ -57,7 +57,6 @@ impl HeadlessServer {
 
         if let Some(held_inputs) = held_inputs {
             self.release_client_shell_inputs(client_id, held_inputs);
-            self.retire_direct_graphics_for_client(client_id);
         }
         if changed {
             self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);

@@ -45,16 +45,12 @@ impl HeadlessServer {
                         .flatten();
                     let child_requests_mouse =
                         focused.is_some_and(|(runtime, _)| runtime.mouse_reporting_enabled());
-                    let sgr_pixels = client.pixel_mouse
-                        && focused.is_some_and(|(runtime, pane_id)| {
-                            self.app.pane_graphics.active_for_pane(pane_id)
-                                && runtime.sgr_pixel_mouse_enabled()
-                        });
+                    // Shell clients only needed SGR pixel reports for pane image layers.
                     Some((
                         client_id,
                         client.shell_surface_active
                             && (client.shell_mouse_capture || child_requests_mouse),
-                        client.shell_surface_active && sgr_pixels,
+                        false,
                     ))
                 }
                 ClientConnectionMode::TerminalAttach { terminal_id } => {
@@ -216,12 +212,8 @@ impl HeadlessServer {
         }
     }
 
-    pub(super) fn has_pending_presentation_work(
-        &self,
-        needs_full_render: bool,
-        needs_graphics_render: bool,
-    ) -> bool {
-        needs_full_render || needs_graphics_render || self.app.render_dirty.has_immediate_work()
+    pub(super) fn has_pending_presentation_work(&self, needs_full_render: bool) -> bool {
+        needs_full_render || self.app.render_dirty.has_immediate_work()
     }
 
     pub(super) fn sync_immediate_pty_sources(&self) {
@@ -498,7 +490,6 @@ impl HeadlessServer {
                         shell_shows_popup,
                         render_cell_size,
                         &shell_graphics_delivery,
-                        client_id,
                     );
                     crate::render_prof::duration_since(
                         "full_render.render_tab_surface_virtual",
@@ -556,9 +547,7 @@ impl HeadlessServer {
             let has_graphics = surface_parts
                 .as_ref()
                 .is_some_and(|(_, _, _, graphics, _)| {
-                    !graphics.assets.is_empty()
-                        || !graphics.placements.is_empty()
-                        || !graphics.retained_assets.is_empty()
+                    !graphics.assets.is_empty() || !graphics.placements.is_empty()
                 });
             let mut next_shell_graphics_delivery = None;
             let prepared = if let Some((panes, splits, popup, graphics, delivery)) = surface_parts {

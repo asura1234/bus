@@ -44,8 +44,6 @@ pub fn stdin_reader_loop(
     host_palette_query_progress: Arc<AtomicU16>,
     host_mouse_capture_active: Arc<AtomicBool>,
     host_sgr_pixels_active: Arc<AtomicBool>,
-    #[cfg(unix)] direct_response: Arc<std::sync::Mutex<super::direct_graphics::ResponseMatcher>>,
-    #[cfg(unix)] direct_response_active: Arc<AtomicBool>,
 ) {
     #[cfg(windows)]
     {
@@ -70,8 +68,6 @@ pub fn stdin_reader_loop(
         host_palette_query_progress,
         host_mouse_capture_active,
         host_sgr_pixels_active,
-        direct_response,
-        direct_response_active,
     );
 }
 
@@ -85,8 +81,6 @@ fn unix_stdin_reader_loop(
     host_palette_query_progress: Arc<AtomicU16>,
     host_mouse_capture_active: Arc<AtomicBool>,
     host_sgr_pixels_active: Arc<AtomicBool>,
-    direct_response: Arc<std::sync::Mutex<super::direct_graphics::ResponseMatcher>>,
-    direct_response_active: Arc<AtomicBool>,
 ) {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
@@ -103,28 +97,8 @@ fn unix_stdin_reader_loop(
     let mut pending_palette = Vec::new();
     let mut pending_mode = None;
     let mut last_geometry = None;
-    let mut direct_filter = super::direct_graphics::InputFilter::default();
 
     while !should_quit.load(Ordering::Acquire) {
-        if direct_filter.has_pending()
-            && stdin_read_ready(&reader, crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS)
-                == Some(false)
-        {
-            let released = direct_response
-                .lock()
-                .ok()
-                .and_then(|mut matcher| direct_filter.flush_if_inactive(&mut matcher));
-            if let Some(data) = released {
-                if event_tx
-                    .blocking_send(ClientLoopEvent::StdinInput(data))
-                    .is_err()
-                    && !host_palette_query_pending.load(Ordering::Acquire)
-                {
-                    return;
-                }
-            }
-            continue;
-        }
         match reader.read(&mut scratch) {
             Ok(0) => break,
             Ok(n) => {
@@ -136,29 +110,7 @@ fn unix_stdin_reader_loop(
                         crate::input::mouse::HostGeometry::current(),
                     );
                 }
-                let filtered = filter_direct_input(
-                    &scratch[..n],
-                    &mut direct_filter,
-                    &direct_response,
-                    &direct_response_active,
-                );
-                let chunks = if let Some((raw_chunks, responses)) = filtered {
-                    for response in responses {
-                        if event_tx
-                            .blocking_send(ClientLoopEvent::DirectGraphicsResponse(response))
-                            .is_err()
-                            && !host_palette_query_pending.load(Ordering::Acquire)
-                        {
-                            return;
-                        }
-                    }
-                    raw_chunks
-                        .into_iter()
-                        .flat_map(|chunk| framer.push(&chunk))
-                        .collect()
-                } else {
-                    framer.push(&scratch[..n])
-                };
+                let chunks = framer.push(&scratch[..n]);
                 if !framer.has_pending_input() {
                     pending_mode = None;
                 }
@@ -236,24 +188,6 @@ fn unix_stdin_reader_loop(
             }
         }
     }
-}
-
-#[cfg(unix)]
-fn filter_direct_input(
-    bytes: &[u8],
-    filter: &mut super::direct_graphics::InputFilter,
-    response: &std::sync::Mutex<super::direct_graphics::ResponseMatcher>,
-    active: &AtomicBool,
-) -> Option<(Vec<Vec<u8>>, Vec<super::direct_graphics::Response>)> {
-    if !active.load(Ordering::Acquire) && !filter.has_pending() {
-        return None;
-    }
-    Some(
-        response
-            .lock()
-            .map(|mut matcher| filter.push(bytes, &mut matcher))
-            .unwrap_or_else(|_| (vec![bytes.to_vec()], Vec::new())),
-    )
 }
 
 #[cfg(unix)]
@@ -650,16 +584,6 @@ mod tests {
             ClientLoopEvent::StdinInput(d) => assert_eq!(d, data),
             _ => panic!("expected StdinInput event"),
         }
-    }
-
-    #[test]
-    fn inactive_direct_input_bypasses_filter() {
-        let response =
-            std::sync::Mutex::new(super::super::direct_graphics::ResponseMatcher::default());
-        let active = response.lock().unwrap().active_handle();
-        let mut filter = super::super::direct_graphics::InputFilter::default();
-        assert!(filter_direct_input(b"typed", &mut filter, &response, &active).is_none());
-        assert!(!filter.has_pending());
     }
 
     #[test]

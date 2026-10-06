@@ -122,7 +122,6 @@ impl HeadlessServer {
                 api::ApiRequestMessage {
                     request: *request,
                     respond_to,
-                    stream_active: None,
                 },
             )
     }

@@ -1,7 +1,5 @@
 use super::*;
 
-#[path = "pane_graphics.rs"]
-mod pane_graphics_tests;
 #[path = "surface_interest.rs"]
 mod surface_interest_tests;
 
@@ -188,7 +186,6 @@ fn headless_pane_list(server: &mut HeadlessServer) -> Vec<api::schema::PaneInfo>
             method: api::schema::Method::PaneList(api::schema::PaneListParams::default()),
         },
         respond_to,
-        stream_active: None,
     });
     let response: api::schema::SuccessResponse =
         serde_json::from_str(&response_rx.recv().unwrap()).unwrap();
@@ -246,7 +243,6 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
                 method: api::schema::Method::ServerStop(api::schema::EmptyParams::default()),
             },
             respond_to,
-            stream_active: None,
         })
     );
     let response = response_rx
@@ -1472,7 +1468,6 @@ async fn client_local_navigation_does_not_emit_global_focus_transitions() {
                 }),
             },
             respond_to,
-            stream_active: None,
         },
     );
     server.app.sync_focus_events();
@@ -1581,7 +1576,6 @@ async fn repeated_layout_action_reapplies_controller_geometry() {
                 ),
             },
             respond_to,
-            stream_active: None,
         },
     ));
 
@@ -1625,7 +1619,6 @@ async fn public_close_reapplies_controller_geometry() {
                 }),
             },
             respond_to,
-            stream_active: None,
         })
     );
 
@@ -1828,7 +1821,6 @@ async fn public_background_tab_create_preserves_client_locations() {
             }),
         },
         respond_to,
-        stream_active: None,
     });
 
     assert_eq!(
@@ -1875,7 +1867,6 @@ async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
             ),
         },
         respond_to,
-        stream_active: None,
     });
 
     let first_location = server.clients[&41].shell_location.as_ref().unwrap();
@@ -1945,7 +1936,6 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
             ),
         },
         respond_to,
-        stream_active: None,
     });
     assert_eq!(server.app.state.active, Some(1));
     server.render_and_stream();
@@ -2466,24 +2456,23 @@ async fn client_shell_release_under_popup_renders_when_it_resets_scrollback() {
     );
     server.foreground_client_id = Some(11);
 
-    let render_impact =
-        server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
-            client_id: 11,
-            pane_id: public_pane_id,
-            events: vec![crate::protocol::ClientPaneInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('x'),
-                modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Release,
-                repeat_count: 1,
-                shifted_codepoint: None,
-                generated_text: None,
-                tracks_release: true,
-                physical_key_id: Some(0x2d),
-                windows_record: None,
-            }],
-        });
+    let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: public_pane_id,
+        events: vec![crate::protocol::ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('x'),
+            modifiers: 0,
+            kind: crate::protocol::ClientKeyKind::Release,
+            repeat_count: 1,
+            shifted_codepoint: None,
+            generated_text: None,
+            tracks_release: true,
+            physical_key_id: Some(0x2d),
+            windows_record: None,
+        }],
+    });
 
-    assert_eq!(render_impact, RenderImpact::Full);
+    assert!(render_impact);
     assert!(!input_rx.recv().await.expect("encoded release").is_empty());
     shutdown_test_runtimes(&mut server);
 }
@@ -2523,16 +2512,15 @@ async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
     );
     server.foreground_client_id = Some(11);
 
-    let render_impact =
-        server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
-            client_id: 11,
-            pane_id: public_pane_id.clone(),
-            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
-                "x".to_owned(),
-            )],
-        });
+    let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: public_pane_id.clone(),
+        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+            "x".to_owned(),
+        )],
+    });
 
-    assert_eq!(render_impact, RenderImpact::Full);
+    assert!(render_impact);
     assert_eq!(
         input_rx.try_recv().expect("text must reach the PTY"),
         Bytes::from_static(b"x")
@@ -2547,15 +2535,14 @@ async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
         Some(0)
     );
 
-    let render_impact =
-        server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
-            client_id: 11,
-            pane_id: public_pane_id,
-            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
-                "y".to_owned(),
-            )],
-        });
-    assert_eq!(render_impact, RenderImpact::None);
+    let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: public_pane_id,
+        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+            "y".to_owned(),
+        )],
+    });
+    assert!(!render_impact);
     assert_eq!(
         input_rx.try_recv().expect("second text must reach the PTY"),
         Bytes::from_static(b"y")
@@ -2582,20 +2569,19 @@ async fn client_shell_mouse_motion_delivers_without_render_when_foreground() {
     server.foreground_client_id = Some(11);
     assert!(server.claim_unowned_shell_tab_geometry(11, false));
 
-    let render_impact =
-        server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
-            client_id: 11,
-            pane_id,
-            events: vec![crate::protocol::ClientPaneInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::Moved,
-                position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
-                geometry: None,
-                modifiers: 0,
-                lines: 0,
-            }],
-        });
+    let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id,
+        events: vec![crate::protocol::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::ClientMouseKind::Moved,
+            position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+            geometry: None,
+            modifiers: 0,
+            lines: 0,
+        }],
+    });
 
-    assert_eq!(render_impact, RenderImpact::None);
+    assert!(!render_impact);
     assert!(
         input_rx.try_recv().is_ok(),
         "motion must still reach the PTY"
@@ -2620,20 +2606,19 @@ async fn client_shell_mouse_motion_promotes_and_requests_render() {
         ),
     );
 
-    let render_impact =
-        server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
-            client_id: 11,
-            pane_id,
-            events: vec![crate::protocol::ClientPaneInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::Moved,
-                position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
-                geometry: None,
-                modifiers: 0,
-                lines: 0,
-            }],
-        });
+    let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id,
+        events: vec![crate::protocol::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::ClientMouseKind::Moved,
+            position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+            geometry: None,
+            modifiers: 0,
+            lines: 0,
+        }],
+    });
 
-    assert_eq!(render_impact, RenderImpact::Full);
+    assert!(render_impact);
     assert_eq!(server.foreground_client_id, Some(11));
     assert!(
         input_rx.try_recv().is_ok(),
@@ -2662,56 +2647,6 @@ fn install_focused_test_runtime(
     server.app.state.selected = 0;
     server.app.state.mode = crate::app::Mode::Terminal;
     input_rx
-}
-
-fn retained_test_server(
-    initial_screen: &[u8],
-) -> (
-    HeadlessServer,
-    std::sync::mpsc::Receiver<Vec<u8>>,
-    crate::layout::PaneId,
-) {
-    let (server, _control_rx, render_rx, pane_id) =
-        retained_test_server_with_control(initial_screen);
-    (server, render_rx, pane_id)
-}
-
-fn retained_test_server_with_control(
-    initial_screen: &[u8],
-) -> (
-    HeadlessServer,
-    std::sync::mpsc::Receiver<Vec<u8>>,
-    std::sync::mpsc::Receiver<Vec<u8>>,
-    crate::layout::PaneId,
-) {
-    let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("test");
-    let pane_id = workspace.focused_pane_id().expect("focused pane");
-    workspace.insert_test_runtime(
-        pane_id,
-        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, initial_screen),
-    );
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
-
-    let (client_tx, client_control_rx, client_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.sync_foreground_client_state();
-    assert!(server.claim_unowned_shell_tab_geometry(1, true));
-
-    (server, client_control_rx, client_rx, pane_id)
 }
 
 #[test]
@@ -3191,7 +3126,7 @@ fn direct_terminal_observer_keeps_hidden_pty_source_renderable_with_client_shell
     assert!(server.pty_sources_visible_to_any_render_target(&HashSet::from([background_pane])));
     server.sync_immediate_pty_sources();
     assert!(server.app.render_dirty.request_pty(background_pane));
-    assert!(server.has_pending_presentation_work(false, false));
+    assert!(server.has_pending_presentation_work(false));
     assert!(server.app.render_dirty.request_pty(hidden_pane));
 }
 
@@ -5737,7 +5672,6 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
             }),
         },
         respond_to,
-        stream_active: None,
     });
 
     assert!(changed);
@@ -5799,7 +5733,6 @@ fn notification_show_api_preserves_colon_in_forwarded_title() {
             }),
         },
         respond_to,
-        stream_active: None,
     });
 
     assert!(changed);
@@ -5844,7 +5777,6 @@ fn notification_show_api_validates_empty_title_before_disabled_delivery() {
             }),
         },
         respond_to,
-        stream_active: None,
     });
 
     assert!(changed);
@@ -5874,7 +5806,6 @@ fn notification_show_api_reports_no_foreground_client() {
             }),
         },
         respond_to,
-        stream_active: None,
     });
 
     assert!(changed);
@@ -5924,7 +5855,6 @@ fn notification_show_api_includes_sound_in_semantic_event() {
                 ),
             },
             respond_to,
-            stream_active: None,
         })
     );
 
@@ -6101,7 +6031,6 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
             }),
         },
         respond_to,
-        stream_active: None,
     });
 
     assert!(changed);

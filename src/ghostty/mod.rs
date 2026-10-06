@@ -3604,11 +3604,12 @@ mod tests {
         terminal.enable_kitty_graphics().unwrap();
         terminal.resize(10, 5, 8, 16).unwrap();
         let mut upload = Vec::new();
-        crate::kitty_graphics::encode_kitty_regular_file(
-            &mut upload,
-            &[],
-            "a=t,f=32,s=1,v=1,i=10,q=0",
-            path.to_str().unwrap(),
+        let payload = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(path.to_str().unwrap().as_bytes())
+        };
+        upload.extend_from_slice(
+            format!("\x1b_Ga=t,f=32,s=1,v=1,i=10,q=0,t=f;{payload}\x1b\\").as_bytes(),
         );
         terminal.write(&upload);
         assert!(terminal.kitty_image_placements().unwrap().is_empty());

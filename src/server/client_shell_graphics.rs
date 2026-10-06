@@ -7,7 +7,6 @@ pub(crate) fn collect_retained(
     target: crate::ui::TabSurfaceTarget,
     cell_size: crate::kitty_graphics::HostCellSize,
     delivered: &DeliveryCache,
-    client_id: u64,
 ) -> Option<(SurfaceGraphicsScene, DeliveryCache)> {
     let rect = |rect: crate::protocol::SurfaceRect| {
         ratatui::layout::Rect::new(rect.x, rect.y, rect.width, rect.height)
@@ -39,7 +38,6 @@ pub(crate) fn collect_retained(
         Some(target),
         cell_size,
         delivered,
-        client_id,
     ))
 }
 
@@ -51,7 +49,6 @@ pub(crate) fn collect(
     target: Option<crate::ui::TabSurfaceTarget>,
     cell_size: crate::kitty_graphics::HostCellSize,
     delivered: &DeliveryCache,
-    client_id: u64,
 ) -> (SurfaceGraphicsScene, DeliveryCache) {
     let popup_content_size = popup.map(|popup| (popup.frame.width, popup.frame.height));
     crate::kitty_graphics::surface::collect_scene(
@@ -64,6 +61,5 @@ pub(crate) fn collect(
         popup_content_size,
         cell_size,
         delivered,
-        client_id,
     )
 }

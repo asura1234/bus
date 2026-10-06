@@ -15,8 +15,6 @@
 mod attach;
 mod clipboard_forwarding;
 mod config_reload;
-#[cfg(unix)]
-mod direct_graphics;
 pub(crate) mod endpoint;
 mod endpoint_commands;
 mod errors;
@@ -100,13 +98,9 @@ use notifications::{handle_notify, handle_shell_notification_effects};
 #[cfg(test)]
 use notifications::{handle_notify_with_notifiers, sound_from_notify_message};
 
-#[cfg(unix)]
-use std::collections::HashMap;
 use std::io::{self, Write as _};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
-#[cfg(unix)]
-use std::sync::Mutex;
 use std::time::Duration;
 
 use interprocess::local_socket::traits::Stream as _;
@@ -353,12 +347,6 @@ async fn run_client_loop(
         kitty_graphics_enabled: config.kitty_graphics_enabled,
         pixel_geometry_enabled: config.pixel_geometry_enabled,
         pixel_geometry_exact: initial_pixel_geometry_exact,
-        #[cfg(unix)]
-        direct_graphics_response: Arc::new(Mutex::new(direct_graphics::ResponseMatcher::default())),
-        #[cfg(unix)]
-        retired_direct_graphics: None,
-        #[cfg(unix)]
-        pending_surface_graphics: HashMap::new(),
         attach_escape,
         #[cfg(unix)]
         mouse_scroll_lines: config.mouse_scroll_lines,
@@ -416,13 +404,6 @@ async fn run_client_loop(
     let stdin_sgr_pixels_active = host_sgr_pixels_active.clone();
     let stdin_host_palette_query_pending = state.host_palette_query_pending.clone();
     let stdin_host_palette_query_progress = state.host_palette_query_progress.clone();
-    #[cfg(unix)]
-    let stdin_direct_response = state.direct_graphics_response.clone();
-    #[cfg(unix)]
-    let stdin_direct_response_active = stdin_direct_response
-        .lock()
-        .map(|matcher| matcher.active_handle())
-        .unwrap_or_default();
     std::thread::spawn(move || {
         input::stdin_reader_loop(
             stdin_tx,
@@ -433,10 +414,6 @@ async fn run_client_loop(
             stdin_host_palette_query_progress,
             stdin_mouse_capture_active,
             stdin_sgr_pixels_active,
-            #[cfg(unix)]
-            stdin_direct_response,
-            #[cfg(unix)]
-            stdin_direct_response_active,
         );
     });
 
@@ -665,48 +642,6 @@ async fn run_client_loop(
                 let msg = ClientMessage::Input { data };
                 if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
-                }
-            }
-            #[cfg(unix)]
-            ClientLoopEvent::DirectGraphicsResponse(response) => {
-                let pending_key = state
-                    .pending_surface_graphics
-                    .keys()
-                    .find(|(_, transfer_id, image_id)| {
-                        *transfer_id == response.transfer_id && *image_id == response.image_id
-                    })
-                    .cloned();
-                let owner = pending_key
-                    .as_ref()
-                    .map(|(endpoint_id, _, _)| endpoint_id.clone());
-                let composed = pending_key
-                    .and_then(|key| {
-                        state
-                            .pending_surface_graphics
-                            .remove(&key)
-                            .map(|asset| (key, asset))
-                    })
-                    .filter(|_| response.success)
-                    .and_then(|((endpoint_id, _, _), asset)| {
-                        if write_stream.active_id() != &endpoint_id {
-                            return None;
-                        }
-                        let shell = state.shell.as_mut()?;
-                        shell
-                            .trust_direct_graphics_asset(&asset, response.image_id)
-                            .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
-                            .flatten()
-                    });
-                let message = ClientMessage::GraphicsTransmissionResult {
-                    transfer_id: response.transfer_id,
-                    image_id: response.image_id,
-                    success: response.success,
-                };
-                if let Some(owner) = owner {
-                    write_stream.send_to(&owner, &message);
-                }
-                if let Some(frame) = composed {
-                    state.present_frame(frame);
                 }
             }
             #[cfg(unix)]
@@ -1031,151 +966,15 @@ async fn run_client_loop(
                             let _ = stdout.flush();
                         }
                     }
+                    // Direct pane image transfers were removed; ignore them from older servers.
+                    ServerMessage::GraphicsFile { .. }
+                    | ServerMessage::GraphicsTransmissionRetired { .. } => {}
                     ServerMessage::TerminalBell { count } => {
                         if let Err(err) =
                             crate::terminal_effects::write_terminal_bells(&mut io::stdout(), count)
                         {
                             warn!(err = %err, "failed to emit terminal bell");
                         }
-                    }
-                    ServerMessage::GraphicsFile {
-                        path,
-                        expected_len,
-                        image_id,
-                        transfer_id,
-                        leading,
-                        control,
-                        surface_asset,
-                    } => {
-                        #[cfg(unix)]
-                        {
-                            if state.retired_direct_graphics.take()
-                                == Some((endpoint_id.clone(), transfer_id, image_id))
-                            {
-                                continue;
-                            }
-                            let surface_asset_valid = match (state.shell.as_ref(), &surface_asset) {
-                                (Some(shell), Some(asset)) => {
-                                    crate::kitty_graphics::surface::host_image_id(
-                                        shell.graphics_scope(),
-                                        asset,
-                                    ) == image_id
-                                }
-                                (None, None) => true,
-                                _ => false,
-                            };
-                            let valid = state.kitty_graphics_enabled
-                                && surface_asset_valid
-                                && usize::try_from(expected_len).ok().is_some_and(|len| {
-                                    crate::pane_graphics_files::validate_direct_source(
-                                        std::path::Path::new(&path),
-                                        len,
-                                    )
-                                    .is_ok()
-                                        && direct_graphics::valid_control(&control, image_id, len)
-                                })
-                                && state
-                                    .direct_graphics_response
-                                    .lock()
-                                    .is_ok_and(|mut matcher| matcher.arm(transfer_id, image_id));
-                            let sent = if valid {
-                                let mut command = Vec::new();
-                                crate::kitty_graphics::encode_kitty_regular_file(
-                                    &mut command,
-                                    &leading,
-                                    &control,
-                                    &path,
-                                );
-                                let mut stdout = io::stdout();
-                                let written = stdout
-                                    .write_all(&command)
-                                    .and_then(|()| stdout.flush())
-                                    .is_ok();
-                                if written {
-                                    record_received_kitty_graphics(&command);
-                                }
-                                written
-                            } else {
-                                false
-                            };
-                            if sent {
-                                if let Some(asset) = surface_asset {
-                                    state.pending_surface_graphics.insert(
-                                        (endpoint_id.clone(), transfer_id, image_id),
-                                        asset,
-                                    );
-                                }
-                                if let Ok(mut matcher) = state.direct_graphics_response.lock() {
-                                    matcher.start(transfer_id);
-                                }
-                                let started = ClientMessage::GraphicsTransmissionStarted {
-                                    transfer_id,
-                                    image_id,
-                                };
-                                if let Err(err) = write_to_server(&mut write_stream, &started) {
-                                    return Err(ClientError::ConnectionLost(err));
-                                }
-                            } else {
-                                state.pending_surface_graphics.remove(&(
-                                    endpoint_id.clone(),
-                                    transfer_id,
-                                    image_id,
-                                ));
-                                if let Ok(mut matcher) = state.direct_graphics_response.lock() {
-                                    if valid {
-                                        matcher.retire(transfer_id);
-                                    } else {
-                                        matcher.cancel(transfer_id);
-                                    }
-                                }
-                                let result = ClientMessage::GraphicsTransmissionResult {
-                                    transfer_id,
-                                    image_id,
-                                    success: false,
-                                };
-                                if let Err(err) = write_to_server(&mut write_stream, &result) {
-                                    return Err(ClientError::ConnectionLost(err));
-                                }
-                            }
-                        }
-                        #[cfg(not(unix))]
-                        let _ = (
-                            path,
-                            expected_len,
-                            image_id,
-                            transfer_id,
-                            leading,
-                            control,
-                            surface_asset,
-                        );
-                    }
-                    ServerMessage::GraphicsTransmissionRetired {
-                        transfer_id,
-                        image_id,
-                    } => {
-                        #[cfg(unix)]
-                        {
-                            state.retired_direct_graphics =
-                                Some((endpoint_id.clone(), transfer_id, image_id));
-                            state.pending_surface_graphics.remove(&(
-                                endpoint_id.clone(),
-                                transfer_id,
-                                image_id,
-                            ));
-                            let cleanup = state.shell.as_mut().map_or_else(Vec::new, |shell| {
-                                shell.retire_direct_graphics_image(image_id);
-                                shell
-                                    .compose(state.reported_size.0, state.reported_size.1)
-                                    .map(|frame| frame.graphics)
-                                    .unwrap_or_else(|| shell.take_pending_graphics_cleanup())
-                            });
-                            state.present_graphics(&cleanup);
-                            if let Ok(mut matcher) = state.direct_graphics_response.lock() {
-                                matcher.retire(transfer_id);
-                            }
-                        }
-                        #[cfg(not(unix))]
-                        let _ = (transfer_id, image_id);
                     }
                     ServerMessage::ServerShutdown { reason } => {
                         return Err(ClientError::ServerShutdown { reason });
@@ -1552,10 +1351,6 @@ async fn run_client_loop(
             }
             ClientLoopEvent::Timer => {
                 client_timer.fired();
-                #[cfg(unix)]
-                if let Ok(mut matcher) = state.direct_graphics_response.lock() {
-                    matcher.expire();
-                }
                 state
                     .detached_process_children
                     .retain_mut(|child| child.try_wait().ok().flatten().is_none());

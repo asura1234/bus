@@ -6,8 +6,6 @@ pub(super) enum ClientLoopEvent {
     StdinInput(Vec<u8>),
     #[cfg(unix)]
     PixelMouse(Vec<u8>, crate::input::mouse::HostGeometry),
-    #[cfg(unix)]
-    DirectGraphicsResponse(direct_graphics::Response),
     #[cfg(windows)]
     StdinEvents(Vec<crate::protocol::ClientInputEvent>),
     Resize(u16, u16, u32, u32, bool),

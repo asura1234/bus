@@ -94,7 +94,6 @@ impl RenderPipeline {
                 height_px: 1,
             },
             &self.graphics_delivery,
-            1,
         );
         let server_elapsed = started.elapsed();
         self.graphics_delivery = rendered.graphics_delivery;

@@ -1,25 +1,6 @@
 use super::*;
 
 impl ClientShellState {
-    #[cfg(unix)]
-    pub(crate) fn graphics_scope(&self) -> &str {
-        self.graphics.scope()
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn trust_direct_graphics_asset(
-        &mut self,
-        key: &crate::protocol::SurfaceGraphicsAssetKey,
-        image_id: u32,
-    ) -> bool {
-        self.graphics.trust_direct_asset(key, image_id)
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn retire_direct_graphics_image(&mut self, image_id: u32) {
-        self.graphics.retire_direct_image(image_id);
-    }
-
     pub(crate) fn take_pending_graphics_cleanup(&mut self) -> Vec<u8> {
         self.graphics.take_pending_cleanup()
     }

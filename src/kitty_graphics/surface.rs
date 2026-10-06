@@ -43,7 +43,6 @@ pub(crate) struct ClientState {
     scene: SurfaceGraphicsScene,
     assets: HashMap<SurfaceGraphicsAssetKey, Vec<u8>>,
     host: HostGraphicsCache,
-    trusted_direct: HashMap<SurfaceGraphicsAssetKey, u32>,
     reset_pending: bool,
     stale_images: Vec<u32>,
     forced_delete_images: Vec<u32>,
@@ -61,41 +60,9 @@ impl ClientState {
         self.scope = scope.to_owned();
         self.scene = SurfaceGraphicsScene::default();
         self.assets.clear();
-        self.trusted_direct.clear();
         self.stale_images.clear();
         self.forced_delete_images.clear();
         self.reset_pending = true;
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn trust_direct_asset(
-        &mut self,
-        key: &SurfaceGraphicsAssetKey,
-        image_id: u32,
-    ) -> bool {
-        if image_id != host_image_id(&self.scope, key) {
-            return false;
-        }
-        self.host
-            .images
-            .insert(image_id, image_signature_from_asset(key));
-        if self
-            .scene
-            .placements
-            .iter()
-            .all(|placement| &placement.asset != key)
-            && !self.scene.retained_assets.contains(key)
-        {
-            self.trusted_direct.insert(key.clone(), image_id);
-        }
-        true
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn retire_direct_image(&mut self, image_id: u32) {
-        self.trusted_direct
-            .retain(|_, trusted| *trusted != image_id);
-        self.forced_delete_images.push(image_id);
     }
 
     pub(crate) fn take_pending_cleanup(&mut self) -> Vec<u8> {
@@ -125,27 +92,18 @@ impl ClientState {
             .placements
             .iter()
             .map(|placement| placement.asset.clone())
-            .chain(scene.retained_assets.iter().cloned())
             .collect::<HashSet<_>>();
         let previous = self
             .scene
             .placements
             .iter()
             .map(|placement| placement.asset.clone())
-            .chain(self.scene.retained_assets.iter().cloned())
             .collect::<HashSet<_>>();
         self.stale_images.extend(
             previous
                 .difference(&desired)
                 .map(|key| host_image_id(&self.scope, key)),
         );
-        let unclaimed = self
-            .trusted_direct
-            .iter()
-            .filter_map(|(key, image_id)| (!desired.contains(key)).then_some(*image_id))
-            .collect::<Vec<_>>();
-        self.stale_images.extend(unclaimed);
-        self.trusted_direct.clear();
         let placed = scene
             .placements
             .iter()
@@ -203,47 +161,14 @@ impl ClientState {
             .collect::<Vec<_>>();
         self.host.request_placement_replay();
         loop {
-            let encoded = encode_graphics_update_incremental(
-                &mut self.host,
-                &placements,
-                &HashSet::new(),
-                None,
-                false,
-            );
+            let encoded =
+                encode_graphics_update_incremental(&mut self.host, &placements, None, false);
             bytes.extend(encoded.bytes);
             if !encoded.incomplete {
                 return bytes;
             }
         }
     }
-}
-
-pub(crate) fn pane_layer_asset_key(
-    app: &crate::app::App,
-    key: &crate::app::pane_graphics::Key,
-    layer: &crate::app::pane_graphics::Layer,
-) -> Option<SurfaceGraphicsAssetKey> {
-    let workspace_index = app
-        .state
-        .workspaces
-        .iter()
-        .position(|workspace| workspace.pane_state(key.0).is_some())?;
-    Some(SurfaceGraphicsAssetKey {
-        source: SurfaceGraphicsSource::PaneLayer {
-            pane_id: app.public_pane_id(workspace_index, key.0)?,
-            layer_id: key.1.clone(),
-        },
-        image_width: layer.image_width,
-        image_height: layer.image_height,
-        format: match layer.format {
-            crate::api::schema::PaneGraphicsFormat::Rgb => SurfaceGraphicsFormat::Rgb,
-            crate::api::schema::PaneGraphicsFormat::Rgba
-            | crate::api::schema::PaneGraphicsFormat::Bgra => SurfaceGraphicsFormat::Rgba,
-            crate::api::schema::PaneGraphicsFormat::Png => SurfaceGraphicsFormat::Png,
-        },
-        data_len: layer.data_len() as u64,
-        data_fingerprint: layer.data_fingerprint,
-    })
 }
 
 pub(crate) fn host_image_id(scope: &str, key: &SurfaceGraphicsAssetKey) -> u32 {
@@ -253,26 +178,12 @@ pub(crate) fn host_image_id(scope: &str, key: &SurfaceGraphicsAssetKey) -> u32 {
     10_000 + ((hasher.finish() as u32) % 900_000)
 }
 
-pub(crate) fn direct_upload_control(scope: &str, key: &SurfaceGraphicsAssetKey) -> (u32, String) {
-    let image_id = host_image_id(scope, key);
-    (
-        image_id,
-        format!(
-            "a=t,f={},s={},v={},i={image_id},q=0",
-            format_code(key.format),
-            key.image_width,
-            key.image_height
-        ),
-    )
-}
-
 pub(crate) fn collect_scene(
     app: &crate::app::App,
     surface: crate::ui::TabSurfaceView<'_>,
     popup_content_size: Option<(u16, u16)>,
     cell_size: HostCellSize,
     delivered: &DeliveryCache,
-    client_id: u64,
 ) -> (SurfaceGraphicsScene, DeliveryCache) {
     if !cell_size.is_known() {
         return (SurfaceGraphicsScene::default(), DeliveryCache::default());
@@ -303,7 +214,7 @@ pub(crate) fn collect_scene(
     // Reconstruct only the small image-signature index expected by the existing
     // collector. This prevents copying already-delivered image payloads on each
     // pane-scaled render while keeping Ghostty as the authoritative image store.
-    let mut uploaded_images = HashMap::new();
+    let uploaded_images = HashMap::new();
     let mut delivered_terminal_images = HashMap::new();
     for key in &delivered.assets {
         let signature = image_signature_from_asset(key);
@@ -322,28 +233,20 @@ pub(crate) fn collect_scene(
                     );
                 }
             }
-            SurfaceGraphicsSource::PaneLayer { pane_id, layer_id } => {
-                if let Some(pane_id) = public_panes.get(pane_id) {
-                    if let Some(slot) = app.pane_graphics.slots.get(&(*pane_id, layer_id.clone())) {
-                        uploaded_images.insert(slot.host_image_id, signature);
-                    }
-                }
-            }
             SurfaceGraphicsSource::Terminal {
                 target: SurfaceGraphicsTarget::Popup { .. },
                 ..
-            } => {}
+            }
+            | SurfaceGraphicsSource::PaneLayer { .. } => {}
         }
     }
     let mut host_placements = collect_visible_placements(
         &app.state,
-        &app.pane_graphics,
         &app.terminal_runtimes,
         surface,
         cell_size,
         &uploaded_images,
         &delivered_terminal_images,
-        client_id,
     );
 
     if let (Some(popup), Some((width, height)), Some((_, target))) = (
@@ -396,15 +299,6 @@ pub(crate) fn collect_scene(
                 target,
                 image_id: *image_id,
             },
-            HostSourceKey::PaneLayer { layer_id, .. } => {
-                let SurfaceGraphicsTarget::Pane { pane_id } = target else {
-                    continue;
-                };
-                SurfaceGraphicsSource::PaneLayer {
-                    pane_id,
-                    layer_id: layer_id.clone(),
-                }
-            }
             HostSourceKey::ClientSurface { .. } => continue,
         };
         let Some((clipped, _)) = clipped_placement(&placement) else {
@@ -475,22 +369,11 @@ pub(crate) fn collect_scene(
             placement.x,
         )
     });
-    let mut retained_assets = app
-        .pane_graphics
-        .slots
-        .iter()
-        .filter_map(|(key, slot)| {
-            let layer = slot.layer.as_ref()?;
-            (slot.direct_client() == Some(client_id))
-                .then(|| pane_layer_asset_key(app, key, layer))?
-        })
-        .collect::<Vec<_>>();
-    retained_assets.sort_by_key(|key| format!("{:?}", key.source));
     (
         SurfaceGraphicsScene {
             assets,
             placements,
-            retained_assets,
+            retained_assets: Vec::new(),
         },
         next,
     )
@@ -565,10 +448,7 @@ fn client_host_placement(
                 ..
             },
             Visibility::Main | Visibility::Popup,
-        )
-        | (SurfaceGraphicsSource::PaneLayer { .. }, Visibility::Main | Visibility::Popup) => {
-            main_origin
-        }
+        ) => main_origin,
         _ => return None,
     };
     let source_key = HostSourceKey::ClientSurface {
@@ -783,153 +663,6 @@ mod tests {
         assert!(String::from_utf8_lossy(&bytes).contains("\u{1b}[12;33H"));
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn trusted_direct_asset_is_placed_without_inline_reupload() {
-        let mut state = ClientState::default();
-        state.set_scope("endpoint-a:boot-1");
-        let _ = state.encode(
-            Visibility::Hidden,
-            (0, 0),
-            None,
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        );
-        let image = asset(
-            SurfaceGraphicsTarget::Pane {
-                pane_id: "w1:p1".into(),
-            },
-            15,
-            vec![1, 2, 3, 4],
-        );
-        let image_id = host_image_id("endpoint-a:boot-1", &image.key);
-        assert!(state.trust_direct_asset(&image.key, image_id));
-        let mut direct_scene = scene(image, 0, 0);
-        direct_scene.assets.clear();
-        state.set_scene(direct_scene);
-
-        let bytes = state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        );
-        let bytes = String::from_utf8_lossy(&bytes);
-        assert!(bytes.contains("a=p"));
-        assert!(!bytes.contains("a=t,t=d"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn direct_asset_trusted_after_scene_arrival_is_immediately_placeable() {
-        let mut state = ClientState::default();
-        state.set_scope("endpoint-a:boot-1");
-        let _ = state.take_pending_cleanup();
-        let image = asset(
-            SurfaceGraphicsTarget::Pane {
-                pane_id: "w1:p1".into(),
-            },
-            18,
-            vec![1, 2, 3, 4],
-        );
-        let image_id = host_image_id("endpoint-a:boot-1", &image.key);
-        let mut direct_scene = scene(image.clone(), 0, 0);
-        direct_scene.assets.clear();
-        state.set_scene(direct_scene);
-        assert!(state.trust_direct_asset(&image.key, image_id));
-
-        let bytes = state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        );
-        let bytes = String::from_utf8_lossy(&bytes);
-        assert!(bytes.contains("a=p"), "{bytes}");
-        assert!(!bytes.contains("a=t,t=d"), "{bytes}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn retained_direct_asset_survives_hidden_scene_and_replays_without_upload() {
-        let mut state = ClientState::default();
-        state.set_scope("endpoint-a:boot-1");
-        let _ = state.take_pending_cleanup();
-        let image = asset(
-            SurfaceGraphicsTarget::Pane {
-                pane_id: "w1:p1".into(),
-            },
-            19,
-            vec![1, 2, 3, 4],
-        );
-        let image_id = host_image_id("endpoint-a:boot-1", &image.key);
-        let mut active = scene(image.clone(), 0, 0);
-        active.assets.clear();
-        state.set_scene(active.clone());
-        assert!(state.trust_direct_asset(&image.key, image_id));
-        let _ = state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        );
-
-        state.set_scene(SurfaceGraphicsScene {
-            retained_assets: vec![image.key.clone()],
-            ..SurfaceGraphicsScene::default()
-        });
-        let hidden = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        ))
-        .unwrap();
-        assert!(!hidden.contains(&format!("a=d,d=I,i={image_id}")));
-
-        active.retained_assets.push(image.key.clone());
-        state.set_scene(active);
-        let restored = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        ))
-        .unwrap();
-        assert!(restored.contains("a=p"), "{restored}");
-        assert!(!restored.contains("a=t,t=d"), "{restored}");
-
-        state.set_scene(SurfaceGraphicsScene::default());
-        let removed = String::from_utf8(state.encode(
-            Visibility::Main,
-            (0, 0),
-            None,
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        ))
-        .unwrap();
-        assert!(removed.contains(&format!("a=d,d=I,i={image_id}")));
-    }
-
     #[test]
     fn popup_visibility_keeps_uncovered_main_scene_placements() {
         let mut state = ClientState::default();
@@ -966,47 +699,6 @@ mod tests {
         .unwrap();
         assert!(bytes.contains("\u{1b}[2;3H"), "{bytes}");
         assert!(bytes.contains("\u{1b}[11;21H"), "{bytes}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn retired_pending_direct_asset_is_deleted_even_before_cache_adoption() {
-        let mut state = ClientState::default();
-        state.set_scope("endpoint-a:boot-1");
-        let _ = state.take_pending_cleanup();
-        state.retire_direct_image(4242);
-        let cleanup = String::from_utf8(state.take_pending_cleanup()).unwrap();
-        assert!(cleanup.contains("a=d,d=I,i=4242"), "{cleanup}");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn unclaimed_direct_asset_is_deleted_by_the_next_authoritative_scene() {
-        let mut state = ClientState::default();
-        state.set_scope("endpoint-a:boot-1");
-        let _ = state.take_pending_cleanup();
-        let image = asset(
-            SurfaceGraphicsTarget::Pane {
-                pane_id: "w1:p1".into(),
-            },
-            16,
-            vec![1, 2, 3, 4],
-        );
-        let image_id = host_image_id("endpoint-a:boot-1", &image.key);
-        assert!(state.trust_direct_asset(&image.key, image_id));
-        state.set_scene(SurfaceGraphicsScene::default());
-
-        let bytes = state.encode(
-            Visibility::Hidden,
-            (0, 0),
-            None,
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        );
-        let bytes = String::from_utf8_lossy(&bytes);
-        assert!(bytes.contains(&format!("a=d,d=I,i={image_id}")), "{bytes}");
     }
 
     #[test]

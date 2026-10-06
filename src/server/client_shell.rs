@@ -235,7 +235,6 @@ pub(super) fn render_pane_surface(
     show_popup: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
     graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
-    client_id: u64,
 ) -> RenderedPaneSurface {
     let content_revisions_before = target
         .and_then(|target| {
@@ -371,7 +370,6 @@ pub(super) fn render_pane_surface(
         target,
         cell_size,
         graphics_delivery,
-        client_id,
     );
     RenderedPaneSurface {
         frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
