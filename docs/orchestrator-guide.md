@@ -115,10 +115,10 @@ Write the choice in the workflow's Coordination section.
 - **Use different models for review.** Reviewers on different providers catch
   different problems.
 - **Save quota for review.** `bus state` shows 5-hour and weekly usage per
-  provider, under `usage`. Only Codex usage is collected for now; Claude and
-  Cursor report `unknown`. As a rule of thumb, once a provider is below
-  about 25% of its weekly allowance, stop giving it coding tasks and keep it for
-  review. Unknown usage is unknown, not full.
+  provider, under `usage`. Bus collects Claude and Codex usage; Cursor, and
+  stale or missing data, report `unknown`. As a rule of thumb, once a provider
+  is below about 25% of its weekly allowance, stop giving it coding tasks and
+  keep it for review. Unknown usage is unknown, not full.
 - **Move work when a provider runs out.** If an agent hits a usage limit, add an
   agent on another provider (`bus agent add`) and hand the work over.
 - **Watch context health.** `bus state` shows how many times each agent's
