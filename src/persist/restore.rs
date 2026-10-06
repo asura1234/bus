@@ -222,13 +222,10 @@ fn restore_workspace(
             resumed_agent_sessions,
             &public_pane_ids_by_old_raw,
         );
-        let Some((mut tab, restored_terminals, restored_runtimes, reverse_id_map)) = restored_tab
+        let Some((tab, restored_terminals, restored_runtimes, reverse_id_map)) = restored_tab
         else {
             continue;
         };
-        if let Some(public_tab_number) = snap.public_tab_numbers.get(idx).copied() {
-            tab.number = public_tab_number;
-        }
         next_public_tab_number = next_public_tab_number.max(tab.number + 1);
         for pane_id in tab.layout.pane_ids() {
             let public_number = public_pane_numbers_by_old_raw
