@@ -16,12 +16,24 @@ pub(super) use render::layout;
 pub(super) use state::*;
 
 impl super::ClientShellState {
-    /// `enabled` is whether this client presents Kitty graphics at all; the
-    /// host terminal must also be one known to draw them.
+    /// `enabled` is whether this client presents graphics at all; the host
+    /// terminal must also be one known to draw images (Kitty or iTerm2).
     pub(crate) fn set_bus_kitty_graphics(&mut self, enabled: bool) {
         if let Some(bus) = self.bus.as_mut() {
-            bus.kitty_graphics =
-                enabled && thumbnails::host_supports_kitty_graphics(|key| std::env::var(key).ok());
+            bus.graphics = enabled
+                .then(|| thumbnails::host_graphics_protocol(|key| std::env::var(key).ok()))
+                .flatten();
+            if let Some(protocol) = bus.graphics {
+                bus.thumbnails.set_protocol(protocol);
+            }
+        }
+    }
+
+    /// The client repainted every cell without drawing Bus graphics in that
+    /// frame, which erases iTerm2 images; draw them again.
+    pub(crate) fn bus_graphics_erased(&mut self) {
+        if let Some(bus) = self.bus.as_mut() {
+            bus.thumbnails.invalidate();
         }
     }
 
@@ -40,7 +52,7 @@ impl super::ClientShellState {
     pub(super) fn compute_bus_view(&mut self, cols: u16, rows: u16) {
         let cell = self.graphics_cell_size;
         if let Some(bus) = self.bus.as_mut() {
-            bus.thumbnails.set_cell(bus.kitty_graphics.then_some(cell));
+            bus.thumbnails.set_cell(bus.graphics.map(|_| cell));
             bus.compute_view(cols, rows);
         }
     }

@@ -1021,9 +1021,18 @@ impl BusUi {
         self.view = view;
     }
 
-    /// Kitty commands updating the history thumbnails for the latest view.
+    /// Graphics commands updating the history thumbnails for the latest view.
+    /// A full repaint of this frame erases iTerm2 images, so they are drawn
+    /// again after it; moving or removing them asks for that repaint.
     pub fn thumbnail_graphics(&mut self) -> Vec<u8> {
-        self.thumbnails.encode(&self.view.thumbnails)
+        if self.full_repaint {
+            self.thumbnails.invalidate();
+        }
+        let graphics = self.thumbnails.encode(&self.view.thumbnails);
+        if self.thumbnails.take_repaint() {
+            self.full_repaint = true;
+        }
+        graphics
     }
     fn room_view(&mut self, view: &mut View, main: Rect) {
         let Some(room) = self.room.and_then(|id| self.snapshot.state.room(id)) else {

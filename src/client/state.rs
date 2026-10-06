@@ -201,6 +201,11 @@ impl ClientState {
         } else {
             &[]
         };
+        if self.repaint_pending && graphics.is_empty() {
+            if let Some(shell) = self.shell.as_mut() {
+                shell.bus_graphics_erased();
+            }
+        }
         let _ = write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics);
         let _ = stdout.flush();
         self.blit_encoder.commit(frame_data, encoded);

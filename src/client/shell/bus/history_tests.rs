@@ -917,7 +917,7 @@ const CELL: crate::kitty_graphics::HostCellSize = crate::kitty_graphics::HostCel
 };
 
 #[test]
-fn image_attachments_reserve_thumbnail_rows_above_their_name() {
+fn image_attachments_draw_as_thumbnails_instead_of_their_name() {
     let dir = thumbnail_dir("rows");
     let image = png(&dir, "shot.png", (200, 80));
     let notes = dir.join("notes.md");
@@ -928,11 +928,15 @@ fn image_attachments_reserve_thumbnail_rows_above_their_name() {
     ui.compute_view(100, 40);
 
     let lines = ui.history.cached();
-    let caption = lines
+    assert!(
+        !lines.iter().any(|line| line.text == "[shot.png]"),
+        "the picture replaces the name placeholder"
+    );
+    let first = lines
         .iter()
-        .position(|line| line.text == "[shot.png]")
-        .expect("image name row");
-    let thumbnail: Vec<_> = lines[..caption]
+        .position(|line| line.thumbnail.is_some())
+        .expect("thumbnail rows");
+    let thumbnail: Vec<_> = lines[first..first + 4]
         .iter()
         .filter_map(|line| line.thumbnail.as_ref())
         .collect();
@@ -941,7 +945,7 @@ fn image_attachments_reserve_thumbnail_rows_above_their_name() {
         .iter()
         .enumerate()
         .all(|(row, slot)| slot.row == row as u16 && (slot.cols, slot.rows) == (20, 4)));
-    assert!(lines[caption - 4..caption]
+    assert!(lines[first..first + 4]
         .iter()
         .all(|line| line.text.is_empty()
             && line.action == Some(render::Action::FileDetail(image.clone()))));
@@ -959,7 +963,7 @@ fn image_attachments_reserve_thumbnail_rows_above_their_name() {
         (placement.x, placement.cols, placement.rows),
         (text.x, 20, 4)
     );
-    assert_eq!(placement.y, text.y + (caption - 4 - ui.main_scroll) as u16);
+    assert_eq!(placement.y, text.y + (first - ui.main_scroll) as u16);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -1178,4 +1182,74 @@ fn option_enter_sends_the_draft_to_wait_for_each_agents_own_turn() {
         .pending
         .iter()
         .any(|pending| matches!(pending.command, BusCommand::Submit(id) if id == room)));
+}
+
+#[test]
+fn iterm2_draws_the_picture_at_its_reserved_rows() {
+    let dir = thumbnail_dir("iterm2");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.graphics = Some(super::thumbnails::Protocol::Iterm2);
+    ui.thumbnails
+        .set_protocol(super::thumbnails::Protocol::Iterm2);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+
+    // The picture's rows open the file; no name placeholder is drawn.
+    let lines = ui.history.cached();
+    assert!(!lines.iter().any(|line| line.text == "[shot.png]"));
+    let rows: Vec<_> = lines
+        .iter()
+        .filter(|line| line.thumbnail.is_some())
+        .collect();
+    assert_eq!(rows.len(), 4);
+    assert!(rows
+        .iter()
+        .all(|line| line.action == Some(render::Action::FileDetail(image.clone()))));
+
+    let placement = ui.view.thumbnails[0].clone();
+    ui.full_repaint = false;
+    let graphics = String::from_utf8(ui.thumbnail_graphics()).unwrap();
+    assert!(
+        graphics.contains(&format!(
+            "\x1b[{};{}H\x1b]1337;File=inline=1;",
+            placement.y + 1,
+            placement.x + 1
+        )),
+        "{graphics:?}"
+    );
+    assert!(graphics.contains(";width=20;height=4;"));
+    assert!(!ui.full_repaint, "first draw needs no repaint");
+    assert!(ui.thumbnail_graphics().is_empty(), "unchanged frame");
+
+    // Switching screens repaints every cell, so the image is drawn again.
+    ui.full_repaint = true;
+    assert!(!ui.thumbnail_graphics().is_empty());
+
+    // A cover hides it: the client repaints to erase the image cells.
+    ui.full_repaint = false;
+    ui.view.thumbnails.clear();
+    assert!(ui.thumbnail_graphics().is_empty());
+    assert!(ui.full_repaint);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn without_an_image_protocol_the_name_row_is_still_clickable() {
+    // Terminal.app: no protocol, so no cell size and no reserved rows.
+    let dir = thumbnail_dir("terminal-app");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.compute_view(100, 40);
+    let lines = ui.history.cached();
+    let caption = lines
+        .iter()
+        .find(|line| line.text == "[shot.png]")
+        .expect("image name row");
+    assert_eq!(caption.action, Some(render::Action::FileDetail(image)));
+    assert!(lines.iter().all(|line| line.thumbnail.is_none()));
+    assert!(ui.thumbnail_graphics().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
 }

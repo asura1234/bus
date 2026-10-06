@@ -1,8 +1,9 @@
 //! Inline image thumbnails for room-history attachments, drawn with the Kitty
-//! graphics protocol. History reserves cell rows for each thumbnail; this
-//! module sizes them, decodes each image once, and emits only the placement
-//! changes between frames. Without Kitty support, a known cell size, or a
-//! readable image, history keeps showing the attachment's file name only.
+//! graphics protocol or iTerm2's inline image protocol. History reserves cell
+//! rows for each thumbnail; this module sizes them, decodes each image once,
+//! and emits only what changed between frames. Without a graphics protocol, a
+//! known cell size, or a readable image, history keeps showing the
+//! attachment's file name only (it always shows that row).
 use crate::kitty_graphics::{encode_delete_placement, encode_kitty_data, HostCellSize};
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
@@ -18,6 +19,18 @@ const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 /// Kitty image ids for thumbnails start here, clear of pane image ids that
 /// set the high bit and of small ids applications pick for themselves.
 const FIRST_IMAGE_ID: u32 = 0x4255_0000;
+
+/// How the host terminal draws images.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum Protocol {
+    /// Kitty graphics: placements float above the cells and are moved or
+    /// deleted by id.
+    #[default]
+    Kitty,
+    /// iTerm2 `OSC 1337 File=`: the image is painted into the cells it covers,
+    /// so it is redrawn after any repaint and erased by repainting its cells.
+    Iterm2,
+}
 
 /// One thumbnail shown in the history viewport.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,7 +50,8 @@ impl Placement {
 
 #[derive(Default)]
 pub(super) struct Thumbnails {
-    /// Host cell size when the terminal can show Kitty graphics.
+    protocol: Protocol,
+    /// Host cell size when the terminal can show images.
     cell: Option<HostCellSize>,
     dims: HashMap<PathBuf, Option<(u32, u32)>>,
     /// Image id per decoded size, or None when the file cannot be decoded.
@@ -48,10 +62,45 @@ pub(super) struct Thumbnails {
     /// Placements drawn by the last encoded frame: image id, placement id.
     shown: Vec<(u32, u32, Placement)>,
     next_id: u32,
+    /// iTerm2: the full inline image command per image id (each id has one
+    /// cell size), resent whenever the image is drawn again.
+    inline_data: HashMap<u32, String>,
+    /// iTerm2: the screen was repainted under the shown images, erasing them.
+    stale: bool,
+    /// iTerm2: shown images moved or went away; their cells need repainting.
+    repaint: bool,
 }
 
 impl Thumbnails {
-    /// `cell` is None when the host cannot show Kitty graphics.
+    pub fn set_protocol(&mut self, protocol: Protocol) {
+        if protocol != self.protocol {
+            self.protocol = protocol;
+            self.images.clear();
+            self.pending_upload.clear();
+            self.inline_data.clear();
+        }
+    }
+
+    /// iTerm2 images live in the cells, so a full repaint erased them; draw
+    /// them again with the next frame.
+    pub fn invalidate(&mut self) {
+        if self.protocol == Protocol::Iterm2 && !self.shown.is_empty() {
+            self.stale = true;
+        }
+    }
+
+    /// Whether erased images wait to be drawn again.
+    pub fn stale(&self) -> bool {
+        self.stale
+    }
+
+    /// Whether the last encode moved or removed iTerm2 images, so the client
+    /// must repaint every cell to erase them before they are drawn again.
+    pub fn take_repaint(&mut self) -> bool {
+        std::mem::take(&mut self.repaint)
+    }
+
+    /// `cell` is None when the host cannot show images.
     pub fn set_cell(&mut self, cell: Option<HostCellSize>) {
         let cell = cell.filter(|cell| cell.width_px > 1 && cell.height_px > 1);
         if cell != self.cell {
@@ -59,6 +108,7 @@ impl Thumbnails {
             self.cell = cell;
             self.images.clear();
             self.pending_upload.clear();
+            self.inline_data.clear();
         }
     }
 
@@ -81,7 +131,7 @@ impl Thumbnails {
         Some(fit((width, height), cell, max_cols.min(MAX_COLS), MAX_ROWS))
     }
 
-    /// Kitty commands that move the visible thumbnails from the previous
+    /// Graphics commands that move the visible thumbnails from the previous
     /// frame's placements to `placements`.
     pub fn encode(&mut self, placements: &[Placement]) -> Vec<u8> {
         let Some(cell) = self.cell else {
@@ -109,6 +159,9 @@ impl Thumbnails {
             let copy = copies.entry(id).or_insert(0);
             *copy += 1;
             next.push((id, *copy, placement.clone()));
+        }
+        if self.protocol == Protocol::Iterm2 {
+            return self.encode_inline(next);
         }
         if next == self.shown {
             return Vec::new();
@@ -145,8 +198,51 @@ impl Thumbnails {
         out
     }
 
+    /// iTerm2 draws every shown image again whenever any of them changed or
+    /// a repaint erased them; moved or removed ones are erased by a repaint.
+    fn encode_inline(&mut self, next: Vec<(u32, u32, Placement)>) -> Vec<u8> {
+        if next == self.shown && !self.stale {
+            return Vec::new();
+        }
+        if next != self.shown && !self.shown.is_empty() {
+            self.repaint = true;
+        }
+        self.stale = false;
+        let mut out = Vec::new();
+        if next.is_empty() {
+            self.shown = next;
+            return out;
+        }
+        out.extend_from_slice(b"\x1b7");
+        for (id, _, placement) in &next {
+            if let Some(data) = self.pending_upload.remove(id) {
+                self.inline_data.insert(
+                    *id,
+                    encode_inline_image(&data, placement.cols, placement.rows),
+                );
+            }
+            if let Some(command) = self.inline_data.get(id) {
+                let _ = write!(
+                    out,
+                    "\x1b[{};{}H{command}",
+                    placement.y + 1,
+                    placement.x + 1,
+                );
+            }
+        }
+        out.extend_from_slice(b"\x1b8");
+        self.shown = next;
+        out
+    }
+
     fn clear(&mut self) -> Vec<u8> {
         if self.shown.is_empty() {
+            return Vec::new();
+        }
+        if self.protocol == Protocol::Iterm2 {
+            self.shown.clear();
+            self.stale = false;
+            self.repaint = true;
             return Vec::new();
         }
         let mut out = Vec::new();
@@ -161,6 +257,17 @@ impl Thumbnails {
         self.next_id = self.next_id.wrapping_add(1) % 0x1_0000;
         id
     }
+}
+
+/// iTerm2's inline image command for `png`, scaled into `cols` × `rows` cells
+/// without moving the cursor (https://iterm2.com/documentation-images.html).
+pub(super) fn encode_inline_image(png: &[u8], cols: u16, rows: u16) -> String {
+    use base64::Engine as _;
+    format!(
+        "\x1b]1337;File=inline=1;size={};width={cols};height={rows};preserveAspectRatio=1;doNotMoveCursor=1:{}\x07",
+        png.len(),
+        base64::engine::general_purpose::STANDARD.encode(png),
+    )
 }
 
 /// Recognizes the attachment types Bus decodes into thumbnails.
@@ -227,19 +334,28 @@ fn thumbnail_png(path: &Path, cell: HostCellSize, cols: u16, rows: u16) -> Optio
     Some(png)
 }
 
-/// Whether the host terminal is one known to draw Kitty graphics. Bus clients
-/// run directly in the host terminal, so its environment identifies it.
-pub(super) fn host_supports_kitty_graphics(var: impl Fn(&str) -> Option<String>) -> bool {
+/// The image protocol of the host terminal, or None when it draws no images
+/// (Terminal.app, unknown terminals, anything inside tmux). Bus clients run
+/// directly in the host terminal, so its environment identifies it.
+pub(crate) fn host_graphics_protocol(var: impl Fn(&str) -> Option<String>) -> Option<Protocol> {
     if var("TMUX").is_some() {
-        return false;
+        return None;
     }
     let term = var("TERM").unwrap_or_default();
     let program = var("TERM_PROGRAM").unwrap_or_default();
-    term.contains("kitty")
+    if term.contains("kitty")
         || term.contains("ghostty")
         || matches!(program.as_str(), "ghostty" | "WezTerm" | "kitty")
         || var("KITTY_WINDOW_ID").is_some()
         || var("GHOSTTY_RESOURCES_DIR").is_some()
+    {
+        return Some(Protocol::Kitty);
+    }
+    // iTerm2 keeps TERM=xterm-256color; LC_TERMINAL also survives ssh.
+    if program == "iTerm.app" || var("LC_TERMINAL").as_deref() == Some("iTerm2") {
+        return Some(Protocol::Iterm2);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -375,35 +491,103 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |key: &str| {
+            pairs
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+        }
+    }
+
     #[test]
-    fn host_detection_trusts_known_kitty_terminals_outside_tmux() {
-        let env = |pairs: &'static [(&'static str, &'static str)]| {
-            move |key: &str| {
-                pairs
-                    .iter()
-                    .find(|(name, _)| *name == key)
-                    .map(|(_, value)| value.to_string())
-            }
+    fn host_detection_picks_each_terminals_image_protocol() {
+        use Protocol::*;
+        for (pairs, expected) in [
+            (&[("TERM", "xterm-kitty")][..], Some(Kitty)),
+            (&[("TERM_PROGRAM", "ghostty")][..], Some(Kitty)),
+            (&[("TERM_PROGRAM", "WezTerm")][..], Some(Kitty)),
+            (&[("KITTY_WINDOW_ID", "1")][..], Some(Kitty)),
+            // iTerm2 keeps TERM=xterm-256color.
+            (
+                &[("TERM_PROGRAM", "iTerm.app"), ("TERM", "xterm-256color")][..],
+                Some(Iterm2),
+            ),
+            (&[("LC_TERMINAL", "iTerm2")][..], Some(Iterm2)),
+            (&[("TERM_PROGRAM", "Apple_Terminal")][..], None),
+            (&[("TERM", "xterm-256color")][..], None),
+            (&[("TERM", "xterm-kitty"), ("TMUX", "/tmp/tmux")][..], None),
+            (
+                &[("TERM_PROGRAM", "iTerm.app"), ("TMUX", "/tmp/tmux")][..],
+                None,
+            ),
+        ] {
+            assert_eq!(host_graphics_protocol(env(pairs)), expected, "{pairs:?}");
+        }
+    }
+
+    #[test]
+    fn iterm2_inline_image_follows_the_documented_format() {
+        use base64::Engine as _;
+        let png = b"\x89PNG fake bytes";
+        let command = encode_inline_image(png, 12, 3);
+        let prefix = format!(
+            "\x1b]1337;File=inline=1;size={};width=12;height=3;preserveAspectRatio=1;doNotMoveCursor=1:",
+            png.len()
+        );
+        assert!(command.starts_with(&prefix), "{command:?}");
+        assert!(command.ends_with('\x07'), "BEL terminates the OSC");
+        let payload = &command[prefix.len()..command.len() - 1];
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(payload)
+                .unwrap(),
+            png
+        );
+    }
+
+    #[test]
+    fn iterm2_redraws_images_after_repaints_and_erases_moved_ones() {
+        let dir = scratch("iterm2");
+        let path: Arc<Path> = Arc::from(write_png(&dir, "shot.png", (40, 40)).as_path());
+        let mut thumbnails = Thumbnails::default();
+        thumbnails.set_protocol(Protocol::Iterm2);
+        thumbnails.set_cell(Some(CELL));
+        let at = |y| Placement {
+            path: Arc::clone(&path),
+            x: 3,
+            y,
+            cols: 4,
+            rows: 2,
         };
-        assert!(host_supports_kitty_graphics(env(&[(
-            "TERM",
-            "xterm-kitty"
-        )])));
-        assert!(host_supports_kitty_graphics(env(&[(
-            "TERM_PROGRAM",
-            "ghostty"
-        )])));
-        assert!(host_supports_kitty_graphics(env(&[(
-            "TERM_PROGRAM",
-            "WezTerm"
-        )])));
-        assert!(!host_supports_kitty_graphics(env(&[(
-            "TERM_PROGRAM",
-            "Apple_Terminal"
-        )])));
-        assert!(!host_supports_kitty_graphics(env(&[
-            ("TERM", "xterm-kitty"),
-            ("TMUX", "/tmp/tmux")
-        ])));
+
+        let first = String::from_utf8(thumbnails.encode(&[at(5)])).unwrap();
+        assert!(
+            first.contains("\x1b[6;4H\x1b]1337;File=inline=1;"),
+            "drawn at the reserved cells: {first:?}"
+        );
+        assert!(first.contains(";width=4;height=2;"));
+        assert!(!first.contains("\x1b_G"), "no Kitty commands");
+        assert!(!thumbnails.take_repaint(), "nothing to erase yet");
+        assert!(thumbnails.encode(&[at(5)]).is_empty(), "unchanged frame");
+
+        // A full repaint wiped the cells: draw again, no extra repaint.
+        thumbnails.invalidate();
+        assert!(thumbnails.stale());
+        let again = String::from_utf8(thumbnails.encode(&[at(5)])).unwrap();
+        assert!(again.contains("\x1b[6;4H\x1b]1337;File="));
+        assert!(!thumbnails.stale() && !thumbnails.take_repaint());
+
+        // Scrolling moves it: repaint to erase the old cells, then draw.
+        let moved = String::from_utf8(thumbnails.encode(&[at(7)])).unwrap();
+        assert!(moved.contains("\x1b[8;4H\x1b]1337;File="));
+        assert!(thumbnails.take_repaint());
+
+        // Covered or scrolled away: no bytes, but the cells are repainted.
+        assert!(thumbnails.encode(&[]).is_empty());
+        assert!(thumbnails.take_repaint());
+        thumbnails.invalidate();
+        assert!(!thumbnails.stale(), "nothing shown, nothing to redraw");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -234,6 +234,9 @@ impl History {
                     position: index,
                     ..RowAnchor::new(prompt.id, None, RowKind::File)
                 };
+                // With an image protocol the picture stands in for the file:
+                // its rows open the file detail, and no name row follows. The
+                // name shows only where no picture can be drawn.
                 if let Some((cols, rows)) = thumbnails.size(path, width) {
                     let shared: Arc<std::path::Path> = Arc::from(path.as_path());
                     lines.extend((0..rows).map(|row| Line {
@@ -256,6 +259,7 @@ impl History {
                             ..file_anchor
                         },
                     }));
+                    continue;
                 }
                 lines.push(Line {
                     text: format!(

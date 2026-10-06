@@ -469,12 +469,15 @@ Attached files and images appear as absolute paths: in each `history` prompt's
 pasted into the Bus composer are saved under `attachments/` in the Bus data
 directory, so those paths stay readable after the session ends.
 
-In the room history, image attachments (PNG, JPEG, GIF first frame, WebP) also
-show as thumbnails up to eight rows tall above their file name, when the host
-terminal draws Kitty graphics (kitty, Ghostty, WezTerm; not inside tmux) and
-`terminal.kitty_graphics` is not turned off. Otherwise, or when the file is
-missing or unreadable, only the file name shows. A thumbnail draws only while
-it is fully in view and no dialog covers the history.
+In the room history, image attachments (PNG, JPEG, GIF first frame, WebP) show
+as the picture itself, up to eight rows tall, in place of their file name, when
+the host terminal draws images: Kitty graphics in kitty, Ghostty and WezTerm,
+and the inline image protocol in iTerm2 (detected by `TERM_PROGRAM=iTerm.app`
+or `LC_TERMINAL=iTerm2`). Not inside tmux, and not when
+`terminal.kitty_graphics` is turned off. Clicking a picture opens the file
+detail. Elsewhere (for example Terminal.app), or when the file is missing or
+unreadable, a clickable `[file name]` row shows instead. A picture draws only
+while it is fully in view and no dialog covers the history.
 
 ## Answer an agent's dialog
 

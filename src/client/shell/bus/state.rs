@@ -148,7 +148,8 @@ pub(in crate::client::shell) struct BusUi {
     /// The view switched screens since the client last repainted every cell.
     pub(super) full_repaint: bool,
     /// The client presents Kitty graphics and the host terminal draws them.
-    pub(super) kitty_graphics: bool,
+    /// The host's image protocol, or None when thumbnails are not drawn.
+    pub(super) graphics: Option<super::thumbnails::Protocol>,
     /// Region receiving the current left-button drag, if it started a selection.
     pub(super) drag: Option<super::selection::Region>,
     /// History selection as (anchor, head); editor selections live in `Editor`.
@@ -233,7 +234,7 @@ impl BusUi {
             thumbnails: super::thumbnails::Thumbnails::default(),
             view_key: None,
             full_repaint: false,
-            kitty_graphics: false,
+            graphics: None,
             drag: None,
             history_selection: None,
             recipient_scroll: 0,
@@ -770,6 +771,7 @@ impl BusUi {
         }
         changed |= self.tick_status_animation(std::time::Instant::now());
         changed |= self.tick_toast(std::time::Instant::now());
+        changed |= self.thumbnails.stale();
         changed
     }
 
