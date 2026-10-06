@@ -4,7 +4,7 @@ use super::{
     forms::{
         Form, Orchestrates, PromptField, Rename, RenameTarget, ORCHESTRATES_FIELD, PROMPT_FIELD,
     },
-    render::Action,
+    render::{Action, SoundTarget},
 };
 use crate::bus::{launch::AddAgent, model::*, orchestrator::OrchestratorSpec, runtime::BusCommand};
 use crate::{client::shell::ClientShellInput, raw_input::RawInputEvent};
@@ -340,21 +340,35 @@ impl BusUi {
             });
         }
     }
-    fn toggle_room_sound(&mut self, room: RoomId) {
-        if let Some(enabled) = self
-            .snapshot
-            .state
-            .room(room)
-            .map(|room| room.sound_enabled())
-        {
-            self.queue(BusCommand::SetRoomSound(room, !enabled), Effect::None);
+    fn toggle_sound(&mut self, target: SoundTarget) {
+        match target {
+            SoundTarget::Room(room) => {
+                if let Some(enabled) = self
+                    .snapshot
+                    .state
+                    .room(room)
+                    .map(|room| room.sound_enabled())
+                {
+                    self.queue(BusCommand::SetRoomSound(room, !enabled), Effect::None);
+                }
+            }
+            SoundTarget::NewRooms => {
+                // Shown at once; the coordinator's saved copy follows.
+                let enabled = !self.settings.room_sound.enabled;
+                self.settings.room_sound.enabled = enabled;
+                self.queue(BusCommand::SetNewRoomSound(enabled), Effect::None);
+            }
         }
     }
-    /// Moves a room to the next or previous sound (Default first, then the
-    /// system sounds) and plays it as a preview.
-    pub(super) fn cycle_room_sound(&mut self, room: RoomId, forward: bool) {
-        let Some(current) = self.snapshot.state.room(room).map(|r| r.sound_name.clone()) else {
-            return;
+    /// Moves a sound row to the next or previous sound (Default first, then
+    /// the system sounds) and plays it as a preview.
+    pub(super) fn cycle_sound(&mut self, target: SoundTarget, forward: bool) {
+        let current = match target {
+            SoundTarget::Room(room) => match self.snapshot.state.room(room) {
+                Some(room) => room.sound_name.clone(),
+                None => return,
+            },
+            SoundTarget::NewRooms => self.settings.room_sound.name.clone(),
         };
         let mut choices: Vec<Option<String>> = vec![None];
         choices.extend(self.system_sounds.iter().flatten().cloned().map(Some));
@@ -374,11 +388,18 @@ impl BusUi {
         if let Some(config) = &self.sound_config {
             crate::sound::play_named(choice.as_deref(), config);
         }
-        self.queue(BusCommand::SetRoomSoundName(room, choice), Effect::None);
+        let command = match target {
+            SoundTarget::Room(room) => BusCommand::SetRoomSoundName(room, choice),
+            SoundTarget::NewRooms => {
+                self.settings.room_sound.name = choice.clone();
+                BusCommand::SetNewRoomSoundName(choice)
+            }
+        };
+        self.queue(command, Effect::None);
     }
-    /// The room's sound as Settings shows it, noting one no longer installed.
-    pub(super) fn room_sound_label(&self, room: &Room) -> String {
-        match &room.sound_name {
+    /// A sound name as Settings shows it, noting one no longer installed.
+    pub(super) fn sound_label(&self, name: Option<&str>) -> String {
+        match name {
             None => crate::sound::DEFAULT_SOUND_NAME.into(),
             Some(name)
                 if self.system_sounds.as_ref().is_some_and(|sounds| {
@@ -387,19 +408,23 @@ impl BusUi {
             {
                 format!("{name} (missing)")
             }
-            Some(name) => name.clone(),
+            Some(name) => name.to_owned(),
         }
     }
     /// Keeps the keyboard-focused sound row inside the scrolled Settings list.
     fn reveal_settings_field(&mut self) {
-        let Some(line) = self.sound_settings_lines().iter().position(|line| {
-            matches!(line, super::render::SoundSettingsLine::Room { field, .. } if *field == self.settings_field)
+        let lines = self.sound_settings_lines();
+        let Some(line) = lines.iter().position(|line| {
+            matches!(line, super::render::SoundSettingsLine::Sound { field, .. } if *field == self.settings_field)
         }) else {
             self.settings_scroll = 0;
             return;
         };
-        // Bring the group heading into view along with its first room.
-        let line = if self.settings_field <= 1 { 0 } else { line };
+        // Bring a group heading into view along with its first row.
+        let line = match line.checked_sub(1).map(|above| &lines[above]) {
+            Some(super::render::SoundSettingsLine::Heading(_)) => line - 1,
+            _ => line,
+        };
         let height = usize::from(self.view.settings_list.height.max(1));
         if line < self.settings_scroll {
             self.settings_scroll = line;
@@ -685,17 +710,25 @@ impl BusUi {
                 }
                 self.open_form(Form::Settings);
             }
-            Action::ToggleRoomSound(room) => {
-                if let Some(index) = self.sound_settings_rooms().iter().position(|r| *r == room) {
+            Action::ToggleSound(target) => {
+                if let Some(index) = self
+                    .sound_settings_targets()
+                    .iter()
+                    .position(|t| *t == target)
+                {
                     self.settings_field = index + 1;
                 }
-                self.toggle_room_sound(room);
+                self.toggle_sound(target);
             }
-            Action::CycleRoomSound(room, forward) => {
-                if let Some(index) = self.sound_settings_rooms().iter().position(|r| *r == room) {
+            Action::CycleSound(target, forward) => {
+                if let Some(index) = self
+                    .sound_settings_targets()
+                    .iter()
+                    .position(|t| *t == target)
+                {
                     self.settings_field = index + 1;
                 }
-                self.cycle_room_sound(room, forward);
+                self.cycle_sound(target, forward);
             }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::Cancel => {
@@ -1238,26 +1271,26 @@ impl BusUi {
             return;
         }
         if matches!(self.form, Some(Form::Settings)) {
-            let rooms = self.sound_settings_rooms();
+            let targets = self.sound_settings_targets();
             match code {
                 KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
-                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(rooms.len()),
+                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(targets.len()),
                 // Enter alone toggles (Space is deliberately inert in Settings).
                 KeyCode::Enter => match self.settings_field {
                     0 => self.toggle_color_blind_mode(),
                     field => {
-                        if let Some(room) = rooms.get(field - 1) {
-                            self.toggle_room_sound(*room);
+                        if let Some(target) = targets.get(field - 1) {
+                            self.toggle_sound(*target);
                         }
                     }
                 },
                 KeyCode::Left | KeyCode::Right => {
-                    if let Some(room) = self
+                    if let Some(target) = self
                         .settings_field
                         .checked_sub(1)
-                        .and_then(|i| rooms.get(i))
+                        .and_then(|i| targets.get(i))
                     {
-                        self.cycle_room_sound(*room, code == KeyCode::Right);
+                        self.cycle_sound(*target, code == KeyCode::Right);
                     }
                 }
                 _ => {}

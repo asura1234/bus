@@ -56,11 +56,13 @@ fn settings_lists_master_sound_above_every_work_room() {
     let master_group = below("MASTER");
     let master = position("[x] # MASTER");
     let rooms_group = below("ROOMS");
+    let new_rooms = position("[ ] New rooms");
     let first = position("[ ] # room-0");
     let second = position("[ ] # room-1");
     assert!(position("Color blind mode") < heading);
     assert!(heading < master_group && master_group < master, "{rows:#?}");
-    assert!(master < rooms_group && rooms_group < first && first < second);
+    assert!(master < rooms_group && rooms_group < new_rooms && new_rooms < first);
+    assert!(first < second);
 }
 
 #[test]
@@ -71,18 +73,71 @@ fn settings_keyboard_and_mouse_toggle_room_sound() {
     // Field 0 is still color blind mode.
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    // The new-room default row sits between MASTER and the rooms.
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
     assert_eq!(queued_sound(&ui), [(master, false)], "Space never toggles");
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(queued_sound(&ui), [(master, false), (rooms[0], true)]);
-    ui.action(render::Action::ToggleRoomSound(rooms[1]));
-    assert_eq!(ui.settings_field, 3);
+    ui.action(render::Action::ToggleSound(render::SoundTarget::Room(
+        rooms[1],
+    )));
+    assert_eq!(ui.settings_field, 4);
     assert_eq!(queued_sound(&ui).last(), Some(&(rooms[1], true)));
     // Down stops at the last room.
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 3);
+    assert_eq!(ui.settings_field, 4);
     assert!(!ui.settings.color_blind_mode);
+}
+
+#[test]
+fn settings_new_rooms_row_sets_the_global_default_for_rooms_created_later() {
+    let (mut ui, _, _) = sound_fixture(0);
+    ui.system_sounds = Some(vec!["Glass".into()]);
+    ui.action(render::Action::Settings);
+    let rows = settings_rows(&mut ui, 40);
+    let new_rooms = rows
+        .iter()
+        .position(|row| row.contains("[ ] New rooms") && row.ends_with("‹ Default ›"))
+        .unwrap_or_else(|| panic!("{rows:#?}"));
+    assert!(rows[new_rooms + 1].contains("No rooms yet"), "{rows:#?}");
+
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    let queued: Vec<_> = ui
+        .pending
+        .iter()
+        .filter_map(|p| match &p.command {
+            BusCommand::SetNewRoomSound(on) => Some(format!("on {on}")),
+            BusCommand::SetNewRoomSoundName(name) => Some(format!("name {name:?}")),
+            BusCommand::SetRoomSound(..) | BusCommand::SetRoomSoundName(..) => Some("room".into()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(queued, ["on true", "name Some(\"Glass\")"]);
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[x] New rooms") && row.ends_with("‹ Glass ›")),
+        "{rows:#?}"
+    );
+
+    // The coordinator's saved copy replaces the UI's.
+    ui.receive_event(BusEvent::SettingsChanged(
+        crate::bus::settings::BusSettings {
+            color_blind_mode: true,
+            ..Default::default()
+        },
+    ));
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[ ] New rooms") && row.ends_with("‹ Default ›")),
+        "{rows:#?}"
+    );
 }
 
 fn queued_sound_names(ui: &BusUi) -> Vec<(RoomId, Option<String>)> {
@@ -134,8 +189,11 @@ fn settings_rows_cycle_through_default_and_the_system_sounds() {
 
     // A saved choice continues from its place in the list, ignoring case.
     with_sound_name(&mut ui, rooms[0], "glass");
-    ui.action(render::Action::CycleRoomSound(rooms[0], true));
-    assert_eq!(ui.settings_field, 2);
+    ui.action(render::Action::CycleSound(
+        render::SoundTarget::Room(rooms[0]),
+        true,
+    ));
+    assert_eq!(ui.settings_field, 3);
     assert_eq!(queued_sound_names(&ui).last(), Some(&(rooms[0], None)));
 
     // A sound no longer installed is labelled, and plays the default ding.
@@ -150,7 +208,9 @@ fn settings_rows_cycle_through_default_and_the_system_sounds() {
         .view
         .hits
         .iter()
-        .find(|hit| hit.action == render::Action::CycleRoomSound(rooms[0], false))
+        .find(|hit| {
+            hit.action == render::Action::CycleSound(render::SoundTarget::Room(rooms[0]), false)
+        })
         .expect("previous-sound arrow")
         .rect;
     assert_eq!(
@@ -175,7 +235,7 @@ fn settings_sound_list_scrolls_to_keep_the_focused_room_visible() {
     ui.action(render::Action::Settings);
     let rows = settings_rows(&mut ui, 24);
     assert!(!rows.iter().any(|row| row.contains("# room-29")));
-    for _ in 0..rooms.len() + 1 {
+    for _ in 0..rooms.len() + 2 {
         key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     }
     let rows = settings_rows(&mut ui, 24);
@@ -184,7 +244,7 @@ fn settings_sound_list_scrolls_to_keep_the_focused_room_visible() {
         "{rows:#?}"
     );
     assert!(!rows.iter().any(|row| row.contains("[x] # MASTER")));
-    for _ in 0..rooms.len() + 1 {
+    for _ in 0..rooms.len() + 2 {
         key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     }
     let rows = settings_rows(&mut ui, 24);

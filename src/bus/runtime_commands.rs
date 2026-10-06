@@ -13,6 +13,7 @@ impl Worker {
         let result = match command {
             BusCommand::CreateRoom(name) => {
                 let id = state.create_room(&name).map_err(|e| e.to_string())?;
+                self.apply_new_room_sound(&mut state, id);
                 self.save(state)?;
                 let _ = events.send(BusEvent::RoomCreated(id));
                 return Ok(());
@@ -27,8 +28,26 @@ impl Worker {
                 Ok(())
             }
             BusCommand::MarkRoomSeen(id) => state.mark_room_seen(id),
-            BusCommand::SetRoomSound(id, on) => state.set_room_sound(id, on),
-            BusCommand::SetRoomSoundName(id, name) => state.set_room_sound_name(id, name),
+            BusCommand::SetRoomSound(id, on) => {
+                state.set_room_sound(id, on).map_err(|e| e.to_string())?;
+                self.record_master_sound(&state, id)?;
+                Ok(())
+            }
+            BusCommand::SetRoomSoundName(id, name) => {
+                state
+                    .set_room_sound_name(id, name)
+                    .map_err(|e| e.to_string())?;
+                self.record_master_sound(&state, id)?;
+                Ok(())
+            }
+            BusCommand::SetNewRoomSound(on) => {
+                self.update_new_room_sound(|pref| pref.enabled = on, events)?;
+                return Ok(());
+            }
+            BusCommand::SetNewRoomSoundName(name) => {
+                self.update_new_room_sound(|pref| pref.name = name, events)?;
+                return Ok(());
+            }
             BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),
             BusCommand::SetDraftText(id, text) => state.set_draft_text(id, &text),
             BusCommand::SetRecipients(id, recipients) => state.set_draft_recipients(id, recipients),

@@ -49,9 +49,9 @@ pub(super) enum Action {
     Suggestion(usize),
     Settings,
     ToggleColorBlindMode,
-    ToggleRoomSound(RoomId),
-    /// Picks the next (true) or previous system sound for a room.
-    CycleRoomSound(RoomId, bool),
+    ToggleSound(SoundTarget),
+    /// Picks the next (true) or previous system sound for a Settings sound row.
+    CycleSound(SoundTarget, bool),
     Cancel,
     Add,
 }
@@ -521,55 +521,94 @@ fn animated_status_colors(word: &str, phase: u8) -> Option<Vec<Color>> {
         _ => None,
     }
 }
+/// What a Settings sound row sets: a room's sound (MASTER's is global), or
+/// the global sound new work rooms start with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SoundTarget {
+    Room(RoomId),
+    NewRooms,
+}
+
 /// One row of the Settings form's sound-notification list.
 pub(super) enum SoundSettingsLine {
     Heading(&'static str),
     Empty(&'static str),
     /// `field` is the row's Settings focus index; color blind mode is field 0.
-    Room {
-        room: RoomId,
+    Sound {
+        target: SoundTarget,
         field: usize,
     },
 }
 
 impl BusUi {
-    /// MASTER in its own group first, then every work room, in sidebar order.
-    pub(super) fn sound_settings_rooms(&self) -> Vec<RoomId> {
+    /// MASTER in its own group first, then the new-room default and every
+    /// work room, in sidebar order.
+    pub(super) fn sound_settings_targets(&self) -> Vec<SoundTarget> {
         let state = &self.snapshot.state;
-        state
-            .master_room()
+        let master = state.master_room().map(|room| SoundTarget::Room(room.id));
+        let work = state
+            .rooms()
+            .filter(|room| room.kind == RoomKind::Work && !room.deletion_pending)
+            .map(|room| SoundTarget::Room(room.id));
+        master
             .into_iter()
-            .chain(
-                state
-                    .rooms()
-                    .filter(|room| room.kind == RoomKind::Work && !room.deletion_pending),
-            )
-            .map(|room| room.id)
+            .chain(std::iter::once(SoundTarget::NewRooms))
+            .chain(work)
             .collect()
     }
 
     pub(super) fn sound_settings_lines(&self) -> Vec<SoundSettingsLine> {
-        let rooms = self.sound_settings_rooms();
-        let master = self.snapshot.state.master_room().map(|room| room.id);
+        let master = self
+            .snapshot
+            .state
+            .master_room()
+            .map(|room| SoundTarget::Room(room.id));
         let mut lines = Vec::new();
-        let mut work = rooms.iter().copied().enumerate().peekable();
-        if let Some((index, room)) = work.next_if(|(_, room)| Some(*room) == master) {
-            lines.push(SoundSettingsLine::Heading("MASTER"));
-            lines.push(SoundSettingsLine::Room {
-                room,
+        let mut targets = self
+            .sound_settings_targets()
+            .into_iter()
+            .enumerate()
+            .map(|(index, target)| SoundSettingsLine::Sound {
+                target,
                 field: index + 1,
-            });
+            })
+            .peekable();
+        if let Some(line) =
+            targets.next_if(|line| matches!(line, SoundSettingsLine::Sound { target, .. } if Some(*target) == master))
+        {
+            lines.push(SoundSettingsLine::Heading("MASTER"));
+            lines.push(line);
             lines.push(SoundSettingsLine::Empty(""));
         }
         lines.push(SoundSettingsLine::Heading("ROOMS"));
-        if work.peek().is_none() {
+        lines.extend(targets.next());
+        if targets.peek().is_none() {
             lines.push(SoundSettingsLine::Empty("No rooms yet"));
         }
-        lines.extend(work.map(|(index, room)| SoundSettingsLine::Room {
-            room,
-            field: index + 1,
-        }));
+        lines.extend(targets);
         lines
+    }
+
+    /// A Settings sound row's checkbox label, whether it is on, and its sound.
+    pub(super) fn sound_row(&self, target: SoundTarget) -> Option<(String, bool, String)> {
+        match target {
+            SoundTarget::Room(room) => {
+                let room = self.snapshot.state.room(room)?;
+                Some((
+                    format!("# {}", room.name),
+                    room.sound_enabled(),
+                    self.sound_label(room.sound_name.as_deref()),
+                ))
+            }
+            SoundTarget::NewRooms => {
+                let pref = &self.settings.room_sound;
+                Some((
+                    "New rooms".into(),
+                    pref.enabled,
+                    self.sound_label(pref.name.as_deref()),
+                ))
+            }
+        }
     }
 }
 
@@ -1698,14 +1737,14 @@ impl BusUi {
                         SoundSettingsLine::Empty(text) => {
                             view.row(rect, *text, None, false, true);
                         }
-                        SoundSettingsLine::Room { room, field } => {
-                            let Some(room) = self.snapshot.state.room(*room) else {
+                        SoundSettingsLine::Sound { target, field } => {
+                            let Some((label, enabled, sound)) = self.sound_row(*target) else {
                                 continue;
                             };
                             let selected = self.settings_field == *field;
-                            // The room's sound sits right of its checkbox:
+                            // The row's sound sits right of its checkbox:
                             // ‹ previous · name · next ›.
-                            let name = display(&self.room_sound_label(room));
+                            let name = display(&sound);
                             let name_width = (unicode_width::UnicodeWidthStr::width(name.as_str())
                                 as u16)
                                 .min(width.saturating_sub(16));
@@ -1713,26 +1752,22 @@ impl BusUi {
                             let choice_x = x + width.saturating_sub(choice_width);
                             view.row(
                                 Rect::new(x, rect.y, width.saturating_sub(choice_width + 1), 1),
-                                format!(
-                                    "[{}] # {}",
-                                    if room.sound_enabled() { "x" } else { " " },
-                                    room.name
-                                ),
-                                Some(Action::ToggleRoomSound(room.id)),
+                                format!("[{}] {label}", if enabled { "x" } else { " " }),
+                                Some(Action::ToggleSound(*target)),
                                 selected,
                                 false,
                             );
                             view.row(
                                 Rect::new(choice_x, rect.y, 2, 1),
                                 "‹",
-                                Some(Action::CycleRoomSound(room.id, false)),
+                                Some(Action::CycleSound(*target, false)),
                                 selected,
                                 true,
                             );
                             view.row(
                                 Rect::new(choice_x + 2, rect.y, name_width + 2, 1),
                                 format!("{name} ›"),
-                                Some(Action::CycleRoomSound(room.id, true)),
+                                Some(Action::CycleSound(*target, true)),
                                 selected,
                                 false,
                             );

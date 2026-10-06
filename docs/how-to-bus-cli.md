@@ -356,7 +356,8 @@ bus state | jq '.result.settings'
   expire after 15 minutes. Missing or expired data reports `unknown` with a
   `reason`; it never means the allowance is unused. After Bus restarts, Claude
   must emit a fresh observation. Cursor usage is not collected yet.
-- `settings` holds the UI preferences, currently `color_blind_mode`.
+- `settings` holds the settings every Bus shares (see Shared settings below):
+  `color_blind_mode`, `master_sound` and `room_sound`.
 
 ## Sound notifications
 
@@ -366,7 +367,8 @@ for the human's own sends. Nothing rings for the first two seconds after start
 or resume, and one ding covers a burst of messages.
 
 MASTER starts with sound on; work rooms start off. Toggle a room from Settings
-in the UI or with the CLI:
+in the UI or with the CLI. MASTER's sound is shared by every session (see Shared
+settings below); a work room's sound belongs to its session:
 
 ```sh
 bus room sound "$room_id" --on
@@ -392,6 +394,16 @@ match case-insensitively, and an unknown name changes nothing. Without
 `--sound`, the room keeps its sound. `sounds` lists every choice with its
 `name` and `path` (`null` for `Default`). `state` reports each room's `sound`
 and `sound_name`.
+
+New work rooms start with the shared new-room sound, off with `Default` until
+changed. Settings shows it as the `New rooms` row at the top of ROOMS; the CLI
+sets it with `settings room-sound (--on | --off) [--sound NAME]`, which takes
+names as `room sound` does and keeps the sound without `--sound`. Changing it
+leaves existing rooms as they are:
+
+```sh
+bus settings room-sound --on --sound Glass
+```
 
 Bus stores the name, not the path, and plays the sound once from the client
 running the session. A sound that is no longer installed or fails to play
@@ -622,6 +634,30 @@ bus settings color-blind --off
 The generic forms are `agent details AGENT (--on | --off)` and
 `settings color-blind (--on | --off)`. `state` reports `details_disclosed` and
 `settings.color_blind_mode`.
+
+### Shared settings
+
+Settings that are not tied to one room are shared by every Bus session:
+color-blind mode, MASTER's sound (`master_sound`) and the sound new work rooms
+start with (`room_sound`). They live in `settings.json` beside the session
+registry (`~/.local/share/bus/settings.json`). A change made in any Bus, from
+the UI or the CLI, is what every Bus launched or resumed afterwards starts with:
+at launch MASTER takes `master_sound`, and each room created later takes
+`room_sound`. Bus instances already running keep their MASTER sound until they
+restart. `settings` prints the shared file; `state` reports what each room
+actually uses:
+
+```sh
+bus settings
+```
+
+`master_sound` is `null` until a Bus first launches with shared sound settings;
+that launch keeps its session's MASTER sound and records it. Old sessions and
+old settings files load unchanged.
+
+An explicit `BUS_DATA_DIR` root without a registry session (tests, e2e runs,
+isolated development copies) keeps its own `settings.json` in that root and
+never reads or writes the shared file.
 
 Clear a room's unread count without changing the room open in the UI:
 

@@ -259,10 +259,13 @@ impl BusUi {
     }
     /// Applies immediately; a failed save keeps the choice for this run only.
     pub(super) fn toggle_color_blind_mode(&mut self) {
-        self.settings.color_blind_mode = !self.settings.color_blind_mode;
+        let on = !self.settings.color_blind_mode;
+        self.settings.color_blind_mode = on;
         if let Some(path) = &self.settings_path {
-            if let Err(error) = crate::bus::settings::save(path, &self.settings) {
-                self.error = Some(error);
+            // Change only this field; the coordinator saves the sound fields.
+            match crate::bus::settings::update(path, |settings| settings.color_blind_mode = on) {
+                Ok(saved) => self.settings = saved,
+                Err(error) => self.error = Some(error),
             }
         }
     }
@@ -392,7 +395,7 @@ impl BusUi {
     pub fn receive_event(&mut self, event: BusEvent) {
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
-            BusEvent::DevSettingsChanged(settings) => self.settings = settings,
+            BusEvent::SettingsChanged(settings) => self.settings = settings,
             BusEvent::DevFocusRequested { room, agent } => {
                 if let Some(agent) = agent {
                     // Show this agent's room in the sidebar without marking the

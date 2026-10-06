@@ -69,7 +69,7 @@ impl Worker {
             };
         }
         let (fields, mutation): (&[&str], bool) = match request.method.as_str() {
-            "state" | "diagnostics" | "sounds" => (&[], false),
+            "state" | "diagnostics" | "sounds" | "settings" => (&[], false),
             "room.create" => (&["name"], true),
             "room.rename" => (&["room", "name"], true),
             "room.notes" => (&["room", "text"], true),
@@ -80,6 +80,7 @@ impl Worker {
             "agent.rename" => (&["agent", "name"], true),
             "agent.details" => (&["agent", "on"], true),
             "settings.color_blind" => (&["on"], true),
+            "settings.room_sound" => (&["on", "sound"], true),
             "bus.quit" => (&[], true),
             "agent.add" => (
                 &[
@@ -242,19 +243,7 @@ impl Worker {
                     .ok_or("Sound must be on or off")?;
                 // Resolve the name before changing anything, so an unknown
                 // sound leaves the room as it was.
-                let name = match optional_text(p, "sound")? {
-                    None => None,
-                    Some(name) if name.eq_ignore_ascii_case(crate::sound::DEFAULT_SOUND_NAME) => {
-                        Some(None)
-                    }
-                    Some(name) => Some(Some(
-                        crate::sound::find_sound(&self.system_sounds(), name)
-                            .map(|sound| sound.name.clone())
-                            .ok_or_else(|| {
-                                format!("Unknown sound {name:?}; `bus sounds` lists them")
-                            })?,
-                    )),
-                };
+                let name = self.sound_choice(p)?;
                 if let Some(name) = name {
                     self.dev_command(BusCommand::SetRoomSoundName(room, name))?;
                 }
@@ -276,14 +265,32 @@ impl Worker {
                     .settings_path
                     .as_ref()
                     .ok_or("Bus settings location unavailable")?;
-                // Start from the saved file, as the UI does, and keep other fields.
-                let mut settings = crate::bus::settings::load(path)?;
-                settings.color_blind_mode = on;
-                crate::bus::settings::save(path, &settings)?;
+                // Change only this field of the saved file; other writers keep theirs.
+                let settings =
+                    crate::bus::settings::update(path, |settings| settings.color_blind_mode = on)?;
                 events
-                    .send(BusEvent::DevSettingsChanged(settings))
+                    .send(BusEvent::SettingsChanged(settings))
                     .map_err(|_| "Bus UI event channel disconnected")?;
                 Ok(json!({"updated":true,"color_blind_mode":on}))
+            }
+            "settings" => Ok(json!({"settings": self.settings_json()})),
+            "settings.room_sound" => {
+                let on = p
+                    .get("on")
+                    .and_then(Value::as_bool)
+                    .ok_or("Sound must be on or off")?;
+                let name = self.sound_choice(p)?;
+                let events = events.ok_or("Bus UI event channel unavailable")?;
+                let saved = self.update_new_room_sound(
+                    |pref| {
+                        pref.enabled = on;
+                        if let Some(name) = name {
+                            pref.name = name;
+                        }
+                    },
+                    events,
+                )?;
+                Ok(json!({"updated":true,"room_sound":saved.room_sound}))
             }
             "bus.quit" => {
                 // Same as Ctrl+Q: the UI saves drafts, then shuts the coordinator down.
@@ -450,6 +457,20 @@ impl Worker {
             }
         }
         Ok(json!({"updated":true}))
+    }
+
+    /// The optional `sound` parameter: None when absent, Some(None) for Bus's
+    /// own ding, or an installed system sound by its listed name.
+    fn sound_choice(&self, p: &Value) -> Result<Option<Option<String>>, String> {
+        Ok(match optional_text(p, "sound")? {
+            None => None,
+            Some(name) if name.eq_ignore_ascii_case(crate::sound::DEFAULT_SOUND_NAME) => Some(None),
+            Some(name) => Some(Some(
+                crate::sound::find_sound(&self.system_sounds(), name)
+                    .map(|sound| sound.name.clone())
+                    .ok_or_else(|| format!("Unknown sound {name:?}; `bus sounds` lists them"))?,
+            )),
+        })
     }
 
     fn system_sounds(&self) -> Vec<crate::sound::SystemSound> {

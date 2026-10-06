@@ -9,6 +9,8 @@ mod dev_control;
 mod dialogs;
 #[path = "runtime_resume.rs"]
 mod resume;
+#[path = "runtime_settings.rs"]
+mod settings_runtime;
 use super::{
     callbacks::{self, Parsed},
     launch::{self, AddAgent},
@@ -34,6 +36,10 @@ pub(crate) enum BusCommand {
     SetRoomSound(RoomId, bool),
     /// A system sound name, or None for Bus's own ding.
     SetRoomSoundName(RoomId, Option<String>),
+    /// The global sound new work rooms start with.
+    SetNewRoomSound(bool),
+    /// A system sound name, or None for Bus's own ding.
+    SetNewRoomSoundName(Option<String>),
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),
     DeleteAgent(AgentId),
@@ -77,8 +83,8 @@ pub(crate) enum BusEvent {
     },
     /// Dev `quit`: run the UI's own save-and-quit, as Ctrl+Q does.
     DevQuitRequested,
-    /// Dev `settings`: the coordinator already saved these; the UI applies them.
-    DevSettingsChanged(super::settings::BusSettings),
+    /// The coordinator saved these global settings; the UI applies them.
+    SettingsChanged(super::settings::BusSettings),
     /// Outcome of this exact command, independent of later snapshot acknowledgements.
     CommandFinished {
         command_id: u64,
@@ -151,6 +157,10 @@ impl BusHandle {
         let mut worker = Worker::open(data_dir.clone(), Box::new(HerdrTransport::new(target)))?;
         worker.dev_enabled = super::diagnostics::dev_enabled();
         worker.settings_path = super::settings::path();
+        if let Err(error) = worker.apply_global_settings() {
+            tracing::warn!(%error, "global Bus settings not applied");
+            worker.error = Some(error);
+        }
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
         let (commands, receiver) = mpsc::sync_channel(256);
         let dev_control = super::control::start(worker.dev_enabled, &data_dir, commands.clone())?;

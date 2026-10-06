@@ -77,9 +77,10 @@ fn dev_quit_runs_the_ui_save_and_quit_and_dev_settings_apply() {
     assert!(ui.quitting.is_none());
     ui.receive_event(BusEvent::DevQuitRequested);
     assert!(ui.quitting.is_some());
-    ui.receive_event(BusEvent::DevSettingsChanged(
+    ui.receive_event(BusEvent::SettingsChanged(
         crate::bus::settings::BusSettings {
             color_blind_mode: true,
+            ..Default::default()
         },
     ));
     assert!(ui.settings.color_blind_mode);

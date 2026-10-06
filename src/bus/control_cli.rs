@@ -44,7 +44,9 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   request recover REQUEST_ID --confirm
   wait --message MESSAGE_ID [--timeout SECONDS]
   history --room ROOM
+  settings
   settings color-blind (--on | --off)
+  settings room-sound (--on | --off) [--sound NAME]
   quit
   diagnostics
   sounds
@@ -68,6 +70,9 @@ orchestrator; --to all then skips it.
 room seen clears a room's unread count without changing the visible Bus view.
 room sound turns that room's new-message sound on or off; MASTER starts on, work rooms off.
 room sound --sound picks a system sound by name (Default is Bus's own ding); sounds lists them.
+settings shows the settings every Bus shares: color blind mode, MASTER's sound (room sound
+master changes it) and room_sound, which settings room-sound sets for rooms created later.
+Bus launches and room creation read them; state shows each room's effective sound.
 state includes each agent's compactions and per-provider usage (5-hour and weekly used %).
 Claude usage comes from its status line; Codex usage is read after each turn.
 Usage status \"unknown\" means data is missing or stale, never that the allowance is unused.
@@ -233,8 +238,8 @@ fn cli() -> Command {
         .subcommand(subcommand("quit"))
         .subcommand(
             subcommand("settings")
-                .subcommand_required(true)
-                .subcommand(toggle("color-blind")),
+                .subcommand(toggle("color-blind"))
+                .subcommand(toggle("room-sound").arg(value_arg("sound").long("sound"))),
         )
         .subcommand(subcommand("diagnostics"))
         .subcommand(subcommand("sounds"))
@@ -418,10 +423,18 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         "state" => ("state", json!({})),
         "quit" => ("bus.quit", json!({})),
         "settings" => match args.subcommand() {
+            None => ("settings", json!({})),
             Some(("color-blind", args)) => (
                 "settings.color_blind",
                 json!({"on": on_off(args, "settings color-blind")?}),
             ),
+            Some(("room-sound", args)) => {
+                let mut params = json!({"on": on_off(args, "settings room-sound")?});
+                if args.contains_id("sound") {
+                    params["sound"] = required(args, "sound")?.into();
+                }
+                ("settings.room_sound", params)
+            }
             _ => return Err("unknown settings command".into()),
         },
         "diagnostics" => ("diagnostics", json!({})),
@@ -688,6 +701,7 @@ mod tests {
             assert!(command(args).is_err(), "{args:?}");
         }
         assert!(HELP.contains("room sound ROOM (--on | --off) [--sound NAME]"));
+        assert!(HELP.contains("settings room-sound (--on | --off) [--sound NAME]"));
         assert!(HELP.contains("\n  sounds\n"));
     }
 
@@ -716,6 +730,7 @@ mod tests {
         for args in [
             &["agent", "details", "2"][..],
             &["settings", "color-blind"],
+            &["settings", "room-sound", "--sound", "Glass"],
             &["agent", "details", "2", "--on", "--off"],
         ] {
             assert!(command(args).is_err(), "{args:?}");
@@ -876,6 +891,17 @@ mod tests {
                 &["settings", "color-blind", "--on"],
                 "settings.color_blind",
                 json!({"on": true}),
+            ),
+            (&["settings"], "settings", json!({})),
+            (
+                &["settings", "room-sound", "--on", "--sound", "Glass"],
+                "settings.room_sound",
+                json!({"on": true, "sound": "Glass"}),
+            ),
+            (
+                &["settings", "room-sound", "--off"],
+                "settings.room_sound",
+                json!({"on": false}),
             ),
             (
                 &["agent", "details", "2", "--off"],

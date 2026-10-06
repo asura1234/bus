@@ -161,7 +161,7 @@ fn dev_quit_and_settings_reach_the_ui_and_state_reports_them() {
     assert!(on.ok, "{on:?}");
     assert!(matches!(
         receiver.try_recv().unwrap(),
-        BusEvent::DevSettingsChanged(settings) if settings.color_blind_mode
+        BusEvent::SettingsChanged(settings) if settings.color_blind_mode
     ));
     assert!(crate::bus::settings::load(&path).unwrap().color_blind_mode);
     assert_eq!(
