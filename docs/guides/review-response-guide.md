@@ -1,145 +1,160 @@
 # Review Response Guide (Author Side)
 
-`review-plan` and `review-pr` produce evidence-backed findings. PR reviewers may also leave uncommitted red probe tests. This guide governs the other side of that process: the author verifies, adjudicates, groups, and remediates one or more compatible review artifacts.
+`/review-plan` and `/review-pr` are **problem production**: the reviewer lists problems in the plan or the code as evidence-backed findings; a PR reviewer may also write tests that prove a problem and leave uncommitted red tests behind. This guide serves the opposite side — **adjudicating and remediating review comments**: once the author has one or more compatible review.md files, the author decides, finding by finding, how each should be handled.
 
-Reviewer and author are peer decision-makers with different responsibilities. A reviewer identifies a problem and may suggest a repair. The author independently decides whether the claim is true, whether it belongs in scope, and what repair is correct, then owns the actual patch. A later review validates the result. Review is input, not command; convergence is measured by evidence and final behavior, not by literal compliance with a proposed fix.
+**Core stance: reviewer and author are peer judges in a convergence process, with different responsibilities but no relationship of obedience.** The reviewer judges from their own context where a problem lies, and may suggest a repair along the way; the author judges from their own context, independently, whether the problem holds and how it should be repaired, and owns the actual patch; the next-round reviewer then judges whether the result meets the goal and invariants. Review is input, not command; the convergence criterion is evidence and final behavior, not whether the author followed the reviewer's original proposal.
 
-The author's value is independent judgment. Automatically land only verified, admitted issues. Record misreads, scope expansion, over-engineering, conflicts with locked choices, and true open decisions as the fixed REJECT or FLAG disposition rather than silently accepting or dropping them. Deduplicate repeated root causes.
+The author's value does not lie in how cleanly the review converges or how thoroughly it is adopted, but in **independently judging the review's problem claims and repair suggestions** — automatically landing only problems verified to hold, and **recording (REJECT, no action needed) or handing to the developer (FLAG)** the non-adopted items such as misreadings, scope expansion, over-engineering, and conflicts with established decisions (neither silently copying nor silently dismissing — the skill's own judgment of "should this be adopted" can be wrong too), and deduplicating repeated comments. Blind wholesale acceptance and blind rejection are the same dereliction: both replace verification with a convenient posture.
 
-This guide is language-independent. It defines judgment; execution order belongs to `address-review-comments`.
+This guide is language-independent; examples are expressed in Rust. It defines the **judgment criteria**; the execution order lives in the `address-review-comments` skill.
 
-## Guardrail: verify before adjudicating
+## Guardrail: verify first, then adjudicate
 
-Every finding is checked against first-party reality before disposition:
+Every finding must be **verified against reality** before adjudication, and the only valid criterion is a first-party source — not the reviewer's paraphrase, and not a rebuttal you assume on your own:
 
-1. Read current source, plan text, tests, and archived decisions. A confident review sentence is not proof.
-2. Multiple lanes reporting the same claim increase investigation priority but never replace verification; they can share the same misread.
-3. Separate the problem claim from the proposed remediation. Independently establish root cause, postcondition, behavior owner, upper-level invariants, and regression evidence. Then evaluate the reviewer's suggestion as one candidate that may be accepted, narrowed, broadened, or replaced. A patch that removes a local symptom while breaking lifecycle, visibility, ownership, or adjacent transitions is wrong even when the finding is true.
-4. Resolve conflicts by authority: current source and tests; repository/module SOT and authoritative documentation; plan/PR/commit prose; review wording.
-5. Repository writes are allowed only for APPLY. REJECT, FLAG, and HOUSEKEEPING never modify repository content. Plan and PR modes land by default; `--no-commit-and-push` leaves the accepted changes unlanded.
-6. A true claim is not necessarily a safe behavior change. PR mode usually follows manual or automated validation, so existing behavior is a protected baseline. Changing it requires positive evidence: a reachable input and wrong output that prior validation missed. Without that evidence, strengthen the current contract with a test or FLAG the behavior choice.
-7. Every deduplicated finding and consistency item passes the goal/scope gate before repair design:
-   - work outside the locked goal -> `scope-change`;
-   - work toward an explicit non-goal -> `scope-change`;
-   - expanding, shrinking, overturning, or redefining the goal -> `violates-stated-goal`;
-   - speculative robustness outside the goal contract -> `over-engineering` or `robustness-not-in-goal`;
-   - an incremental-round finding first raised against unchanged material with no delta relationship -> `review-scope-violation`.
-   These are REJECT, never APPLY. A real defect may still be outside this task's authority. A red test, multiple agreeing lanes, earlier APPLY, or permission to include incidental work does not grant scope.
-8. Verify current HEAD. Historical review may describe an older snapshot. A claim repaired before adjudication is `already-addressed`, with its current location. Locate by symbol and context rather than stale line number.
+1. **Go back to the source / the plan text / `Archived decisions` to verify** — when a finding claims "function A does not handle null", "the plan misses file X", or "this goes out of bounds", first Read the actual code or plan to confirm whether it is true. A finding that cannot be verified must not be adopted on tone alone.
+2. **No performative agreement**: do not skip verification because the reviewer's wording is confident, or because multiple lanes raised it. Multiple lanes independently raising the same problem is **stronger evidence** (worth verifying first), but N lanes can share the same misreading — corroboration raises priority, it does not replace verification.
+3. **Adjudicate the problem claim and the repair suggestion separately**: a finding's problem claim is a claim to be verified; the "possible fix" is only a candidate starting point offered by the reviewer, not a specification, and it does not automatically become correct because the problem is confirmed. The author first, without relying on that suggestion, independently derives from source, tests, the goal, and the architecture SOT the **root cause, the post-repair postcondition, the true Owner, and the upper-level invariants that must be preserved**; then treats the reviewer's suggestion as one candidate and, by its actual quality, adopts it as-is, adjusts it, or replaces it with a better solution. A suggestion that removes a local symptom but breaks upper-level invariants such as lifecycle, visibility, ownership, or adjacent state transitions is still a wrong repair; copying it merely because the finding itself holds is forbidden.
+4. **Rank conflicts by credibility**: actual behavior of source and tests > module `AGENTS.md` / official documentation > plan text / PR description / commit message / review wording.
+5. **The author side does modify the repository, but only for verified APPLY classes (valid-issue / partial)**; non-APPLY comments never modify the repository, and land as REJECT (no developer action needed, one line of record) or FLAG (handed to the developer for decision, see the "Not adopted" section below) according to their **fixed disposition** — scope expansion / over-engineering / pure contradiction of an established decision and the like are fixed REJECT (not adopted, **not escalated**), while genuine open choices / lane conflicts are fixed FLAG (escalated). plan/pr land through `commit-and-push` by default. When a genuine open choice is met while judging **whether a review should be adopted**, it must be escalated rather than decided unilaterally.
+6. **Claim is true ≠ applying it is safe; manual-test protection applies only to PR dispositions that already have that evidence.** address-review-comments in PR mode usually runs **after manual testing** — the questioned behavior has already been manually verified to work by the author (code-review-guide "Review context: existing behavior is a verified baseline"). So a PR finding "holding" does not mean "changing it accordingly" is safe: whenever the repair would change verified runtime behavior, the adoption bar is positive evidence (a reachable input + a wrong output that manual testing missed); if that cannot be produced, go strengthen-with-test or FLAG. A PR that is truly abandon-level is still decided by the developer according to the review verdict, not salvaged finding by finding by this process.
+7. **GOAL & SCOPE GATE — every deduped finding and sync item must pass it, before any APPLY or repair design.** Judge against the established goal (plan: `## Goal`; pr: the consistent locked goal recorded by every lane): (a) the repair request exceeds the goal (→ scope-change); (a′) it advances an explicit non-goal (skip if none, → scope-change); (b) it overturns, expands, shrinks, or redefines the goal (→ violates-stated-goal); (c) it adds speculative robustness for failure modes outside the goal contract (→ over-engineering / robustness-not-in-goal); (d) in an incremental round it targets unchanged content for the first time, with no relationship to the delta (→ review-scope-violation). Any hit is REJECT and must not be APPLY. For a PR, (a) is judged by code-review-guide "Goal-relevance admission", **which also covers incidental defects that really exist in the diff but whose repair request does not serve the goal**; only the developer changes the goal.
+   Pointing out a delivery shortfall against the goal, or a PR's secondary purpose, is still adjudicated as usual and is not a goal change. The reachable-input + wrong-output exemption and the ambiguous-provenance exemption of (c)(d) apply only to those two questions and **do not exempt (a)/(a′)/(b)**. A real defect can also be out of scope; Good Samaritan, a red test, multiple lanes agreeing, or a previous APPLY cannot supply the authorization. A repair request confirmed to be outside the goal is fixed REJECT(scope-change), and must not be turned into APPLY-SAFE, strengthen-with-test, or FLAG because it is "useful". If this work is needed later, the developer authorizes it separately; do not automatically create an issue, split, revert, or modify the goal.
+8. **Verification targets the current HEAD, not the commit the review was written against.** A review is always written against some snapshot, and by the time the author reads it the branch has often moved on: machine reviews on GitHub (Codex / Copilot, etc.) pin their comments to the commit that triggered them, and later pushes neither withdraw nor update them. So every finding must **gather evidence again at the current HEAD** — one that held on an old commit but no longer holds at HEAD lands as `already-addressed` (with the commit/location where it was handled), neither APPLY because it was true at the time, nor dropped wholesale because the branch moved (old and new mixed in one review is the norm; judge each one). Line numbers likewise drift with later commits; locate by symbol and context, not by the line number written in the review.
 
-## Verification and adjudication authority
+## Authority boundaries of verification and adjudication
 
-The main agent chooses the orchestration. It may verify claims serially, delegate a bounded set of read-only fact questions, or combine both, based on claim count, shared files, and context cost. No specific fan-out shape is mandatory.
+**The orchestration is decided by the main agent itself.** Verifying one by one alone, handing several to subagents, or mixing both depends on the number of claims this round, whether they share files, and main's remaining context — this guide prescribes no shape and does not presume parallel is faster.
 
-These invariants always hold:
+This used to be hard-coded as "one isolated verifier per canonical claim + an immutable manifest + exact-once collection", and has been removed. **It transplanted a practice that works on the review side to the author side, where the payoff structure is the opposite**:
 
-- Every canonical claim receives exactly one first-party truth assessment before adjudication: `SUPPORTED`, `CONTRADICTED`, or `INCONCLUSIVE`, with evidence location and uncertainty.
-- Verification and adjudication are different authorities. A verifier answers only the atomic fact question. Goal/scope admission, disposition, conflict resolution, and repair direction belong only to the main agent. `SUPPORTED` is not automatically APPLY and `CONTRADICTED` is not automatically REJECT.
-- Truth assessment applies to the problem claim, not the suggested repair. APPLY means the problem should be fixed, not that the reviewer's patch should be used.
-- Every disposition in the triage ledger carries a first-party citation: path:line, exact document section, or command and output. No citation means the claim was not verified.
-- Delegated verifiers are repository- and Git-read-only. They do not write, stage, commit, push, decide disposition, propose a patch, or expand scope.
-- No repository write occurs until every claim has been adjudicated.
+- The fan-out of `review-pr` / `review-plan` produces **perspectives**. Multiple lanes each look at the same diff with independent context; overlap is not waste — two lanes hitting the same problem is corroboration, and each seeing different things is the output itself.
+- The author side needs exactly the opposite: adjudication is **comparative**. Deduplicating by root cause, recognizing mutually exclusive guidance, and pressing the same goal gate consistently onto every claim all require **one context holding all claims at once**. Cutting it into isolated assignments destroys exactly the cross-claim context the work depends on, and then asks main to read a pile of reports to rebuild it.
 
-### Bounded verification
+The cost is real too: review claims usually **cluster on the same few files**, and isolation requires each verifier to rebuild context from scratch, so the same file is read N times — a single agent reads it once and amortizes it across claims. That earlier change was justified by "shortening verification wait time", but its acceptance criteria were all structural (barrier, exact-once, ownership), with no latency or cost criterion, so nobody noticed when it got slower. Stop treating any one orchestration shape as the discipline itself, and do not infer that because fan-out works on the review side it works equally on the author side.
 
-Read enough source, callers, and contracts to establish the claimed behavior, its owner, goal relationship, and concrete consequence. REJECT is a disposition, not permission to skip verification based on a title or path. The same file may contain goal-related and unrelated behavior.
+Whoever gathers the evidence, the following do not change:
 
-Do not expand verification into exhaustive input enumeration, unrelated bug discovery, or repair design. When evidence is insufficient, record `INCONCLUSIVE` and the missing evidence. Preserve truth and scope separately: `SUPPORTED + out-of-goal repair = REJECT(scope-change)`. A genuine unresolved product or architecture choice is `requires-developer-decision`; known out-of-goal work is not promoted to FLAG merely because it would be useful.
+- **Every canonical claim gets one first-party truth assessment before adjudication**, from the closed set `SUPPORTED / CONTRADICTED / INCONCLUSIVE`, recording where the evidence was taken and the uncertainty; when evidence is unavailable, say so truthfully, and do not fill it in with guesses.
+- **Evidence gathering and adjudication are two kinds of authority.** Evidence gathering only answers "what is the relationship between this atomic fact and the first-party evidence"; the goal and scope gate, disposition, conflict resolution, and repair direction belong only to main. `SUPPORTED` does not equal APPLY, and `CONTRADICTED` does not automatically equal REJECT.
+- A truth assessment judges only the **problem claim**, it does not verify the reviewer's repair suggestion. APPLY likewise means only "this problem should be fixed", not "the reviewer's solution should be implemented"; the repair direction must be derived independently by main from the same first-party context, and main is responsible for it.
+- **Every disposition in the ledger must carry a first-party citation** (`path:line`, a section name, or a command and its output). This is the only credential the developer can spot-check for "was it really verified" — being unable to write a citation means it was not verified, which is more direct than any process boundary.
+- **Delegated subagents are read-only on the repository and Git**: they do not write business files, do not add/commit/push, do not output a disposition, and do not expand the review surface along the way. How many to delegate and how to group them is main's call, but they must not cite each other's findings.
+- **Do not touch the repository before every claim is adjudicated.** Any repair would turn reviewer claims that are not yet adjudicated into write operations prematurely.
 
-## Input sanitation and consistency drift
+### Bounded verification: establish the facts and the goal relationship, then rule on scope independently
 
-- Run `prepare_review_input.py` before reading review content. It validates mode and target identity and emits only the two actionable sections. Structured review may come from these skills; free-form review is also valid with `--free-form-file` and explicit mode. Free-form input lacks round provenance and SCOPE_HASH, so it cannot be classified as `review-scope-violation`; its locked goal must be supplied explicitly.
-- The non-blocking consistency list is still actionable input. A verified in-scope wording, naming, comment, or documentation item is APPLY-SAFE. False or out-of-scope drift receives the same fixed disposition discipline. It does not change the prior review verdict or trigger another round by itself.
-- Triage metadata begins with `**模式**：plan|pr`.
+Every canonical claim still needs a first-party truth assessment; REJECT is an adjudication, not a way to skip verification by title or path.
+Read enough source, callers, and contracts to determine the claimed behavior, the true Owner, and whether it affects the locked goal.
+A module the goal does not name may carry a necessary dependency, and the same file may contain both goal-related and unrelated code; do not partition directly by path.
 
-## Dispositions: each claim receives exactly one
+Evidence gathering answers the current claim; it does not expand into exhaustive input enumeration of that subsystem, investigation of extra defects, or repair design. When evidence is insufficient, record `INCONCLUSIVE` and the gap truthfully; do not write a real defect as `CONTRADICTED` in order to reject an out-of-scope repair.
+The truth of the claim and its scope are ruled on separately: `SUPPORTED + out-of-goal repair request → REJECT(scope-change)`;
+only a goal-related `SUPPORTED` continues to normal adjudication, and when scope cannot yet be established, do not reject on a guess either.
+A genuine product / architecture open choice still goes to `requires-developer-decision`; do not promote a known out-of-scope item to FLAG on the grounds of "technically correct".
 
-There are four actions: automatic repair (APPLY), direct rejection with no developer action (REJECT), escalation for developer decision (FLAG), and internal consolidation (HOUSEKEEPING). A disposition has a fixed action. Judgment decides which disposition applies; routing after that is table lookup.
+For example, when the locked goal is the FCPXML handoff, a review-artifact delimiter error can be true, but if the product export does not depend on it, that PR does not fix it;
+if a shared path helper really makes the export point at the wrong media, it is adjudicated normally according to the proven dependency. A blocked review-tool execution is reported separately;
+do not rewrite a troubleshooting need into a product defect or an unbounded toolchain repair task.
 
-Read only the named judgment sections from reviewer guides. Do not import their review-production steps or issue a reviewer verdict from the author side.
+## Input sanitation and the sync list
 
-| Disposition family | Judgment source of truth |
+- `address-review-comments` must first use `prepare_review_input.py` to validate the mode and target identity of all explicit review files, and read only the two fixed sections after sanitation. **Review sources are not limited to this repo's review skills**: free-form text such as GitHub reviews, pasted comments, or any prompt is equally valid input (`--free-form-file` + explicit `--mode`); the adjudication discipline does not depend on who wrote the review. Free-form input lacks round provenance and SCOPE_HASH, so it **must not** be judged `review-scope-violation`, and its goal must also be given explicitly by the caller, not inferred from the diff or the PR description; the other verification and classification gates apply as usual. Prior-round reconciliation, the exploration area, the verdict, and the preamble do not take part in author adjudication; the source label keeps lane, round, file, and finding id as provenance.
+- "同步清单（CONSISTENCY drift，非阻塞）" (the sync list) is also actionable input, and must not be discarded because it is non-blocking. When verified to hold and within scope, correct the documentation, naming, or comment as APPLY-SAFE; when it does not hold or is out of scope, record it by the same disposition table. It does not change the review verdict, and does not by itself trigger a new round.
+- The first metadata field of every disposition ledger is fixed as `**模式**：plan|pr`.
+
+## Disposition classification (each finding gets exactly one disposition)
+
+There are **four actions**: **automatic repair (APPLY) / direct rejection (REJECT, no developer action needed) / flag and escalate to the developer (FLAG, developer decision needed) / internal consolidation (HOUSEKEEPING)**. **The action is a fixed attribute of the disposition enum, not a per-finding judgment** — judgment happens only in "which disposition does the finding belong to"; once the disposition is set, landing APPLY/REJECT/FLAG/HOUSEKEEPING is table lookup, not another decision (classification is judgment, routing is not). The same classification applies to both plan review and code review; only where the "repair" lands differs (plan document vs code). The judgment criteria for each category are not repeated in this guide — the criteria are **one ruler shared by reviewer and author**, stored only once, in the section named in the table below; this guide gives only the mapping and the disposition action.
+
+**Read only the sections named in the table below, not the whole review guide.** Those are **reviewer-side** documents; their sections such as "Review scope", "Three verdicts", "Adversarial posture", "Output format", and "Verification boundary" describe how to **produce** findings, which the author neither executes nor produces; reading the whole thing in only leads the author to apply reviewer actions (for example issuing a verdict on the reviewer's behalf).
+
+| Disposition in this guide | Section holding the judgment criteria (single source of truth) |
 | --- | --- |
-| APPLY-SAFE / APPLY-BEHAVIOR | code-review guide, “Review context: existing behavior is a verified baseline” |
-| `over-engineering` | code-review KISS/YAGNI/dimension 8/nit boundary; plan-review over-spec boundary |
-| `scope-change` | code-review goal-relevance admission and dimension 6; plan-review multi-purpose rule |
-| `already-addressed` | code-review scope; in plan mode, current plan and archived decisions |
-| `review-scope-violation` | closed-world convergence rules in plan/code guides |
-| `violates-stated-goal` | plan-review locked workflow and goal rules |
-| `implementation-detail` | plan-review admissibility stop rule; code-review nit boundary |
+| APPLY-SAFE / APPLY-BEHAVIOR tiers | code-review-guide "Review context: existing behavior is a verified baseline" |
+| over-engineering | architecture-principles "KISS: keep it simple, reject over-engineering", "YAGNI: do not pre-build for an unknown future"; code-review-guide dimension 8 "Over-engineering and branch proliferation", "Nitpicking versus real findings"; plan-review-guide "Plan sufficiency (over-spec boundary)" |
+| scope-change | code-review-guide "Goal-relevance admission" (dimension 6 "PR single purpose" only judges whether incidental changes can be included); plan-review-guide "1. Multi-purpose plan" |
+| already-addressed | code-review-guide "Review scope"; in plan mode compare directly against the plan text and `Archived decisions`; plan-review-guide has no dedicated section |
+| review-scope-violation | the closed-incremental rule in code-review-guide / plan-review-guide "Convergence: SUBSTANTIVE vs CONSISTENCY" |
+| violates-stated-goal | plan-review-guide "Workflow structure is a fixed constant, outside review scope" |
+| implementation-detail | plan-review-guide "Finding admissibility and the Ready threshold (stop rule)"; code-review-guide "Nitpicking versus real findings" |
 
-### APPLY: automatic remediation
+Sections outside the table are never input to author adjudication. When a new judgment criterion is needed, change the one named in the table above rather than writing another set in this guide — the same ruler written in two places inevitably drifts, and once author and reviewer disagree on "what counts as over-engineering", the author starts rejecting problems the reviewer raised legitimately.
 
-The author independently derives every repair from first-party context. For implementation or behavior, identify root cause, required postcondition, behavior owner, preserved upper-level invariants, and regression evidence that proves both the defect is gone and existing correct behavior survives.
+### Automatic repair (APPLY — plan/pr land by default)
 
-#### APPLY-SAFE
+APPLY is split into two tiers by **whether it changes runtime behavior that has already been manually verified**, with different bars (criteria as in guardrail 6 + code-review-guide "Review context"). This tiering constrains the PR's verified baseline:
 
-- `valid-issue` without behavior change: dead-code removal, comments/naming/spelling, tighter visibility, logging, unit tests, documentation, or replacing an existing impossible-state fallback with fail-fast.
-- `strengthen-with-test`: the review raises a behavior concern, but current behavior is verified correct and simply lacks protection. Add a regression test for the current contract rather than changing behavior.
+The author independently determines the repair direction of every APPLY from first-party context. When implementation or behavior is involved, the author must first make explicit the problem's true root cause,
+the post-repair postcondition, the Owner responsible for that behavior, the upper-level invariants that must not be broken, and the regression evidence that can prove both "the problem is gone" and "existing correct
+behavior still holds"; the reviewer's suggestion is then only a candidate that is tested against these constraints. Adopting, adjusting, or replacing it
+are all normal dispositions, and replacing the original suggestion does not demote it to conflicting / FLAG. Only when first-party context still cannot determine a safe repair direction
+and a product or architecture open choice really remains does it go to `requires-developer-decision`.
 
-#### APPLY-BEHAVIOR
+**APPLY-SAFE (additive / does not change existing behavior) — repaired automatically as usual, no regression risk:**
 
-- `valid-issue`: the claim is verified, supplies positive evidence of a reachable wrong result, is in scope, and can be repaired without over-engineering.
-- `partial`: the claim is true but the suggested patch is too broad, too narrow, only treats a symptom, or violates existing patterns. Implement the author's smaller root-cause repair while preserving upper-level invariants.
+- **valid-issue (the part that does not change behavior)**: dead-code removal, comments/naming/spelling, tightening visibility, adding logs, **adding unit tests, updating docs**, removing **existing** over-defensive fallbacks in favor of fail-fast (the opposite direction of over-engineering under REJECT below, which asks to add fallbacks). These do not change the runtime behavior of existing code paths.
+- **strengthen-with-test**: the reviewer raises a "correctness / bug" concern that would change behavior, but verification shows **the current behavior is actually right** (manual testing + re-derivation confirm it), the path merely lacks test protection. → Take its real kernel (the coverage gap), add a unit test asserting the **currently verified behavior** to pin it (plus docs if needed), and **do not** change behavior as the reviewer said. This is one kind of partial: the real signal is "under-tested", and the safe landing is "add a test", not "change behavior". It is also the default exit for "suspected but unprovable" findings — trading regression risk for hardening.
 
-Without positive evidence that protected PR behavior is wrong, do not use APPLY-BEHAVIOR. Use `strengthen-with-test` or FLAG `behavior-change-unverified`.
+**APPLY-BEHAVIOR (changes existing runtime behavior) — change only when clearly established:**
 
-### REJECT and FLAG: no automatic repository changes
+- **valid-issue**: verified to hold, the finding gives **positive evidence** that the existing behavior is indeed wrong (a reachable input + a wrong output that manual testing missed), it is within this PR's scope, and the repair introduces no over-engineering. → Fix the root cause.
+- **partial**: the problem claim holds, but the reviewer's solution is too broad, too narrow, excessive, only fixes a local symptom, or does not fit existing patterns. → The author picks, under the repair constraints above, a better, minimal implementation that preserves the upper-level invariants; overriding the original suggestion is a normal outcome.
+- If positive evidence that "the existing behavior is indeed wrong" cannot be produced, it **does not belong** to APPLY-BEHAVIOR — either downgrade to strengthen-with-test (add a test pinning the current behavior), or FLAG `behavior-change-unverified` for escalation. Default stance: manually tested existing behavior is intentional, and changing it requires positive evidence, not a hypothetical "some case is not handled".
 
-Every non-APPLY claim remains visible. The mapping is fixed.
+### Not adopted (repository unchanged): two tiers by **whether further developer action is needed**
 
-REJECT requires no developer action and is recorded compactly:
+Findings the author does not APPLY never modify the repository, but they are **neither silently adopted nor silently rejected** — all are recorded in the output (to keep the review from steering the plan/PR off course, and also to guard against the skill's own misclassification). Whether each disposition goes to REJECT or FLAG is **fixed** (see the two tiers below, not a per-finding judgment):
 
-- `over-engineering` / `robustness-not-in-goal`: adds an abstraction, state, branch, or failure path unsupported by current goal and reachable requirements.
-- `claim-not-true`: first-party source contradicts the claim.
-- `already-addressed`: the issue is real historically but absent at current HEAD.
-- `scope-change`: the requested repair does not serve the locked goal or advances a non-goal.
-- `violates-stated-goal`: the finding changes the developer's locked assignment.
-- `review-scope-violation`: a closed-world follow-up introduces a finding against unchanged, unrelated material with clear provenance.
-- workflow-structure rewrite: changes the fixed one-shot plan/verification/PR cadence.
-- pure `contradicts-archived-decision`: conflicts with a locked decision without disproving its factual premise.
+- **REJECT — no further developer action needed (one compact line, for spot-checking misclassification)**: the skill has ruled not to adopt — over-engineering(robustness-not-in-goal) / claim-not-true / already-addressed / scope-change / violates-stated-goal / review-scope-violation / tampering with the workflow structure / pure-contradiction contradicts-archived-decision — one line each (one sentence for the finding + which category + source lane; over-engineering / claim-not-true / already-addressed add one sentence of first-party basis), **never silently dropped** (the classification is heuristic and can wrongly hit genuinely in-scope items; leaving one line lets the developer catch a misclassification at a glance).
+- **FLAG — further developer decision needed (full evidence)**: genuine judgment/dispute items — behavior-change-unverified / conflicting / requires-developer-decision / the **premise-challenge exception** to archived decisions — escalated prominently with full verification basis, for the developer to rule on.
 
-FLAG requires developer decision and includes complete evidence:
+- **behavior-change-unverified** (code review only): the finding asks to change existing runtime behavior that **has passed manual testing**, but there is neither positive evidence that the behavior is indeed wrong (a reachable input + a wrong output), nor does the reviewer accept resolving it with only a test — they insist the behavior itself must change. → Neither change silently nor dismiss silently; escalate with the verification basis, and let the developer rule whether to change the behavior or keep it. These are often a signal of "promising, or should it be sent back" — when it is truly abandon-level the developer decides by the review's existing verdict; it is not work for address-review-comments to force-fix finding by finding (guardrail 6).
+- **over-engineering** (including **robustness-not-in-goal**): the reviewer asks to add an abstraction, state, branch, or failure path that the current goal and reachable requirements cannot prove necessary. → Adjudicate uniformly by architecture-principles' KISS and YAGNI and code-review-guide dimension 8; one with positive evidence of a reachable input and a wrong output is a real bug, not this category.
+- **claim-not-true**: verification finds the claim inconsistent with the source/plan text (the reviewer misread). → Per the guide guardrails; attach the first-party source that refutes it, **never silently drop** — let the developer recheck whether the skill's verification is reliable.
+- **already-addressed**: the problem is real but the plan/code already handles it. → For code see "Review scope"; for plan compare directly against the plan text and `Archived decisions` (plan-review-guide has no dedicated section); attach where it was handled, without concluding on the developer's behalf that no further look is needed.
+- **scope-change**: asks for work beyond the locked goal, including further repair of incidental defects inside the diff. → For a PR uniformly by "Goal-relevance admission", for a plan see "Multi-purpose plan"; a first-party citation explains the missing goal relationship, and the real truth assessment is kept. Any hit is REJECT, not APPLY, and having previously included such a repair does not carry the obligation forward.
+- **violates-stated-goal**: the comment tries to **overturn / expand / shrink / redefine** the plan's declared `## Goal`, or can **only be satisfied by changing the goal** (typical: "while you're at it, also do X", "the goal is too small/too large, change it to Y"). → The goal is a developer commitment **locked** once the plan enters review-plan, and **only the developer can change it** (plan-review-guide "Workflow structure is a fixed constant, outside review scope"); **this finding is rejected directly (REJECT, no developer action needed, one line of record)** — changing the goal is the developer's independent authority and is not triggered by this finding, and the author/skill never lands it automatically. plan mode may judge whether the plan itself serves the goal; code mode judges the implementation only by the review dimensions of the existing code, and does not audit plan-checklist completion.
+- **review-scope-violation**: a finding raised for the first time in an incremental round / follow-up review that **explicitly targets unchanged content**, has no relationship to this round's diff, and asks for execution-level ordering / control flow (crossing the closed incremental boundary). → For the criterion see `plan-review-guide` / `code-review-guide` "Closed incremental / CLOSED WORLD"; land as **REJECT**, not APPLY. **When provenance is ambiguous it is not this category**; adjudicate as usual (do not use the burden of proof to suppress a legitimate SUBSTANTIVE finding whose source the author finds hard to prove).
+- **contradicts-archived-decision**: the comment runs against `Archived decisions` or an explicit developer constraint. → By default point to that decision; only when the reviewer's evidence truly shakes the decision's premise is it presented as "reopen the decision" — neither reopening nor upholding it on the developer's behalf.
+- **conflicting**: two lanes give mutually exclusive guidance on the same spot that cannot both be satisfied. → Escalate both sides and the tradeoff; do not pick one on your own.
+- **requires-developer-decision**: a genuine product/architecture open choice that source + archived decisions alone cannot converge. → Give the options and the impact of each.
 
-- `behavior-change-unverified`: asks to change protected PR behavior without positive evidence that current behavior is wrong and cannot be resolved by strengthening tests.
-- `conflicting`: two verified lanes require mutually exclusive outcomes.
-- `requires-developer-decision`: a genuine product or architecture choice cannot be resolved from source and locked decisions.
-- archived-decision premise challenge: new evidence undermines the factual premise of the decision rather than merely disagreeing with it.
+### Internal consolidation (HOUSEKEEPING — recorded in the ledger only, not in the developer-decision section)
 
-Specific rules:
-
-- `scope-change` remains REJECT even when the defect is real, the test is red, or the work seems useful. The developer may authorize it separately later.
-- `review-scope-violation` requires clear provenance. When provenance is ambiguous, adjudicate normally rather than using uncertainty to discard a legitimate issue.
-- `contradicts-archived-decision` becomes FLAG only when evidence challenges the premise. The author neither reopens nor defends the decision automatically.
-- `conflicting` presents both verified sides and the tradeoff; the author does not choose silently.
-
-### HOUSEKEEPING
-
-- `duplicate-root-cause`: merge into one canonical claim and record corroborating lanes. Repair or escalate only once.
-- `implementation-detail`: plan-review detail below macro level or code-review style outside every review dimension. Record internally; it is not an actionable finding.
+- **duplicate-root-cause**: same root cause as another finding. → Merge into that one, land/escalate only once (multiple reviewers inevitably produce duplicates; deduplication is a hard requirement).
+- **implementation-detail**: in plan review, below macro level (naming/field splitting/private organization, etc., left to the executing agent per plan-review-guide's stop rule); in code review, pure style nits that map to no review dimension. → Not an admissible problem.
 
 ## Cross-lane adjudication
 
-- Deduplicate by actual root cause, not wording.
-- Detect mutually exclusive instructions and FLAG them.
-- Reject scope expansion and unsupported robustness even when they appear comprehensive.
-- Treat corroboration as investigation priority, never as truth.
+Verifying a single comment is only the foundation. With multiple lanes in parallel, the real author value lies between lanes:
+
+- **Deduplicate by root cause**: when the same root cause is caught by multiple lanes, merge them into one adjudication and record the corroborating lanes; do not change the same problem twice, and do not list it twice in the report.
+- **Recognize conflicts**: lane A wants X, lane B wants ¬X (or gives incompatible directions on the same spot) → escalate as `conflicting`, do not take sides privately.
+- **Block scope expansion and over-engineering**: when a reviewer oversteps and pushes the plan/PR toward "bigger, more complete, more defensive", the author is the gate — **REJECT (recorded, not adopted)** as scope-change / over-engineering (not silent compliance), rather than accepting by default comments that "look more thorough".
+- **Corroboration ≠ truth**: agreement across lanes is no reason to skip verification (shared misreadings exist), but agreement can weight investigation priority and confidence in valid-issue.
 
 ## Taking ownership of PR reviewer tests
 
-Reviewer tests are pending regression evidence, including red untracked files and new cases in existing test files. Match each test to its claim, actual assertion, and worktree hunk before modification. Red does not automatically prove the reviewer's expected behavior.
+Tests left by the reviewer are regression evidence pending adjudication, including new files that still run red and new cases in existing test files. The author first reconciles each
+test with its claim, its actual assertion, and its worktree hunk; red by itself is not worktree pollution, and does not automatically prove the reviewer's
+expectation correct. Whether to adopt is still decided by the same verification and adjudication rules, and tests are not modified before every claim is adjudicated.
 
-For APPLY, include the corresponding test in the repair allowlist and narrowly prove red-to-green after fixing the root cause. Keep accepted green coverage tests too. Rename or merge them only to match actual semantic behavior. Never manufacture green by deleting, skipping, weakening, or mocking away the assertion. If the original assertion is wrong, rewriting it requires independent first-party evidence and a triage note.
+For an APPLY repair, the author takes over the corresponding test and adds it to the repair allowlist, and after fixing the root cause runs it narrowly to prove red turns green; adopted
+green coverage cases are kept as well. Tests should follow code-review-guide "Probe test naming and ownership", renaming them by actual
+behavior or merging them into existing test files when needed; never manufacture green by deleting the test, changing it to skip/todo, weakening a valid assertion, or mocking out the behavior under test.
+When the original assertion really is wrong, the rewrite must have independent first-party evidence and be explained in triage.
 
-PR mode lands accepted tests with the repair through commit-and-push, including previously dirty or untracked reviewer files. Verify every adopted hunk entered the commit and remote branch. Do not commit rejected, disputed, or unrelated probes automatically. `--no-commit-and-push` still forbids landing.
+PR mode by default has `commit-and-push` commit and push the repair together with these verified tests; a test coming from the reviewer,
+already dirty before the author took over, or still untracked, is no reason to leave it out of the commit. Before committing, check each adopted file/case hunk item by item; after committing,
+check that they really entered the commit and the same-name remote branch. Tests not adopted, still disputed, or unrelated are not committed automatically; keep them and list them explicitly as
+out-of-disposition scope; `--no-commit-and-push` still forbids landing, and only reports the verification results and the tests awaiting commit.
 
-## Plan-review finalization boundary
+## Landing and boundaries (principles)
 
-Every plan-review lane returning Ready is a fact, not a state transition. Reviewers stay read-only and never write plan state, and no runtime or helper advances from a verdict; plan status authority stays with the plan author.
+> The concrete execution steps (repair by group, run verification, commit-and-push per group, recheck the worktree) are in the pseudocode of the `address-review-comments` skill; this section only sets principles.
 
-## Landing and boundaries
-
-- Land only verified APPLY claims and fix root causes rather than copying proposed patches.
-- Never land FLAG automatically.
-- A repair must not reactivate flagged/merged claims, introduce conflict, or expand change surface unnecessarily.
-- Plan and PR modes use the repository's commit-and-push workflow when landing is enabled. Respect the current Bus branch policy and use an explicit refspec.
+- Land only verified APPLY classes; the author fixes the finding's **root cause**, not the reviewer's literal patch. Reviewer and author may both judge from their own context; the follow-up review accepts the patch's evidence, goal, and invariants, not whether the author obeyed the earlier suggestion.
+- **FLAG classes are never landed automatically** — their disposition belongs to the developer, and the author neither adopts nor rejects them on the developer's behalf.
+- Landing any repair must not reactivate items already FLAGged (or consolidated), introduce new internal conflicts, or needlessly enlarge the change surface (minimal change).
+- When plan/pr do not specify `--no-commit-and-push`, keep the existing per-group landing behavior, pushing on the current feature branch with an explicit `<branch>:<branch>` refspec to `origin` (never `upstream`) per the `commit-and-push` skill; never land on master/main (local commits are forbidden too) unless the developer explicitly asked to commit or push directly to master — create a feature branch first, and merge back into master through a PR in the end.

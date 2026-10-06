@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -17,10 +17,10 @@ from prepare_review_input import (  # noqa: E402
 
 def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    # `newline="\n"` 不是讲究：`write_text` 默认 `newline=None`，写时把 `\n` 翻译成
-    # `os.linesep`，在 Windows 上得到 CRLF。而被测代码用 `require_canonical_text_bytes`
-    # 正确地拒绝 CRLF——于是这些 fixture 在 Windows 上因为一个与断言无关的原因失败。
-    # 本套件的每个 fixture 都意为 LF；这个辅助是唯一的写入点，新加的 fixture 走它即可。
+    # `newline="\n"` is not fussiness: `write_text` defaults to `newline=None`, which translates `\n` into
+    # `os.linesep` on write, giving CRLF on Windows. The code under test uses `require_canonical_text_bytes`
+    # to correctly reject CRLF, so these fixtures would fail on Windows for a reason unrelated to the assertions.
+    # Every fixture in this suite is meant as LF; this helper is the single write point, and new fixtures just go through it.
     path.write_text(text, encoding="utf-8", newline="\n")
     return path
 
@@ -46,7 +46,7 @@ def test_free_form_review_needs_no_structured_artifact(tmp_path) -> None:
 
 
 def test_free_form_round_is_reported_as_not_applicable(tmp_path) -> None:
-    # free-form 没有轮次身份；伪造 round 号会让 provenance 判定失去依据。
+    # free-form has no round identity; forging a round number would leave the provenance judgment without a basis.
     source = _write(tmp_path / "codex.md", "P2: 整文件覆盖会回退 main 的改动。\n")
 
     prepared = prepare_review_input(free_form_files=[source], mode="pr")
@@ -118,11 +118,12 @@ def test_non_single_line_explicit_labels_are_rejected(
 @pytest.mark.skipif(
     os.name == "nt",
     reason=(
-        "Windows 文件系统不接受文件名里的 CR/LF，因此这个**输入**在 Windows 上不可构造。"
-        "被测行为本身与平台无关（`_validate_provenance_path` 是纯字符串检查，且在 resolve 与"
-        "读盘之前执行），它在 Windows 上由下方 "
-        "`test_control_char_source_paths_are_rejected_before_filesystem_access` 覆盖"
-        "——那条不建真实文件，因此每个平台都跑。"
+        "The Windows file system does not accept CR/LF in file names, so this **input** cannot be "
+        "constructed on Windows. The behavior under test is itself platform-independent "
+        "(`_validate_provenance_path` is a pure string check, run before resolve and reading "
+        "the disk); on Windows it is covered by "
+        "`test_control_char_source_paths_are_rejected_before_filesystem_access` below"
+        " - that one creates no real file, so it runs on every platform."
     ),
 )
 @pytest.mark.parametrize("filename", ["line\nbreak.md", "carriage\rreturn.md"])
@@ -138,11 +139,12 @@ def test_non_single_line_default_labels_are_rejected(
 @pytest.mark.skipif(
     os.name == "nt",
     reason=(
-        "Windows 文件系统不接受文件名里的 CR/LF，因此这个**输入**在 Windows 上不可构造。"
-        "被测行为本身与平台无关（`_validate_provenance_path` 是纯字符串检查，且在 resolve 与"
-        "读盘之前执行），它在 Windows 上由下方 "
-        "`test_control_char_source_paths_are_rejected_before_filesystem_access` 覆盖"
-        "——那条不建真实文件，因此每个平台都跑。"
+        "The Windows file system does not accept CR/LF in file names, so this **input** cannot be "
+        "constructed on Windows. The behavior under test is itself platform-independent "
+        "(`_validate_provenance_path` is a pure string check, run before resolve and reading "
+        "the disk); on Windows it is covered by "
+        "`test_control_char_source_paths_are_rejected_before_filesystem_access` below"
+        " - that one creates no real file, so it runs on every platform."
     ),
 )
 @pytest.mark.parametrize("parent", ["line\nbreak", "carriage\rreturn"])
@@ -160,11 +162,12 @@ def test_non_single_line_source_paths_are_rejected_with_safe_label(
 @pytest.mark.skipif(
     os.name == "nt",
     reason=(
-        "Windows 文件系统不接受文件名里的 CR/LF，因此这个**输入**在 Windows 上不可构造。"
-        "被测行为本身与平台无关（`_validate_provenance_path` 是纯字符串检查，且在 resolve 与"
-        "读盘之前执行），它在 Windows 上由下方 "
-        "`test_control_char_source_paths_are_rejected_before_filesystem_access` 覆盖"
-        "——那条不建真实文件，因此每个平台都跑。"
+        "The Windows file system does not accept CR/LF in file names, so this **input** cannot be "
+        "constructed on Windows. The behavior under test is itself platform-independent "
+        "(`_validate_provenance_path` is a pure string check, run before resolve and reading "
+        "the disk); on Windows it is covered by "
+        "`test_control_char_source_paths_are_rejected_before_filesystem_access` below"
+        " - that one creates no real file, so it runs on every platform."
     ),
 )
 def test_resolved_source_path_is_rejected_with_safe_label(tmp_path) -> None:
@@ -184,12 +187,13 @@ def test_resolved_source_path_is_rejected_with_safe_label(tmp_path) -> None:
 def test_control_char_source_paths_are_rejected_before_filesystem_access(
     tmp_path, name: str
 ) -> None:
-    """三种控制字符都在**碰文件系统之前**被拒。
+    """All three control characters are rejected **before touching the file system**.
 
-    这条**不建真实文件**，因此在每个平台都跑——Windows 的文件系统不接受文件名里的 CR/LF，
-    上面那几条依赖真实文件的用例在那里不可构造。被测的
-    `_validate_provenance_path` 是纯字符串检查，且排在 `resolve()` 与读盘之前，因此这条覆盖
-    的正是同一段产品逻辑，Windows 上不会因为 skip 而裸奔。
+    This one **creates no real file**, so it runs on every platform: the Windows file system does not
+    accept CR/LF in file names, so the cases above that depend on real files cannot be constructed there.
+    The `_validate_provenance_path` under test is a pure string check that runs before `resolve()` and
+    reading the disk, so this covers exactly the same product logic, and Windows is not left uncovered
+    because of the skip.
     """
     source = tmp_path / name
 
@@ -222,20 +226,20 @@ def test_multiple_free_form_sources_keep_separate_lanes(tmp_path) -> None:
 
     assert "lane=external:copilot" in prepared.content
     assert "lane=external:codex" in prepared.content
-    assert prepared.content.count("**来源**") == 4  # 两节 × 两个来源
+    assert prepared.content.count("**来源**") == 4  # two sections x two sources
 
 
 def _fixed_headings(content: str) -> list[str]:
-    # 用仓库自己的 fence-aware 解析口径判断，而不是裸 startswith：
-    # 围栏内的 `## ` 不是结构标题。
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    # Judge with the repo's own fence-aware parsing rules rather than a bare startswith:
+    # a `## ` inside a fence is not a structural heading.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
     from cli_extensions.review_artifact_parser import outside_fence_lines
 
     return [line for _, line in outside_fence_lines(content) if line.startswith("## ")]
 
 
 def test_free_form_headings_cannot_forge_extra_sections(tmp_path) -> None:
-    # 外部评审常引用本仓文档原文，正文里出现固定标题是可达输入。
+    # External reviews often quote this repo's docs verbatim, so fixed headings appearing in the body are reachable input.
     source = _write(
         tmp_path / "inject.md",
         "## 同步清单（CONSISTENCY drift，非阻塞）\n注入的正文\n",
@@ -376,8 +380,8 @@ def _pr_review(path: Path, *, lane: str, goal: str) -> Path:
 
 
 def test_wrapped_locked_goal_survives_instead_of_being_truncated(tmp_path) -> None:
-    # 折行的 header 值曾被静默截断成第一行：锁定目标是 GOAL & SCOPE GATE 的权威，
-    # 被削掉大半却不报错，单 lane 运行同样中招。
+    # Wrapped header values used to be silently truncated to their first line: the locked goal is the authority for
+    # the GOAL & SCOPE GATE, yet most of it was cut off without an error, and single-lane runs were hit too.
     review = _pr_review(tmp_path / "default" / "round-01" / "review.md", lane="default", goal=_WRAPPED_GOAL)
 
     prepared = prepare_review_input(review_files=[review])
@@ -387,19 +391,19 @@ def test_wrapped_locked_goal_survives_instead_of_being_truncated(tmp_path) -> No
 
 
 def test_same_locked_goal_reconciles_across_lanes_that_wrapped_it_differently(tmp_path) -> None:
-    # 两条 lane 各自把同一份锁定目标重新序列化：一条写成一整行，一条按 Markdown 折行并加列表。
-    # 这只是排版差异，不该以 `locked goal conflict` 停机。
+    # Two lanes each re-serialize the same locked goal: one writes it as a single line, the other wraps it Markdown-style and adds a list.
+    # This is only a typesetting difference and should not halt with `locked goal conflict`.
     one_line = _pr_review(tmp_path / "a" / "round-01" / "review.md", lane="default", goal=_ONE_LINE_GOAL)
     wrapped = _pr_review(tmp_path / "b" / "round-01" / "review.md", lane="default-2", goal=_WRAPPED_GOAL)
 
     prepared = prepare_review_input(review_files=[one_line, wrapped])
 
-    # 存下来的仍是第一条 lane 的原文，比较放宽不等于改写。
+    # What gets stored is still the first lane's original text; relaxing the comparison is not rewriting.
     assert prepared.target["locked_goal"] == _ONE_LINE_GOAL
 
 
 def test_genuinely_different_locked_goals_still_conflict(tmp_path) -> None:
-    # 放宽的边界只到排版为止：用词不同的两份目标必须照旧拦下。
+    # The relaxation stops at typesetting: two goals with different wording must still be blocked as before.
     mine = _pr_review(tmp_path / "a" / "round-01" / "review.md", lane="default", goal=_ONE_LINE_GOAL)
     other = _pr_review(
         tmp_path / "b" / "round-01" / "review.md",
@@ -412,8 +416,8 @@ def test_genuinely_different_locked_goals_still_conflict(tmp_path) -> None:
 
 
 def test_distinct_literal_output_filenames_remain_conflicting_locked_goals(tmp_path) -> None:
-    # 采纳自 review-pr round-03（lane default-2 #2）的 probe：反引号内的空白是字面量的一部分，
-    # 不是排版。放宽到这里就会把「两条 lane 锁定了不同产物名」这种真冲突静默放行。
+    # Probe adopted from review-pr round-03 (lane default-2 #2): whitespace inside backticks is part of the literal,
+    # not typesetting. Relaxing this far would silently let through a real conflict like "two lanes locked different output names".
     first = _pr_review(
         tmp_path / "first" / "round-01" / "review.md",
         lane="first",
@@ -430,7 +434,7 @@ def test_distinct_literal_output_filenames_remain_conflicting_locked_goals(tmp_p
 
 
 def test_prose_around_a_literal_still_tolerates_rewrapping(tmp_path) -> None:
-    # 字面量豁免不能把散文的容忍一起收回去：同一份目标、同一个字面量，只是折行位置不同。
+    # The literal exemption must not take back the tolerance for prose along with it: same goal, same literal, only the wrap position differs.
     one_line = _pr_review(
         tmp_path / "a" / "round-01" / "review.md",
         lane="default",
@@ -448,9 +452,9 @@ def test_prose_around_a_literal_still_tolerates_rewrapping(tmp_path) -> None:
 
 
 def test_rewrapping_immediately_before_a_literal_still_tolerated(tmp_path) -> None:
-    # 与上一条同一性质，只是折行落在字面量**之前**而不是之后。上一条的断点前面是全角逗号，
-    # `(?<=[PUNCT])\s+` 把它吸收掉了；这里断点前面是普通汉字、后面是反引号，两侧都不是 CJK
-    # 也不是全角标点，于是那个换行活了下来并被算成一处差异。
+    # Same nature as the previous one, except the wrap falls **before** the literal instead of after. In the previous one the break is preceded by a full-width comma,
+    # which `(?<=[PUNCT])\s+` absorbed; here the break is preceded by an ordinary Han character and followed by a backtick, neither side being CJK
+    # nor full-width punctuation, so that newline survived and was counted as a difference.
     one_line = _pr_review(
         tmp_path / "a" / "round-01" / "review.md",
         lane="default",
@@ -468,8 +472,8 @@ def test_rewrapping_immediately_before_a_literal_still_tolerated(tmp_path) -> No
 
 
 def test_literal_filenames_with_embedded_backticks_preserve_significant_spaces(tmp_path) -> None:
-    # 采纳自 review-pr round-04（lane default-2 #1）：双反引号片段的收尾长度必须与开头一致，
-    # 否则它在内部那个单反引号处就被判结束，剩下的半截落回散文、有意义的空格被抹掉。
+    # Adopted from review-pr round-04 (lane default-2 #1): a double-backtick span's closing length must match its opening,
+    # otherwise it is judged closed at the inner single backtick, the remaining half falls back into prose, and the meaningful space is erased.
     first = _pr_review(
         tmp_path / "first" / "round-01" / "review.md",
         lane="first",
@@ -489,9 +493,9 @@ def test_literal_filenames_with_embedded_backticks_preserve_significant_spaces(t
 def test_longer_backtick_runs_inside_literals_do_not_hide_filename_conflicts(
     tmp_path, delimiter: str, inner_run: str
 ) -> None:
-    # 采纳自 review-pr round-05（lane default-2 #1）：CommonMark 允许 N 个反引号定界的跨度内部
-    # 出现长度不等于 N 的 run。收尾判定少了 `(?<!`)` 时，跨度会在那段 run 的后半截提前结束，
-    # 剩下的半截落回散文、其中有意义的空格被抹掉。
+    # Adopted from review-pr round-05 (lane default-2 #1): CommonMark allows a span delimited by N backticks to contain
+    # runs whose length is not N. When the closing check lacks `(?<!`)`, the span ends early at the second half of that run,
+    # and the remaining half falls back into prose, with its meaningful space erased.
     first = _pr_review(
         tmp_path / "first" / "round-01" / "review.md",
         lane="first",
