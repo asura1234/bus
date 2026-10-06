@@ -814,7 +814,7 @@ impl App {
             params.direction
         {
             let Some((ws_idx, source_pane_id)) =
-                self.resolve_swap_source(params.pane_id.as_deref())
+                self.resolve_optional_pane(params.pane_id.as_deref())
             else {
                 return encode_error(id, "pane_not_found", "source pane not found");
             };
@@ -2129,10 +2129,6 @@ impl App {
                 Some((ws_idx, pane_id))
             }
         }
-    }
-
-    fn resolve_swap_source(&self, pane_id: Option<&str>) -> Option<(usize, PaneId)> {
-        self.resolve_optional_pane(pane_id)
     }
 
     fn directional_pane_target(
