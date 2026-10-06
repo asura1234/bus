@@ -12,22 +12,14 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   delete in the workflow log. *Why:* the right team changes as the work does,
   and the log keeps every change visible.
 - **Give a worker a fresh context before an unrelated task.** When a worker
-  agent has finished one task and the next one is unrelated, reset it first:
-  - Claude Code and Cursor: delete the agent and add a fresh one with the same
-    provider, PWD and role. Do not send `/clear` (Claude Code) or `/new-chat`
-    (Cursor) through Bus: the command runs, but Bus then loses the agent
-    (Claude Code: `session_invalidated`; Cursor: the next message never
-    settles).
-  - Codex: `bus send --room ROOM --to AGENT --text "/new"`, answer the "Where
-    should the new conversation run?" dialog with `bus agent choose` (Current
-    checkout), then free the `/new` request with
-    `bus request recover REQUEST_ID --confirm` (the request ID is in the send
-    result). Then send the new task.
-
-  *Why:* leftover context from the old task costs tokens and misleads the agent.
+  has finished one task and the next one is unrelated, run
+  `bus agent clear AGENT` first, then send the new task. It works for every
+  provider (Bus types `/clear` or `/new-chat` and keeps the agent bound). Never
+  send `/clear` with `bus send`. *Why:* leftover context from the old task costs
+  tokens and misleads the agent.
 - **At most 5 compactions per worker terminal.** `bus state` shows each agent's
-  `compactions.count`. At 5, have the agent write a handover note to a file, then
-  replace it with a fresh agent that starts from the note. *Why:* each
+  `compactions.count`. At 5, have the worker write a handover note to a file,
+  run `bus agent clear` on it, and have it continue from the note. *Why:* each
   compaction loses detail, and quality drops after several.
 - **Never clear or replace yourself.** The two rules above apply to workers
   only: the orchestrator never resets its own context and is never replaced

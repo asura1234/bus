@@ -150,7 +150,8 @@ Write the choice in the workflow's Coordination section.
   agent on another provider (`bus agent add`) and hand the work over.
 - **Watch context health.** `bus state` shows how many times each agent's
   context has been compacted. After 5 compactions, ask a worker to write a
-  handover note to a file, then start a fresh worker from that note. This
+  handover note to a file, run `bus agent clear` on it, and have it continue
+  from that note. Clear a worker the same way before an unrelated task. This
   limit is for workers only: the orchestrator never clears itself and is never
   replaced for compactions, because it carries the context of the whole effort.
 

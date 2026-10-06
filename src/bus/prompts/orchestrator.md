@@ -56,7 +56,9 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   X" for shared files; a separate worktree only when it is a must.
 - Use different models for review. Keep a provider for review only once its
   weekly allowance is below about 25% (`bus state` shows usage). After 5
-  compactions, have a worker write a handover note and start a fresh worker.
+  compactions, have a worker write a handover note, run `bus agent clear` on
+  it, and have it continue from the note. Run `bus agent clear` before giving a
+  worker an unrelated task too.
   This applies to workers only: never clear or replace yourself; you keep the
   context for the whole effort.
 - Ask the human before: merging, pushing to shared branches, publishing,
