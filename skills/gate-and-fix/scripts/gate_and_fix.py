@@ -26,12 +26,8 @@ CI_TOOLS = frozenset({"just", "cargo-nextest"})
 MAINTENANCE_TESTS = (
     "scripts.test_agent_detection_manifest_check",
     "scripts.test_bus_dev_acceptance",
-    "scripts.test_changelog",
-    "scripts.test_config_reference_check",
-    "scripts.test_docs_translation_parity",
     "scripts.test_hermes_integration_asset",
     "scripts.test_package_windows_conpty",
-    "scripts.test_preview",
     "scripts.test_sanitize_review_severity",
     "scripts.test_skill_migration_contract",
     "scripts.test_unix_installer",
@@ -133,16 +129,6 @@ def select_gates(
                     "src/integration/assets/opencode/herdr-agent-state.test.ts",
                     "src/integration/assets/opencode/herdr-tui-session.test.ts",
                 ),
-                requires_exclusive_execution=True,
-            ),
-            Gate(
-                "plugin-marketplace-install",
-                ("bun", "--cwd=workers/plugin-marketplace", "install", "--frozen-lockfile"),
-                requires_exclusive_execution=True,
-            ),
-            Gate(
-                "plugin-marketplace-test",
-                ("bun", "--cwd=workers/plugin-marketplace", "test"),
                 requires_exclusive_execution=True,
             ),
         ]

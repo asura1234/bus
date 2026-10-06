@@ -57,17 +57,16 @@ FOR each pending target in audit order
 STOP if a target cannot be audited from the current tree or overlaps another active owner. Leave it
 pending and report the exact target; never guess or mark it verified.
 
-Independently inspect whether changed user-visible behavior requires README, docs/next, website,
-changelog, or integration documentation. Edit only the documents genuinely affected by this change
-and preserve translation parity where the repository requires it.
+Independently inspect whether changed user-visible behavior requires README, docs/, HELP, or skill
+documentation. Edit only the documents genuinely affected by this change.
 
 ========== VERIFY ==========
 
 Format only documents changed by this run.
 
-Run the directly affected docs, maintenance, or integration-asset tests, then the global gates:
+Run the directly affected docs, maintenance, or integration-asset tests, then the global gate:
 
-  just docs-contract-test
+  just maintenance-test
 
 IF a global gate fails only on unrelated pre-existing/task-owned documents
   Preserve the exact failure as an exclusion; do not edit outside this run's targets.

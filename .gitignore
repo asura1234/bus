@@ -13,14 +13,8 @@ __pycache__/
 !/docs/orchestrator-guide.md
 !/docs/guides/
 !/docs/guides/**
-!/docs/next/
-!/docs/next/**
-!/docs/preview/
-!/docs/preview/**
 !/docs/templates/
 !/docs/templates/**
-!/docs/versions/
-!/docs/versions/**
 !/docs/workflows/
 !/docs/workflows/**
 /.local/
@@ -34,6 +28,3 @@ __pycache__/
 /.pi/cache
 /result
 /result-*
-
-/.wrangler/
-**/.wrangler/
