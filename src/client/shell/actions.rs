@@ -878,14 +878,6 @@ impl ClientShellState {
                     _ => unreachable!("relative agent action"),
                 };
                 let pane_id = agents[next].clone();
-                if !self
-                    .hits
-                    .agents
-                    .iter()
-                    .any(|(_, visible_pane_id)| visible_pane_id == &pane_id)
-                {
-                    self.agent_scroll = next.min(self.hits.agent_max_scroll);
-                }
                 Some(Method::PaneFocus(PaneTarget { pane_id }))
             }
             KeybindAction::SwitchWorkspace(index) => {
@@ -895,7 +887,6 @@ impl ClientShellState {
                     .get(entries.get(index)?.index)?
                     .workspace_id
                     .clone();
-                self.reveal_workspace(&workspace_id);
                 Some(Method::WorkspaceFocus(WorkspaceTarget { workspace_id }))
             }
             KeybindAction::PreviousWorkspace | KeybindAction::NextWorkspace => {
@@ -918,7 +909,6 @@ impl ClientShellState {
                 let workspace_id = snapshot.workspaces[entries[next].index]
                     .workspace_id
                     .clone();
-                self.reveal_workspace(&workspace_id);
                 Some(Method::WorkspaceFocus(WorkspaceTarget { workspace_id }))
             }
             KeybindAction::SwitchTab(index) => {

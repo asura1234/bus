@@ -1,24 +1,6 @@
 use super::*;
 use ratatui::widgets::{Clear, Widget};
 
-pub(super) fn render_mobile_banner(
-    buffer: &mut Buffer,
-    area: Rect,
-    notice: &ClientVisibleEndpointNotice,
-    offset_for_warning: bool,
-    palette: &Palette,
-) -> Rect {
-    super::notifications::render_mobile_notice_banner(
-        buffer,
-        area,
-        &notice.title,
-        Some(&notice.body),
-        palette.red,
-        offset_for_warning,
-        palette,
-    )
-}
-
 pub(super) fn render_lifecycle_banner(
     buffer: &mut Buffer,
     area: Rect,

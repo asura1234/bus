@@ -132,7 +132,6 @@ impl ClientShellConfig {
             switch_ascii_input_source_in_prefix: config
                 .experimental
                 .switch_ascii_input_source_in_prefix,
-            local_config_path: crate::config::config_path(),
             preferences_path: None,
             preferences: preferences::ClientChromePreferences::default(),
             startup_config_diagnostic: None,
@@ -285,70 +284,6 @@ impl ClientShellConfig {
         diagnostics
     }
 
-    pub(super) fn layout(
-        &self,
-        cols: u16,
-        rows: u16,
-        sidebar_collapsed: bool,
-        tab_count: usize,
-        sidebar_width: u16,
-    ) -> ClientShellLayout {
-        if cols <= self.mobile_width_threshold {
-            let header_height = rows.min(2);
-            return ClientShellLayout {
-                sidebar: Rect::default(),
-                tab_bar: Rect::default(),
-                mobile_header: Rect::new(0, 0, cols, header_height),
-                pane_surface: Rect::new(0, header_height, cols, rows.saturating_sub(header_height)),
-            };
-        }
-
-        let sidebar_width = if sidebar_collapsed {
-            match self.sidebar_collapsed_mode {
-                SidebarCollapsedModeConfig::Compact => 4,
-                SidebarCollapsedModeConfig::Hidden => 0,
-            }
-        } else {
-            let (min, max) = crate::config::validated_sidebar_bounds(
-                self.sidebar_min_width,
-                self.sidebar_max_width,
-            )
-            .unwrap_or((18, 36));
-            sidebar_width.clamp(min, max)
-        }
-        .min(cols.saturating_sub(1));
-        let main = Rect::new(sidebar_width, 0, cols.saturating_sub(sidebar_width), rows);
-        let show_tab_bar = rows > 1 && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
-        let tab_height = u16::from(show_tab_bar);
-        let (tab_bar, pane_surface) = match self.tab_bar_position {
-            TabBarPositionConfig::Top => (
-                Rect::new(main.x, 0, main.width, tab_height),
-                Rect::new(
-                    main.x,
-                    tab_height,
-                    main.width,
-                    rows.saturating_sub(tab_height),
-                ),
-            ),
-            TabBarPositionConfig::Bottom => (
-                Rect::new(
-                    main.x,
-                    rows.saturating_sub(tab_height),
-                    main.width,
-                    tab_height,
-                ),
-                Rect::new(main.x, 0, main.width, rows.saturating_sub(tab_height)),
-            ),
-        };
-
-        ClientShellLayout {
-            sidebar: Rect::new(0, 0, sidebar_width, rows),
-            tab_bar,
-            mobile_header: Rect::default(),
-            pane_surface,
-        }
-    }
-
     pub(crate) fn initial_surface_size(&self, cols: u16, rows: u16) -> ClientSurfaceSize {
         if crate::bus::entry::data_dir().is_some() {
             let surface = super::bus::layout(cols, rows).pane_surface;
@@ -357,24 +292,9 @@ impl ClientShellConfig {
                 rows: surface.height.max(1),
             };
         }
-        let sidebar_collapsed = self
-            .preferences
-            .sidebar_collapsed
-            .unwrap_or(self.sidebar_start_collapsed);
-        let (min_width, max_width) =
-            crate::config::validated_sidebar_bounds(self.sidebar_min_width, self.sidebar_max_width)
-                .unwrap_or((18, 36));
-        let sidebar_width = self
-            .preferences
-            .sidebar_width
-            .unwrap_or(self.sidebar_width)
-            .clamp(min_width, max_width);
-        let surface = self
-            .layout(cols, rows, sidebar_collapsed, 0, sidebar_width)
-            .pane_surface;
         ClientSurfaceSize {
-            cols: surface.width.max(1),
-            rows: surface.height.max(1),
+            cols: cols.max(1),
+            rows: rows.max(1),
         }
     }
 }
@@ -410,10 +330,6 @@ mod tests {
             crate::config::StatusIndicatorStyle::Symbols
         );
         assert_eq!(shell.agents.row_gap, 2);
-        assert_eq!(
-            shell.agents.rows[0][0].style_for_value("Local").bold,
-            Some(true)
-        );
         let previous = shell.agents.clone();
         shell.apply_live_config(
             &Config::default(),
@@ -425,30 +341,6 @@ mod tests {
             shell.keybinds.prefix,
             (KeyCode::Char('a'), KeyModifiers::CONTROL)
         );
-    }
-
-    #[test]
-    fn initial_surface_size_uses_persisted_endpoint_chrome() {
-        let path = std::env::temp_dir().join(format!(
-            "herdr-initial-shell-preferences-{}.json",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        preferences::store(
-            &path,
-            preferences::ClientChromePreferences {
-                sidebar_width: Some(31),
-                sidebar_collapsed: Some(true),
-                ..preferences::ClientChromePreferences::default()
-            },
-        )
-        .expect("persist endpoint chrome");
-        let config =
-            ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
-        let initial = config.initial_surface_size(100, 30);
-        let state = ClientShellState::new(config);
-        assert_eq!(initial, state.surface_size(100, 30));
-        std::fs::remove_file(path).expect("remove endpoint chrome");
     }
 
     #[test]

@@ -276,6 +276,9 @@ fn selection_edge_drag_requests_scroll_and_timer_continues_it() {
         max_offset_from_bottom: 20,
         viewport_rows: 2,
     });
+    // Leave a row above the pane so the drag can leave its top edge.
+    pane_surface.panes[0].rect.y = 1;
+    pane_surface.panes[0].inner_rect.y = 1;
     state.set_pane_surface(pane_surface);
     state.compose(106, 20).expect("composed frame");
     let pane = state.hits.panes[0].clone();

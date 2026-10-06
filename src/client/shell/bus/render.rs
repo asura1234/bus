@@ -2033,8 +2033,6 @@ pub(in crate::client::shell) fn layout(
     crate::client::shell::ClientShellLayout {
         sidebar: Rect::new(0, 0, width, rows),
         pane_surface: Rect::new(width, 0, cols - width, rows),
-        tab_bar: Rect::default(),
-        mobile_header: Rect::default(),
     }
 }
 

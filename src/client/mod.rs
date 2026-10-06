@@ -1405,7 +1405,6 @@ async fn run_client_loop(
                     let (effects, outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
-                        outcome.repaint |= shell.tick_status_animation(now);
                         outcome.repaint |= shell.tick_bus();
                         outcome.detach |= shell.bus_exit_ready();
                         for expired in expired_endpoints {

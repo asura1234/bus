@@ -6,46 +6,6 @@ impl ClientContextMenuOverlay {
 
         let item = |label, action| ClientContextMenuItem { label, action };
         match &self.target {
-            ClientContextMenuTarget::Workspace { is_git: false, .. } => {
-                vec![item("Rename", Action::Rename), item("Close", Action::Close)]
-            }
-            ClientContextMenuTarget::Workspace {
-                is_linked_worktree: false,
-                has_worktree_children: false,
-                ..
-            } => vec![
-                item("Rename", Action::Rename),
-                item("Close", Action::Close),
-                item("New worktree", Action::NewWorktree),
-                item("Open worktree...", Action::OpenWorktree),
-            ],
-            ClientContextMenuTarget::Workspace {
-                is_linked_worktree: true,
-                ..
-            } => vec![
-                item("Rename", Action::Rename),
-                item("Close", Action::Close),
-                item("Delete worktree checkout...", Action::RemoveWorktree),
-            ],
-            ClientContextMenuTarget::Workspace {
-                has_worktree_children: true,
-                collapsed,
-                ..
-            } => vec![
-                item("Rename", Action::Rename),
-                item("Close group", Action::Close),
-                item("New worktree", Action::NewWorktree),
-                item("Open worktree...", Action::OpenWorktree),
-                item(
-                    if *collapsed { "Expand" } else { "Collapse" },
-                    Action::ToggleGroup,
-                ),
-            ],
-            ClientContextMenuTarget::Tab { .. } => vec![
-                item("New tab", Action::NewTab),
-                item("Rename", Action::Rename),
-                item("Close", Action::Close),
-            ],
             ClientContextMenuTarget::Pane {
                 source_pane_id,
                 has_manual_label,
@@ -80,67 +40,6 @@ impl ClientContextMenuOverlay {
 }
 
 impl ClientShellState {
-    pub(super) fn open_workspace_context_menu(&mut self, workspace_id: String, x: u16, y: u16) {
-        let Some(snapshot) = self.snapshot.as_deref() else {
-            return;
-        };
-        let Some(workspace) = snapshot
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.workspace_id == workspace_id)
-        else {
-            return;
-        };
-        let worktree = workspace.worktree.as_ref();
-        let has_worktree_children = worktree.is_some_and(|worktree| {
-            !worktree.is_linked_worktree
-                && snapshot
-                    .workspaces
-                    .iter()
-                    .filter(|candidate| {
-                        candidate
-                            .worktree
-                            .as_ref()
-                            .is_some_and(|candidate| candidate.key == worktree.key)
-                    })
-                    .count()
-                    >= 2
-        });
-        let collapsed =
-            worktree.is_some_and(|worktree| self.collapsed_groups.contains(&worktree.key));
-        self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
-            target: ClientContextMenuTarget::Workspace {
-                workspace_id,
-                is_git: worktree.is_some() || workspace.branch.is_some(),
-                is_linked_worktree: worktree.is_some_and(|worktree| worktree.is_linked_worktree),
-                has_worktree_children,
-                collapsed,
-            },
-            x,
-            y,
-            highlighted: 0,
-        }));
-    }
-
-    pub(super) fn open_tab_context_menu(&mut self, tab_id: String, x: u16, y: u16) {
-        let Some(tab) = self
-            .snapshot
-            .as_deref()
-            .and_then(|snapshot| snapshot.tabs.iter().find(|tab| tab.tab_id == tab_id))
-        else {
-            return;
-        };
-        self.overlay = Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
-            target: ClientContextMenuTarget::Tab {
-                tab_id,
-                workspace_id: tab.workspace_id.clone(),
-            },
-            x,
-            y,
-            highlighted: 0,
-        }));
-    }
-
     pub(super) fn open_pane_context_menu(&mut self, pane_id: String, x: u16, y: u16) {
         let Some(snapshot) = self.snapshot.as_deref() else {
             return;
@@ -191,13 +90,6 @@ impl ClientShellState {
             return;
         };
         match menu.target {
-            ClientContextMenuTarget::Workspace { workspace_id, .. } => {
-                self.activate_workspace_context_action(workspace_id, action, outcome)
-            }
-            ClientContextMenuTarget::Tab {
-                tab_id,
-                workspace_id,
-            } => self.activate_tab_context_action(tab_id, workspace_id, action, outcome),
             ClientContextMenuTarget::Pane {
                 pane_id,
                 workspace_id,
@@ -214,157 +106,6 @@ impl ClientShellState {
             ),
         }
         outcome.repaint = true;
-    }
-
-    fn activate_workspace_context_action(
-        &mut self,
-        workspace_id: String,
-        action: ClientContextMenuAction,
-        outcome: &mut ClientShellInput,
-    ) {
-        use crate::input::KeybindAction;
-
-        match action {
-            ClientContextMenuAction::Rename => {
-                let label = self
-                    .snapshot
-                    .as_deref()
-                    .and_then(|snapshot| {
-                        snapshot
-                            .workspaces
-                            .iter()
-                            .find(|workspace| workspace.workspace_id == workspace_id)
-                    })
-                    .map(|workspace| workspace.label.clone());
-                if let Some(label) = label {
-                    self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-                        title: "rename workspace",
-                        input: label,
-                        replace_on_type: false,
-                        target: ClientRenameTarget::Workspace { workspace_id },
-                    }));
-                }
-            }
-            ClientContextMenuAction::Close => {
-                if self.config.confirm_close {
-                    self.open_confirm_close_overlay(workspace_id);
-                } else {
-                    self.push_endpoint_method(
-                        crate::api::schema::Method::WorkspaceClose(
-                            crate::api::schema::WorkspaceCloseParams {
-                                workspace_id,
-                                close_group: true,
-                            },
-                        ),
-                        outcome,
-                    );
-                }
-            }
-            ClientContextMenuAction::NewWorktree => {
-                self.begin_worktree_action_for(KeybindAction::NewWorktree, workspace_id, outcome)
-            }
-            ClientContextMenuAction::OpenWorktree => {
-                self.begin_worktree_action_for(KeybindAction::OpenWorktree, workspace_id, outcome)
-            }
-            ClientContextMenuAction::RemoveWorktree => {
-                self.begin_worktree_action_for(KeybindAction::RemoveWorktree, workspace_id, outcome)
-            }
-            ClientContextMenuAction::ToggleGroup => {
-                let key = self.snapshot.as_deref().and_then(|snapshot| {
-                    snapshot
-                        .workspaces
-                        .iter()
-                        .find(|workspace| workspace.workspace_id == workspace_id)
-                        .and_then(|workspace| workspace.worktree.as_ref())
-                        .map(|worktree| worktree.key.clone())
-                });
-                if let Some(key) = key {
-                    if !self.collapsed_groups.remove(&key) {
-                        self.collapsed_groups.insert(key);
-                    }
-                    self.persist_chrome_preferences(outcome);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn activate_tab_context_action(
-        &mut self,
-        tab_id: String,
-        workspace_id: String,
-        action: ClientContextMenuAction,
-        outcome: &mut ClientShellInput,
-    ) {
-        use crate::api::schema::{Method, TabTarget};
-
-        self.push_endpoint_method(
-            Method::TabFocus(TabTarget {
-                tab_id: tab_id.clone(),
-            }),
-            outcome,
-        );
-        match action {
-            ClientContextMenuAction::NewTab => {
-                if self.config.prompt_new_tab_name {
-                    let default_name = (self
-                        .snapshot
-                        .as_deref()
-                        .map(|snapshot| {
-                            snapshot
-                                .tabs
-                                .iter()
-                                .filter(|tab| tab.workspace_id == workspace_id)
-                                .count()
-                        })
-                        .unwrap_or(0)
-                        + 1)
-                    .to_string();
-                    self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-                        title: "new tab",
-                        input: default_name.clone(),
-                        replace_on_type: true,
-                        target: ClientRenameTarget::NewTab {
-                            workspace_id,
-                            default_name,
-                        },
-                    }));
-                } else {
-                    self.push_endpoint_method(
-                        Method::TabCreate(crate::api::schema::TabCreateParams {
-                            workspace_id: Some(workspace_id),
-                            cwd: None,
-                            focus: true,
-                            label: None,
-                            env: Default::default(),
-                        }),
-                        outcome,
-                    );
-                }
-            }
-            ClientContextMenuAction::Rename => {
-                let tab = self
-                    .snapshot
-                    .as_deref()
-                    .and_then(|snapshot| snapshot.tabs.iter().find(|tab| tab.tab_id == tab_id));
-                if let Some(tab) = tab {
-                    self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-                        title: "rename tab",
-                        input: tab.label.clone(),
-                        replace_on_type: false,
-                        target: ClientRenameTarget::Tab {
-                            tab_id,
-                            auto_name: !tab.custom_label,
-                            original_name: tab.label.clone(),
-                        },
-                    }));
-                }
-            }
-            ClientContextMenuAction::Close => {
-                self.push_endpoint_method(Method::TabClose(TabTarget { tab_id }), outcome);
-            }
-            _ => {}
-        }
     }
 
     fn activate_pane_context_action(
@@ -463,7 +204,6 @@ impl ClientShellState {
             ClientContextMenuAction::ClosePane => {
                 self.push_endpoint_method(Method::PaneClose(PaneTarget { pane_id }), outcome)
             }
-            _ => {}
         }
     }
 }

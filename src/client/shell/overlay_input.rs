@@ -1,22 +1,6 @@
 use super::*;
 
 impl ClientShellState {
-    pub(super) fn complete_onboarding(&mut self, outcome: &mut ClientShellInput) {
-        if self.snapshot.is_none() {
-            return;
-        }
-        if let Err(error) = crate::config::update_file_at(
-            &self.config.local_config_path,
-            "onboarding setting",
-            |content| crate::config::upsert_top_level_bool(content, "onboarding", false),
-        ) {
-            self.set_local_config_diagnostic(Some(error));
-        }
-        self.config.startup_onboarding = false;
-        self.open_settings_overlay();
-        outcome.repaint = true;
-    }
-
     pub(super) fn open_navigator_overlay(&mut self) {
         let expanded_workspaces =
             super::aggregate_navigation::cached_endpoint_snapshots(&self.endpoints)
@@ -298,42 +282,6 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) {
         use crossterm::event::KeyModifiers;
-
-        if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
-            if matches!(
-                key.code,
-                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
-            ) {
-                self.complete_onboarding(outcome);
-            }
-            return;
-        }
-
-        if matches!(self.overlay, Some(ClientShellOverlay::GlobalMenu(_))) {
-            match key.code {
-                KeyCode::Esc => {
-                    self.overlay = None;
-                    outcome.repaint = true;
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    self.move_global_menu_selection(-1);
-                    outcome.repaint = true;
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    self.move_global_menu_selection(1);
-                    outcome.repaint = true;
-                }
-                KeyCode::Enter => {
-                    let highlighted = match self.overlay.as_ref() {
-                        Some(ClientShellOverlay::GlobalMenu(menu)) => menu.highlighted,
-                        _ => return,
-                    };
-                    self.activate_global_menu_item(highlighted, outcome);
-                }
-                _ => {}
-            }
-            return;
-        }
 
         if self.route_settings_key(key, outcome) {
             return;

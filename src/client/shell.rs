@@ -12,27 +12,22 @@ mod endpoint_agent_state;
 mod endpoint_agents;
 mod endpoint_navigation;
 mod endpoint_notices;
-mod endpoint_sidebar;
 mod endpoints;
 pub(super) use endpoints::*;
-mod global_menu;
 mod graphics;
 mod input;
 mod input_source;
-mod mobile;
 mod mouse;
 mod notification_policy;
 mod notifications;
 mod overlay_input;
 mod preferences;
 mod render;
-mod scroll;
 mod settings;
 mod state;
 mod surface_patch;
 mod worktrees;
 
-pub(in crate::client::shell) use render::sidebar;
 pub(crate) use state::*;
 #[cfg(test)]
 pub(super) use surface_patch::apply_composed_surface_patch;
@@ -53,9 +48,9 @@ use crate::config::{
     TabBarPositionConfig,
 };
 use crate::protocol::{
-    ClientMessage, ClientMousePosition, ClientPaneInputEvent, ClientShellSnapshot, ClientShellTab,
-    ClientShellWorkspace, ClientSurfaceSize, FrameData, PaneSurfaceFrame, SemanticNotification,
-    SemanticNotificationKind, SemanticNotificationSound,
+    ClientMessage, ClientMousePosition, ClientPaneInputEvent, ClientShellSnapshot,
+    ClientSurfaceSize, FrameData, PaneSurfaceFrame, SemanticNotification, SemanticNotificationKind,
+    SemanticNotificationSound,
 };
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
@@ -213,52 +208,6 @@ fn status_icon(
     }
 }
 
-fn sidebar_agent_status_word(status: crate::api::schema::AgentStatus) -> Option<&'static str> {
-    use crate::api::schema::AgentStatus;
-
-    match status {
-        AgentStatus::Working => Some("Working"),
-        AgentStatus::Blocked => Some("Blocked"),
-        AgentStatus::Idle | AgentStatus::Done | AgentStatus::Unknown => None,
-    }
-}
-
-fn sidebar_agent_status_styles(
-    status: crate::api::schema::AgentStatus,
-    animation_phase: u8,
-    palette: &Palette,
-) -> Vec<Style> {
-    use crate::api::schema::AgentStatus;
-
-    let Some(word) = sidebar_agent_status_word(status) else {
-        return Vec::new();
-    };
-    let length = word.chars().count();
-    let wave_head = usize::from(animation_phase) % length;
-    word.chars()
-        .enumerate()
-        .map(|(index, _)| {
-            let modifier = match status {
-                AgentStatus::Working if index == wave_head => Modifier::BOLD,
-                AgentStatus::Working if index.abs_diff(wave_head) == 1 => Modifier::empty(),
-                AgentStatus::Working => Modifier::DIM,
-                AgentStatus::Blocked => match animation_phase % 6 {
-                    0 | 5 => Modifier::DIM,
-                    2 | 3 => Modifier::BOLD,
-                    _ => Modifier::empty(),
-                },
-                AgentStatus::Idle | AgentStatus::Done | AgentStatus::Unknown => Modifier::empty(),
-            };
-            let color = if status == AgentStatus::Working {
-                palette.green
-            } else {
-                palette.red
-            };
-            Style::default().fg(color).add_modifier(modifier)
-        })
-        .collect()
-}
-
 fn status_dot(status: crate::api::schema::AgentStatus) -> &'static str {
     status_icon(status, crate::config::StatusIndicatorStyle::Dots)
 }
@@ -271,17 +220,6 @@ fn status_priority(status: crate::api::schema::AgentStatus) -> u8 {
         AgentStatus::Working => 2,
         AgentStatus::Idle => 1,
         AgentStatus::Unknown => 0,
-    }
-}
-
-fn status_text(status: crate::api::schema::AgentStatus) -> &'static str {
-    use crate::api::schema::AgentStatus;
-    match status {
-        AgentStatus::Working => "working",
-        AgentStatus::Blocked => "blocked",
-        AgentStatus::Done => "done",
-        AgentStatus::Idle => "idle",
-        AgentStatus::Unknown => "unknown",
     }
 }
 

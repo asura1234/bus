@@ -1,9 +1,5 @@
 use super::*;
 
-pub(super) const MIN_TAB_WIDTH: u16 = 8;
-pub(super) const NEW_TAB_WIDTH: u16 = 3;
-pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
-
 fn pane_surface_row<'a>(
     surface: &'a PaneSurfaceFrame,
     pane: &crate::protocol::PaneSurfacePane,
@@ -94,7 +90,6 @@ pub(crate) struct ClientShellConfig {
     pub(super) right_click_passthrough_modifiers: Option<crossterm::event::KeyModifiers>,
     pub(super) redraw_on_focus_gained: bool,
     pub(super) switch_ascii_input_source_in_prefix: bool,
-    pub(super) local_config_path: std::path::PathBuf,
     pub(super) preferences_path: Option<std::path::PathBuf>,
     pub(super) preferences: preferences::ClientChromePreferences,
     pub(super) startup_config_diagnostic: Option<String>,
@@ -104,64 +99,15 @@ pub(crate) struct ClientShellConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ClientShellLayout {
     pub sidebar: Rect,
-    pub tab_bar: Rect,
-    pub mobile_header: Rect,
     pub pane_surface: Rect,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ClientMobileTarget {
-    Machine(ClientEndpointId),
-    NewWorkspace,
-    Workspace {
-        endpoint_id: ClientEndpointId,
-        workspace_id: String,
-    },
-    NewTab,
-    Tab {
-        endpoint_id: ClientEndpointId,
-        tab_id: String,
-    },
-    Agent {
-        endpoint_id: ClientEndpointId,
-        pane_id: String,
-    },
-    Menu(usize),
 }
 
 #[derive(Default)]
 pub(super) struct ShellHitMap {
-    pub(super) machines: Vec<MachineHit>,
-    pub(super) workspaces: Vec<WorkspaceHit>,
-    pub(super) workspace_body: Rect,
-    pub(super) workspace_scrollbar: Rect,
-    pub(super) workspace_scroll_metrics: Option<crate::pane::ScrollMetrics>,
-    pub(super) workspace_max_scroll: usize,
-    pub(super) tabs: Vec<(Rect, String)>,
     pub(super) panes: Vec<PaneHit>,
     pub(super) popup: Option<PaneHit>,
     pub(super) pane_splits: Vec<PaneSplitHit>,
-    pub(super) agents: Vec<(Rect, String)>,
-    pub(super) endpoint_agents: Vec<(Rect, ClientEndpointId, String)>,
-    pub(super) agent_body: Rect,
-    pub(super) agent_scrollbar: Rect,
-    pub(super) agent_scroll_metrics: Option<crate::pane::ScrollMetrics>,
-    pub(super) agent_max_scroll: usize,
-    pub(super) agent_sort_toggle: Rect,
-    pub(super) sidebar_divider: Rect,
-    pub(super) sidebar_section_divider: Rect,
-    pub(super) sidebar_toggle: Rect,
-    pub(super) new_workspace: Rect,
-    pub(super) new_tab: Rect,
-    pub(super) tab_scroll_left: Rect,
-    pub(super) tab_scroll_right: Rect,
-    pub(super) mobile_switch: Rect,
-    pub(super) mobile_close: Rect,
-    pub(super) mobile_targets: Vec<(Rect, ClientMobileTarget)>,
-    pub(super) mobile_max_scroll: usize,
-    pub(super) global_launcher: Rect,
     pub(super) notification_toast: Rect,
-    pub(super) global_menu_rows: Vec<(Rect, usize)>,
     pub(super) context_menu_rows: Vec<(Rect, usize)>,
     pub(super) overlay_primary: Rect,
     pub(super) overlay_clear: Rect,
@@ -212,40 +158,9 @@ pub(super) struct ClientPaneMouseGesture {
     pub(super) last_position: crate::protocol::ClientMousePosition,
 }
 
-pub(super) struct ClientWorkspacePress {
-    pub(super) endpoint_id: ClientEndpointId,
-    pub(super) workspace_id: String,
-    pub(super) start_column: u16,
-    pub(super) start_row: u16,
-}
-
-pub(super) struct ClientTabPress {
-    pub(super) tab_id: String,
-    pub(super) workspace_id: String,
-    pub(super) start_column: u16,
-    pub(super) start_row: u16,
-}
-
 pub(super) enum ClientChromeDrag {
-    SidebarWidth,
-    SidebarSection,
-    WorkspaceScrollbar {
-        grab_row_offset: u16,
-    },
-    AgentScrollbar {
-        grab_row_offset: u16,
-    },
     HelpScrollbar {
         grab_row_offset: u16,
-    },
-    Tab {
-        tab_id: String,
-        workspace_id: String,
-        insert_index: Option<usize>,
-    },
-    Workspace {
-        source_workspace_id: String,
-        target: Option<(Option<String>, u16)>,
     },
     PaneSplit {
         hit: PaneSplitHit,
@@ -260,14 +175,6 @@ pub(super) enum ClientChromeDrag {
         last_sent_offset: Option<usize>,
         last_sent_at: Option<std::time::Instant>,
     },
-}
-
-pub(super) struct WorkspaceHit {
-    pub(super) rect: Rect,
-    pub(super) endpoint_id: ClientEndpointId,
-    pub(super) workspace_id: String,
-    pub(super) indented: bool,
-    pub(super) group_toggle: Option<(Rect, String)>,
 }
 
 #[derive(Debug)]
@@ -310,7 +217,6 @@ pub(super) enum ClientShellMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClientShellOverlayKind {
-    Onboarding,
     Rename,
     ConfirmClose,
     Help,
@@ -319,7 +225,6 @@ pub(super) enum ClientShellOverlayKind {
     WorktreeOpen,
     WorktreeRemove,
     ContextMenu,
-    GlobalMenu,
     Settings,
 }
 
@@ -408,11 +313,6 @@ pub(super) struct ClientHelpOverlay {
     pub(super) query: String,
     pub(super) search_focused: bool,
     pub(super) scroll: usize,
-}
-
-#[derive(Debug)]
-pub(super) struct ClientGlobalMenuOverlay {
-    pub(super) highlighted: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -533,13 +433,6 @@ pub(super) struct ClientWorktreeRemoveOverlay {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClientContextMenuAction {
-    Rename,
-    Close,
-    NewWorktree,
-    OpenWorktree,
-    RemoveWorktree,
-    ToggleGroup,
-    NewTab,
     RenamePane,
     ClearPaneName,
     SwapWithFocusedPane,
@@ -552,17 +445,6 @@ pub(super) enum ClientContextMenuAction {
 
 #[derive(Debug)]
 pub(super) enum ClientContextMenuTarget {
-    Workspace {
-        workspace_id: String,
-        is_git: bool,
-        is_linked_worktree: bool,
-        has_worktree_children: bool,
-        collapsed: bool,
-    },
-    Tab {
-        tab_id: String,
-        workspace_id: String,
-    },
     Pane {
         pane_id: String,
         workspace_id: String,
@@ -594,7 +476,6 @@ pub(super) struct ClientConfirmCloseOverlay {
 
 #[derive(Debug)]
 pub(super) enum ClientShellOverlay {
-    Onboarding,
     Rename(ClientRenameOverlay),
     ConfirmClose(ClientConfirmCloseOverlay),
     Help(ClientHelpOverlay),
@@ -603,14 +484,12 @@ pub(super) enum ClientShellOverlay {
     WorktreeOpen(ClientWorktreeOpenOverlay),
     WorktreeRemove(ClientWorktreeRemoveOverlay),
     ContextMenu(ClientContextMenuOverlay),
-    GlobalMenu(ClientGlobalMenuOverlay),
     Settings(ClientSettingsOverlay),
 }
 
 impl ClientShellOverlay {
     pub(super) fn kind(&self) -> ClientShellOverlayKind {
         match self {
-            Self::Onboarding => ClientShellOverlayKind::Onboarding,
             Self::Rename(_) => ClientShellOverlayKind::Rename,
             Self::ConfirmClose(_) => ClientShellOverlayKind::ConfirmClose,
             Self::Help(_) => ClientShellOverlayKind::Help,
@@ -619,7 +498,6 @@ impl ClientShellOverlay {
             Self::WorktreeOpen(_) => ClientShellOverlayKind::WorktreeOpen,
             Self::WorktreeRemove(_) => ClientShellOverlayKind::WorktreeRemove,
             Self::ContextMenu(_) => ClientShellOverlayKind::ContextMenu,
-            Self::GlobalMenu(_) => ClientShellOverlayKind::GlobalMenu,
             Self::Settings(_) => ClientShellOverlayKind::Settings,
         }
     }
@@ -863,12 +741,7 @@ pub(crate) struct ClientShellState {
     pub(super) sidebar_section_split: f32,
     pub(super) sidebar_section_split_manual: bool,
     pub(super) agent_panel_sort_manual: bool,
-    pub(super) status_animation_phase: u8,
-    pub(super) status_animation_last_tick: Option<std::time::Instant>,
-    pub(super) last_sidebar_divider_click: Option<std::time::Instant>,
     pub(super) chrome_drag: Option<ClientChromeDrag>,
-    pub(super) workspace_press: Option<ClientWorkspacePress>,
-    pub(super) tab_press: Option<ClientTabPress>,
     pub(super) collapsed_groups: HashSet<String>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
@@ -883,7 +756,6 @@ pub(crate) struct ClientShellState {
     pub(super) hits: ShellHitMap,
     pub(super) endpoints: Vec<ClientShellEndpoint>,
     pub(super) active_endpoint_id: ClientEndpointId,
-    pub(super) collapsed_endpoints: HashSet<ClientEndpointId>,
     pub(super) mode: ClientShellMode,
     pub(super) navigate_workspace_id: Option<String>,
     pub(super) overlay: Option<ClientShellOverlay>,
@@ -933,17 +805,13 @@ pub(crate) struct ClientShellState {
 #[derive(Clone, Copy)]
 pub(super) struct WorkspaceEntry {
     pub(super) index: usize,
-    pub(super) indented: bool,
-    pub(super) last_child: bool,
 }
 
 impl ClientShellState {
     pub(crate) fn new(mut config: ClientShellConfig) -> Self {
         let preferences = config.preferences.clone();
         let local_config_diagnostic = config.startup_config_diagnostic.take();
-        let overlay = config
-            .startup_onboarding
-            .then_some(ClientShellOverlay::Onboarding);
+        let overlay = None;
         let sidebar_collapsed = preferences
             .sidebar_collapsed
             .unwrap_or(config.sidebar_start_collapsed);
@@ -983,12 +851,7 @@ impl ClientShellState {
             sidebar_section_split,
             sidebar_section_split_manual: preferences.sidebar_section_split.is_some(),
             agent_panel_sort_manual: preferences.agent_panel_sort.is_some(),
-            status_animation_phase: 0,
-            status_animation_last_tick: None,
-            last_sidebar_divider_click: None,
             chrome_drag: None,
-            workspace_press: None,
-            tab_press: None,
             collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
             workspace_scroll: 0,
             agent_scroll: 0,
@@ -1003,7 +866,6 @@ impl ClientShellState {
             hits: ShellHitMap::default(),
             endpoints: vec![local_endpoint()],
             active_endpoint_id: ClientEndpointId::Local,
-            collapsed_endpoints: HashSet::new(),
             mode: ClientShellMode::Terminal,
             navigate_workspace_id: None,
             overlay,
@@ -1070,52 +932,22 @@ impl ClientShellState {
         true
     }
 
-    pub(super) fn mobile_layout_active(&self) -> bool {
-        self.last_composed_size
-            .is_some_and(|(cols, rows)| !self.layout(cols, rows).mobile_header.is_empty())
-    }
-
     pub(super) fn navigation_workspace_entries(
         &self,
         snapshot: &ClientShellSnapshot,
     ) -> Vec<WorkspaceEntry> {
-        if self.mobile_layout_active() {
-            render::workspace_entries(snapshot, &HashSet::new())
-        } else {
-            render::workspace_entries(snapshot, &self.collapsed_groups)
-        }
-    }
-
-    pub(super) fn reveal_workspace(&mut self, workspace_id: &str) {
-        if self
-            .hits
-            .workspaces
-            .iter()
-            .any(|hit| hit.workspace_id == workspace_id)
-        {
-            return;
-        }
-        let target = self.snapshot.as_deref().and_then(|snapshot| {
-            self.navigation_workspace_entries(snapshot)
-                .iter()
-                .position(|entry| snapshot.workspaces[entry.index].workspace_id == workspace_id)
-        });
-        if let Some(target) = target {
-            self.workspace_scroll = target.min(self.hits.workspace_max_scroll);
-        }
+        render::workspace_entries(snapshot, &self.collapsed_groups)
     }
 
     pub(super) fn layout(&self, cols: u16, rows: u16) -> ClientShellLayout {
         if self.bus.is_some() {
             return super::bus::layout(cols, rows);
         }
-        self.config.layout(
-            cols,
-            rows,
-            self.sidebar_collapsed,
-            self.focused_tab_count(),
-            self.sidebar_width,
-        )
+        // Without Bus (the hidden test client) the pane surface fills the terminal.
+        ClientShellLayout {
+            sidebar: Rect::default(),
+            pane_surface: Rect::new(0, 0, cols, rows),
+        }
     }
 
     pub(crate) fn surface_size(&self, cols: u16, rows: u16) -> ClientSurfaceSize {
@@ -1133,8 +965,6 @@ impl ClientShellState {
         self.input_leases = ClientInputLeases::default();
         self.popup_terminal_id = None;
         self.chrome_drag = None;
-        self.workspace_press = None;
-        self.tab_press = None;
         self.workspace_scroll = 0;
         self.agent_scroll = 0;
         self.tab_scroll = 0;
@@ -1155,10 +985,7 @@ impl ClientShellState {
         self.visible_endpoint_notice = None;
         self.endpoint_error = None;
         self.navigate_workspace_id = None;
-        self.overlay = self
-            .config
-            .startup_onboarding
-            .then_some(ClientShellOverlay::Onboarding);
+        self.overlay = None;
         self.previous_pane_id = None;
         self.pane_mouse_gesture = None;
         self.url_click_consumes_until_up = false;
@@ -1353,7 +1180,6 @@ impl ClientShellState {
             })
         {
             self.navigate_workspace_id = snapshot.focused_workspace_id.clone();
-            self.reveal_mobile_workspace = self.mobile_layout_active();
         }
         let pane_exists =
             |pane_id: &String| snapshot.panes.iter().any(|pane| &pane.pane_id == pane_id);
@@ -1454,12 +1280,7 @@ impl ClientShellState {
             }
             self.mode = ClientShellMode::Terminal;
             self.navigate_workspace_id = None;
-            if !matches!(self.overlay.as_ref(), Some(ClientShellOverlay::Onboarding)) {
-                self.overlay = self
-                    .config
-                    .startup_onboarding
-                    .then_some(ClientShellOverlay::Onboarding);
-            }
+            self.overlay = None;
             self.selection = None;
             self.last_pane_click = None;
             self.selection_autoscroll = None;
@@ -1469,8 +1290,6 @@ impl ClientShellState {
             self.copy_mode = None;
             self.reset_copy_pipeline();
             self.chrome_drag = None;
-            self.workspace_press = None;
-            self.tab_press = None;
             if self.pane_mouse_gesture.as_ref().is_some_and(|gesture| {
                 gesture.hit.popup && previous_popup.as_deref() == Some(gesture.hit.pane_id.as_str())
             }) {
@@ -1622,61 +1441,6 @@ impl ClientShellState {
             repaint = true;
         }
         repaint
-    }
-
-    fn animated_sidebar_status_visible(&self) -> bool {
-        use crate::api::schema::AgentStatus;
-
-        if self.sidebar_collapsed {
-            return false;
-        }
-        let animated = |status| matches!(status, AgentStatus::Working | AgentStatus::Blocked);
-        let local_visible = self.hits.agents.iter().any(|(_, pane_id)| {
-            self.snapshot.as_deref().is_some_and(|snapshot| {
-                snapshot
-                    .agents
-                    .iter()
-                    .any(|agent| &agent.pane_id == pane_id && animated(agent.agent_status))
-            })
-        });
-        local_visible
-            || self
-                .hits
-                .endpoint_agents
-                .iter()
-                .any(|(_, endpoint_id, pane_id)| {
-                    self.endpoints.iter().any(|endpoint| {
-                        endpoint.endpoint_id == *endpoint_id
-                            && endpoint.status == ClientEndpointStatus::Online
-                            && endpoint.snapshot.as_deref().is_some_and(|snapshot| {
-                                snapshot.agents.iter().any(|agent| {
-                                    agent.pane_id == *pane_id && animated(agent.agent_status)
-                                })
-                            })
-                    })
-                })
-    }
-
-    pub(crate) fn tick_status_animation(&mut self, now: std::time::Instant) -> bool {
-        const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
-
-        if !self.animated_sidebar_status_visible() {
-            self.status_animation_phase = 0;
-            self.status_animation_last_tick = None;
-            return false;
-        }
-        let Some(last_tick) = self.status_animation_last_tick else {
-            self.status_animation_last_tick = Some(now);
-            return false;
-        };
-        if now.saturating_duration_since(last_tick) < FRAME_INTERVAL {
-            return false;
-        }
-        // 42 is a shared cycle boundary for the seven-letter Working wave and
-        // the six-frame Blocked pulse, so neither animation jumps mid-cycle.
-        self.status_animation_phase = self.status_animation_phase.wrapping_add(1) % 42;
-        self.status_animation_last_tick = Some(now);
-        true
     }
 
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {

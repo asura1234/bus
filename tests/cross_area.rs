@@ -809,6 +809,7 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
                 Ok(n) if n > 0 => {
                     let out = String::from_utf8_lossy(&buf[..n]);
                     if out.contains("\u{2500}")
+                        || out.contains("$")
                         || out.contains("workspace")
                         || out.contains("pane")
                         || out.contains("terminal")

@@ -174,10 +174,6 @@ impl ClientShellState {
                 RawInputEvent::Key(key) => self.handle_key(key, &mut outcome),
                 RawInputEvent::Text(text) => {
                     let text = text.into_string();
-                    if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
-                        self.reconcile_input_source();
-                        continue;
-                    }
                     if self.prepare_committed_text(&text, &mut outcome) {
                         self.reconcile_input_source();
                         continue;
@@ -200,10 +196,6 @@ impl ClientShellState {
                     }
                 }
                 RawInputEvent::Paste(text) => {
-                    if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
-                        self.reconcile_input_source();
-                        continue;
-                    }
                     if self.prepare_committed_text(&text, &mut outcome) {
                         self.reconcile_input_source();
                         continue;
@@ -479,12 +471,6 @@ impl ClientShellState {
     ) -> Option<ClientInputTarget> {
         if self.handle_modal_paste_shortcut_with(key, outcome, crate::platform::read_clipboard_text)
         {
-            return None;
-        }
-        if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
-            if key.kind == KeyEventKind::Press {
-                self.route_overlay_key(key, outcome);
-            }
             return None;
         }
         if let Some(target) = self.popup_input_target() {
@@ -853,7 +839,6 @@ impl ClientShellState {
         let Some(snapshot) = self.snapshot.as_deref() else {
             return;
         };
-        let mobile = self.mobile_layout_active();
         let entries = self.navigation_workspace_entries(snapshot);
         if entries.is_empty() {
             return;
@@ -867,19 +852,11 @@ impl ClientShellState {
                     .position(|entry| snapshot.workspaces[entry.index].workspace_id == selected)
             })
             .unwrap_or(0);
-        let next = if mobile {
-            (current as isize + delta).clamp(0, entries.len().saturating_sub(1) as isize) as usize
-        } else {
-            (current as isize + delta).rem_euclid(entries.len() as isize) as usize
-        };
+        let next = (current as isize + delta).rem_euclid(entries.len() as isize) as usize;
         let workspace_id = snapshot.workspaces[entries[next].index]
             .workspace_id
             .clone();
-        self.navigate_workspace_id = Some(workspace_id.clone());
-        self.reveal_mobile_workspace = mobile;
-        if !mobile {
-            self.reveal_workspace(&workspace_id);
-        }
+        self.navigate_workspace_id = Some(workspace_id);
     }
 
     fn cycle_pane(&mut self, reverse: bool, outcome: &mut ClientShellInput) {

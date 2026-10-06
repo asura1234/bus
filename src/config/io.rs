@@ -541,33 +541,6 @@ fn load_live_section<T>(
     }
 }
 
-pub(crate) fn upsert_top_level_bool(content: &str, key: &str, value: bool) -> String {
-    let replacement = format!("{key} = {value}");
-    let mut lines: Vec<String> = content.lines().map(|line| line.to_string()).collect();
-    let mut in_section = false;
-
-    for line in &mut lines {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_section = true;
-            continue;
-        }
-        if in_section {
-            continue;
-        }
-        if trimmed.starts_with(&format!("{key} ")) || trimmed.starts_with(&format!("{key}=")) {
-            *line = replacement.clone();
-            return lines.join("\n") + "\n";
-        }
-    }
-
-    if lines.is_empty() {
-        format!("{replacement}\n")
-    } else {
-        format!("{replacement}\n{}\n", lines.join("\n").trim_end())
-    }
-}
-
 /// Write a key = value pair in a TOML section (creates section if missing).
 pub fn upsert_section_value(content: &str, section: &str, key: &str, value: &str) -> String {
     upsert_section_raw(content, section, key, value)
@@ -672,14 +645,6 @@ fn upsert_section_raw(content: &str, section: &str, key: &str, value: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn upsert_top_level_bool_replaces_existing_value() {
-        let content = "onboarding = true\n[keys]\nprefix = \"ctrl+b\"\n";
-        let updated = upsert_top_level_bool(content, "onboarding", false);
-        assert!(updated.contains("onboarding = false"));
-        assert!(!updated.contains("onboarding = true"));
-    }
 
     #[test]
     fn upsert_section_bool_adds_missing_section() {

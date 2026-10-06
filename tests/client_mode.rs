@@ -441,6 +441,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
                     let out = String::from_utf8_lossy(&buf[..n]);
                     output.push_str(&out);
                     if out.contains("\u{2500}")
+                        || out.contains("$")
                         || out.contains("workspace")
                         || out.contains("pane")
                         || out.contains("terminal")
@@ -616,6 +617,7 @@ fn attach_thin_client_with_config(
     while Instant::now() < deadline {
         let out = read_output(&output);
         if out.contains('\u{2500}')
+            || out.contains("$")
             || out.contains("workspace")
             || out.contains("pane")
             || out.contains("terminal")
@@ -1041,6 +1043,7 @@ fn read_until_client_attaches(client: &SpawnedHerdr) -> String {
             Err(err) => panic!("read thin client PTY: {err}"),
         }
         if output.contains('\u{2500}')
+            || output.contains("$")
             || output.contains("workspace")
             || output.contains("pane")
             || output.contains("terminal")

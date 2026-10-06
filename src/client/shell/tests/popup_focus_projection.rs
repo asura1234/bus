@@ -119,7 +119,7 @@ fn non_overlay_ctrl_v_is_forwarded_to_the_focused_pane() {
 }
 
 #[test]
-fn desktop_composition_keeps_shell_outside_origin_relative_surface() {
+fn composition_places_the_surface_at_its_origin() {
     let config = ClientShellConfig::from_config(&Config::default());
     let mut state = ClientShellState::new(config);
     state.set_snapshot(Box::new(snapshot()));
@@ -136,14 +136,11 @@ fn desktop_composition_keeps_shell_outside_origin_relative_surface() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("spaces"));
-    assert!(text.contains("client-shell"));
-    assert!(text.contains("main"));
     assert!(text.contains("LIVE"));
     assert!(!text.contains("1 1"));
     assert_eq!(
         frame.cursor.as_ref().map(|cursor| (cursor.x, cursor.y)),
-        Some((27, 2))
+        Some((1, 1))
     );
 }
 
@@ -878,86 +875,6 @@ fn edit_scrollback_binding_targets_the_focused_endpoint_pane() {
 }
 
 #[test]
-fn sidebar_scrollbars_use_proportional_shared_geometry_and_drag() {
-    let mut projected = snapshot();
-    for index in 2..=10 {
-        let mut workspace = projected.workspaces[0].clone();
-        workspace.workspace_id = format!("ws_{index}");
-        workspace.number = index;
-        workspace.label = format!("workspace-{index}");
-        workspace.focused = false;
-        projected.workspaces.push(workspace);
-    }
-    for index in 1..=10 {
-        projected.agents.push(crate::protocol::ClientShellAgent {
-            pane_id: format!("agent-pane-{index}"),
-            workspace_id: "ws_1".into(),
-            tab_id: "tab_1".into(),
-            name: Some(format!("agent-{index}")),
-            display_agent: None,
-            agent: Some("codex".into()),
-            title: None,
-            terminal_title: None,
-            terminal_title_stripped: None,
-            agent_status: AgentStatus::Idle,
-            state_change_seq: index,
-            state_labels: Vec::new(),
-            tokens: Vec::new(),
-            focused: false,
-        });
-    }
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    state.compose(106, 20).expect("overflowing sidebars");
-
-    for agent in [false, true] {
-        let (track, metrics) = if agent {
-            (
-                state.hits.agent_scrollbar,
-                state.hits.agent_scroll_metrics.expect("agent metrics"),
-            )
-        } else {
-            (
-                state.hits.workspace_scrollbar,
-                state
-                    .hits
-                    .workspace_scroll_metrics
-                    .expect("workspace metrics"),
-            )
-        };
-        assert!(track.width > 0);
-        let thumb = crate::ui::scrollbar_thumb(metrics, track).expect("scrollbar thumb");
-        assert!(thumb.len > 1);
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: track.x,
-            row: thumb.top,
-            modifiers: KeyModifiers::empty(),
-        })]);
-        let dragged =
-            state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-                kind: MouseEventKind::Drag(MouseButton::Left),
-                column: track.x,
-                row: track.bottom().saturating_sub(1),
-                modifiers: KeyModifiers::empty(),
-            })]);
-        assert!(dragged.repaint);
-        if agent {
-            assert_eq!(state.agent_scroll, metrics.max_offset_from_bottom);
-        } else {
-            assert_eq!(state.workspace_scroll, metrics.max_offset_from_bottom);
-        }
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::Up(MouseButton::Left),
-            column: track.x,
-            row: track.bottom().saturating_sub(1),
-            modifiers: KeyModifiers::empty(),
-        })]);
-    }
-}
-
-#[test]
 fn popup_preemption_cancels_settings_theme_preview() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
@@ -1047,9 +964,10 @@ fn retained_surface_patch_updates_only_pane_cells_without_recomposing_chrome() {
     let pane_index = usize::from(layout.pane_surface.y) * usize::from(patched.width)
         + usize::from(layout.pane_surface.x);
     assert_eq!(patched.cells[pane_index].symbol, "N");
+    let outside_pane = usize::from(patched.width) * 10 + 50;
     assert_eq!(
-        patched.cells[0], composed.cells[0],
-        "sidebar chrome changed"
+        patched.cells[outside_pane], composed.cells[outside_pane],
+        "cells outside the pane changed"
     );
     assert_eq!(state.pane_surface.as_ref().unwrap().surface_revision, 2);
 

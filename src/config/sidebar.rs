@@ -6,8 +6,6 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::detect::Agent;
-
 const MAX_SIDEBAR_ROWS: usize = 16;
 const MAX_SIDEBAR_TOKENS_PER_ROW: usize = 16;
 const DEFAULT_SIDEBAR_ROW_GAP: u16 = 0;
@@ -46,11 +44,7 @@ pub struct SidebarTokenColor {
     b: u8,
 }
 
-impl SidebarTokenColor {
-    pub(crate) fn ratatui(self) -> ratatui::style::Color {
-        ratatui::style::Color::Rgb(self.r, self.g, self.b)
-    }
-}
+impl SidebarTokenColor {}
 
 impl Serialize for SidebarTokenColor {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -139,13 +133,6 @@ pub enum SpaceSidebarToken {
 }
 
 impl AgentSidebarToken {
-    pub(crate) fn style_for_value(&self, value: &str) -> SidebarTokenStyle {
-        match self {
-            Self::Styled { style, rules, .. } => rules::matching_style(rules, *style, value),
-            _ => SidebarTokenStyle::default(),
-        }
-    }
-
     pub(crate) fn parts(&self) -> (&Self, SidebarTokenStyle) {
         match self {
             Self::Styled { token, style, .. } => (token, *style),
@@ -155,13 +142,6 @@ impl AgentSidebarToken {
 }
 
 impl SpaceSidebarToken {
-    pub(crate) fn style_for_value(&self, value: &str) -> SidebarTokenStyle {
-        match self {
-            Self::Styled { style, rules, .. } => rules::matching_style(rules, *style, value),
-            _ => SidebarTokenStyle::default(),
-        }
-    }
-
     pub(crate) fn parts(&self) -> (&Self, SidebarTokenStyle) {
         match self {
             Self::Styled { token, style, .. } => (token, *style),
@@ -429,13 +409,7 @@ pub struct AgentsSidebarConfig {
     pub row_gap: u16,
 }
 
-impl AgentsSidebarConfig {
-    pub(crate) fn rows_for_agent(&self, agent: Option<Agent>) -> &AgentSidebarRows {
-        agent
-            .and_then(|agent| self.rows_by_agent.get(crate::detect::agent_label(agent)))
-            .unwrap_or(&self.rows)
-    }
-}
+impl AgentsSidebarConfig {}
 
 impl Default for AgentsSidebarConfig {
     fn default() -> Self {
@@ -566,50 +540,6 @@ row_gap = 3
     }
 
     #[test]
-    fn parses_occurrence_styles_without_changing_plain_tokens() {
-        let config: crate::config::Config = toml::from_str(
-            r##"
-[ui.sidebar.agents]
-rows = [[{ token = "workspace", fg = "#abc", bold = false }, "workspace"], [{ token = "$summary", dim = false }]]
-
-[ui.sidebar.agents.rows_by_agent]
-claude = [[{ token = "agent", fg = "#112233", bold = true, dim = false }]]
-
-[ui.sidebar.spaces]
-rows = [[{ token = "git_status", fg = "#ff00aa" }], [{ token = "$jj", bold = true }]]
-"##,
-        )
-        .unwrap();
-
-        let (token, style) = config.ui.sidebar.agents.rows[0][0].parts();
-        assert_eq!(token, &AgentSidebarToken::Workspace);
-        assert_eq!(style.bold, Some(false));
-        assert_eq!(
-            style.fg.unwrap().ratatui(),
-            ratatui::style::Color::Rgb(0xaa, 0xbb, 0xcc)
-        );
-        assert_eq!(
-            config.ui.sidebar.agents.rows[0][1],
-            AgentSidebarToken::Workspace
-        );
-
-        let (token, style) = config.ui.sidebar.agents.rows_by_agent["claude"][0][0].parts();
-        assert_eq!(token, &AgentSidebarToken::Agent);
-        assert_eq!(style.bold, Some(true));
-        assert_eq!(style.dim, Some(false));
-
-        let (token, style) = config.ui.sidebar.spaces.rows[0][0].parts();
-        assert_eq!(token, &SpaceSidebarToken::GitStatus);
-        assert_eq!(
-            style.fg.unwrap().ratatui(),
-            ratatui::style::Color::Rgb(0xff, 0x00, 0xaa)
-        );
-        let (token, style) = config.ui.sidebar.spaces.rows[1][0].parts();
-        assert_eq!(token, &SpaceSidebarToken::Custom("jj".into()));
-        assert_eq!(style.bold, Some(true));
-    }
-
-    #[test]
     fn conditional_sidebar_rules_round_trip() {
         let input = r##"
 [agents]
@@ -704,7 +634,7 @@ rows = [[{ token = "$status", rules = [{ contains = "error", bold = true }] }]]
 
     #[test]
     fn accepts_every_canonical_agent_override_key() {
-        let agents = Agent::ALL;
+        let agents = crate::detect::Agent::ALL;
         let entries = agents
             .iter()
             .map(|agent| format!("{} = [[\"agent\"]]", crate::detect::agent_label(*agent)))

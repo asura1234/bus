@@ -28,8 +28,8 @@ pub use self::{
         MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
-        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
-        SpaceSidebarToken, SpacesSidebarConfig,
+        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SpaceSidebarToken,
+        SpacesSidebarConfig,
     },
     sound::SoundConfig,
     tab_bar::TabBarRightEntryConfig,
@@ -38,9 +38,8 @@ pub use self::{
 };
 
 pub(crate) use self::keybinds::parse_key_combo;
-pub(crate) use self::write::{update_file_at, write_edit, ConfigEdit};
+pub(crate) use self::write::{write_edit, ConfigEdit};
 pub(crate) use self::{
-    io::upsert_top_level_bool,
     tab_bar::{
         parse_tab_bar_datetime_format, tab_bar_right_diagnostics,
         MAX_TAB_BAR_COMMAND_INTERVAL_SECONDS, MAX_TAB_BAR_COMMAND_TIMEOUT_SECONDS,

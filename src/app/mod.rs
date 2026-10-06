@@ -1386,12 +1386,6 @@ mod tests {
             app.reload_config().status,
             crate::config::ConfigReloadStatus::Applied
         );
-        assert_eq!(
-            app.state.sidebar_agents.rows[0][0]
-                .style_for_value("90")
-                .bold,
-            Some(true)
-        );
         let previous = app.state.sidebar_agents.clone();
         std::fs::write(&path, conditional.replace("gt = 80", "gt = 'invalid'")).unwrap();
         assert_eq!(

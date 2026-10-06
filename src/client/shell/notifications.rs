@@ -7,103 +7,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
-pub(super) fn render_mobile_notice_banner(
-    buffer: &mut Buffer,
-    area: Rect,
-    title: &str,
-    body: Option<&str>,
-    dot_color: Color,
-    offset_for_warning: bool,
-    palette: &Palette,
-) -> Rect {
-    if area.is_empty() {
-        return Rect::default();
-    }
-    let warning_offset = u16::from(offset_for_warning);
-    let y = area.y
-        + area
-            .height
-            .saturating_sub(1u16.saturating_add(warning_offset));
-    let rect = Rect::new(area.x, y, area.width, 1);
-    let background = palette.surface0;
-    Clear.render(rect, buffer);
-    buffer.set_style(rect, Style::default().bg(background));
-    let mut x = rect.x;
-    for (text, style) in [
-        (" ", Style::default().bg(background)),
-        ("●", Style::default().fg(dot_color).bg(background)),
-        (" ", Style::default().bg(background)),
-        (
-            title,
-            Style::default()
-                .fg(palette.text)
-                .bg(background)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ] {
-        x = super::render::put_segment(buffer, x, rect.y, rect.right(), text, style);
-    }
-    if let Some(body) = body.filter(|body| !body.is_empty()) {
-        x = super::render::put_segment(
-            buffer,
-            x,
-            rect.y,
-            rect.right(),
-            " · ",
-            Style::default().fg(palette.overlay0).bg(background),
-        );
-        super::render::put_text(
-            buffer,
-            x,
-            rect.y,
-            rect.right().saturating_sub(x),
-            body,
-            Style::default().fg(palette.overlay0).bg(background),
-        );
-    }
-    rect
-}
-
-pub(super) fn render_mobile_notification_banner(
-    buffer: &mut Buffer,
-    area: Rect,
-    notification: &ClientVisibleNotification,
-    offset_for_warning: bool,
-    palette: &Palette,
-) -> Rect {
-    let event = &notification.event;
-    let title = match event.kind {
-        SemanticNotificationKind::NeedsAttention => event
-            .title
-            .strip_suffix(" needs attention")
-            .map(|agent| format!("{agent} waiting"))
-            .unwrap_or_else(|| event.title.clone()),
-        SemanticNotificationKind::Finished => event
-            .title
-            .strip_suffix(" finished")
-            .map(|agent| format!("{agent} done"))
-            .unwrap_or_else(|| event.title.clone()),
-        SemanticNotificationKind::UpdateInstalled => "update ready".to_owned(),
-        SemanticNotificationKind::Custom => event.title.clone(),
-    };
-    let dot_color = match event.kind {
-        SemanticNotificationKind::NeedsAttention => palette.red,
-        SemanticNotificationKind::Finished => palette.blue,
-        SemanticNotificationKind::UpdateInstalled | SemanticNotificationKind::Custom => {
-            palette.accent
-        }
-    };
-    render_mobile_notice_banner(
-        buffer,
-        area,
-        &title,
-        event.body.as_deref(),
-        dot_color,
-        offset_for_warning,
-        palette,
-    )
-}
-
 pub(super) fn render_notification_card(
     buffer: &mut Buffer,
     area: Rect,
@@ -225,33 +128,6 @@ mod tests {
             },
             deadline: std::time::Instant::now(),
         }
-    }
-
-    #[test]
-    fn mobile_notification_is_a_bottom_banner_with_released_title() {
-        let palette = crate::app::client_palette_from_config(&Config::default());
-        let mut notification = notification();
-        notification.event.kind = SemanticNotificationKind::NeedsAttention;
-        notification.event.title = "pi needs attention".into();
-        notification.event.body = Some("workspace · tab 1".into());
-        let area = Rect::new(0, 0, 44, 20);
-        let mut buffer = Buffer::empty(area);
-        for cell in &mut buffer.content {
-            cell.set_symbol("X");
-        }
-        let rect =
-            render_mobile_notification_banner(&mut buffer, area, &notification, true, &palette);
-        assert_eq!(rect, Rect::new(0, 18, 44, 1));
-        let text = buffer
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(text.contains("pi waiting"));
-        assert!(text.contains("workspace · tab 1"));
-        assert!(buffer.content[18 * 44..19 * 44]
-            .iter()
-            .all(|cell| cell.symbol() != "X"));
     }
 
     #[test]

@@ -1,6 +1,5 @@
 use ratatui::layout::Rect;
 
-mod onboarding;
 mod panes;
 mod scrollbar;
 mod sidebar;
@@ -9,11 +8,6 @@ mod tab_surface;
 mod text;
 mod widgets;
 
-pub(crate) use self::onboarding::{
-    onboarding_welcome_continue_rect, ONBOARDING_DESCRIPTION, ONBOARDING_HELP_LABEL,
-    ONBOARDING_HELP_SUFFIX, ONBOARDING_NEXT, ONBOARDING_PREFIX_LABEL, ONBOARDING_PREFIX_SUFFIX,
-    ONBOARDING_SUBTITLE, ONBOARDING_TITLE,
-};
 use self::panes::resize_popup_pane;
 pub(crate) use self::panes::{
     apply_pane_chrome, pane_inner_rect, pane_is_scrolled_back, render_selection_highlight,
@@ -22,19 +16,13 @@ pub(crate) use self::scrollbar::{
     render_pane_scrollbar_buffer, scrollbar_offset_from_drag_row, scrollbar_offset_from_row,
     scrollbar_thumb, scrollbar_thumb_grab_offset,
 };
-pub(crate) use self::sidebar::{
-    agent_panel_entries_from, expanded_sidebar_sections, resolved_token_spans, sidebar_agent_rows,
-    sidebar_section_divider_rect, sidebar_space_rows, AgentPanelEntry, AgentTokenContext,
-    ResolvedToken, ResolvedTokenKind, SpaceTokenContext,
-};
+pub(crate) use self::sidebar::{agent_panel_entries_from, AgentPanelEntry};
 use self::status::copy_feedback_rect;
 pub(crate) use self::status::{render_config_diagnostic_buffer, render_copy_feedback_buffer};
 pub(crate) use self::tab_surface::{
     compute_tab_surface, compute_tab_surface_for, render_tab_surface, resize_tab_surface,
     tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceLayout, TabSurfaceTarget, TabSurfaceView,
 };
-pub(crate) use self::text::truncate_end;
-pub(crate) use self::widgets::modal_stack_areas;
 
 use crate::app::AppState;
 use crate::terminal::TerminalRuntimeRegistry;

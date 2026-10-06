@@ -6,7 +6,6 @@ use crate::protocol::ClientShellAgent;
 #[derive(Clone, Copy)]
 pub(super) struct CachedEndpointSnapshot<'a> {
     pub(super) endpoint_id: &'a ClientEndpointId,
-    pub(super) label: &'a str,
     pub(super) status: ClientEndpointStatus,
     pub(super) snapshot: &'a ClientShellSnapshot,
     pub(super) agent_recency: &'a HashMap<String, u64>,
@@ -27,7 +26,6 @@ pub(super) fn cached_endpoint_snapshots(
             .as_deref()
             .map(|snapshot| CachedEndpointSnapshot {
                 endpoint_id: &endpoint.endpoint_id,
-                label: &endpoint.label,
                 status: endpoint.status,
                 snapshot,
                 agent_recency: &endpoint.agent_recency,

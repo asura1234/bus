@@ -30,39 +30,6 @@ impl ClientShellState {
                 .bg(self.config.palette.panel_bg),
         );
         self.hits = ShellHitMap::default();
-        let sidebar = if layout.sidebar.width > 0 {
-            layout.sidebar
-        } else {
-            Rect::new(0, 1, cols, rows.saturating_sub(2))
-        };
-        super::endpoint_sidebar::render_expanded(
-            &mut buffer,
-            sidebar,
-            self.snapshot.as_deref(),
-            &self.config,
-            &mut render::ShellRenderState {
-                endpoints: &self.endpoints,
-                active_endpoint_id: &self.active_endpoint_id,
-                collapsed_endpoints: &self.collapsed_endpoints,
-                collapsed_groups: &self.collapsed_groups,
-                workspace_scroll: &mut self.workspace_scroll,
-                agent_scroll: &mut self.agent_scroll,
-                tab_scroll: &mut self.tab_scroll,
-                reveal_focused_workspace: &mut self.reveal_focused_workspace,
-                reveal_focused_tab: &mut self.reveal_focused_tab,
-                sidebar_collapsed: false,
-                sidebar_section_split: self.sidebar_section_split,
-                status_animation_phase: self.status_animation_phase,
-                tab_drag_insert_index: None,
-                selected_workspace_id: self.navigate_workspace_id.as_deref(),
-                dragged_workspace_id: None,
-                workspace_drop_indicator_row: None,
-            },
-            &mut self.hits,
-        );
-        if !self.config.mouse_capture {
-            self.hits = ShellHitMap::default();
-        }
         let message = self.endpoint_error.clone().unwrap_or_else(|| {
             let status = self
                 .endpoint_status(&self.active_endpoint_id)
@@ -73,11 +40,7 @@ impl ClientShellState {
                 self.active_endpoint_label()
             )
         });
-        let message_area = if layout.sidebar.width > 0 {
-            layout.pane_surface
-        } else {
-            Rect::new(0, 0, cols, 1)
-        };
+        let message_area = Rect::new(layout.pane_surface.x, 0, layout.pane_surface.width, 1);
         render::put_text(
             &mut buffer,
             message_area.x,
@@ -127,56 +90,11 @@ impl ClientShellState {
             return None;
         }
         let layout = self.layout(cols, rows);
-        if self.last_tab_bar_width != Some(layout.tab_bar.width) {
-            self.last_tab_bar_width = Some(layout.tab_bar.width);
-            self.reveal_focused_tab = true;
-        }
-        let tab_drag_insert_index = match &self.chrome_drag {
-            Some(ClientChromeDrag::Tab { insert_index, .. }) => *insert_index,
-            _ => None,
-        };
-        let (dragged_workspace_id, workspace_drop_indicator_row) = match &self.chrome_drag {
-            Some(ClientChromeDrag::Workspace {
-                source_workspace_id,
-                target,
-            }) => (
-                Some(source_workspace_id.as_str()),
-                target.as_ref().map(|(_, row)| *row),
-            ),
-            _ => (None, None),
-        };
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
-        self.hits = if let Some(bus) = self.bus.as_ref() {
+        if let Some(bus) = self.bus.as_ref() {
             bus.render(&mut buffer);
-            ShellHitMap::default()
-        } else {
-            render::render_shell(
-                &mut buffer,
-                layout,
-                snapshot,
-                &self.config,
-                render::ShellRenderState {
-                    endpoints: &self.endpoints,
-                    active_endpoint_id: &self.active_endpoint_id,
-                    collapsed_endpoints: &self.collapsed_endpoints,
-                    collapsed_groups: &self.collapsed_groups,
-                    workspace_scroll: &mut self.workspace_scroll,
-                    agent_scroll: &mut self.agent_scroll,
-                    tab_scroll: &mut self.tab_scroll,
-                    reveal_focused_workspace: &mut self.reveal_focused_workspace,
-                    reveal_focused_tab: &mut self.reveal_focused_tab,
-                    sidebar_collapsed: self.sidebar_collapsed,
-                    sidebar_section_split: self.sidebar_section_split,
-                    status_animation_phase: self.status_animation_phase,
-                    tab_drag_insert_index,
-                    selected_workspace_id: (self.mode == ClientShellMode::Navigate)
-                        .then_some(self.navigate_workspace_id.as_deref())
-                        .flatten(),
-                    dragged_workspace_id,
-                    workspace_drop_indicator_row,
-                },
-            )
-        };
+        }
+        self.hits = ShellHitMap::default();
         self.hits.panes = surface
             .panes
             .iter()
@@ -249,19 +167,8 @@ impl ClientShellState {
         if !self.config.mouse_capture {
             self.hits.pane_splits.clear();
         }
-        let mode_bar_area = if layout.mobile_header.is_empty()
-            && self.config.tab_bar_position == TabBarPositionConfig::Bottom
-            && !layout.tab_bar.is_empty()
-        {
-            layout.tab_bar
-        } else {
-            layout.pane_surface
-        };
-        let mobile_navigate_panel = !layout.mobile_header.is_empty()
-            && self.mode == ClientShellMode::Navigate
-            && self.endpoint_error.is_none();
-        let mode_bar = if mobile_navigate_panel
-            || self.overlay.is_some()
+        let mode_bar_area = layout.pane_surface;
+        let mode_bar = if self.overlay.is_some()
             || (self.bus.is_some() && self.mode == ClientShellMode::Terminal)
         {
             None
@@ -276,12 +183,6 @@ impl ClientShellState {
                 &self.config.palette,
             )
         };
-        if mode_bar == Some(layout.tab_bar) {
-            self.hits.tabs.clear();
-            self.hits.new_tab = Rect::default();
-            self.hits.tab_scroll_left = Rect::default();
-            self.hits.tab_scroll_right = Rect::default();
-        }
         let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
         let mode_bar_cells = mode_bar.map(|bar| {
             let start = usize::from(bar.y) * usize::from(frame.width) + usize::from(bar.x);
@@ -394,11 +295,7 @@ impl ClientShellState {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
             if let Some(diagnostic) = self.config_diagnostic.as_deref() {
-                let diagnostic_area = if layout.mobile_header.is_empty() {
-                    Rect::new(0, 0, cols, rows)
-                } else {
-                    layout.pane_surface
-                };
+                let diagnostic_area = Rect::new(0, 0, cols, rows);
                 crate::ui::render_config_diagnostic_buffer(
                     &mut composed,
                     diagnostic_area,
@@ -412,48 +309,28 @@ impl ClientShellState {
                     Rect::new(0, 0, cols, rows),
                     label,
                     *status,
-                    u16::from(has_config_diagnostic) + layout.mobile_header.height,
+                    u16::from(has_config_diagnostic),
                     &self.config.palette,
                 );
                 1
             });
             if let Some(notice) = self.visible_endpoint_notice.as_ref() {
-                self.hits.notification_toast = if layout.mobile_header.is_empty() {
-                    endpoint_notices::render_notice(
-                        &mut composed,
-                        Rect::new(0, 0, cols, rows),
-                        notice,
-                        u16::from(has_config_diagnostic) + lifecycle_offset,
-                        &self.config.palette,
-                    )
-                } else {
-                    endpoint_notices::render_mobile_banner(
-                        &mut composed,
-                        Rect::new(0, 0, cols, rows),
-                        notice,
-                        has_config_diagnostic || lifecycle_offset > 0,
-                        &self.config.palette,
-                    )
-                };
+                self.hits.notification_toast = endpoint_notices::render_notice(
+                    &mut composed,
+                    Rect::new(0, 0, cols, rows),
+                    notice,
+                    u16::from(has_config_diagnostic) + lifecycle_offset,
+                    &self.config.palette,
+                );
             } else if let Some(notification) = self.visible_notification.as_ref() {
-                self.hits.notification_toast = if layout.mobile_header.is_empty() {
-                    notifications::render_visible_notification(
-                        &mut composed,
-                        Rect::new(0, 0, cols, rows),
-                        notification,
-                        self.config.toast_position,
-                        u16::from(has_config_diagnostic) + lifecycle_offset,
-                        &self.config.palette,
-                    )
-                } else {
-                    notifications::render_mobile_notification_banner(
-                        &mut composed,
-                        Rect::new(0, 0, cols, rows),
-                        notification,
-                        has_config_diagnostic || lifecycle_offset > 0,
-                        &self.config.palette,
-                    )
-                };
+                self.hits.notification_toast = notifications::render_visible_notification(
+                    &mut composed,
+                    Rect::new(0, 0, cols, rows),
+                    notification,
+                    self.config.toast_position,
+                    u16::from(has_config_diagnostic) + lifecycle_offset,
+                    &self.config.palette,
+                );
             }
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
@@ -461,11 +338,7 @@ impl ClientShellState {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
             let base_offset = u16::from(has_config_diagnostic);
-            let feedback_area = if layout.mobile_header.is_empty() {
-                layout.pane_surface
-            } else {
-                Rect::new(0, 0, cols, rows)
-            };
+            let feedback_area = layout.pane_surface;
             let offset = crate::ui::copy_feedback_offset_for_toast(
                 feedback_area,
                 feedback,
@@ -518,62 +391,12 @@ impl ClientShellState {
                 });
             }
         }
-        if !layout.mobile_header.is_empty()
-            && self.mode == ClientShellMode::Navigate
-            && self.overlay.is_none()
-        {
-            let mut composed = frame.to_ratatui_buffer()?;
-            super::mobile::render_mobile_switcher(
-                &mut composed,
-                Rect::new(0, 0, cols, rows),
-                snapshot,
-                &self.endpoints,
-                &self.active_endpoint_id,
-                &self.config,
-                self.navigate_workspace_id.as_deref(),
-                &mut self.mobile_switcher_scroll,
-                &mut self.reveal_mobile_workspace,
-                &mut self.hits,
-            );
-            if let Some((label, status)) = active_lifecycle.as_ref() {
-                let _ = endpoint_notices::render_lifecycle_banner(
-                    &mut composed,
-                    Rect::new(0, 0, cols, rows),
-                    label,
-                    *status,
-                    2,
-                    &self.config.palette,
-                );
-            }
-            if let Some(notice) = self.visible_endpoint_notice.as_ref() {
-                self.hits.notification_toast = endpoint_notices::render_mobile_banner(
-                    &mut composed,
-                    Rect::new(0, 0, cols, rows),
-                    notice,
-                    active_lifecycle.is_some(),
-                    &self.config.palette,
-                );
-            }
-            frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
-            self.hits.panes.clear();
-            self.hits.pane_splits.clear();
-            self.hits.popup = None;
-        }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
         if let Some(overlay) = self.overlay.as_ref() {
             let mut composed = frame.to_ratatui_buffer()?;
             let cursor = if let ClientShellOverlay::ContextMenu(menu) = overlay {
                 self.hits.context_menu_rows =
                     render::render_context_menu(&mut composed, menu, &self.config.palette)?;
-                None
-            } else if let ClientShellOverlay::GlobalMenu(menu) = overlay {
-                self.hits.global_menu_rows = render::render_global_menu(
-                    &mut composed,
-                    self.hits.global_launcher,
-                    menu,
-                    snapshot,
-                    &self.config.palette,
-                )?;
                 None
             } else {
                 let rendered = render::render_client_overlay(

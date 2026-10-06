@@ -34,9 +34,7 @@ pub(crate) fn render_client_overlay(
 ) -> Option<OverlayRender> {
     if !matches!(
         o,
-        ClientShellOverlay::Navigator(_)
-            | ClientShellOverlay::ContextMenu(_)
-            | ClientShellOverlay::GlobalMenu(_)
+        ClientShellOverlay::Navigator(_) | ClientShellOverlay::ContextMenu(_)
     ) {
         for y in b.area.y..b.area.bottom() {
             for x in b.area.x..b.area.right() {
@@ -46,7 +44,6 @@ pub(crate) fn render_client_overlay(
         }
     }
     match o {
-        ClientShellOverlay::Onboarding => render_onboarding_overlay(b, p),
         ClientShellOverlay::Rename(v) => render_rename_overlay(b, v, p),
         ClientShellOverlay::ConfirmClose(v) => render_confirm_close_overlay(b, v, p),
         ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p),
@@ -63,87 +60,8 @@ pub(crate) fn render_client_overlay(
         ClientShellOverlay::WorktreeRemove(v) => {
             worktree_overlays::render_worktree_remove_overlay(b, v, p)
         }
-        ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_) => None,
+        ClientShellOverlay::ContextMenu(_) => None,
     }
-}
-
-pub(crate) fn render_global_menu(
-    buffer: &mut Buffer,
-    launcher: Rect,
-    menu: &ClientGlobalMenuOverlay,
-    snapshot: &ClientShellSnapshot,
-    palette: &Palette,
-) -> Option<Vec<(Rect, usize)>> {
-    let items = super::super::global_menu::global_menu_items(snapshot);
-    let screen = buffer.area;
-    let width = items
-        .iter()
-        .map(|(label, action)| {
-            display_width(label)
-                + u16::from(super::super::global_menu::global_menu_item_has_badge(
-                    snapshot, *action,
-                )) * 2
-        })
-        .max()
-        .unwrap_or(8)
-        .saturating_add(4)
-        .min(screen.width.max(1));
-    let height = (items.len() as u16)
-        .saturating_add(2)
-        .min(screen.height.max(1));
-    let x = launcher
-        .right()
-        .saturating_sub(width)
-        .min(screen.right().saturating_sub(width));
-    let y = launcher.y.saturating_sub(height).max(screen.y);
-    let inner = panel(
-        buffer,
-        Rect::new(x, y, width, height),
-        palette.accent,
-        palette.panel_bg,
-    )?;
-    let mut rows = Vec::new();
-    for (index, (label, action)) in items.iter().enumerate() {
-        let row_y = inner.y.saturating_add(index as u16);
-        if row_y >= inner.bottom() {
-            break;
-        }
-        let row = Rect::new(inner.x, row_y, inner.width, 1);
-        let highlighted = index == menu.highlighted;
-        let style = if highlighted {
-            Style::default()
-                .fg(panel_contrast_fg(palette))
-                .bg(palette.accent)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette.text).bg(palette.panel_bg)
-        };
-        buffer.set_style(row, style);
-        let has_badge = super::super::global_menu::global_menu_item_has_badge(snapshot, *action);
-        if has_badge {
-            let badge_style = if highlighted {
-                style
-            } else {
-                Style::default()
-                    .fg(palette.accent)
-                    .bg(palette.panel_bg)
-                    .add_modifier(Modifier::BOLD)
-            };
-            put_text(buffer, row.x, row.y, row.width.min(2), " ●", badge_style);
-            put_text(
-                buffer,
-                row.x.saturating_add(2),
-                row.y,
-                row.width.saturating_sub(2),
-                &format!(" {label}"),
-                style,
-            );
-        } else {
-            put_text(buffer, row.x, row.y, row.width, &format!(" {label}"), style);
-        }
-        rows.push((row, index));
-    }
-    Some(rows)
 }
 
 pub(crate) fn render_context_menu(
@@ -280,96 +198,6 @@ fn contrast(p: &Palette) -> ratatui::style::Color {
         ratatui::style::Color::Reset => p.surface_dim,
         c => c,
     }
-}
-
-fn render_onboarding_overlay(b: &mut Buffer, p: &Palette) -> Option<OverlayRender> {
-    let outer = popup(b.area, 64, 16)?;
-    let inner = panel(b, outer, p.accent, p.panel_bg)?;
-    if inner.height < 11 {
-        return Some(OverlayRender::default());
-    }
-    let stack = crate::ui::modal_stack_areas(inner, 2, 0, 1, 1);
-    let base = Style::default()
-        .bg(p.panel_bg)
-        .remove_modifier(Modifier::DIM);
-    let title = base.fg(p.text).add_modifier(Modifier::BOLD);
-    let muted = base.fg(p.overlay0);
-    let text = base.fg(p.overlay1);
-    let accent = base.fg(p.accent).add_modifier(Modifier::BOLD);
-
-    put_text(
-        b,
-        stack.header.x,
-        stack.header.y,
-        stack.header.width,
-        crate::ui::ONBOARDING_TITLE,
-        title,
-    );
-    put_text(
-        b,
-        stack.header.x,
-        stack.header.y.saturating_add(1),
-        stack.header.width,
-        crate::ui::ONBOARDING_SUBTITLE,
-        muted,
-    );
-
-    let content = stack.content;
-    for (offset, line) in crate::ui::ONBOARDING_DESCRIPTION.iter().enumerate() {
-        put_text(
-            b,
-            content.x,
-            content.y.saturating_add(offset as u16),
-            content.width,
-            line,
-            text,
-        );
-    }
-
-    let key_y = content.y.saturating_add(4);
-    let mut key_x = content.x;
-    for (value, style) in [
-        ("  ", base),
-        (crate::ui::ONBOARDING_PREFIX_LABEL, accent),
-        (crate::ui::ONBOARDING_PREFIX_SUFFIX, text),
-        (crate::ui::ONBOARDING_HELP_LABEL, accent),
-        (crate::ui::ONBOARDING_HELP_SUFFIX, text),
-    ] {
-        let width = display_width(value);
-        put_text(
-            b,
-            key_x,
-            key_y,
-            content.right().saturating_sub(key_x),
-            value,
-            style,
-        );
-        key_x = key_x.saturating_add(width);
-    }
-    put_text(
-        b,
-        content.x,
-        content.y.saturating_add(5),
-        content.width,
-        crate::ui::ONBOARDING_NEXT,
-        text,
-    );
-
-    let primary = crate::ui::onboarding_welcome_continue_rect(stack.actions.unwrap_or_default());
-    button(
-        b,
-        primary,
-        " ↵ continue ",
-        Style::default()
-            .fg(contrast(p))
-            .bg(p.accent)
-            .add_modifier(Modifier::BOLD)
-            .remove_modifier(Modifier::DIM),
-    );
-    Some(OverlayRender {
-        primary,
-        ..OverlayRender::default()
-    })
 }
 
 fn render_rename_overlay(

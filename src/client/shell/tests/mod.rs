@@ -1,5 +1,6 @@
 use super::*;
 use crate::api::schema::AgentStatus;
+use crate::protocol::ClientShellWorkspace;
 use crate::protocol::{
     ClientShellAgent, ClientShellPane, ClientShellTab, ClientShellWorktree, PaneSurfacePane,
     PaneSurfaceSplit, PaneSurfaceSplitDirection, SurfaceRect,
@@ -209,7 +210,6 @@ mod endpoint_requests;
 #[path = "input.rs"]
 mod input_domain;
 mod keybindings_settings;
-mod mobile;
 mod mouse_selection;
 mod popup_focus_projection;
 mod startup_overlays;

@@ -13,11 +13,6 @@ pub(crate) struct ClientShellEndpoint {
     pub(crate) methods: Option<HashSet<String>>,
 }
 
-pub(super) struct MachineHit {
-    pub(super) rect: Rect,
-    pub(super) endpoint_id: ClientEndpointId,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClientEndpointFocusTarget {
     Workspace(String),
@@ -201,19 +196,6 @@ impl ClientShellState {
             .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
             .and_then(|endpoint| endpoint.methods.as_ref())
             .is_none_or(|methods| methods.contains(crate::api::api_method_name(method)))
-    }
-
-    pub(super) fn focused_tab_count(&self) -> usize {
-        let Some(snapshot) = self.snapshot.as_deref() else {
-            return 0;
-        };
-        snapshot
-            .tabs
-            .iter()
-            .filter(|tab| {
-                Some(tab.workspace_id.as_str()) == snapshot.focused_workspace_id.as_deref()
-            })
-            .count()
     }
 
     #[cfg(test)]

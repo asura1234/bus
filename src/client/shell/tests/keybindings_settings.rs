@@ -1,50 +1,6 @@
 use super::*;
 
 #[test]
-fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
-    let mut config = Config::default();
-    config.ui.prompt_new_workspace_name = false;
-    config.ui.prompt_new_tab_name = true;
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    state.compose(106, 20).expect("composed frame");
-
-    let new_workspace = state.hits.new_workspace;
-    let create_workspace =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: new_workspace.x + 1,
-            row: new_workspace.y,
-            modifiers: KeyModifiers::empty(),
-        })]);
-    let [ClientShellAction::Endpoint { request, .. }] = &create_workspace.actions[..] else {
-        panic!("new workspace click should use the endpoint API");
-    };
-    assert!(matches!(
-        request.method,
-        crate::api::schema::Method::WorkspaceCreate(_)
-    ));
-
-    let new_tab = state.hits.new_tab;
-    let open_new_tab =
-        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: new_tab.x + 1,
-            row: new_tab.y,
-            modifiers: KeyModifiers::empty(),
-        })]);
-    assert!(open_new_tab.actions.is_empty());
-    assert!(matches!(
-        state.overlay,
-        Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            target: ClientRenameTarget::NewTab { .. },
-            ..
-        }))
-    ));
-}
-
-#[test]
 fn manual_client_chrome_preferences_round_trip_per_endpoint() {
     let path = std::env::temp_dir().join(format!(
         "herdr-client-shell-prefs-{}.json",
@@ -78,70 +34,6 @@ fn manual_client_chrome_preferences_round_trip_per_endpoint() {
         HashSet::from(["repo-one".to_string(), "repo-two".to_string()])
     );
     std::fs::remove_file(path).expect("remove client chrome preferences");
-}
-
-#[test]
-fn tab_bar_renders_endpoint_status_ellipses_and_clamps_to_useful_scroll() {
-    let mut projected = snapshot();
-    projected.tab_bar_right = vec![
-        crate::protocol::ClientShellTabStatusSegment {
-            text: "ZOOM".into(),
-            accent: true,
-        },
-        crate::protocol::ClientShellTabStatusSegment {
-            text: "host".into(),
-            accent: false,
-        },
-    ];
-    projected.tab_bar_right_separator = " · ".into();
-    for number in 2..=8 {
-        projected.tabs.push(ClientShellTab {
-            tab_id: format!("tab_{number}"),
-            workspace_id: "ws_1".into(),
-            number,
-            label: number.to_string(),
-            custom_label: false,
-            zoomed: false,
-            focused: false,
-            agent_status: AgentStatus::Idle,
-        });
-    }
-    let mut config = ClientShellConfig::from_config(&Config::default());
-    config.mobile_width_threshold = 0;
-    let mut state = ClientShellState::new(config);
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    let frame = state.compose(106, 20).expect("status and overflow tabs");
-    let top = frame.cells[..frame.width as usize]
-        .iter()
-        .map(|cell| cell.symbol.as_str())
-        .collect::<String>();
-    assert!(top.contains("ZOOM · host"));
-    assert!(top.contains('…'));
-
-    state.tab_scroll = usize::MAX;
-    state.reveal_focused_tab = false;
-    state.compose(106, 20).expect("clamped tab scroll");
-    assert!(state.tab_scroll < 7);
-    let manual_scroll = state.tab_scroll;
-    let mut replacement = (**state.snapshot.as_ref().expect("snapshot")).clone();
-    replacement.revision = 2;
-    replacement.tab_bar_right[1].text = "tick".into();
-    let mut replacement_surface = surface();
-    replacement_surface.projection_revision = 2;
-    state.set_snapshot(Box::new(replacement));
-    state.set_pane_surface(replacement_surface);
-    assert!(!state.reveal_focused_tab);
-    state.compose(106, 20).expect("same-width status update");
-    assert_eq!(state.tab_scroll, manual_scroll);
-
-    state.compose(45, 20).expect("narrow tabs win over status");
-    let narrow = state.compose(45, 20).expect("narrow tab frame");
-    let top = narrow.cells[..narrow.width as usize]
-        .iter()
-        .map(|cell| cell.symbol.as_str())
-        .collect::<String>();
-    assert!(!top.contains("ZOOM · host"));
 }
 
 #[test]

@@ -210,9 +210,13 @@ fn client_shell_graphics_follow_final_shell_origin_and_local_overlay_visibility(
     let visible = state.compose(106, 20).expect("visible graphics frame");
     let visible = String::from_utf8_lossy(&visible.graphics);
     assert!(visible.contains("a=t,t=d"));
-    assert!(visible.contains("\u{1b}[2;27H"));
+    assert!(visible.contains("\u{1b}[1;1H"));
 
-    state.overlay = Some(ClientShellOverlay::Onboarding);
+    state.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
+        query: String::new(),
+        search_focused: false,
+        scroll: 0,
+    }));
     let hidden = state.compose(106, 20).expect("overlay frame");
     assert!(String::from_utf8_lossy(&hidden.graphics).contains("a=d,d=i"));
 

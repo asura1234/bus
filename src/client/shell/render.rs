@@ -7,26 +7,10 @@ pub(in crate::client::shell) mod sidebar;
 #[path = "../shell/tabs.rs"]
 mod tabs;
 
-pub(super) use super::agent_sidebar::{ordered_agent_pane_ids, render_agent_panel};
 pub(super) use super::aggregate_navigation::navigator_rows as client_navigator_rows;
-pub(super) use overlays::{render_client_overlay, render_context_menu, render_global_menu};
-pub(super) use sidebar::{render_collapsed_sidebar, render_sidebar, workspace_entries};
-pub(super) use tabs::{render_tab_bar, tab_bar_status_width};
-
-pub(in crate::client::shell) fn render_sidebar_background(
-    buffer: &mut Buffer,
-    area: Rect,
-    palette: &Palette,
-) {
-    buffer.set_style(area, Style::default().bg(palette.sidebar_bg));
-    let separator_x = area.right().saturating_sub(1);
-    for y in area.y..area.bottom() {
-        if let Some(cell) = buffer.cell_mut((separator_x, y)) {
-            cell.set_symbol("│");
-            cell.set_style(Style::default().fg(palette.surface_dim));
-        }
-    }
-}
+pub(super) use overlays::{render_client_overlay, render_context_menu};
+pub(super) use sidebar::workspace_entries;
+pub(super) use tabs::tab_bar_status_width;
 
 pub(super) fn render_mode_bar(
     buffer: &mut Buffer,
@@ -194,113 +178,6 @@ pub(super) fn render_mode_bar(
     Some(bar)
 }
 
-pub(super) struct ShellRenderState<'a> {
-    pub(super) endpoints: &'a [ClientShellEndpoint],
-    pub(super) active_endpoint_id: &'a ClientEndpointId,
-    pub(super) collapsed_endpoints: &'a HashSet<ClientEndpointId>,
-    pub(super) collapsed_groups: &'a HashSet<String>,
-    pub(super) workspace_scroll: &'a mut usize,
-    pub(super) agent_scroll: &'a mut usize,
-    pub(super) tab_scroll: &'a mut usize,
-    pub(super) reveal_focused_workspace: &'a mut bool,
-    pub(super) reveal_focused_tab: &'a mut bool,
-    pub(super) sidebar_collapsed: bool,
-    pub(super) sidebar_section_split: f32,
-    pub(super) status_animation_phase: u8,
-    pub(super) tab_drag_insert_index: Option<usize>,
-    pub(super) selected_workspace_id: Option<&'a str>,
-    pub(super) dragged_workspace_id: Option<&'a str>,
-    pub(super) workspace_drop_indicator_row: Option<u16>,
-}
-
-pub(super) fn render_shell(
-    buffer: &mut Buffer,
-    layout: ClientShellLayout,
-    snapshot: &ClientShellSnapshot,
-    config: &ClientShellConfig,
-    mut state: ShellRenderState<'_>,
-) -> ShellHitMap {
-    let mut hits = ShellHitMap::default();
-    if layout.mobile_header.height > 0 {
-        super::mobile::render_mobile_header(
-            buffer,
-            layout.mobile_header,
-            snapshot,
-            config,
-            &mut hits,
-        );
-    }
-    if layout.sidebar.width > 0 {
-        if state.endpoints.len() > 1 {
-            if state.sidebar_collapsed {
-                super::endpoint_sidebar::render_collapsed(
-                    buffer,
-                    layout.sidebar,
-                    config,
-                    &mut state,
-                    &mut hits,
-                );
-            } else {
-                super::endpoint_sidebar::render_expanded(
-                    buffer,
-                    layout.sidebar,
-                    Some(snapshot),
-                    config,
-                    &mut state,
-                    &mut hits,
-                );
-            }
-        } else if state.sidebar_collapsed {
-            render_collapsed_sidebar(
-                buffer,
-                layout.sidebar,
-                snapshot,
-                config,
-                state.selected_workspace_id,
-                &mut hits,
-            );
-        } else {
-            render_sidebar(
-                buffer,
-                layout.sidebar,
-                snapshot,
-                config,
-                &mut state,
-                &mut hits,
-            );
-        }
-    }
-    if layout.tab_bar.height > 0 {
-        render_tab_bar(
-            buffer,
-            layout.tab_bar,
-            snapshot,
-            config,
-            state.tab_scroll,
-            state.reveal_focused_tab,
-            state.tab_drag_insert_index,
-            &mut hits,
-        );
-    }
-    if !config.mouse_capture {
-        hits.sidebar_divider = Rect::default();
-        hits.sidebar_section_divider = Rect::default();
-        hits.workspace_scrollbar = Rect::default();
-        hits.agent_scrollbar = Rect::default();
-        hits.agent_sort_toggle = Rect::default();
-        hits.new_workspace = Rect::default();
-        hits.machines.clear();
-        hits.workspaces.clear();
-        hits.agents.clear();
-        hits.endpoint_agents.clear();
-        hits.tab_scroll_left = Rect::default();
-        hits.tab_scroll_right = Rect::default();
-        hits.new_tab = Rect::default();
-        hits.pane_splits.clear();
-    }
-    hits
-}
-
 pub(super) fn put_right_text(buffer: &mut Buffer, area: Rect, y: u16, text: &str, style: Style) {
     let width = display_width(text).min(area.width);
     put_text(
@@ -311,19 +188,6 @@ pub(super) fn put_right_text(buffer: &mut Buffer, area: Rect, y: u16, text: &str
         text,
         style,
     );
-}
-
-pub(super) fn put_segment(
-    buffer: &mut Buffer,
-    x: u16,
-    y: u16,
-    right: u16,
-    text: &str,
-    style: Style,
-) -> u16 {
-    let width = display_width(text).min(right.saturating_sub(x));
-    put_text(buffer, x, y, width, text, style);
-    x.saturating_add(width)
 }
 
 pub(super) fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
