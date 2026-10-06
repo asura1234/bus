@@ -476,7 +476,6 @@ fn foreground_group_changed(
     last_foreground_pgid: Option<u32>,
 ) -> bool {
     foreground_pgid != last_foreground_pgid
-        && (foreground_pgid.is_some() || last_foreground_pgid.is_some())
 }
 
 // Only kernel-observed foreground groups drive change detection. Remembering an
@@ -1407,7 +1406,7 @@ fn is_powershell_shell(shell: &str) -> bool {
     let name = shell
         .rsplit(['/', '\\'])
         .next()
-        .unwrap_or(shell)
+        .unwrap()
         .to_ascii_lowercase();
     matches!(
         name.as_str(),
