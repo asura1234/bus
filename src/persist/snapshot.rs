@@ -107,7 +107,7 @@ pub struct PaneSnapshot {
     pub launch_argv: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct PaneAgentSessionSnapshot {
     pub source: String,
     pub agent: String,
@@ -310,14 +310,11 @@ fn capture_tab(
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> TabSnapshot {
     let mut panes = HashMap::new();
-    for id in tab.panes.keys() {
+    for (id, pane) in &tab.panes {
         let cwd = tab
             .cwd_for_pane(*id, terminals, terminal_runtimes)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
-        let terminal = tab
-            .panes
-            .get(id)
-            .and_then(|pane| terminals.get(&pane.attached_terminal_id));
+        let terminal = terminals.get(&pane.attached_terminal_id);
         let label = terminal.and_then(|terminal| terminal.manual_label.clone());
         let (agent_name, managed_agent_kind) = terminal
             .filter(|terminal| !terminal.managed_agent_launch_pending())
@@ -402,7 +399,7 @@ fn capture_tab_history(
 ) -> HashMap<u32, PaneHistorySnapshot> {
     let mut panes = HashMap::new();
     for (id, pane) in &tab.panes {
-        if let Some(history) = capture_pane_history(Some(pane), terminal_runtimes) {
+        if let Some(history) = capture_pane_history(pane, terminal_runtimes) {
             panes.insert(id.raw(), history);
         }
     }
@@ -410,11 +407,11 @@ fn capture_tab_history(
 }
 
 fn capture_pane_history(
-    pane: Option<&crate::pane::PaneState>,
+    pane: &crate::pane::PaneState,
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> Option<PaneHistorySnapshot> {
     let ansi = terminal_runtimes
-        .get(&pane?.attached_terminal_id)?
+        .get(&pane.attached_terminal_id)?
         .snapshot_history()?;
     let lines = ansi.lines().count();
     Some(PaneHistorySnapshot { ansi, lines })

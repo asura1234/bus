@@ -31,7 +31,6 @@ struct PaneRestoreStartup<'a> {
     restore_plan: Option<crate::agent_resume::AgentResumePlan>,
     initial_history_ansi: Option<&'a str>,
     duplicate_agent_session: bool,
-    reserved_agent_session: Option<String>,
 }
 
 struct RestoreRuntimeContext<'a> {
@@ -340,11 +339,6 @@ fn restore_tab(
         };
         let restored_agent_session =
             restored_terminal_agent_session(saved_agent_session, startup.duplicate_agent_session);
-        let initial_restore_agent = startup
-            .restore_plan
-            .as_ref()
-            .and_then(|plan| crate::detect::parse_agent_label(&plan.agent));
-
         let old_pane_id = reverse_id_map.get(id).copied();
         let public_pane_id = old_pane_id
             .and_then(|old_id| public_pane_ids_by_old_raw.get(&old_id))
@@ -358,7 +352,8 @@ fn restore_tab(
                 )
             })
             .unwrap_or_default();
-        if let Some(plan) = startup.restore_plan.clone() {
+        if let Some(plan) = startup.restore_plan {
+            let initial_restore_agent = crate::detect::parse_agent_label(&plan.agent);
             let terminal_id = TerminalId::alloc();
             let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone())
                 .with_pending_agent_resume_plan(plan);
@@ -417,25 +412,11 @@ fn restore_tab(
                 if let Some(session) = restored_agent_session {
                     terminal.set_persisted_agent_session(session);
                 }
-                if let Some(agent) = initial_restore_agent {
-                    let _ = terminal.set_detected_state_with_screen_signals_at(
-                        Some(agent),
-                        AgentState::Idle,
-                        false,
-                        false,
-                        false,
-                        false,
-                        std::time::Instant::now(),
-                    );
-                }
                 panes.insert(*id, PaneState::new(terminal_id.clone()));
                 terminal_runtimes.insert(terminal_id, runtime);
                 terminals.push(terminal);
             }
             Err(e) => {
-                if let Some(key) = startup.reserved_agent_session.as_deref() {
-                    resumed_agent_sessions.remove(key);
-                }
                 error!(
                     tab = ?snap.custom_name,
                     pane_id = id.raw(),
@@ -499,20 +480,12 @@ fn pane_restore_startup<'a>(
     let restore_plan =
         session.and_then(|session| restore_plan_for_snapshot(session, agent_restore.enabled));
     let has_native_agent_restore = restore_plan.is_some();
-    // Reserve before spawning so later panes in the same restore pass cannot
-    // launch the same native agent session. The caller rolls this reservation
-    // back if runtime spawn fails before any agent process is started.
-    let mut reserved_agent_session = None;
+    // Reserve before deferring launch so later panes in the same restore pass
+    // cannot launch the same native agent session.
     let duplicate_agent_session = restore_plan.as_ref().is_some_and(|plan| {
-        if agent_restore
+        !agent_restore
             .resumed_sessions
             .insert(plan.dedupe_key.clone())
-        {
-            reserved_agent_session = Some(plan.dedupe_key.clone());
-            false
-        } else {
-            true
-        }
     });
     let restore_plan = if duplicate_agent_session {
         None
@@ -528,7 +501,6 @@ fn pane_restore_startup<'a>(
             history.map(|history| history.ansi.as_str())
         },
         duplicate_agent_session,
-        reserved_agent_session,
     }
 }
 
@@ -562,16 +534,6 @@ fn restored_terminal_agent_session(
         return None;
     }
     session.and_then(persisted_agent_session_from_snapshot)
-}
-
-#[cfg(test)]
-fn take_restore_plan_for_snapshot(
-    session: &PaneAgentSessionSnapshot,
-    resume_agents_on_restore: bool,
-    resumed_agent_sessions: &mut HashSet<String>,
-) -> Option<crate::agent_resume::AgentResumePlan> {
-    restore_plan_for_snapshot(session, resume_agents_on_restore)
-        .filter(|plan| resumed_agent_sessions.insert(plan.dedupe_key.clone()))
 }
 
 pub(super) fn prune_restored_node(node: Node, surviving: &HashSet<PaneId>) -> Option<Node> {
@@ -780,17 +742,31 @@ mod tests {
             value: pi_session_path.clone(),
         };
         let mut resumed = HashSet::new();
+        let mut agent_restore = AgentRestoreState {
+            enabled: false,
+            resumed_sessions: &mut resumed,
+        };
 
-        assert!(take_restore_plan_for_snapshot(&session, false, &mut resumed).is_none());
-        assert!(resumed.is_empty());
+        assert!(
+            pane_restore_startup(Some(&session), None, &mut agent_restore)
+                .restore_plan
+                .is_none()
+        );
+        assert!(agent_restore.resumed_sessions.is_empty());
 
-        let first = take_restore_plan_for_snapshot(&session, true, &mut resumed)
+        agent_restore.enabled = true;
+        let first = pane_restore_startup(Some(&session), None, &mut agent_restore)
+            .restore_plan
             .expect("first restore should get a plan");
         assert_eq!(
             first.argv,
             vec!["pi", "--session", pi_session_path.as_str()]
         );
-        assert!(take_restore_plan_for_snapshot(&session, true, &mut resumed).is_none());
+        assert!(
+            pane_restore_startup(Some(&session), None, &mut agent_restore)
+                .restore_plan
+                .is_none()
+        );
     }
 
     #[test]
@@ -897,10 +873,19 @@ mod tests {
             value: test_session_path("pi-session.jsonl"),
         };
         let mut resumed = HashSet::new();
-        assert!(take_restore_plan_for_snapshot(&session, true, &mut resumed).is_some());
-        assert!(take_restore_plan_for_snapshot(&session, true, &mut resumed).is_none());
+        let mut agent_restore = AgentRestoreState {
+            enabled: true,
+            resumed_sessions: &mut resumed,
+        };
+        let first = pane_restore_startup(Some(&session), None, &mut agent_restore);
+        let duplicate = pane_restore_startup(Some(&session), None, &mut agent_restore);
+        assert!(first.restore_plan.is_some());
+        assert!(duplicate.restore_plan.is_none());
 
-        assert!(restored_terminal_agent_session(Some(&session), true).is_none());
+        assert!(
+            restored_terminal_agent_session(Some(&session), duplicate.duplicate_agent_session)
+                .is_none()
+        );
     }
 
     #[tokio::test]
