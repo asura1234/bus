@@ -712,6 +712,8 @@ the run's directories. `--keep` leaves the data directory for debugging.
 | `dialog` | The agent raises a dialog mid-turn; it is answered through Bus and the reply lands. |
 | `resume` | Bus quits and restarts on the same data directory; each agent relaunches into its session and a new round trip works. |
 
+| `orchestrator` | A MASTER orchestrator of its own work room, with the default prompt, settles human messages: plain, with an attached image, steered mid-turn, after a background shell (Claude), and once more after. |
+| `adoption` | The orchestrator is deleted and re-added with `--resume` of its session; the same round trips settle in that same session. Needs `orchestrator`. |
 `--providers` defaults to every installed provider CLI and `--cases` to all of
 them. A case a provider cannot run is reported `SKIP` with the reason: the
 background case is Claude-only, and the dialog case skips when the provider's

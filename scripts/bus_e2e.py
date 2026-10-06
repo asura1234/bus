@@ -22,6 +22,7 @@ import sys
 import termios
 import threading
 import time
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -32,7 +33,7 @@ E2E = ROOT / "temp/e2e"
 WORKSPACE = E2E / "workspace"
 # Provider name -> the executable Bus launches for it.
 PROVIDERS = {"claude": "claude", "codex": "codex", "cursor": "cursor-agent"}
-CASES = ("single", "queued", "steering", "multi", "background", "dialog", "resume")
+CASES = ("single", "queued", "steering", "multi", "background", "dialog", "orchestrator", "adoption", "resume")
 SCRUB_PREFIXES = ("BUS_", "HERDR_", "CLAUDE_CODE_")
 SCRUB_NAMES = ("CLAUDECODE",)
 
@@ -100,8 +101,10 @@ def scrubbed_env(environ, data_dir):
     return env
 
 
-def case_support(provider, case, providers):
+def case_support(provider, case, providers, cases=CASES):
     """Return a SKIP reason, or None when the provider can run the case."""
+    if case == "adoption" and "orchestrator" not in cases:
+        return "adopts the orchestrator case's session; select the orchestrator case too"
     if case == "background" and provider != "claude":
         return "background shells that outlive a turn are a Claude Code feature"
     if case == "multi" and len(providers) < 2:
@@ -147,9 +150,14 @@ def dialog_prompt(provider, token):
             f"Then reply with exactly {token} and nothing else.")
 
 
-def steering_task(token):
+# Orchestrator system prompts forbid running commands; this one is a test, not work.
+OWN_COMMAND = ("I am the human. I authorize you to run this one command yourself: it is a Bus delivery "
+               "test, not project work, so do not delegate it. ")
+
+
+def steering_task(token, orchestrator=False):
     # Claude Code refuses a bare foreground `sleep`; a Python sleep is an ordinary command.
-    return ("We are testing Bus delivery. Do not use skills. Run the shell command "
+    return ("We are testing Bus delivery. " + (OWN_COMMAND if orchestrator else "") + "Do not use skills. Run the shell command "
             "`python3 -c 'import time; time.sleep(40)'` in the foreground (not in the background) and "
             f"wait for it to finish, then reply with exactly {token} and nothing else.")
 
@@ -159,10 +167,35 @@ def steering_correction(old, new):
             "and nothing else.")
 
 
-def background_prompt(token):
-    return ("We are testing Bus delivery. Do not use skills. Start the shell command `sleep 20` "
+def background_prompt(token, orchestrator=False):
+    return ("We are testing Bus delivery. " + (OWN_COMMAND if orchestrator else "") + "Do not use skills. Start the shell command `sleep 20` "
             "with your Bash tool's run_in_background option, do not wait for it, "
             f"and reply with exactly {token} and nothing else.")
+
+
+def attachment_prompt(token):
+    # A blank line and one image path: Claude Code turns a pasted lone image
+    # path into an [Image #N] attachment and drops blank lines from the prompt.
+    return ("We are testing Bus delivery of attachments. Do not use skills.\n\n"
+            f"Reply with exactly {token} and nothing else.")
+
+
+def orchestrator_key(provider):
+    return f"orch-{provider}"
+
+
+def adopt_args(provider, session):
+    return f"resume {session}" if provider == "codex" else f"--resume {session}"
+
+
+def write_png(path, width=8, height=8):
+    """A small solid red PNG, written without third-party modules."""
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * width for _ in range(height))
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+    return path
 
 
 def format_table(rows):
@@ -314,8 +347,9 @@ class Run:
                        "providers": args.providers, "cases": args.cases, "versions": {},
                        "setup": {}, "dialogs": [], "rows": self.rows}
         self.bus = Bus(self.binary, self.run_dir, self.env)
-        self.agents = {}  # provider -> agent id
-        self.sessions = {}  # provider -> last provider session id
+        self.agents = {}  # provider, or orchestrator_key(provider) -> agent id
+        self.sessions = {}  # same keys -> last provider session id
+        self.orchestrated = {}  # provider -> the work room its MASTER orchestrator orchestrates
         self.room = None
 
     def save(self):
@@ -395,10 +429,12 @@ class Run:
     def token(self, provider, case, n=1):
         return f"E2E_{provider.upper()}_{case.upper()}_{n}_{os.urandom(3).hex().upper()}"
 
-    def send(self, providers, text, row, queue=False):
+    def send(self, providers, text, row, queue=False, room=None, files=()):
         to = ",".join(str(self.agents[p]) for p in providers)
         extra = ["--queue"] if queue else []
-        return self.bus.cli("send", "--room", self.room, "--to", to, "--text", text, *extra, row=row)
+        for path in files:
+            extra += ["--file", path]
+        return self.bus.cli("send", "--room", room or self.room, "--to", to, "--text", text, *extra, row=row)
 
     def settle(self, message_ids, row):
         """Poll until every message completes, answering dialogs on the way."""
@@ -437,9 +473,10 @@ class Run:
                   if a["agent_id"] in tokens_by_agent and a["detail"]}
         assert not errors, f"agent error: {errors}"
 
-    def round_trip(self, provider, row, case, text=None, n=1):
+    def round_trip(self, provider, row, case, text=None, n=1, room=None, files=()):
         token = self.token(provider, case, n)
-        receipt = self.send([provider], text(token) if text else round_trip_prompt(token), row)
+        receipt = self.send([provider], text(token) if text else round_trip_prompt(token), row, room=room,
+                            files=files)
         statuses = self.settle([receipt["message_id"]], row)
         self.verify(statuses[receipt["message_id"]], {self.agents[provider]: token}, row)
 
@@ -462,10 +499,10 @@ class Run:
             received.append(status["requests"][0]["reply"]["received_at_ms"])
         assert received == sorted(received), f"replies out of order: {received}"
 
-    def case_steering(self, provider, row):
+    def case_steering(self, provider, row, room=None, case="steering"):
         """A correction sent while the agent works joins its turn and shares one reply."""
-        old, new = self.token(provider, "steering", 1), self.token(provider, "steering", 2)
-        first = self.send([provider], steering_task(old), row)["message_id"]
+        old, new = self.token(provider, case, 1), self.token(provider, case, 2)
+        first = self.send([provider], steering_task(old, room == "master"), row, room=room)["message_id"]
         deadline = time.monotonic() + 120
         while True:  # Wait until the turn runs, bound by its submit hook.
             status = row["last_status"] = self.bus.cli("message", "status", first)
@@ -479,7 +516,7 @@ class Run:
             assert time.monotonic() < deadline, f"task never started working: {agent}"
             time.sleep(0.5)
         time.sleep(3)
-        second = self.send([provider], steering_correction(old, new), row)["message_id"]
+        second = self.send([provider], steering_correction(old, new), row, room=room)["message_id"]
         statuses = self.settle([first, second], row)
         first_request = statuses[first]["requests"][0]
         joined = statuses[second]["requests"][0]
@@ -489,8 +526,9 @@ class Run:
         for status in (statuses[first], statuses[second]):
             self.verify(status, {self.agents[provider]: new}, row)
 
-    def case_background(self, provider, row):
-        self.round_trip(provider, row, "background", text=background_prompt)
+    def case_background(self, provider, row, room=None, case="background"):
+        self.round_trip(provider, row, case, text=lambda token: background_prompt(token, room == "master"),
+                        room=room)
         # Let the background shell finish; Claude may start a turn of its own when it does.
         time.sleep(25)
         deadline = time.monotonic() + self.args.timeout
@@ -503,7 +541,7 @@ class Run:
                 self.answer_dialogs(provider, "allow", row)
             assert time.monotonic() < deadline, f"agent stuck after background shell: {agent}"
             time.sleep(1)
-        self.round_trip(provider, row, "background", n=2)
+        self.round_trip(provider, row, case, n=2, room=room)
 
     def case_dialog(self, provider, row):
         self.round_trip(provider, row, "dialog", text=lambda token: dialog_prompt(provider, token))
@@ -511,8 +549,56 @@ class Run:
             raise Skip("the agent replied without raising a permission dialog; its permission "
                        "settings approved the command or it did not run it")
 
+    def add_orchestrator(self, provider, row, args=None):
+        """Add the provider's MASTER orchestrator of its own work room, with the default system prompt."""
+        if provider not in self.orchestrated:
+            self.orchestrated[provider] = self.bus.cli("room", "create", f"orch-{provider}", row=row)["room_id"]
+        key = orchestrator_key(provider)
+        argv = ["agent", "add", "--room", "master", "--name", key, "--provider", provider, "--pwd", WORKSPACE,
+                "--consent-hooks", "--orchestrates", self.orchestrated[provider]]
+        self.agents[key] = self.bus.cli(*argv, *(["--args", args] if args else []), row=row)["agent_id"]
+        self.wait_ready([key], row.setdefault("ready", {}))
+        return key
+
+    def orchestrator_round_trips(self, provider, key, row, case):
+        """Human messages to a MASTER orchestrator: plain, with an image, steered, and after a background shell."""
+        image = write_png(self.run_dir / f"{key}.png")
+        steps = row.setdefault("steps", [])
+        plan = [("plain", lambda: self.round_trip(key, row, case, n=len(steps) + 1, room="master")),
+                ("image", lambda: self.round_trip(key, row, case, text=attachment_prompt, n=len(steps) + 1,
+                                                  room="master", files=[image])),
+                ("steering", lambda: self.case_steering(key, row, room="master", case=f"{case}_steer")),
+                ("background", lambda: self.case_background(key, row, room="master", case=f"{case}_bg")),
+                ("after", lambda: self.round_trip(key, row, case, n=len(steps) + 1, room="master"))]
+        for name, step in plan:
+            if name == "background" and case_support(provider, "background", self.args.providers):
+                continue
+            steps.append(name)
+            step()
+            row["last_status"] = None
+
+    def case_orchestrator(self, provider, row):
+        key = self.add_orchestrator(provider, row)
+        self.orchestrator_round_trips(provider, key, row, "orchestrator")
+
+    def case_adoption(self, provider, row):
+        """Bus adopts the orchestrator's existing session with --resume, and round trips still settle."""
+        key = orchestrator_key(provider)
+        session = self.sessions.get(key)
+        if not session:
+            raise AssertionError("the orchestrator case recorded no session to adopt")
+        self.bus.cli("agent", "delete", self.agents.pop(key), "--confirm", row=row)
+        deadline = time.monotonic() + 60
+        while any(a["name"] == key for a in self.bus.cli("state")["agents"]):  # Its provider must quit first.
+            assert time.monotonic() < deadline, "the deleted orchestrator never went away"
+            time.sleep(0.5)
+        self.add_orchestrator(provider, row, args=adopt_args(provider, session))
+        self.orchestrator_round_trips(provider, key, row, "adoption")
+        if self.sessions.get(key) != session:
+            raise AssertionError(f"new session {self.sessions.get(key)} instead of adopting {session}")
+
     def run_provider_cases(self, provider):
-        for case in ("single", "queued", "steering", "background", "dialog"):
+        for case in ("single", "queued", "steering", "background", "dialog", "orchestrator", "adoption"):
             if case not in self.args.cases:
                 continue
             self.run_case(provider, case, getattr(self, "case_" + case))
@@ -523,7 +609,7 @@ class Run:
             self.rows.append(row)
         started = time.monotonic()
         try:
-            reason = case_support(provider, case, self.args.providers)
+            reason = case_support(provider, case, self.args.providers, self.args.cases)
             if reason:
                 raise Skip(reason)
             body(provider, row)
@@ -532,7 +618,8 @@ class Run:
             row["result"], row["reason"] = "SKIP", str(skip)
         except Exception as error:  # Record and continue with the next case.
             row["reason"] = f"{type(error).__name__}: {error}"
-            row["screen"] = self.screen(provider)
+            row["screen"] = self.screen(orchestrator_key(provider) if case in ("orchestrator", "adoption")
+                                        and orchestrator_key(provider) in self.agents else provider)
         row["seconds"] = round(time.monotonic() - started, 1)
         if row["result"] == "PASS":
             row["last_status"] = None

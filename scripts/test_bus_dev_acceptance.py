@@ -233,6 +233,8 @@ class EndToEndArgumentTests(unittest.TestCase):
         self.assertIn("Claude", e2e.case_support("codex", "background", ["claude", "codex"]))
         self.assertIn("two providers", e2e.case_support("cursor", "multi", ["cursor"]))
         self.assertIsNone(e2e.case_support("cursor", "multi", ["claude", "cursor"]))
+        self.assertIn("orchestrator case", e2e.case_support("codex", "adoption", ["codex"], ["adoption"]))
+        self.assertIsNone(e2e.case_support("codex", "adoption", ["codex"], ["orchestrator", "adoption"]))
 
 
 class EndToEndEnvironmentTests(unittest.TestCase):
@@ -292,6 +294,22 @@ class EndToEndDialogTests(unittest.TestCase):
         self.assertIn("AskUserQuestion", e2e.dialog_prompt("claude", "T"))
         self.assertIn("escalated", e2e.dialog_prompt("codex", "T"))
         self.assertIn("run_in_background", e2e.background_prompt("T"))
+        # Claude Code drops blank lines once it lifts an attached image; the prompt keeps one.
+        self.assertIn("\n\nReply with exactly T and nothing else.", e2e.attachment_prompt("T"))
+        # Orchestrators run the test command themselves only when the human says so.
+        for prompt in (e2e.steering_task, e2e.background_prompt):
+            self.assertNotIn("I authorize", prompt("T"))
+            self.assertIn("I authorize", prompt("T", True))
+
+    def test_orchestrator_adoption_args_and_image(self):
+        self.assertEqual(e2e.adopt_args("codex", "S"), "resume S")
+        self.assertEqual(e2e.adopt_args("claude", "S"), "--resume S")
+        self.assertEqual(e2e.adopt_args("cursor", "S"), "--resume S")
+        self.assertEqual(e2e.orchestrator_key("cursor"), "orch-cursor")
+        with tempfile.TemporaryDirectory() as tmp:
+            data = e2e.write_png(Path(tmp) / "x.png").read_bytes()
+        self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertTrue(data.endswith(b"IEND\xaeB`\x82"))
 
 
 class EndToEndReportTests(unittest.TestCase):
