@@ -13,7 +13,6 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
         revision: 1,
         config_diagnostic: None,
         server_keybindings_toml: None,
-        worktree_directory: "/tmp/herdr-worktrees".into(),
         focused_workspace_id: Some("ws_1".into()),
         focused_tab_id: Some("tab_1".into()),
         focused_pane_id: Some("pane_1".into()),

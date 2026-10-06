@@ -776,7 +776,6 @@ pub struct AppState {
     /// Set when the headless server should ask attached clients to reload
     /// their client-local sound config from disk.
     pub request_client_config_reload: bool,
-    pub worktree_directory: std::path::PathBuf,
     // Geometry of the most recently computed server pane surface.
     pub view: ViewState,
     // Notifications
@@ -960,7 +959,6 @@ impl AppState {
             mode: Mode::Navigate,
             should_quit: false,
             request_client_config_reload: false,
-            worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             view: ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),

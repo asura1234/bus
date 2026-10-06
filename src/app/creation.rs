@@ -23,7 +23,7 @@ pub(crate) fn resolve_new_terminal_cwd(
         NewTerminalCwdConfig::Current => {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
         }
-        NewTerminalCwdConfig::Path(path) => crate::worktree::expand_tilde_path(path),
+        NewTerminalCwdConfig::Path(path) => crate::home_path::expand_tilde_path(path),
     }
 }
 

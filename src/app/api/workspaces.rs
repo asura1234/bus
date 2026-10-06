@@ -451,12 +451,12 @@ mod tests {
         ));
         let created_cwd = &app.state.workspaces[1].identity_cwd;
         assert_eq!(
-            crate::worktree::canonical_or_original(created_cwd),
-            crate::worktree::canonical_or_original(&focused_cwd)
+            crate::home_path::canonical_or_original(created_cwd),
+            crate::home_path::canonical_or_original(&focused_cwd)
         );
         assert_ne!(
-            crate::worktree::canonical_or_original(created_cwd),
-            crate::worktree::canonical_or_original(&root_cwd)
+            crate::home_path::canonical_or_original(created_cwd),
+            crate::home_path::canonical_or_original(&root_cwd)
         );
         shutdown_test_runtimes(&mut app);
         let _ = std::fs::remove_dir_all(&focused_cwd);
@@ -510,8 +510,8 @@ mod tests {
             ResponseResult::WorkspaceCreated { .. }
         ));
         assert_eq!(
-            crate::worktree::canonical_or_original(&app.state.workspaces[2].identity_cwd),
-            crate::worktree::canonical_or_original(&source_cwd)
+            crate::home_path::canonical_or_original(&app.state.workspaces[2].identity_cwd),
+            crate::home_path::canonical_or_original(&source_cwd)
         );
 
         let invalid = app.handle_workspace_create(
@@ -543,8 +543,8 @@ mod tests {
             ResponseResult::WorkspaceCreated { .. }
         ));
         assert_eq!(
-            crate::worktree::canonical_or_original(&app.state.workspaces[3].identity_cwd),
-            crate::worktree::canonical_or_original(&source_cwd)
+            crate::home_path::canonical_or_original(&app.state.workspaces[3].identity_cwd),
+            crate::home_path::canonical_or_original(&source_cwd)
         );
         shutdown_test_runtimes(&mut app);
         let _ = std::fs::remove_dir_all(&source_cwd);

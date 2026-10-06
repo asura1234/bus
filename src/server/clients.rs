@@ -185,8 +185,6 @@ pub(crate) struct ClientConnection {
     /// only if this exact presentation lease is still active when its response arrives.
     pub(crate) shell_endpoint_command_surface_revision: Option<u64>,
     /// Request id and buffered response for a deferred worktree-created navigation.
-    pub(crate) shell_deferred_navigation_request_id: Option<String>,
-    pub(crate) shell_deferred_navigation_response: Option<Vec<u8>>,
     /// Whether this shell uses the endpoint-owned keymap rather than a client-owned keymap.
     pub(crate) shell_uses_endpoint_keybindings: bool,
     /// Channels for sending framed ServerMessage data to the client writer thread.
@@ -247,8 +245,6 @@ impl ClientConnection {
             shell_projection_revision: 0,
             shell_endpoint_command_in_flight: false,
             shell_endpoint_command_surface_revision: None,
-            shell_deferred_navigation_request_id: None,
-            shell_deferred_navigation_response: None,
             shell_uses_endpoint_keybindings: false,
             writer,
         }

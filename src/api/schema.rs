@@ -10,7 +10,6 @@ pub mod server;
 pub mod session;
 pub mod tabs;
 pub mod workspaces;
-pub mod worktrees;
 
 pub use agents::*;
 pub use commands::*;
@@ -22,7 +21,6 @@ pub use server::*;
 pub use session::*;
 pub use tabs::*;
 pub use workspaces::*;
-pub use worktrees::*;
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -77,14 +75,6 @@ pub enum Method {
     WorkspaceReportMetadata(WorkspaceReportMetadataParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
-    #[serde(rename = "worktree.list")]
-    WorktreeList(WorktreeListParams),
-    #[serde(rename = "worktree.create")]
-    WorktreeCreate(WorktreeCreateParams),
-    #[serde(rename = "worktree.open")]
-    WorktreeOpen(WorktreeOpenParams),
-    #[serde(rename = "worktree.remove")]
-    WorktreeRemove(WorktreeRemoveParams),
     #[serde(rename = "tab.create")]
     TabCreate(TabCreateParams),
     #[serde(rename = "tab.list")]

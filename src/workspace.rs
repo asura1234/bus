@@ -1080,10 +1080,6 @@ impl Workspace {
         self.cached_git_ahead_behind
     }
 
-    pub fn git_space(&self) -> Option<&GitSpaceMetadata> {
-        self.cached_git_space.as_ref()
-    }
-
     pub fn worktree_space(&self) -> Option<&WorktreeSpaceMembership> {
         self.worktree_space.as_ref()
     }

@@ -12,7 +12,6 @@ use super::server::ServerCapabilities;
 use super::session::SessionSnapshot;
 use super::tabs::TabInfo;
 use super::workspaces::WorkspaceInfo;
-use super::worktrees::{WorktreeInfo, WorktreeSourceInfo};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SuccessResponse {
@@ -32,6 +31,8 @@ pub struct ErrorBody {
     pub message: String,
 }
 
+// Built once per API response and serialized immediately; variant size does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
@@ -54,28 +55,6 @@ pub enum ResponseResult {
     },
     WorkspaceList {
         workspaces: Vec<WorkspaceInfo>,
-    },
-    WorktreeList {
-        source: WorktreeSourceInfo,
-        worktrees: Vec<WorktreeInfo>,
-    },
-    WorktreeCreated {
-        workspace: WorkspaceInfo,
-        tab: TabInfo,
-        root_pane: PaneInfo,
-        worktree: WorktreeInfo,
-    },
-    WorktreeOpened {
-        workspace: WorkspaceInfo,
-        tab: TabInfo,
-        root_pane: PaneInfo,
-        worktree: WorktreeInfo,
-        already_open: bool,
-    },
-    WorktreeRemoved {
-        workspace_id: String,
-        path: String,
-        forced: bool,
     },
     TabInfo {
         tab: TabInfo,

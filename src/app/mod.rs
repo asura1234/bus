@@ -25,7 +25,6 @@ mod terminal_targets;
 mod terminal_titles;
 mod theme_sync;
 mod window_title;
-mod worktrees;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -94,12 +93,6 @@ pub struct App {
     pub(crate) git_refresh_due_after_in_flight: bool,
     pub(crate) git_identity_refresh_requested: bool,
     pub(crate) git_status_cache: HashMap<std::path::PathBuf, crate::workspace::GitStatusCacheEntry>,
-    pub(crate) pending_api_worktree_creates: HashMap<std::path::PathBuf, u64>,
-    pub(crate) pending_api_worktree_removes: HashMap<String, u64>,
-    pub(crate) pending_api_worktree_remove_paths: HashMap<std::path::PathBuf, u64>,
-    pub(crate) pending_worktree_remove_runtime_exits: HashMap<crate::layout::PaneId, usize>,
-    pub(crate) pending_worktree_remove_runtime_restores: HashMap<crate::layout::PaneId, u64>,
-    pub(crate) next_api_worktree_operation_id: u64,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
@@ -344,9 +337,6 @@ impl App {
 
         let agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
 
-        let worktree_directory =
-            crate::worktree::expand_tilde_absolute_path(&config.worktrees.directory);
-
         info!(
             pane_scrollback_limit_bytes = config.advanced.scrollback_limit_bytes,
             "using pane scrollback configuration"
@@ -373,7 +363,6 @@ impl App {
             mode,
             should_quit: false,
             request_client_config_reload: false,
-            worktree_directory,
             view: state::ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),
@@ -456,12 +445,6 @@ impl App {
             git_refresh_due_after_in_flight: false,
             git_identity_refresh_requested: false,
             git_status_cache: HashMap::new(),
-            pending_api_worktree_creates: HashMap::new(),
-            pending_api_worktree_removes: HashMap::new(),
-            pending_api_worktree_remove_paths: HashMap::new(),
-            pending_worktree_remove_runtime_exits: HashMap::new(),
-            pending_worktree_remove_runtime_restores: HashMap::new(),
-            next_api_worktree_operation_id: 1,
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
             pending_agent_resume_deadline: None,
@@ -673,11 +656,6 @@ impl App {
             self.state.default_shell = config.terminal.default_shell.clone();
             self.state.shell_mode = config.terminal.shell_mode;
             self.state.new_terminal_cwd = config.terminal.new_cwd.clone();
-        }
-
-        if !invalid_section("worktrees") {
-            self.state.worktree_directory =
-                crate::worktree::expand_tilde_absolute_path(&config.worktrees.directory);
         }
 
         if !invalid_section("theme") {
@@ -1541,18 +1519,6 @@ mod tests {
                 label: Some("logs".into()),
             }),
         };
-        let worktree_list = crate::api::schema::Request {
-            id: "req_4".into(),
-            method: crate::api::schema::Method::WorktreeList(
-                crate::api::schema::WorktreeListParams::default(),
-            ),
-        };
-        let worktree_create = crate::api::schema::Request {
-            id: "req_5".into(),
-            method: crate::api::schema::Method::WorktreeCreate(
-                crate::api::schema::WorktreeCreateParams::default(),
-            ),
-        };
         let pane_swap = crate::api::schema::Request {
             id: "req_6".into(),
             method: crate::api::schema::Method::PaneSwap(crate::api::schema::PaneSwapParams {
@@ -1597,10 +1563,8 @@ mod tests {
         };
 
         assert!(!crate::api::request_changes_ui(&read_only));
-        assert!(!crate::api::request_changes_ui(&worktree_list));
         assert!(crate::api::request_changes_ui(&mutating));
         assert!(crate::api::request_changes_ui(&pane_rename));
-        assert!(crate::api::request_changes_ui(&worktree_create));
         assert!(crate::api::request_changes_ui(&pane_swap));
         assert!(crate::api::request_changes_ui(&pane_focus_direction));
         assert!(crate::api::request_changes_ui(&pane_resize));

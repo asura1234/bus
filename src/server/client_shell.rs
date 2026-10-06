@@ -202,7 +202,6 @@ pub(super) fn snapshot(
         revision,
         config_diagnostic: config_diagnostic.map(str::to_owned),
         server_keybindings_toml: app.client_shell_keybindings_profile().map(str::to_owned),
-        worktree_directory: app.state.worktree_directory.to_string_lossy().into_owned(),
         focused_workspace_id,
         focused_tab_id,
         focused_pane_id,

@@ -35,23 +35,6 @@ fn classify_shell_focus_transition<'a>(
     (lost, gained)
 }
 
-pub(super) fn forward_proxied_api_response(
-    proxy: Option<(
-        std::sync::mpsc::Sender<String>,
-        std::sync::mpsc::Receiver<String>,
-    )>,
-) -> bool {
-    let Some((respond_to, response_rx)) = proxy else {
-        return false;
-    };
-    let Ok(response) = response_rx.recv() else {
-        return false;
-    };
-    let succeeded = serde_json::from_str::<api::schema::SuccessResponse>(&response).is_ok();
-    let _ = respond_to.send(response);
-    succeeded
-}
-
 impl HeadlessServer {
     pub(super) fn default_shell_target(&self) -> Option<crate::ui::TabSurfaceTarget> {
         let workspace_index = self.app.state.active?;
@@ -238,9 +221,6 @@ impl HeadlessServer {
                 | Method::TabCreate(_)
                 | Method::WorkspaceClose(_)
                 | Method::WorkspaceCreate(_)
-                | Method::WorktreeCreate(_)
-                | Method::WorktreeOpen(_)
-                | Method::WorktreeRemove(_)
         )
     }
 
@@ -277,9 +257,6 @@ impl HeadlessServer {
                 | Method::WorkspaceMove(_)
                 | Method::WorkspaceMoveBlock(_)
                 | Method::WorkspaceRename(_)
-                | Method::WorktreeCreate(_)
-                | Method::WorktreeOpen(_)
-                | Method::WorktreeRemove(_)
         )
     }
 
@@ -305,21 +282,7 @@ impl HeadlessServer {
                 | Method::WorkspaceClose(_)
                 | Method::WorkspaceCreate(_)
                 | Method::WorkspaceFocus(_)
-                | Method::WorktreeCreate(_)
-                | Method::WorktreeOpen(_)
-                | Method::WorktreeRemove(_)
         )
-    }
-
-    pub(super) fn deferred_endpoint_navigation_tab_id(response: &[u8]) -> Option<String> {
-        let response = serde_json::from_slice::<serde_json::Value>(response).ok()?;
-        if response.pointer("/result/type")?.as_str()? != "worktree_created" {
-            return None;
-        }
-        response
-            .pointer("/result/tab/tab_id")?
-            .as_str()
-            .map(str::to_owned)
     }
 
     fn apply_shell_navigation_request(
@@ -806,7 +769,7 @@ impl HeadlessServer {
     /// Applies a public socket request, including its session-wide focus projection.
     pub(super) fn handle_api_request_with_shutdown_check(
         &mut self,
-        mut msg: api::ApiRequestMessage,
+        msg: api::ApiRequestMessage,
     ) -> bool {
         let target_before = self.default_shell_target();
         let popup_before = self.app.state.popup_pane.is_some();
@@ -847,23 +810,12 @@ impl HeadlessServer {
             api::schema::Method::TabCreate(params) => params.focus,
             _ => false,
         };
-        let inspect_worktree_open = matches!(
-            &msg.request.method,
-            api::schema::Method::WorktreeOpen(params) if params.focus
-        );
-        let response_proxy = inspect_worktree_open.then(|| {
-            let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
-            let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
-            (original, proxy_rx)
-        });
         let reconcile = Self::shell_locations_may_need_reconcile(&msg.request.method);
         let changed = self.handle_api_request_with_shutdown_check_inner(msg, false);
-        let worktree_open_succeeded = forward_proxied_api_response(response_proxy);
         let target_changed = self.default_shell_target() != target_before;
         let public_focus_succeeded = explicit_public_focus_target
             .is_some_and(|target| self.default_shell_target() == Some(target))
-            || (create_focus_requested && target_changed)
-            || worktree_open_succeeded;
+            || (create_focus_requested && target_changed);
         if public_focus_succeeded {
             self.focus_all_shell_clients_on_default_target();
         }

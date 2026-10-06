@@ -919,8 +919,6 @@ pub struct ClientShellSnapshot {
     pub config_diagnostic: Option<String>,
     /// Endpoint's normalized built-in keybindings, used only when a remote client selects server bindings.
     pub server_keybindings_toml: Option<String>,
-    /// Endpoint-owned base directory used for new linked worktree checkouts.
-    pub worktree_directory: String,
     pub focused_workspace_id: Option<String>,
     pub focused_tab_id: Option<String>,
     pub focused_pane_id: Option<String>,
@@ -2589,7 +2587,6 @@ mod tests {
             revision: 1,
             config_diagnostic: Some("endpoint config warning".into()),
             server_keybindings_toml: Some("[keys]\nprefix = \"ctrl+a\"\n".into()),
-            worktree_directory: "/tmp/herdr-worktrees".into(),
             focused_workspace_id: Some("w1".into()),
             focused_tab_id: Some("w1:t1".into()),
             focused_pane_id: Some("w1:p1".into()),

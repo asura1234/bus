@@ -9,49 +9,6 @@ use crate::detect::{Agent, AgentState};
 use crate::layout::PaneId;
 use crate::workspace::{GitStatusCacheEntry, WorkspaceGitStatus};
 
-#[derive(Debug)]
-pub struct ApiWorktreeAddRequest {
-    pub id: String,
-    pub operation_id: u64,
-    pub checkout_key: std::path::PathBuf,
-    pub source_workspace_id: Option<String>,
-    pub source_existing_membership: Option<crate::workspace::WorktreeSpaceMembership>,
-    pub source_checkout_path: std::path::PathBuf,
-    pub source_repo_root: std::path::PathBuf,
-    pub repo_key: String,
-    pub repo_name: String,
-    pub label: Option<String>,
-    pub focus: bool,
-    pub respond_to: std::sync::mpsc::Sender<String>,
-}
-
-#[derive(Debug)]
-pub struct WorktreeAddResult {
-    pub path: std::path::PathBuf,
-    pub api_request: Option<ApiWorktreeAddRequest>,
-    pub result: Result<(), String>,
-}
-
-#[derive(Debug)]
-pub struct ApiWorktreeRemoveRequest {
-    pub id: String,
-    pub operation_id: u64,
-    pub checkout_key: std::path::PathBuf,
-    pub shutdown_panes: Vec<crate::layout::PaneId>,
-    pub respond_to: std::sync::mpsc::Sender<String>,
-}
-
-#[derive(Debug)]
-pub struct WorktreeRemoveResult {
-    pub workspace_id: String,
-    pub path: std::path::PathBuf,
-    pub workspace: Option<Box<crate::api::schema::WorkspaceInfo>>,
-    pub worktree: Option<Box<crate::api::schema::WorktreeInfo>>,
-    pub forced: bool,
-    pub api_request: Option<ApiWorktreeRemoveRequest>,
-    pub result: Result<(), String>,
-}
-
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
@@ -60,8 +17,6 @@ pub enum AppEvent {
         pane_id: PaneId,
         exit_reason: crate::platform::ChildExitReason,
     },
-    /// A worktree-removal runtime could not be restored normally.
-    WorktreeRuntimeRestoreFailed { pane_id: PaneId, operation_id: u64 },
     /// Process detection identified an agent before its screen state was confirmed.
     AgentProcessDetected {
         pane_id: PaneId,
@@ -149,8 +104,4 @@ pub enum AppEvent {
         segment_index: usize,
         result: Result<Option<String>, String>,
     },
-    /// Background `git worktree add` completed.
-    WorktreeAddFinished(Box<WorktreeAddResult>),
-    /// Background `git worktree remove` completed.
-    WorktreeRemoveFinished(Box<WorktreeRemoveResult>),
 }

@@ -43,10 +43,6 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "workspace.move",
     "workspace.move_block",
     "workspace.rename",
-    "worktree.create",
-    "worktree.list",
-    "worktree.open",
-    "worktree.remove",
 ];
 
 pub(crate) fn supported_client_shell_method_names() -> &'static [&'static str] {

@@ -830,8 +830,8 @@ mod tests {
         let created_terminal_id = created.terminal_id(created.root_pane).unwrap();
         let created_cwd = &app.state.terminals.get(created_terminal_id).unwrap().cwd;
         assert_eq!(
-            crate::worktree::canonical_or_original(created_cwd),
-            crate::worktree::canonical_or_original(&cached_cwd)
+            crate::home_path::canonical_or_original(created_cwd),
+            crate::home_path::canonical_or_original(&cached_cwd)
         );
         shutdown_test_runtimes(&mut app);
     }

@@ -14,6 +14,7 @@ mod copy_mode;
 mod detect;
 mod events;
 mod ghostty;
+mod home_path;
 mod input;
 mod ipc;
 mod kitty_graphics;
@@ -41,7 +42,6 @@ mod terminal_notify;
 mod terminal_theme;
 mod ui;
 mod workspace;
-mod worktree;
 
 fn args_as_utf8<I>(args: I) -> Result<Vec<String>, String>
 where

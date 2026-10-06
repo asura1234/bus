@@ -254,84 +254,6 @@
             },
             {
               "properties": {
-                "type": {
-                  "const": "worktree_created",
-                  "type": "string"
-                },
-                "workspace": {
-                  "$ref": "#/schemas/event/$defs/WorkspaceInfo"
-                },
-                "worktree": {
-                  "$ref": "#/schemas/event/$defs/WorktreeInfo"
-                }
-              },
-              "required": [
-                "type",
-                "workspace",
-                "worktree"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "already_open": {
-                  "type": "boolean"
-                },
-                "type": {
-                  "const": "worktree_opened",
-                  "type": "string"
-                },
-                "workspace": {
-                  "$ref": "#/schemas/event/$defs/WorkspaceInfo"
-                },
-                "worktree": {
-                  "$ref": "#/schemas/event/$defs/WorktreeInfo"
-                }
-              },
-              "required": [
-                "type",
-                "workspace",
-                "worktree",
-                "already_open"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "forced": {
-                  "type": "boolean"
-                },
-                "type": {
-                  "const": "worktree_removed",
-                  "type": "string"
-                },
-                "workspace": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/schemas/event/$defs/WorkspaceInfo"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "workspace_id": {
-                  "type": "string"
-                },
-                "worktree": {
-                  "$ref": "#/schemas/event/$defs/WorktreeInfo"
-                }
-              },
-              "required": [
-                "type",
-                "workspace_id",
-                "worktree",
-                "forced"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
                 "tab": {
                   "$ref": "#/schemas/event/$defs/TabInfo"
                 },
@@ -736,9 +658,6 @@
             "workspace_moved",
             "workspace_reordered",
             "workspace_focused",
-            "worktree_created",
-            "worktree_opened",
-            "worktree_removed",
             "tab_created",
             "tab_closed",
             "tab_renamed",
@@ -1157,49 +1076,6 @@
             "repo_root",
             "checkout_path",
             "is_linked_worktree"
-          ],
-          "type": "object"
-        },
-        "WorktreeInfo": {
-          "properties": {
-            "branch": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "is_bare": {
-              "type": "boolean"
-            },
-            "is_detached": {
-              "type": "boolean"
-            },
-            "is_linked_worktree": {
-              "type": "boolean"
-            },
-            "is_prunable": {
-              "type": "boolean"
-            },
-            "label": {
-              "type": "string"
-            },
-            "open_workspace_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "path": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "is_bare",
-            "is_detached",
-            "is_prunable",
-            "is_linked_worktree",
-            "label"
           ],
           "type": "object"
         }
@@ -3579,42 +3455,6 @@
             {
               "properties": {
                 "type": {
-                  "const": "worktree.created",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "type": {
-                  "const": "worktree.opened",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "type": {
-                  "const": "worktree.removed",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "type": {
                   "const": "tab.created",
                   "type": "string"
                 }
@@ -4100,134 +3940,6 @@
             "workspace_id"
           ],
           "type": "object"
-        },
-        "WorktreeCreateParams": {
-          "properties": {
-            "base": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "branch": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "cwd": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "focus": {
-              "default": false,
-              "type": "boolean"
-            },
-            "label": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "path": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "trust_repository": {
-              "type": "boolean"
-            },
-            "workspace_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "type": "object"
-        },
-        "WorktreeListParams": {
-          "properties": {
-            "cwd": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "trust_repository": {
-              "type": "boolean"
-            },
-            "workspace_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "type": "object"
-        },
-        "WorktreeOpenParams": {
-          "properties": {
-            "branch": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "cwd": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "focus": {
-              "default": false,
-              "type": "boolean"
-            },
-            "label": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "path": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "trust_repository": {
-              "type": "boolean"
-            },
-            "workspace_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "type": "object"
-        },
-        "WorktreeRemoveParams": {
-          "properties": {
-            "force": {
-              "default": false,
-              "type": "boolean"
-            },
-            "trust_repository": {
-              "type": "boolean"
-            },
-            "workspace_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "workspace_id"
-          ],
-          "type": "object"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4512,70 +4224,6 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/WorkspaceCloseParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "worktree.list",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/WorktreeListParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "worktree.create",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/WorktreeCreateParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "worktree.open",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/WorktreeOpenParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "worktree.remove",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/WorktreeRemoveParams"
             }
           },
           "required": [
@@ -6355,84 +6003,6 @@
             },
             {
               "properties": {
-                "type": {
-                  "const": "worktree_created",
-                  "type": "string"
-                },
-                "workspace": {
-                  "$ref": "#/schemas/success_response/$defs/WorkspaceInfo"
-                },
-                "worktree": {
-                  "$ref": "#/schemas/success_response/$defs/WorktreeInfo"
-                }
-              },
-              "required": [
-                "type",
-                "workspace",
-                "worktree"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "already_open": {
-                  "type": "boolean"
-                },
-                "type": {
-                  "const": "worktree_opened",
-                  "type": "string"
-                },
-                "workspace": {
-                  "$ref": "#/schemas/success_response/$defs/WorkspaceInfo"
-                },
-                "worktree": {
-                  "$ref": "#/schemas/success_response/$defs/WorktreeInfo"
-                }
-              },
-              "required": [
-                "type",
-                "workspace",
-                "worktree",
-                "already_open"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "forced": {
-                  "type": "boolean"
-                },
-                "type": {
-                  "const": "worktree_removed",
-                  "type": "string"
-                },
-                "workspace": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/schemas/success_response/$defs/WorkspaceInfo"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "workspace_id": {
-                  "type": "string"
-                },
-                "worktree": {
-                  "$ref": "#/schemas/success_response/$defs/WorktreeInfo"
-                }
-              },
-              "required": [
-                "type",
-                "workspace_id",
-                "worktree",
-                "forced"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
                 "tab": {
                   "$ref": "#/schemas/success_response/$defs/TabInfo"
                 },
@@ -6852,9 +6422,6 @@
             "workspace_moved",
             "workspace_reordered",
             "workspace_focused",
-            "worktree_created",
-            "worktree_opened",
-            "worktree_removed",
             "tab_created",
             "tab_closed",
             "tab_renamed",
@@ -7926,113 +7493,6 @@
             },
             {
               "properties": {
-                "source": {
-                  "$ref": "#/schemas/success_response/$defs/WorktreeSourceInfo"
-                },
-                "type": {
-                  "const": "worktree_list",
-                  "type": "string"
-                },
-                "worktrees": {
-                  "items": {
-                    "$ref": "#/schemas/success_response/$defs/WorktreeInfo"
-                  },
-                  "type": "array"
-                }
-              },
-              "required": [
-                "type",
-                "source",
-                "worktrees"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "root_pane": {
-                  "$ref": "#/schemas/success_response/$defs/PaneInfo"
-                },
-                "tab": {
-                  "$ref": "#/schemas/success_response/$defs/TabInfo"
-                },
-                "type": {
-                  "const": "worktree_created",
-                  "type": "string"
-                },
-                "workspace": {
-                  "$ref": "#/schemas/success_response/$defs/WorkspaceInfo"
-                },
-                "worktree": {
-                  "$ref": "#/schemas/success_response/$defs/WorktreeInfo"
-                }
-              },
-              "required": [
-                "type",
-                "workspace",
-                "tab",
-                "root_pane",
-                "worktree"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "already_open": {
-                  "type": "boolean"
-                },
-                "root_pane": {
-                  "$ref": "#/schemas/success_response/$defs/PaneInfo"
-                },
-                "tab": {
-                  "$ref": "#/schemas/success_response/$defs/TabInfo"
-                },
-                "type": {
-                  "const": "worktree_opened",
-                  "type": "string"
-                },
-                "workspace": {
-                  "$ref": "#/schemas/success_response/$defs/WorkspaceInfo"
-                },
-                "worktree": {
-                  "$ref": "#/schemas/success_response/$defs/WorktreeInfo"
-                }
-              },
-              "required": [
-                "type",
-                "workspace",
-                "tab",
-                "root_pane",
-                "worktree",
-                "already_open"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "forced": {
-                  "type": "boolean"
-                },
-                "path": {
-                  "type": "string"
-                },
-                "type": {
-                  "const": "worktree_removed",
-                  "type": "string"
-                },
-                "workspace_id": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "workspace_id",
-                "path",
-                "forced"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
                 "tab": {
                   "$ref": "#/schemas/success_response/$defs/TabInfo"
                 },
@@ -9005,78 +8465,6 @@
             "repo_root",
             "checkout_path",
             "is_linked_worktree"
-          ],
-          "type": "object"
-        },
-        "WorktreeInfo": {
-          "properties": {
-            "branch": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "is_bare": {
-              "type": "boolean"
-            },
-            "is_detached": {
-              "type": "boolean"
-            },
-            "is_linked_worktree": {
-              "type": "boolean"
-            },
-            "is_prunable": {
-              "type": "boolean"
-            },
-            "label": {
-              "type": "string"
-            },
-            "open_workspace_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "path": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "is_bare",
-            "is_detached",
-            "is_prunable",
-            "is_linked_worktree",
-            "label"
-          ],
-          "type": "object"
-        },
-        "WorktreeSourceInfo": {
-          "properties": {
-            "repo_key": {
-              "type": "string"
-            },
-            "repo_name": {
-              "type": "string"
-            },
-            "repo_root": {
-              "type": "string"
-            },
-            "source_checkout_path": {
-              "type": "string"
-            },
-            "source_workspace_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "repo_key",
-            "repo_name",
-            "repo_root",
-            "source_checkout_path"
           ],
           "type": "object"
         }
