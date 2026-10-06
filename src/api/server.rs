@@ -59,23 +59,23 @@ pub(crate) fn start_server_with_stop_control(
     event_hub: EventHub,
     server_stop: Arc<AtomicBool>,
 ) -> std::io::Result<ServerHandle> {
-    start_server_inner(api_tx, event_hub, default_capabilities(), Some(server_stop))
+    start_server_inner(api_tx, event_hub, default_capabilities(), server_stop)
 }
 
-fn default_capabilities() -> Option<ServerCapabilities> {
-    Some(ServerCapabilities {
+fn default_capabilities() -> ServerCapabilities {
+    ServerCapabilities {
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
         surface_interest: true,
         health_check: true,
-    })
+    }
 }
 
 fn start_server_inner(
     api_tx: ApiRequestSender,
     event_hub: EventHub,
-    capabilities: Option<ServerCapabilities>,
-    server_stop: Option<Arc<AtomicBool>>,
+    capabilities: ServerCapabilities,
+    server_stop: Arc<AtomicBool>,
 ) -> std::io::Result<ServerHandle> {
     let path = socket_path();
     prepare_socket_path(&path)?;
@@ -94,7 +94,7 @@ fn start_server_inner(
                     let api_tx = api_tx.clone();
                     let event_hub = event_hub.clone();
                     let capabilities = capabilities.clone();
-                    let server_stop = server_stop.clone();
+                    let server_stop = Arc::clone(&server_stop);
                     let connection_running = Arc::clone(&listener_running);
                     std::thread::spawn(move || {
                         if let Err(err) = handle_connection_with_stop(
@@ -103,7 +103,7 @@ fn start_server_inner(
                             &event_hub,
                             &connection_running,
                             capabilities,
-                            server_stop.as_ref(),
+                            &server_stop,
                         ) {
                             warn!(err = %err, "api connection failed");
                         }
@@ -145,9 +145,15 @@ fn handle_connection(
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
-    capabilities: Option<ServerCapabilities>,
 ) -> std::io::Result<()> {
-    handle_connection_with_stop(stream, api_tx, event_hub, running, capabilities, None)
+    handle_connection_with_stop(
+        stream,
+        api_tx,
+        event_hub,
+        running,
+        default_capabilities(),
+        &Arc::new(AtomicBool::new(false)),
+    )
 }
 
 fn handle_connection_with_stop(
@@ -155,8 +161,8 @@ fn handle_connection_with_stop(
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
-    capabilities: Option<ServerCapabilities>,
-    server_stop: Option<&Arc<AtomicBool>>,
+    capabilities: ServerCapabilities,
+    server_stop: &Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     if let Err(err) = stream.set_send_timeout(Some(STREAM_WRITE_TIMEOUT)) {
         debug!(err = %err, "api connection write timeout unavailable");
@@ -313,8 +319,8 @@ fn finish_wait_response(
 fn handle_request(
     request: Request,
     api_tx: &ApiRequestSender,
-    capabilities: Option<ServerCapabilities>,
-    server_stop: Option<&Arc<AtomicBool>>,
+    capabilities: ServerCapabilities,
+    server_stop: &Arc<AtomicBool>,
 ) -> String {
     if matches!(&request.method, Method::Ping(_)) {
         return serde_json::to_string(&SuccessResponse {
@@ -322,7 +328,7 @@ fn handle_request(
             result: ResponseResult::Pong {
                 version: crate::build_info::version(),
                 protocol: crate::protocol::PROTOCOL_VERSION,
-                capabilities,
+                capabilities: Some(capabilities),
             },
         })
         .unwrap_or_else(|_| {
@@ -340,15 +346,13 @@ fn handle_request(
     }
 
     if matches!(&request.method, Method::ServerStop(_)) {
-        if let Some(server_stop) = server_stop {
-            server_stop.store(true, Ordering::Release);
-            return serde_json::to_string(&SuccessResponse {
-                id: request.id,
-                result: ResponseResult::Ok {},
-            })
-            .unwrap_or_else(|_| "{}".to_string());
-        }
-    } else if server_stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+        server_stop.store(true, Ordering::Release);
+        return serde_json::to_string(&SuccessResponse {
+            id: request.id,
+            result: ResponseResult::Ok {},
+        })
+        .unwrap_or_else(|_| "{}".to_string());
+    } else if server_stop.load(Ordering::Acquire) {
         return error_response_json(
             request.id,
             "server_unavailable",
@@ -546,7 +550,6 @@ mod windows_tests {
                 &api_tx,
                 &EventHub::default(),
                 &Arc::new(AtomicBool::new(true)),
-                None,
             );
             done_tx.send(result).unwrap();
         });
@@ -1054,15 +1057,8 @@ mod tests {
                 method: Method::Ping(crate::api::schema::PingParams::default()),
             },
             &tx,
-            Some(ServerCapabilities {
-                detached_server_daemon: true,
-                endpoint_protocol_generation: Some(
-                    crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
-                ),
-                surface_interest: true,
-                health_check: true,
-            }),
-            None,
+            default_capabilities(),
+            &Arc::new(AtomicBool::new(false)),
         );
 
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -1080,8 +1076,8 @@ mod tests {
                 method: Method::ServerStop(crate::api::schema::EmptyParams::default()),
             },
             &tx,
-            None,
-            Some(&stop),
+            default_capabilities(),
+            &stop,
         );
 
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -1095,8 +1091,8 @@ mod tests {
                 method: Method::WorkspaceList(crate::api::schema::EmptyParams::default()),
             },
             &tx,
-            None,
-            Some(&stop),
+            default_capabilities(),
+            &stop,
         );
         let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
         assert_eq!(rejected["error"]["code"], "server_unavailable");
@@ -1112,8 +1108,14 @@ mod tests {
         };
 
         let request_for_thread = request.clone();
-        let thread =
-            std::thread::spawn(move || handle_request(request_for_thread, &tx, None, None));
+        let thread = std::thread::spawn(move || {
+            handle_request(
+                request_for_thread,
+                &tx,
+                default_capabilities(),
+                &Arc::new(AtomicBool::new(false)),
+            )
+        });
 
         let msg = rx.blocking_recv().unwrap();
         assert_eq!(msg.request.id, "req_2");
@@ -1146,7 +1148,7 @@ mod tests {
 
         let running = Arc::new(AtomicBool::new(true));
         let event_hub = EventHub::default();
-        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+        handle_connection(server, &api_tx, &event_hub, &running).unwrap();
 
         let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
         assert_eq!(response["id"], "wait_1");
@@ -1173,7 +1175,7 @@ mod tests {
 
         let running = Arc::new(AtomicBool::new(true));
         let event_hub = EventHub::default();
-        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+        handle_connection(server, &api_tx, &event_hub, &running).unwrap();
 
         let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
         assert_eq!(response["id"], "wait_2");
@@ -1234,7 +1236,7 @@ mod tests {
         client.flush().unwrap();
 
         let running = Arc::new(AtomicBool::new(true));
-        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+        handle_connection(server, &api_tx, &event_hub, &running).unwrap();
 
         let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
         assert_eq!(response["id"], "wait_close");
@@ -1297,7 +1299,7 @@ mod tests {
         let event_hub = EventHub::default();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let server_thread = std::thread::spawn(move || {
-            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
+            let result = handle_connection(server, &api_tx, &event_hub, &server_running);
             done_tx.send(result).unwrap();
         });
 
@@ -1329,7 +1331,7 @@ mod tests {
         let event_hub = EventHub::default();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let server_thread = std::thread::spawn(move || {
-            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
+            let result = handle_connection(server, &api_tx, &event_hub, &server_running);
             done_tx.send(result).unwrap();
         });
 
@@ -1361,7 +1363,7 @@ mod tests {
         let event_hub = EventHub::default();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let server_thread = std::thread::spawn(move || {
-            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
+            let result = handle_connection(server, &api_tx, &event_hub, &server_running);
             done_tx.send(result).unwrap();
         });
 
