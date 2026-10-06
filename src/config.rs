@@ -47,6 +47,44 @@ pub(crate) fn test_config_env_lock() -> &'static std::sync::Mutex<()> {
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
+#[cfg(test)]
+pub(crate) struct TestBusEnvGuard<'a> {
+    _lock: &'a std::sync::MutexGuard<'static, ()>,
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+#[cfg(test)]
+// A running Bus exports these variables, which outrank test config/session fixtures.
+// Borrow the shared lock so restoration always happens before it is released.
+pub(crate) fn test_without_bus_env<'a>(
+    lock: &'a std::sync::MutexGuard<'static, ()>,
+) -> TestBusEnvGuard<'a> {
+    let previous = ["BUS_DATA_DIR", "BUS_SESSION_ID"]
+        .into_iter()
+        .map(|key| {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            (key, previous)
+        })
+        .collect();
+    TestBusEnvGuard {
+        _lock: lock,
+        previous,
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestBusEnvGuard<'_> {
+    fn drop(&mut self) {
+        for (key, value) in self.previous.drain(..) {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
 impl Config {
     pub fn kitty_graphics_enabled(&self) -> bool {
         self.terminal

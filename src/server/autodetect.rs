@@ -550,6 +550,7 @@ test "$sid" = "$$"
     #[test]
     fn validate_running_server_compatibility_names_session_commands_for_protocol_mismatch() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let dir = unique_test_dir("named-protocol");
         std::env::set_var("XDG_CONFIG_HOME", &dir);
         std::env::set_var(crate::session::SESSION_ENV_VAR, "work");

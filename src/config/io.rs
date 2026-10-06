@@ -619,6 +619,7 @@ mod tests {
     #[test]
     fn config_loaders_report_unreadable_path() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path =
             std::env::temp_dir().join(format!("herdr-config-unreadable-{}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
@@ -781,6 +782,7 @@ mouse_captur = true
     #[test]
     fn startup_config_accepts_legacy_agent_panel_scope_without_warning() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path = std::env::temp_dir().join(format!(
             "herdr-config-legacy-agent-panel-scope-{}.toml",
             std::process::id()
@@ -799,6 +801,7 @@ mouse_captur = true
     #[test]
     fn startup_config_load_warns_about_unknown_top_level_sections() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path = std::env::temp_dir().join(format!(
             "herdr-config-unknown-section-{}.toml",
             std::process::id()

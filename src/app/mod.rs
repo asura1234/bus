@@ -1003,6 +1003,7 @@ mod tests {
     #[test]
     fn reload_config_updates_live_state() {
         let _guard = config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path = temp_config_path("reload-config-success");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -1047,6 +1048,7 @@ mod tests {
     #[test]
     fn reload_config_keeps_kitty_graphics_until_restart() {
         let _guard = config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path = temp_config_path("reload-config-kitty-graphics");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "[terminal]\nkitty_graphics = false\n").unwrap();
@@ -1074,6 +1076,7 @@ mod tests {
     #[test]
     fn reload_config_requests_client_reload_for_host_cursor_only_change() {
         let _guard = config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path = temp_config_path("reload-config-host-cursor");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "[ui]\nhost_cursor = \"native\"\n").unwrap();
@@ -1098,6 +1101,7 @@ mod tests {
     #[test]
     fn reload_config_updates_sidebar_token_rows() {
         let _guard = config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path = temp_config_path("reload-config-sidebar-tokens");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
@@ -1165,6 +1169,7 @@ mod tests {
     #[test]
     fn reload_config_invalid_sidebar_bounds_keeps_previous_ui_and_returns_partial() {
         let _guard = config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path = temp_config_path("reload-config-invalid-sidebar-bounds");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
@@ -1202,6 +1207,7 @@ mod tests {
     #[test]
     fn reload_config_applies_known_sibling_and_summarizes_unknown_key() {
         let _guard = config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path = temp_config_path("reload-config-unknown-key");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
@@ -1234,6 +1240,7 @@ mod tests {
     #[test]
     fn reload_config_preserves_invalid_terminal_section_but_applies_valid_ui() {
         let _guard = config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let path = temp_config_path("reload-config-invalid-terminal-section");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -2092,6 +2099,7 @@ mod tests {
     #[test]
     fn due_session_save_starts_background_writer() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home = unique_temp_path("background-session-save");
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
@@ -2157,6 +2165,7 @@ mod tests {
     #[tokio::test]
     async fn pane_exit_checkpoint_survives_automatic_workspace_creation_on_shutdown() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home = unique_temp_path("signaled-pane-session-checkpoint");
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
@@ -2194,6 +2203,7 @@ mod tests {
     #[test]
     fn normal_autosave_replaces_a_signaled_exit_checkpoint() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home = unique_temp_path("signaled-pane-autosave");
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
@@ -2227,6 +2237,7 @@ mod tests {
     #[test]
     fn durable_mutation_after_pane_exit_checkpoint_wins_on_shutdown() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home = unique_temp_path("pane-exit-newer-session-state");
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::remove_var(crate::session::SESSION_ENV_VAR);

@@ -41,6 +41,7 @@ id = "codex"
 
 fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let bus = crate::config::test_without_bus_env(&_guard);
     let old_config = std::env::var_os("XDG_CONFIG_HOME");
     let old_state = std::env::var_os("XDG_STATE_HOME");
     let base = std::env::temp_dir().join(format!(
@@ -62,6 +63,7 @@ fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
         Some(value) => std::env::set_var("XDG_STATE_HOME", value),
         None => std::env::remove_var("XDG_STATE_HOME"),
     }
+    drop(bus);
     reload_manifests();
     let _ = std::fs::remove_dir_all(&base);
     result

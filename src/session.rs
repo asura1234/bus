@@ -592,6 +592,7 @@ mod tests {
     #[test]
     fn configure_from_args_maps_default_session_name_to_default_path() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home =
             std::env::temp_dir().join(format!("herdr-session-default-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
@@ -645,6 +646,7 @@ mod tests {
     #[test]
     fn env_default_session_name_uses_default_path() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home =
             std::env::temp_dir().join(format!("herdr-env-session-default-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
@@ -694,6 +696,7 @@ mod tests {
     #[test]
     fn explicit_session_socket_ignores_inherited_socket_override() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home =
             std::env::temp_dir().join(format!("herdr-session-precedence-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
