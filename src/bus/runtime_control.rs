@@ -914,7 +914,7 @@ impl Worker {
         // Its closing is expected now, so no "closed on its own" follow-up.
         let mut answered = self.state.clone();
         answered
-            .mark_dialog_answered(id)
+            .mark_dialog_answered(id, option)
             .map_err(|error| error.to_string())?;
         self.save(answered)?;
         // Moves are confirmed after a short delay, so watch until the dialog

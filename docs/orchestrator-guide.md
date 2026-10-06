@@ -180,11 +180,12 @@ only for an unrelated task that should get a turn and a reply of its own.
 ## Unblock agents
 
 - **Dialogs:** agents stop at permission, trust and question dialogs. Bus
-  sends you a message for each one: the question, the options with the
-  selected one marked, and the `bus agent choose AGENT --option N --fingerprint F`
-  command to answer it. `bus wait` also stops early with
-  `agent_waiting_on_dialog`. Decide, answer, and check the reported `outcome`;
-  if the fingerprint is stale, run `bus agent dialog AGENT` for a fresh one.
+  sends you a message for each one: who is waiting, what they want, and the
+  options with the selected one marked. Run `bus agent dialog AGENT` for a
+  fresh fingerprint, then `bus agent choose AGENT --option N --fingerprint F`.
+  `bus wait` also stops early with `agent_waiting_on_dialog`. Decide, answer,
+  and check the reported `outcome`. When the dialog closes, the next line is
+  `answered: option N` if Bus recorded the choice.
   Ask the human before approving anything destructive or outward-facing.
 - **Stuck requests:** check `bus message status`, `bus diagnostics` and
   `bus agent read` before `bus request recover`.

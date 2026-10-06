@@ -147,6 +147,26 @@ fn notices(worker: &Worker, room: RoomId) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn notice_names_the_command_and_leaves_the_fingerprint_out() {
+    let observed = json!({
+        "dialog": {
+            "text": "Would you like to run the following command?\n\n$ printf muse-safe-probe",
+            "options": [
+                {"number": 1, "label": "Allow once", "selected": true},
+                {"number": 2, "label": "Abort", "selected": false}
+            ],
+            "hint": "Press enter to confirm or esc to cancel"
+        },
+        "fingerprint": "d1.eyJabc"
+    });
+    let notice = dialog_notice(AgentId(61), "Codex", "dev", &observed);
+    assert_eq!(
+        notice,
+        "Codex in dev (agent 61)\nCodex wants to run: printf muse-safe-probe\n1. Allow once (selected)\n2. Abort\n\nAnswer: bus agent dialog 61, then bus agent choose 61 --option N"
+    );
+}
+
 fn polls(worker: &mut Worker, count: usize) {
     for _ in 0..count {
         worker.poll().unwrap();
@@ -167,24 +187,13 @@ fn orchestrator_is_told_once_per_dialog_and_when_it_closes_on_its_own() {
     let sent = messages_to(&worker, orchestrator);
     assert_eq!(sent.len(), 1, "{sent:?}");
     let notice = &sent[0];
-    assert!(
-        notice.starts_with(&format!(
-            "builder (agent {}) in room work is waiting on a dialog",
-            agent.0
-        )),
-        "{notice}"
+    let expected = format!(
+        "builder in work (agent {id})\nDo you want to proceed?\n1. Yes (selected)\n2. No\n\nAnswer: bus agent dialog {id}, then bus agent choose {id} --option N",
+        id = agent.0
     );
-    assert!(
-        notice.contains("Do you want to proceed?\n\n1. Yes (selected)\n2. No\nEsc to cancel"),
-        "{notice}"
-    );
-    assert!(
-        notice.contains(&format!(
-            "bus agent choose {} --option N --fingerprint d1.",
-            agent.0
-        )),
-        "{notice}"
-    );
+    assert_eq!(notice, &expected);
+    assert!(!notice.contains("fingerprint"), "{notice}");
+    assert!(!notice.contains("Esc to cancel"), "{notice}");
     let master = worker.state.master_room().unwrap().id;
     assert!(worker
         .state
@@ -197,23 +206,23 @@ fn orchestrator_is_told_once_per_dialog_and_when_it_closes_on_its_own() {
     polls(&mut worker, 3);
     let sent = messages_to(&worker, orchestrator);
     assert_eq!(sent.len(), 2, "{sent:?}");
-    assert!(
-        sent[1].contains("closed without an answer through Bus"),
-        "{}",
-        sent[1]
-    );
+    assert_eq!(sent[1], "answered");
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn without_an_orchestrator_the_human_gets_the_notice_and_answers_need_no_follow_up() {
+fn without_an_orchestrator_the_human_gets_the_notice_and_a_one_line_answer() {
     let (mut worker, agent, room, _, screen, dir) = worker(false);
     screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
     let posted = notices(&worker, room);
     assert_eq!(posted.len(), 1, "{posted:?}");
-    assert!(posted[0].contains("is waiting on a dialog"));
+    assert!(posted[0].contains("Do you want to proceed?"));
+    assert!(posted[0].contains(&format!(
+        "Answer: bus agent dialog {id}, then bus agent choose {id} --option N",
+        id = agent.0
+    )));
     assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
     assert_eq!(
         worker.state.requests().count(),
@@ -228,18 +237,16 @@ fn without_an_orchestrator_the_human_gets_the_notice_and_answers_need_no_follow_
     let chosen = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
     assert_eq!(chosen["outcome"], "closed");
     polls(&mut worker, 3);
-    assert_eq!(
-        notices(&worker, room).len(),
-        1,
-        "an answered dialog closes quietly"
-    );
+    let posted = notices(&worker, room);
+    assert_eq!(posted.len(), 2, "{posted:?}");
+    assert_eq!(posted[1], "answered: option 1");
 
     // A blocked screen without a readable dialog still gets reported.
     screen.lock().unwrap().blocked = true;
     polls(&mut worker, 2);
     let posted = notices(&worker, room);
-    assert_eq!(posted.len(), 2, "{posted:?}");
-    assert!(posted[1].contains(&format!("bus agent read {} --source visible", agent.0)));
+    assert_eq!(posted.len(), 3, "{posted:?}");
+    assert!(posted[2].contains(&format!("bus agent read {} --source visible", agent.0)));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

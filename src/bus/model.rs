@@ -295,6 +295,9 @@ pub(crate) struct Agent {
     /// The reported dialog was answered through Bus, so its closing is expected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) dialog_answered: bool,
+    /// 通过 Bus 选定的选项号，关闭通知要写明是哪一项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dialog_answer: Option<u32>,
     pub(crate) actionable_error: Option<String>,
     pub(crate) current_request: Option<RequestId>,
     #[serde(default)]
@@ -960,6 +963,7 @@ impl BusState {
                 dialog: false,
                 dialog_notice: None,
                 dialog_answered: false,
+                dialog_answer: None,
                 actionable_error: None,
                 current_request: None,
                 hook_setup_confirmed: false,
@@ -1551,14 +1555,21 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent))?;
         agent.dialog_notice = notice;
         agent.dialog_answered = false;
+        agent.dialog_answer = None;
         Ok(())
     }
 
-    pub(crate) fn mark_dialog_answered(&mut self, agent: AgentId) -> Result<(), ModelError> {
-        self.agents
+    pub(crate) fn mark_dialog_answered(
+        &mut self,
+        agent: AgentId,
+        option: u32,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
             .get_mut(&agent)
-            .ok_or(ModelError::UnknownAgent(agent))?
-            .dialog_answered = true;
+            .ok_or(ModelError::UnknownAgent(agent))?;
+        agent.dialog_answered = true;
+        agent.dialog_answer = Some(option);
         Ok(())
     }
 

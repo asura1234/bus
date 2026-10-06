@@ -499,21 +499,24 @@ marks such an agent `dialog: true`.
 
 Bus tells someone without being asked. Once a dialog has been on screen for
 about a second, Bus sends the room's orchestrator a message in MASTER, delivered
-like any other message: the agent, the room, the question, the numbered options
-with the selected one marked, and the exact `bus agent choose` command with a
-fresh fingerprint. A room without an orchestrator gets the same text as a Bus
-notice in the room itself, for the Human. Each dialog is reported once, a
-blocked screen without a readable dialog is reported with the `agent read`
-command to inspect it, and a short follow-up says when a reported dialog closed
-without an answer through Bus.
+like any other message: the agent and room, what it wants on one line, and
+the numbered options with the selected one marked. Key hints such as `Press
+enter to confirm or esc to cancel` are left out. The answer line is `bus agent
+dialog AGENT`, then `bus agent choose AGENT --option N`; the fingerprint is
+not in the message, because `agent dialog` fetches a fresh one. A room without
+an orchestrator gets the same text as a Bus notice in the room itself, for the
+Human. Each dialog is reported once, a blocked screen without a readable
+dialog is reported with the `agent read` command to inspect it, and when that
+dialog closes Bus adds one line, `answered: option N` when Bus recorded the
+choice, otherwise `answered`.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last
 status when a recipient that has not replied shows a dialog or a blocked
 screen; `message status` lists such recipients in `waiting_on_dialog`. Answer
 the dialog, then wait again.
 
-To answer, observe the dialog, decide, then choose one option with the
-fingerprint from the notice or from `agent dialog`:
+To answer, observe the dialog for a fresh fingerprint, decide, then choose
+one option:
 
 ```sh
 bus agent dialog "$agent_id"

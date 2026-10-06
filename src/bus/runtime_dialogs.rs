@@ -54,11 +54,12 @@ impl Worker {
                         continue;
                     }
                 },
-                None if agent.dialog_answered => None,
-                None => Some(format!(
-                    "{name} (agent {}) in room {room} is no longer waiting on its dialog; it closed without an answer through Bus.",
-                    id.0
-                )),
+                // 读不到选项的阻塞自己结束时不再追一条消息。
+                None if agent.dialog_notice.as_deref() == Some(BLOCKED) => None,
+                None => Some(match agent.dialog_answer {
+                    Some(option) => format!("answered: option {option}"),
+                    None => "answered".to_owned(),
+                }),
             };
             let mut state = self.state.clone();
             if let Some(text) = text {
@@ -77,13 +78,15 @@ impl Worker {
 
 fn dialog_notice(id: AgentId, name: &str, room: &str, observed: &Value) -> String {
     let dialog = &observed["dialog"];
-    let mut text = format!(
-        "{name} (agent {}) in room {room} is waiting on a dialog:\n\n",
-        id.0
-    );
-    if let Some(question) = dialog["text"].as_str().filter(|text| !text.is_empty()) {
-        text.push_str(question);
-        text.push_str("\n\n");
+    let mut text = format!("{}\n", who(name, room, id));
+    if let Some(question) = dialog["text"]
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .map(|text| wants_line(name, text))
+        .filter(|line| !line.is_empty())
+    {
+        text.push_str(&question);
+        text.push('\n');
     }
     for option in dialog["options"].as_array().into_iter().flatten() {
         text.push_str(&format!(
@@ -97,16 +100,57 @@ fn dialog_notice(id: AgentId, name: &str, room: &str, observed: &Value) -> Strin
             }
         ));
     }
-    if let Some(hint) = dialog["hint"].as_str() {
-        text.push_str(hint);
-        text.push('\n');
-    }
     text.push_str(&format!(
-        "\nAnswer with:\nbus agent choose {} --option N --fingerprint {}",
-        id.0,
-        observed["fingerprint"].as_str().unwrap_or_default()
+        "\nAnswer: bus agent dialog {id}, then bus agent choose {id} --option N",
+        id = id.0
     ));
     text
+}
+
+fn who(name: &str, room: &str, id: AgentId) -> String {
+    if room.is_empty() {
+        format!("{name} (agent {})", id.0)
+    } else {
+        format!("{name} in {room} (agent {})", id.0)
+    }
+}
+
+/// 给人看的一行：要批准的命令，或问题本身。
+fn wants_line(name: &str, text: &str) -> String {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if let Some(command) = lines.iter().find_map(|line| {
+        line.strip_prefix("$ ")
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+    }) {
+        return format!("{name} wants to run: {command}");
+    }
+    let asks_to_run = lines.iter().any(|line| {
+        let lower = line.to_lowercase();
+        lower.contains("run the following command")
+            || lower.contains("bash command")
+            || lower.contains("requires approval")
+            || lower.contains("do you want to proceed")
+    });
+    if asks_to_run {
+        if let Some(command) = lines.iter().copied().find(|line| {
+            let lower = line.to_lowercase();
+            !line.ends_with('?')
+                && !lower.contains("command")
+                && !lower.contains("approval")
+                && !lower.contains("proceed")
+        }) {
+            return format!("{name} wants to run: {command}");
+        }
+    }
+    if let Some(question) = lines.iter().rev().find(|line| line.ends_with('?')) {
+        return (*question).to_owned();
+    }
+    lines.last().copied().unwrap_or_default().to_owned()
 }
 
 /// Delivers the notice to the room's orchestrator in MASTER, like any message,
