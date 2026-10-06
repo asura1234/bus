@@ -165,6 +165,14 @@ A typical PR review loop, run by the orchestrator:
    `just e2e` (live round trips with every provider) and report its table.
 6. Tell the human the branch is ready for their regression test before merge.
 
+## Steer agents without waiting
+
+Correct an agent the moment you notice a problem; do not wait for its turn to
+end. `bus send` to a working agent types the message into its running turn, and
+the turn's reply answers the original task and every correction together:
+`bus wait` on any of those messages returns the same reply. Send with `--queue`
+only for an unrelated task that should get a turn and a reply of its own.
+
 ## Unblock agents
 
 - **Dialogs:** agents stop at permission, trust and question dialogs. Bus

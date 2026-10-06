@@ -209,7 +209,7 @@ bus wait --message "$message_id" --timeout 600
 To record the message as written by a room agent instead of the human, add
 `--as AGENT`. The author must be an agent in the same room, or the room's MASTER
 orchestrator, and cannot also be a recipient; `--to all` skips it. The generic form is
-`send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT]`.
+`send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue]`.
 
 `send` confirms that the message was durably queued. It does not mean the agent
 started or replied. `wait` polls every 200 milliseconds until every recipient
@@ -230,11 +230,50 @@ The per-agent `stage` explains how far delivery progressed:
 | `submitting` | Bus is writing the request to the provider terminal. |
 | `awaiting_start` | Submission occurred, but no trusted provider turn start is bound yet. |
 | `delivered` | A trusted provider turn started and Bus is awaiting its final reply. |
+| `joined` | The message joined another message's turn; see `group`. |
 | `replied` | Bus recorded the final reply for that recipient. |
 
 Treat `complete: true` from `message status` or `wait` as the settlement signal.
 A successful terminal write, a visually idle agent, or a queued focus change is
 not proof that the request completed.
+
+### Steer an agent while it works
+
+You never have to wait for an agent to finish before correcting it. A message
+sent to an agent that is working on a Bus message is typed into its terminal
+right away, the way a person types while an agent works, and the provider takes
+it into the running turn:
+
+```sh
+bus send --room "$room_id" --to "$agent_id" --text "Use the streaming API instead."
+```
+
+The message joins the agent's current group: the message that started the turn
+plus every message typed into it. The turn's final reply belongs to the whole
+group. `message status` and `wait` for any message in the group return that
+shared reply and `complete: true` once the group settles; each joined request
+reports the first message's request ID as `group`. The room history shows the
+group's messages stacked, with one reply under the newest.
+
+Verified live with each provider:
+
+| Provider | What happens to the typed message |
+| --- | --- |
+| Claude Code | Taken into the running turn at its next step; the submit hook reports it under the turn's prompt ID. |
+| Codex | Taken into the running turn; the submit hook reports it under the turn's ID. |
+| Cursor | Runs as the next generation once the current one ends; that generation's reply answers the group. |
+
+Bus does not type into an agent that waits on a dialog or a blocked screen;
+the message stays queued and the dialog notice tells you what the agent needs.
+A message sent to an idle agent starts a new turn and group, as before. When
+messages piled up while the agent could not take them (it was launching,
+blocked, or finishing another turn), Bus sends them as one prompt, in order,
+each part headed `[N/M from SENDER at HH:MM]`, and they form one group.
+
+Add `--queue` to wait for the agent to become idle and give the message a turn
+of its own, with its own reply. A `--queue` message is never typed into a
+running turn or joined with other messages. In the room UI, Enter steers and
+Option+Enter (Alt+Enter) queues.
 
 Both commands query the same persisted message status: `wait` owns no separate
 completion state, and the correlated result remains queryable after the waiting CLI process exits or Bus restarts.
