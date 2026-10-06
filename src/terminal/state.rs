@@ -318,7 +318,7 @@ impl TerminalState {
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
-        let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
+        let previous_presentation = self.effective_presentation_at(now, true);
         let previous_detected_agent = self.detected_agent;
         let previous_session = self.current_session_identity_for_persistence();
         let newer_custom_authority = process_exited
@@ -700,7 +700,7 @@ impl TerminalState {
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
-        let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
+        let previous_presentation = self.effective_presentation_at(now, true);
         let previous_session = self.current_session_identity_for_persistence();
         self.reconcile_agent_name_owner(&agent_label, session_ref.as_ref());
         if foreground_takeover_allowed {
@@ -1467,8 +1467,7 @@ impl TerminalState {
             let previous_known_agent = self.effective_known_agent();
             let previous_state = self.state;
             let now = Instant::now();
-            let previous_presentation =
-                self.effective_presentation_for_state_at(previous_state, now);
+            let previous_presentation = self.effective_presentation_at(now, true);
             let previous_session = self.current_session_identity_for_persistence();
             let suppressed = self
                 .suppressed_full_lifecycle_hook_reports
@@ -1573,7 +1572,7 @@ impl TerminalState {
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
-        let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
+        let previous_presentation = self.effective_presentation_at(now, true);
         let previous_session = self.current_session_identity_for_persistence();
         if session_replacement_allowed || foreground_takeover_allowed {
             self.forget_stale_full_lifecycle_hook_session(&source, &agent_label, &session_ref);
@@ -1712,7 +1711,7 @@ impl TerminalState {
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
-        let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
+        let previous_presentation = self.effective_presentation_at(now, true);
         let previous_session = self.current_session_identity_for_persistence();
         self.suppress_current_full_lifecycle_hook_authority(
             FullLifecycleHookSuppressionReason::HookClear,
@@ -1765,7 +1764,7 @@ impl TerminalState {
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
-        let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
+        let previous_presentation = self.effective_presentation_at(now, true);
         let previous_session = self.current_session_identity_for_persistence();
         self.suppress_full_lifecycle_hook_report(
             source,
@@ -1826,7 +1825,7 @@ impl TerminalState {
         let agent_label = self.effective_agent_label().map(str::to_string);
         let known_agent = self.effective_known_agent();
         let state = self.state;
-        let presentation = self.effective_presentation_for_state_at(state, now);
+        let presentation = self.effective_presentation_at(now, true);
         EffectiveStateChange {
             previous_agent_label: agent_label.clone(),
             previous_known_agent: known_agent,
@@ -2161,7 +2160,7 @@ impl TerminalState {
         let agent_label = self.effective_agent_label().map(str::to_string);
         let known_agent = self.effective_known_agent();
 
-        let presentation = self.effective_presentation_for_state_at(state, now);
+        let presentation = self.effective_presentation_at(now, true);
         self.clear_expiry_pending_for_hidden_metadata();
 
         if previous_agent_label == agent_label

@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crate::detect::AgentState;
-
 use super::{TerminalState, TerminalStateMutation};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -371,15 +369,11 @@ impl TerminalState {
         })
     }
 
-    pub(super) fn effective_presentation_for_state_at(
+    pub(super) fn effective_presentation_at(
         &self,
-        _state: AgentState,
         now: Instant,
+        enforce_ttl: bool,
     ) -> EffectivePresentation {
-        self.effective_presentation_at(now, true)
-    }
-
-    fn effective_presentation_at(&self, now: Instant, enforce_ttl: bool) -> EffectivePresentation {
         let mut presentation = EffectivePresentation::empty();
         presentation.title = self.newest_metadata_title(now, enforce_ttl);
         presentation.display_agent = self.newest_metadata_display_agent(now, enforce_ttl);
@@ -504,7 +498,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::detect::Agent;
+    use crate::detect::{Agent, AgentState};
     use crate::terminal::TerminalId;
 
     fn test_terminal() -> TerminalState {
@@ -863,10 +857,8 @@ mod tests {
         });
 
         assert_eq!(terminal.next_agent_metadata_expiry(), Some(old_deadline));
-        let presentation = terminal.effective_presentation_for_state_at(
-            terminal.state,
-            old_deadline - Duration::from_millis(1),
-        );
+        let presentation =
+            terminal.effective_presentation_at(old_deadline - Duration::from_millis(1), true);
         assert_eq!(presentation.title.as_deref(), Some("Prompt title"));
         assert_eq!(presentation.display_agent, None);
 
