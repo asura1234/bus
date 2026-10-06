@@ -7,6 +7,7 @@ use crate::api::schema::{
 use crate::app::{App, Mode};
 
 use super::responses::{encode_error, encode_success};
+use super::workspaces::workspace_not_found;
 
 impl App {
     pub(super) fn handle_tab_list(&mut self, id: String, params: TabListParams) -> String {
@@ -291,14 +292,6 @@ impl App {
             })
             .unwrap_or_default()
     }
-}
-
-fn workspace_not_found(id: String, workspace_id: &str) -> String {
-    encode_error(
-        id,
-        "workspace_not_found",
-        format!("workspace {workspace_id} not found"),
-    )
 }
 
 fn tab_not_found(id: String, tab_id: &str) -> String {

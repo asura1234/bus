@@ -346,7 +346,7 @@ impl App {
     }
 }
 
-fn workspace_not_found(id: String, workspace_id: &str) -> String {
+pub(super) fn workspace_not_found(id: String, workspace_id: &str) -> String {
     encode_error(
         id,
         "workspace_not_found",
