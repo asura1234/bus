@@ -13,9 +13,9 @@ What it does:
        {create-plan-complete, review-plan-in-progress}
      - read-only ``--check`` additionally accepts create-plan-in-progress for
        the plan author's preflight and review-plan-complete for publication checks
-       (plan-execution-* 已进执行阶段 / abandoned 一律拒绝)
+       (plan-execution-* has entered execution / abandoned are always rejected)
      - 需要决策的事项 has NO open items — decisions are resolved by the developer
-       with the plan author while writing the plan (per plan-template 计划生成规则,
+       with the plan author while writing the plan (per the plan-template 计划生成规则,
        the plan body isn't even generated until they are); open items mean the
        plan isn't review-ready, not that a special review mode should run
 
@@ -46,8 +46,9 @@ What it does:
        diff of its snapshot vs the current plan to round-NN/plan-diff.patch
 
   3. Mode: "full" if this lane has no completed rounds; "incremental" otherwise.
-     (决策评估不属于审查轮次：已归档的决策是开发者的既定选择，开发者需要意见时
-     手动单独征询 agent，不在 /review-plan 内。)
+     (Decision evaluation is not a review round: archived decisions are the developer's
+     settled choices; when the developer wants an opinion they ask an agent separately,
+     outside /review-plan.)
 
   The plan 状态 is the durable workflow signal; the temp history is only an
   accelerator. If 状态 is review-plan-in-progress but no round history exists
@@ -74,16 +75,33 @@ Exit codes:
 Usage:
     python3 skills/review-plan/scripts/review_round.py [<plan.md>] \
         [--reviewer <lane>] [--devils-advocate]
-    python3 skills/review-plan/scripts/review_round.py <plan.md> --check   # 只跑结构/状态门禁，read-only；可验证已完成评审的计划
+    python3 skills/review-plan/scripts/review_round.py <plan.md> --check   # structure/status gate only, read-only; can verify a plan whose review is complete
 """
 
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+# Lane ownership, round claiming, and ledger discovery share one implementation with the other review
+# skill (skills/AGENTS.md: shared Python lives in the repo-root cli_extensions/). This part used to exist
+# as a byte-identical copy in each of two skills, and its drift fails silently: a wrong lane only makes a
+# reviewer read someone else's PREV_REVIEWS, with no red light at all.
+sys.path.insert(0, str(REPO_ROOT / "cli_extensions"))
+from review_round_common import (  # noqa: E402
+    git,
+)
+from review_round_common import (  # noqa: E402
+    triage_ledgers as _triage_ledgers,
+)
+
+
+def triage_ledgers(branch_slug: str) -> list[Path]:
+    """All **plan-mode** triage ledgers on this branch; other modes are outside this CLOSED WORLD."""
+    return _triage_ledgers(branch_slug, "plan")
+
 
 # Shared deterministic plan checks live beside this module.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -112,61 +130,13 @@ from verify_task_graph import (  # noqa: E402
 
 ALLOWED_STATUSES = frozenset({"create-plan-complete", "review-plan-in-progress"})
 LEGACY_STATUS_RE = re.compile(r"(?m)^-\s*Status:\s*\S+")
-TRIAGE_MODE_FIELD_RE = re.compile(
-    r"(?im)^\s*(?:\*\*)?(?:review type|review mode|审查类型|模式)(?:\*\*)?\s*[:：]\s*(plan|pr|code)\b"
-)
-TRIAGE_MODE_TITLE_RE = re.compile(r"(?im)^#.*?[（(]\s*(plan|pr|code)\s*模式")
-TRIAGE_MODE_ALIASES = {"plan": "plan", "pr": "pr", "code": "pr"}
-
-
-def rel(path: Path) -> str:
-    try:
-        return str(path.relative_to(REPO_ROOT))
-    except ValueError:
-        return str(path)
-
-
-def git(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True)
 
 
 def current_branch() -> str:
-    # 一个分支一个计划：lane 历史按分支归档，bare `/review-plan` 才能在同分支延续轮次。
-    # detached / 非 git 环境回退到 _detached_ 哨兵，仍能正常按 plan stem 留痕。
+    # One branch, one plan: lane history is filed per branch so bare `/review-plan` can continue rounds on it.
+    # Detached / non-git environments fall back to the _detached_ sentinel and still record per plan stem.
     branch = git("branch", "--show-current").stdout.strip()
     return branch or "_detached_"
-
-
-def triage_mode(path: Path) -> str | None:
-    """读取 author-response 台账显式声明的 review mode；未知格式 fail closed。"""
-    try:
-        content = path.read_text()
-    except OSError:
-        return None
-    preamble = content.split("\n## ", 1)[0]
-    match = TRIAGE_MODE_FIELD_RE.search(preamble) or TRIAGE_MODE_TITLE_RE.search(preamble)
-    return TRIAGE_MODE_ALIASES.get(match.group(1).lower()) if match else None
-
-
-def triage_ledgers(branch_slug: str) -> list[Path]:
-    """本分支全部 plan-mode 裁决台账，排除 PR mode 与 task namespace，按 mtime 旧→新。
-
-    triage.md 是每次 address-review 运行的产物、只含该次处理的 finding，**非累积**；只读最新
-    一份会漏掉更早或别的 lane 裁决过的已决项，无法兑现「跨轮 / 跨 lane 抑制」。故返回全部台账，
-    由 reviewer 全部读取、同一问题以较新台账的裁决为准。PR-mode 与 task-mode 台账不属于计划
-    CLOSED WORLD，不得用于抑制 plan finding。只按 mtime 排序，不依赖目录名 / 轮号。无则返回 []。
-    """
-    address_root = REPO_ROOT / "temp" / "address-review-comments"
-    triage_root = address_root / branch_slug
-    task_namespace = address_root / "__task__"
-    if not triage_root.is_dir():
-        return []
-    candidates = [
-        t
-        for t in triage_root.glob("*/triage.md")
-        if t.is_file() and task_namespace not in t.parents and triage_mode(t) == "plan"
-    ]
-    return sorted(candidates, key=lambda p: p.stat().st_mtime)
 
 
 def detect_branch_plan_docs() -> list[Path]:
@@ -176,7 +146,7 @@ def detect_branch_plan_docs() -> list[Path]:
     if diff.returncode == 0:
         names.update(diff.stdout.split())
     for line in git("status", "--porcelain").stdout.splitlines():
-        # porcelain 行形如 'XY <path>'，截断状态码取路径；rename/copy 形如 'old -> new'，取新路径
+        # A porcelain line looks like 'XY <path>'; strip the status code to get the path; rename/copy looks like 'old -> new', take the new path
         path = line[3:].strip()
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
@@ -187,11 +157,11 @@ def detect_branch_plan_docs() -> list[Path]:
 
 
 def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
-    # check_only=True 是不创建 review round 的只读结构/状态验证：
-    #   - 计划作者在 still-in-progress 状态下预检，只有 PASS 才 flip 到 complete；
-    #   - commit/publish 在 review-plan-complete 状态下复验 finalized plan。
-    # 真正的 /review-plan 门禁（check_only=False）仍只接受 create-plan-complete /
-    # review-plan-in-progress，不能重新打开已完成评审的计划。
+    # check_only=True is a read-only structure/status validation that creates no review round:
+    #   - the plan author preflights while still-in-progress and flips to complete only on PASS;
+    #   - commit/publish re-validates the finalized plan at review-plan-complete.
+    # The real /review-plan gate (check_only=False) still accepts only create-plan-complete /
+    # review-plan-in-progress and cannot reopen a plan whose review is complete.
     if STATUS_RE.search(text) is None and LEGACY_STATUS_RE.search(text):
         return [
             "检测到 migration 前的 legacy plan 格式。历史内容不会被自动改写；"
@@ -230,9 +200,9 @@ def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
                 "'review-plan-in-progress'（继续审查）"
             )
 
-    # 决策评估不属于审查轮次：模板规则下计划正文（大小/实施步骤等）在决策全部解决前
-    # 不会生成，存在未解决决策项即意味着计划尚不具备审查条件（前提不满足），
-    # 而不是需要一个特殊的"决策审查模式"
+    # Decision evaluation is not a review round: under the template rules the plan body (size / implementation
+    # steps, etc.) is not generated until every decision is resolved, so an unresolved decision item means the
+    # plan is not yet reviewable (prerequisite unmet), not that a special "decision review mode" is needed
     decisions_body = extract_section_body(text, "需要决策的事项")
     if decisions_body and check_decisions_empty(decisions_body) is not None:
         failures.append(
@@ -240,15 +210,16 @@ def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
             "（计划正文在决策解决前不会生成），解决后再提交审查"
         )
 
-    # 目标是计划撰写阶段就应填好的散文陈述（同 当前状态分析 / 参考资料），
-    # review 时必须已声明单一目标：新计划必须含 `## 目标`（旧计划按创建日期豁免），且不得占位或空
+    # The goal is a prose statement that should be filled in while writing the plan (like 当前状态分析 / 参考资料);
+    # at review time a single goal must be declared: new plans must contain `## 目标` (old plans are exempt by
+    # creation date), and it must not be a placeholder or empty
     if err := check_goal_required(text):
         failures.append(err)
     if err := check_goal_section(text):
         failures.append(err)
 
-    # 格式类机械检查：任务字段、身份、依赖、owner 与环都由单一 verifier 负责。
-    # 大小 在 review 阶段允许为空（完整度 ≥95% 后才填写）
+    # Mechanical format checks: task fields, identity, dependencies, owners, and cycles all belong to one verifier.
+    # 大小 may be empty during review (it is filled in only once completeness is >=95%)
     task_failures = check_task_fields(text)
     failures.extend(task_failures)
     if not task_failures:
@@ -265,74 +236,3 @@ def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
         failures.append(err)
     failures.extend(check_loc_estimates(text))
     return failures
-
-
-def lanes_with_history(lane_root: Path) -> list[str]:
-    """本计划下所有「已有已完成轮次（含 review.md）」的 lane 名，按名排序。
-
-    用于裸调用（无 --reviewer）的归属安全检查：一旦存在真正的具名 lane，裸调用无法确定要续
-    哪条，必须让用户显式 --reviewer（否则会静默落回 default、丢失跨轮归属）。
-    """
-    if not lane_root.exists():
-        return []
-    return [
-        d.name
-        for d in sorted(lane_root.iterdir())
-        if d.is_dir() and any(r.is_dir() and (r / "review.md").is_file() for r in d.glob("round-*"))
-    ]
-
-
-# default 与 default-N 都是脚本为「单 reviewer / 首轮并发」自动认领的裸调用族（见 claim_bare_round），
-# 不是用户显式 --reviewer 传入的具名 lane。
-DEFAULT_LANE_RE = re.compile(r"default(-\d+)?")
-
-
-def bare_call_ambiguous_lanes(prior_lanes: list[str]) -> list[str]:
-    """裸调用无法自动归属时，返回导致歧义的 lane（非空即须显式 --reviewer）；可自动续则返回 []。
-
-    可自动续（返回 []）的**唯一** solo 情形：无任何用户具名 lane，且 default 自动族至多一条已完成 lane
-    （default 中断后落到 default-2 也算这一条，claim_bare_round 会在其上续写——见其文档）。
-    歧义（返回全部已完成 lane 供报错）：
-      - 存在用户显式 --reviewer 传入的具名 lane（多 reviewer）；或
-      - **≥2 条** default 族已完成 lane（多个并发首轮各自完成 default / default-2，裸调用无法确定续哪条，
-        续 default 会让原属 default-2 的 reviewer 读错 PREV_REVIEWS、破坏 lane 隔离）。
-    """
-    named = [ln for ln in prior_lanes if not DEFAULT_LANE_RE.fullmatch(ln)]
-    default_family = [ln for ln in prior_lanes if DEFAULT_LANE_RE.fullmatch(ln)]
-    if not named and len(default_family) <= 1:
-        return []
-    return sorted(named + default_family)
-
-
-def claim_bare_round(lane_root: Path) -> tuple[str, Path, list[Path]]:
-    """裸调用（无 --reviewer）下并发安全地认领一个轮次目录。
-
-    优先续用稳定的 'default' lane（solo 反复裸调用即在此累积轮次）；若 'default' 当前
-    存在一个「在飞行中」的轮次（round 目录已建但还没写 review.md——说明被另一个并发实例
-    占用，或上次中断遗留），就原子地跳到下一条编号 lane（default-2 / default-3 …）。
-    认领靠 `mkdir(exist_ok=False)` 的原子性：同一轮次目录只会被一个实例建成，竞争失败者
-    自动顺延到下一条 lane，从而并发裸调用互不覆盖留痕。
-
-    返回 (reviewer, 本轮 round 目录, 本 lane 已完成轮次列表)。
-
-    代价（已知且可接受）：中断遗留的「在飞行中」轮次不再被原地复用，而是让活跃 lane 顺延
-    一格（如 default 中断后 solo 续轮自动落到 default-2 并在其上继续）——不丢数据，仅 lane
-    名漂移；这是换取并发不覆盖的取舍。
-    """
-    n = 1
-    while True:
-        lane = "default" if n == 1 else f"default-{n}"
-        lane_dir = lane_root / lane
-        rounds = sorted(d for d in lane_dir.glob("round-*") if d.is_dir()) if lane_dir.exists() else []
-        completed = [d for d in rounds if (d / "review.md").is_file()]
-        inflight = any(not (d / "review.md").is_file() for d in rounds)
-        if inflight:
-            n += 1
-            continue
-        target = lane_dir / f"round-{len(completed) + 1:02d}"
-        try:
-            target.mkdir(parents=True, exist_ok=False)
-        except FileExistsError:
-            n += 1
-            continue
-        return lane, target, completed

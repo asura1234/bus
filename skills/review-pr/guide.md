@@ -1,89 +1,162 @@
 # Review PR Guide
 
-This guide contains the workflow principles for `review-pr`. Code-review dimensions, severity semantics, architecture judgment, and nit boundaries are defined by [Code Review Guide](../../docs/guides/code-review-guide.md). Field names and order are defined by [Review Artifact Format](../../docs/guides/review-format.md).
+This guide holds only the workflow principles of `/review-pr`. Code-review dimensions, severity, architecture judgment, and nitpicking
+boundaries are defined in one place by the [Code Review Guide](../../docs/guides/code-review-guide.md); report fields and order are defined in one place by
+the [Review Format](../../docs/guides/review-format.md).
 
 ## A lane is one independent viewpoint
 
-Use the same stable reviewer lane across rounds so a reviewer can reconcile its own history. Parallel reviewers use distinct lanes and do not read one another's `review.md`. Their value comes from independent perspectives, not identical reports; the author merges legitimate overlap by location and semantic root cause.
+Only when the same reviewer uses a stable lane across rounds can it reconcile its own history. When multiple models review in parallel, each reviewer
+uses a distinct and stable `--reviewer <name>`, and none reads another's `review.md`. The value of different models comes from independent
+viewpoints, not from three reports finding the same problems; the author merges legitimate overlap by location and semantic root cause.
 
-A bare invocation uses `default` only when unambiguous. Concurrent bare calls may be isolated as `default-2`, `default-3`, and so on. Once multiple or named lanes exist, the exact existing reviewer name must be supplied.
+When unambiguous, a bare invocation uses the `default` lane. Concurrent bare invocations may be temporarily isolated by the script into `default-2`, `default-3`;
+once multiple or named lanes exist, you must pass back the same reviewer name the script lists.
 
-## Lock the goal; do not change the assignment
+## Lock the goal; do not change the assignment for the developer
 
-With an associated plan, the goal, non-goals, and archived decisions are review inputs, not redesign prompts. Without a plan, the goal must come from the developer's one-sentence answer and cannot be inferred from the diff, commits, or PR body.
+With an associated plan, `## 目标`, `## 非目标`, and `## 已归档的决策` are review inputs, not content for the reviewer
+to redesign. Without a plan, the goal must come from the developer's one-sentence answer and cannot be guessed from the diff, commits, or PR description.
 
-A reviewer may report code that diverges from those inputs, but may not expand the goal, move toward a non-goal, or replace an archived choice by preference. Only new source evidence that disproves a decision's factual premise may be escalated to the developer.
+A reviewer may report an implementation that deviates from the goal or archived decisions, but may not demand an expanded goal, a move toward a non-goal, or
+overturn an archived decision with its own approach. Only when new source evidence truly disproves a decision's factual premise is the challenge escalated to the developer.
 
-Apply the code-review guide's goal-relevance gate before investigation, proof, delegation, and output. Dimension 6 is the only exception: classify out-of-goal diff by cumulative slice size without reviewing its implementation. `XS`/`S` becomes non-blocking consistency drift; `M` or larger becomes a substantive scope finding that may recommend `split-pr`. Permission to include incidental work does not create an obligation to repair it. Diff and round boundaries may narrow scope further.
+Before investigation, proof, delegation, and output, uniformly apply code-review-guide "goal-relevance admission". Dimension 6 is the only exception:
+it must write out-of-goal diff as a scope comment by cumulative slice size, but does not authorize deep review of that slice. `XS` / `S` go into the sync list,
+`M` and larger go into new problems and recommend `split-pr`; a Good Samaritan inclusion permit adds no follow-up repair obligation.
+Diff coverage and round boundaries can only further narrow the scope of other dimensions.
 
 ## The plan is input, not a code-review target
 
-Committed plan-document changes are excluded from code-review scope. They do not enter diff snapshots, delta, touched-file sets, findings, consistency drift, or single-purpose calculations. An explicitly associated plan supplies only locked goal, non-goals, and archived decisions. When no other committed changes remain, the prologue fails because there is no code to review.
+Committed changes under `plans/**` are all excluded from code-review scope; they do not enter the diff snapshot,
+delta, touched-file set, findings, sync list, or PR single-purpose judgment. Only an explicitly associated `--plan` is read,
+and only as input for locked goal, non-goals, and archived decisions; the reviewer does not review,
+comment on, or demand fixes to the plan file itself. When the branch has no other committed changes after excluding `plans/**`,
+the `review-pr` prologue should fail for having no reviewable code.
 
 ## Round 1 establishes coverage; Round 2+ consumes the delta
 
-Round 1 first partitions the diff by goal relevance, reads every eligible touched file completely, covers all nine dimensions, and records any incomplete region. Upstream and downstream reading serves the goal-related judgment and does not become a general module audit.
+Round 1 first identifies the diff's relationship to the goal, reads every eligible touched file in full, checks all 9 dimensions, and records uncovered areas explicitly in the ledger.
+Upstream/downstream reading serves goal-related judgment and does not expand into a general audit of touched modules.
 
-Round 2+ is closed world:
+Round 2+ is a CLOSED WORLD:
 
-- recheck goal relevance and reconcile open prior findings;
-- identify and review goal-related changes in the current delta;
-- inspect contract contradictions or regressions directly introduced by that delta;
-- cover a missed Round 1 region only when the prior ledger explicitly proves it was missed.
+- first check goal relevance of open prior-round problems, then reconcile;
+- identify and review goal-related changes in this round's delta;
+- check upstream/downstream contract contradictions or regressions directly introduced by the delta;
+- cover an area once only when the ledger explicitly proves Round 1 missed it.
 
-Do not rescan covered unchanged code or use fresh territory to maintain a finding count. Convergence comes from monotonically shrinking scope, not a round limit.
+Incremental rounds do not rescan covered, unchanged code and do not rely on fresh territory to sustain finding counts. Convergence comes from monotonically
+shrinking scope, not from a hard cap on rounds.
 
-## Prove behavioral suspicion with a test first
+## Write behavioral suspicion as a test first, then as a finding
 
-Test proof applies to runtime-behavior claims in correctness, security, and bug dimensions. Other dimensions are established by reading source and cite path:line observations; they do not create probes or use proven/unproven labels.
+**Scope**: test proof targets only **claims about runtime behavior** — dimensions 2 correctness, 3 security, 7 bug.
+Other dimensions are judged by reading source; evidence lists only `path:line` and the source observation, writes no probe, and does not mark
+`已证明` / `未证明`. All proof, investigation, and output first pass code-review-guide "goal-relevance admission",
+then this round's coverage boundary; dimension 6 is the only exception, doing only purpose / cumulative-size classification on out-of-goal diff.
 
-In the behavioral dimensions, writing a test is the default action. First apply the goal-relevance gate, then turn the suspicion into a focused regression case. A red test provides root cause, reproduction, and repair acceptance. A suspicion that cannot be expressed as a test is usually not understood well enough to report.
+**A default action, not an option**: write every behavioral suspicion as a test first, then decide whether to write it as a finding. A red test simultaneously
+gives the root cause, reproduction, and repair acceptance criterion, none of which a paper suspicion has; a behavioral suspicion that cannot be written as a test usually
+has not been thought through. Run it narrowly (Rust with `just test-one <filter>`, a skill's Python tests with
+`python3 -m pytest <test file>::<test name>`), with scope locked to the area of this suspicion;
+not limited to tests you added — related existing tests may run too. Quality gates — lint, format check, coverage,
+build — and the unfiltered full test suite all belong to CI and `gate-and-fix`; the reviewer does not run them.
 
-Write access is limited to test files: create a test file or add a new case to an existing one. Never edit implementation, configuration, build scripts, or docs, and never modify code to manufacture a red result. A probe must have a real failure mode; assertions about the test harness or a test-configured mock prove nothing.
+**Write access covers only test files**: you may create test files or add your own cases to existing test files. Production code,
+config, build scripts, and docs are never touched; adjusting the implementation to make a test red manufactures evidence, and the hypothesis fails.
+Do not write tests to pad numbers either — a probe must have a meaningful failure mode and turn red when the implementation is wrong; asserting the harness's own output
+or a just-configured mock is not proof.
 
-Run the narrowest relevant test target or exact test name. Related existing tests may also run. Full lint, formatting, coverage, build, full-suite tests, and E2E belong to CI and `gate-and-fix`.
+**Probe lifecycle**:
 
-Probe tests remain in the worktree, uncommitted, for the author to adopt, rewrite, or remove. They should be normal durable regression tests with semantic names. Never put lane, dimension, or round identifiers in test names, delete another reviewer's probe, or weaken existing assertions.
+- probes stay in the working tree, uncommitted, and the author decides to adopt, rewrite, or delete them; tests should be keepable
+  long-term as normal regression tests;
+- file and case names follow code-review-guide "probe test naming and ownership"; first make clear which
+  files you may write, never overwrite or delete someone else's probe, never delete or weaken existing assertions; lane / round are recorded only in the review
+  artifact, not in test names;
+- red → write a finding in the corresponding dimension, with the first evidence item
+  `已证明：<test name @ relative test file path> — <failed assertion>`;
+- green → withdraw the suspicion and open no finding; the probe stays in the working tree, with one line recorded in review.md
+  "本轮探索区域 / 运行的测试";
+- never leave only a red test without writing a finding.
 
-A red probe becomes a finding whose evidence begins `已证明：<test @ relative path> — <failed assertion>`. A green probe withdraws the suspicion and is recorded only in file-only exploration bookkeeping.
+**What may stop at "unproven"**: whatever Unit / Integration tests can prove must be proven before reporting,
+never reported as a suspicion. Only behavior that "can be confirmed only by manual verification in a real terminal session"
+may stop at suspicion: the first evidence item is `未证明`, with no explanation and no list of what was tried; phrase it as "cannot rule out X", and
+write the impact conditionally. `未证明` does not block Ready, does not trigger a new round, and cannot alone justify changing verified existing behavior.
+(Full criteria in code-review-guide "verification boundary" and guardrail 5.)
 
-If behavior can be proven with Unit or Integration tests, prove it before reporting. If only a real terminal session can confirm it, the evidence may begin `未证明`; state that the behavior cannot be ruled out and write impact conditionally. An unproven suspicion does not block Ready, trigger another round, or independently justify changing manually verified behavior.
+A review round's quality is measured not by finding count but by how many behavioral suspicions received goal-related evidence or were ruled out;
+do not reward continued pursuit by number of red tests.
 
-## The triage ledger is author-decision memory
+## The triage ledger is the memory of author dispositions
 
-Read every triage ledger oldest to newest; the newest disposition for the same root cause wins.
+`TRIAGE_LEDGER` must be read in full and applied oldest to newest. A newer disposition of the same root problem overrides an older one.
 
-- `rejected`: do not reopen under a new label unless new evidence disproves the factual premise.
-- `applied`: recheck goal relevance and verify the repair; prior adoption never expands the goal.
-- `flagged`: the developer is deciding; do not duplicate it.
+- `rejected`: do not reopen under new clothing; challenge only when new evidence disproves the factual premise.
+- `applied`: first recheck goal relevance, then verify it was really fixed; out-of-scope items close per the admission rules, and a prior APPLY does not modify the goal.
+- `flagged`: the developer is deciding; do not copy it into another finding.
+
+This keeps different lanes independent while never repeatedly asking the author to handle the same already-decided thing.
 
 ## Fan-out increases coverage, not report count
 
-Subagents are narrow partitions inside one reviewer lane, not extra reviewers. Use the fewest dimension groups justified by the diff. Small diffs stay serial.
+Subagents are a narrow division of labor inside one reviewer lane, not extra reviewers. Choose the fewest necessary
+dimension groups by the actual diff; small diffs do not parallelize for parallelism's sake.
 
-Subagents return raw candidates only. The main reviewer verifies them against current source, rechecks goal relationship, deduplicates them, removes nits, and writes the only `review.md`. Close all subagents before reporting. Fresh-eyes and platform-native review are optional full-round candidate sources and never reopen incremental scope.
+Subagents may return only raw candidates. The main agent must go back to real source to verify, deduplicate, discard nitpicks, and produce
+the single `review.md`. All subagents are released before the report is produced; the next round decides afresh from the delta whether dispatch is needed.
 
-## Adversarial posture increases proof pressure
+Fresh-eyes and platform built-in review serve as supplementary candidate sources only in full rounds; they cannot replace guide-driven
+review, nor reopen covered areas in incremental rounds.
 
-`--devils-advocate` means actively seek counterexamples and test unstated assumptions while retaining the same goal, scope, evidence standard, and readiness rules. Suspicion is not default rejection; a counterclaim requires evidence too. Posture does not create a new lane or turn an incremental round into a full one.
+### Fresh-eyes is the source of viewpoint; dimension groups are the source of coverage
 
-## A finding is evidence, not persuasion
+Dimension groups set out with the same checklist and find what the checklist anticipates. Problems the checklist cannot name
+are bumped into only by an agent that has not read it — so fresh-eyes is not a nice-to-have supplement; it is this round's
+only viewpoint not framed by the checklist, and it must be dispatched.
 
-Reports are agent-anonymous. A finding states location, observation, evidence, impact, and optional remediation. It does not say “blocking,” “recommended,” P0/P1, or name a source model. Severity influences only the single final verdict.
+For the same reason, it is invalidated once it reads the **dimension list**: an agent that has read the list goes confirming the list item by item instead of looking at the code.
+The ground truth it receives must be verbatim identical to the other groups, with the only difference falling on "no checklist" —
+otherwise there is no telling whether a difference it finds comes from viewpoint or from input.
 
-Do not narrate exploration, praise the implementation, write first-person retrospectives, or ask what to do next. With no substantive problem, `新问题与建议` contains exactly `无。`. Rejected candidates may appear only in file-only exploration bookkeeping.
+What is forbidden is the checklist, not discipline. It must still read this guide's "Write behavioral suspicion as a test first, then as a finding" section:
+the proof boundary is written only there, and the next paragraph describes exactly why it most needs that boundary.
+code-review-guide, architecture-principles, the dimension list, and any prior-round review are never read.
 
-Consistency drift normally means wording. Dimension 6 `XS`/`S` out-of-goal code slices are the explicit exception. The “other” dimension still requires goal relevance and materiality and cannot collect implementation detail or style nits.
+But "no checklist" means **it decides what to look at**, not that "it decides what counts as proof".
+It is at once this round's highest-value and highest-variance source: most likely to find real problems the checklist does not cover, and also most likely to produce
+the broad, confident speculation — and the latter is exactly what turns review into a second source of entropy. The proof boundary is not loosened by a word.
 
-The full prior-round reconciliation table remains in `review.md` as audit history, while chat contains only the renderer's summary. `本轮探索区域` is also file-only bookkeeping. All other sections survive unchanged.
+## Adversarial posture raises proof pressure without lowering fairness
 
-## The renderer owns the output protocol
+`--devils-advocate` means actively seeking counterexamples and verifying claims outside the code, while still bound by the same goal, scope, proof standard, and
+readiness rules. Suspicion is not default rejection; a counterargument also needs evidence. Switching posture creates no new lane,
+nor turns an incremental round back into a full round.
 
-The agent writes a valid, complete `review.md`. `cli_extensions/review_artifact.py render-response` then:
+## A finding is evidence, not a sales pitch
 
-- validates the title, required sections, order, ledger, and verdict;
-- removes file-only exploration bookkeeping;
-- condenses the prior-round table into its existing summary;
-- preserves every other section verbatim.
+Reports must be agent-anonymous. A finding states only location, observation, evidence, impact, and optional remediation, never writing
+"blocking", "recommend adopting", P0/P1, or the source model. Severity is used only to compute the single final verdict.
 
-The final chat response is the renderer output, not a hand-produced summary.
+Do not write the exploration process, praise, first-person retrospectives, or "what else should I do". With no substantive problem, `新问题与建议`
+is strictly `无。`; candidates tried but not upheld enter at most the file-only `本轮探索区域`.
+
+The sync list usually carries wording drift; dimension 6 `XS` / `S` out-of-goal code slices are an explicit exception. The "other" dimension still
+must satisfy formal goal relevance and materiality admission and cannot shelter implementation details, style nits, or candidates excluded by other rules.
+
+The full prior-round reconciliation table stays in `review.md` as the audit record; chat shows only the one-sentence summary generated by the renderer.
+`本轮探索区域` likewise serves only later reviewers and does not enter chat. Other sections are preserved verbatim.
+
+## The renderer enforces the output protocol
+
+The agent's responsibility ends at writing a legal, complete `review.md`. The chat body is validated and deterministically generated by
+`cli_extensions/review_artifact.py render-response`:
+
+- validates the title, fixed sections, order, ledger, and verdict;
+- removes the file-only `本轮探索区域`;
+- condenses the full prior-round reconciliation table into its existing summary;
+- preserves all other content verbatim.
+
+So the skill no longer asks the model to hand-execute the same "output discipline". The final reply returns the renderer output verbatim.

@@ -6,7 +6,7 @@ the only writes are this script's own round artifacts under temp/review-pr/.
 
 What it does:
 
-  1. Prereq (前提不满足 → FAIL):
+  1. Prereq (unmet prerequisite → FAIL):
      - inside a git work tree, on a named branch that is not main/master
      - base ref (default origin/master) resolvable
      - committed non-plan diff is non-empty (nothing to review otherwise); `plans/**`
@@ -69,13 +69,29 @@ Usage:
 import argparse
 import difflib
 import re
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+# Lane ownership, round claiming, and ledger discovery share one implementation with the other
+# review skill (skills/AGENTS.md: shared Python lives in the repo-root cli_extensions/). This code
+# once existed as byte-identical copies in both skills, and its drift fails silently: a wrong lane
+# only makes the reviewer read someone else's PREV_REVIEWS, with no red light anywhere.
+sys.path.insert(0, str(REPO_ROOT / "cli_extensions"))
+from review_round_common import (  # noqa: E402
+    bare_call_ambiguous_lanes,
+    claim_bare_round,
+    git,
+    lanes_with_history,
+    rel,
+)
+from review_round_common import (
+    triage_ledgers as _triage_ledgers,
+)
+
 PR_SCRIPTS = REPO_ROOT / "skills" / "pr" / "scripts"
 if str(PR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(PR_SCRIPTS))
@@ -84,11 +100,6 @@ if str(PR_SCRIPTS) not in sys.path:
 from pr_goal_context import build_context  # noqa: E402
 
 
-TRIAGE_MODE_FIELD_RE = re.compile(
-    r"(?im)^\s*(?:\*\*)?(?:review type|review mode|审查类型|模式)(?:\*\*)?\s*[:：]\s*(plan|pr|code)\b"
-)
-TRIAGE_MODE_TITLE_RE = re.compile(r"(?im)^#.*?[（(]\s*(plan|pr|code)\s*模式")
-TRIAGE_MODE_ALIASES = {"plan": "plan", "pr": "pr", "code": "pr"}
 LOCKED_GOAL_NAME = ".locked-goal"
 LOCKED_NON_GOALS_NAME = ".locked-non-goals"
 
@@ -105,19 +116,13 @@ class LockedReviewContext:
     non_goals_file: Path
 
 
-def rel(path: Path) -> str:
-    try:
-        return str(path.relative_to(REPO_ROOT))
-    except ValueError:
-        return str(path)
-
-
-def git(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True)
+def triage_ledgers(branch_slug: str) -> list[Path]:
+    """All **PR-mode** triage ledgers on this branch; other modes and task-mode are outside this CLOSED WORLD."""
+    return _triage_ledgers(branch_slug, "pr")
 
 
 def read_required_goal_and_non_goals(lane_root: Path) -> LockedReviewContext:
-    """读取分支级 Goal 与 Non-goals 两份 lock；任一缺失或只有空白都 fail closed。"""
+    """Read the branch-level Goal and Non-goals locks; fail closed when either is missing or blank."""
     goal_file = lane_root / LOCKED_GOAL_NAME
     non_goals_file = lane_root / LOCKED_NON_GOALS_NAME
     values: dict[Path, str] = {}
@@ -161,109 +166,6 @@ def load_locked_review_context(lane_root: Path, plan: Path | None) -> LockedRevi
     return context
 
 
-def triage_mode(path: Path) -> str | None:
-    """读取 author-response 台账显式声明的 review mode；未知格式 fail closed。"""
-    try:
-        content = path.read_text()
-    except OSError:
-        return None
-    preamble = content.split("\n## ", 1)[0]
-    match = TRIAGE_MODE_FIELD_RE.search(preamble) or TRIAGE_MODE_TITLE_RE.search(preamble)
-    return TRIAGE_MODE_ALIASES.get(match.group(1).lower()) if match else None
-
-
-def triage_ledgers(branch_slug: str) -> list[Path]:
-    """本分支全部 PR-mode 裁决台账，排除 plan mode 与 task namespace，按 mtime 旧→新。
-
-    triage.md 是每次 address-review 运行的产物、只含该次处理的 finding，**非累积**；只读最新
-    一份会漏掉更早或别的 lane 裁决过的已决项，无法兑现「跨轮 / 跨 lane 抑制」。故返回全部台账，
-    由 reviewer 全部读取、同一问题以较新台账的裁决为准。plan-mode 与 task-mode 台账不属于 PR
-    CLOSED WORLD，不得用于抑制 code finding。只按 mtime 排序，不依赖目录名 / 轮号。无则返回 []。
-    """
-    address_root = REPO_ROOT / "temp" / "address-review-comments"
-    triage_root = address_root / branch_slug
-    task_namespace = address_root / "__task__"
-    if not triage_root.is_dir():
-        return []
-    candidates = [
-        t
-        for t in triage_root.glob("*/triage.md")
-        if t.is_file() and task_namespace not in t.parents and triage_mode(t) == "pr"
-    ]
-    return sorted(candidates, key=lambda p: p.stat().st_mtime)
-
-
-def lanes_with_history(lane_root: Path) -> list[str]:
-    """本分支下所有「已有已完成轮次（含 review.md）」的 lane 名，按名排序。
-
-    用于裸调用（无 --reviewer）的归属安全检查：一旦存在真正的具名 lane，裸调用无法确定要续
-    哪条，必须让用户显式 --reviewer（否则会静默落回 default、丢失跨轮归属）。
-    """
-    if not lane_root.exists():
-        return []
-    return [
-        d.name
-        for d in sorted(lane_root.iterdir())
-        if d.is_dir() and any(r.is_dir() and (r / "review.md").is_file() for r in d.glob("round-*"))
-    ]
-
-
-# default 与 default-N 都是脚本为「单 reviewer / 首轮并发」自动认领的裸调用族（见 claim_bare_round），
-# 不是用户显式 --reviewer 传入的具名 lane。
-DEFAULT_LANE_RE = re.compile(r"default(-\d+)?")
-
-
-def bare_call_ambiguous_lanes(prior_lanes: list[str]) -> list[str]:
-    """裸调用无法自动归属时，返回导致歧义的 lane（非空即须显式 --reviewer）；可自动续则返回 []。
-
-    可自动续（返回 []）的**唯一** solo 情形：无任何用户具名 lane，且 default 自动族至多一条已完成 lane
-    （default 中断后落到 default-2 也算这一条，claim_bare_round 会在其上续写——见其文档）。
-    歧义（返回全部已完成 lane 供报错）：
-      - 存在用户显式 --reviewer 传入的具名 lane（多 reviewer）；或
-      - **≥2 条** default 族已完成 lane（多个并发首轮各自完成 default / default-2，裸调用无法确定续哪条，
-        续 default 会让原属 default-2 的 reviewer 读错 PREV_REVIEWS、破坏 lane 隔离）。
-    """
-    named = [ln for ln in prior_lanes if not DEFAULT_LANE_RE.fullmatch(ln)]
-    default_family = [ln for ln in prior_lanes if DEFAULT_LANE_RE.fullmatch(ln)]
-    if not named and len(default_family) <= 1:
-        return []
-    return sorted(named + default_family)
-
-
-def claim_bare_round(lane_root: Path) -> tuple[str, Path, list[Path]]:
-    """裸调用（无 --reviewer）下并发安全地认领一个轮次目录。
-
-    优先续用稳定的 'default' lane（solo 反复裸调用即在此累积轮次）；若 'default' 当前
-    存在一个「在飞行中」的轮次（round 目录已建但还没写 review.md——说明被另一个并发实例
-    占用，或上次中断遗留），就原子地跳到下一条编号 lane（default-2 / default-3 …）。
-    认领靠 `mkdir(exist_ok=False)` 的原子性：同一轮次目录只会被一个实例建成，竞争失败者
-    自动顺延到下一条 lane，从而并发裸调用互不覆盖留痕。
-
-    返回 (reviewer, 本轮 round 目录, 本 lane 已完成轮次列表)。
-
-    代价（已知且可接受）：中断遗留的「在飞行中」轮次不再被原地复用，而是让活跃 lane 顺延
-    一格（如 default 中断后 solo 续轮自动落到 default-2 并在其上继续）——不丢数据，仅 lane
-    名漂移；这是换取并发不覆盖的取舍。
-    """
-    n = 1
-    while True:
-        lane = "default" if n == 1 else f"default-{n}"
-        lane_dir = lane_root / lane
-        rounds = sorted(d for d in lane_dir.glob("round-*") if d.is_dir()) if lane_dir.exists() else []
-        completed = [d for d in rounds if (d / "review.md").is_file()]
-        inflight = any(not (d / "review.md").is_file() for d in rounds)
-        if inflight:
-            n += 1
-            continue
-        target = lane_dir / f"round-{len(completed) + 1:02d}"
-        try:
-            target.mkdir(parents=True, exist_ok=False)
-        except FileExistsError:
-            n += 1
-            continue
-        return lane, target, completed
-
-
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--base", default="origin/master")
@@ -278,11 +180,13 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
-    # lane 选择：裸调用（无 --reviewer）续用稳定 'default' lane，并发安全地认领轮次——见下方
-    # claim_bare_round（'default' 被并发占用时自动隔离到 default-2/3…，互不覆盖）。续轮不依赖
-    # agent 记住任何 id，也不受 --devils-advocate 与否影响（lane 与姿态无关）。这里先处理具名
-    # lane 的名字校验：清洗后为空串即 fail-fast（非法字符会被替换成 '-' 不会变空，故仅当 --reviewer
-    # 传了空串时触发），避免静默落回 default 与裸调用串台。
+    # Lane selection: a bare call (no --reviewer) continues the stable 'default' lane and claims a
+    # round concurrency-safely -- see claim_bare_round below (when 'default' is occupied by a
+    # concurrent run it auto-isolates to default-2/3..., never overwriting). Continuation does not
+    # depend on the agent remembering any id, nor on --devils-advocate (lane is independent of
+    # posture). Here we first validate a named lane: an empty result after sanitizing fails fast
+    # (illegal characters become '-' and never empty the name, so this only fires when --reviewer
+    # is an empty string), avoiding a silent fallback to default that would cross into bare calls.
     default_lane = args.reviewer is None
     reviewer: str | None = None
     if not default_lane:
@@ -324,9 +228,7 @@ def main(argv: list[str]) -> int:
         else:
             diff_text = diff_proc.stdout
             if not diff_text.strip():
-                failures.append(
-                    f"git diff {args.base}...HEAD has no committed non-plan changes after excluding plans/**"
-                )
+                failures.append(f"git diff {args.base}...HEAD 排除 plans 后没有可审查的已提交变更")
 
     if failures:
         print("FAIL")
@@ -352,9 +254,11 @@ def main(argv: list[str]) -> int:
         notes.append("工作树存在未提交变更——它们不在审查范围内（审查只覆盖已提交的 diff）")
 
     if default_lane:
-        # 归属安全：裸调用只在「无历史」或「仅 default 有历史」时自动续轮。一旦存在具名 lane 或
-        # 多条 lane 有历史（多 reviewer 场景），裸调用无法确定要续哪条——FAIL 要求显式 --reviewer，
-        # 不再静默落回 default（那会丢失跨轮归属、让 reviewer 读串别人的历史）。
+        # Ownership safety: a bare call auto-continues only with "no history" or "only default has
+        # history". Once a named lane or multiple lanes have history (multi-reviewer), a bare call
+        # cannot tell which to continue -- FAIL and require an explicit --reviewer instead of
+        # silently falling back to default (that loses cross-round ownership and lets a reviewer
+        # read someone else's history).
         prior_lanes = lanes_with_history(lane_root)
         ambiguous = bare_call_ambiguous_lanes(prior_lanes)
         if ambiguous:
@@ -421,8 +325,8 @@ def main(argv: list[str]) -> int:
     head_sha = git("rev-parse", "--short", "HEAD").stdout.strip()
 
     print(f"ROUND={round_n}")
-    # MODE 以「本 lane 是否存在已完成轮」为准，而非 round 编号：残留的 aborted 高编号
-    # 轮次目录不应在没有任何 PREV_REVIEWS 的情况下把模式判成 incremental
+    # MODE depends on whether this lane has a completed round, not on the round number: a leftover
+    # aborted high-numbered round dir must not make the mode incremental without any PREV_REVIEWS
     print(f"MODE={'incremental' if completed else 'full'}")
     print(f"POSTURE={'devils-advocate' if args.devils_advocate else 'standard'}")
     print(f"REVIEWER={reviewer}")

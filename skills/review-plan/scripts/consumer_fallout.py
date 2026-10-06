@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成完整 consumer fallout artifact，并输出按任务聚合的高置信摘要。"""
+"""Generate the complete consumer fallout artifact and print the per-task high-confidence summary."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ _RUST_MOD_RE = re.compile(
 
 
 class InventoryError(Exception):
-    """计划或 Git inventory 无法确定性读取。"""
+    """The plan or Git inventory cannot be read deterministically."""
 
 
 def _git_files(repo: Path) -> list[str]:

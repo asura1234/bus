@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Round prologue for /review-plan：组合前提门禁、lane 与 round bookkeeping。"""
+"""Round prologue for /review-plan: combines the prerequisite gate, lane, and round bookkeeping."""
 
 from __future__ import annotations
 
@@ -12,14 +12,22 @@ from pathlib import Path
 from review_round_support import (
     REPO_ROOT,
     STATUS_RE,
-    bare_call_ambiguous_lanes,
-    claim_bare_round,
     current_branch,
     detect_branch_plan_docs,
-    lanes_with_history,
     prereq_failures,
-    rel,
     triage_ledgers,
+)
+
+
+# Lane ownership and round claiming share one implementation with /review-pr, living in the repo-root
+# cli_extensions/ (skills/AGENTS.md). Take them from the real owner instead of relaying through
+# review_round_support — a pass-through re-export would make "who owns these symbols" unclear again.
+sys.path.insert(0, str(REPO_ROOT / "cli_extensions"))
+from review_round_common import (  # noqa: E402
+    bare_call_ambiguous_lanes,
+    claim_bare_round,
+    lanes_with_history,
+    rel,
 )
 
 
@@ -28,9 +36,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("plan", nargs="?", default=None)
     parser.add_argument("--reviewer", default=None)
     parser.add_argument("--devils-advocate", action="store_true", dest="devils_advocate")
-    # --check：只跑结构/状态门禁，read-only、不建轮次、不写 .last-plan。
-    #   既供计划作者在置 create-plan-complete 前自检，也供 commit/publish 在
-    #   review-plan-complete 后复验 finalized plan；真正的 review round 仍拒绝 completed 状态。
+    # --check: run only the structure/status gate; read-only, creates no round, writes no .last-plan.
+    #   Serves both the plan author's self-check before setting create-plan-complete and
+    #   commit/publish re-validating a finalized plan after review-plan-complete; a real review
+    #   round still rejects the completed status.
     parser.add_argument("--check", action="store_true")
     try:
         args = parser.parse_args(argv[1:])
@@ -47,11 +56,11 @@ def main(argv: list[str]) -> int:
     pointer = branch_dir / ".last-plan"
 
     notes: list[str] = []
-    # 计划文件可省略：一个分支一个计划，省略时沿用本分支上次审查的计划，让用户可以反复
-    # 裸调用 `/review-plan` 直到收敛，无需每次重述路径。
+    # The plan file may be omitted: one branch, one plan. When omitted, reuse the plan this branch last
+    # reviewed, so the user can repeatedly bare-invoke `/review-plan` until convergence without restating the path.
     if args.plan is not None:
         plan_path = Path(args.plan)
-        # 显式相对路径优先按 CWD 解析，找不到时回退 REPO_ROOT，兼容从仓库外目录调用
+        # An explicit relative path resolves against CWD first and falls back to REPO_ROOT, so calls from outside the repo work
         if not plan_path.is_file() and not plan_path.is_absolute():
             anchored = REPO_ROOT / args.plan
             if anchored.is_file():
@@ -60,7 +69,7 @@ def main(argv: list[str]) -> int:
             print(f"error: {plan_path} not found", file=sys.stderr)
             return 2
     elif pointer.is_file():
-        # 指针存的是仓库相对路径，按 REPO_ROOT 还原，不依赖调用时的工作目录
+        # The pointer stores a repo-relative path; restore it against REPO_ROOT, independent of the caller's working directory
         recorded = pointer.read_text().strip()
         plan_path = Path(recorded) if Path(recorded).is_absolute() else REPO_ROOT / recorded
         if not plan_path.is_file():
@@ -85,11 +94,13 @@ def main(argv: list[str]) -> int:
                     print(f"  - {rel(c)}")
             return 1
 
-    # lane 选择：裸调用（无 --reviewer）续用稳定 'default' lane，并发安全地认领轮次——见下方
-    # claim_bare_round（'default' 被并发占用时自动隔离到 default-2/3…，互不覆盖）。续轮不依赖
-    # agent 记住任何 id，也不受 --devils-advocate 与否影响（lane 与姿态无关）。这里先处理具名
-    # lane 的名字校验：清洗后为空串即 fail-fast（非法字符会被替换成 '-' 不会变空，故仅当 --reviewer
-    # 传了空串时触发），避免静默落回 default 与裸调用串台。
+    # Lane selection: a bare call (no --reviewer) continues the stable 'default' lane and claims the round
+    # concurrency-safely — see claim_bare_round below (when 'default' is held concurrently it is isolated into
+    # default-2/3…, without overwriting each other). Continuing a round does not depend on the agent remembering
+    # any id, and is unaffected by --devils-advocate (lane is independent of posture). Here we first validate a
+    # named lane: an empty string after sanitizing fails fast (illegal characters become '-' and never empty it,
+    # so this only fires when --reviewer is passed an empty string), avoiding a silent fallback to default that
+    # would cross-talk with bare calls.
     default_lane = args.reviewer is None
     reviewer: str | None = None
     if not default_lane:
@@ -109,12 +120,12 @@ def main(argv: list[str]) -> int:
             print(f"- {f}")
         return 1
 
-    # --check：结构/状态门禁通过即返回，不做任何轮次 bookkeeping（不写 .last-plan、不建 round 目录）。
+    # --check: return as soon as the structure/status gate passes, with no round bookkeeping (no .last-plan, no round directory).
     if args.check:
         print("PASS: 计划满足 /review-plan 前提门禁（模板 / 状态 / 决策 / 目标 / 实施步骤结构）")
         return 0
 
-    # 计划通过前提校验后，记录为本分支的「上次审查计划」，供后续裸调用沿用
+    # Once the plan passes the prerequisite checks, record it as this branch's "last reviewed plan" for later bare calls
     branch_dir.mkdir(parents=True, exist_ok=True)
     pointer.write_text(rel(plan_path) + "\n")
 
@@ -122,9 +133,10 @@ def main(argv: list[str]) -> int:
 
     lane_root = branch_dir / plan_path.stem
     if default_lane:
-        # 归属安全：裸调用只在「无历史」或「仅 default 有历史」时自动续轮。一旦存在具名 lane 或
-        # 多条 lane 有历史（多 reviewer 场景），裸调用无法确定要续哪条——FAIL 要求显式 --reviewer，
-        # 不再静默落回 default（那会丢失跨轮归属、让 reviewer 读串别人的历史）。
+        # Ownership safety: a bare call continues automatically only with "no history" or "only default has
+        # history". Once a named lane exists or multiple lanes have history (multi-reviewer), a bare call cannot
+        # tell which to continue — FAIL and require an explicit --reviewer, instead of silently falling back to
+        # default (which would lose cross-round ownership and let a reviewer read someone else's history).
         prior_lanes = lanes_with_history(lane_root)
         ambiguous = bare_call_ambiguous_lanes(prior_lanes)
         if ambiguous:
@@ -194,8 +206,8 @@ def main(argv: list[str]) -> int:
             notes.append(f"{completed[-1].name} 缺少 plan-snapshot.md，本轮无增量 diff")
 
     print(f"ROUND={round_n}")
-    # MODE 以「本 lane 是否存在已完成轮」为准，而非 round 编号：残留的 aborted 高编号
-    # 轮次目录不应在没有任何 PREV_REVIEWS 的情况下把模式判成 incremental
+    # MODE is decided by "does this lane have a completed round", not by the round number: a leftover aborted
+    # high-numbered round directory must not make the mode incremental without any PREV_REVIEWS
     print(f"MODE={'incremental' if completed else 'full'}")
     print(f"POSTURE={'devils-advocate' if args.devils_advocate else 'standard'}")
     print(f"REVIEWER={reviewer}")
