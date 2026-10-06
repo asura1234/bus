@@ -21,8 +21,7 @@ replace `rebase-origin-main`, `update-docs`, or PR creation.
   - `just ci`, when both `just` and `cargo-nextest` are available on the host;
   - otherwise its direct expansion: `cargo fmt --check`,
     `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, the
-    `scripts.test_*` maintenance unittest set, `scripts.test_ui_hot_path_architecture`, the Bun
-    integration-asset tests, and the `workers/plugin-marketplace` install and tests;
+    `scripts.test_*` maintenance unittest set and `scripts.test_ui_hot_path_architecture`;
   - followed by `git diff --check <base>...HEAD`.
   The artifact records the exact commands that ran, never claiming that an unavailable wrapper ran.
 - Then, by changed path, append `skill-tests` (`python3 -m pytest -q <files>`):

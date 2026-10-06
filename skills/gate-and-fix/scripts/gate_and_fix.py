@@ -86,7 +86,7 @@ def select_gates(
 
     Bus has one Rust workspace; `just ci` is the repository's complete Unix pre-PR gate. When
     `just` or `cargo-nextest` is unavailable, the recipe is expanded into the corresponding direct
-    Cargo, Python, and Bun gates. The skill-test index is loaded by the caller from the resolved
+    Cargo and Python gates. The skill-test index is loaded by the caller from the resolved
     `--repo`, never inferred from `__file__`: invoked from another checkout, that would filter B's
     diff with A's index.
     """

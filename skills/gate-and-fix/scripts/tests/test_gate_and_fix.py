@@ -65,18 +65,11 @@ class GateAndFixTest(unittest.TestCase):
                 "test",
                 "maintenance-test",
                 "ui-hot-path-architecture-test",
-                "integration-assets-test",
-                "plugin-marketplace-install",
-                "plugin-marketplace-test",
                 "diff-check",
             ],
         )
         self.assertEqual(gates[0].argv, ("cargo", "fmt", "--check"))
         self.assertEqual(gates[2].argv, ("cargo", "test", "--locked"))
-        self.assertEqual(
-            gates[6].argv,
-            ("bun", "--cwd=workers/plugin-marketplace", "install", "--frozen-lockfile"),
-        )
 
     def test_select_gates_skips_skill_tests_outside_skill_inputs(self) -> None:
         names = [
