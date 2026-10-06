@@ -101,6 +101,7 @@ impl Worker {
             "agent.dialog.observe" => (&["agent"], false),
             "agent.dialog.choose" => (&["agent", "option", "fingerprint"], true),
             "agent.focus" => (&["agent"], true),
+            "agent.clear" => (&["agent"], true),
             "message.send" => (&["room", "to", "text", "files", "as", "queue"], true),
             "message.status" => (&["message"], false),
             "request.recover" => (&["request", "confirm"], true),
@@ -372,6 +373,10 @@ impl Worker {
                     .map_err(|_| "Option must be a number")?;
                 self.choose_dialog_option(agent, option, required(p, "fingerprint")?)
             }
+            "agent.clear" => {
+                let agent = self.dev_agent(required(p, "agent")?, None)?;
+                self.dev_clear(agent)
+            }
             "message.send" => self.dev_send(p),
             "message.status" => {
                 let id = required(p, "message")?
@@ -421,6 +426,61 @@ impl Worker {
             }
             _ => Err("Unknown method".into()),
         }
+    }
+
+    /// Starts a fresh provider context in an idle agent's terminal. The reset
+    /// command is typed directly, not sent as a Bus message, and the agent
+    /// rebinds to the new provider session its next callback reports.
+    fn dev_clear(&mut self, id: AgentId) -> Result<Value, String> {
+        let agent = self.state.agent(id).ok_or("Unknown agent")?;
+        if agent.deletion_pending
+            || agent.session_binding_invalidated
+            || !agent.hook_setup_confirmed
+            || agent.status != RuntimeStatus::Idle
+        {
+            return Err("Only an idle, ready agent can be cleared".into());
+        }
+        if agent.current_request.is_some() || self.state.next_queued_request(id).is_some() {
+            return Err(
+                "The agent still has messages to answer; clear it once they are done".into(),
+            );
+        }
+        let identity = &agent.runtime_identity;
+        let (Some(terminal), Some(pane)) = (&identity.terminal_id, &identity.pane_id) else {
+            return Err("The agent has no terminal yet".into());
+        };
+        let text = clear_command(agent.provider).to_string();
+        let method = match &identity.session_id {
+            Some(session) => Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
+                target: pane.clone(),
+                text: text.clone(),
+                expected_terminal_id: terminal.clone(),
+                expected_pane_id: pane.clone(),
+                expected_agent: launch::provider_kind(agent.provider).into(),
+                expected_session_id: session.clone(),
+                steer: false,
+            }),
+            // Codex starts its provider session with the first turn.
+            None if agent.provider == Provider::Codex => {
+                Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {
+                    target: pane.clone(),
+                    text: text.clone(),
+                    expected_terminal_id: terminal.clone(),
+                    expected_pane_id: pane.clone(),
+                    expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
+                })
+            }
+            None => return Err("The agent has no provider session yet".into()),
+        };
+        match self.transport.request(method) {
+            Ok(ResponseResult::AgentPrompted { .. }) => {}
+            Ok(other) => return Err(format!("Unexpected response to {text}: {other:?}")),
+            Err(error) => return Err(error.message),
+        }
+        let mut state = self.state.clone();
+        state.begin_session_reset(id).map_err(|e| e.to_string())?;
+        self.save(state)?;
+        Ok(json!({"agent_id": id, "sent": text, "stage": "cleared"}))
     }
 
     fn settings_json(&self) -> Value {
@@ -1036,4 +1096,13 @@ fn build_json() -> Value {
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
         "binary": std::env::current_exe().ok(),
     })
+}
+
+/// The provider command that starts a fresh context in the same terminal.
+/// Codex's `/new` asks where the new conversation runs; `/clear` does not.
+fn clear_command(provider: Provider) -> &'static str {
+    match provider {
+        Provider::ClaudeCode | Provider::Codex => "/clear",
+        Provider::Cursor => "/new-chat",
+    }
 }

@@ -2367,3 +2367,114 @@ fn saved_state_without_unrelated_turns_keeps_pending_reply_and_tracks_new_activi
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn agent_of(worker: &Worker, agent: AgentId) -> &crate::bus::model::Agent {
+    worker.state.agent(agent).unwrap()
+}
+
+#[test]
+fn cleared_claude_rebinds_to_its_fresh_session_start() {
+    let (mut worker, agent, _room, dir, calls) = fixture(Provider::ClaudeCode, vec![]);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.state.record_compaction(agent, 5).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"SessionStart","session_id":"fresh","source":"clear"}),
+    );
+    // The first pass rebinds; the retained SessionStart is consumed on the next.
+    for _ in 0..2 {
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+    }
+    let cleared = agent_of(&worker, agent);
+    assert_eq!(
+        cleared.runtime_identity.session_id.as_deref(),
+        Some("fresh")
+    );
+    assert!(!cleared.session_binding_invalidated);
+    assert!(!cleared.session_reset_pending);
+    assert_eq!(cleared.compactions.count, 0);
+    assert!(callbacks::records(&dir.join("callbacks/launch"))
+        .unwrap()
+        .is_empty());
+    assert!(calls.lock().unwrap().contains(&"pane.report_agent_session"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cleared_codex_answers_a_message_sent_into_its_fresh_session() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let request = queue(&mut worker, room, agent, "fresh task");
+    worker.submit_ready().unwrap();
+    // Codex starts the fresh session with the first turn after /clear.
+    for value in [
+        json!({"hook_event_name":"SessionStart","session_id":"fresh","source":"startup"}),
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"fresh","turn_id":"t","prompt":"fresh task"}),
+        json!({"hook_event_name":"Stop","session_id":"fresh","turn_id":"t","last_assistant_message":"FRESH"}),
+    ] {
+        record(&dir, Provider::Codex, value);
+    }
+    for _ in 0..2 {
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+    }
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 100)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        worker.state.room(room).unwrap().latest_replies[&agent].text,
+        "FRESH"
+    );
+    assert_eq!(
+        agent_of(&worker, agent)
+            .runtime_identity
+            .session_id
+            .as_deref(),
+        Some("fresh")
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cleared_cursor_rebinds_from_the_first_turn_of_its_new_chat() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Cursor, vec![]);
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let request = queue(&mut worker, room, agent, "fresh task");
+    worker.submit_ready().unwrap();
+    // Cursor sends no sessionStart for /new-chat; the turn names the new chat.
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"fresh","generation_id":"t","prompt":"fresh task"}),
+    );
+    for _ in 0..2 {
+        worker
+            .consume_callbacks(agent, &dir.join("callbacks/launch"))
+            .unwrap();
+    }
+    let cleared = agent_of(&worker, agent);
+    assert_eq!(
+        cleared.runtime_identity.session_id.as_deref(),
+        Some("fresh")
+    );
+    assert!(!cleared.session_binding_invalidated);
+    let request = worker.state.request(request).unwrap();
+    assert!(request.trusted_start_bound);
+    assert_eq!(request.provider_session_id.as_deref(), Some("fresh"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

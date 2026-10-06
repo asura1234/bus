@@ -21,3 +21,11 @@ fn dev_focus_cli_requires_one_target_and_maps_agent_and_room() {
         .is_err());
     }
 }
+
+#[test]
+fn dev_agent_clear_cli_maps_one_agent() {
+    let parsed = parse(&["agent", "clear", "7"].map(str::to_owned), "clear-cli").unwrap();
+    assert_eq!(parsed.method, "agent.clear");
+    assert_eq!(parsed.params, json!({"agent": "7"}));
+    assert!(parse(&["agent".into(), "clear".into()], "missing").is_err());
+}

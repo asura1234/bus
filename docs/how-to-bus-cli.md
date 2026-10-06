@@ -285,6 +285,24 @@ notifier. A future
 `send --wait` convenience may only compose the existing durable `send` and
 `wait` primitives.
 
+### Give an agent a fresh context
+
+Start a fresh provider context in an idle agent's terminal before an unrelated
+task:
+
+```sh
+bus agent clear "$agent_id"
+```
+
+Bus types the provider's reset command itself: `/clear` for Claude Code and
+Codex, `/new-chat` for Cursor. It is not a Bus message, so nothing waits for a
+reply. The agent keeps its terminal, name and room and rebinds to the new
+provider session when the provider reports it: Claude Code and Codex with their
+session start hook, Cursor with the first turn of the new chat. Its compaction
+count starts again at zero. The agent must be idle with no message in progress
+or queued. Do not send `/clear` or `/new-chat` with `send`: Bus would wait for a
+reply that never comes, and would not rebind the agent.
+
 ## Address one or many agents
 
 `--to` accepts a comma-separated list of agent names or numeric IDs:

@@ -131,6 +131,51 @@ impl Worker {
                     .session_id
                     .as_ref()
                     .is_some_and(|known| known != session)
+                    && agent.session_reset_pending
+                {
+                    // `agent clear` started a fresh provider context in this
+                    // terminal. Claude and Codex announce it with SessionStart;
+                    // Cursor's first new turn names its new conversation.
+                    let pane = agent
+                        .runtime_identity
+                        .pane_id
+                        .clone()
+                        .ok_or("Callback arrived before pane creation was recorded")?;
+                    let source = match &parsed {
+                        Parsed::Session { source, .. } => source.clone(),
+                        _ => None,
+                    };
+                    self.transport
+                        .request(Method::PaneReportAgentSession(
+                            schema::PaneReportAgentSessionParams {
+                                pane_id: pane,
+                                source: format!("herdr:{}", launch::provider_kind(agent.provider)),
+                                agent: launch::provider_kind(agent.provider).into(),
+                                seq: Some(record.sequence),
+                                agent_session_id: Some(session.clone()),
+                                agent_session_path: None,
+                                session_start_source: Some(source.unwrap_or_else(|| "new".into())),
+                            },
+                        ))
+                        .map_err(|e| e.message)?;
+                    tracing::info!(
+                        event = "bus.callback.rebound",
+                        reason = "session_reset",
+                        "Agent rebound to its fresh provider session"
+                    );
+                    state
+                        .rebind_reset_session(id, session.clone())
+                        .map_err(|e| e.to_string())?;
+                    self.save(state)?;
+                    // The callback stays spooled and is consumed on the next pass,
+                    // now under the rebound session.
+                    return Ok(());
+                }
+                if agent
+                    .runtime_identity
+                    .session_id
+                    .as_ref()
+                    .is_some_and(|known| known != session)
                 {
                     tracing::warn!(
                         event = "bus.callback.rejected",
@@ -195,10 +240,16 @@ impl Worker {
                             },
                         ))
                         .map_err(|e| e.message)?;
-                    identity.session_id = Some(session);
+                    identity.session_id = Some(session.clone());
                     state
                         .set_agent_runtime_identity(id, identity)
                         .map_err(|e| e.to_string())?;
+                    if agent.session_reset_pending {
+                        // A reset agent that had no session yet binds its first one here.
+                        state
+                            .rebind_reset_session(id, session)
+                            .map_err(|e| e.to_string())?;
+                    }
                     // Identical hooks share one spool file, so a hook retry counts once.
                     if source.as_deref() == Some("compact") {
                         state

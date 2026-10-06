@@ -2336,3 +2336,111 @@ fn state_reports_how_the_running_bus_was_built() {
         json!(std::env::current_exe().unwrap())
     );
 }
+
+#[test]
+fn agent_clear_types_each_providers_reset_command_outside_bus_messages() {
+    use std::sync::{Arc, Mutex};
+    struct Prompts(Arc<Mutex<Vec<String>>>);
+    impl Transport for Prompts {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            let Method::AgentPromptIfIdle(params) = method else {
+                panic!("agent clear must only type into the idle agent");
+            };
+            assert_eq!(params.expected_session_id, "session");
+            self.0.lock().unwrap().push(params.text);
+            let agent = serde_json::from_value(json!({
+                "terminal_id":"terminal", "agent":"claude", "agent_status":"idle",
+                "workspace_id":"workspace", "tab_id":"tab", "pane_id":"pane",
+                "focused":false, "interactive_ready":true, "revision":1
+            }))
+            .unwrap();
+            Ok(ResponseResult::AgentPrompted { agent })
+        }
+    }
+    for (provider, command) in [
+        (Provider::ClaudeCode, "/clear"),
+        (Provider::Codex, "/clear"),
+        (Provider::Cursor, "/new-chat"),
+    ] {
+        let dir = std::env::temp_dir().join(format!(
+            "bus-control-clear-{}-{}-{}",
+            std::process::id(),
+            super::super::super::io::now_ns(),
+            NEXT_FIXTURE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let typed = Arc::new(Mutex::new(Vec::new()));
+        let mut worker = Worker::open(dir.clone(), Box::new(Prompts(Arc::clone(&typed)))).unwrap();
+        worker.dev_enabled = true;
+        let room = worker.state.create_room("test").unwrap();
+        let agent = worker
+            .state
+            .create_agent(room, "worker", provider, dir.clone(), None)
+            .unwrap();
+        worker
+            .state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("terminal".into()),
+                    pane_id: Some("pane".into()),
+                    session_id: Some("session".into()),
+                },
+            )
+            .unwrap();
+        worker.state.confirm_hook_setup(agent).unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 1)
+            .unwrap();
+        let response = call(
+            &mut worker,
+            "clear",
+            "agent.clear",
+            json!({"agent":"worker"}),
+        );
+        assert!(response.ok, "{response:?}");
+        assert_eq!(response.result["sent"], command);
+        assert_eq!(*typed.lock().unwrap(), [command]);
+        assert!(worker.state.agent(agent).unwrap().session_reset_pending);
+        assert_eq!(worker.state.requests().count(), 0);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn agent_clear_refuses_an_agent_that_is_not_idle_or_still_has_messages() {
+    let (mut worker, room, agent, dir) = fixture();
+    let launching = call(
+        &mut worker,
+        "launching",
+        "agent.clear",
+        json!({"agent":"codex1"}),
+    );
+    assert!(
+        error_message(&launching).contains("idle, ready"),
+        "{launching:?}"
+    );
+    worker.state.confirm_hook_setup(agent).unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 1)
+        .unwrap();
+    worker.state.set_draft_text(room, "pending").unwrap();
+    worker.state.set_draft_recipients(room, [agent]).unwrap();
+    worker.state.submit_draft(room, 2).unwrap();
+    let queued = call(
+        &mut worker,
+        "queued",
+        "agent.clear",
+        json!({"agent":"codex1"}),
+    );
+    assert!(
+        error_message(&queued).contains("messages to answer"),
+        "{queued:?}"
+    );
+    assert!(!worker.state.agent(agent).unwrap().session_reset_pending);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

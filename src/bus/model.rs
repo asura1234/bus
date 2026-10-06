@@ -311,6 +311,10 @@ pub(crate) struct Agent {
     pub(crate) orchestrates: Option<RoomId>,
     #[serde(default)]
     pub(crate) compactions: Compactions,
+    /// `agent clear` reset the provider context: the next callback that names a
+    /// different provider session rebinds this agent to it instead of being rejected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) session_reset_pending: bool,
 }
 
 /// Context compactions reported by the provider's SessionStart hook
@@ -971,6 +975,7 @@ impl BusState {
                 deletion_pending: false,
                 orchestrates: None,
                 compactions: Compactions::default(),
+                session_reset_pending: false,
             },
         );
         self.queues.insert(id, Vec::new());
@@ -1093,6 +1098,42 @@ impl BusState {
             return Err(ModelError::InvalidTransition);
         }
         agent.hook_setup_confirmed = true;
+        Ok(())
+    }
+
+    /// Marks the agent's provider context as reset by `agent clear`.
+    pub(crate) fn begin_session_reset(&mut self, id: AgentId) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .session_reset_pending = true;
+        Ok(())
+    }
+
+    /// Binds a reset agent to the provider session its fresh context reported.
+    /// A fresh context starts with no compactions.
+    pub(crate) fn rebind_reset_session(
+        &mut self,
+        id: AgentId,
+        session: String,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        let previous = agent.runtime_identity.session_id.replace(session.clone());
+        agent.session_reset_pending = false;
+        agent.compactions = Compactions::default();
+        // A message already sent into the fresh context was recorded under the
+        // old session; its callbacks now carry the new one.
+        if let Some(request) = agent
+            .current_request
+            .and_then(|request| self.requests.get_mut(&request))
+        {
+            if previous.is_some() && request.provider_session_id == previous {
+                request.provider_session_id = Some(session);
+            }
+        }
         Ok(())
     }
 

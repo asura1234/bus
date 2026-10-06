@@ -35,6 +35,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent dialog AGENT
   agent choose AGENT --option N --fingerprint FINGERPRINT
   agent focus AGENT
+  agent clear AGENT
   agent rename AGENT NAME
   agent details AGENT (--on | --off)
   agent setup-confirm AGENT --confirm
@@ -67,6 +68,8 @@ exact dialog is still shown. Bus messages a room's orchestrator about each dialo
 wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
+agent clear starts a fresh provider context in an idle agent's terminal (/clear for claude
+and codex, /new-chat for cursor) and keeps the agent bound to the new provider session.
 room seen clears a room's unread count without changing the visible Bus view.
 room sound turns that room's new-message sound on or off; MASTER starts on, work rooms off.
 room sound --sound picks a system sound by name (Default is Bus's own ding); sounds lists them.
@@ -323,6 +326,7 @@ fn cli() -> Command {
                         .arg(option("fingerprint")),
                 )
                 .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
+                .subcommand(subcommand("clear").arg(value_arg("agent").required(true)))
                 .subcommand(toggle("details").arg(value_arg("agent").required(true)))
                 .subcommand(
                     subcommand("rename")
@@ -470,6 +474,7 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         },
         "agent" => match args.subcommand() {
             Some(("focus", args)) => ("agent.focus", json!({"agent": required(args, "agent")?})),
+            Some(("clear", args)) => ("agent.clear", json!({"agent": required(args, "agent")?})),
             Some(("details", args)) => (
                 "agent.details",
                 json!({"agent": required(args, "agent")?, "on": on_off(args, "agent details")?}),
