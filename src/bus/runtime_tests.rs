@@ -287,10 +287,52 @@ impl Transport for FakeTransport {
                 .requests()
                 .any(|r| r.phase == RequestPhase::Submitting));
         }
+        if let Method::PaneReportAgentSession(params) = &method {
+            if let Some(session) = &params.agent_session_id {
+                REPORTED_SESSION.set(Some((params.agent.clone(), session.clone())));
+            }
+        }
+        if let (Method::AgentGet(target), None, Some((agent, session))) = (
+            &method,
+            self.replies.front(),
+            REPORTED_SESSION.with_borrow(Clone::clone),
+        ) {
+            return Ok(ResponseResult::AgentInfo {
+                agent: native_info(&target.target, &agent, &session),
+            });
+        }
         self.replies
             .pop_front()
             .unwrap_or(Ok(ResponseResult::Ok {}))
     }
+}
+
+thread_local! {
+    /// The last session reported to the fake server; `agent.get` answers with
+    /// it when no reply is queued, as a server that accepts the report would.
+    static REPORTED_SESSION: std::cell::RefCell<Option<(String, String)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn native_info(pane: &str, agent: &str, session: &str) -> crate::api::schema::AgentInfo {
+    serde_json::from_value(json!({
+        "terminal_id": "terminal",
+        "pane_id": pane,
+        "name": "bus-r1-a2",
+        "agent": agent,
+        "agent_status": "idle",
+        "agent_session": {
+            "source": format!("herdr:{agent}"),
+            "agent": agent,
+            "kind": "id",
+            "value": session
+        },
+        "workspace_id": "w1",
+        "tab_id": "t1",
+        "focused": false,
+        "revision": 1
+    }))
+    .unwrap()
 }
 
 fn fixture(
@@ -439,7 +481,7 @@ fn delete_failure_suspends_while_native_ownership_is_unproven(
     worker.submit_ready().unwrap();
     assert_eq!(
         *calls.lock().unwrap(),
-        vec!["pane.close_if_identity", "agent.list"]
+        vec!["pane.close_if_identity", "agent.list", "agent.get"]
     );
     drop(worker);
     let fake = FakeTransport {
@@ -453,7 +495,7 @@ fn delete_failure_suspends_while_native_ownership_is_unproven(
         .observe_status(agent, RuntimeStatus::Idle, 10)
         .unwrap();
     recovered.submit_ready().unwrap();
-    assert_eq!(calls.lock().unwrap().len(), 2);
+    assert_eq!(calls.lock().unwrap().len(), 3);
     recovered
         .command(BusCommand::DeleteAgent(agent), &events)
         .unwrap();
@@ -634,6 +676,16 @@ impl Transport for NativeBoundClose {
             let agent = saved.agents().next().unwrap();
             return native_agents(Some(format!("bus-r{}-a{}", agent.room_id.0, agent.id.0)));
         }
+        if let Method::AgentGet(target) = &method {
+            let saved = JsonStore::new(self.state_path.clone())
+                .load()
+                .unwrap()
+                .unwrap();
+            let kind = crate::bus::launch::provider_kind(saved.agents().next().unwrap().provider);
+            return Ok(ResponseResult::AgentInfo {
+                agent: native_info(&target.target, kind, &self.session),
+            });
+        }
         let Method::PaneCloseIfIdentity(params) = method else {
             panic!("Deletion must not report native sessions or deliver prompts: {method:?}");
         };
@@ -769,21 +821,17 @@ fn deletion_never_rebinds_a_known_session_from_a_later_session_start() {
         Provider::ClaudeCode,
         json!({"hook_event_name":"SessionStart", "session_id":"rebound"}),
     );
-    let (events, _) = mpsc::channel();
-    assert!(worker
+    let (events, received) = mpsc::channel();
+    // The agent is deleted, but its terminal is never closed under the
+    // rebound session: that session may not be Bus's to end.
+    worker
         .command(BusCommand::DeleteAgent(agent), &events)
-        .is_err());
-    assert_eq!(
-        worker
-            .state
-            .agent(agent)
-            .unwrap()
-            .runtime_identity
-            .session_id
-            .as_deref(),
-        Some("session")
-    );
+        .unwrap();
+    assert!(worker.state.agent(agent).is_none());
     assert_eq!(*calls.lock().unwrap(), vec![Some("session".into())]);
+    assert!(received
+        .try_iter()
+        .any(|event| matches!(event, BusEvent::TerminalsLeftOpen(_))));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -2475,6 +2523,106 @@ fn cleared_cursor_rebinds_from_the_first_turn_of_its_new_chat() {
     let request = worker.state.request(request).unwrap();
     assert!(request.trusted_start_bound);
     assert_eq!(request.provider_session_id.as_deref(), Some("fresh"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cleared_cursor_keeps_its_session_when_the_server_refuses_the_new_chat() {
+    // A server older than the Cursor new-chat rule answers the report with ok
+    // but still attributes the old session to the pane.
+    let (mut worker, agent, _room, dir, _) = fixture(
+        Provider::Cursor,
+        vec![
+            Ok(ResponseResult::Ok {}),
+            Ok(ResponseResult::AgentInfo {
+                agent: native_info("pane", "cursor", "session"),
+            }),
+        ],
+    );
+    worker.state.begin_session_reset(agent).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"fresh","generation_id":"t","prompt":"fresh task"}),
+    );
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    let refused = agent_of(&worker, agent);
+    assert_eq!(
+        refused.runtime_identity.session_id.as_deref(),
+        Some("session")
+    );
+    assert!(refused.session_binding_invalidated);
+    assert_eq!(refused.status, RuntimeStatus::Unavailable);
+    assert!(refused
+        .actionable_error
+        .as_deref()
+        .is_some_and(|error| error.contains("kept the previous provider session")));
+    assert!(callbacks::records(&dir.join("callbacks/launch"))
+        .unwrap()
+        .is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Regression: a Cursor agent rebound to its new chat while the server kept the
+/// old one; every guarded close answered `terminal_identity_changed` and the
+/// agent could never be deleted.
+#[test]
+fn delete_leaves_open_an_owned_terminal_whose_provider_session_moved() {
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::Cursor,
+        vec![
+            identity_changed(),
+            native_agents(Some("bus-r1-a2".into())),
+            Ok(ResponseResult::AgentInfo {
+                agent: native_info("pane", "cursor", "moved"),
+            }),
+        ],
+    );
+    let request = queue(&mut worker, room, agent, "stuck");
+    let (events, received) = mpsc::channel();
+    worker
+        .command(BusCommand::DeleteAgent(agent), &events)
+        .unwrap();
+    assert!(worker.state.agent(agent).is_none());
+    assert!(worker.state.request(request).is_none());
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["pane.close_if_identity", "agent.list", "agent.get"]
+    );
+    assert!(received.try_iter().any(|event| matches!(
+        event,
+        BusEvent::TerminalsLeftOpen(terminals) if terminals[0].pane_id == "pane"
+    )));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn delete_keeps_an_agent_whose_terminal_carries_another_managed_name() {
+    let mut foreign = native_info("pane", "cursor", "moved");
+    foreign.name = Some("bus-r1-a9".into());
+    let (mut worker, agent, _room, dir, calls) = fixture(
+        Provider::Cursor,
+        vec![
+            identity_changed(),
+            native_agents(Some("bus-r1-a2".into())),
+            Ok(ResponseResult::AgentInfo { agent: foreign }),
+        ],
+    );
+    let (events, _) = mpsc::channel();
+    assert!(worker
+        .command(BusCommand::DeleteAgent(agent), &events)
+        .is_err());
+    assert!(worker.state.agent(agent).unwrap().deletion_pending);
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec!["pane.close_if_identity", "agent.list", "agent.get"]
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -254,6 +254,8 @@ impl Worker {
             return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into()).map(|()| None);
         };
         let managed_name = format!("bus-r{}-a{}", agent.room_id.0, id.0);
+        let kind = launch::provider_kind(agent.provider);
+        let expected_session = identity.session_id.clone();
         let left_open = LeftOpenTerminal {
             agent_id: id,
             agent_name: agent.name.clone(),
@@ -264,9 +266,9 @@ impl Worker {
             schema::PaneCloseIfIdentityParams {
                 pane_id: pane.clone(),
                 expected_terminal_id: terminal.clone(),
-                expected_agent: launch::provider_kind(agent.provider).into(),
+                expected_agent: kind.into(),
                 expected_managed_name: managed_name.clone(),
-                expected_session_id: identity.session_id.clone(),
+                expected_session_id: expected_session.clone(),
             },
         ));
         match result {
@@ -299,6 +301,24 @@ impl Worker {
                             "Native terminal no longer carries the Bus managed name; left open");
                         return Ok(Some(left_open));
                     }
+                    if expected_session.is_some()
+                        && self.owned_terminal_session_moved(
+                            &left_open,
+                            kind,
+                            &managed_name,
+                            expected_session.as_deref(),
+                        )
+                    {
+                        // The provider session in this agent's own terminal
+                        // moved on, as after an agent clear the server did not
+                        // record or a chat resumed by hand. No retry can pass
+                        // the guard, and the session there may not be Bus's to
+                        // end, so the agent goes and the terminal stays open.
+                        tracing::info!(event = "bus.deletion.session_moved", agent_id = id.0,
+                            pane_id = %left_open.pane_id, terminal_id = %left_open.terminal_id,
+                            "Owned terminal now runs another provider session; left open");
+                        return Ok(Some(left_open));
+                    }
                 }
                 let message = if matches!(
                     error.code.as_deref(),
@@ -313,6 +333,34 @@ impl Worker {
                 self.agent_error(id, message).map(|()| None)
             }
         }
+    }
+
+    /// Whether the native server still shows this agent's own terminal, pane,
+    /// managed name and provider, with a provider session other than `expected`.
+    /// A failed lookup proves nothing.
+    fn owned_terminal_session_moved(
+        &mut self,
+        terminal: &LeftOpenTerminal,
+        kind: &str,
+        managed_name: &str,
+        expected: Option<&str>,
+    ) -> bool {
+        let Ok(ResponseResult::AgentInfo { agent: info }) =
+            self.transport
+                .request(Method::AgentGet(schema::AgentTarget {
+                    target: terminal.pane_id.clone(),
+                }))
+        else {
+            return false;
+        };
+        info.terminal_id == terminal.terminal_id
+            && info.pane_id == terminal.pane_id
+            && info.name.as_deref() == Some(managed_name)
+            && info.agent.as_deref() == Some(kind)
+            && info.agent_session.is_some_and(|session| {
+                session.source == format!("herdr:{kind}")
+                    && Some(session.value.as_str()) != expected
+            })
     }
 
     /// `agent.list` includes every terminal carrying a managed name, even with

@@ -58,6 +58,20 @@ impl Worker {
         Ok(true)
     }
 
+    /// The provider session the native server attributes to `pane`.
+    pub(super) fn native_session(&mut self, pane: &str) -> Result<Option<String>, String> {
+        match self
+            .transport
+            .request(Method::AgentGet(schema::AgentTarget {
+                target: pane.to_owned(),
+            }))
+            .map_err(|e| e.message)?
+        {
+            ResponseResult::AgentInfo { agent } => Ok(agent.agent_session.map(|s| s.value)),
+            _ => Err("Unexpected native agent response".into()),
+        }
+    }
+
     pub(super) fn consume_callbacks(&mut self, id: AgentId, dir: &Path) -> Result<(), String> {
         let mut rollout = None;
         let mut records = callbacks::records(dir).map_err(|e| e.to_string())?;
@@ -148,7 +162,7 @@ impl Worker {
                     self.transport
                         .request(Method::PaneReportAgentSession(
                             schema::PaneReportAgentSessionParams {
-                                pane_id: pane,
+                                pane_id: pane.clone(),
                                 source: format!("herdr:{}", launch::provider_kind(agent.provider)),
                                 agent: launch::provider_kind(agent.provider).into(),
                                 seq: Some(record.sequence),
@@ -158,6 +172,32 @@ impl Worker {
                             },
                         ))
                         .map_err(|e| e.message)?;
+                    // The server answers ok even when it keeps the old session,
+                    // as a server older than this build does for a Cursor new
+                    // chat. Rebinding then would leave Bus and the terminal
+                    // disagreeing, so the agent could not be read or deleted.
+                    if self.native_session(&pane)?.as_deref() != Some(session.as_str()) {
+                        tracing::warn!(
+                            event = "bus.callback.rejected",
+                            reason = "session_reset_refused",
+                            "Native server kept the previous provider session"
+                        );
+                        state
+                            .invalidate_agent_session(id)
+                            .map_err(|e| e.to_string())?;
+                        state
+                            .observe_status(
+                                id,
+                                RuntimeStatus::Unavailable,
+                                crate::bus::io::now_ms(),
+                            )
+                            .map_err(|e| e.to_string())?;
+                        state.set_agent_error(id, Some("The Bus server kept the previous provider session after agent clear, so Bus can no longer follow this agent. Delete it and add a new one; restart Bus first if its server predates this build.".into())).map_err(|e| e.to_string())?;
+                        self.save(state)?;
+                        std::fs::remove_file(path).map_err(|e| e.to_string())?;
+                        crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
+                        continue;
+                    }
                     tracing::info!(
                         event = "bus.callback.rebound",
                         reason = "session_reset",
