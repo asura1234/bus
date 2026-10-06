@@ -78,13 +78,11 @@ fn configure_background_command_platform(_command: &mut std::process::Command) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlatformCapabilities {
-    pub(crate) direct_terminal_attach: bool,
     pub(crate) preserve_legacy_doubled_escape_input: bool,
 }
 
 pub(crate) const fn capabilities() -> PlatformCapabilities {
     PlatformCapabilities {
-        direct_terminal_attach: cfg!(unix),
         preserve_legacy_doubled_escape_input: cfg!(target_os = "macos"),
     }
 }
@@ -240,7 +238,6 @@ pub(crate) fn read_limited_reader(
     let mut sentinel = [0_u8; 1];
     loop {
         return match reader.read(&mut sentinel) {
-            Ok(0) if bytes.is_empty() => Ok(LimitedRead::Empty),
             Ok(0) => Ok(LimitedRead::Complete(bytes)),
             Ok(_) => Ok(LimitedRead::Oversized),
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,

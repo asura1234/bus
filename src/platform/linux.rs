@@ -149,10 +149,6 @@ fn foreground_job_for_group(child_pid: u32, process_group_id: u32) -> Option<For
         })
         .collect::<Vec<_>>();
 
-    if processes.is_empty() {
-        return None;
-    }
-
     Some(ForegroundJob {
         process_group_id,
         processes,
