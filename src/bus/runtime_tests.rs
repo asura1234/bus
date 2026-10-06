@@ -2018,3 +2018,167 @@ fn orchestrator_era_consumed_approve_once_fingerprint_stays_consumed() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn claude_start(prompt_id: &str, prompt: &str) -> serde_json::Value {
+    json!({"hook_event_name":"UserPromptSubmit","session_id":"session","prompt_id":prompt_id,"prompt":prompt})
+}
+
+fn claude_stop(prompt_id: &str, text: &str, background: serde_json::Value) -> serde_json::Value {
+    json!({"hook_event_name":"Stop","session_id":"session","prompt_id":prompt_id,"last_assistant_message":text,"background_tasks":background,"session_crons":[]})
+}
+
+/// The turn a background shell's completion starts on its own.
+fn claude_task_notification_turn(
+    prompt_id: &str,
+    background: serde_json::Value,
+) -> Vec<serde_json::Value> {
+    vec![
+        json!({"hook_event_name":"SessionStart","session_id":"session","source":"resume"}),
+        claude_start(
+            prompt_id,
+            "<task-notification>\n<task-id>shell-1</task-id>\n<status>completed</status>\n</task-notification>",
+        ),
+        claude_stop(prompt_id, "Notification handled", background),
+    ]
+}
+
+#[test]
+fn claude_task_notification_after_a_stop_with_a_running_shell_keeps_the_bus_reply() {
+    // Consumed together, or the notification turn in a later pass.
+    for split in [false, true] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+        let spool = dir.join("callbacks/launch");
+        let request = queue(&mut worker, room, agent, "do the task");
+        worker.submit_ready().unwrap();
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_start("prompt-1", "do the task"),
+        );
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_stop(
+                "prompt-1",
+                "Task done",
+                json!([{"id":"shell-1","type":"shell","status":"running"}]),
+            ),
+        );
+        if split {
+            worker.consume_callbacks(agent, &spool).unwrap();
+        }
+        for value in claude_task_notification_turn("prompt-2", json!([])) {
+            record(&dir, Provider::ClaudeCode, value);
+        }
+        worker.consume_callbacks(agent, &spool).unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 20)
+            .unwrap();
+
+        let settled = worker.state.request(request).unwrap();
+        assert_eq!(settled.phase, RequestPhase::Completed, "split={split}");
+        assert_eq!(settled.provider_turn_id.as_deref(), Some("prompt-1"));
+        assert_eq!(
+            worker.state.room(room).unwrap().latest_replies[&agent].text,
+            "Task done"
+        );
+        assert_eq!(worker.state.agent(agent).unwrap().actionable_error, None);
+        assert!(callbacks::records(&spool).unwrap().is_empty());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn claude_unrelated_turns_never_error_or_block_the_next_request() {
+    // The notification turn may end while a monitor it started still runs.
+    for background in [
+        json!([]),
+        json!([{"id":"monitor-1","type":"monitor","status":"running"}]),
+    ] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+        let spool = dir.join("callbacks/launch");
+        let first = queue(&mut worker, room, agent, "first task");
+        worker.submit_ready().unwrap();
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_start("prompt-1", "first task"),
+        );
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_stop("prompt-1", "First done", json!([])),
+        );
+        worker.consume_callbacks(agent, &spool).unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 20)
+            .unwrap();
+        assert_eq!(
+            worker.state.request(first).unwrap().phase,
+            RequestPhase::Completed
+        );
+
+        // The shell finishes while the next request is pasted but not yet submitted.
+        let second = queue(&mut worker, room, agent, "second task");
+        worker.submit_ready().unwrap();
+        // The fake transport leaves the submission uncertain; the turn adds no error.
+        let submitted_error = worker.state.agent(agent).unwrap().actionable_error.clone();
+        for value in claude_task_notification_turn("prompt-2", background.clone()) {
+            record(&dir, Provider::ClaudeCode, value);
+        }
+        worker.consume_callbacks(agent, &spool).unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().actionable_error,
+            submitted_error
+        );
+        assert!(!worker.state.request(second).unwrap().trusted_start_bound);
+
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_start("prompt-3", "second task"),
+        );
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_stop("prompt-3", "Second done", json!([])),
+        );
+        worker.consume_callbacks(agent, &spool).unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 30)
+            .unwrap();
+        assert_eq!(
+            worker.state.request(second).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(
+            worker.state.room(room).unwrap().latest_replies[&agent].text,
+            "Second done"
+        );
+
+        // With nothing in flight, the user typing in the terminal is only activity.
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_start("prompt-4", "typed by the user"),
+        );
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            claude_stop("prompt-4", "Typed reply", json!([])),
+        );
+        worker.consume_callbacks(agent, &spool).unwrap();
+        assert_eq!(worker.state.agent(agent).unwrap().actionable_error, None);
+        assert_eq!(
+            worker.state.room(room).unwrap().latest_replies[&agent].text,
+            "Second done"
+        );
+        assert!(callbacks::records(&spool).unwrap().is_empty());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

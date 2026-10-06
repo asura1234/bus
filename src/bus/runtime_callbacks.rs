@@ -61,17 +61,7 @@ impl Worker {
     pub(super) fn consume_callbacks(&mut self, id: AgentId, dir: &Path) -> Result<(), String> {
         let mut rollout = None;
         let mut records = callbacks::records(dir).map_err(|e| e.to_string())?;
-        // Companion hooks can reach the spool in either order, including after reconnect.
-        records.sort_by_key(|(_, r)| {
-            (
-                match callbacks::parse(r.manifest.provider, &r.value) {
-                    Ok(Parsed::Session { .. }) => 0,
-                    Ok(Parsed::Started { .. }) => 1,
-                    _ => 2,
-                },
-                r.sequence,
-            )
-        });
+        order_records(&mut records);
         for (path, record) in &records {
             let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
             let _span = tracing::info_span!("bus.callback", agent_id = id.0,
@@ -303,7 +293,10 @@ impl Worker {
                 Parsed::Ignore => None,
             };
             if let Some(callback) = callback {
-                if matches!(callback.kind, CallbackEventKind::Final { .. })
+                if matches!(
+                    callback.kind,
+                    CallbackEventKind::Final { .. } | CallbackEventKind::BackgroundPending
+                ) && !state.is_unrelated_turn(&callback)
                     && state
                         .agent(id)
                         .and_then(|a| a.current_request)
@@ -313,18 +306,24 @@ impl Worker {
                                 && callback.sequence > r.submission_boundary.unwrap_or(u64::MAX)
                         })
                 {
+                    // It may also end a turn the agent started on its own before
+                    // the submit hook ran, so it is not an agent error.
                     tracing::debug!(
                         event = "bus.callback.deferred",
                         reason = "trusted_start_missing",
-                        "Final retained until matching submit hook arrives"
+                        "Stop retained until matching submit hook arrives"
                     );
-                    state.set_agent_error(id,Some("Awaiting trusted submit-hook binding; final callback retained and no retry will occur".into())).map_err(|e|e.to_string())?;
-                    self.save(state)?;
                     continue;
                 }
                 let disposition = state.accept_callback(callback);
                 tracing::info!(event = "bus.callback.correlated", disposition = ?disposition,
                     "Provider callback correlation result");
+                if disposition == CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn) {
+                    tracing::info!(
+                        event = "bus.callback.unrelated_turn",
+                        "Agent activity outside the Bus request"
+                    );
+                }
                 if matches!(
                     disposition,
                     CallbackDisposition::Rejected(
@@ -378,4 +377,49 @@ impl Worker {
             ),
         }
     }
+}
+
+/// Applies turns in the order they began, so a later turn (a task notification,
+/// or the user typing) can never overtake the Stop of the turn Bus submitted.
+/// Session starts go first, and within a turn the submit hook goes first:
+/// companion hooks can reach the spool in either order, including after reconnect.
+fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
+    let mut keyed: Vec<_> = std::mem::take(records)
+        .into_iter()
+        .map(|entry| {
+            let parsed = callbacks::parse(entry.1.manifest.provider, &entry.1.value);
+            let turn = match &parsed {
+                Ok(
+                    Parsed::Started { session, turn, .. }
+                    | Parsed::Final { session, turn, .. }
+                    | Parsed::BackgroundPending { session, turn }
+                    | Parsed::CursorResponse { session, turn, .. }
+                    | Parsed::CursorStop { session, turn }
+                    | Parsed::Failure { session, turn, .. },
+                ) => Some((session.clone(), turn.clone())),
+                _ => None,
+            };
+            let rank = match parsed {
+                Ok(Parsed::Session { .. }) => 0,
+                Ok(Parsed::Started { .. }) => 1,
+                _ => 2,
+            };
+            (rank, turn, entry)
+        })
+        .collect();
+    let mut began = BTreeMap::new();
+    for (_, turn, (_, record)) in &keyed {
+        if let Some(turn) = turn {
+            let first = began.entry(turn.clone()).or_insert(record.sequence);
+            *first = (*first).min(record.sequence);
+        }
+    }
+    keyed.sort_by_key(|(rank, turn, (_, record))| {
+        let turn_began = turn
+            .as_ref()
+            .and_then(|turn| began.get(turn).copied())
+            .unwrap_or(record.sequence);
+        (*rank != 0, turn_began, *rank, record.sequence)
+    });
+    records.extend(keyed.into_iter().map(|(_, _, entry)| entry));
 }

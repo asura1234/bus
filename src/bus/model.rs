@@ -413,6 +413,8 @@ pub(crate) enum CallbackRejection {
     WrongPrompt,
     UnboundFinal,
     DuplicateFinal,
+    /// The callback belongs to a provider turn Bus did not start.
+    UnrelatedTurn,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -493,6 +495,11 @@ pub(crate) struct BusState {
     queues: BTreeMap<AgentId, Vec<RequestId>>,
     consumed_callback_ids: BTreeSet<String>,
     consumed_provider_turns: BTreeSet<String>,
+    /// Provider turns the agent started on its own (a task notification, or the
+    /// user typing in its terminal). Their later hooks are activity, never a
+    /// reply or an error for the request Bus is waiting on.
+    #[serde(default)]
+    unrelated_provider_turns: BTreeSet<String>,
     visible_room: Option<RoomId>,
     /// Approve-once fingerprints already sent to a native prompt; each is single-use.
     #[serde(default)]
@@ -564,6 +571,7 @@ impl BusState {
             queues: BTreeMap::new(),
             consumed_callback_ids: BTreeSet::new(),
             consumed_provider_turns: BTreeSet::new(),
+            unrelated_provider_turns: BTreeSet::new(),
             visible_room: None,
             consumed_permission_fingerprints: BTreeSet::new(),
             legacy_orchestrator: None,
@@ -1397,7 +1405,27 @@ impl BusState {
         if agent.deletion_pending {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         }
+        let turn_key = provider_turn_key(
+            &callback.launch_id,
+            callback.provider_session_id.as_deref(),
+            callback.provider_turn_id.as_deref(),
+        );
+        if let Some(key) = turn_key
+            .as_ref()
+            .filter(|key| self.unrelated_provider_turns.contains(*key))
+        {
+            if matches!(
+                callback.kind,
+                CallbackEventKind::Final { .. } | CallbackEventKind::Error { .. }
+            ) {
+                self.unrelated_provider_turns.remove(key);
+            }
+            return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
+        }
         let Some(request_id) = agent.current_request else {
+            if matches!(callback.kind, CallbackEventKind::PromptStarted) {
+                self.unrelated_provider_turns.extend(turn_key);
+            }
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         };
         let Some(request) = self.requests.get(&request_id) else {
@@ -1419,8 +1447,12 @@ impl BusState {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongSession);
             }
         }
+        // A turn that wakes after the request paused for background work carries
+        // the real reply. Once the request holds a final reply, a new turn is the
+        // agent's own activity and must not replace or discard that reply.
         let continuation = matches!(callback.kind, CallbackEventKind::PromptStarted)
             && request.trusted_start_bound
+            && request.pending_final.is_none()
             && request.provider_session_id.is_some()
             && callback.provider_session_id == request.provider_session_id
             && request.provider_turn_id.is_some()
@@ -1430,6 +1462,18 @@ impl BusState {
                 .prompt_payload
                 .as_deref()
                 .is_some_and(|payload| !request.prompt.matches_callback_payload(payload));
+        if matches!(callback.kind, CallbackEventKind::PromptStarted)
+            && !continuation
+            && callback.provider_turn_id.is_some()
+            && callback.provider_turn_id != request.provider_turn_id
+            && callback
+                .prompt_payload
+                .as_deref()
+                .is_some_and(|payload| !request.prompt.matches_callback_payload(payload))
+        {
+            self.unrelated_provider_turns.extend(turn_key);
+            return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
+        }
         if let Some(expected) = request.provider_turn_id.as_deref() {
             if !continuation && callback.provider_turn_id.as_deref() != Some(expected) {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongTurn);
@@ -1509,11 +1553,6 @@ impl BusState {
                 if request.pending_final.is_some() {
                     return CallbackDisposition::Rejected(CallbackRejection::DuplicateFinal);
                 }
-                let turn_key = provider_turn_key(
-                    &callback.launch_id,
-                    callback.provider_session_id.as_deref(),
-                    callback.provider_turn_id.as_deref(),
-                );
                 if turn_key
                     .as_ref()
                     .is_some_and(|key| self.consumed_provider_turns.contains(key))
@@ -1546,6 +1585,16 @@ impl BusState {
                 CallbackDisposition::AcceptedError
             }
         }
+    }
+
+    /// Whether the callback belongs to a turn the agent started on its own.
+    pub(crate) fn is_unrelated_turn(&self, callback: &ProviderCallback) -> bool {
+        provider_turn_key(
+            &callback.launch_id,
+            callback.provider_session_id.as_deref(),
+            callback.provider_turn_id.as_deref(),
+        )
+        .is_some_and(|key| self.unrelated_provider_turns.contains(&key))
     }
 
     pub(crate) fn next_queued_request(&self, agent: AgentId) -> Option<RequestId> {
