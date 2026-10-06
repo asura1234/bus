@@ -129,7 +129,6 @@ fn parse_right_click_passthrough_modifier(value: &str) -> Option<Option<KeyModif
             "cmd" | "command" | "super" => KeyModifiers::SUPER,
             "meta" => KeyModifiers::META,
             "hyper" => KeyModifiers::HYPER,
-            "shift" => return None,
             _ => return None,
         };
         modifiers |= modifier;

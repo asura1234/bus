@@ -60,22 +60,17 @@ fn home_dir_from_env(
         usable_home_component(env("HOMEPATH")),
     ) {
         let path = path.to_string_lossy();
-        if !path.starts_with(['\\', '/']) {
-            return usable_home_path(env("HOME")).ok_or(());
+        if path.starts_with(['\\', '/']) {
+            let combined = format!("{}{}", drive.to_string_lossy(), path);
+            return Ok(PathBuf::from(combined));
         }
-        let combined = format!("{}{}", drive.to_string_lossy(), path);
-        return Ok(PathBuf::from(combined));
     }
 
     usable_home_path(env("HOME")).ok_or(())
 }
 
 fn usable_home_path(value: Option<OsString>) -> Option<PathBuf> {
-    let value = value?;
-    if value.is_empty() || value == "~" {
-        return None;
-    }
-    Some(PathBuf::from(value))
+    usable_home_component(value).map(PathBuf::from)
 }
 
 fn usable_home_component(value: Option<OsString>) -> Option<OsString> {
