@@ -2912,3 +2912,27 @@ fn overflow_mixed_file_chips_keep_full_path_inspection_and_removal() {
     }
     assert_eq!(ui.main_scroll, 0, "file scrolling must not move replies");
 }
+
+#[test]
+fn pasted_images_are_saved_once_under_the_bus_data_dir() {
+    let root = std::env::temp_dir().join(format!(
+        "bus-paste-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let room = RoomId(7);
+    let first = input::save_pasted_image(&root, room, b"\x89PNG fake", "png").unwrap();
+    let again = input::save_pasted_image(&root, room, b"\x89PNG fake", "png").unwrap();
+    let other = input::save_pasted_image(&root, room, b"other", "png").unwrap();
+
+    assert!(first.is_absolute());
+    assert!(first.starts_with(root.join("attachments").join("room-7")));
+    assert_eq!(first.extension().unwrap(), "png");
+    assert_eq!(std::fs::read(&first).unwrap(), b"\x89PNG fake");
+    assert_eq!(first, again, "one image pasted twice is one file");
+    assert_ne!(first, other);
+    std::fs::remove_dir_all(&root).unwrap();
+}

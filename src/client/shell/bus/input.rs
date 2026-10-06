@@ -917,19 +917,18 @@ impl BusUi {
         let Some(room) = self.room else {
             return;
         };
-        let path = std::env::temp_dir().join(format!(
-            "bus-paste-{}-{}.{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0),
-            image.extension
-        ));
-        if std::fs::write(&path, &image.bytes).is_err() {
-            self.error = Some("Could not write the clipboard image.".into());
+        let Some(root) = crate::bus::entry::data_dir() else {
+            self.error = Some("Could not save the clipboard image: no Bus data directory.".into());
             return;
-        }
+        };
+        let path = match save_pasted_image(&root, room, &image.bytes, image.extension) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(event = "bus.paste_image.write_failed", %error);
+                self.error = Some("Could not write the clipboard image.".into());
+                return;
+            }
+        };
         self.queue(
             BusCommand::AttachFile(room, path.display().to_string()),
             Effect::Files(room),
@@ -1414,4 +1413,27 @@ impl BusUi {
             }
         }
     }
+}
+
+/// Saves a pasted clipboard image where later readers can still open it: the
+/// Bus data directory outlives the session, unlike the system temp directory.
+/// Naming by content keeps repeated pastes of one image to a single file.
+pub(super) fn save_pasted_image(
+    root: &std::path::Path,
+    room: RoomId,
+    bytes: &[u8],
+    extension: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    use sha2::{Digest, Sha256};
+    let dir = root.join("attachments").join(format!("room-{}", room.0));
+    std::fs::create_dir_all(&dir)?;
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    let path = dir.join(format!("paste-{}.{extension}", &digest[..16]));
+    if !path.is_file() {
+        // Write beside the target and rename so readers never see a partial image.
+        let partial = dir.join(format!(".{}.partial-{}", &digest[..16], std::process::id()));
+        std::fs::write(&partial, bytes)?;
+        std::fs::rename(&partial, &path)?;
+    }
+    Ok(path)
 }
