@@ -2450,7 +2450,8 @@ mod tests {
 
         let parent_pid = std::process::id().to_string();
         let test_exe = std::env::current_exe().expect("resolve test executable");
-        let configurations: [(&str, fn(&mut Command)); 2] = [
+        type CommandConfigurator = fn(&mut Command);
+        let configurations: [(&str, CommandConfigurator); 2] = [
             ("background", super::configure_background_command_platform),
             ("server daemon", super::detach_server_daemon_command),
         ];
