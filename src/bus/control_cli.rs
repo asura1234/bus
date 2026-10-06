@@ -39,7 +39,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent details AGENT (--on | --off)
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
-  send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT]
+  send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue]
   message status MESSAGE_ID
   request recover REQUEST_ID --confirm
   wait --message MESSAGE_ID [--timeout SECONDS]
@@ -338,7 +338,8 @@ fn cli() -> Command {
                 .arg(option("to"))
                 .arg(option("text"))
                 .arg(value_arg("file").long("file").action(ArgAction::Append))
-                .arg(value_arg("as").long("as")),
+                .arg(value_arg("as").long("as"))
+                .arg(flag("queue")),
         )
         .subcommand(
             subcommand("message")
@@ -558,6 +559,9 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             // Omitted rather than defaulted so Human sends keep their request shape.
             if args.contains_id("as") {
                 params["as"] = json!(required(args, "as")?);
+            }
+            if args.get_flag("queue") {
+                params["queue"] = json!(true);
             }
             ("message.send", params)
         }
@@ -1320,6 +1324,16 @@ mod tests {
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"]["code"], "timeout");
         assert_eq!(response["result"], status);
+    }
+
+    #[test]
+    fn send_queue_asks_for_an_own_turn_and_is_omitted_otherwise() {
+        let queued =
+            command(&["send", "--room", "r", "--to", "a", "--text", "t", "--queue"]).unwrap();
+        assert_eq!(queued.params["queue"], true);
+        let steering = command(&["send", "--room", "r", "--to", "a", "--text", "t"]).unwrap();
+        assert!(steering.params.get("queue").is_none());
+        assert!(HELP.contains("[--as AGENT] [--queue]"));
     }
 
     #[test]

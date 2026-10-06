@@ -1,6 +1,7 @@
 /// Client-only help. These commands never become agent prompts.
 pub(super) const TEXT: &str = "Composer
-Enter          Send to checked agents
+Enter          Send; a working agent takes it into its current turn
+Option+Enter   Send to wait for each agent's next turn of its own
 Shift+Enter    New line
 Ctrl+J         New line (legacy terminal fallback)
 \\ then Enter   New line in any terminal

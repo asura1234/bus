@@ -77,7 +77,12 @@ fn check_prompt_identity_and_idle(
             "Agent identity changed; prompt was not sent",
         ));
     }
-    if !matches!(agent.agent_status, AgentStatus::Idle | AgentStatus::Done) {
+    let accepted = match agent.agent_status {
+        AgentStatus::Idle | AgentStatus::Done => true,
+        AgentStatus::Working => params.steer,
+        AgentStatus::Blocked | AgentStatus::Unknown => false,
+    };
+    if !accepted || agent.dialog_id.is_some() {
         return Err(("agent_not_idle", "Agent is not idle; prompt was not sent"));
     }
     if agent.launch_pending || !agent.interactive_ready {
@@ -899,6 +904,7 @@ mod tests {
             expected_pane_id: info.pane_id.clone(),
             expected_agent: "codex".into(),
             expected_session_id: "session".into(),
+            steer: false,
         };
         let run = |app: &mut App, params: AgentPromptIfIdleParams| {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -992,6 +998,7 @@ mod tests {
                     expected_pane_id: info.pane_id,
                     expected_agent: "codex".into(),
                     expected_session_id: "session".into(),
+                    steer: false,
                 }),
             },
             respond_to,

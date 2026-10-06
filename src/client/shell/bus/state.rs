@@ -119,6 +119,8 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) pending: VecDeque<Pending>,
     pub next_id: u64,
     pub send_intent: Option<RoomId>,
+    /// The pending send waits for each agent's own turn instead of steering.
+    pub(super) send_queued: bool,
     pub error: Option<String>,
     pub(super) dismissed_snapshot_error: Option<String>,
     pub(super) toast: Option<Toast>,
@@ -206,6 +208,7 @@ impl BusUi {
             pending: VecDeque::new(),
             next_id: 1,
             send_intent: None,
+            send_queued: false,
             error: None,
             dismissed_snapshot_error: None,
             toast: None,
@@ -268,7 +271,7 @@ impl BusUi {
             (Effect::Text(a,_),Effect::Text(b,_)) | (Effect::Notes(a,_),Effect::Notes(b,_)) | (Effect::Recipients(a,_),Effect::Recipients(b,_)) if a==b));
         let id = self.next_id;
         self.next_id += 1;
-        if let BusCommand::Submit(room) = &command {
+        if let BusCommand::Submit(room) | BusCommand::SubmitQueued(room) = &command {
             tracing::info!(
                 event = "bus.message.submit",
                 room_id = room.0,
@@ -552,12 +555,23 @@ impl BusUi {
                     .locals
                     .get(&room)
                     .map_or(0, |local| local.text_generation);
-                self.queue(BusCommand::Submit(room), Effect::Submit(room, generation));
+                let command = if std::mem::take(&mut self.send_queued) {
+                    BusCommand::SubmitQueued(room)
+                } else {
+                    BusCommand::Submit(room)
+                };
+                self.queue(command, Effect::Submit(room, generation));
             } else if self.quitting.is_some() && self.failed.is_empty() && !self.exit_ready {
                 self.queue(BusCommand::Shutdown, Effect::Shutdown);
             }
         }
     }
+    /// Sends like Enter, but the message waits for each agent's own turn.
+    pub fn request_queued_send(&mut self, room: RoomId) {
+        self.request_send(room);
+        self.send_queued = self.send_intent == Some(room);
+    }
+
     pub fn request_send(&mut self, room: RoomId) {
         if let Some(local) = self
             .locals

@@ -242,6 +242,7 @@ mod tests {
                 expected_pane_id: "p".into(),
                 expected_agent: "codex".into(),
                 expected_session_id: "s".into(),
+                steer: false,
             },
         ));
         assert!(outcome.unwrap_err().definitely_rejected);

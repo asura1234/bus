@@ -74,7 +74,7 @@ impl BusUi {
         // Once confirmed, a not-yet-dispatched room prompt must not outrun deletion.
         self.pending.retain(|pending| {
             pending.enqueued
-                || !matches!(pending.command, BusCommand::Submit(id) if Some(id) == room)
+                || !matches!(pending.command, BusCommand::Submit(id) | BusCommand::SubmitQueued(id) if Some(id) == room)
         });
         let command = match target {
             DeleteTarget::Room(id) => BusCommand::DeleteRoom(id),
@@ -197,7 +197,8 @@ pub(super) fn target_exists(command: &BusCommand, state: &BusState) -> bool {
         | BusCommand::Quote(id, _)
         | BusCommand::AttachFile(id, _)
         | BusCommand::RemoveFile(id, _)
-        | BusCommand::Submit(id) => state.room(*id).is_some(),
+        | BusCommand::Submit(id)
+        | BusCommand::SubmitQueued(id) => state.room(*id).is_some(),
         BusCommand::RenameAgent(id, _)
         | BusCommand::SetDetails(id, _)
         | BusCommand::FocusTerminal(id)

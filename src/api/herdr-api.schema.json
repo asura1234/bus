@@ -1274,6 +1274,10 @@
             "expected_terminal_id": {
               "type": "string"
             },
+            "steer": {
+              "description": "Also type into a working agent, as a person types while it works, so\nthe provider takes the text into its running turn. A blocked agent is\nstill refused.",
+              "type": "boolean"
+            },
             "target": {
               "type": "string"
             },

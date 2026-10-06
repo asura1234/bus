@@ -910,6 +910,11 @@ impl BusUi {
             }
             (KeyCode::Enter, _) if self.notes_focus => self.insert("\n"),
             (KeyCode::Enter, _) if self.pending_line_continue => self.finish_line_continue(),
+            (KeyCode::Enter, KeyModifiers::ALT) => {
+                if let Some(room) = self.room {
+                    self.request_queued_send(room);
+                }
+            }
             (KeyCode::Enter, _) => {
                 if let Some(room) = self.room {
                     self.request_send(room);

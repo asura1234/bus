@@ -251,6 +251,11 @@ pub struct AgentPromptIfIdleParams {
     pub expected_pane_id: String,
     pub expected_agent: String,
     pub expected_session_id: String,
+    /// Also type into a working agent, as a person types while it works, so
+    /// the provider takes the text into its running turn. A blocked agent is
+    /// still refused.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub steer: bool,
 }
 
 /// First interactive Codex turn: its SessionStart hook is deferred until input.

@@ -1101,3 +1101,81 @@ fn file_detail_popup_hides_history_thumbnails_it_covers() {
         "the file detail popup covers the thumbnail rows"
     );
 }
+
+#[test]
+fn a_steered_group_shows_its_messages_stacked_with_one_reply() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut ids = Vec::new();
+    for (text, at) in [
+        ("write the parser", 1_000),
+        ("use streaming instead", 2_000),
+    ] {
+        snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+        snapshot.state.set_draft_text(room, text).unwrap();
+        ids.push(snapshot.state.submit_draft(room, at).unwrap()[0]);
+    }
+    let mut json = serde_json::to_value(&snapshot.state).unwrap();
+    for id in &ids {
+        let record = &mut json["requests"][id.0.to_string()];
+        record["phase"] = "completed".into();
+        record["completed_at_ms"] = 3_000.into();
+        record["pending_final"] = serde_json::json!({
+            "callback_id": "final", "text": "streaming parser written",
+            "received_at_ms": 3_000, "provider_session_id": "s", "provider_turn_id": "t"
+        });
+    }
+    json["requests"][ids[1].0.to_string()]["group"] = ids[0].0.into();
+    json["requests"][ids[1].0.to_string()]["steered"] = true.into();
+    snapshot.state = serde_json::from_value(json).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+
+    let snapshot = ui.snapshot.clone();
+    let lines = ui.history.lines(
+        &snapshot.state,
+        snapshot.state.room(room).unwrap(),
+        100,
+        snapshot.revision,
+        4_000,
+        &mut Default::default(),
+    );
+    let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+    let position = |needle: &str| texts.iter().position(|text| text.contains(needle));
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|text| text.contains("streaming parser written"))
+            .count(),
+        1
+    );
+    assert!(position("write the parser") < position("use streaming instead"));
+    assert!(position("use streaming instead") < position("streaming parser written"));
+}
+
+#[test]
+fn option_enter_sends_the_draft_to_wait_for_each_agents_own_turn() {
+    let (mut ui, room, agent) = fixture();
+    ui.room = Some(room);
+    ui.receive_snapshot(ui.snapshot.clone());
+    let local = ui.locals.get_mut(&room).unwrap();
+    local.recipients.insert(agent);
+    local.text.insert("after you finish");
+    key(&mut ui, KeyCode::Enter, KeyModifiers::ALT);
+    ui.settle();
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::SubmitQueued(id) if id == room)));
+    assert!(!ui.send_queued);
+
+    let local = ui.locals.get_mut(&room).unwrap();
+    local.text.insert("now");
+    ui.pending.clear();
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    ui.settle();
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::Submit(id) if id == room)));
+}

@@ -9,6 +9,7 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let mut state = self.state.clone();
+        let queued = matches!(command, BusCommand::SubmitQueued(_));
         let result = match command {
             BusCommand::CreateRoom(name) => {
                 let id = state.create_room(&name).map_err(|e| e.to_string())?;
@@ -47,10 +48,14 @@ impl Worker {
                 state.attach_file(room, path)
             }
             BusCommand::RemoveFile(room, path) => state.remove_file(room, &path),
-            BusCommand::Submit(room) => {
-                let requests = state
-                    .submit_draft(room, crate::bus::io::now_ms())
-                    .map_err(|e| e.to_string())?;
+            BusCommand::Submit(room) | BusCommand::SubmitQueued(room) => {
+                let now = crate::bus::io::now_ms();
+                let requests = if queued {
+                    state.submit_draft_queued(room, now)
+                } else {
+                    state.submit_draft(room, now)
+                }
+                .map_err(|e| e.to_string())?;
                 self.save(state)?;
                 for id in requests {
                     super::super::diagnostics::request(
@@ -379,7 +384,7 @@ impl Worker {
                 None => {
                     let master = input.room;
                     state
-                        .submit_message_from(
+                        .submit_message_with(
                             master,
                             Draft {
                                 text: orchestrator::prompt_message(&text),
@@ -388,6 +393,8 @@ impl Worker {
                             },
                             Author::Human,
                             crate::bus::io::now_ms(),
+                            // The system prompt is the agent's first turn of its own.
+                            true,
                         )
                         .map_err(|e| e.to_string())?;
                 }

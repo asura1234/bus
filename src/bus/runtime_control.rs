@@ -100,7 +100,7 @@ impl Worker {
             "agent.dialog.observe" => (&["agent"], false),
             "agent.dialog.choose" => (&["agent", "option", "fingerprint"], true),
             "agent.focus" => (&["agent"], true),
-            "message.send" => (&["room", "to", "text", "files", "as"], true),
+            "message.send" => (&["room", "to", "text", "files", "as", "queue"], true),
             "message.status" => (&["message"], false),
             "request.recover" => (&["request", "confirm"], true),
             "room.history" => (&["room"], false),
@@ -567,7 +567,7 @@ impl Worker {
         }
         let mut state = self.state.clone();
         let ids = state
-            .submit_message_from(
+            .submit_message_with(
                 room,
                 Draft {
                     text: optional_text(p, "text")?.unwrap_or_default().into(),
@@ -576,6 +576,7 @@ impl Worker {
                 },
                 author.map_or(Author::Human, Author::Agent),
                 crate::bus::io::now_ms(),
+                p.get("queue").and_then(Value::as_bool).unwrap_or(false),
             )
             .map_err(|e| e.to_string())?;
         let message = state
@@ -609,8 +610,8 @@ impl Worker {
         Ok(
             json!({"message_id":message,"files":requests[0].prompt.files,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"waiting_on_dialog":requests.iter().filter(|r| self.waiting_on_dialog(r)).map(|r| r.agent_id).collect::<Vec<_>>(),"requests":requests.iter().map(|r| {
             let agent = self.state.agent(r.agent_id);
-            let stage = match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" };
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"reason":if r.phase==RequestPhase::Queued {agent.and_then(crate::bus::diagnostics::wait_reason)}else{None},"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
+            let stage = match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.group.is_some()=>"joined",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" };
+            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"reason":if r.phase==RequestPhase::Queued {agent.and_then(crate::bus::diagnostics::wait_reason)}else{None},"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"group":r.group,"queue":r.queue_only,"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
         }).collect::<Vec<_>>()}),
         )
     }

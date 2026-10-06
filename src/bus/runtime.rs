@@ -50,6 +50,8 @@ pub(crate) enum BusCommand {
     AttachFile(RoomId, String),
     RemoveFile(RoomId, PathBuf),
     Submit(RoomId),
+    /// Like `Submit`, but each message waits for its agent's own turn.
+    SubmitQueued(RoomId),
     SetDetails(AgentId, bool),
     AddAgent(AddAgent),
     /// Adds a MASTER agent, launched with its orchestrator system prompt.
@@ -321,7 +323,8 @@ impl Worker {
                     let _ = call.reply.try_send(response);
                 }
                 Ok((id, command)) => {
-                    let submitting = matches!(command, BusCommand::Submit(_));
+                    let submitting =
+                        matches!(command, BusCommand::Submit(_) | BusCommand::SubmitQueued(_));
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
                     let result = if self.storage_failed {
                         Err("Bus storage unavailable; restart after fixing storage".into())
@@ -579,6 +582,8 @@ impl Worker {
             if !can_deliver() {
                 break;
             }
+            // Messages waited because the agent could not take them yet.
+            let waited = self.delivery_waits.contains_key(&agent.id);
             if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
                 if let Some(reason) = super::diagnostics::wait_reason(&agent) {
                     if self.delivery_waits.insert(agent.id, (request, reason))
@@ -596,6 +601,12 @@ impl Worker {
                 }
             } else {
                 self.delivery_waits.remove(&agent.id);
+            }
+            if let Some((request, lead)) = self.state.next_steering(agent.id) {
+                if agent.hook_setup_confirmed && !agent.session_binding_invalidated {
+                    self.steer(&agent, request, lead)?;
+                }
+                continue;
             }
             if agent.status != RuntimeStatus::Idle
                 || !agent.hook_setup_confirmed
@@ -619,11 +630,15 @@ impl Worker {
                 continue;
             };
             let mut state = self.state.clone();
-            let text = state
-                .request(request)
-                .ok_or("Missing queued request")?
-                .prompt
-                .rendered_payload();
+            // Messages that piled up while the agent was unavailable go as one prompt.
+            let text = match waited.then(|| state.coalesce_queue(request)).flatten() {
+                Some(text) => text,
+                None => state
+                    .request(request)
+                    .ok_or("Missing queued request")?
+                    .prompt
+                    .rendered_payload(),
+            };
             let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
                 .map_err(|e| e.to_string())?;
             state
@@ -657,6 +672,7 @@ impl Worker {
                     expected_pane_id: pane.clone(),
                     expected_agent: launch::provider_kind(agent.provider).into(),
                     expected_session_id: session.clone(),
+                    steer: false,
                 })
             } else {
                 Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {
@@ -707,6 +723,64 @@ impl Worker {
     }
 }
 
+impl Worker {
+    /// Types `request` into the agent's running turn, the way a person types
+    /// while an agent works, so it joins `lead`'s group and shares its reply.
+    fn steer(&mut self, agent: &Agent, request: RequestId, lead: RequestId) -> Result<(), String> {
+        let identity = &agent.runtime_identity;
+        let (Some(terminal), Some(pane), Some(session)) = (
+            &identity.terminal_id,
+            &identity.pane_id,
+            &identity.session_id,
+        ) else {
+            return Ok(());
+        };
+        let mut state = self.state.clone();
+        let text = state
+            .request(request)
+            .ok_or("Missing queued request")?
+            .prompt
+            .rendered_payload();
+        state
+            .begin_steering(request, lead)
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
+        super::diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
+        let outcome = match self.transport.request(Method::AgentPromptIfIdle(
+            schema::AgentPromptIfIdleParams {
+                target: pane.clone(),
+                text,
+                expected_terminal_id: terminal.clone(),
+                expected_pane_id: pane.clone(),
+                expected_agent: launch::provider_kind(agent.provider).into(),
+                expected_session_id: session.clone(),
+                steer: true,
+            },
+        )) {
+            Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
+                provider_session_id: Some(session.clone()),
+                provider_turn_id: None,
+            },
+            Ok(other) => SubmissionOutcome::Uncertain {
+                message: format!("Unexpected steering response: {other:?}"),
+            },
+            Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
+                message: error.message,
+            },
+            Err(error) => SubmissionOutcome::Uncertain {
+                message: error.message,
+            },
+        };
+        tracing::info!(event = "bus.delivery.result", request_id = request.0, lead_id = lead.0,
+            mode = "steer", outcome = ?outcome, "Typed into the running turn");
+        let mut state = self.state.clone();
+        state
+            .record_steering(request, outcome)
+            .map_err(|e| e.to_string())?;
+        self.save(state)
+    }
+}
+
 fn branch_for(cwd: &Path) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["-C"])
@@ -721,6 +795,9 @@ fn branch_for(cwd: &Path) -> Option<String> {
     (!branch.is_empty()).then_some(branch)
 }
 
+#[cfg(test)]
+#[path = "runtime_steering_tests.rs"]
+mod steering_tests;
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod tests;

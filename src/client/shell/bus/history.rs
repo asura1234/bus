@@ -278,6 +278,13 @@ impl History {
                     continue;
                 };
                 let request = exchange.requests.get(agent_id).copied();
+                // A group's messages share one reply, shown under its newest one.
+                if let Some(request) = request {
+                    let members = state.group_members(request.group.unwrap_or(request.id));
+                    if members.last().is_some_and(|last| *last != request.id) {
+                        continue;
+                    }
+                }
                 let final_reply = request
                     .filter(|request| request.phase == RequestPhase::Completed)
                     .and_then(|request| request.pending_final.as_ref());
@@ -662,6 +669,7 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         request.id.0.hash(&mut hash);
         request.prompt.id.0.hash(&mut hash);
         request.prompt.submitted_at_ms.hash(&mut hash);
+        request.group.map(|lead| lead.0).hash(&mut hash);
         if request.phase == RequestPhase::Completed {
             request
                 .pending_final

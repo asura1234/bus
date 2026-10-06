@@ -206,15 +206,7 @@ impl Prompt {
     }
 
     fn matches_callback_payload(&self, payload: &str) -> bool {
-        fn normalize(value: &str) -> String {
-            value
-                .replace("\r\n", "\n")
-                .replace('\r', "\n")
-                .trim_end_matches(|character: char| character.is_ascii_whitespace())
-                .to_owned()
-        }
-
-        normalize(payload) == normalize(&self.rendered_payload())
+        normalized_payload(payload) == normalized_payload(&self.rendered_payload())
     }
 }
 
@@ -353,6 +345,58 @@ pub(crate) struct Request {
     pub(crate) uncertain_outcome: bool,
     pub(crate) pending_final: Option<PendingFinal>,
     pub(crate) completed_at_ms: Option<u64>,
+    /// Sent with `--queue`: waits for an idle agent and gets its own turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) queue_only: bool,
+    /// The lead request of the group this one joined, by being typed into the
+    /// lead's running turn or coalesced into its prompt. The group shares the
+    /// lead's final reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) group: Option<RequestId>,
+    /// Typed into a running turn; its submit hook may arrive or not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) steered: bool,
+    /// The exact text Bus typed for a coalesced group, when it differs from
+    /// this prompt alone. Submit hooks are matched against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) submitted_payload: Option<String>,
+}
+
+impl Request {
+    pub(crate) fn matches_callback_payload(&self, payload: &str) -> bool {
+        match &self.submitted_payload {
+            Some(typed) => normalized_payload(payload) == normalized_payload(typed),
+            None => self.prompt.matches_callback_payload(payload),
+        }
+    }
+
+    fn settled(&self) -> bool {
+        matches!(
+            self.phase,
+            RequestPhase::Completed | RequestPhase::Abandoned
+        )
+    }
+}
+
+/// How long a steered group waits after its final reply for the submit hook
+/// of typed input that the provider may still run as a turn of its own.
+pub(crate) const STEERING_SETTLE_MS: u64 = 5_000;
+
+/// Local wall-clock `HH:MM` of a millisecond timestamp, for coalesced prompts.
+fn clock(at_ms: u64) -> String {
+    i64::try_from(at_ms / 1000)
+        .ok()
+        .and_then(crate::platform::local_datetime_at)
+        .map(|local| format!("{:02}:{:02}", local.hour(), local.minute()))
+        .unwrap_or_else(|| "--:--".into())
+}
+
+fn normalized_payload(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end_matches(|character: char| character.is_ascii_whitespace())
+        .to_owned()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -440,6 +484,8 @@ pub(crate) enum CallbackRejection {
 pub(crate) enum CallbackDisposition {
     AcceptedBinding,
     AcceptedContinuation,
+    /// Input Bus typed into the running turn reached the provider.
+    AcceptedSteering,
     AcceptedProgress,
     AcceptedPendingSettlement,
     AcceptedCompleted,
@@ -1173,6 +1219,19 @@ impl BusState {
         author: Author,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
+        self.submit_message_with(room, draft, author, now_ms, false)
+    }
+
+    /// `queue_only` (`send --queue`) waits for an idle agent instead of
+    /// steering a running turn, and is never coalesced with other messages.
+    pub(crate) fn submit_message_with(
+        &mut self,
+        room: RoomId,
+        draft: Draft,
+        author: Author,
+        now_ms: u64,
+        queue_only: bool,
+    ) -> Result<Vec<RequestId>, ModelError> {
         let original = self
             .rooms
             .get(&room)
@@ -1183,7 +1242,7 @@ impl BusState {
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
             .draft = draft;
-        let result = self.submit_draft_from(room, author, now_ms);
+        let result = self.submit_draft_from(room, author, now_ms, queue_only);
         self.rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
@@ -1196,7 +1255,16 @@ impl BusState {
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(room, Author::Human, now_ms)
+        self.submit_draft_from(room, Author::Human, now_ms, false)
+    }
+
+    /// Sends the Human's draft to wait for each idle agent and its own turn.
+    pub(crate) fn submit_draft_queued(
+        &mut self,
+        room: RoomId,
+        now_ms: u64,
+    ) -> Result<Vec<RequestId>, ModelError> {
+        self.submit_draft_from(room, Author::Human, now_ms, true)
     }
 
     fn submit_draft_from(
@@ -1204,6 +1272,7 @@ impl BusState {
         room: RoomId,
         author: Author,
         now_ms: u64,
+        queue_only: bool,
     ) -> Result<Vec<RequestId>, ModelError> {
         let room_state = self.rooms.get(&room).ok_or(ModelError::UnknownRoom(room))?;
         if room_state.deletion_pending {
@@ -1258,6 +1327,10 @@ impl BusState {
                     uncertain_outcome: false,
                     pending_final: None,
                     completed_at_ms: None,
+                    queue_only,
+                    group: None,
+                    steered: false,
+                    submitted_payload: None,
                 },
             );
             self.queues.entry(agent_id).or_default().push(request_id);
@@ -1363,7 +1436,17 @@ impl BusState {
                 request_state.phase = RequestPhase::Queued;
                 request_state.expected_launch_id = None;
                 request_state.submission_boundary = None;
-                self.queues.entry(agent_id).or_default().insert(0, request);
+                request_state.submitted_payload = None;
+                // Coalesced members go back behind their lead, in order.
+                let members = self.group_members(request);
+                for member in &members {
+                    if let Some(member) = self.requests.get_mut(member) {
+                        member.phase = RequestPhase::Queued;
+                        member.group = None;
+                    }
+                }
+                let queue = self.queues.entry(agent_id).or_default();
+                queue.splice(0..0, std::iter::once(request).chain(members));
                 let agent = self
                     .agents
                     .get_mut(&agent_id)
@@ -1531,6 +1614,38 @@ impl BusState {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongSession);
             }
         }
+        // Input Bus typed into this turn binds where the provider reports it:
+        // in the running turn, or in a turn of its own that then carries the
+        // group's reply. It is never an unrelated turn or an agent error.
+        if let (CallbackEventKind::PromptStarted, Some(payload), true) = (
+            &callback.kind,
+            callback.prompt_payload.as_deref(),
+            request.trusted_start_bound,
+        ) {
+            let steered = self.group_members(request_id).into_iter().find(|member| {
+                self.requests.get(member).is_some_and(|m| {
+                    m.steered && !m.settled() && m.matches_callback_payload(payload)
+                })
+            });
+            if let Some(member) = steered {
+                if let Some(member) = self.requests.get_mut(&member) {
+                    member.trusted_start_bound = true;
+                    member.uncertain_outcome = false;
+                    member.provider_session_id = callback.provider_session_id.clone();
+                    member.provider_turn_id = callback.provider_turn_id.clone();
+                }
+                if let Some(lead) = self.requests.get_mut(&request_id) {
+                    if callback.provider_turn_id.is_some()
+                        && callback.provider_turn_id != lead.provider_turn_id
+                    {
+                        lead.provider_turn_id = callback.provider_turn_id;
+                        lead.provider_prompt_id = callback.provider_prompt_id;
+                        lead.pending_final = None;
+                    }
+                }
+                return CallbackDisposition::AcceptedSteering;
+            }
+        }
         // A turn that wakes after the request paused for background work carries
         // the real reply. Once the request holds a final reply, a new turn is the
         // agent's own activity and must not replace or discard that reply.
@@ -1545,7 +1660,7 @@ impl BusState {
             && callback
                 .prompt_payload
                 .as_deref()
-                .is_some_and(|payload| !request.prompt.matches_callback_payload(payload));
+                .is_some_and(|payload| !request.matches_callback_payload(payload));
         if matches!(callback.kind, CallbackEventKind::PromptStarted)
             && !continuation
             && callback.provider_turn_id.is_some()
@@ -1553,7 +1668,7 @@ impl BusState {
             && callback
                 .prompt_payload
                 .as_deref()
-                .is_some_and(|payload| !request.prompt.matches_callback_payload(payload))
+                .is_some_and(|payload| !request.matches_callback_payload(payload))
         {
             self.unrelated_provider_turns.extend(turn_key);
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
@@ -1577,7 +1692,7 @@ impl BusState {
             && callback
                 .prompt_payload
                 .as_deref()
-                .is_some_and(|payload| !request.prompt.matches_callback_payload(payload))
+                .is_some_and(|payload| !request.matches_callback_payload(payload))
         {
             return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
         }
@@ -1591,7 +1706,7 @@ impl BusState {
                     && !callback
                         .prompt_payload
                         .as_deref()
-                        .is_some_and(|payload| request.prompt.matches_callback_payload(payload))
+                        .is_some_and(|payload| request.matches_callback_payload(payload))
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
@@ -1655,7 +1770,8 @@ impl BusState {
                 });
                 if settled_after_submission {
                     match self.complete_pending_final(callback.agent_id, callback.occurred_at_ms) {
-                        Ok(()) => CallbackDisposition::AcceptedCompleted,
+                        Ok(true) => CallbackDisposition::AcceptedCompleted,
+                        Ok(false) => CallbackDisposition::AcceptedPendingSettlement,
                         Err(_) => CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest),
                     }
                 } else {
@@ -1679,6 +1795,180 @@ impl BusState {
             callback.provider_turn_id.as_deref(),
         )
         .is_some_and(|key| self.unrelated_provider_turns.contains(&key))
+    }
+
+    /// The request a message may steer into: the agent's current request while
+    /// its turn visibly runs, bound by its submit hook, with no final reply yet.
+    /// Returns the first queued request and that lead, unless the queued one
+    /// asked to wait (`--queue`).
+    pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
+        let agent_state = self.agents.get(&agent)?;
+        if agent_state.status != RuntimeStatus::Working
+            || agent_state.dialog
+            || agent_state.deletion_pending
+        {
+            return None;
+        }
+        let lead = self.requests.get(&agent_state.current_request?)?;
+        if lead.phase != RequestPhase::Active
+            || !lead.trusted_start_bound
+            || lead.pending_final.is_some()
+        {
+            return None;
+        }
+        let first = *self.queues.get(&agent)?.first()?;
+        (!self.requests.get(&first)?.queue_only).then_some((first, lead.id))
+    }
+
+    /// Moves `request` from the queue into `lead`'s group before Bus types it
+    /// into the running turn. The lead then settles only on an idle status
+    /// observed after this, so the turn the typing extends is not cut short.
+    pub(crate) fn begin_steering(
+        &mut self,
+        request: RequestId,
+        lead: RequestId,
+    ) -> Result<(), ModelError> {
+        let agent_id = self
+            .requests
+            .get(&request)
+            .ok_or(ModelError::UnknownRequest(request))?
+            .agent_id;
+        let agent = self
+            .agents
+            .get(&agent_id)
+            .ok_or(ModelError::UnknownAgent(agent_id))?;
+        if agent.current_request != Some(lead)
+            || self.queues.get(&agent_id).and_then(|queue| queue.first()) != Some(&request)
+        {
+            return Err(ModelError::InvalidTransition);
+        }
+        let status_revision = agent.status_revision;
+        let launch = self
+            .requests
+            .get(&lead)
+            .ok_or(ModelError::UnknownRequest(lead))?
+            .expected_launch_id
+            .clone();
+        if let Some(queue) = self.queues.get_mut(&agent_id) {
+            queue.remove(0);
+        }
+        let request_state = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        request_state.phase = RequestPhase::Submitting;
+        request_state.expected_launch_id = launch;
+        request_state.group = Some(lead);
+        request_state.steered = true;
+        if let Some(lead) = self.requests.get_mut(&lead) {
+            lead.submission_status_revision = status_revision;
+        }
+        Ok(())
+    }
+
+    /// Records the native outcome of typing a steering message. A definite
+    /// rejection (the agent stopped working) returns it to the queue front.
+    pub(crate) fn record_steering(
+        &mut self,
+        request: RequestId,
+        outcome: SubmissionOutcome,
+    ) -> Result<(), ModelError> {
+        let request_state = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        if request_state.phase != RequestPhase::Submitting || !request_state.steered {
+            return Err(ModelError::InvalidTransition);
+        }
+        match outcome {
+            SubmissionOutcome::Confirmed { .. } => request_state.phase = RequestPhase::Active,
+            SubmissionOutcome::Uncertain { .. } => {
+                request_state.phase = RequestPhase::Active;
+                request_state.uncertain_outcome = true;
+            }
+            SubmissionOutcome::DefinitelyRejected { .. } => {
+                request_state.phase = RequestPhase::Queued;
+                request_state.expected_launch_id = None;
+                request_state.group = None;
+                request_state.steered = false;
+                let agent_id = request_state.agent_id;
+                self.queues.entry(agent_id).or_default().insert(0, request);
+            }
+        }
+        Ok(())
+    }
+
+    /// Joins the queued messages that piled up while the agent could not take
+    /// them into `lead`'s prompt: consecutive ones from the queue front, up to
+    /// the first sent with `--queue`. Returns the text to type, each part
+    /// marked with its sender and time, or `None` when `lead` goes alone.
+    pub(crate) fn coalesce_queue(&mut self, lead: RequestId) -> Option<String> {
+        let agent_id = self.requests.get(&lead)?.agent_id;
+        let queue = self.queues.get(&agent_id)?;
+        if queue.first() != Some(&lead) || self.requests.get(&lead)?.queue_only {
+            return None;
+        }
+        let members: Vec<RequestId> = queue[1..]
+            .iter()
+            .copied()
+            .take_while(|id| self.requests.get(id).is_some_and(|r| !r.queue_only))
+            .collect();
+        if members.is_empty() {
+            return None;
+        }
+        let parts: Vec<RequestId> = std::iter::once(lead)
+            .chain(members.iter().copied())
+            .collect();
+        let count = parts.len();
+        let text = parts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, id)| {
+                let prompt = &self.requests.get(id)?.prompt;
+                Some(format!(
+                    "[{}/{count} from {} at {}]\n{}",
+                    index + 1,
+                    self.sender_name(&prompt.author),
+                    clock(prompt.submitted_at_ms),
+                    prompt.rendered_payload()
+                ))
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if let Some(queue) = self.queues.get_mut(&agent_id) {
+            queue.retain(|id| !members.contains(id));
+        }
+        for member in members {
+            if let Some(request) = self.requests.get_mut(&member) {
+                request.phase = RequestPhase::Active;
+                request.group = Some(lead);
+            }
+        }
+        if let Some(request) = self.requests.get_mut(&lead) {
+            request.submitted_payload = Some(text.clone());
+        }
+        Some(text)
+    }
+
+    fn sender_name(&self, author: &Author) -> String {
+        match author {
+            Author::Human => "the human".into(),
+            Author::Orchestrator => "the orchestrator".into(),
+            Author::Bus => "Bus".into(),
+            Author::Agent(id) => self
+                .agents
+                .get(id)
+                .map_or_else(|| "an agent".into(), |agent| agent.name.clone()),
+        }
+    }
+
+    /// The requests that joined `lead`'s group, oldest first.
+    pub(crate) fn group_members(&self, lead: RequestId) -> Vec<RequestId> {
+        self.requests
+            .values()
+            .filter(|request| request.group == Some(lead))
+            .map(|request| request.id)
+            .collect()
     }
 
     pub(crate) fn next_queued_request(&self, agent: AgentId) -> Option<RequestId> {
@@ -1722,6 +2012,12 @@ impl BusState {
         request_state.phase = RequestPhase::Abandoned;
         request_state.pending_final = None;
         request_state.completed_at_ms = Some(recovered_at_ms);
+        for member in self.group_members(request) {
+            if let Some(member) = self.requests.get_mut(&member).filter(|m| !m.settled()) {
+                member.phase = RequestPhase::Abandoned;
+                member.completed_at_ms = Some(recovered_at_ms);
+            }
+        }
         let agent = self
             .agents
             .get_mut(&agent_id)
@@ -1757,26 +2053,41 @@ impl BusState {
         Ok(())
     }
 
+    /// Settles the agent's current request, and every request in its group,
+    /// with its pending final reply. Returns whether it settled: a group with
+    /// typed input whose submit hook has not arrived waits a few seconds, in
+    /// case the provider runs that input as a turn of its own.
     fn complete_pending_final(
         &mut self,
         agent_id: AgentId,
         completed_at_ms: u64,
-    ) -> Result<(), ModelError> {
+    ) -> Result<bool, ModelError> {
         let request_id = self
             .agents
             .get(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?
             .current_request;
         let Some(request_id) = request_id else {
-            return Ok(());
+            return Ok(false);
         };
         let request = self
             .requests
             .get(&request_id)
             .ok_or(ModelError::UnknownRequest(request_id))?;
         let Some(pending) = request.pending_final.clone() else {
-            return Ok(());
+            return Ok(false);
         };
+        let members = self.group_members(request_id);
+        let unseen_steering = members.iter().any(|member| {
+            self.requests
+                .get(member)
+                .is_some_and(|m| m.steered && !m.trusted_start_bound && !m.settled())
+        });
+        if unseen_steering
+            && completed_at_ms < pending.received_at_ms.saturating_add(STEERING_SETTLE_MS)
+        {
+            return Ok(false);
+        }
         let room_id = request.room_id;
         let turn_key = provider_turn_key(
             request.expected_launch_id.as_deref().unwrap_or_default(),
@@ -1786,7 +2097,7 @@ impl BusState {
         let reply = Reply {
             request_id,
             agent_id,
-            text: pending.text,
+            text: pending.text.clone(),
             received_at_ms: pending.received_at_ms,
         };
         let room = self
@@ -1796,6 +2107,13 @@ impl BusState {
         room.latest_replies.insert(agent_id, reply);
         if self.visible_room != Some(room_id) {
             room.unread_count = room.unread_count.saturating_add(1);
+        }
+        for member in members {
+            if let Some(member) = self.requests.get_mut(&member).filter(|m| !m.settled()) {
+                member.phase = RequestPhase::Completed;
+                member.completed_at_ms = Some(completed_at_ms);
+                member.pending_final = Some(pending.clone());
+            }
         }
         let request = self
             .requests
@@ -1812,7 +2130,7 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = None;
         agent.actionable_error = None;
-        Ok(())
+        Ok(true)
     }
 }
 
