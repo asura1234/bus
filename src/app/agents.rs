@@ -385,6 +385,10 @@ impl App {
             display_agent: pane.display_agent,
             agent_status: pane.agent_status,
             screen_detection_skipped: terminal.full_lifecycle_hook_authority_active(),
+            dialog: self
+                .lookup_runtime_sender(ws_idx, pane_id)
+                .and_then(|runtime| runtime.visible_text_snapshot_with_seq())
+                .is_some_and(|(screen, _)| crate::detect::dialog::parse(&screen).is_some()),
             state_labels: pane.state_labels,
             tokens: pane.tokens,
             agent_session: pane.agent_session,

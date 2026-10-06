@@ -97,33 +97,16 @@ printf '%s\\n' "$@" > "$FAKE_HERDR_ARGS"
             ["--bus", "--dev", "agent", "read", "3", "--source", "recent", "--lines", "5000"],
         )
 
-    def test_dev_control_preserves_typed_permission_cli_shape_without_raw_keys(self) -> None:
+    def test_dev_control_preserves_typed_dialog_cli_shape_without_raw_keys(self) -> None:
         result = self._run(
-            "dev-control",
-            "agent",
-            "approve-once",
-            "3",
-            "--fingerprint",
-            "v1.bound.digest",
-            "--response",
-            "allow-once",
+            "dev-control", "agent", "choose", "3", "--option", "2", "--fingerprint", "d1.bound.digest"
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.cargo_args.exists())
         self.assertEqual(
             self.herdr_args.read_text(encoding="utf-8").splitlines(),
-            [
-                "--bus",
-                "--dev",
-                "agent",
-                "approve-once",
-                "3",
-                "--fingerprint",
-                "v1.bound.digest",
-                "--response",
-                "allow-once",
-            ],
+            ["--bus", "--dev", "agent", "choose", "3", "--option", "2", "--fingerprint", "d1.bound.digest"],
         )
         self.assertNotIn("send-keys", self.herdr_args.read_text(encoding="utf-8"))
 

@@ -457,14 +457,12 @@ impl TerminalRuntime {
         self.0.try_send_bytes(bytes)
     }
 
-    pub(crate) fn try_approve_permission_once(
+    pub(crate) fn try_choose_dialog_option(
         &self,
-        expected_revision: u64,
-        expected_prompt_digest: &str,
-        response: Bytes,
-    ) -> Result<bool, mpsc::error::TrySendError<Bytes>> {
-        self.0
-            .try_approve_permission_once(expected_revision, expected_prompt_digest, response)
+        expected_digest: &str,
+        option: u32,
+    ) -> Result<crate::pane::DialogChoice, String> {
+        self.0.try_choose_dialog_option(expected_digest, option)
     }
 
     pub fn queue_user_input_submission(

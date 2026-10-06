@@ -3,9 +3,9 @@ use std::time::Duration;
 use bytes::Bytes;
 
 use crate::api::schema::{
-    AgentApproveOnceParams, AgentPermissionObservation, AgentPromptParams, AgentRenameParams,
-    AgentSendKeysParams, AgentStartParams, AgentTarget, ApprovedPermissionResponse, PaneReadResult,
-    PermissionEligibility, ResponseResult, SafePermissionAction,
+    AgentDialog, AgentDialogChooseParams, AgentDialogChooseResult, AgentDialogObservation,
+    AgentDialogOption, AgentPromptParams, AgentRenameParams, AgentSendKeysParams, AgentStartParams,
+    AgentTarget, PaneReadResult, ResponseResult,
 };
 use crate::app::App;
 
@@ -422,7 +422,7 @@ impl App {
         )
     }
 
-    pub(super) fn handle_agent_permission_observe(
+    pub(super) fn handle_agent_dialog_observe(
         &mut self,
         id: String,
         target: AgentTarget,
@@ -439,39 +439,40 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
             return agent_not_found(id, &target.target);
         };
-        let Some(observation) = permission_observation(&agent, runtime) else {
+        let Some(observation) = dialog_observation(&agent, runtime) else {
             return encode_error(
                 id,
-                "permission_observation_unavailable",
-                "Agent permission surface changed while it was being observed",
+                "dialog_observation_unavailable",
+                "Agent screen changed while it was being observed",
             );
         };
-        encode_success(id, ResponseResult::AgentPermission { observation })
+        encode_success(id, ResponseResult::AgentDialog { observation })
     }
 
-    pub(super) fn handle_agent_approve_once(
+    /// Answers a choice dialog only while the agent's identity and the exact
+    /// observed dialog still hold; otherwise nothing is sent.
+    pub(super) fn handle_agent_dialog_choose(
         &mut self,
         id: String,
-        params: AgentApproveOnceParams,
+        params: AgentDialogChooseParams,
     ) -> String {
         self.reconcile_managed_agent_target(&params.target);
         let agent = match self.agent_info_for_target(&params.target) {
             Ok(agent) => agent,
             Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
         };
+        let session = agent.agent_session.as_ref().map(|session| &session.value);
         if agent.terminal_id != params.expected_terminal_id
             || agent.pane_id != params.expected_pane_id
-            || agent
-                .agent_session
+            || params
+                .expected_session_id
                 .as_ref()
-                .map(|session| session.value.as_str())
-                != Some(params.expected_session_id.as_str())
-            || params.expected_session_id.is_empty()
+                .is_some_and(|expected| session != Some(expected))
         {
             return encode_error(
                 id,
                 "agent_identity_changed",
-                "Agent terminal, pane, or session identity changed; no permission response was sent",
+                "Agent terminal, pane, or session identity changed; no keys were sent",
             );
         }
         let resolved = match self.resolve_agent_target(&params.target) {
@@ -481,40 +482,30 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
             return agent_not_found(id, &params.target);
         };
-        let response = match (agent.agent.as_deref(), params.response) {
-            (Some("codex"), ApprovedPermissionResponse::AllowOnce) => Bytes::from_static(b"1\r"),
-            (Some("claude" | "cursor"), ApprovedPermissionResponse::AllowOnce) => {
-                Bytes::from_static(b"\r")
+        let (keys, reason) = match runtime
+            .try_choose_dialog_option(&params.expected_dialog_digest, params.option)
+        {
+            Ok(crate::pane::DialogChoice::Sent(keys)) => (keys, None),
+            Ok(crate::pane::DialogChoice::Stale) => (Vec::new(), Some("stale_or_changed_dialog")),
+            Ok(crate::pane::DialogChoice::Unreachable) => {
+                (Vec::new(), Some("option_missing_or_selection_not_visible"))
             }
-            _ => {
-                return encode_error(
-                    id,
-                    "unsupported_permission_response",
-                    "The active provider has no audited allow-once response",
-                )
-            }
+            Err(error) => return encode_error(id, "dialog_write_failed", error),
         };
-        let written = match runtime.try_approve_permission_once(
-            params.expected_content_revision,
-            &params.expected_prompt_digest,
-            response,
-        ) {
-            Ok(written) => written,
-            Err(error) => return encode_error(id, "permission_write_failed", error.to_string()),
-        };
-        let Some(observation) = permission_observation(&agent, runtime) else {
+        let Some(observation) = dialog_observation(&agent, runtime) else {
             return encode_error(
                 id,
-                "permission_observation_unavailable",
-                "Agent permission surface changed while its result was being reported",
+                "dialog_observation_unavailable",
+                "Agent screen changed while the result was being reported",
             );
         };
         encode_success(
             id,
-            ResponseResult::AgentApprovedOnce {
-                approval: crate::api::schema::AgentApproveOnceResult {
-                    written,
-                    reason: (!written).then(|| "stale_or_changed_prompt".into()),
+            ResponseResult::AgentDialogChosen {
+                choice: AgentDialogChooseResult {
+                    written: reason.is_none(),
+                    reason: reason.map(str::to_owned),
+                    keys,
                     observation,
                 },
             },
@@ -638,45 +629,33 @@ impl App {
     }
 }
 
-fn permission_observation(
+fn dialog_observation(
     agent: &crate::api::schema::AgentInfo,
     runtime: &crate::terminal::TerminalRuntime,
-) -> Option<AgentPermissionObservation> {
-    let (prompt_text, content_revision) = runtime.visible_text_snapshot_with_seq()?;
-    let session_id = agent.agent_session.as_ref()?.value.clone();
-    let command = crate::api::schema::safe_permission_command(&prompt_text);
-    let eligibility = command.map_or_else(
-        || {
-            if prompt_text.to_ascii_lowercase().contains("permission")
-                || prompt_text.to_ascii_lowercase().contains("allow")
-            {
-                PermissionEligibility::Risky
-            } else {
-                PermissionEligibility::Unknown
-            }
-        },
-        |_| PermissionEligibility::Allowlisted {
-            action: SafePermissionAction::ReadOnlyInspection,
-            root: agent
-                .foreground_cwd
-                .clone()
-                .or_else(|| agent.cwd.clone())
-                .unwrap_or_else(|| agent.workspace_id.clone()),
-        },
-    );
-    let allowed_responses = matches!(eligibility, PermissionEligibility::Allowlisted { .. })
-        .then_some(ApprovedPermissionResponse::AllowOnce)
-        .into_iter()
-        .collect();
-    Some(AgentPermissionObservation {
+) -> Option<AgentDialogObservation> {
+    let (screen, content_revision) = runtime.visible_text_snapshot_with_seq()?;
+    Some(AgentDialogObservation {
         terminal_id: agent.terminal_id.clone(),
         pane_id: agent.pane_id.clone(),
-        session_id,
+        session_id: agent
+            .agent_session
+            .as_ref()
+            .map(|session| session.value.clone()),
         content_revision,
-        prompt_digest: crate::api::schema::permission_prompt_digest(&prompt_text),
-        prompt_text,
-        eligibility,
-        allowed_responses,
+        dialog: crate::detect::dialog::parse(&screen).map(|dialog| AgentDialog {
+            digest: dialog.digest(),
+            text: dialog.text,
+            options: dialog
+                .options
+                .into_iter()
+                .map(|option| AgentDialogOption {
+                    number: option.number,
+                    label: option.label,
+                    selected: option.selected,
+                })
+                .collect(),
+            hint: dialog.hint,
+        }),
     })
 }
 
@@ -1215,8 +1194,13 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[tokio::test]
-    async fn agent_approve_once_safe_prompt_is_atomic_and_fixed_response() {
+    const CLAUDE_BASH_DIALOG: &[u8] = b" Do you want to proceed?\r\n \xe2\x9d\xaf 1. Yes\r\n   2. Yes, and don't ask again for: curl *\r\n   3. No\r\n\r\n Esc to cancel \xc2\xb7 Tab to amend\r\n";
+
+    /// A named Claude agent showing `screen`; `session` is unset while launching.
+    fn app_with_dialog(
+        screen: &[u8],
+        session: Option<&str>,
+    ) -> (App, tokio::sync::mpsc::Receiver<Bytes>) {
         let mut app = app_with_agent();
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
@@ -1224,102 +1208,140 @@ mod tests {
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
-        terminal.set_detected_state(Some(Agent::Codex), AgentState::Blocked);
-        terminal.set_agent_session_ref(
-            "bus".into(),
-            "codex".into(),
-            crate::agent_resume::AgentSessionRef::id("session"),
-            Some(1),
-        );
-        let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        runtime.test_process_pty_bytes(b"Allow read-only command: rg --files");
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Blocked);
+        if let Some(session) = session {
+            terminal.set_agent_session_ref(
+                "bus".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id(session),
+                Some(1),
+            );
+        }
+        let (runtime, writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        runtime.test_process_pty_bytes(screen);
         app.state.insert_test_runtime(pane_id, runtime);
-        let info = app.agent_info(0, pane_id).unwrap();
-        let observed = app.handle_agent_permission_observe(
+        (app, writes)
+    }
+
+    fn observe_dialog(app: &mut App) -> AgentDialogObservation {
+        let observed = app.handle_agent_dialog_observe(
             "observe".into(),
             AgentTarget {
                 target: "reviewer".into(),
             },
         );
         let success: SuccessResponse = serde_json::from_str(&observed).unwrap();
-        let ResponseResult::AgentPermission { observation } = success.result else {
+        let ResponseResult::AgentDialog { observation } = success.result else {
             panic!("unexpected observation response");
         };
-        assert!(matches!(
-            observation.eligibility,
-            PermissionEligibility::Allowlisted { .. }
-        ));
-        let approved = app.handle_agent_approve_once(
-            "approve".into(),
-            AgentApproveOnceParams {
+        observation
+    }
+
+    fn choose(
+        app: &mut App,
+        observation: &AgentDialogObservation,
+        session: Option<&str>,
+        digest: &str,
+        option: u32,
+    ) -> String {
+        app.handle_agent_dialog_choose(
+            "choose".into(),
+            AgentDialogChooseParams {
                 target: "reviewer".into(),
-                expected_terminal_id: info.terminal_id,
-                expected_pane_id: info.pane_id,
-                expected_session_id: "session".into(),
-                expected_content_revision: observation.content_revision,
-                expected_prompt_digest: observation.prompt_digest,
-                response: ApprovedPermissionResponse::AllowOnce,
+                expected_terminal_id: observation.terminal_id.clone(),
+                expected_pane_id: observation.pane_id.clone(),
+                expected_session_id: session.map(str::to_owned),
+                expected_dialog_digest: digest.into(),
+                option,
             },
-        );
-        let success: SuccessResponse = serde_json::from_str(&approved).unwrap();
-        let ResponseResult::AgentApprovedOnce { approval } = success.result else {
-            panic!("unexpected approval response");
+        )
+    }
+
+    fn chosen(response: &str) -> AgentDialogChooseResult {
+        let success: SuccessResponse = serde_json::from_str(response).unwrap();
+        let ResponseResult::AgentDialogChosen { choice } = success.result else {
+            panic!("unexpected choice response: {response}");
         };
-        assert!(approval.written);
-        assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"1\r"));
+        choice
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_choose_moves_from_the_selected_option_then_confirms() {
+        let (mut app, mut writes) = app_with_dialog(CLAUDE_BASH_DIALOG, Some("session"));
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        assert!(app.agent_info(0, pane_id).unwrap().dialog);
+        let observation = observe_dialog(&mut app);
+        let dialog = observation.dialog.clone().unwrap();
+        assert_eq!(dialog.text, "Do you want to proceed?");
+        assert_eq!(dialog.options.len(), 3);
+        assert!(dialog.options[0].selected);
+
+        let choice = chosen(&choose(
+            &mut app,
+            &observation,
+            Some("session"),
+            &dialog.digest,
+            3,
+        ));
+        assert!(choice.written);
+        assert_eq!(choice.keys, ["down", "down", "enter"]);
+        let moves = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
+        assert_eq!(moves.unwrap().unwrap(), Bytes::from_static(b"\x1b[B\x1b[B"));
+        let enter = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
+        assert_eq!(enter.unwrap().unwrap(), Bytes::from_static(b"\r"));
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_choose_works_while_launching_without_a_session() {
+        let (mut app, mut writes) = app_with_dialog(CLAUDE_BASH_DIALOG, None);
+        let observation = observe_dialog(&mut app);
+        assert_eq!(observation.session_id, None);
+        let digest = observation.dialog.clone().unwrap().digest;
+        let choice = chosen(&choose(&mut app, &observation, None, &digest, 1));
+        assert_eq!(choice.keys, ["enter"]);
+        assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\r"));
         assert!(writes.try_recv().is_err());
     }
 
     #[tokio::test]
-    async fn agent_approve_once_content_race_fails_closed_without_keys() {
-        let mut app = app_with_agent();
+    async fn agent_dialog_choose_sends_nothing_for_stale_missing_or_foreign_dialogs() {
+        let (mut app, mut writes) = app_with_dialog(CLAUDE_BASH_DIALOG, Some("session"));
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
-        terminal.set_agent_name("reviewer".into());
-        terminal.set_detected_state(Some(Agent::Codex), AgentState::Blocked);
-        terminal.set_agent_session_ref(
-            "bus".into(),
-            "codex".into(),
-            crate::agent_resume::AgentSessionRef::id("session"),
-            Some(1),
+        let observation = observe_dialog(&mut app);
+        let digest = observation.dialog.clone().unwrap().digest;
+
+        let error: crate::api::schema::ErrorResponse = serde_json::from_str(&choose(
+            &mut app,
+            &observation,
+            Some("other-session"),
+            &digest,
+            1,
+        ))
+        .unwrap();
+        assert_eq!(error.error.code, "agent_identity_changed");
+
+        let missing = chosen(&choose(&mut app, &observation, Some("session"), &digest, 4));
+        assert!(!missing.written);
+        assert_eq!(
+            missing.reason.as_deref(),
+            Some("option_missing_or_selection_not_visible")
         );
-        let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        runtime.test_process_pty_bytes(b"Allow read-only command: rg --files");
-        app.state.insert_test_runtime(pane_id, runtime);
-        let observed = app.handle_agent_permission_observe(
-            "observe".into(),
-            AgentTarget {
-                target: "reviewer".into(),
-            },
-        );
-        let success: SuccessResponse = serde_json::from_str(&observed).unwrap();
-        let ResponseResult::AgentPermission { observation } = success.result else {
-            panic!()
-        };
+
         app.lookup_runtime_sender(0, pane_id)
             .unwrap()
-            .test_process_pty_bytes(b"\r\nAllow shell command: rm -rf build");
-        let rejected = app.handle_agent_approve_once(
-            "approve".into(),
-            AgentApproveOnceParams {
-                target: "reviewer".into(),
-                expected_terminal_id: observation.terminal_id,
-                expected_pane_id: observation.pane_id,
-                expected_session_id: observation.session_id,
-                expected_content_revision: observation.content_revision,
-                expected_prompt_digest: observation.prompt_digest,
-                response: ApprovedPermissionResponse::AllowOnce,
-            },
-        );
-        let success: SuccessResponse = serde_json::from_str(&rejected).unwrap();
-        let ResponseResult::AgentApprovedOnce { approval } = success.result else {
-            panic!()
-        };
-        assert!(!approval.written);
-        assert_eq!(approval.reason.as_deref(), Some("stale_or_changed_prompt"));
+            .test_process_pty_bytes(b"\x1b[2J\x1b[H Allow rm -rf build?\r\n \xe2\x9d\xaf 1. Yes\r\n   2. No\r\n\r\n Esc to cancel\r\n");
+        let stale = chosen(&choose(&mut app, &observation, Some("session"), &digest, 1));
+        assert!(!stale.written);
+        assert_eq!(stale.reason.as_deref(), Some("stale_or_changed_dialog"));
+        assert!(stale.keys.is_empty());
+
+        app.lookup_runtime_sender(0, pane_id)
+            .unwrap()
+            .test_process_pty_bytes(b"\x1b[2J\x1b[H\xe2\x9d\xaf \r\n");
+        let idle = observe_dialog(&mut app);
+        assert_eq!(idle.dialog, None);
+        assert!(!app.agent_info(0, pane_id).unwrap().dialog);
+        assert!(!chosen(&choose(&mut app, &idle, Some("session"), &digest, 1)).written);
         assert!(writes.try_recv().is_err());
     }
 

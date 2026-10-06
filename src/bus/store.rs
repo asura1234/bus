@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn applied_approve_once_fingerprint_stays_consumed_after_load() {
+    fn retired_approve_once_ledger_still_loads() {
         let dir = temp_dir("legacy-fingerprint");
         let path = dir.join("state.json");
         let mut document: serde_json::Value =
@@ -479,10 +479,8 @@ mod tests {
         });
         fs::write(&path, serde_json::to_vec_pretty(&document).expect("encode")).expect("write");
         let state = JsonStore::new(path).load().expect("load").expect("state");
-        assert!(
-            state.permission_fingerprint_consumed("fp-already-sent"),
-            "a fingerprint already sent before this build can be approved again"
-        );
+        // Retired approve-once fingerprints can never match a dialog fingerprint.
+        assert!(!state.dialog_fingerprint_consumed("fp-already-sent"));
         fs::remove_dir_all(dir).expect("cleanup");
     }
 

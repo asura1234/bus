@@ -1222,28 +1222,29 @@
     },
     "request": {
       "$defs": {
-        "AgentApproveOnceParams": {
+        "AgentDialogChooseParams": {
           "additionalProperties": false,
           "properties": {
-            "expected_content_revision": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
+            "expected_dialog_digest": {
+              "type": "string"
             },
             "expected_pane_id": {
               "type": "string"
             },
-            "expected_prompt_digest": {
-              "type": "string"
-            },
             "expected_session_id": {
-              "type": "string"
+              "description": "Checked when set; a launching agent has no bound session yet.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "expected_terminal_id": {
               "type": "string"
             },
-            "response": {
-              "$ref": "#/schemas/request/$defs/ApprovedPermissionResponse"
+            "option": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
             },
             "target": {
               "type": "string"
@@ -1253,10 +1254,8 @@
             "target",
             "expected_terminal_id",
             "expected_pane_id",
-            "expected_session_id",
-            "expected_content_revision",
-            "expected_prompt_digest",
-            "response"
+            "expected_dialog_digest",
+            "option"
           ],
           "type": "object"
         },
@@ -1786,12 +1785,6 @@
             "target"
           ],
           "type": "object"
-        },
-        "ApprovedPermissionResponse": {
-          "enum": [
-            "allow-once"
-          ],
-          "type": "string"
         },
         "ClientShellSurfaceSetParams": {
           "description": "Updates whether the requesting client shell receives and controls pane presentation.",
@@ -5475,7 +5468,7 @@
         {
           "properties": {
             "method": {
-              "const": "agent.permission.observe",
+              "const": "agent.dialog.observe",
               "type": "string"
             },
             "params": {
@@ -5491,11 +5484,11 @@
         {
           "properties": {
             "method": {
-              "const": "agent.approve_once",
+              "const": "agent.dialog.choose",
               "type": "string"
             },
             "params": {
-              "$ref": "#/schemas/request/$defs/AgentApproveOnceParams"
+              "$ref": "#/schemas/request/$defs/AgentDialogChooseParams"
             }
           },
           "required": [
@@ -6866,10 +6859,49 @@
     },
     "success_response": {
       "$defs": {
-        "AgentApproveOnceResult": {
+        "AgentDialog": {
+          "description": "A numbered choice dialog: a permission, trust or question prompt.",
           "properties": {
+            "digest": {
+              "description": "Identifies this exact dialog, including its selected option.",
+              "type": "string"
+            },
+            "hint": {
+              "description": "The key hint below the options, such as `Esc to cancel`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "options": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/AgentDialogOption"
+              },
+              "type": "array"
+            },
+            "text": {
+              "description": "The question or title above the options.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "options",
+            "digest"
+          ],
+          "type": "object"
+        },
+        "AgentDialogChooseResult": {
+          "properties": {
+            "keys": {
+              "description": "The keys sent, such as `[\"down\", \"enter\"]`; empty when nothing was sent.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "observation": {
-              "$ref": "#/schemas/success_response/$defs/AgentPermissionObservation"
+              "$ref": "#/schemas/success_response/$defs/AgentDialogObservation"
             },
             "reason": {
               "type": [
@@ -6884,6 +6916,66 @@
           "required": [
             "written",
             "observation"
+          ],
+          "type": "object"
+        },
+        "AgentDialogObservation": {
+          "properties": {
+            "content_revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "dialog": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentDialog"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`None` when no choice dialog is visible."
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "pane_id",
+            "content_revision"
+          ],
+          "type": "object"
+        },
+        "AgentDialogOption": {
+          "description": "One numbered option of a choice dialog on an agent's screen.",
+          "properties": {
+            "label": {
+              "type": "string"
+            },
+            "number": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "selected": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "number",
+            "label",
+            "selected"
           ],
           "type": "object"
         },
@@ -6913,6 +7005,10 @@
                 "string",
                 "null"
               ]
+            },
+            "dialog": {
+              "description": "A numbered choice dialog is visible and waits for an answer.",
+              "type": "boolean"
             },
             "display_agent": {
               "type": [
@@ -7074,50 +7170,6 @@
           ],
           "type": "object"
         },
-        "AgentPermissionObservation": {
-          "properties": {
-            "allowed_responses": {
-              "items": {
-                "$ref": "#/schemas/success_response/$defs/ApprovedPermissionResponse"
-              },
-              "type": "array"
-            },
-            "content_revision": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "eligibility": {
-              "$ref": "#/schemas/success_response/$defs/PermissionEligibility"
-            },
-            "pane_id": {
-              "type": "string"
-            },
-            "prompt_digest": {
-              "type": "string"
-            },
-            "prompt_text": {
-              "type": "string"
-            },
-            "session_id": {
-              "type": "string"
-            },
-            "terminal_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "terminal_id",
-            "pane_id",
-            "session_id",
-            "content_revision",
-            "prompt_digest",
-            "prompt_text",
-            "eligibility",
-            "allowed_responses"
-          ],
-          "type": "object"
-        },
         "AgentSessionInfo": {
           "properties": {
             "agent": {
@@ -7155,12 +7207,6 @@
             "blocked",
             "done",
             "unknown"
-          ],
-          "type": "string"
-        },
-        "ApprovedPermissionResponse": {
-          "enum": [
-            "allow-once"
           ],
           "type": "string"
         },
@@ -8982,54 +9028,6 @@
           ],
           "type": "object"
         },
-        "PermissionEligibility": {
-          "oneOf": [
-            {
-              "properties": {
-                "action": {
-                  "$ref": "#/schemas/success_response/$defs/SafePermissionAction"
-                },
-                "kind": {
-                  "const": "allowlisted",
-                  "type": "string"
-                },
-                "root": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind",
-                "action",
-                "root"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "kind": {
-                  "const": "unknown",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "kind": {
-                  "const": "risky",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "kind"
-              ],
-              "type": "object"
-            }
-          ]
-        },
         "PluginActionContext": {
           "enum": [
             "global",
@@ -9961,10 +9959,10 @@
             {
               "properties": {
                 "observation": {
-                  "$ref": "#/schemas/success_response/$defs/AgentPermissionObservation"
+                  "$ref": "#/schemas/success_response/$defs/AgentDialogObservation"
                 },
                 "type": {
-                  "const": "agent_permission",
+                  "const": "agent_dialog",
                   "type": "string"
                 }
               },
@@ -9976,17 +9974,17 @@
             },
             {
               "properties": {
-                "approval": {
-                  "$ref": "#/schemas/success_response/$defs/AgentApproveOnceResult"
+                "choice": {
+                  "$ref": "#/schemas/success_response/$defs/AgentDialogChooseResult"
                 },
                 "type": {
-                  "const": "agent_approved_once",
+                  "const": "agent_dialog_chosen",
                   "type": "string"
                 }
               },
               "required": [
                 "type",
-                "approval"
+                "choice"
               ],
               "type": "object"
             },
@@ -10979,12 +10977,6 @@
               "type": "object"
             }
           ]
-        },
-        "SafePermissionAction": {
-          "enum": [
-            "read_only_inspection"
-          ],
-          "type": "string"
         },
         "ServerCapabilities": {
           "properties": {

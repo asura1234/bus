@@ -107,11 +107,11 @@ pub enum ResponseResult {
     AgentList {
         agents: Vec<AgentInfo>,
     },
-    AgentPermission {
-        observation: super::agents::AgentPermissionObservation,
+    AgentDialog {
+        observation: super::agents::AgentDialogObservation,
     },
-    AgentApprovedOnce {
-        approval: super::agents::AgentApproveOnceResult,
+    AgentDialogChosen {
+        choice: super::agents::AgentDialogChooseResult,
     },
     AgentView {
         active: bool,

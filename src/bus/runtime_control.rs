@@ -6,26 +6,31 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+/// What a dialog fingerprint vouches for: this agent's launch identity and
+/// the exact dialog it showed. A fingerprint answers at most one dialog.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct PermissionFingerprintClaims {
+struct DialogFingerprintClaims {
     room_id: RoomId,
     agent_id: AgentId,
-    participant_incarnation: u64,
     launch_id: String,
     terminal_id: String,
-    session_id: String,
     pane_id: String,
-    current_request: RequestId,
-    provider_turn: String,
+    /// `None` while the agent launches, before its session is bound.
+    session_id: Option<String>,
     content_revision: u64,
-    prompt_digest: String,
+    dialog_digest: String,
+    /// The question and labels without the selection, to tell a moved
+    /// selection from a different dialog.
+    dialog_shape: String,
+    options: u32,
+    /// Makes each observation's fingerprint distinct, so spending one never
+    /// blocks answering the same dialog after observing it again.
+    observed_at_ns: u128,
 }
 
-pub(super) struct PermissionCandidate {
-    claims: PermissionFingerprintClaims,
-    native: schema::AgentPermissionObservation,
-    fingerprint: String,
-}
+/// How long `agent choose` watches the screen for the dialog to react.
+const DIALOG_SETTLE_POLLS: u32 = 20;
+const DIALOG_SETTLE_INTERVAL: Duration = Duration::from_millis(100);
 
 impl Worker {
     #[cfg(test)]
@@ -92,8 +97,8 @@ impl Worker {
             "agent.orchestrate" => (&["agent", "room"], true),
             "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
             "agent.read" => (&["agent", "source", "lines"], false),
-            "agent.permission.observe" => (&["agent"], false),
-            "agent.permission.approve_once" => (&["agent", "fingerprint", "response"], true),
+            "agent.dialog.observe" => (&["agent"], false),
+            "agent.dialog.choose" => (&["agent", "option", "fingerprint"], true),
             "agent.focus" => (&["agent"], true),
             "message.send" => (&["room", "to", "text", "files", "as"], true),
             "message.status" => (&["message"], false),
@@ -324,17 +329,16 @@ impl Worker {
                 optional_text(p, "source")?,
                 optional_u32(p, "lines")?,
             ),
-            "agent.permission.observe" => {
+            "agent.dialog.observe" => {
                 let agent = self.dev_agent(required(p, "agent")?, None)?;
-                let candidate = self.permission_candidate(agent)?;
-                Ok(permission_candidate_json(candidate))
+                self.observe_dialog(agent)
             }
-            "agent.permission.approve_once" => {
-                let agent_id = self.dev_agent(required(p, "agent")?, None)?;
-                if required(p, "response")? != "allow-once" {
-                    return Err("Response must be allow-once".into());
-                }
-                self.approve_permission_once(Some(agent_id), required(p, "fingerprint")?.into())
+            "agent.dialog.choose" => {
+                let agent = self.dev_agent(required(p, "agent")?, None)?;
+                let option = required(p, "option")?
+                    .parse::<u32>()
+                    .map_err(|_| "Option must be a number")?;
+                self.choose_dialog_option(agent, option, required(p, "fingerprint")?)
             }
             "message.send" => self.dev_send(p),
             "message.status" => {
@@ -710,185 +714,213 @@ impl Worker {
         }))
     }
 
-    pub(super) fn approve_permission_once(
-        &mut self,
-        expected_agent: Option<AgentId>,
-        fingerprint: String,
-    ) -> Result<Value, String> {
-        let claims = decode_permission_fingerprint(&fingerprint)?;
-        if expected_agent.is_some_and(|agent| agent != claims.agent_id) {
-            return Err("Permission fingerprint targets another agent".into());
-        }
-        let agent = self.state.agent(claims.agent_id).ok_or("Unknown agent")?;
+    /// The agent's launch identity: launch, terminal and pane are required;
+    /// the session is `None` until the provider binds it.
+    fn dialog_identity(
+        &self,
+        id: AgentId,
+    ) -> Result<(RoomId, String, String, String, Option<String>), String> {
+        let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let identity = &agent.runtime_identity;
-        let request = agent
-            .current_request
-            .ok_or("Agent has no current Request")?;
-        let turn = self
-            .state
-            .request(request)
-            .and_then(|request| request.provider_turn_id.as_deref())
-            .ok_or("Current Request has no provider turn")?;
-        if claims.room_id != agent.room_id
-            || claims.participant_incarnation != 1
-            || identity.launch_id.as_deref() != Some(claims.launch_id.as_str())
-            || identity.terminal_id.as_deref() != Some(claims.terminal_id.as_str())
-            || identity.session_id.as_deref() != Some(claims.session_id.as_str())
-            || identity.pane_id.as_deref() != Some(claims.pane_id.as_str())
-            || claims.current_request != request
-            || claims.provider_turn != turn
-        {
-            return Err("Permission fingerprint no longer matches Worker-owned room facts".into());
-        }
-        if self.state.permission_fingerprint_consumed(&fingerprint) {
-            return Err("Permission fingerprint was already used".into());
-        }
-        let target = claims.pane_id.clone();
-        // Consume before the native write so a lost response can never be replayed.
-        let mut consumed = self.state.clone();
-        consumed.consume_permission_fingerprint(fingerprint);
-        self.save(consumed)?;
-        let native =
-            self.transport
-                .request(Method::AgentApproveOnce(schema::AgentApproveOnceParams {
-                    target,
-                    expected_terminal_id: claims.terminal_id,
-                    expected_pane_id: claims.pane_id,
-                    expected_session_id: claims.session_id,
-                    expected_content_revision: claims.content_revision,
-                    expected_prompt_digest: claims.prompt_digest,
-                    response: schema::ApprovedPermissionResponse::AllowOnce,
-                }));
-        match native {
-            Ok(ResponseResult::AgentApprovedOnce { approval }) if approval.written => Ok(json!({
-                "written": true,
-                "single_use": true,
-                "audit": approval,
-            })),
-            Ok(ResponseResult::AgentApprovedOnce { approval }) => Err(format!(
-                "Permission was not written: {}",
-                approval.reason.unwrap_or_else(|| "prompt changed".into())
-            )),
-            Ok(_) => Err("Unexpected native permission response; outcome is uncertain".into()),
-            Err(error) => Err(format!(
-                "Permission outcome is uncertain: {}",
-                error.message
-            )),
-        }
+        let (Some(launch_id), Some(terminal_id), Some(pane_id)) = (
+            identity.launch_id.clone(),
+            identity.terminal_id.clone(),
+            identity.pane_id.clone(),
+        ) else {
+            return Err("Agent has no terminal yet".into());
+        };
+        Ok((
+            agent.room_id,
+            launch_id,
+            terminal_id,
+            pane_id,
+            identity.session_id.clone(),
+        ))
     }
 
-    pub(super) fn permission_candidate(
+    fn native_dialog(
         &mut self,
-        id: AgentId,
-    ) -> Result<PermissionCandidate, String> {
-        let agent = self.state.agent(id).ok_or("Unknown agent")?;
-        let identity = agent.runtime_identity.clone();
-        let room_id = agent.room_id;
-        let current_request = agent
-            .current_request
-            .ok_or("Agent has no current Request")?;
-        let provider_turn = self
-            .state
-            .request(current_request)
-            .and_then(|request| request.provider_turn_id.clone())
-            .ok_or("Current Request has no provider turn")?;
-        let (Some(launch_id), Some(terminal_id), Some(session_id), Some(pane_id)) = (
-            identity.launch_id,
-            identity.terminal_id,
-            identity.session_id,
-            identity.pane_id,
-        ) else {
-            return Err("Agent runtime identity is incomplete".into());
-        };
+        pane_id: &str,
+        terminal_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<schema::AgentDialogObservation, String> {
         let response = self
             .transport
-            .request(Method::AgentPermissionObserve(schema::AgentTarget {
-                target: pane_id.clone(),
+            .request(Method::AgentDialogObserve(schema::AgentTarget {
+                target: pane_id.into(),
             }))
             .map_err(|error| error.message)?;
-        let ResponseResult::AgentPermission { observation } = response else {
-            return Err("Unexpected native permission response".into());
+        let ResponseResult::AgentDialog { observation } = response else {
+            return Err("Unexpected native dialog response".into());
         };
         if observation.terminal_id != terminal_id
             || observation.pane_id != pane_id
-            || observation.session_id != session_id
-            || !matches!(
-                observation.eligibility,
-                schema::PermissionEligibility::Allowlisted { .. }
-            )
-            || observation.allowed_responses != [schema::ApprovedPermissionResponse::AllowOnce]
+            || session_id.is_some_and(|session| observation.session_id.as_deref() != Some(session))
         {
-            return Err(
-                "Permission prompt is stale, unknown, risky, or outside the allowlist".into(),
-            );
+            return Err("Agent terminal or session changed; observe the dialog again".into());
         }
-        let claims = PermissionFingerprintClaims {
-            room_id,
-            agent_id: id,
-            participant_incarnation: 1,
-            launch_id,
-            terminal_id,
-            session_id,
-            pane_id,
-            current_request,
-            provider_turn,
-            content_revision: observation.content_revision,
-            prompt_digest: observation.prompt_digest.clone(),
+        Ok(observation)
+    }
+
+    pub(super) fn observe_dialog(&mut self, id: AgentId) -> Result<Value, String> {
+        let (room_id, launch_id, terminal_id, pane_id, session_id) = self.dialog_identity(id)?;
+        let observation = self.native_dialog(&pane_id, &terminal_id, session_id.as_deref())?;
+        let fingerprint = match &observation.dialog {
+            Some(dialog) => Some(encode_dialog_fingerprint(&DialogFingerprintClaims {
+                room_id,
+                agent_id: id,
+                launch_id,
+                terminal_id,
+                pane_id,
+                session_id,
+                content_revision: observation.content_revision,
+                dialog_digest: dialog.digest.clone(),
+                dialog_shape: dialog_shape(dialog),
+                options: dialog.options.len() as u32,
+                observed_at_ns: crate::bus::io::now_ns(),
+            })?),
+            None => None,
         };
-        let fingerprint = encode_permission_fingerprint(&claims)?;
-        Ok(PermissionCandidate {
-            claims,
-            native: observation,
-            fingerprint,
-        })
+        Ok(json!({
+            "agent_id": id,
+            "dialog": observation.dialog.as_ref().map(dialog_json),
+            "fingerprint": fingerprint,
+            "content_revision": observation.content_revision,
+            "observed_at_ms": crate::bus::io::now_ms(),
+        }))
+    }
+
+    /// Answers the observed dialog once: the fingerprint is spent before any
+    /// key is written, so a lost response can never answer a second dialog.
+    pub(super) fn choose_dialog_option(
+        &mut self,
+        id: AgentId,
+        option: u32,
+        fingerprint: &str,
+    ) -> Result<Value, String> {
+        let claims = decode_dialog_fingerprint(fingerprint)?;
+        if claims.agent_id != id {
+            return Err("Dialog fingerprint belongs to another agent".into());
+        }
+        let (room_id, launch_id, terminal_id, pane_id, session_id) = self.dialog_identity(id)?;
+        if claims.room_id != room_id
+            || claims.launch_id != launch_id
+            || claims.terminal_id != terminal_id
+            || claims.pane_id != pane_id
+            || claims.session_id != session_id
+        {
+            return Err("Agent launch or session changed; observe the dialog again".into());
+        }
+        if option == 0 || option > claims.options {
+            return Err(format!("Option must be between 1 and {}", claims.options));
+        }
+        if self.state.dialog_fingerprint_consumed(fingerprint) {
+            return Err("Dialog fingerprint was already used; observe the dialog again".into());
+        }
+        let mut consumed = self.state.clone();
+        consumed.consume_dialog_fingerprint(fingerprint.to_owned());
+        self.save(consumed)?;
+        let native =
+            self.transport
+                .request(Method::AgentDialogChoose(schema::AgentDialogChooseParams {
+                    target: pane_id.clone(),
+                    expected_terminal_id: terminal_id.clone(),
+                    expected_pane_id: pane_id.clone(),
+                    expected_session_id: session_id.clone(),
+                    expected_dialog_digest: claims.dialog_digest.clone(),
+                    option,
+                }));
+        let keys = match native {
+            Ok(ResponseResult::AgentDialogChosen { choice }) if choice.written => choice.keys,
+            Ok(ResponseResult::AgentDialogChosen { choice }) => {
+                return Err(format!(
+                    "No keys were sent ({}); observe the dialog again",
+                    choice.reason.as_deref().unwrap_or("dialog changed")
+                ))
+            }
+            Ok(_) => return Err("Unexpected native dialog response; outcome is uncertain".into()),
+            Err(error) => {
+                return Err(format!(
+                    "Dialog answer outcome is uncertain: {}",
+                    error.message
+                ))
+            }
+        };
+        // Moves are confirmed after a short delay, so watch until the dialog
+        // closes or another one replaces it.
+        let mut outcome = "unchanged";
+        let mut after = None;
+        for poll in 0..DIALOG_SETTLE_POLLS {
+            if poll > 0 {
+                std::thread::sleep(DIALOG_SETTLE_INTERVAL);
+            }
+            let Ok(observation) = self.native_dialog(&pane_id, &terminal_id, session_id.as_deref())
+            else {
+                outcome = "unknown";
+                break;
+            };
+            outcome = match &observation.dialog {
+                None => "closed",
+                Some(dialog) if dialog.digest == claims.dialog_digest => "unchanged",
+                Some(dialog) if dialog_shape(dialog) == claims.dialog_shape => "selection_moved",
+                Some(_) => "replaced",
+            };
+            after = observation.dialog;
+            if matches!(outcome, "closed" | "replaced") {
+                break;
+            }
+        }
+        Ok(json!({
+            "agent_id": id,
+            "option": option,
+            "keys": keys,
+            "outcome": outcome,
+            "dialog": after.as_ref().map(dialog_json),
+        }))
     }
 }
 
-fn encode_permission_fingerprint(claims: &PermissionFingerprintClaims) -> Result<String, String> {
+fn dialog_shape(dialog: &schema::AgentDialog) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(dialog.text.as_bytes());
+    for option in &dialog.options {
+        hasher.update(format!("\0{}\0{}", option.number, option.label));
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn dialog_json(dialog: &schema::AgentDialog) -> Value {
+    json!({
+        "text": dialog.text,
+        "options": dialog.options,
+        "hint": dialog.hint,
+    })
+}
+
+fn encode_dialog_fingerprint(claims: &DialogFingerprintClaims) -> Result<String, String> {
     use base64::Engine;
     let payload = serde_json::to_vec(claims).map_err(|error| error.to_string())?;
     let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload);
     let digest = format!("{:x}", Sha256::digest(&payload));
-    Ok(format!("v1.{encoded}.{digest}"))
+    Ok(format!("d1.{encoded}.{digest}"))
 }
 
-fn decode_permission_fingerprint(value: &str) -> Result<PermissionFingerprintClaims, String> {
+fn decode_dialog_fingerprint(value: &str) -> Result<DialogFingerprintClaims, String> {
     use base64::Engine;
+    let malformed = || "Dialog fingerprint is malformed; observe the dialog again".to_owned();
     let mut parts = value.split('.');
-    let (Some("v1"), Some(encoded), Some(expected), None) =
+    let (Some("d1"), Some(encoded), Some(expected), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
-        return Err("Permission fingerprint is malformed".into());
+        return Err(malformed());
     };
     let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(encoded)
-        .map_err(|_| "Permission fingerprint is malformed".to_owned())?;
-    let actual = format!("{:x}", Sha256::digest(&payload));
-    if actual != expected {
-        return Err("Permission fingerprint digest mismatch".into());
+        .map_err(|_| malformed())?;
+    if format!("{:x}", Sha256::digest(&payload)) != expected {
+        return Err(malformed());
     }
-    serde_json::from_slice(&payload).map_err(|_| "Permission fingerprint is malformed".into())
-}
-
-pub(super) fn permission_candidate_json(candidate: PermissionCandidate) -> Value {
-    json!({
-        "fingerprint": candidate.fingerprint,
-        "room_id": candidate.claims.room_id,
-        "agent_id": candidate.claims.agent_id,
-        "participant_incarnation": candidate.claims.participant_incarnation,
-        "launch_id": candidate.claims.launch_id,
-        "terminal_id": candidate.claims.terminal_id,
-        "session_id": candidate.claims.session_id,
-        "pane_id": candidate.claims.pane_id,
-        "current_request": candidate.claims.current_request,
-        "provider_turn": candidate.claims.provider_turn,
-        "content_revision": candidate.claims.content_revision,
-        "prompt_digest": candidate.claims.prompt_digest,
-        "prompt_text": candidate.native.prompt_text,
-        "eligibility": candidate.native.eligibility,
-        "allowed_responses": candidate.native.allowed_responses,
-        "observed_at_ms": crate::bus::io::now_ms(),
-    })
+    serde_json::from_slice(&payload).map_err(|_| malformed())
 }
 
 fn required<'a>(p: &'a Value, field: &str) -> Result<&'a str, String> {

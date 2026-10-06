@@ -1079,11 +1079,11 @@ impl App {
                 );
             }
             Method::AgentRead(params) => return self.handle_agent_read(request.id, params),
-            Method::AgentPermissionObserve(target) => {
-                return self.handle_agent_permission_observe(request.id, target)
+            Method::AgentDialogObserve(target) => {
+                return self.handle_agent_dialog_observe(request.id, target)
             }
-            Method::AgentApproveOnce(params) => {
-                return self.handle_agent_approve_once(request.id, params)
+            Method::AgentDialogChoose(params) => {
+                return self.handle_agent_dialog_choose(request.id, params)
             }
             Method::AgentExplain(target) => return self.handle_agent_explain(request.id, target),
             Method::AgentSendKeys(params) => {

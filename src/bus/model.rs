@@ -284,6 +284,9 @@ pub(crate) struct Agent {
     pub(crate) details_disclosed: bool,
     pub(crate) status: RuntimeStatus,
     pub(crate) status_revision: u64,
+    /// A numbered choice dialog is visible; answer it with `agent choose`.
+    #[serde(default)]
+    pub(crate) dialog: bool,
     pub(crate) actionable_error: Option<String>,
     pub(crate) current_request: Option<RequestId>,
     #[serde(default)]
@@ -501,11 +504,11 @@ pub(crate) struct BusState {
     #[serde(default)]
     unrelated_provider_turns: BTreeSet<String>,
     visible_room: Option<RoomId>,
-    /// Approve-once fingerprints already sent to a native prompt; each is single-use.
-    #[serde(default)]
-    consumed_permission_fingerprints: BTreeSet<String>,
-    /// Read-only: the retired orchestrator ledger, whose approve-once digests are
-    /// folded into `consumed_permission_fingerprints` on load and never saved.
+    /// Dialog fingerprints already spent on an answer; each is single-use.
+    /// Retired approve-once fingerprints load here too and can never match.
+    #[serde(default, alias = "consumed_permission_fingerprints")]
+    consumed_dialog_fingerprints: BTreeSet<String>,
+    /// Read-only: the retired orchestrator ledger, accepted on load and never saved.
     #[serde(default, rename = "orchestrator", skip_serializing)]
     legacy_orchestrator: Option<serde_json::Value>,
 }
@@ -573,37 +576,17 @@ impl BusState {
             consumed_provider_turns: BTreeSet::new(),
             unrelated_provider_turns: BTreeSet::new(),
             visible_room: None,
-            consumed_permission_fingerprints: BTreeSet::new(),
+            consumed_dialog_fingerprints: BTreeSet::new(),
             legacy_orchestrator: None,
         }
     }
 
     /// Carries what the orchestrator build saved forward without the retired
-    /// features: approve-once fingerprints it already sent stay consumed, and a
-    /// Room Brief's goal and non-goals are appended once to the room notes.
-    /// Malformed legacy data is ignored rather than failing the load.
+    /// features: its ledger is dropped, and a Room Brief's goal and non-goals
+    /// are appended once to the room notes. Malformed legacy data is ignored
+    /// rather than failing the load.
     pub(crate) fn absorb_legacy_fields(&mut self) {
-        if let Some(operations) = self
-            .legacy_orchestrator
-            .take()
-            .as_ref()
-            .and_then(|ledger| ledger.get("operations"))
-            .and_then(serde_json::Value::as_object)
-        {
-            for operation in operations.values() {
-                if operation.get("kind").and_then(serde_json::Value::as_str)
-                    == Some("approve_permission_once")
-                {
-                    if let Some(digest) = operation
-                        .get("intent_digest")
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        self.consumed_permission_fingerprints
-                            .insert(digest.to_owned());
-                    }
-                }
-            }
-        }
+        self.legacy_orchestrator = None;
         for room in self.rooms.values_mut() {
             let Some(brief) = room.legacy_brief.take() else {
                 continue;
@@ -632,12 +615,12 @@ impl BusState {
         }
     }
 
-    pub(crate) fn permission_fingerprint_consumed(&self, fingerprint: &str) -> bool {
-        self.consumed_permission_fingerprints.contains(fingerprint)
+    pub(crate) fn dialog_fingerprint_consumed(&self, fingerprint: &str) -> bool {
+        self.consumed_dialog_fingerprints.contains(fingerprint)
     }
 
-    pub(crate) fn consume_permission_fingerprint(&mut self, fingerprint: String) {
-        self.consumed_permission_fingerprints.insert(fingerprint);
+    pub(crate) fn consume_dialog_fingerprint(&mut self, fingerprint: String) {
+        self.consumed_dialog_fingerprints.insert(fingerprint);
     }
 
     fn allocate_id(&mut self) -> u64 {
@@ -842,6 +825,7 @@ impl BusState {
                 details_disclosed: false,
                 status: RuntimeStatus::Launching,
                 status_revision: 0,
+                dialog: false,
                 actionable_error: None,
                 current_request: None,
                 hook_setup_confirmed: false,
@@ -1369,6 +1353,18 @@ impl BusState {
                     .actionable_error = Some(message);
             }
         }
+        Ok(())
+    }
+
+    pub(crate) fn observe_dialog(
+        &mut self,
+        agent: AgentId,
+        dialog: bool,
+    ) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?
+            .dialog = dialog;
         Ok(())
     }
 

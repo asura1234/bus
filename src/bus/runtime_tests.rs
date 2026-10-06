@@ -2038,7 +2038,7 @@ fn master_session_saved_before_sound_and_compactions_keeps_its_orchestrators() {
     value
         .as_object_mut()
         .unwrap()
-        .remove("consumed_permission_fingerprints");
+        .remove("consumed_dialog_fingerprints");
     let (worker, dir) = open_saved_document(json!({"version": 1, "state": value}));
     assert_eq!(worker.state.master_room().map(|room| room.id), Some(master));
     assert_eq!(
@@ -2059,26 +2059,15 @@ fn master_session_saved_before_sound_and_compactions_keeps_its_orchestrators() {
 }
 
 #[test]
-fn orchestrator_era_consumed_approve_once_fingerprint_stays_consumed() {
+fn retired_approve_once_fingerprints_still_load_as_spent_dialog_fingerprints() {
     let fingerprint = "v1.eyJhIjoxfQ.0000";
     let mut document = orchestrator_era_document();
+    document["state"]["consumed_permission_fingerprints"] = json!([fingerprint]);
     document["state"]["orchestrator"]["operations"] = json!({
-        "1": {
-            "operation_id": 1,
-            "room_id": 1,
-            "actor": "orchestrator",
-            "kind": "approve_permission_once",
-            "intent_digest": fingerprint,
-            "phase": "applied",
-            "uncertainty": null,
-            "result": {"Applied": {"receipt_digest": fingerprint}}
-        }
+        "1": {"operation_id": 1, "kind": "approve_permission_once", "intent_digest": "other"}
     });
     let (worker, dir) = open_saved_document(document);
-    assert!(
-        worker.state.permission_fingerprint_consumed(fingerprint),
-        "an approve-once fingerprint consumed by the orchestrator build is replayable after upgrade"
-    );
+    assert!(worker.state.dialog_fingerprint_consumed(fingerprint));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

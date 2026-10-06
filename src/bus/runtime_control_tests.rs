@@ -771,59 +771,65 @@ fn room_orchestrator_core_worker_recent_read_has_no_one_thousand_line_clamp() {
 }
 
 #[test]
-fn agent_approve_once_worker_rejects_stale_launch_before_native_then_persists_and_rejects_replay() {
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    };
+fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
+    use std::sync::{Arc, Mutex};
 
-    struct PermissionTransport {
-        approvals: Arc<AtomicUsize>,
+    #[derive(Default)]
+    struct Native {
+        shown: bool,
+        written: bool,
+        choices: Vec<schema::AgentDialogChooseParams>,
     }
-    impl Transport for PermissionTransport {
+    struct DialogTransport(Arc<Mutex<Native>>);
+    fn observation(shown: bool) -> schema::AgentDialogObservation {
+        schema::AgentDialogObservation {
+            terminal_id: "term_internal".into(),
+            pane_id: "w1:p2".into(),
+            session_id: None,
+            content_revision: 22,
+            dialog: shown.then(|| schema::AgentDialog {
+                text: "Do you trust the contents of this directory?".into(),
+                options: vec![
+                    schema::AgentDialogOption {
+                        number: 1,
+                        label: "Yes, continue".into(),
+                        selected: true,
+                    },
+                    schema::AgentDialogOption {
+                        number: 2,
+                        label: "No, quit".into(),
+                        selected: false,
+                    },
+                ],
+                hint: Some("Press enter to continue".into()),
+                digest: "dialog-digest".into(),
+            }),
+        }
+    }
+    impl Transport for DialogTransport {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            let mut native = self.0.lock().unwrap();
             match method {
-                Method::AgentPermissionObserve(params) => {
+                Method::AgentDialogObserve(params) => {
                     assert_eq!(params.target, "w1:p2");
-                    Ok(ResponseResult::AgentPermission {
-                        observation: schema::AgentPermissionObservation {
-                            terminal_id: "term_internal".into(),
-                            pane_id: "w1:p2".into(),
-                            session_id: "session".into(),
-                            content_revision: 22,
-                            prompt_digest: "prompt-digest".into(),
-                            prompt_text: "Allow read-only command: rg --files".into(),
-                            eligibility: schema::PermissionEligibility::Allowlisted {
-                                action: schema::SafePermissionAction::ReadOnlyInspection,
-                                root: "/repo".into(),
-                            },
-                            allowed_responses: vec![schema::ApprovedPermissionResponse::AllowOnce],
-                        },
+                    Ok(ResponseResult::AgentDialog {
+                        observation: observation(native.shown),
                     })
                 }
-                Method::AgentApproveOnce(params) => {
-                    assert_eq!(params.expected_terminal_id, "term_internal");
-                    assert_eq!(params.expected_content_revision, 22);
-                    self.approvals.fetch_add(1, Ordering::SeqCst);
-                    Ok(ResponseResult::AgentApprovedOnce {
-                        approval: schema::AgentApproveOnceResult {
-                            written: true,
-                            reason: None,
-                            observation: schema::AgentPermissionObservation {
-                                terminal_id: "term_internal".into(),
-                                pane_id: "w1:p2".into(),
-                                session_id: "session".into(),
-                                content_revision: 22,
-                                prompt_digest: "prompt-digest".into(),
-                                prompt_text: "Allow read-only command: rg --files".into(),
-                                eligibility: schema::PermissionEligibility::Allowlisted {
-                                    action: schema::SafePermissionAction::ReadOnlyInspection,
-                                    root: "/repo".into(),
-                                },
-                                allowed_responses: vec![
-                                    schema::ApprovedPermissionResponse::AllowOnce,
-                                ],
+                Method::AgentDialogChoose(params) => {
+                    native.choices.push(params);
+                    let written = native.written;
+                    native.shown = !written;
+                    Ok(ResponseResult::AgentDialogChosen {
+                        choice: schema::AgentDialogChooseResult {
+                            written,
+                            reason: (!written).then(|| "stale_or_changed_dialog".into()),
+                            keys: if written {
+                                vec!["down".into(), "enter".into()]
+                            } else {
+                                vec![]
                             },
+                            observation: observation(native.shown),
                         },
                     })
                 }
@@ -833,97 +839,97 @@ fn agent_approve_once_worker_rejects_stale_launch_before_native_then_persists_an
     }
 
     let (mut worker, _room, agent, dir) = fixture();
+    // Still launching: the trust dialog comes before any session is bound.
+    let identity = |launch: &str| AgentRuntimeIdentity {
+        launch_id: Some(launch.into()),
+        terminal_id: Some("term_internal".into()),
+        pane_id: Some("w1:p2".into()),
+        session_id: None,
+    };
     worker
         .state
-        .set_agent_runtime_identity(
-            agent,
-            AgentRuntimeIdentity {
-                launch_id: Some("launch".into()),
-                terminal_id: Some("term_internal".into()),
-                pane_id: Some("w1:p2".into()),
-                session_id: Some("session".into()),
-            },
-        )
+        .set_agent_runtime_identity(agent, identity("launch"))
         .unwrap();
-    let sent = call(
+    let relaunch = |worker: &mut Worker, launch: &str| {
+        let mut state = worker.state.clone();
+        state
+            .set_agent_runtime_identity(agent, identity(launch))
+            .unwrap();
+        worker.save(state).unwrap();
+    };
+    let native = Arc::new(Mutex::new(Native::default()));
+    worker.transport = Box::new(DialogTransport(native.clone()));
+
+    let none = call(
         &mut worker,
-        "send-permission",
-        "message.send",
-        json!({
-            "room":"test","to":["codex1"],"text":"inspect"
-        }),
-    );
-    let request = RequestId(sent.result["request_ids"][0].as_u64().unwrap());
-    worker.state.begin_submission(request, "launch", 1).unwrap();
-    worker
-        .state
-        .record_submission(
-            request,
-            SubmissionOutcome::Confirmed {
-                provider_session_id: Some("session".into()),
-                provider_turn_id: Some("turn-1".into()),
-            },
-        )
-        .unwrap();
-    let approvals = Arc::new(AtomicUsize::new(0));
-    worker.transport = Box::new(PermissionTransport {
-        approvals: approvals.clone(),
-    });
-    let observed = call(
-        &mut worker,
-        "observe-permission",
-        "agent.permission.observe",
+        "observe-none",
+        "agent.dialog.observe",
         json!({"agent":"codex1"}),
     );
-    assert!(observed.ok, "{observed:?}");
-    let fingerprint = observed.result["fingerprint"].as_str().unwrap().to_owned();
-    assert_eq!(observed.result["launch_id"], "launch");
-    assert_eq!(observed.result["current_request"], request.0);
-    assert_eq!(observed.result["provider_turn"], "turn-1");
-    worker
-        .state
-        .set_agent_runtime_identity(
-            agent,
-            AgentRuntimeIdentity {
-                launch_id: Some("replacement-launch".into()),
-                terminal_id: Some("term_internal".into()),
-                pane_id: Some("w1:p2".into()),
-                session_id: Some("session".into()),
-            },
-        )
-        .unwrap();
-    let stale = worker.approve_permission_once(Some(agent), fingerprint.clone());
-    assert!(stale.is_err());
-    assert_eq!(approvals.load(Ordering::SeqCst), 0);
-    worker
-        .state
-        .set_agent_runtime_identity(
-            agent,
-            AgentRuntimeIdentity {
-                launch_id: Some("launch".into()),
-                terminal_id: Some("term_internal".into()),
-                pane_id: Some("w1:p2".into()),
-                session_id: Some("session".into()),
-            },
-        )
-        .unwrap();
-    let approved = worker
-        .approve_permission_once(Some(agent), fingerprint.clone())
-        .unwrap();
-    assert_eq!(approved["written"], true);
-    assert_eq!(approvals.load(Ordering::SeqCst), 1);
-    let replay = call(
+    assert!(none.ok, "{none:?}");
+    assert_eq!(none.result["dialog"], Value::Null);
+    assert_eq!(none.result["fingerprint"], Value::Null);
+
+    native.lock().unwrap().shown = true;
+    let observed = call(
         &mut worker,
-        "replay-permission",
-        "agent.permission.approve_once",
-        json!({
-            "agent":"codex1","fingerprint":fingerprint,"response":"allow-once"
-        }),
+        "observe",
+        "agent.dialog.observe",
+        json!({"agent":"codex1"}),
     );
-    assert!(!replay.ok);
-    assert_eq!(approvals.load(Ordering::SeqCst), 1);
+    assert_eq!(observed.result["dialog"]["options"][1]["label"], "No, quit");
+    let fingerprint = observed.result["fingerprint"].as_str().unwrap().to_owned();
+    // Mutations replay by request ID, so each attempt needs its own.
+    let attempts = std::cell::Cell::new(0);
+    let choose = |worker: &mut Worker, option: &str, fingerprint: &str| {
+        attempts.set(attempts.get() + 1);
+        call(
+            worker,
+            &format!("choose-{}", attempts.get()),
+            "agent.dialog.choose",
+            json!({"agent":"codex1","option":option,"fingerprint":fingerprint}),
+        )
+    };
+
+    // A relaunched agent, a missing option or a forged fingerprint sends nothing.
+    relaunch(&mut worker, "replacement-launch");
+    assert!(!choose(&mut worker, "2", &fingerprint).ok);
+    relaunch(&mut worker, "launch");
+    assert!(!choose(&mut worker, "3", &fingerprint).ok);
+    assert!(!choose(&mut worker, "1", &fingerprint.replace("d1.", "d1.x")).ok);
+    assert!(native.lock().unwrap().choices.is_empty());
+
+    // The native layer rejects a dialog that changed; the fingerprint is spent.
+    let stale = choose(&mut worker, "2", &fingerprint);
+    assert!(!stale.ok);
+    let message = stale.error.unwrap().message;
+    assert!(message.contains("No keys were sent"), "{message}");
+    assert_eq!(native.lock().unwrap().choices.len(), 1);
+    assert!(!choose(&mut worker, "2", &fingerprint).ok);
+    assert_eq!(native.lock().unwrap().choices.len(), 1);
+
+    let fresh = call(
+        &mut worker,
+        "observe-again",
+        "agent.dialog.observe",
+        json!({"agent":"codex1"}),
+    );
+    let fresh = fresh.result["fingerprint"].as_str().unwrap().to_owned();
+    assert_ne!(fresh, fingerprint);
+    native.lock().unwrap().written = true;
+    let chosen = choose(&mut worker, "2", &fresh);
+    assert!(chosen.ok, "{chosen:?}");
+    assert_eq!(chosen.result["outcome"], "closed");
+    assert_eq!(chosen.result["keys"], json!(["down", "enter"]));
+    let sent = native.lock().unwrap().choices[1].clone();
+    assert_eq!(sent.option, 2);
+    assert_eq!(sent.expected_dialog_digest, "dialog-digest");
+    assert_eq!(sent.expected_session_id, None);
+
+    assert!(!choose(&mut worker, "2", &fresh).ok);
+    assert_eq!(native.lock().unwrap().choices.len(), 2);
     let saved = worker.store.load().unwrap().unwrap();
-    assert!(saved.permission_fingerprint_consumed(&fingerprint));
+    assert!(saved.dialog_fingerprint_consumed(&fresh));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

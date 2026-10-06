@@ -32,8 +32,8 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent orchestrate AGENT (--room ROOM | --none)
   agent read AGENT --source visible
   agent read AGENT [--source recent] --lines N
-  agent permission AGENT
-  agent approve-once AGENT --fingerprint FINGERPRINT --response allow-once
+  agent dialog AGENT
+  agent choose AGENT --option N --fingerprint FINGERPRINT
   agent focus AGENT
   agent rename AGENT NAME
   agent details AGENT (--on | --off)
@@ -58,6 +58,8 @@ A MASTER agent launches with an orchestrator system prompt, the built-in one unl
 --args \"--resume SESSION_ID\" (claude, cursor) or \"resume SESSION_ID\" (codex) adopts an
 existing provider session by its UUID; quit that session elsewhere first.
 Use --to all explicitly for all room agents.
+agent dialog shows a numbered choice dialog (permission, trust or question prompt) and a
+single-use fingerprint; agent choose answers it only while that exact dialog is still shown.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
 room seen clears a room's unread count without changing the visible Bus view.
@@ -279,12 +281,12 @@ fn cli() -> Command {
                                 .value_parser(clap::value_parser!(u32).range(1..)),
                         ),
                 )
-                .subcommand(subcommand("permission").arg(value_arg("agent").required(true)))
+                .subcommand(subcommand("dialog").arg(value_arg("agent").required(true)))
                 .subcommand(
-                    subcommand("approve-once")
+                    subcommand("choose")
                         .arg(value_arg("agent").required(true))
-                        .arg(option("fingerprint"))
-                        .arg(option("response").value_parser(["allow-once"])),
+                        .arg(option("option"))
+                        .arg(option("fingerprint")),
                 )
                 .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
                 .subcommand(toggle("details").arg(value_arg("agent").required(true)))
@@ -485,16 +487,16 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
                 }
                 ("agent.read", params)
             }
-            Some(("permission", args)) => (
-                "agent.permission.observe",
+            Some(("dialog", args)) => (
+                "agent.dialog.observe",
                 json!({"agent": required(args, "agent")?}),
             ),
-            Some(("approve-once", args)) => (
-                "agent.permission.approve_once",
+            Some(("choose", args)) => (
+                "agent.dialog.choose",
                 json!({
                     "agent": required(args, "agent")?,
+                    "option": required(args, "option")?,
                     "fingerprint": required(args, "fingerprint")?,
-                    "response": required(args, "response")?,
                 }),
             ),
             Some(("setup-confirm", args)) => (
@@ -1063,48 +1065,43 @@ mod tests {
     }
 
     #[test]
-    fn agent_approve_once_cli_exposes_only_fingerprint_and_fixed_response() {
-        let observe = command(&["agent", "permission", "Reviewer"]).unwrap();
-        assert_eq!(observe.method, "agent.permission.observe");
+    fn agent_dialog_cli_observes_and_chooses_with_a_fingerprint() {
+        let observe = command(&["agent", "dialog", "Reviewer"]).unwrap();
+        assert_eq!(observe.method, "agent.dialog.observe");
         assert_eq!(observe.params, json!({"agent":"Reviewer"}));
-        let approve = command(&[
+        let choose = command(&[
             "agent",
-            "approve-once",
+            "choose",
             "Reviewer",
+            "--option",
+            "2",
             "--fingerprint",
-            "fp-abc",
-            "--response",
-            "allow-once",
+            "d1.abc.def",
         ])
         .unwrap();
-        assert_eq!(approve.method, "agent.permission.approve_once");
+        assert_eq!(choose.method, "agent.dialog.choose");
         assert_eq!(
-            approve.params,
-            json!({
-                "agent":"Reviewer","fingerprint":"fp-abc","response":"allow-once"
-            })
+            choose.params,
+            json!({"agent":"Reviewer","option":"2","fingerprint":"d1.abc.def"})
         );
-        assert!(command(&[
-            "agent",
-            "approve-once",
-            "Reviewer",
-            "--fingerprint",
-            " ",
-            "--response",
-            "allow-once",
-        ])
-        .is_err());
-        assert!(command(&[
-            "agent",
-            "approve-once",
-            "Reviewer",
-            "--fingerprint",
-            "fp",
-            "--response",
-            "yes",
-        ])
-        .is_err());
-        assert!(command(&["agent", "permission", "Reviewer", "--keys", "enter"]).is_err());
+        for args in [
+            &["agent", "choose", "Reviewer", "--option", "2"][..],
+            &["agent", "choose", "Reviewer", "--fingerprint", "d1.abc.def"],
+            &[
+                "agent",
+                "choose",
+                "Reviewer",
+                "--option",
+                " ",
+                "--fingerprint",
+                "f",
+            ],
+            &["agent", "dialog", "Reviewer", "--keys", "enter"],
+            &["agent", "permission", "Reviewer"],
+            &["agent", "approve-once", "Reviewer", "--fingerprint", "f"],
+        ] {
+            assert!(command(args).is_err(), "{args:?}");
+        }
     }
 
     #[test]

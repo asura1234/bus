@@ -507,6 +507,9 @@ impl Worker {
             state
                 .observe_status(agent.id, status, super::io::now_ms())
                 .map_err(|e| e.to_string())?;
+            state
+                .observe_dialog(agent.id, info.is_some_and(|info| info.dialog))
+                .map_err(|e| e.to_string())?;
             if let Some(info) = info {
                 let cwd = info
                     .foreground_cwd

@@ -119,10 +119,10 @@ pub enum Method {
     AgentGet(AgentTarget),
     #[serde(rename = "agent.read")]
     AgentRead(AgentReadParams),
-    #[serde(rename = "agent.permission.observe")]
-    AgentPermissionObserve(AgentTarget),
-    #[serde(rename = "agent.approve_once")]
-    AgentApproveOnce(AgentApproveOnceParams),
+    #[serde(rename = "agent.dialog.observe")]
+    AgentDialogObserve(AgentTarget),
+    #[serde(rename = "agent.dialog.choose")]
+    AgentDialogChoose(AgentDialogChooseParams),
     #[serde(rename = "agent.explain")]
     AgentExplain(AgentTarget),
     #[serde(rename = "agent.send_keys")]
