@@ -420,6 +420,7 @@ impl BusUi {
                     notice,
                 });
             }
+            BusEvent::Notice(notice) => self.show_toast(notice),
             _ => {}
         }
     }

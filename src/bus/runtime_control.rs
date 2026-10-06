@@ -1,6 +1,7 @@
 //! Dev commands execute on the existing single-writer coordinator.
 use super::*;
 use crate::bus::control::{Request as ControlRequest, Response};
+use crate::bus::orchestrator::OrchestratorSpec;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -84,6 +85,7 @@ impl Worker {
                     "extra_args",
                     "consent_project_hooks",
                     "orchestrates",
+                    "system_prompt",
                 ],
                 true,
             ),
@@ -281,17 +283,36 @@ impl Worker {
                     "cursor" => Provider::Cursor,
                     _ => return Err("Provider must be claude, codex, or cursor".into()),
                 };
+                let room = self.dev_room(required(p, "room")?)?;
+                let master = self.state.master_room().is_some_and(|m| m.id == room);
+                let cwd = optional_text(p, "cwd")?;
+                let orchestrates = optional_text(p, "orchestrates")?;
+                let system_prompt = optional_text(p, "system_prompt")?;
+                if !master && cwd.is_none() {
+                    return Err("--pwd is required outside MASTER".into());
+                }
+                if !master && system_prompt.is_some() {
+                    return Err("--system-prompt applies only to MASTER orchestrators".into());
+                }
                 let input = AddAgent {
-                    room: self.dev_room(required(p, "room")?)?,
+                    room,
                     name: required(p, "name")?.into(),
                     provider,
-                    cwd: required(p, "cwd")?.into(),
+                    cwd: cwd.unwrap_or_default().into(),
                     extra_args: optional_text(p, "extra_args")?.unwrap_or_default().into(),
                     consent_project_hooks: optional_bool(p, "consent_project_hooks")?,
                 };
-                self.dev_command(match optional_text(p, "orchestrates")? {
-                    Some(room) => BusCommand::AddOrchestrator(input, self.dev_room(room)?),
-                    None => BusCommand::AddAgent(input),
+                self.dev_command(if master {
+                    let spec = OrchestratorSpec {
+                        room: orchestrates.map(|r| self.dev_room(r)).transpose()?,
+                        system_prompt: system_prompt.map(Into::into),
+                    };
+                    BusCommand::AddMasterAgent(input, spec)
+                } else {
+                    match orchestrates {
+                        Some(room) => BusCommand::AddOrchestrator(input, self.dev_room(room)?),
+                        None => BusCommand::AddAgent(input),
+                    }
                 })
             }
             "agent.orchestrate" => {
@@ -391,6 +412,7 @@ impl Worker {
             match event {
                 BusEvent::RoomCreated(id) => return Ok(json!({"room_id":id})),
                 BusEvent::AgentAdded(id) => return Ok(json!({"agent_id":id,"stage":"launching"})),
+                BusEvent::Notice(notice) => return Ok(json!({"updated":true,"notice":notice})),
                 BusEvent::SetupRequired { notice, .. } => {
                     return Err(format!(
                         "Project hook setup requires --consent-hooks: {} ({})",

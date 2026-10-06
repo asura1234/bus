@@ -1,5 +1,6 @@
 //! Worker commands, owned launch operations and terminal navigation.
 use super::*;
+use crate::bus::orchestrator::{self, OrchestratorSpec};
 
 impl Worker {
     pub(super) fn command(
@@ -91,9 +92,22 @@ impl Worker {
             }
             BusCommand::AddAgent(input) => return self.add_agent(input, None, events),
             BusCommand::AddOrchestrator(input, room) => {
-                return self.add_agent(input, Some(room), events)
+                let spec = OrchestratorSpec {
+                    room: Some(room),
+                    system_prompt: None,
+                };
+                return self.add_agent(input, Some(spec), events);
             }
-            BusCommand::SetOrchestrates(agent, room) => state.set_agent_orchestrates(agent, room),
+            BusCommand::AddMasterAgent(input, spec) => {
+                return self.add_agent(input, Some(spec), events)
+            }
+            BusCommand::SetOrchestrates(agent, room) => {
+                state
+                    .set_agent_orchestrates(agent, room)
+                    .map_err(|e| e.to_string())?;
+                self.save(state)?;
+                return self.retarget_prompt(agent, room, events);
+            }
             BusCommand::FocusTerminal(id) => {
                 let agent = state.agent(id).ok_or("Unknown agent")?;
                 let target = agent
@@ -266,12 +280,58 @@ impl Worker {
         )
     }
 
-    fn add_agent(
+    /// Re-fills a reassigned orchestrator's room placeholders where the human
+    /// has not edited its prompt files.
+    fn retarget_prompt(
         &mut self,
-        input: AddAgent,
-        orchestrates: Option<RoomId>,
+        agent: AgentId,
+        room: Option<RoomId>,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
+        let Some(folder) = self.state.agent(agent).map(|a| a.cwd.clone()) else {
+            return Ok(());
+        };
+        let room = room
+            .and_then(|room| self.state.room(room))
+            .map(|room| (room.name.clone(), room.id));
+        orchestrator::write_docs(&self.data_dir)?;
+        let outcome = orchestrator::retarget(&self.data_dir, &folder, room)?;
+        if let Some(notice) = outcome.notice() {
+            let _ = events.send(BusEvent::Notice(notice));
+        }
+        Ok(())
+    }
+
+    fn add_agent(
+        &mut self,
+        mut input: AddAgent,
+        orchestrator: Option<OrchestratorSpec>,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        let orchestrates = orchestrator.as_ref().and_then(|spec| spec.room);
+        if orchestrator.is_some() {
+            if input.cwd.trim().is_empty() {
+                orchestrator::check_folder_name(&input.name)?;
+                input.cwd = orchestrator::default_folder(&self.data_dir, &input.name)
+                    .to_string_lossy()
+                    .into_owned();
+            }
+            // Validate the agent and its MASTER assignment before creating its folder.
+            let mut scratch = self.state.clone();
+            let id = scratch
+                .create_agent(
+                    input.room,
+                    &input.name,
+                    input.provider,
+                    input.cwd.clone().into(),
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+            scratch
+                .set_agent_orchestrates(id, orchestrates)
+                .map_err(|e| e.to_string())?;
+            orchestrator::ensure_folder(&self.data_dir, Path::new(&input.cwd), &input.name)?;
+        }
         let cwd = launch::canonical_directory(&input.cwd)?;
         let mut state = self.state.clone();
         let id = state
@@ -292,6 +352,21 @@ impl Worker {
                 });
                 return Ok(());
             }
+        }
+        if let Some(spec) = &orchestrator {
+            let values = orchestrator::PromptValues {
+                room: orchestrates
+                    .and_then(|room| state.room(room))
+                    .map(|room| (room.name.clone(), room.id)),
+                agent: state.agent(id).map(|a| a.name.clone()).unwrap_or_default(),
+                docs: orchestrator::write_docs(&self.data_dir)?,
+            };
+            orchestrator::write_folder(
+                &self.data_dir,
+                &cwd,
+                spec.system_prompt.as_deref(),
+                &values,
+            )?;
         }
         let prepared = launch::prepare(
             &input,

@@ -50,6 +50,9 @@ pub(crate) enum BusCommand {
     AddAgent(AddAgent),
     /// Adds a MASTER agent that orchestrates the given work room.
     AddOrchestrator(AddAgent, RoomId),
+    /// Adds a MASTER agent with its Bus-owned folder and system prompt; an
+    /// empty PWD uses the default folder.
+    AddMasterAgent(AddAgent, super::orchestrator::OrchestratorSpec),
     SetOrchestrates(AgentId, Option<RoomId>),
     FocusTerminal(AgentId),
     CompleteHookSetup(AgentId),
@@ -83,6 +86,8 @@ pub(crate) enum BusEvent {
         result: Result<Vec<launch::PathSuggestion>, String>,
     },
     AgentAdded(AgentId),
+    /// Something the human should know about a command that succeeded.
+    Notice(String),
     RoomCreated(RoomId),
     TerminalFocused {
         agent: AgentId,

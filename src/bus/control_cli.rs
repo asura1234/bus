@@ -28,6 +28,8 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   room sound ROOM (--on | --off)
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks] [--orchestrates ROOM]
+  agent add --room master --name NAME --provider claude|codex|cursor [--orchestrates ROOM]
+            [--system-prompt TEXT | --system-prompt-file PATH] [--pwd PATH]
   agent orchestrate AGENT (--room ROOM | --none)
   agent read AGENT --source visible
   agent read AGENT [--source recent] --lines N
@@ -51,6 +53,10 @@ Every command accepts --request-id STRING and emits one JSON response.
 ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) for the
 MASTER room. Only MASTER agents orchestrate, each at most one work room: use
 agent add --room master --orchestrates ROOM, or agent orchestrate to reassign or unassign.
+A MASTER agent's --pwd defaults to its Bus-owned folder <BUS_DATA_DIR>/orchestrators/NAME;
+Bus writes its system prompt there as CLAUDE.md and AGENTS.md (default: the built-in
+orchestrator prompt; {{ROOM_NAME}} {{ROOM_ID}} {{AGENT_NAME}} {{DOCS}} are filled in) plus
+the workflow-create skill. Reassigning re-fills the room unless those files were edited.
 Use --to all explicitly for all room agents.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
@@ -240,10 +246,17 @@ fn cli() -> Command {
                         .arg(option("room"))
                         .arg(option("name"))
                         .arg(option("provider").value_parser(["claude", "codex", "cursor"]))
-                        .arg(option("pwd"))
+                        .arg(value_arg("pwd").long("pwd"))
                         .arg(Arg::new("args").long("args").allow_hyphen_values(true))
                         .arg(flag("consent-hooks"))
-                        .arg(value_arg("orchestrates").long("orchestrates")),
+                        .arg(value_arg("orchestrates").long("orchestrates"))
+                        .arg(
+                            Arg::new("system-prompt")
+                                .long("system-prompt")
+                                .allow_hyphen_values(true)
+                                .conflicts_with("system-prompt-file"),
+                        )
+                        .arg(value_arg("system-prompt-file").long("system-prompt-file")),
                 )
                 .subcommand(
                     subcommand("orchestrate")
@@ -417,12 +430,24 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             Some(("add", args)) => {
                 let mut params = json!({
                     "room": required(args, "room")?, "name": required(args, "name")?,
-                    "provider": required(args, "provider")?, "cwd": required(args, "pwd")?,
+                    "provider": required(args, "provider")?,
                     "extra_args": args.get_one::<String>("args").map(String::as_str).unwrap_or(""),
                     "consent_project_hooks": args.get_flag("consent-hooks"),
                 });
+                // A MASTER agent defaults to its Bus-owned folder; Bus requires a PWD elsewhere.
+                if let Some(pwd) = args.get_one::<String>("pwd") {
+                    params["cwd"] = json!(pwd);
+                }
                 if let Some(room) = args.get_one::<String>("orchestrates") {
                     params["orchestrates"] = json!(room);
+                }
+                if let Some(text) = args.get_one::<String>("system-prompt") {
+                    params["system_prompt"] = json!(text);
+                }
+                if let Some(path) = args.get_one::<String>("system-prompt-file") {
+                    let text = std::fs::read_to_string(path)
+                        .map_err(|e| format!("Cannot read --system-prompt-file {path}: {e}"))?;
+                    params["system_prompt"] = json!(text);
                 }
                 ("agent.add", params)
             }
@@ -555,6 +580,31 @@ mod tests {
     }
 
     #[test]
+    fn agent_add_reads_the_system_prompt_file_and_leaves_pwd_to_the_runtime() {
+        let path = std::env::temp_dir().join(format!("bus-prompt-{}.md", std::process::id()));
+        std::fs::write(&path, "You run {{ROOM_NAME}}.\n").unwrap();
+        let parsed = command(&[
+            "agent",
+            "add",
+            "--room",
+            "master",
+            "--name",
+            "orch",
+            "--provider",
+            "cursor",
+            "--orchestrates",
+            "pr-1",
+            "--system-prompt-file",
+            path.to_str().unwrap(),
+        ])
+        .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(parsed.params["system_prompt"], "You run {{ROOM_NAME}}.\n");
+        assert_eq!(parsed.params["orchestrates"], "pr-1");
+        assert!(parsed.params.get("cwd").is_none());
+    }
+
+    #[test]
     fn send_preserves_explicit_recipients_text_files_and_request_identity() {
         let parsed = command(&[
             "send",
@@ -615,6 +665,7 @@ mod tests {
         }
         assert!(HELP.contains("agent orchestrate AGENT (--room ROOM | --none)"));
         assert!(HELP.contains("[--orchestrates ROOM]"));
+        assert!(HELP.contains("[--system-prompt TEXT | --system-prompt-file PATH] [--pwd PATH]"));
     }
 
     #[test]
@@ -727,6 +778,26 @@ mod tests {
                     "room": "master", "name": "claude-orch", "provider": "claude",
                     "cwd": "/repo", "extra_args": "", "consent_project_hooks": false,
                     "orchestrates": "pr-123"
+                }),
+            ),
+            (
+                &[
+                    "agent",
+                    "add",
+                    "--room",
+                    "master",
+                    "--name",
+                    "codex-orch",
+                    "--provider",
+                    "codex",
+                    "--system-prompt",
+                    "Run {{ROOM_NAME}}.",
+                ],
+                "agent.add",
+                json!({
+                    "room": "master", "name": "codex-orch", "provider": "codex",
+                    "extra_args": "", "consent_project_hooks": false,
+                    "system_prompt": "Run {{ROOM_NAME}}."
                 }),
             ),
             (
@@ -917,11 +988,27 @@ mod tests {
                 "agent",
                 "add",
                 "--room",
-                "7",
+                "master",
                 "--name",
-                "Reviewer",
+                "orch",
                 "--provider",
                 "codex",
+                "--system-prompt",
+                "x",
+                "--system-prompt-file",
+                "/tmp/x",
+            ],
+            &[
+                "agent",
+                "add",
+                "--room",
+                "master",
+                "--name",
+                "orch",
+                "--provider",
+                "codex",
+                "--system-prompt-file",
+                "/nonexistent/bus-prompt.md",
             ],
             &["send", "--room", "7", "--to", "9"],
             &["send", "--room", "7", "--to", "9", "--text"],
