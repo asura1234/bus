@@ -210,6 +210,13 @@ impl ClientState {
         if self.presentation_frozen {
             return;
         }
+        if self
+            .shell
+            .as_mut()
+            .is_some_and(|shell| shell.take_bus_full_repaint())
+        {
+            self.request_repaint();
+        }
         let frame_data = if self.draw_host_cursor {
             render_ansi::frame_with_drawn_cursor(frame_data)
         } else {

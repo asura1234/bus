@@ -609,6 +609,19 @@ impl BusUi {
     }
     pub fn compute_view(&mut self, cols: u16, rows: u16) {
         self.sync_toast();
+        let key = super::ViewKey {
+            room: self.room,
+            terminal: self.terminal,
+            form: self.form.as_ref().map(std::mem::discriminant),
+            deletion: self.deletion.is_some(),
+        };
+        if self
+            .view_key
+            .replace(key)
+            .is_some_and(|previous| previous != key)
+        {
+            self.full_repaint = true;
+        }
         let layout = layout(cols, rows);
         let sidebar = layout.sidebar;
         let main = layout.pane_surface;

@@ -24,6 +24,18 @@ pub(super) enum ComposerSize {
     Compact,
 }
 
+/// Which screen the Bus view shows. A change repaints every terminal cell, so
+/// cells a terminal shows differently from the last frame (which the diff
+/// encoder would never revisit, like the blank right margin) heal on every
+/// screen switch, even in terminals that send no focus events.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ViewKey {
+    pub room: Option<RoomId>,
+    pub terminal: Option<AgentId>,
+    pub form: Option<std::mem::Discriminant<super::forms::Form>>,
+    pub deletion: bool,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct LocalRoom {
     pub text: Editor,
@@ -129,6 +141,10 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) history_follow_tail: bool,
     pub(super) history: super::history::History,
     pub(super) thumbnails: super::thumbnails::Thumbnails,
+    /// The screen the last view showed: room, agent terminal, form, dialog.
+    pub(super) view_key: Option<ViewKey>,
+    /// The view switched screens since the client last repainted every cell.
+    pub(super) full_repaint: bool,
     /// The client presents Kitty graphics and the host terminal draws them.
     pub(super) kitty_graphics: bool,
     /// Region receiving the current left-button drag, if it started a selection.
@@ -212,6 +228,8 @@ impl BusUi {
             history_follow_tail: true,
             history: super::history::History::default(),
             thumbnails: super::thumbnails::Thumbnails::default(),
+            view_key: None,
+            full_repaint: false,
             kitty_graphics: false,
             drag: None,
             history_selection: None,

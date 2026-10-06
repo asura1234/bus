@@ -3052,3 +3052,105 @@ fn room_notes_scroll_with_the_wheel_and_page_keys_and_keep_the_caret_visible() {
     assert!(visible(&ui), "typing scrolls back to the caret");
     assert!(ui.locals[&room].notes.text.contains("x- [ ] item 21"));
 }
+
+#[test]
+fn switching_bus_screens_requests_one_full_repaint() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.compute_view(100, 30);
+    ui.full_repaint = false;
+    ui.compute_view(100, 30);
+    assert!(!ui.full_repaint, "redrawing the same screen diffs as usual");
+    ui.action(render::Action::Settings);
+    ui.compute_view(100, 30);
+    assert!(std::mem::take(&mut ui.full_repaint), "opening a form");
+    ui.compute_view(100, 30);
+    assert!(!ui.full_repaint, "once per switch");
+    ui.action(render::Action::Cancel);
+    ui.compute_view(100, 30);
+    assert!(std::mem::take(&mut ui.full_repaint), "closing a form");
+    ui.open_room(other);
+    ui.compute_view(100, 30);
+    assert!(std::mem::take(&mut ui.full_repaint), "switching rooms");
+    ui.open_room(room);
+    ui.terminal = Some(agent);
+    ui.compute_view(100, 30);
+    assert!(
+        std::mem::take(&mut ui.full_repaint),
+        "opening an agent terminal"
+    );
+}
+
+/// Replays real room frames through a terminal emulator, as a host terminal
+/// would show them.
+#[test]
+fn a_screen_switch_repaints_stale_cells_in_the_right_margin() {
+    use crate::protocol::render_ansi::BlitEncoder;
+    let (cols, rows) = (100u16, 30u16);
+    let frame = |ui: &mut BusUi| {
+        ui.compute_view(cols, rows);
+        let mut buffer =
+            ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
+        ui.render(&mut buffer);
+        crate::protocol::FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[])
+    };
+    let margin = |terminal: &crate::ghostty::Terminal| -> String {
+        (0..u32::from(rows))
+            .map(|row| {
+                let (_, graphemes) = terminal.screen_cell(cols - 1, row).unwrap();
+                graphemes
+                    .first()
+                    .and_then(|code| char::from_u32(*code))
+                    .unwrap_or(' ')
+            })
+            .collect()
+    };
+    let (mut ui, room, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    let mut terminal = crate::ghostty::Terminal::new(cols, rows, 0).unwrap();
+    let mut encoder = BlitEncoder::new();
+    let mut present = |terminal: &mut crate::ghostty::Terminal, frame, repaint| {
+        let encoded = encoder.encode(&frame, repaint);
+        terminal.write(&encoded.bytes);
+        encoder.commit(frame, encoded);
+    };
+
+    let first = frame(&mut ui);
+    present(&mut terminal, first, false);
+    assert!(
+        margin(&terminal).trim().is_empty(),
+        "Bus never draws in the margin"
+    );
+
+    // The terminal shows something in the margin that no Bus frame drew
+    // there (e.g. text a terminal draws differently). The diff encoder never
+    // revisits cells whose frame content is unchanged.
+    terminal.write(b"\x1b[5;100Hr\x1b[20;100Hd");
+    ui.locals.get_mut(&room).unwrap().notes.insert("changed");
+    let changed = frame(&mut ui);
+    present(&mut terminal, changed, ui.full_repaint);
+    assert_eq!(
+        margin(&terminal).replace(' ', ""),
+        "rd",
+        "a diff frame keeps them"
+    );
+
+    // Any screen switch repaints every cell, margin included.
+    ui.open_room(other);
+    let switched = frame(&mut ui);
+    assert!(ui.full_repaint);
+    present(
+        &mut terminal,
+        switched,
+        std::mem::take(&mut ui.full_repaint),
+    );
+    assert!(
+        margin(&terminal).trim().is_empty(),
+        "{:?}",
+        margin(&terminal)
+    );
+}

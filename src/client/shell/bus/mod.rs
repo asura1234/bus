@@ -25,6 +25,14 @@ impl super::ClientShellState {
         }
     }
 
+    /// Whether the Bus view switched screens since the last call, so the
+    /// client should repaint every cell instead of only the changed ones.
+    pub(crate) fn take_bus_full_repaint(&mut self) -> bool {
+        self.bus
+            .as_mut()
+            .is_some_and(|bus| std::mem::take(&mut bus.full_repaint))
+    }
+
     pub(super) fn compute_bus_view(&mut self, cols: u16, rows: u16) {
         let cell = self.graphics_cell_size;
         if let Some(bus) = self.bus.as_mut() {
