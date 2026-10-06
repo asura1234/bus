@@ -158,15 +158,13 @@ fn load(
         Provider::Cursor => project.join(".cursor/hooks.json"),
     };
     validate_hooks(&hook_path, agent.provider, binary)?;
-    let discovery = super::trusted_assignment::prepare_discovery(root, agent.id, launch)?;
-    let mut env = vec![
+    let env = vec![
         ("BUS_LAUNCH_ID".into(), launch.into()),
         (
             "BUS_CALLBACK_DIR".into(),
             spool.to_string_lossy().into_owned(),
         ),
     ];
-    env.extend(discovery.env(binary));
     Ok(LaunchExtras {
         env,
         args: if agent.provider == Provider::ClaudeCode {
@@ -462,14 +460,8 @@ mod tests {
             )
         }
 
-        /// Callback capture plus trusted-assignment discovery for the token the last load wrote.
+        /// Callback capture env for the saved launch.
         fn expected_env(&self) -> Vec<(String, String)> {
-            let assignments = self
-                .root
-                .join("trusted-assignments")
-                .join(self.agent.0.to_string())
-                .join("owned-launch");
-            let token = std::fs::read_to_string(assignments.join(".read-token")).unwrap();
             [
                 ("BUS_LAUNCH_ID", "owned-launch".to_owned()),
                 (
@@ -479,19 +471,6 @@ mod tests {
                         .to_string_lossy()
                         .into_owned(),
                 ),
-                ("BUS_BINARY", self.binary.to_string_lossy().into_owned()),
-                (
-                    "BUS_TRUSTED_ASSIGNMENT_DIR",
-                    assignments.to_string_lossy().into_owned(),
-                ),
-                (
-                    "BUS_TRUSTED_ASSIGNMENT_ENDPOINT",
-                    assignments
-                        .join("active.json")
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                ("BUS_TRUSTED_ASSIGNMENT_TOKEN", token),
             ]
             .map(|(key, value)| (key.to_owned(), value))
             .into()
