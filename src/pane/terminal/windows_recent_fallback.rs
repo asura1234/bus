@@ -2,7 +2,7 @@ use super::{ghostty_line_from_cells, GhosttyPaneCore, TerminalReadSnapshot};
 
 const CACHE_LINES: usize = 2000;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Default)]
 pub(super) struct Cache {
     rows: Vec<RenderedLine>,
     last_snapshot: Vec<RenderedLine>,
@@ -11,7 +11,7 @@ pub(super) struct Cache {
     pub(super) needs_refresh: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 struct RenderedLine {
     text: String,
     soft_wrapped: bool,
@@ -209,9 +209,9 @@ fn merge_snapshot(cache: &mut Vec<RenderedLine>, snapshot: &[RenderedLine]) {
     }
 
     let max_overlap = cache.len().min(snapshot.len());
-    let overlap = (0..=max_overlap)
+    let overlap = (1..=max_overlap)
         .rev()
-        .find(|count| *count == 0 || cache[cache.len() - count..] == snapshot[..*count])
+        .find(|count| cache[cache.len() - count..] == snapshot[..*count])
         .unwrap_or(0);
     cache.extend(snapshot[overlap..].iter().cloned());
     let overflow = cache.len().saturating_sub(CACHE_LINES);
@@ -225,12 +225,7 @@ fn cache_text(cache: &[&str], lines: usize) -> String {
         return String::new();
     }
     let start = cache.len().saturating_sub(lines);
-    let text = cache[start..].join("\n");
-    if text.is_empty() {
-        text
-    } else {
-        format!("{text}\n")
-    }
+    format!("{}\n", cache[start..].join("\n"))
 }
 
 #[cfg(test)]
