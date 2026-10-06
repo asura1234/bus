@@ -895,9 +895,11 @@ impl Workspace {
             return name.clone();
         }
 
-        self.resolved_identity_cwd_from(terminals, terminal_runtimes)
-            .map(|cwd| self.automatic_display_name_for_cwd(&cwd))
-            .unwrap_or_else(|| "workspace".into())
+        self.automatic_display_name_for_cwd(
+            &self
+                .resolved_identity_cwd_from(terminals, terminal_runtimes)
+                .expect("workspace always has an identity cwd"),
+        )
     }
 
     fn automatic_display_name_for_cwd(&self, cwd: &std::path::Path) -> String {

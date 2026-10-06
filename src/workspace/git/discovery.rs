@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitSpaceMetadata {
     pub key: String,
-    pub checkout_key: String,
     pub repo_name: String,
     pub repo_root: PathBuf,
     pub is_linked_worktree: bool,
@@ -66,9 +65,6 @@ pub(super) fn git_space_metadata_from_info(info: &GitWorktreeInfo) -> GitSpaceMe
     let key = canonicalize_best_effort_path(&info.git_common_dir)
         .display()
         .to_string();
-    let checkout_key = canonicalize_best_effort_path(&info.repo_root)
-        .display()
-        .to_string();
     let common_dir_name = info
         .git_common_dir
         .file_name()
@@ -85,7 +81,6 @@ pub(super) fn git_space_metadata_from_info(info: &GitWorktreeInfo) -> GitSpaceMe
         .to_string();
     GitSpaceMetadata {
         key,
-        checkout_key,
         repo_name,
         repo_root: info.repo_root.clone(),
         is_linked_worktree: info.is_linked_worktree,
