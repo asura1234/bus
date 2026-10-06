@@ -12,7 +12,6 @@ on:
       - "flake.lock"
       - "flake.nix"
       - "nix/**"
-      - "skills/**"
       - "vendor/**"
   push:
     branches: [master]
@@ -25,7 +24,6 @@ on:
       - "flake.lock"
       - "flake.nix"
       - "nix/**"
-      - "skills/**"
       - "vendor/**"
 
 permissions:

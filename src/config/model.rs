@@ -965,8 +965,6 @@ pub struct AdvancedConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ExperimentalConfig {
-    /// Allow launching herdr inside an existing herdr pane. Default: false.
-    pub allow_nested: bool,
     /// Deprecated compatibility key for `terminal.kitty_graphics`.
     pub kitty_graphics: Option<bool>,
     /// Persist pane screen history to session-history.json. Default: false.
@@ -1915,13 +1913,11 @@ kitty_graphics = true
     fn experimental_config_parses() {
         let toml = r#"
 [experimental]
-allow_nested = true
 kitty_graphics = true
 pane_history = true
 switch_ascii_input_source_in_prefix = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.experimental.allow_nested);
         assert_eq!(config.experimental.kitty_graphics, Some(true));
         assert!(config.kitty_graphics_enabled());
         assert!(config.experimental.pane_history);

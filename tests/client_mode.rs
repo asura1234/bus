@@ -122,7 +122,7 @@ fn spawn_client_process_with_args_and_env(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.args(args);
     cmd.env("HERDR_DISABLE_SOUND", "1");
     cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
@@ -182,7 +182,7 @@ fn spawn_server_with_config(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
@@ -310,7 +310,7 @@ fn client_sees_headless_startup_config_diagnostic() {
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
@@ -371,7 +371,7 @@ fn server_unreachable_shows_clear_error() {
     )
     .unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bus"))
         .arg("client")
         .env("HERDR_DISABLE_SOUND", "1")
         .env("XDG_CONFIG_HOME", &config_home)
@@ -635,80 +635,6 @@ fn attach_thin_client_with_config(
     );
 
     (spawned_server, thin_client, output)
-}
-
-#[test]
-fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let _lock = test_lock();
-    for select_remote in [false, true] {
-        let base = unique_test_dir();
-        let config_home = base.join("config");
-        let runtime_dir = base.join("runtime");
-        let api_socket = runtime_dir.join("herdr.sock");
-        fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
-        fs::write(
-            config_home.join(app_dir_name()).join("config.toml"),
-            "onboarding = false\n",
-        )
-        .unwrap();
-        let catalog_dir = runtime_dir
-            .join("state")
-            .join(app_dir_name())
-            .join("client");
-        fs::create_dir_all(&catalog_dir).unwrap();
-        let profile = "0123456789abcdef0123456789abcdef";
-        fs::write(catalog_dir.join("endpoints.json"), serde_json::json!({
-            "version": 1, "selected_profile": select_remote.then_some(profile),
-            "ssh": [{"id": profile, "label": "Unavailable remote", "target": "test-only", "session": "default", "enabled": true}],
-        }).to_string()).unwrap();
-        let bin = base.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        fs::write(bin.join("ssh"), "#!/bin/sh\nexit 255\n").unwrap();
-        fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o700)).unwrap();
-        let path = format!(
-            "{}:{}",
-            bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        );
-
-        // Exercise both auto-start and a subsequent attach to the healthy Local server.
-        for args in [&[][..], &["client"][..]] {
-            let client = spawn_client_process_with_args_and_env(
-                &config_home,
-                &runtime_dir,
-                &api_socket,
-                args,
-                &[("PATH", &path)],
-            );
-            let output =
-                spawn_pty_drain(client._master.as_ref().unwrap().try_clone_reader().unwrap());
-            wait_for_socket(&api_socket, Duration::from_secs(10));
-            assert!(wait_until(
-                Duration::from_secs(10),
-                Duration::from_millis(20),
-                || { read_output(&output).contains("Local") }
-            ));
-            let mut input = client._master.as_ref().unwrap().take_writer().unwrap();
-            input
-                .write_all(b"printf 'LOCAL_%s\\n' DIRECT_READY\r")
-                .unwrap();
-            assert!(wait_until(Duration::from_secs(10), Duration::from_millis(20), || {
-                read_output(&output).contains("LOCAL_DIRECT_READY")
-            }), "Local must accept input without waiting for SSH (remote selected: {select_remote}): {}", read_output(&output));
-            let text = read_output(&output);
-            assert!(!text.contains("Local: connecting"), "{text}");
-            assert!(!text.contains("Local: reconnecting"), "{text}");
-            drop(input);
-            drop(client);
-        }
-        let _ = send_json_request(
-            &api_socket,
-            r#"{"id":"stop","method":"server.stop","params":{}}"#,
-        );
-        cleanup_test_base(&base);
-    }
 }
 
 #[test]
@@ -1473,7 +1399,7 @@ fn client_receives_notify_on_agent_state_change() {
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);

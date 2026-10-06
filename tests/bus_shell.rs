@@ -16,8 +16,8 @@ fn isolated_home(label: &str) -> std::path::PathBuf {
 
 #[test]
 fn bus_paths_are_isolated_even_with_inherited_herdr_and_xdg_overrides() {
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
-        .args(["--bus", "--paths"])
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["--paths"])
         .env("BUS_DATA_DIR", "/tmp/bus-path-contract")
         .env("HERDR_CONFIG_PATH", "/tmp/not-bus/config.toml")
         .env("XDG_CONFIG_HOME", "/tmp/not-bus/config")
@@ -40,8 +40,8 @@ fn bus_paths_are_isolated_even_with_inherited_herdr_and_xdg_overrides() {
 fn bus_resume_reports_missing_exact_and_last_sessions_without_starting() {
     let home = isolated_home("resume-missing");
 
-    let exact = Command::new(env!("CARGO_BIN_EXE_herdr"))
-        .args(["--bus", "resume", "0123456789abcdef"])
+    let exact = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["resume", "0123456789abcdef"])
         .env_remove("BUS_DATA_DIR")
         .env("HOME", &home)
         .output()
@@ -54,8 +54,8 @@ fn bus_resume_reports_missing_exact_and_last_sessions_without_starting() {
         String::from_utf8_lossy(&exact.stderr)
     );
 
-    let last = Command::new(env!("CARGO_BIN_EXE_herdr"))
-        .args(["--bus", "resume", "--last"])
+    let last = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["resume", "--last"])
         .env_remove("BUS_DATA_DIR")
         .env("HOME", &home)
         .output()
@@ -73,8 +73,8 @@ fn bus_resume_reports_missing_exact_and_last_sessions_without_starting() {
 
 #[test]
 fn bus_help_documents_fresh_and_resumed_session_commands() {
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
-        .args(["--bus", "--help"])
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["--help"])
         .output()
         .expect("run help");
     assert!(output.status.success());
@@ -88,8 +88,8 @@ fn bus_help_documents_fresh_and_resumed_session_commands() {
 fn bus_sessions_is_read_only_and_succeeds_when_no_sessions_exist() {
     let home = isolated_home("sessions-empty");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
-        .args(["--bus", "sessions"])
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["sessions"])
         .env_remove("BUS_DATA_DIR")
         .env("HOME", &home)
         .output()

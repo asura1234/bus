@@ -1,5 +1,5 @@
 {
-  description = "herdr — terminal workspace manager for AI coding agents";
+  description = "bus — coordinate selected AI coding agents in native terminal rooms";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -54,27 +54,27 @@
         system:
         let
           pkgs = pkgsFor system;
-          herdr = pkgs.callPackage ./nix/package.nix {
+          bus = pkgs.callPackage ./nix/package.nix {
             rustPlatform = rustPlatformFor pkgs;
           };
         in
         {
-          inherit herdr;
-          default = herdr;
+          inherit bus;
+          default = bus;
         }
       );
 
       apps = forAllSystems (system: {
         default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/herdr";
-          meta.description = "Run Herdr";
+          program = "${self.packages.${system}.default}/bin/bus";
+          meta.description = "Run Bus";
         };
       });
 
       checks = forAllSystems (system: {
-        herdr = self.packages.${system}.default;
-        default = self.checks.${system}.herdr;
+        bus = self.packages.${system}.default;
+        default = self.checks.${system}.bus;
       });
 
       devShells = forAllSystems (
@@ -85,7 +85,7 @@
         in
         {
           default = pkgs.mkShell {
-            name = "herdr-dev";
+            name = "bus-dev";
             packages = with pkgs; [
               cargo-nextest
               cmake
@@ -108,7 +108,7 @@
 
       overlays.default = lib.composeExtensions rust-overlay.overlays.default (
         final: _prev: {
-          herdr = final.callPackage ./nix/package.nix {
+          bus = final.callPackage ./nix/package.nix {
             rustPlatform = rustPlatformFor final;
           };
         }

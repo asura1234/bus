@@ -161,7 +161,7 @@ jobs:
           cache-bin: false
           key: conpty-package-windows-2022
 
-      - name: Build Herdr
+      - name: Build Bus
         run: cargo build --locked --target x86_64-pc-windows-msvc
 
       - name: Build and verify official ConPTY package
@@ -169,11 +169,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
-          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
+          $stage = Join-Path $env:RUNNER_TEMP "bus-windows-x86_64"
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           .\scripts\package_windows_conpty.ps1 `
-            -HerdrExe target\x86_64-pc-windows-msvc\debug\herdr.exe `
+            -BusExe target\x86_64-pc-windows-msvc\debug\bus.exe `
             -PackagePath $package `
             -StageDir $stage `
-            -OutputPath artifacts\herdr-windows-x86_64.zip
+            -OutputPath artifacts\bus-windows-x86_64.zip
           "HERDR_CONPTY_PACKAGE_DIR=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

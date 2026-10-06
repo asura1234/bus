@@ -21,7 +21,7 @@ class RunLauncherTests(unittest.TestCase):
         self.bin_dir.mkdir()
         self.cargo_args = self.root / "cargo-args"
         self.cargo_cwd = self.root / "cargo-cwd"
-        self.herdr_args = self.root / "herdr-args"
+        self.bus_args = self.root / "bus-args"
 
         self.assertTrue(RUN.is_file(), "run launcher is missing")
         shutil.copy2(RUN, self.root / "run")
@@ -35,9 +35,9 @@ exit "${FAKE_CARGO_EXIT:-0}"
 """,
         )
         self._write_executable(
-            self.root / "target" / "debug" / "herdr",
+            self.root / "target" / "debug" / "bus",
             """#!/bin/sh
-printf '%s\\n' "$@" > "$FAKE_HERDR_ARGS"
+printf '%s\\n' "$@" > "$FAKE_BUS_ARGS"
 """,
         )
 
@@ -60,7 +60,7 @@ printf '%s\\n' "$@" > "$FAKE_HERDR_ARGS"
                 "FAKE_CARGO_ARGS": str(self.cargo_args),
                 "FAKE_CARGO_CWD": str(self.cargo_cwd),
                 "FAKE_CARGO_EXIT": str(cargo_exit),
-                "FAKE_HERDR_ARGS": str(self.herdr_args),
+                "FAKE_BUS_ARGS": str(self.bus_args),
             },
             capture_output=True,
             text=True,
@@ -73,19 +73,19 @@ printf '%s\\n' "$@" > "$FAKE_HERDR_ARGS"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             self.cargo_args.read_text(encoding="utf-8").splitlines(),
-            ["build", "--locked", "--bin", "herdr"],
+            ["build", "--locked", "--bin", "bus"],
         )
         self.assertEqual(self.cargo_cwd.read_text(encoding="utf-8").strip(), str(self.root))
         self.assertEqual(
-            self.herdr_args.read_text(encoding="utf-8").splitlines(),
-            ["--bus", "--dev", "resume", "--last"],
+            self.bus_args.read_text(encoding="utf-8").splitlines(),
+            ["--dev", "resume", "--last"],
         )
 
     def test_dev_never_launches_an_existing_binary_after_a_failed_build(self) -> None:
         result = self._run("dev", cargo_exit=17)
 
         self.assertEqual(result.returncode, 17)
-        self.assertFalse(self.herdr_args.exists())
+        self.assertFalse(self.bus_args.exists())
 
     def test_dev_control_uses_existing_binary_without_building(self) -> None:
         result = self._run("dev-control", "agent", "read", "3", "--source", "recent", "--lines", "5000")
@@ -93,8 +93,8 @@ printf '%s\\n' "$@" > "$FAKE_HERDR_ARGS"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.cargo_args.exists())
         self.assertEqual(
-            self.herdr_args.read_text(encoding="utf-8").splitlines(),
-            ["--bus", "--dev", "agent", "read", "3", "--source", "recent", "--lines", "5000"],
+            self.bus_args.read_text(encoding="utf-8").splitlines(),
+            ["--dev", "agent", "read", "3", "--source", "recent", "--lines", "5000"],
         )
 
     def test_dev_control_preserves_typed_dialog_cli_shape_without_raw_keys(self) -> None:
@@ -105,13 +105,13 @@ printf '%s\\n' "$@" > "$FAKE_HERDR_ARGS"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.cargo_args.exists())
         self.assertEqual(
-            self.herdr_args.read_text(encoding="utf-8").splitlines(),
-            ["--bus", "--dev", "agent", "choose", "3", "--option", "2", "--fingerprint", "d1.bound.digest"],
+            self.bus_args.read_text(encoding="utf-8").splitlines(),
+            ["--dev", "agent", "choose", "3", "--option", "2", "--fingerprint", "d1.bound.digest"],
         )
-        self.assertNotIn("send-keys", self.herdr_args.read_text(encoding="utf-8"))
+        self.assertNotIn("send-keys", self.bus_args.read_text(encoding="utf-8"))
 
     def test_dev_control_fails_closed_when_debug_binary_is_missing(self) -> None:
-        (self.root / "target" / "debug" / "herdr").unlink()
+        (self.root / "target" / "debug" / "bus").unlink()
         result = self._run("dev-control", "state")
 
         self.assertEqual(result.returncode, 1)

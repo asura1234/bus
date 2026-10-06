@@ -2763,7 +2763,7 @@ impl HeadlessServer {
             && toast_after != toast_before
         {
             if let Some(toast) = &toast_after {
-                debug!(target: "herdr::private_payload", title = %toast.title, body = %toast.context, "forwarding toast notification from API request");
+                debug!(target: "bus::private_payload", title = %toast.title, body = %toast.context, "forwarding toast notification from API request");
                 self.send_notify_to_foreground_client(
                     toast_notify_kind(self.app.state.toast_config.delivery)
                         .expect("toast forwarding requires a client notification kind"),

@@ -19,7 +19,7 @@ fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically(
     .unwrap();
     let payload = r#"{"session_id":"fixture-session","transcript_path":"/tmp/bus-fixture.jsonl","hook_event_name":"UserPromptSubmit","turn_id":"fixture-turn","prompt":"fixture @literal $HOME"}"#;
     for _ in 0..2 {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bus"))
             .args(["--bus-callback", "codex-hook"])
             .env("HERDR_ENV", "1")
             .env("BUS_DEV", "1")
@@ -67,7 +67,7 @@ fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically(
 
 #[test]
 fn project_hook_is_inert_without_bus_launch_environment() {
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
         .args(["--bus-callback", "cursor-hook"])
         .env("HERDR_ENV", "1")
         .env_remove("BUS_CALLBACK_DIR")
@@ -97,7 +97,7 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
         ("wrong", b"{}".to_vec(), "identity mismatch"),
         ("expected", vec![b' '; 2 * 1024 * 1024 + 1], "exceeds 2 MiB"),
     ] {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bus"))
             .args(["--bus-callback", "codex-hook"])
             .env("HERDR_ENV", "1")
             .env("BUS_CALLBACK_DIR", &dir)

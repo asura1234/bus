@@ -18,18 +18,18 @@ case "${1:-}" in
     dev)
         shift
         cd "$REPO_ROOT"
-        cargo build --locked --bin herdr
-        exec "$REPO_ROOT/target/debug/herdr" --bus --dev "$@"
+        cargo build --locked --bin bus
+        exec "$REPO_ROOT/target/debug/bus" --dev "$@"
         ;;
     dev-control)
         shift
         cd "$REPO_ROOT"
-        binary="$REPO_ROOT/target/debug/herdr"
+        binary="$REPO_ROOT/target/debug/bus"
         if [[ ! -x "$binary" ]]; then
-            echo "Bus debug binary is missing; run './run dev' or 'cargo build --locked --bin herdr' once before dev-control." >&2
+            echo "Bus debug binary is missing; run './run dev' or 'cargo build --locked --bin bus' once before dev-control." >&2
             exit 1
         fi
-        exec "$binary" --bus --dev "$@"
+        exec "$binary" --dev "$@"
         ;;
     -h|--help)
         usage

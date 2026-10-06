@@ -15,7 +15,7 @@
 let
   manifest = lib.importTOML ../Cargo.toml;
   zigDeps = callPackage ../vendor/libghostty-vt/build.zig.zon.nix {
-    name = "herdr-libghostty-vt-zig-cache";
+    name = "bus-libghostty-vt-zig-cache";
     inherit zstd;
     linkFarm =
       name: entries:
@@ -32,7 +32,7 @@ let
   ];
 in
 rustPlatform.buildRustPackage {
-  pname = "herdr";
+  pname = "bus";
   version = manifest.package.version;
 
   src = lib.fileset.toSource {
@@ -40,7 +40,6 @@ rustPlatform.buildRustPackage {
     fileset = lib.fileset.intersection (lib.fileset.fromSource (lib.sources.cleanSource ./..)) (
       lib.fileset.unions [
         ../assets
-        ../docs/next/api/herdr-api.schema.json
         ../src
         ../vendor/libghostty-vt
         ../vendor/libghostty-vt.vendor.json
@@ -48,7 +47,6 @@ rustPlatform.buildRustPackage {
         ../build.rs
         ../Cargo.lock
         ../Cargo.toml
-        ../skills/herdr/SKILL.md
       ]
     );
   };
@@ -80,10 +78,9 @@ rustPlatform.buildRustPackage {
   doCheck = false;
 
   meta = {
-    description = "Terminal workspace manager for AI coding agents";
-    homepage = "https://herdr.dev";
+    description = "Coordinate selected AI coding agents in native terminal rooms (built on Herdr)";
     license = lib.licenses.asl20;
-    mainProgram = "herdr";
+    mainProgram = "bus";
     platforms = lib.platforms.linux ++ lib.platforms.darwin;
   };
 }

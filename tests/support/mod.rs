@@ -754,7 +754,7 @@ fn current_checkout_root() -> &'static Path {
 }
 
 fn is_test_herdr_binary(path: &Path) -> bool {
-    path.ends_with("target/debug/herdr") && path.starts_with(current_checkout_root())
+    path.ends_with("target/debug/bus") && path.starts_with(current_checkout_root())
 }
 
 extern "C" fn run_atexit_cleanup() {
@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn test_binary_matcher_accepts_current_checkout_debug_binary() {
-        let binary = current_checkout_root().join("target/debug/herdr");
+        let binary = current_checkout_root().join("target/debug/bus");
         assert!(
             is_test_herdr_binary(&binary),
             "current checkout debug binary should be considered test-owned"
@@ -888,7 +888,7 @@ mod tests {
     #[test]
     fn test_binary_matcher_rejects_installed_binary() {
         assert!(
-            !is_test_herdr_binary(Path::new("/home/can/.local/bin/herdr")),
+            !is_test_herdr_binary(Path::new("/home/can/.local/bin/bus")),
             "installed binaries must not be considered test-owned"
         );
     }

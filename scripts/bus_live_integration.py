@@ -18,6 +18,7 @@ import pty
 import re
 import select
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -27,6 +28,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+BINARY = ROOT / "target/debug/bus"
 ROWS, COLS, SIDEBAR = 40, 120, 28
 # Exact executable plus steps from the Add form's default Codex selection.
 PROVIDERS = {"codex": ("codex", 0), "claude": ("claude", 1), "cursor": ("cursor-agent", 2)}
@@ -114,7 +116,7 @@ class LiveBus:
             self.env.pop(key, None)
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-        self.child = subprocess.Popen([str(ROOT / "bus")], stdin=slave, stdout=slave,
+        self.child = subprocess.Popen([str(BINARY)], stdin=slave, stdout=slave,
                                      stderr=slave, env=self.env, start_new_session=True)
         os.close(slave)
         self.pump(3)
@@ -247,14 +249,30 @@ class LiveBus:
         if self.child.poll() is None:
             self.send("\x11")
             self.pump(1)
-        result = subprocess.run([str(ROOT / "target/debug/herdr"), "session", "stop", "bus"],
-                                env=self.env, capture_output=True, text=True, timeout=20)
+        returncode = self.stop_server()
         self.pump()
         if self.child.poll() is None:
             self.child.terminate()
             self.child.wait(timeout=5)
         os.close(self.master)
-        return {"isolated_server_stop": result.returncode, "artifacts": str(self.artifacts)}
+        return {"isolated_server_stop": returncode, "artifacts": str(self.artifacts)}
+
+    def stop_server(self):
+        """Ask the isolated session's server to stop through its API socket."""
+        paths = subprocess.run([str(BINARY), "--paths"], env=self.env, capture_output=True,
+                               text=True, timeout=20)
+        if paths.returncode != 0:
+            return paths.returncode
+        socket_path = Path(json.loads(paths.stdout)["logs"]) / "herdr.sock"
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stream:
+                stream.settimeout(20)
+                stream.connect(str(socket_path))
+                stream.sendall(b'{"id":"live:stop","method":"server.stop","params":{}}\n')
+                reply = json.loads(stream.makefile().readline())
+        except (OSError, ValueError):
+            return 1
+        return 0 if "result" in reply else 1
 
 
 def main():

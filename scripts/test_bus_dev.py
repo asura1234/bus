@@ -15,7 +15,7 @@ class BusDevTests(unittest.TestCase):
             root = Path(directory) / "absent"
             for prefix in [[], ["--dev"]]:
                 result = subprocess.run(
-                    [str(ROOT / "target/debug/herdr"), "--bus", *prefix, "state"],
+                    [str(ROOT / "target/debug/bus"), *prefix, "state"],
                     env=dict(os.environ, BUS_DATA_DIR=str(root)), capture_output=True, text=True,
                     timeout=10, check=False,
                 )
@@ -27,7 +27,7 @@ class BusDevTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="bus-control-test-") as directory:
             for args in [["room", "delete", "room"], ["send", "--room", "room", "--text", "hello"]]:
                 result = subprocess.run(
-                    [str(ROOT / "target/debug/herdr"), "--bus", *args],
+                    [str(ROOT / "target/debug/bus"), *args],
                     env=dict(os.environ, BUS_DATA_DIR=directory), capture_output=True, text=True,
                     timeout=10, check=False,
                 )
@@ -38,7 +38,7 @@ class BusDevTests(unittest.TestCase):
     def test_normal_paths_do_not_enable_dev_or_create_state(self):
         with tempfile.TemporaryDirectory(prefix="bus-normal-test-") as directory:
             result = subprocess.run(
-                [str(ROOT / "target/debug/herdr"), "--bus", "--paths"],
+                [str(ROOT / "target/debug/bus"), "--paths"],
                 env=dict(os.environ, BUS_DATA_DIR=directory), capture_output=True, text=True,
                 check=True,
             )
@@ -49,7 +49,7 @@ class BusDevTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="bus-dev-test-") as directory:
             for args in [("--dev", "--paths"), ("--paths", "--dev")]:
                 result = subprocess.run(
-                    [str(ROOT / "target/debug/herdr"), "--bus", *args],
+                    [str(ROOT / "target/debug/bus"), *args],
                     env=dict(os.environ, BUS_DATA_DIR=directory), capture_output=True, text=True,
                     check=False,
                 )
@@ -61,7 +61,7 @@ class BusDevTests(unittest.TestCase):
                 self.assertFalse((Path(directory) / "state.json").exists())
 
     def test_help_documents_dev_and_unknown_options_still_fail(self):
-        result = subprocess.run([str(ROOT / "target/debug/herdr"), "--bus", "--help"], capture_output=True, text=True)
+        result = subprocess.run([str(ROOT / "target/debug/bus"), "--help"], capture_output=True, text=True)
         self.assertIn("--dev", result.stdout)
-        invalid = subprocess.run([str(ROOT / "target/debug/herdr"), "--bus", "--dev", "--unknown"], capture_output=True, text=True)
+        invalid = subprocess.run([str(ROOT / "target/debug/bus"), "--dev", "--unknown"], capture_output=True, text=True)
         self.assertNotEqual(invalid.returncode, 0)

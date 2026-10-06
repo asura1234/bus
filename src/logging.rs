@@ -66,7 +66,7 @@ pub(crate) fn init_file_logging_at(dir: PathBuf, file_name: &str) {
     let filter = if crate::bus::diagnostics::dev_enabled() {
         EnvFilter::new(crate::bus::diagnostics::DEV_FILTER)
     } else {
-        EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("herdr=info"))
+        EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("bus=info"))
     };
 
     let _ = tracing_subscriber::fmt()

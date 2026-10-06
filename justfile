@@ -1,4 +1,4 @@
-# herdr task runner
+# bus task runner
 set windows-shell := ["cmd.exe", "/d", "/s", "/c"]
 
 python := if os() == "windows" { "python" } else { "python3" }
@@ -49,7 +49,7 @@ ci filter='all()': lint
 [unix]
 windows-lint:
     rustup target add x86_64-pc-windows-msvc
-    LIBGHOSTTY_VT_SIMD=false cargo clippy --bin herdr --locked --target x86_64-pc-windows-msvc -- -D warnings
+    LIBGHOSTTY_VT_SIMD=false cargo clippy --bin bus --locked --target x86_64-pc-windows-msvc -- -D warnings
 
 # Check formatting + run unit tests + Windows target lint + documentation contract tests
 [unix]
@@ -73,7 +73,7 @@ build:
 
 # Non-gating full-render scaling profile for background workspaces and active panes
 bench-render-scale:
-    cargo test --release --locked --bin herdr render_scale_profile -- --ignored --nocapture --test-threads=1
+    cargo test --release --locked --bin bus render_scale_profile -- --ignored --nocapture --test-threads=1
 
 
 # Build the vendored libghostty-vt source dist
