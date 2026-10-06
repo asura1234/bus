@@ -2235,3 +2235,135 @@ fn claude_unrelated_turns_never_error_or_block_the_next_request() {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[test]
+fn codex_native_question_answer_keeps_the_active_request_until_its_final() {
+    // A native async question answer invokes UserPromptSubmit while the task
+    // is still running; it does not supply a Stop for the original prompt.
+    for answer_turn in ["original-turn", "answer-turn"] {
+        let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+        let spool = dir.join("callbacks/launch");
+        let request = queue(&mut worker, room, agent, "finish the task");
+        worker.submit_ready().unwrap();
+        record(
+            &dir,
+            Provider::Codex,
+            json!({
+                "hook_event_name":"UserPromptSubmit", "session_id":"session",
+                "turn_id":"original-turn", "prompt":"finish the task"
+            }),
+        );
+        worker.consume_callbacks(agent, &spool).unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Blocked, 10)
+            .unwrap();
+        record(
+            &dir,
+            Provider::Codex,
+            json!({
+                "hook_event_name":"UserPromptSubmit", "session_id":"session",
+                "turn_id":answer_turn,
+                "prompt":"<send_user_message_question_reply>\n[{\"answer\":\"Continue\"}]\n</send_user_message_question_reply>"
+            }),
+        );
+        worker.consume_callbacks(agent, &spool).unwrap();
+        assert_eq!(
+            worker.state.agent(agent).unwrap().current_request,
+            Some(request)
+        );
+        assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Working, 11)
+            .unwrap();
+        record(
+            &dir,
+            Provider::Codex,
+            json!({
+                "hook_event_name":"Stop", "session_id":"session",
+                "turn_id":answer_turn, "last_assistant_message":"The task is finished"
+            }),
+        );
+        worker.consume_callbacks(agent, &spool).unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 12)
+            .unwrap();
+        assert_eq!(
+            worker.state.request(request).unwrap().phase,
+            RequestPhase::Completed
+        );
+        assert_eq!(
+            worker.state.room(room).unwrap().latest_replies[&agent].text,
+            "The task is finished"
+        );
+        assert!(callbacks::records(&spool).unwrap().is_empty());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn saved_state_without_unrelated_turns_keeps_pending_reply_and_tracks_new_activity() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let spool = dir.join("callbacks/launch");
+    let request = queue(&mut worker, room, agent, "finish the task");
+    worker.submit_ready().unwrap();
+    for value in [
+        json!({"hook_event_name":"UserPromptSubmit", "session_id":"session", "turn_id":"original-turn", "prompt":"finish the task"}),
+        json!({"hook_event_name":"Stop", "session_id":"session", "turn_id":"original-turn", "last_assistant_message":"The task is finished"}),
+    ] {
+        record(&dir, Provider::Codex, value);
+    }
+    worker.consume_callbacks(agent, &spool).unwrap();
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("state.json")).unwrap()).unwrap();
+    document["state"]
+        .as_object_mut()
+        .unwrap()
+        .remove("unrelated_provider_turns");
+    drop(worker);
+    std::fs::write(
+        dir.join("state.json"),
+        serde_json::to_vec(&document).unwrap(),
+    )
+    .unwrap();
+    let mut worker = reopen_saved(&dir);
+    record(
+        &dir,
+        Provider::Codex,
+        json!({
+            "hook_event_name":"UserPromptSubmit", "session_id":"session",
+            "turn_id":"typed-turn", "prompt":"a separate terminal instruction"
+        }),
+    );
+    worker.consume_callbacks(agent, &spool).unwrap();
+    drop(worker);
+    let mut worker = reopen_saved(&dir);
+    record(
+        &dir,
+        Provider::Codex,
+        json!({
+            "hook_event_name":"Stop", "session_id":"session", "turn_id":"typed-turn",
+            "last_assistant_message":"The separate terminal reply"
+        }),
+    );
+    worker.consume_callbacks(agent, &spool).unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 12)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        worker.state.room(room).unwrap().latest_replies[&agent].text,
+        "The task is finished"
+    );
+    assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
+    assert!(callbacks::records(&spool).unwrap().is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
