@@ -47,7 +47,7 @@ impl<P> Selection<P> {
     /// Start a potential selection. This records the anchor but doesn't
     /// make anything visible yet — the user might just be clicking.
     pub fn anchor(pane_id: P, viewport_row: u16, col: u16, metrics: Option<ScrollMetrics>) -> Self {
-        let anchor = (absolute_row_for_viewport_row(viewport_row, metrics), col);
+        let anchor = (absolute_row_for_viewport(viewport_row, metrics), col);
         Self {
             pane_id,
             anchor,
@@ -122,7 +122,7 @@ impl<P> Selection<P> {
         metrics: Option<ScrollMetrics>,
     ) {
         let (viewport_row, col) = clamp_to_pane(screen_col, screen_row, pane_inner);
-        self.cursor = (absolute_row_for_viewport_row(viewport_row, metrics), col);
+        self.cursor = (absolute_row_for_viewport(viewport_row, metrics), col);
         if self.cursor != self.anchor {
             self.phase = Phase::Dragging;
         }
@@ -175,7 +175,7 @@ impl<P> Selection<P> {
     }
 
     /// Returns (start, end) in reading order (top-left to bottom-right).
-    fn ordered(&self) -> ((u32, u16), (u32, u16)) {
+    pub(crate) fn ordered_cells(&self) -> ((u32, u16), (u32, u16)) {
         let (ar, ac) = self.anchor;
         let (cr, cc) = self.cursor;
         if ar < cr || (ar == cr && ac <= cc) {
@@ -185,17 +185,13 @@ impl<P> Selection<P> {
         }
     }
 
-    pub(crate) fn ordered_cells(&self) -> ((u32, u16), (u32, u16)) {
-        self.ordered()
-    }
-
     /// Check whether a pane-relative cell (row, col) is inside the selection.
     pub fn contains(&self, viewport_row: u16, col: u16, metrics: Option<ScrollMetrics>) -> bool {
         if !self.is_visible() {
             return false;
         }
-        let row = absolute_row_for_viewport_row(viewport_row, metrics);
-        let ((sr, sc), (er, ec)) = self.ordered();
+        let row = absolute_row_for_viewport(viewport_row, metrics);
+        let ((sr, sc), (er, ec)) = self.ordered_cells();
         if row < sr || row > er {
             return false;
         }
@@ -222,10 +218,6 @@ fn viewport_top_row(metrics: Option<ScrollMetrics>) -> u32 {
 }
 
 pub(crate) fn absolute_row_for_viewport(viewport_row: u16, metrics: Option<ScrollMetrics>) -> u32 {
-    absolute_row_for_viewport_row(viewport_row, metrics)
-}
-
-fn absolute_row_for_viewport_row(viewport_row: u16, metrics: Option<ScrollMetrics>) -> u32 {
     viewport_top_row(metrics) + u32::from(viewport_row)
 }
 
@@ -426,13 +418,13 @@ mod tests {
     #[test]
     fn ordering_forward() {
         let sel = make_sel(2, 5, 4, 10);
-        assert_eq!(sel.ordered(), ((2, 5), (4, 10)));
+        assert_eq!(sel.ordered_cells(), ((2, 5), (4, 10)));
     }
 
     #[test]
     fn ordering_backward() {
         let sel = make_sel(4, 10, 2, 5);
-        assert_eq!(sel.ordered(), ((2, 5), (4, 10)));
+        assert_eq!(sel.ordered_cells(), ((2, 5), (4, 10)));
     }
 
     #[test]
