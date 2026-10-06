@@ -234,8 +234,6 @@ impl App {
                         crate::detect::AgentState::Unknown,
                         false,
                         false,
-                        false,
-                        false,
                         Instant::now(),
                     );
                 }

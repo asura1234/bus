@@ -1200,7 +1200,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Working,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -1209,7 +1208,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -1293,7 +1291,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Working,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -1302,7 +1299,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -1418,7 +1414,6 @@ mod tests {
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
                 visible_blocker: false,
-                visible_working: false,
                 process_exited: true,
                 observed_at: std::time::Instant::now(),
             });
@@ -1472,7 +1467,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: true,
             observed_at,
         });
@@ -1652,7 +1646,6 @@ mod tests {
             agent: Some(crate::detect::Agent::OpenCode),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: true,
             observed_at: std::time::Instant::now(),
         });
@@ -1716,7 +1709,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Working,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -1736,7 +1728,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });

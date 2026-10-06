@@ -373,8 +373,6 @@ fn restore_tab(
                     AgentState::Idle,
                     false,
                     false,
-                    false,
-                    false,
                     std::time::Instant::now(),
                 );
             }

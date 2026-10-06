@@ -235,7 +235,6 @@ async fn publish_state_changed_event(
     agent: Option<Agent>,
     state: AgentState,
     visible_blocker: bool,
-    visible_working: bool,
     process_exited: bool,
     observed_at: std::time::Instant,
 ) {
@@ -248,7 +247,6 @@ async fn publish_state_changed_event(
             agent,
             state,
             visible_blocker,
-            visible_working,
             process_exited,
             observed_at,
         })
@@ -324,7 +322,6 @@ async fn apply_agent_detection_publish_update(
         agent,
         update.state,
         update.visible_blocker,
-        update.visible_working,
         update.process_exited,
         observed_at,
     )
@@ -4505,7 +4502,6 @@ mod tests {
             AgentState::Idle,
             false,
             false,
-            false,
             std::time::Instant::now(),
         );
         tokio::pin!(publish);
@@ -4542,7 +4538,6 @@ mod tests {
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
                 visible_blocker: false,
-                visible_working: false,
                 process_exited: false,
                 observed_at: _,
             } if delivered_pane == pane_id

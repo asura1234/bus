@@ -1377,7 +1377,6 @@ impl AppState {
                 agent,
                 state,
                 visible_blocker,
-                visible_working,
                 process_exited,
                 observed_at,
             } => self
@@ -1386,8 +1385,6 @@ impl AppState {
                         agent,
                         state,
                         visible_blocker,
-                        false,
-                        visible_working,
                         process_exited,
                         observed_at,
                     ))
@@ -1647,8 +1644,6 @@ impl AppState {
                 Some(terminal.set_detected_state_with_screen_signals_at(
                     agent,
                     AgentState::Idle,
-                    false,
-                    true,
                     false,
                     true,
                     observed_at,
@@ -2411,7 +2406,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Working,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2449,7 +2443,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2482,7 +2475,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2504,7 +2496,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2525,7 +2516,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Unknown,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2534,7 +2524,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2561,7 +2550,6 @@ mod tests {
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
                 visible_blocker: false,
-                visible_working: false,
                 process_exited: false,
                 observed_at: Instant::now(),
             })
@@ -2580,7 +2568,6 @@ mod tests {
                 agent: Some(Agent::Pi),
                 state: agent_state,
                 visible_blocker: agent_state == AgentState::Blocked,
-                visible_working: agent_state == AgentState::Working,
                 process_exited: false,
                 observed_at: Instant::now(),
             });
@@ -2591,7 +2578,6 @@ mod tests {
                 agent: Some(Agent::Pi),
                 state: AgentState::Idle,
                 visible_blocker: false,
-                visible_working: false,
                 process_exited: false,
                 observed_at: Instant::now(),
             })
@@ -2615,7 +2601,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Working,
             visible_blocker: false,
-            visible_working: true,
             process_exited: false,
             observed_at: Instant::now(),
         });
@@ -2625,7 +2610,6 @@ mod tests {
                 agent: Some(Agent::Codex),
                 state: AgentState::Idle,
                 visible_blocker: false,
-                visible_working: false,
                 process_exited: true,
                 observed_at: Instant::now(),
             })
@@ -2694,7 +2678,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2718,7 +2701,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2750,7 +2732,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2761,7 +2742,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Working,
             visible_blocker: false,
-            visible_working: true,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2784,7 +2764,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2809,7 +2788,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2836,7 +2814,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2892,7 +2869,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2910,7 +2886,6 @@ mod tests {
             agent: Some(Agent::Codex),
             state: AgentState::Blocked,
             visible_blocker: true,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2940,7 +2915,6 @@ mod tests {
             agent: Some(Agent::Claude),
             state: AgentState::Working,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2963,7 +2937,6 @@ mod tests {
             agent: Some(Agent::Claude),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -2989,7 +2962,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Working,
             visible_blocker: false,
-            visible_working: true,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -3049,7 +3021,6 @@ mod tests {
             agent: Some(Agent::Devin),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -3181,7 +3152,6 @@ mod tests {
             agent: Some(Agent::Droid),
             state: AgentState::Idle,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -3210,7 +3180,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -3236,7 +3205,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -3259,7 +3227,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
@@ -3280,7 +3247,6 @@ mod tests {
             agent: Some(Agent::Pi),
             state: AgentState::Blocked,
             visible_blocker: false,
-            visible_working: false,
             process_exited: false,
             observed_at: std::time::Instant::now(),
         });
