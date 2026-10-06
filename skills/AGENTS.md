@@ -17,13 +17,15 @@ Judgment principles and formats shared across skills live in `docs/guides/`, sha
 - The Bus fork intentionally has no root `AGENTS.md` or root `CLAUDE.md`.
 - The Bus integration base is `origin/master`. Never infer a base from a remote's symbolic HEAD.
 - Use lowercase Conventional Commit subjects accepted by `scripts/conventional_commits.py`.
-- Use `just test-one <filter>` for focused Rust iteration and `just ci` for the full pre-PR gate. `gate-and-fix` preflights `just` and `cargo-nextest`; when either is unavailable, its Bus adapter expands `just ci` into the corresponding direct Cargo, Python, and Bun gates and records every exact command in the round artifact.
+- Use `just test-one <filter>` for focused Rust iteration and `just ci` for the full pre-PR gate. `gate-and-fix` preflights `just` and `cargo-nextest`; when either is unavailable, its Bus adapter expands `just ci` into the corresponding direct Cargo and Python gates and records every exact command in the round artifact.
 - Keep skill entrypoints under 250 lines and fail closed around destructive or publishing operations.
 - Only `skills/pr/scripts/pr_goal_context.py` produces review Goal/Non-goals locks.
 
 ## Installation and verification
 
 Discovery links are derived views: `.agents/skills/<skill>` (Codex and Cursor) and `.claude/skills/<skill>` (Claude) are directory symlinks to `../../skills/<skill>`; derived directories must not maintain content directly. Edit only the canonical copy here.
+
+`workflow-create` is the exception: it has no discovery links, because `src/bus/orchestrator.rs` embeds its `SKILL.md` into the Bus binary and writes it to `<BUS_DATA_DIR>/docs/workflow-create.md` for MASTER orchestrators. Editing it changes what Bus ships.
 
 The final available set in a session is determined only by the injected `Available skills`.
 
@@ -48,6 +50,6 @@ Each skill's full trigger conditions and usage are defined by the frontmatter `d
 | `review-pr` | Iterative review of the committed diff excluding plan documents; behavior suspicions may be proven by writing a failing test, other dimensions are read-only |
 | `address-review-comments` | Author-side disposition of the review artifacts above: mechanical sanitization, root-cause dedup, per-item verification, then APPLY / REJECT / FLAG / HOUSEKEEPING |
 | `update-docs` | Recursively audit and update the `AGENTS.md` files affected by Git change leaves (including `CLAUDE.md` symlinks); no commit, no push |
-| `workflow-create` | Draft or revise a Bus room's `workflow.md` with the human (Bus-only) |
+| `workflow-create` | Draft or revise a Bus room's `workflow.md` with the human; shipped inside Bus as an orchestrator doc, not linked for repo agents |
 
 The review skills (`review-plan` / `review-pr` / `address-review-comments`) share `docs/guides/review-format.md`, `cli_extensions/review_artifact*.py`, and `cli_extensions/review_round_common.py`: the agent writes the artifact per the format, a script validates it fail-closed, and a script then deterministically renders it into the chat response; the lane ownership, round claiming, and triage ledger discovery of `/review-plan` and `/review-pr` are implemented once, in `review_round_common.py`. When changing this chain, verify these skills together.
