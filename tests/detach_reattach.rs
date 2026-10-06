@@ -88,13 +88,11 @@ fn spawn_server(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    client_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
     spawn_server_with_config(
         config_home,
         runtime_dir,
         api_socket_path,
-        client_socket_path,
         "onboarding = false\n",
     )
 }
@@ -103,7 +101,6 @@ fn spawn_server_with_config(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    _client_socket_path: &PathBuf,
     config: &str,
 ) -> SpawnedHerdr {
     fs::create_dir_all(config_home.join("herdr")).unwrap();
@@ -296,7 +293,7 @@ fn explicit_detach_message_causes_clean_disconnect() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -355,7 +352,7 @@ fn reattach_after_detach_shows_current_state() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -446,7 +443,7 @@ fn processes_survive_during_and_after_detach() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -533,7 +530,7 @@ fn server_persists_after_client_connection_drop() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -581,13 +578,11 @@ fn pane_created_without_client_uses_configured_headless_size() {
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
     let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
 
     let spawned = spawn_server_with_config(
         &config_home,
         &runtime_dir,
         &api_socket,
-        &client_socket,
         CUSTOM_HEADLESS_SIZE_CONFIG,
     );
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -626,7 +621,6 @@ fn pane_created_after_detach_uses_configured_headless_size() {
         &config_home,
         &runtime_dir,
         &api_socket,
-        &client_socket,
         CUSTOM_HEADLESS_SIZE_CONFIG,
     );
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -693,7 +687,7 @@ fn detached_output_preserves_last_attached_pty_size() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -761,7 +755,7 @@ fn output_accumulated_while_detached_visible_on_reattach() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 

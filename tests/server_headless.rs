@@ -98,12 +98,7 @@ fn wait_for_file(path: &Path, timeout: Duration) {
     panic!("socket did not accept connections at {}", path.display());
 }
 
-fn spawn_server(
-    config_home: &Path,
-    runtime_dir: &Path,
-    api_socket_path: &Path,
-    _client_socket_path: &Path,
-) -> SpawnedHerdr {
+fn spawn_server(config_home: &Path, runtime_dir: &Path, api_socket_path: &Path) -> SpawnedHerdr {
     fs::create_dir_all(config_home.join("herdr")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
@@ -169,7 +164,7 @@ fn server_creates_both_sockets() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
 
     // Wait for both sockets to appear.
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -200,9 +195,8 @@ fn server_starts_without_terminal() {
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
     let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
 
     // Wait for the API socket to appear — proves the server started.
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -223,9 +217,8 @@ fn server_api_responds_to_ping() {
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
     let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
 
     // Ping the API socket.
@@ -247,7 +240,7 @@ fn server_removes_client_socket_on_exit() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_file(&client_socket, Duration::from_secs(10));
 
@@ -290,7 +283,7 @@ fn server_cleans_up_stale_client_socket() {
     }
 
     // Now start the server — it should clean up the stale socket.
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
 
     // The API should work.
@@ -312,7 +305,7 @@ fn server_persists_after_client_disconnect() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_file(&client_socket, Duration::from_secs(10));
 
@@ -342,10 +335,9 @@ fn duplicate_server_start_fails_gracefully() {
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
     let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
 
     // Start the first server.
-    let spawned1 = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned1 = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
 
     // Try to start a second server — it should fail.
@@ -393,7 +385,7 @@ fn client_handshake_succeeds() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_file(&client_socket, Duration::from_secs(10));
 
@@ -426,7 +418,7 @@ fn client_handshake_rejects_incompatible_version() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_file(&client_socket, Duration::from_secs(10));
 
@@ -457,7 +449,7 @@ fn client_handshake_clamps_small_terminal_size() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_file(&client_socket, Duration::from_secs(10));
 
@@ -489,7 +481,7 @@ fn no_hello_client_closed_within_five_seconds() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_file(&client_socket, Duration::from_secs(10));
 

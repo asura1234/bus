@@ -20,7 +20,6 @@ pub const SERVER_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
 pub const SERVER_MESSAGE_PANE_SURFACE: u32 = 13;
 pub const SERVER_MESSAGE_SEMANTIC_NOTIFICATION: u32 = 14;
 pub const SERVER_MESSAGE_PANE_SURFACE_PATCH: u32 = 19;
-const CLIENT_MESSAGE_CLIENT_SHELL_PANE_INPUT: u32 = 13;
 const CLIENT_MESSAGE_CLIENT_SHELL_FOCUS: u32 = 17;
 const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 19;
 
@@ -69,21 +68,6 @@ pub fn unregister_runtime_dir(path: &Path) {
     }
 }
 
-#[cfg(target_os = "linux")]
-pub fn herdr_server_pids_for_runtime_dir(runtime_dir: &Path) -> std::io::Result<Vec<u32>> {
-    let mut pids = Vec::new();
-    for pid in iter_worktree_server_pids()? {
-        let Some(process_runtime_dir) = process_runtime_dir(pid)? else {
-            continue;
-        };
-        if process_runtime_dir == runtime_dir {
-            pids.push(pid);
-        }
-    }
-    pids.sort_unstable();
-    Ok(pids)
-}
-
 pub fn cleanup_test_base(base: &Path) {
     let runtime_dir = base.join("runtime");
     let runtime_dirs = HashSet::from([runtime_dir.clone()]);
@@ -102,17 +86,6 @@ pub fn wait_for_socket(path: &Path, timeout: Duration) {
         thread::sleep(Duration::from_millis(25));
     }
     panic!("socket did not appear at {}", path.display());
-}
-
-pub fn wait_for_file(path: &Path, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if path.exists() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-    panic!("file did not appear at {}", path.display());
 }
 
 fn encode_varint_u32(v: u32) -> Vec<u8> {
@@ -362,30 +335,6 @@ pub fn read_server_message(stream: &mut UnixStream) -> Result<(u32, Vec<u8>), St
 
     let (variant, consumed) = decode_varint_u32(&payload, 0)?;
     Ok((variant, payload[consumed..].to_vec()))
-}
-
-pub fn send_client_shell_shift_enter(stream: &mut UnixStream, pane_id: &str) -> Result<(), String> {
-    let mut payload = encode_varint_u32(CLIENT_MESSAGE_CLIENT_SHELL_PANE_INPUT);
-    payload.extend_from_slice(&encode_varint_u32(pane_id.len() as u32));
-    payload.extend_from_slice(pane_id.as_bytes());
-    payload.extend_from_slice(&encode_varint_u32(1)); // one pane input event
-    payload.extend_from_slice(&encode_varint_u32(0)); // Key
-    payload.extend_from_slice(&encode_varint_u32(1)); // Enter
-    payload.push(1); // Shift
-    payload.extend_from_slice(&encode_varint_u32(0)); // Press
-    payload.extend_from_slice(&encode_varint_u16(1));
-    payload.push(0); // no shifted codepoint
-    payload.push(0); // no generated text
-    payload.push(0); // does not track release
-    payload.push(0); // no physical key id
-    payload.push(0); // no Windows key record
-
-    stream
-        .write_all(&frame_message(&payload))
-        .map_err(|e| format!("write client shell key: {e}"))?;
-    stream
-        .flush()
-        .map_err(|e| format!("flush client shell key: {e}"))
 }
 
 pub fn send_client_shell_focus(stream: &mut UnixStream, focused: bool) -> Result<(), String> {
