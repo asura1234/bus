@@ -103,7 +103,7 @@ def test_gh_runs_in_the_selected_repository(monkeypatch, tmp_path) -> None:
     assert seen and all(c == str(tmp_path) for c in seen), seen
 
 
-def test_adjudication_counts_must_be_supplied(monkeypatch) -> None:
+def test_adjudication_counts_must_be_supplied() -> None:
     """APPLY / REJECT have no source of truth on GitHub and can only be passed in by the main agent; when missing, exit instead of guessing 0."""
 
     with pytest.raises(SystemExit):
