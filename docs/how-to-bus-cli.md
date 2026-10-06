@@ -295,9 +295,11 @@ bus state | jq '.result.settings'
 - Each room has `id`, `name`, `kind` (`master` or `work`), `notes`,
   `unread_count`, `sound`, `deletion_pending`, and `orchestrator`: the ID of
   the MASTER agent orchestrating it, or `null`.
-- Each agent includes `room_id`, `status`, `details_disclosed`, `orchestrates`
-  (the work room it orchestrates, or `null`), and `compactions`: `count` and
-  `last_at_ms` of the provider context compactions Bus observed for that agent.
+- Each agent includes `room_id`, `status`, `dialog`, `details_disclosed`,
+  `orchestrates` (the work room it orchestrates, or `null`), and `compactions`:
+  `count` and `last_at_ms` of the provider context compactions Bus observed for
+  that agent. `dialog` is `true` while a numbered choice dialog waits for an
+  answer; see [Answer an agent's dialog](#answer-an-agents-dialog).
 - `usage` has one entry per provider: `claude`, `codex`, and `cursor`. An
   `observed` entry reports `five_hour` and `weekly` windows with
   `used_percent`, `resets_at`, and `window_minutes`, plus `read_at_ms` and
@@ -366,24 +368,10 @@ An agent that is still `launching` can be read too, for example to see a
 provider prompt such as Claude's "Do you trust this folder?" dialog that keeps
 it from becoming ready. Its provider session has not started yet, so Bus checks
 everything except the session and reports `runtime.session_verified: false`.
-The CLI cannot answer such a prompt; use the terminal in the UI. Use terminal output as evidence for human or model judgment, never as a
-substitute for message settlement or an automatic workflow signal.
-
-When a managed coding agent is visibly waiting on a safe permission prompt,
-observe the exact factual fingerprint before approving it once:
-
-```sh
-bus agent permission "$agent_id"
-bus agent approve-once "$agent_id" \
-  --fingerprint "$fingerprint" \
-  --response allow-once
-```
-
-The generic forms are `agent permission AGENT` and
-`agent approve-once AGENT --fingerprint FINGERPRINT --response allow-once`.
-Approval is atomic, allowlisted, single-use, and identity-bound; stale, unknown,
-or risky prompts send no keys. This surface does not expose arbitrary keystrokes
-or grant reusable shell authority.
+Answer such a prompt as described in
+[Answer an agent's dialog](#answer-an-agents-dialog). Use terminal output as
+evidence for human or model judgment, never as a substitute for message
+settlement or an automatic workflow signal.
 
 If current facts prove an idle agent still owns a historically wedged request,
 the Human or an orchestrating agent can invoke the same queue-preserving typed
@@ -413,6 +401,37 @@ terminal draws Kitty graphics (kitty, Ghostty, WezTerm; not inside tmux) and
 `terminal.kitty_graphics` is not turned off. Otherwise, or when the file is
 missing or unreadable, only the file name shows. A thumbnail draws only while
 it is fully in view and no dialog covers the history.
+
+## Answer an agent's dialog
+
+Agents run with their normal settings, so they stop at numbered choice dialogs:
+permission prompts, folder-trust prompts, and question panels such as Claude
+Code's `❯ 1. Yes / 2. Yes, and don't ask again / 3. No` or Codex's
+`› 1. Yes, proceed (y)`. `bus state` marks such an agent `dialog: true`.
+Observe the dialog, decide, then choose one option with the fingerprint you
+observed:
+
+```sh
+bus agent dialog "$agent_id"
+bus agent choose "$agent_id" --option 2 --fingerprint "$fingerprint"
+```
+
+`agent dialog AGENT` returns `dialog` with `text` (the question above the
+options), `options` (`number`, `label`, `selected`), and `hint` (the key hint
+below them), plus a `fingerprint`. Both are `null` when no dialog is visible.
+It works while the agent is still launching, before its session starts.
+
+`agent choose AGENT --option N --fingerprint FINGERPRINT` sends keys only while
+the agent's launch, terminal, pane, and session (once bound) are unchanged and
+its screen still shows exactly the observed dialog, including which option is
+selected. It moves the selection with arrow keys from the selected option and
+presses Enter, or presses the digit when the dialog's hint advertises number
+keys. A fingerprint is spent before any key is sent, so it answers at most one
+dialog; observe again for a fresh one. The result lists the `keys` sent and an
+`outcome` from watching the screen for up to two seconds: `closed`, `replaced`
+(another dialog appeared), `selection_moved` (the selection changed but the
+dialog stayed), or `unchanged`. Nothing is sent when no dialog is visible, the
+option does not exist, or the selected option cannot be seen.
 
 ## Build reliable automation
 
@@ -565,8 +584,7 @@ normally, with these changes:
   case, is renamed once to `Master (old)` and keeps all its data.
 - A room's Room Brief goal and non-goals are appended once to its notes.
 - The orchestrator's own transcript, workflow drafts, and capability grants are
-  dropped, because those features no longer exist. Approve-once fingerprints it
-  already sent stay single-use.
+  dropped, because those features no longer exist.
 - `<root>/private/orchestrator-credentials.json` is no longer read. Delete it
   yourself if you no longer need the API key it holds.
 

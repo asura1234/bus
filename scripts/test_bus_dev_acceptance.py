@@ -85,11 +85,9 @@ class AcceptanceObservationTests(unittest.TestCase):
         self.assertIn("agent read AGENT --source visible", guide)
         self.assertIn("agent read AGENT --source recent --lines N", guide)
         self.assertNotIn("returns up to 400 recent lines", guide)
-        self.assertIn("agent permission AGENT", guide)
-        self.assertIn(
-            "agent approve-once AGENT --fingerprint FINGERPRINT --response allow-once",
-            guide,
-        )
+        self.assertIn("agent dialog AGENT", guide)
+        self.assertIn("agent choose AGENT --option N --fingerprint FINGERPRINT", guide)
+        self.assertNotIn("approve-once", guide)
         self.assertIn("request recover REQUEST_ID --confirm", guide)
         self.assertIn("agent orchestrate AGENT (--room ROOM | --none)", guide)
         self.assertIn("agent add ... --orchestrates ROOM", guide)
