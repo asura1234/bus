@@ -44,8 +44,6 @@ pub struct SidebarTokenColor {
     b: u8,
 }
 
-impl SidebarTokenColor {}
-
 impl Serialize for SidebarTokenColor {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -140,8 +138,6 @@ impl AgentSidebarToken {
         }
     }
 }
-
-impl SpaceSidebarToken {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -401,8 +397,6 @@ pub struct AgentsSidebarConfig {
     pub rows_by_agent: BTreeMap<String, AgentSidebarRows>,
     pub row_gap: u16,
 }
-
-impl AgentsSidebarConfig {}
 
 impl Default for AgentsSidebarConfig {
     fn default() -> Self {

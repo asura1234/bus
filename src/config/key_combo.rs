@@ -77,7 +77,7 @@ pub(crate) fn parse_key_combo(s: &str) -> Option<KeyCombo> {
         _ => return None,
     };
 
-    Some(normalize_key_combo((code, modifiers)))
+    Some((code, modifiers))
 }
 
 fn single_key_char(s: &str) -> Option<char> {
@@ -88,16 +88,6 @@ fn single_key_char(s: &str) -> Option<char> {
     } else {
         None
     }
-}
-
-fn normalize_key_combo((mut code, mut modifiers): KeyCombo) -> KeyCombo {
-    if matches!(code, KeyCode::Tab) && modifiers.contains(KeyModifiers::SHIFT) {
-        code = KeyCode::BackTab;
-        modifiers.remove(KeyModifiers::SHIFT);
-    } else if matches!(code, KeyCode::BackTab) {
-        modifiers.remove(KeyModifiers::SHIFT);
-    }
-    (code, modifiers)
 }
 
 #[cfg(test)]
