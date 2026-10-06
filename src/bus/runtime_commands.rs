@@ -51,15 +51,6 @@ impl Worker {
             BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),
             BusCommand::SetDraftText(id, text) => state.set_draft_text(id, &text),
             BusCommand::SetRecipients(id, recipients) => state.set_draft_recipients(id, recipients),
-            BusCommand::Quote(room, agent) => {
-                let text = state
-                    .room(room)
-                    .and_then(|room| room.latest_replies.get(&agent))
-                    .ok_or("No reply to quote")?
-                    .text
-                    .clone();
-                state.quote_reply(room, agent, &text)
-            }
             BusCommand::AttachFile(room, path) => {
                 let home = std::env::home_dir().ok_or("Home directory unavailable")?;
                 let path = crate::bus::files::validate_attachment(&path, &home)

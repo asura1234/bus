@@ -194,7 +194,6 @@ pub(super) fn target_exists(command: &BusCommand, state: &BusState) -> bool {
         | BusCommand::SetNotes(id, _)
         | BusCommand::SetDraftText(id, _)
         | BusCommand::SetRecipients(id, _)
-        | BusCommand::Quote(id, _)
         | BusCommand::AttachFile(id, _)
         | BusCommand::RemoveFile(id, _)
         | BusCommand::Submit(id)

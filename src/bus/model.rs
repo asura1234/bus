@@ -1253,35 +1253,6 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn quote_reply(
-        &mut self,
-        room: RoomId,
-        agent: AgentId,
-        text: &str,
-    ) -> Result<(), ModelError> {
-        let agent = self
-            .agents
-            .get(&agent)
-            .ok_or(ModelError::UnknownAgent(agent))?;
-        if agent.room_id != room {
-            return Err(ModelError::AgentOutsideRoom(agent.id));
-        }
-        let draft = &mut self
-            .rooms
-            .get_mut(&room)
-            .ok_or(ModelError::UnknownRoom(room))?
-            .draft;
-        if !draft.text.is_empty() && !draft.text.ends_with('\n') {
-            draft.text.push('\n');
-        }
-        let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-        draft.text.push_str(&agent.name);
-        draft.text.push_str(": \"");
-        draft.text.push_str(&escaped);
-        draft.text.push_str("\"\n");
-        Ok(())
-    }
-
     pub(crate) fn attach_file(&mut self, room: RoomId, path: PathBuf) -> Result<(), ModelError> {
         let files = &mut self
             .rooms
@@ -3225,30 +3196,6 @@ mod tests {
             "second draft"
         );
         assert!(state.agent(agent).expect("agent").details_disclosed);
-    }
-
-    #[test]
-    fn quote_escapes_quotes_and_backslashes_preserves_newlines_and_routing() {
-        let (mut state, room, codex, claude) = state_with_room_and_agents();
-        state
-            .set_draft_text(room, "existing\n")
-            .expect("existing draft");
-        state
-            .set_draft_recipients(room, [claude])
-            .expect("recipient");
-        state
-            .quote_reply(room, codex, "line 1 with @reviewer\n\"quoted\" \\ path")
-            .expect("quote");
-
-        let draft = &state.room(room).expect("room").draft;
-        assert_eq!(
-            draft.text,
-            "existing\nbuilder: \"line 1 with @reviewer\n\\\"quoted\\\" \\\\ path\"\n"
-        );
-        assert_eq!(
-            draft.recipient_ids.iter().copied().collect::<Vec<_>>(),
-            [claude]
-        );
     }
 
     #[test]
