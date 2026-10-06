@@ -113,6 +113,27 @@ def commit_files(repo: Path, sha: str) -> list[str]:
     return out.splitlines()
 
 
+def commit_numstat(repo: Path, sha: str) -> dict[str, tuple[int, int]]:
+    out = git(repo, "diff-tree", "--no-commit-id", "--numstat", "-r", sha)
+    stats: dict[str, tuple[int, int]] = {}
+    for line in out.splitlines():
+        added, deleted, path = line.split("\t", 2)
+        # Binary files report `-` in numstat: count the file, not lines.
+        stats[path] = (int(added) if added.isdigit() else 0, int(deleted) if deleted.isdigit() else 0)
+    return stats
+
+
+def part_size(repo: Path, part: Part) -> tuple[list[str], int, int]:
+    files: set[str] = set()
+    added = deleted = 0
+    for sha in part.commits:
+        for path, (plus, minus) in commit_numstat(repo, sha).items():
+            files.add(path)
+            added += plus
+            deleted += minus
+    return sorted(files), added, deleted
+
+
 def synthetic_commit(repo: Path, tree: str, parents: list[str], message: str) -> str:
     args = ["commit-tree", tree, "-m", message]
     for parent in parents:
@@ -331,21 +352,30 @@ def cmd_render(repo: Path, plan: Plan) -> str:
         f"Shape: {shape(plan)} ({len(order)} parts, multi-parent policy `{plan.multi_parent}`)",
         f"Source: `{plan.source_branch}` @ {plan.source_sha[:12]}; base: `{plan.base_ref}` @ {plan.base_sha[:12]}",
         "",
-        "| # | Part | Branch | Base | Depends on | Commits | Files |",
-        "|---|---|---|---|---|---|---|",
+        "| # | Part | Branch | Base | Depends on | Commits | Files | Lines |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     shared = shared_commits(plan)
+    file_lists: list[str] = []
     for index, part in enumerate(order, 1):
-        files = sorted({f for sha in part.commits for f in commit_files(repo, sha)})
+        files, added, deleted = part_size(repo, part)
         commits = ", ".join(sha[:9] + ("*" if sha in shared else "") for sha in part.commits)
         deps = ", ".join(part.depends_on) or "—"
+        approx = "~" if any(sha in shared for sha in part.commits) else ""
         lines.append(
             f"| {index} | {part.id}: {part.title} | `{part.branch}` | `{base_label(plan, part)}` "
-            f"| {deps} | {commits} | {', '.join(files)} |"
+            f"| {deps} | {commits} | {approx}{len(files)} | {approx}+{added} / -{deleted} |"
         )
+        file_lists.append(f"- {part.id}: {', '.join(files)}")
+    total = git(repo, "diff", "--shortstat", f"{plan.base_sha}...{plan.source_sha}").strip()
+    lines += ["", f"Source total: {total or 'no changes'}"]
     if shared:
         lines.append("")
-        lines.append("`*` commit shared by several parts: split by hunk, manual reconstruction.")
+        lines.append(
+            "`*` commit shared by several parts: split by hunk, manual reconstruction. "
+            "`~` sizes count the whole shared commit, so they overestimate that part."
+        )
+    lines += ["", "Files per part:", *file_lists]
     if plan.left_on_source:
         lines.append("")
         lines.append("Left on source: " + ", ".join(sha[:9] for sha in plan.left_on_source))

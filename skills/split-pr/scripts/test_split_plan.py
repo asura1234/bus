@@ -219,6 +219,12 @@ class ValidationTest(ScenarioTest):
         out = self.repo.run("render", self.write_plan(self.mixed()))
         self.assertIn("Shape: mixed", out)
         self.assertIn("| 4 | d: feat: part d | `split/d` | `merge(split/a, split/b)` | a, b |", out)
+        self.assertIn("| Files | Lines |", out)
+        self.assertRegex(out, r"\| 1 \| a: .* \| 1 \| \+5 / -0 \|")
+        self.assertRegex(out, r"\| 4 \| d: .* \| 2 \| \+2 / -2 \|")
+        self.assertIn("- d: a.txt, b.txt", out)
+        self.assertIn("Source total: ", out)
+        self.assertIn("Files per part:", out)
         self.assertIn("    d --> b", out)
         self.assertIn("    a --> base", out)
 

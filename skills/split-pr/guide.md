@@ -6,6 +6,20 @@ A part is one independently valuable purpose with its own tests. Group by
 purpose, not directory. A purpose that cannot be reviewed without another part's
 code is not wrong; it is a dependency, and the plan says so explicitly.
 
+## Part size
+
+Split by purpose first. Size decides whether a purpose is still too big to
+review: a smaller review surface exposes more issues, and reviewers (Codex
+especially) miss things in large diffs. `H render` reports each part's file
+count and +/- lines so the user can see that. Treat the numbers as rough: a
+part with a hunk-split commit (`~`) counts that whole commit.
+
+When a part is large (tens of files or thousands of changed lines), offer a
+further split into sub-purposes that are each independently valuable and
+tested, usually as a stack: model and contract first, then the consumers, then
+cleanup. The user decides; never split a purpose into pieces that cannot be
+reviewed or verified alone just to hit a number.
+
 ## Dependencies are proven, not guessed
 
 Part X depends on part Y when X modifies code Y introduces, or relies on it

@@ -64,7 +64,9 @@ IF a part can only become independent through a redesign:
 
 ========== CONFIRM ==========
 Run H render PLAN and show its output verbatim: shape, order, base, depends on,
-commits, files, and the mermaid graph. For a part with two or more parents,
+commits, file count and +/- lines per part, the source total, files per part,
+and the mermaid graph. For any part that is still large, offer splitting it
+further by sub-purpose (guide.md "Part size"). For a part with two or more parents,
 state the policy and its trade-off (guide.md), and offer linearizing when it
 fits. Wait for the user's confirmation. Any change: edit PLAN, rerun check,
 probe, render, and confirm again.
