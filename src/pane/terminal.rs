@@ -7,8 +7,6 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::{layout::Rect, Frame};
-#[cfg(any(unix, test))]
-use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 use unicode_width::UnicodeWidthStr;
@@ -125,37 +123,6 @@ fn decscusr_cursor_shape(style: crate::ghostty::CursorVisualStyle, blinking: boo
         (crate::ghostty::CursorVisualStyle::Underline, false) => 4,
         (crate::ghostty::CursorVisualStyle::Bar, true) => 5,
         (crate::ghostty::CursorVisualStyle::Bar, false) => 6,
-    }
-}
-
-#[cfg(any(unix, test))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InputState {
-    pub alternate_screen: bool,
-    pub application_cursor: bool,
-    pub bracketed_paste: bool,
-    pub focus_reporting: bool,
-    pub mouse_protocol_mode: crate::input::MouseProtocolMode,
-    pub mouse_protocol_encoding: crate::input::MouseProtocolEncoding,
-    pub mouse_alternate_scroll: bool,
-    #[serde(default)]
-    pub modify_other_keys: bool,
-    #[serde(default)]
-    pub color_scheme_reporting: bool,
-}
-
-#[cfg(test)]
-impl InputState {
-    pub fn mouse_reporting_enabled(self) -> bool {
-        self.mouse_protocol_mode.reporting_enabled()
-    }
-
-    pub fn plain_page_keys_use_host_scrollback(self) -> bool {
-        !self.alternate_screen
-            && !self.mouse_reporting_enabled()
-            // Bracketed paste distinguishes zsh's line editor (where it's on)
-            // from e.g. less -X (where it's off).
-            && (!self.application_cursor || self.bracketed_paste)
     }
 }
 
@@ -419,11 +386,6 @@ impl PaneTerminal {
         Some((RetainedTextBuffer::new_search(cols, rows, 0), active_screen))
     }
 
-    #[cfg(any(unix, test))]
-    pub fn input_state(&self) -> Option<InputState> {
-        self.ghostty.input_state()
-    }
-
     pub fn bracketed_paste_enabled(&self) -> bool {
         self.ghostty.bracketed_paste_enabled()
     }
@@ -595,13 +557,6 @@ impl PaneTerminal {
         fallback: crate::input::KeyboardProtocol,
     ) -> crate::input::KeyboardProtocol {
         self.ghostty.keyboard_protocol().unwrap_or(fallback)
-    }
-
-    #[cfg(unix)]
-    pub fn kitty_keyboard_state_ansi(&self) -> Option<String> {
-        self.ghostty
-            .kitty_keyboard_state_ansi()
-            .filter(|ansi| !ansi.is_empty())
     }
 
     pub fn encode_terminal_key(
@@ -1275,13 +1230,6 @@ impl GhosttyPaneTerminal {
             .and_then(|core| core.agent_osc_state.terminal_title().map(str::to_string))
     }
 
-    #[cfg(unix)]
-    pub fn seed_terminal_title(&self, title: Option<String>) {
-        if let Ok(mut core) = self.core.lock() {
-            core.agent_osc_state.seed_terminal_title(title);
-        }
-    }
-
     /// Returns the latest OSC 0/2 title retained for agent detection, or `""`
     /// if no title has been seen or the last update was an empty clear.
     pub fn agent_osc_title(&self) -> String {
@@ -1554,93 +1502,6 @@ impl GhosttyPaneTerminal {
         }
     }
 
-    #[cfg(unix)]
-    pub fn seed_handoff_input_state(&self, input_state: InputState) {
-        let Ok(mut core) = self.core.lock() else {
-            return;
-        };
-
-        if input_state.alternate_screen {
-            core.terminal.write(b"\x1b[?1049h");
-        }
-        let _ = core.terminal.mode_set(
-            crate::ghostty::MODE_APPLICATION_CURSOR_KEYS,
-            input_state.application_cursor,
-        );
-        let _ = core.terminal.mode_set(
-            crate::ghostty::MODE_BRACKETED_PASTE,
-            input_state.bracketed_paste,
-        );
-        let _ = core.terminal.mode_set(
-            crate::ghostty::MODE_FOCUS_EVENT,
-            input_state.focus_reporting,
-        );
-        let _ = core.terminal.mode_set(
-            crate::ghostty::MODE_MOUSE_ALTERNATE_SCROLL,
-            input_state.mouse_alternate_scroll,
-        );
-        let _ = core.terminal.mode_set(
-            crate::ghostty::MODE_COLOR_SCHEME_REPORT,
-            input_state.color_scheme_reporting,
-        );
-
-        core.terminal
-            .write(b"\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l");
-        let mouse_mode_ansi: Option<&[u8]> = match input_state.mouse_protocol_mode {
-            crate::input::MouseProtocolMode::None => None,
-            crate::input::MouseProtocolMode::Press => Some(b"\x1b[?9h"),
-            crate::input::MouseProtocolMode::PressRelease => Some(b"\x1b[?1000h"),
-            crate::input::MouseProtocolMode::ButtonMotion => Some(b"\x1b[?1002h"),
-            crate::input::MouseProtocolMode::AnyMotion => Some(b"\x1b[?1003h"),
-        };
-        if let Some(ansi) = mouse_mode_ansi {
-            core.terminal.write(ansi);
-        }
-
-        core.terminal.write(b"\x1b[?1005l\x1b[?1006l\x1b[?1016l");
-        let mouse_encoding_ansi: Option<&[u8]> = match input_state.mouse_protocol_encoding {
-            crate::input::MouseProtocolEncoding::Default => None,
-            crate::input::MouseProtocolEncoding::Utf8 => Some(b"\x1b[?1005h"),
-            crate::input::MouseProtocolEncoding::Sgr => Some(b"\x1b[?1006h"),
-            crate::input::MouseProtocolEncoding::SgrPixels => Some(b"\x1b[?1016h"),
-        };
-        if let Some(ansi) = mouse_encoding_ansi {
-            core.terminal.write(ansi);
-        }
-
-        if input_state.modify_other_keys {
-            core.kitty_keyboard.observe(b"\x1b[>4;2m");
-            core.terminal.write(b"\x1b[>4;2m");
-        }
-
-        if let Ok(mut key_encoder) = self.key_encoder.lock() {
-            key_encoder.set_from_terminal(&core.terminal);
-        }
-    }
-
-    #[cfg(unix)]
-    pub fn seed_keyboard_protocol_flags(&self, flags: u16) {
-        if flags == 0 {
-            return;
-        }
-        self.seed_keyboard_protocol_ansi(&format!("\x1b[>{flags}u"));
-    }
-
-    #[cfg(unix)]
-    pub fn seed_keyboard_protocol_ansi(&self, ansi: &str) {
-        if ansi.is_empty() {
-            return;
-        }
-        let Ok(mut core) = self.core.lock() else {
-            return;
-        };
-        core.kitty_keyboard.observe(ansi.as_bytes());
-        core.terminal.write(ansi.as_bytes());
-        if let Ok(mut key_encoder) = self.key_encoder.lock() {
-            key_encoder.set_from_terminal(&core.terminal);
-        }
-    }
-
     pub fn resize(
         &self,
         rows: u16,
@@ -1765,12 +1626,6 @@ impl GhosttyPaneTerminal {
         ))
     }
 
-    #[cfg(unix)]
-    pub fn kitty_keyboard_state_ansi(&self) -> Option<String> {
-        let core = self.core.lock().ok()?;
-        core.kitty_keyboard.replay_ansi()
-    }
-
     pub fn bracketed_paste_enabled(&self) -> bool {
         self.mode_enabled(crate::ghostty::MODE_BRACKETED_PASTE)
     }
@@ -1820,79 +1675,6 @@ impl GhosttyPaneTerminal {
     pub fn alternate_screen_active(&self) -> bool {
         self.core.lock().is_ok_and(|core| {
             core.terminal.active_screen().ok() == Some(crate::ghostty::ActiveScreen::Alternate)
-        })
-    }
-
-    // This aggregate snapshot performs multiple terminal queries. Pane-scaled
-    // callers should add a narrow accessor instead.
-    #[cfg(any(unix, test))]
-    pub fn input_state(&self) -> Option<InputState> {
-        let Ok(core) = self.core.lock() else {
-            return None;
-        };
-        let alternate_screen =
-            core.terminal.active_screen().ok()? == crate::ghostty::ActiveScreen::Alternate;
-        let application_cursor = core
-            .terminal
-            .mode_get(crate::ghostty::MODE_APPLICATION_CURSOR_KEYS)
-            .ok()?;
-        let bracketed_paste = core
-            .terminal
-            .mode_get(crate::ghostty::MODE_BRACKETED_PASTE)
-            .ok()?;
-        let focus_reporting = core
-            .terminal
-            .mode_get(crate::ghostty::MODE_FOCUS_EVENT)
-            .ok()?;
-        let mouse_sgr = core
-            .terminal
-            .mode_get(crate::ghostty::MODE_MOUSE_SGR)
-            .ok()?;
-        let mouse_utf8 = core
-            .terminal
-            .mode_get(crate::ghostty::MODE_MOUSE_UTF8)
-            .ok()?;
-        let mouse_sgr_pixels = core
-            .terminal
-            .mode_get(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
-            .ok()?;
-        let mouse_alternate_scroll = core
-            .terminal
-            .mode_get(crate::ghostty::MODE_MOUSE_ALTERNATE_SCROLL)
-            .ok()?;
-        let mouse_protocol_mode = if core.terminal.mode_get(MODE_MOUSE_ANY_MOTION).ok()? {
-            crate::input::MouseProtocolMode::AnyMotion
-        } else if core.terminal.mode_get(MODE_MOUSE_BUTTON_MOTION).ok()? {
-            crate::input::MouseProtocolMode::ButtonMotion
-        } else if core.terminal.mode_get(MODE_MOUSE_PRESS_RELEASE).ok()? {
-            crate::input::MouseProtocolMode::PressRelease
-        } else if core.terminal.mode_get(MODE_MOUSE_X10).ok()? {
-            crate::input::MouseProtocolMode::Press
-        } else {
-            crate::input::MouseProtocolMode::None
-        };
-        let mouse_protocol_encoding = if mouse_sgr_pixels {
-            crate::input::MouseProtocolEncoding::SgrPixels
-        } else if mouse_sgr {
-            crate::input::MouseProtocolEncoding::Sgr
-        } else if mouse_utf8 {
-            crate::input::MouseProtocolEncoding::Utf8
-        } else {
-            crate::input::MouseProtocolEncoding::Default
-        };
-        Some(InputState {
-            alternate_screen,
-            application_cursor,
-            bracketed_paste,
-            focus_reporting,
-            mouse_protocol_mode,
-            mouse_protocol_encoding,
-            mouse_alternate_scroll,
-            modify_other_keys: core.terminal.modify_other_keys_enabled().ok()?,
-            color_scheme_reporting: core
-                .terminal
-                .mode_get(crate::ghostty::MODE_COLOR_SCHEME_REPORT)
-                .ok()?,
         })
     }
 
@@ -3520,22 +3302,6 @@ mod tests {
     use ratatui::{layout::Rect, style::Color};
     use tokio::sync::mpsc;
 
-    #[test]
-    fn plain_page_keys_host_scroll_for_shell_like_decckm_with_bracketed_paste() {
-        assert!(InputState {
-            alternate_screen: false,
-            application_cursor: true,
-            bracketed_paste: true,
-            focus_reporting: false,
-            mouse_protocol_mode: crate::input::MouseProtocolMode::None,
-            mouse_protocol_encoding: crate::input::MouseProtocolEncoding::Default,
-            mouse_alternate_scroll: false,
-            modify_other_keys: false,
-            color_scheme_reporting: false,
-        }
-        .plain_page_keys_use_host_scrollback());
-    }
-
     fn text_cell(text: &str) -> crate::ghostty::ScreenTextCell {
         crate::ghostty::ScreenTextCell {
             wide: crate::ghostty::CellWide::Narrow,
@@ -4663,62 +4429,6 @@ mod tests {
         assert_eq!(encoded, b"\x1bOA");
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn ghostty_seed_handoff_input_state_restores_input_modes() {
-        let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-
-        pane.seed_handoff_input_state(InputState {
-            alternate_screen: true,
-            application_cursor: true,
-            bracketed_paste: true,
-            focus_reporting: true,
-            mouse_protocol_mode: crate::input::MouseProtocolMode::ButtonMotion,
-            mouse_protocol_encoding: crate::input::MouseProtocolEncoding::Sgr,
-            mouse_alternate_scroll: true,
-            modify_other_keys: true,
-            color_scheme_reporting: true,
-        });
-
-        assert_eq!(
-            pane.input_state(),
-            Some(InputState {
-                alternate_screen: true,
-                application_cursor: true,
-                bracketed_paste: true,
-                focus_reporting: true,
-                mouse_protocol_mode: crate::input::MouseProtocolMode::ButtonMotion,
-                mouse_protocol_encoding: crate::input::MouseProtocolEncoding::Sgr,
-                mouse_alternate_scroll: true,
-                modify_other_keys: true,
-                color_scheme_reporting: true,
-            })
-        );
-        assert_eq!(pane.modify_other_keys_level(), 2);
-
-        let encoded = pane.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Up,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
-        assert_eq!(encoded, b"\x1bOA");
-
-        let key = crate::input::parse_terminal_key_sequence("\x1b[13;2u").unwrap();
-        let encoded = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
-        assert_eq!(encoded, b"\x1b[27;2;13~");
-
-        let encoded = pane.encode_mouse_wheel(
-            crossterm::event::MouseEventKind::ScrollUp,
-            crate::input::mouse::Position::Cell { column: 11, row: 9 },
-            crossterm::event::KeyModifiers::empty(),
-        );
-        assert_eq!(encoded.as_deref(), Some(&b"\x1b[<64;12;10M"[..]));
-    }
-
     #[test]
     fn grouped_key_repeats_expand_at_the_destination() {
         let (tx, _rx) = mpsc::channel(4);
@@ -4852,52 +4562,6 @@ mod tests {
             Some(crate::input::KeyboardProtocol::Kitty { flags: 5 })
         );
         assert_eq!(encoded, b"\x1b[13;2u");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ghostty_seed_keyboard_protocol_flags_restores_shift_enter_encoding() {
-        let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-        pane.seed_keyboard_protocol_flags(5);
-
-        let key = crate::input::parse_terminal_key_sequence("\x1b[13;2u").unwrap();
-        let encoded = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
-
-        assert_eq!(
-            pane.keyboard_protocol(),
-            Some(crate::input::KeyboardProtocol::Kitty { flags: 5 })
-        );
-        assert_eq!(encoded, b"\x1b[13;2u");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn ghostty_keyboard_protocol_state_replays_nested_stack() {
-        let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
-        let pane_id = PaneId::from_raw(1);
-        pane.process_pty_bytes(pane_id, 0, b"\x1b[>1u\x1b[>5u", &tx);
-
-        let ansi = pane.kitty_keyboard_state_ansi().unwrap();
-
-        let (restored_tx, _restored_rx) = mpsc::channel(4);
-        let restored_terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
-        let restored = GhosttyPaneTerminal::new(restored_terminal, restored_tx).unwrap();
-        restored.seed_keyboard_protocol_ansi(&ansi);
-        assert_eq!(
-            restored.keyboard_protocol(),
-            Some(crate::input::KeyboardProtocol::Kitty { flags: 5 })
-        );
-
-        let (pop_tx, _pop_rx) = mpsc::channel(4);
-        restored.process_pty_bytes(pane_id, 0, b"\x1b[<u", &pop_tx);
-        assert_eq!(
-            restored.keyboard_protocol(),
-            Some(crate::input::KeyboardProtocol::Kitty { flags: 1 })
-        );
     }
 
     #[cfg(windows)]

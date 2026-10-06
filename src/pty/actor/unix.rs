@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     io::{Read, Write},
-    os::fd::{AsRawFd, OwnedFd, RawFd},
+    os::fd::{AsRawFd, OwnedFd},
     sync::{mpsc as std_mpsc, Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -17,13 +17,11 @@ use crate::pty::fd;
 // normal responsiveness.
 const ACTOR_IDLE_POLL_MS: i32 = 1000;
 const ACTOR_COMMAND_BUFFER: usize = 1024;
-const HANDOFF_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActorState {
     Running,
     Quiesced,
-    Released,
 }
 
 pub(crate) struct PtyReadResult {
@@ -59,7 +57,6 @@ struct PtyResizeRequest {
 #[derive(Default)]
 struct SharedPtyControls {
     resize: Option<PtyResizeRequest>,
-    nudge: Option<PtyResize>,
     terminal_responses: Vec<Bytes>,
 }
 
@@ -82,11 +79,7 @@ enum PtyIoDataCommand {
 }
 
 enum PtyIoControlCommand {
-    BeginHandoff(std_mpsc::Sender<std::io::Result<()>>),
-    DuplicateForHandoff(std_mpsc::Sender<std::io::Result<RawFd>>),
     ForegroundProcessGroup(std_mpsc::Sender<Option<u32>>),
-    RollbackHandoff(std_mpsc::Sender<std::io::Result<()>>),
-    ReleaseAfterCommit(std_mpsc::Sender<std::io::Result<()>>),
     Shutdown,
 }
 
@@ -220,85 +213,6 @@ impl PtyIoActorHandle {
         self.wake_actor();
     }
 
-    pub(crate) fn nudge_child_redraw_after_handoff(
-        &self,
-        rows: u16,
-        cols: u16,
-        cell_width_px: u32,
-        cell_height_px: u32,
-    ) {
-        {
-            let mut controls = self
-                .controls
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            controls.nudge = Some(PtyResize {
-                rows,
-                cols,
-                cell_width_px,
-                cell_height_px,
-            });
-        }
-        self.wake_actor();
-    }
-
-    pub(crate) fn begin_handoff(&self, timeout: Duration) -> std::io::Result<()> {
-        let (reply_tx, reply_rx) = std_mpsc::channel();
-        {
-            let mut user_writes = self
-                .user_writes
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if !user_writes.accepting {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::WouldBlock,
-                    "PTY handoff is already in progress",
-                ));
-            }
-            user_writes.accepting = false;
-            if self
-                .control_tx
-                .send(PtyIoControlCommand::BeginHandoff(reply_tx))
-                .is_err()
-            {
-                user_writes.accepting = true;
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "pty actor closed",
-                ));
-            }
-            self.wake_actor();
-        }
-        match reply_rx.recv_timeout(timeout) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(err)) => {
-                let _ = self.rollback_handoff();
-                Err(err)
-            }
-            Err(_) => {
-                let _ = self.rollback_handoff();
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "timed out waiting for PTY actor to quiesce",
-                ))
-            }
-        }
-    }
-
-    pub(crate) fn duplicate_for_handoff(&self) -> std::io::Result<RawFd> {
-        let (reply_tx, reply_rx) = std_mpsc::channel();
-        self.control_tx
-            .send(PtyIoControlCommand::DuplicateForHandoff(reply_tx))
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pty actor closed"))?;
-        self.wake_actor();
-        reply_rx.recv_timeout(Duration::from_secs(1)).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "timed out waiting for PTY handoff duplicate",
-            )
-        })?
-    }
-
     pub(crate) fn foreground_process_group_id(&self) -> Option<u32> {
         let (reply_tx, reply_rx) = std_mpsc::channel();
         self.control_tx
@@ -306,49 +220,6 @@ impl PtyIoActorHandle {
             .ok()?;
         self.wake_actor();
         reply_rx.recv_timeout(Duration::from_secs(1)).ok()?
-    }
-
-    pub(crate) fn rollback_handoff(&self) -> std::io::Result<()> {
-        let (reply_tx, reply_rx) = std_mpsc::channel();
-        self.control_tx
-            .send(PtyIoControlCommand::RollbackHandoff(reply_tx))
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pty actor closed"))?;
-        self.wake_actor();
-        let result = reply_rx.recv_timeout(Duration::from_secs(1)).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "timed out waiting for PTY handoff rollback",
-            )
-        })?;
-        if result.is_ok() {
-            let mut user_writes = self
-                .user_writes
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            user_writes.accepting = true;
-        }
-        result
-    }
-
-    pub(crate) fn release_after_commit(&self) -> std::io::Result<()> {
-        {
-            let mut user_writes = self
-                .user_writes
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            user_writes.accepting = false;
-        }
-        let (reply_tx, reply_rx) = std_mpsc::channel();
-        self.control_tx
-            .send(PtyIoControlCommand::ReleaseAfterCommit(reply_tx))
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pty actor closed"))?;
-        self.wake_actor();
-        reply_rx.recv_timeout(Duration::from_secs(1)).map_err(|_| {
-            std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "timed out waiting for PTY actor release",
-            )
-        })?
     }
 
     pub(crate) fn shutdown(&self) {
@@ -415,7 +286,6 @@ impl PtyIoActor {
             pending_writes: VecDeque::new(),
             current_write_offset: 0,
             active_submission: None,
-            pending_handoff: None,
             wake_read_fd: wake_pipe.read_fd,
             controls,
             response_order,
@@ -449,7 +319,6 @@ struct PtyIoActorRunner {
     pending_writes: VecDeque<PendingWrite>,
     current_write_offset: usize,
     active_submission: Option<ActiveSubmission>,
-    pending_handoff: Option<std_mpsc::Sender<std::io::Result<()>>>,
     wake_read_fd: OwnedFd,
     controls: Arc<Mutex<SharedPtyControls>>,
     response_order: Arc<Mutex<()>>,
@@ -506,7 +375,7 @@ impl PtyIoActorRunner {
         let mut should_exit = false;
         while !should_exit {
             should_exit = self.drain_commands();
-            if should_exit || self.state == ActorState::Released {
+            if should_exit {
                 break;
             }
 
@@ -523,9 +392,6 @@ impl PtyIoActorRunner {
                 }
             }
             self.schedule_submission_enter();
-            if self.active_submission.is_none() && self.pending_handoff.is_some() {
-                continue;
-            }
 
             if let Some(poll_observer) = &self.poll_observer {
                 let _ = poll_observer.send(());
@@ -582,10 +448,6 @@ impl PtyIoActorRunner {
             return true;
         }
         if self.active_submission.is_some() {
-            return false;
-        }
-        if let Some(reply) = self.pending_handoff.take() {
-            self.defer_or_begin_handoff(reply);
             return false;
         }
         self.drain_data_commands()
@@ -673,142 +535,30 @@ impl PtyIoActorRunner {
 
     fn handle_control_command(&mut self, command: PtyIoControlCommand) -> bool {
         match command {
-            PtyIoControlCommand::BeginHandoff(reply) => {
-                self.defer_or_begin_handoff(reply);
-            }
-            PtyIoControlCommand::DuplicateForHandoff(reply) => {
-                let result = if self.state == ActorState::Quiesced {
-                    fd::duplicate_cloexec_fd(self.file.as_raw_fd())
-                } else {
-                    Err(std::io::Error::other(
-                        "PTY actor must be quiesced before handoff duplication",
-                    ))
-                };
-                let _ = reply.send(result);
-            }
             PtyIoControlCommand::ForegroundProcessGroup(reply) => {
                 let result =
                     crate::platform::foreground_process_group_id_for_tty_fd(self.file.as_raw_fd());
                 let _ = reply.send(result);
-            }
-            PtyIoControlCommand::RollbackHandoff(reply) => {
-                self.pending_handoff.take();
-                let result = if self.state == ActorState::Released {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::BrokenPipe,
-                        "PTY actor was released before handoff rollback",
-                    ))
-                } else {
-                    self.state = ActorState::Running;
-                    Ok(())
-                };
-                let _ = reply.send(result);
-            }
-            PtyIoControlCommand::ReleaseAfterCommit(reply) => {
-                self.state = ActorState::Released;
-                self.pending_writes.clear();
-                let _ = reply.send(Ok(()));
-                return true;
             }
             PtyIoControlCommand::Shutdown => return true,
         }
         false
     }
 
-    fn defer_or_begin_handoff(&mut self, reply: std_mpsc::Sender<std::io::Result<()>>) {
-        if self.active_submission.is_none() {
-            self.drain_pre_quiesce_commands();
-        }
-        if self.active_submission.is_some() {
-            self.pending_handoff = Some(reply);
-        } else {
-            let result = self.begin_handoff();
-            let _ = reply.send(result);
-        }
-    }
-
-    fn begin_handoff(&mut self) -> std::io::Result<()> {
-        self.drain_pre_quiesce_commands();
-        if self.active_submission.is_some() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::WouldBlock,
-                "PTY input submission is still in progress",
-            ));
-        }
-        self.apply_pending_controls();
-        if self.state == ActorState::Released {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "PTY actor was released before handoff quiesce",
-            ));
-        }
-        let deadline = Instant::now() + HANDOFF_DRAIN_TIMEOUT;
-        let _ = self.flush_pending_writes_once()?;
-        while !self.pending_writes.is_empty() {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "timed out draining PTY writes before handoff",
-                ));
-            }
-            let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
-            let readiness = fd::poll_pty_and_wake(
-                self.file.as_raw_fd(),
-                self.wake_read_fd.as_raw_fd(),
-                true,
-                true,
-                timeout_ms,
-            )?;
-            if readiness.wake_ready {
-                fd::drain_wake_fd(self.wake_read_fd.as_raw_fd())?;
-            }
-            if readiness.pty_read_ready && !self.read_once() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "PTY closed while draining writes before handoff",
-                ));
-            }
-            if readiness.pty_write_ready {
-                let _ = self.flush_pending_writes_once()?;
-            }
-        }
-        self.state = ActorState::Quiesced;
-        Ok(())
-    }
-
-    fn drain_pre_quiesce_commands(&mut self) {
-        while let Ok(command) = self.data_rx.try_recv() {
-            if self.handle_data_command(command) {
-                break;
-            }
-            if self.active_submission.is_some() {
-                break;
-            }
-        }
-    }
-
     fn apply_pending_controls(&mut self) {
-        let (resize, nudge, terminal_responses) = {
+        let (resize, terminal_responses) = {
             let mut controls = self
                 .controls
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             (
                 controls.resize.take(),
-                controls.nudge.take(),
                 std::mem::take(&mut controls.terminal_responses),
             )
         };
-        if self.state == ActorState::Released {
-            return;
-        }
         if let Some(request) = resize {
             self.resize(request.resize);
             self.enqueue_terminal_responses(request.terminal_responses);
-        }
-        if let Some(nudge) = nudge {
-            self.nudge(nudge);
         }
         self.enqueue_terminal_responses(terminal_responses);
     }
@@ -849,9 +599,6 @@ impl PtyIoActorRunner {
     }
 
     fn enqueue_terminal_responses(&mut self, terminal_responses: Vec<Bytes>) {
-        if self.state == ActorState::Released {
-            return;
-        }
         for bytes in terminal_responses {
             self.enqueue_write(bytes);
         }
@@ -973,52 +720,6 @@ impl PtyIoActorRunner {
         ));
     }
 
-    fn nudge(&mut self, resize: PtyResize) {
-        if self.state == ActorState::Released {
-            return;
-        }
-        let nudge = if resize.rows > 2 {
-            (
-                resize.rows - 1,
-                resize.cols,
-                resize.cell_width_px,
-                resize.cell_height_px,
-            )
-        } else {
-            (
-                resize.rows,
-                resize.cols.saturating_sub(1).max(4),
-                resize.cell_width_px,
-                resize.cell_height_px,
-            )
-        };
-        if nudge
-            == (
-                resize.rows,
-                resize.cols,
-                resize.cell_width_px,
-                resize.cell_height_px,
-            )
-        {
-            return;
-        }
-        self.log_resize_result(fd::resize_pty_fd(
-            self.file.as_raw_fd(),
-            nudge.0,
-            nudge.1,
-            nudge.2,
-            nudge.3,
-        ));
-        std::thread::sleep(Duration::from_millis(30));
-        self.log_resize_result(fd::resize_pty_fd(
-            self.file.as_raw_fd(),
-            resize.rows,
-            resize.cols,
-            resize.cell_width_px,
-            resize.cell_height_px,
-        ));
-    }
-
     fn log_resize_result(&self, result: std::io::Result<()>) {
         if let Err(err) = result {
             debug!(pane = self.pane_id, err = %err, "PTY resize failed");
@@ -1105,7 +806,6 @@ mod tests {
             pending_writes: VecDeque::new(),
             current_write_offset: 0,
             active_submission: None,
-            pending_handoff: None,
             wake_read_fd: wake_pipe.read_fd,
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
             response_order: Arc::new(Mutex::new(())),
@@ -1237,9 +937,6 @@ mod tests {
                 Duration::from_millis(40),
             )
             .expect("empty enter submission queues");
-        let handoff_handle = handle.clone();
-        let handoff =
-            std::thread::spawn(move || handoff_handle.begin_handoff(Duration::from_millis(250)));
         let mut prompt = [0; 6];
         peer.read_exact(&mut prompt)
             .expect("peer receives prompt before empty enter");
@@ -1248,10 +945,6 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("actor reports empty enter submission")
             .expect("empty enter submission completes");
-        handoff
-            .join()
-            .expect("handoff thread joins")
-            .expect("handoff resumes without an idle poll after submission");
         handle.shutdown();
     }
 
@@ -1454,10 +1147,6 @@ mod tests {
         assert_eq!(output_len, OUTPUT_LEN);
         output_writer.join().expect("output writer joins");
 
-        let handoff_handle = handle.clone();
-        let handoff =
-            std::thread::spawn(move || handoff_handle.begin_handoff(Duration::from_secs(1)));
-
         let mut received_input = vec![0; prefilled + marker.len() + 1];
         peer.read_exact(&mut received_input)
             .expect("peer receives prefill and queued input");
@@ -1471,35 +1160,6 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("actor reports submission")
             .expect("submission completes");
-        handoff
-            .join()
-            .expect("handoff thread joins")
-            .expect("handoff waits for submission");
-        handle.shutdown();
-    }
-
-    #[test]
-    fn actor_wakes_idle_poll_for_handoff_control() {
-        let (poll_tx, poll_rx) = std_mpsc::channel();
-        let (handle, _peer, _read_rx) =
-            actor_with_socket_pair_and_poll_observer(false, Some(poll_tx));
-        poll_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("actor entered idle poll");
-
-        let start = Instant::now();
-        let handoff_handle = handle.clone();
-        let handoff =
-            std::thread::spawn(move || handoff_handle.begin_handoff(Duration::from_secs(1)));
-
-        handoff
-            .join()
-            .expect("handoff thread joins")
-            .expect("handoff control should wake idle actor");
-        assert!(
-            start.elapsed() < Duration::from_millis(500),
-            "handoff control should be driven by wake fd, not the idle poll timeout"
-        );
         handle.shutdown();
     }
 
@@ -1540,68 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn begin_handoff_stops_reads_and_rejects_user_writes_until_rollback() {
-        let (handle, mut peer, read_rx) = actor_with_socket_pair(false);
-
-        handle
-            .begin_handoff(Duration::from_secs(1))
-            .expect("handoff quiesced");
-        let err = handle
-            .begin_handoff(Duration::from_secs(1))
-            .expect_err("concurrent handoff rejected");
-        assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
-        assert!(handle
-            .try_write_user_input(Bytes::from_static(b"blocked"))
-            .is_err());
-
-        peer.write_all(b"held").expect("peer write during quiesce");
-        assert!(
-            read_rx.recv_timeout(Duration::from_millis(150)).is_err(),
-            "actor must not read while quiesced"
-        );
-
-        handle.rollback_handoff().expect("rollback resumes actor");
-        let read = read_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("actor reads held bytes after rollback");
-        assert_eq!(read, Bytes::from_static(b"held"));
-
-        handle
-            .try_write_user_input(Bytes::from_static(b"after"))
-            .expect("write accepted after rollback");
-        let mut buf = [0u8; 5];
-        peer.read_exact(&mut buf).expect("peer receives after");
-        assert_eq!(&buf, b"after");
-        handle.shutdown();
-    }
-
-    #[test]
-    fn duplicate_for_handoff_requires_quiesced_actor() {
-        let (handle, mut peer, read_rx) = actor_with_socket_pair(false);
-
-        assert!(handle.duplicate_for_handoff().is_err());
-        handle
-            .begin_handoff(Duration::from_secs(1))
-            .expect("handoff quiesced");
-        let duplicate = handle
-            .duplicate_for_handoff()
-            .expect("handoff duplicate created");
-        assert!(duplicate >= 0);
-        unsafe {
-            libc::close(duplicate);
-        }
-        handle.rollback_handoff().expect("rollback resumes actor");
-
-        peer.write_all(b"still-live").expect("peer write");
-        let read = read_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("actor still reads after duplicate closes");
-        assert_eq!(read, Bytes::from_static(b"still-live"));
-        handle.shutdown();
-    }
-
-    #[test]
-    fn resize_and_nudge_keep_latest_request_when_command_queue_is_full() {
+    fn resize_keeps_latest_request_when_command_queue_is_full() {
         let (data_tx, _data_rx) = mpsc::channel(1);
         let (control_tx, _control_rx) = std_mpsc::channel();
         data_tx
@@ -1622,7 +1221,6 @@ mod tests {
 
         handle.resize(20, 80, 8, 16, vec![Bytes::from_static(b"old")]);
         handle.resize(40, 120, 9, 18, vec![Bytes::from_static(b"new")]);
-        handle.nudge_child_redraw_after_handoff(41, 121, 10, 20);
         handle.write_terminal_response(|| Some(Bytes::from_static(b"response")));
 
         let controls = controls.lock().expect("controls lock");
@@ -1636,15 +1234,6 @@ mod tests {
                     cell_height_px: 18,
                 },
                 terminal_responses: vec![Bytes::from_static(b"new")],
-            })
-        );
-        assert_eq!(
-            controls.nudge,
-            Some(PtyResize {
-                rows: 41,
-                cols: 121,
-                cell_width_px: 10,
-                cell_height_px: 20,
             })
         );
         assert_eq!(
@@ -1676,7 +1265,6 @@ mod tests {
             pending_writes: VecDeque::new(),
             current_write_offset: 0,
             active_submission: None,
-            pending_handoff: None,
             wake_read_fd: wake_pipe.read_fd,
             controls: Arc::clone(&controls),
             response_order: Arc::clone(&response_order),
@@ -1747,96 +1335,5 @@ mod tests {
             .expect("peer receives resize response");
         assert_eq!(Bytes::from(buf), response);
         handle.shutdown();
-    }
-
-    #[test]
-    fn handoff_control_is_not_blocked_by_full_data_queue() {
-        let (data_tx, _data_rx) = mpsc::channel(1);
-        let (control_tx, control_rx) = std_mpsc::channel();
-        data_tx
-            .try_send(PtyIoDataCommand::WriteUserInput(Bytes::from_static(
-                b"fill",
-            )))
-            .expect("fill data queue");
-        let (wake, _wake_read_fd) = test_wake_pair();
-        let handle = PtyIoActorHandle {
-            data_tx,
-            control_tx,
-            wake,
-            user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
-            controls: Arc::new(Mutex::new(SharedPtyControls::default())),
-            response_order: Arc::new(Mutex::new(())),
-        };
-
-        let handoff = std::thread::spawn(move || handle.begin_handoff(Duration::from_secs(1)));
-        match control_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("handoff control command")
-        {
-            PtyIoControlCommand::BeginHandoff(reply) => {
-                reply.send(Ok(())).expect("handoff waiter alive");
-            }
-            _ => panic!("expected begin handoff command"),
-        }
-
-        handoff
-            .join()
-            .expect("handoff thread joins")
-            .expect("handoff succeeds despite full data queue");
-    }
-
-    #[test]
-    fn begin_handoff_drains_user_writes_already_in_command_queue() {
-        let (actor_socket, mut peer) = UnixStream::pair().expect("socket pair");
-        actor_socket
-            .set_nonblocking(true)
-            .expect("actor socket nonblocking");
-        peer.set_read_timeout(Some(Duration::from_secs(1)))
-            .expect("peer timeout");
-        let (data_tx, data_rx) = mpsc::channel(ACTOR_COMMAND_BUFFER);
-        let (_control_tx, control_rx) = std_mpsc::channel();
-        data_tx
-            .try_send(PtyIoDataCommand::WriteUserInput(Bytes::from_static(
-                b"queued-before-ack",
-            )))
-            .expect("queued write");
-        let mut runner = PtyIoActorRunner {
-            pane_id: 1,
-            file: std::fs::File::from(unsafe { OwnedFd::from_raw_fd(actor_socket.into_raw_fd()) }),
-            data_rx,
-            control_rx,
-            state: ActorState::Running,
-            pending_writes: VecDeque::new(),
-            current_write_offset: 0,
-            active_submission: None,
-            pending_handoff: None,
-            wake_read_fd: fd::create_wake_pipe().expect("wake pipe").read_fd,
-            controls: Arc::new(Mutex::new(SharedPtyControls::default())),
-            response_order: Arc::new(Mutex::new(())),
-            on_read: Box::new(|_| PtyReadResult::empty()),
-            on_reader_exit: None,
-            poll_observer: None,
-        };
-
-        runner.begin_handoff().expect("handoff drains queued write");
-
-        let mut buf = [0u8; 17];
-        peer.read_exact(&mut buf)
-            .expect("queued write reaches peer before quiesce ack");
-        assert_eq!(&buf, b"queued-before-ack");
-        assert_eq!(runner.state, ActorState::Quiesced);
-    }
-
-    #[test]
-    fn release_after_commit_prevents_further_io() {
-        let (handle, mut peer, read_rx) = actor_with_socket_pair(false);
-
-        handle.release_after_commit().expect("actor released");
-        assert!(handle
-            .try_write_user_input(Bytes::from_static(b"blocked"))
-            .is_err());
-
-        let _ = peer.write_all(b"ignored");
-        assert!(read_rx.recv_timeout(Duration::from_millis(150)).is_err());
     }
 }

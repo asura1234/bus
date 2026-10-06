@@ -22,7 +22,6 @@ mod copy_mode;
 mod detect;
 mod events;
 mod ghostty;
-mod handoff_runtime;
 mod input;
 mod integration;
 mod ipc;

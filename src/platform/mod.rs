@@ -30,20 +30,12 @@ pub enum Signal {
 pub enum ChildExitReason {
     Exited,
     Interrupted,
-    /// Imported runtimes have no child wait handle in the replacement server.
-    #[cfg(unix)]
-    Handoff,
     WaitFailed,
 }
 
 impl ChildExitReason {
     pub(crate) fn requires_session_checkpoint(self) -> bool {
-        match self {
-            Self::Interrupted => true,
-            #[cfg(unix)]
-            Self::Handoff => true,
-            _ => false,
-        }
+        matches!(self, Self::Interrupted)
     }
 }
 
@@ -95,14 +87,12 @@ fn configure_background_command_platform(_command: &mut std::process::Command) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlatformCapabilities {
-    pub(crate) live_handoff: bool,
     pub(crate) direct_terminal_attach: bool,
     pub(crate) preserve_legacy_doubled_escape_input: bool,
 }
 
 pub(crate) const fn capabilities() -> PlatformCapabilities {
     PlatformCapabilities {
-        live_handoff: cfg!(unix),
         direct_terminal_attach: cfg!(unix),
         preserve_legacy_doubled_escape_input: cfg!(target_os = "macos"),
     }
@@ -442,8 +432,6 @@ fn child_exit_classification_only_checkpoints_interruptions() {
     let status = portable_pty::ExitStatus::with_signal("Terminated: 15");
     assert_eq!(classify_child_exit(&status), ChildExitReason::Interrupted);
     assert!(classify_child_exit(&status).requires_session_checkpoint());
-    #[cfg(unix)]
-    assert!(ChildExitReason::Handoff.requires_session_checkpoint());
     assert!(!ChildExitReason::WaitFailed.requires_session_checkpoint());
 }
 

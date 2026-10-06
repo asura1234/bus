@@ -508,7 +508,6 @@ fn stream_set_message(
                 ),
             },
             respond_to,
-            response_write_complete: None,
             stream_active: None,
         },
         response_rx,
@@ -573,7 +572,6 @@ fn direct_stream_message(
                 ),
             },
             respond_to,
-            response_write_complete: None,
             stream_active: None,
         },
         response_rx,
@@ -661,7 +659,6 @@ fn stream_open_gate_is_owned_by_the_layer_and_cancels_on_removal() {
             ),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: Some(active.clone()),
     });
     assert!(
@@ -771,7 +768,6 @@ fn stream_set_has_graphics_only_render_impact() {
             }),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
     assert_eq!(impact, RenderImpact::Full);
@@ -806,7 +802,6 @@ fn rejected_or_stale_requests_do_not_schedule_rendering() {
             }),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
     assert!(!changed);
@@ -837,7 +832,6 @@ fn rejected_or_stale_requests_do_not_schedule_rendering() {
             ),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
     assert_eq!(impact, RenderImpact::None);

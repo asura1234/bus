@@ -66,7 +66,6 @@ pub(crate) fn start_server_with_stop_control(
 
 fn default_capabilities() -> Option<ServerCapabilities> {
     Some(ServerCapabilities {
-        live_handoff: crate::platform::capabilities().live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
         surface_interest: true,
@@ -274,7 +273,6 @@ fn handle_connection_with_stop(
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
         method_body => {
-            let (response_write_tx, response_write_rx) = std::sync::mpsc::channel();
             let response = handle_request(
                 Request {
                     id: request_id.clone(),
@@ -283,10 +281,8 @@ fn handle_connection_with_stop(
                 api_tx,
                 capabilities,
                 server_stop,
-                Some(response_write_rx),
             );
             let result = write_text_line_allow_disconnect(&mut stream, &response);
-            let _ = response_write_tx.send(());
             match &result {
                 Ok(()) => crate::logging::api_request_completed(
                     &request_id,
@@ -337,7 +333,6 @@ fn handle_request(
     api_tx: &ApiRequestSender,
     capabilities: Option<ServerCapabilities>,
     server_stop: Option<&Arc<AtomicBool>>,
-    response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
 ) -> String {
     if matches!(&request.method, Method::Ping(_)) {
         return serde_json::to_string(&SuccessResponse {
@@ -379,14 +374,13 @@ fn handle_request(
         );
     }
 
-    dispatch_to_app(request, api_tx, None, response_write_complete, None, None)
+    dispatch_to_app(request, api_tx, None, None, None)
 }
 
 pub(crate) fn api_method_name(method: &Method) -> &'static str {
     match method {
         Method::Ping(_) => "ping",
         Method::ServerStop(_) => "server.stop",
-        Method::ServerLiveHandoff(_) => "server.live_handoff",
         Method::ServerReloadConfig(_) => "server.reload_config",
         Method::ServerAgentManifests(_) => "server.agent_manifests",
         Method::ServerReloadAgentManifests(_) => "server.reload_agent_manifests",
@@ -801,7 +795,7 @@ pub(super) fn dispatch_to_app_with_timeout(
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
 ) -> String {
-    dispatch_to_app(request, api_tx, timeout, None, None, None)
+    dispatch_to_app(request, api_tx, timeout, None, None)
 }
 
 pub(super) fn dispatch_to_app_with_caller_timeout(
@@ -814,7 +808,6 @@ pub(super) fn dispatch_to_app_with_caller_timeout(
         api_tx,
         timeout,
         None,
-        None,
         Some(("timeout", "timed out waiting for agent status")),
     )
 }
@@ -825,7 +818,7 @@ pub(super) fn dispatch_stream_open(
     timeout: Duration,
     active: Arc<AtomicBool>,
 ) -> String {
-    dispatch_to_app(request, api_tx, Some(timeout), None, Some(active), None)
+    dispatch_to_app(request, api_tx, Some(timeout), Some(active), None)
 }
 
 pub(super) fn dispatch_stream_frame(
@@ -837,7 +830,6 @@ pub(super) fn dispatch_stream_frame(
         request,
         api_tx,
         Some(crate::app::pane_graphics::DIRECT_OUTER_TIMEOUT),
-        None,
         Some(active),
         None,
     )
@@ -847,7 +839,6 @@ fn dispatch_to_app(
     request: Request,
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
-    response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
     stream_active: Option<Arc<AtomicBool>>,
     timeout_response: Option<(&str, &str)>,
 ) -> String {
@@ -857,7 +848,6 @@ fn dispatch_to_app(
     if let Err(err) = api_tx.send(ApiRequestMessage {
         request,
         respond_to,
-        response_write_complete,
         stream_active,
     }) {
         if let Some(active) = request_active {
@@ -1134,7 +1124,6 @@ mod tests {
             },
             &tx,
             Some(ServerCapabilities {
-                live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(
                     crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
@@ -1142,7 +1131,6 @@ mod tests {
                 surface_interest: true,
                 health_check: true,
             }),
-            None,
             None,
         );
 
@@ -1163,7 +1151,6 @@ mod tests {
             &tx,
             None,
             Some(&stop),
-            None,
         );
 
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -1179,7 +1166,6 @@ mod tests {
             &tx,
             None,
             Some(&stop),
-            None,
         );
         let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
         assert_eq!(rejected["error"]["code"], "server_unavailable");
@@ -1196,7 +1182,7 @@ mod tests {
 
         let request_for_thread = request.clone();
         let thread =
-            std::thread::spawn(move || handle_request(request_for_thread, &tx, None, None, None));
+            std::thread::spawn(move || handle_request(request_for_thread, &tx, None, None));
 
         let msg = rx.blocking_recv().unwrap();
         assert_eq!(msg.request.id, "req_2");
@@ -1213,45 +1199,6 @@ mod tests {
         let response = thread.join().unwrap();
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(parsed.id, "req_2");
-    }
-
-    #[test]
-    fn dispatched_request_reports_response_write_completion() {
-        let (api_tx, mut api_rx) = mpsc::unbounded_channel();
-        let (mut client, server, _path) = local_stream_pair("write-ack");
-        client
-            .write_all(br#"{"id":"req_write","method":"workspace.list","params":{}}"#)
-            .unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
-
-        let running = Arc::new(AtomicBool::new(true));
-        let server_running = Arc::clone(&running);
-        let event_hub = EventHub::default();
-        let server_thread = std::thread::spawn(move || {
-            handle_connection(server, &api_tx, &event_hub, &server_running, None)
-        });
-
-        let msg = api_rx.blocking_recv().unwrap();
-        let response_write_complete = msg
-            .response_write_complete
-            .expect("socket-dispatched requests include write completion");
-        msg.respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: msg.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
-
-        response_write_complete
-            .recv_timeout(Duration::from_secs(1))
-            .expect("response write completion");
-        let response: SuccessResponse = serde_json::from_str(&read_line(&mut client)).unwrap();
-        assert_eq!(response.id, "req_write");
-        server_thread.join().unwrap().unwrap();
     }
 
     #[test]

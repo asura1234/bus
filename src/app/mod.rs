@@ -29,8 +29,6 @@ mod window_title;
 mod worktrees;
 
 use std::collections::HashMap;
-#[cfg(unix)]
-use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -79,13 +77,6 @@ impl AppPolicy {
         restore_session: false,
         persist_session: false,
         background_updates: false,
-    };
-
-    #[cfg(unix)]
-    pub(crate) const HANDOFF_REPLACEMENT: Self = Self {
-        restore_session: false,
-        persist_session: true,
-        background_updates: true,
     };
 }
 
@@ -555,71 +546,6 @@ impl App {
         app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
         app.configure_window_title(&config.ui.window_title);
         app
-    }
-
-    #[cfg(unix)]
-    pub fn new_from_handoff(
-        config: &Config,
-        config_diagnostic: Option<String>,
-        api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
-        event_hub: crate::api::EventHub,
-        snapshot: &crate::persist::SessionSnapshot,
-        imports: &mut std::collections::HashMap<
-            u32,
-            crate::handoff_runtime::ImportedHandoffRuntime,
-        >,
-    ) -> io::Result<Self> {
-        let mut app = Self::new(
-            config,
-            AppPolicy::HANDOFF_REPLACEMENT,
-            config_diagnostic,
-            api_rx,
-            event_hub,
-        );
-        let (workspaces, terminals, runtimes) = crate::persist::restore_handoff(
-            snapshot,
-            config.advanced.scrollback_limit_bytes,
-            &config.terminal.default_shell,
-            config.terminal.shell_mode,
-            imports,
-            app.event_tx.clone(),
-            app.render_notify.clone(),
-            app.render_dirty.clone(),
-        )?;
-        let pane_id_aliases = crate::persist::handoff_pane_aliases(snapshot, &workspaces);
-
-        app.state.pane_id_aliases = pane_id_aliases;
-        app.state.workspaces = workspaces;
-        app.state.terminals = terminals;
-        app.terminal_runtimes = runtimes.into();
-        app.state.active = snapshot
-            .active
-            .filter(|&idx| idx < app.state.workspaces.len());
-        app.state.selected = snapshot
-            .selected
-            .min(app.state.workspaces.len().saturating_sub(1));
-        app.state.mode = if app.state.active.is_some() {
-            state::Mode::Terminal
-        } else {
-            state::Mode::Navigate
-        };
-        app.last_focus = app.state.active.and_then(|idx| {
-            app.state
-                .workspaces
-                .get(idx)
-                .and_then(|ws| ws.focused_pane_id().map(|pane_id| (idx, pane_id)))
-        });
-        Ok(app)
-    }
-
-    #[cfg(unix)]
-    pub fn unpause_handoff_readers(&self) {
-        self.terminal_runtimes.set_handoff_readers_paused(false);
-    }
-
-    #[cfg(unix)]
-    pub fn assume_handoff_ownership(&mut self) {
-        self.terminal_runtimes.assume_handoff_ownership();
     }
 
     pub(crate) fn ensure_default_workspace(&mut self) -> bool {

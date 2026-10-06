@@ -56,9 +56,8 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
 
     HeadlessServer {
         app,
-        #[cfg(unix)]
-        api_tx: None,
-        api_server: None,
+        _api_tx: None,
+        _api_server: None,
         #[cfg(unix)]
         client_listener: listener,
         client_socket_path: socket_path,
@@ -82,9 +81,6 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         headless_size,
         effective_size: headless_size,
         shutting_down: false,
-        handoff_in_progress: false,
-        #[cfg(unix)]
-        pending_handoff_repaint_nudge: false,
         should_quit,
         server_event_rx,
         server_event_tx,
@@ -120,18 +116,6 @@ fn read_server_shutdown_reason(bytes: Vec<u8>) -> Option<String> {
         ServerMessage::ServerShutdown { reason } => reason,
         other => panic!("expected shutdown, got {other:?}"),
     }
-}
-
-#[test]
-fn completed_handoff_disables_only_old_server_session_persistence() {
-    let mut server = test_headless_server();
-    server.app.policy = crate::app::AppPolicy::PRODUCTION;
-
-    server.finish_live_handoff_shutdown();
-
-    assert!(!server.app.policy.persist_session);
-    assert!(server.app.policy.restore_session);
-    assert!(server.app.policy.background_updates);
 }
 
 #[test]
@@ -204,7 +188,6 @@ fn headless_pane_list(server: &mut HeadlessServer) -> Vec<api::schema::PaneInfo>
             method: api::schema::Method::PaneList(api::schema::PaneListParams::default()),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
     let response: api::schema::SuccessResponse =
@@ -263,7 +246,6 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
                 method: api::schema::Method::ServerStop(api::schema::EmptyParams::default()),
             },
             respond_to,
-            response_write_complete: None,
             stream_active: None,
         })
     );
@@ -1489,7 +1471,6 @@ async fn client_local_navigation_does_not_emit_global_focus_transitions() {
                 }),
             },
             respond_to,
-            response_write_complete: None,
             stream_active: None,
         },
     );
@@ -1599,7 +1580,6 @@ async fn repeated_layout_action_reapplies_controller_geometry() {
                 ),
             },
             respond_to,
-            response_write_complete: None,
             stream_active: None,
         },
     ));
@@ -1644,7 +1624,6 @@ async fn public_close_reapplies_controller_geometry() {
                 }),
             },
             respond_to,
-            response_write_complete: None,
             stream_active: None,
         })
     );
@@ -1848,7 +1827,6 @@ async fn public_background_tab_create_preserves_client_locations() {
             }),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
 
@@ -1896,7 +1874,6 @@ async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
             ),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
 
@@ -1967,7 +1944,6 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
             ),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
     assert_eq!(server.app.state.active, Some(1));
@@ -5770,7 +5746,6 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
             }),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
 
@@ -5833,7 +5808,6 @@ fn notification_show_api_preserves_colon_in_forwarded_title() {
             }),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
 
@@ -5879,7 +5853,6 @@ fn notification_show_api_validates_empty_title_before_disabled_delivery() {
             }),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
 
@@ -5910,7 +5883,6 @@ fn notification_show_api_reports_no_foreground_client() {
             }),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
 
@@ -5961,7 +5933,6 @@ fn notification_show_api_includes_sound_in_semantic_event() {
                 ),
             },
             respond_to,
-            response_write_complete: None,
             stream_active: None,
         })
     );
@@ -6139,7 +6110,6 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
             }),
         },
         respond_to,
-        response_write_complete: None,
         stream_active: None,
     });
 

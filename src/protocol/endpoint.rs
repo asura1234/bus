@@ -1,7 +1,7 @@
 //! Stable endpoint compatibility contract for client-owned shells.
 //!
 //! The endpoint generation is intentionally independent from the private
-//! binary protocol used by same-install CLI, direct-terminal, and handoff
+//! binary protocol used by same-install client and direct-terminal
 //! paths. Generation 1 is the compatibility floor for Local, SSH, and Cloud
 //! shell endpoints and must remain available indefinitely unless retired for a
 //! security reason. New JSON fields must be optional or have serde defaults;

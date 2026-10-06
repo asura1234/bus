@@ -127,28 +127,6 @@ impl KittyKeyboardTracker {
             _ => {}
         }
     }
-
-    #[cfg(unix)]
-    pub(crate) fn replay_ansi(&self) -> Option<String> {
-        let mut ansi = String::new();
-        if self.stack.is_empty() {
-            if self.flags != 0 {
-                ansi.push_str(&format!("\x1b[={}u", self.flags));
-            }
-        } else {
-            let baseline = self.stack[0];
-            if baseline != 0 {
-                ansi.push_str(&format!("\x1b[={baseline}u"));
-            }
-            for flags in self.stack.iter().skip(1).copied().chain([self.flags]) {
-                ansi.push_str(&format!("\x1b[>{flags}u"));
-            }
-        }
-        if self.modify_other_keys_level > 0 {
-            ansi.push_str(&format!("\x1b[>4;{}m", self.modify_other_keys_level));
-        }
-        (!ansi.is_empty()).then_some(ansi)
-    }
 }
 
 fn parse_kitty_keyboard_flags(bytes: &[u8]) -> u16 {
@@ -192,8 +170,6 @@ mod tests {
         assert_eq!(tracker.flags, 0);
         assert!(tracker.stack.is_empty());
         assert_eq!(tracker.modify_other_keys_level(), 0);
-        #[cfg(unix)]
-        assert_eq!(tracker.replay_ansi(), None);
     }
 
     #[test]
@@ -202,8 +178,6 @@ mod tests {
 
         tracker.observe(b"\x1b[>4;1m");
         assert_eq!(tracker.modify_other_keys_level(), 1);
-        #[cfg(unix)]
-        assert_eq!(tracker.replay_ansi().as_deref(), Some("\x1b[>4;1m"));
 
         tracker.observe(b"\x1b[>4;2m");
         assert_eq!(tracker.modify_other_keys_level(), 2);

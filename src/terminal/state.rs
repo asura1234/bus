@@ -245,11 +245,6 @@ impl TerminalState {
         self
     }
 
-    pub fn with_respawn_shell_on_exit(mut self) -> Self {
-        self.respawn_shell_on_exit = true;
-        self
-    }
-
     #[cfg(any(windows, test))]
     pub(crate) fn agent_process_exited_within(&self, now: Instant, max_age: Duration) -> bool {
         self.recent_agent_process_exit
