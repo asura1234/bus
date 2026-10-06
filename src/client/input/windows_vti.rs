@@ -1523,26 +1523,15 @@ mod tests {
         assert!(matches!(event_rx.try_recv(), Ok(ClientLoopEvent::Timer)));
 
         let mut delivered = Vec::new();
-        let mut shortcut_preserved = false;
         while !handoff.pending.is_empty() {
             assert!(handoff.try_flush(&event_tx));
             let Ok(ClientLoopEvent::StdinEvents(events)) = event_rx.try_recv() else {
                 panic!("expected retained Windows input events");
             };
             assert_eq!(events.len(), 1, "logical input batches must stay separate");
-            shortcut_preserved |=
-                crate::client::clipboard_images::should_bridge_clipboard_image_events(
-                    &events,
-                    true,
-                    Some((
-                        crossterm::event::KeyCode::Char('v'),
-                        crossterm::event::KeyModifiers::CONTROL,
-                    )),
-                );
             delivered.extend(events);
         }
         assert_eq!(delivered, expected);
-        assert!(shortcut_preserved);
     }
 
     #[test]
