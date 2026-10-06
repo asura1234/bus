@@ -164,10 +164,14 @@ fn claude_stop_with_live_background_work_is_progress_not_a_final_reply() {
 /// `\n\n<pasted_content id="ID">\n{text}\n</pasted_content id="ID">\n` rather
 /// than the text it submits to the model. Bus submits each request as one paste
 /// with nothing typed around it, so only a prompt that is exactly one such block
-/// is unwrapped; anything else is kept verbatim and must match exactly.
+/// is unwrapped; anything else is kept verbatim and must match exactly. The
+/// `[Image #N]` placeholders Claude puts first for an attached image (see
+/// `model::payload_matches`) are kept in front of the unwrapped text.
 fn unwrap_claude_paste(prompt: String) -> String {
+    let placeholders = claude_image_placeholders(&prompt).0;
+    let (images, body) = prompt.split_at(placeholders);
     let unwrapped = (|| {
-        let framed = prompt.trim_matches(|c: char| c.is_ascii_whitespace());
+        let framed = body.trim_matches(|c: char| c.is_ascii_whitespace());
         let rest = framed.strip_prefix("<pasted_content id=\"")?;
         let (id, rest) = rest.split_once("\">\n")?;
         if id.is_empty() || id.contains(['"', '<', '>', '\n']) {
@@ -176,7 +180,25 @@ fn unwrap_claude_paste(prompt: String) -> String {
         rest.strip_suffix(&format!("\n</pasted_content id=\"{id}\">"))
             .map(str::to_owned)
     })();
-    unwrapped.unwrap_or(prompt)
+    match unwrapped {
+        Some(text) => format!("{images}{text}"),
+        None => prompt,
+    }
+}
+
+/// The byte length and count of the `[Image #N]` placeholders that start a
+/// Claude Code prompt.
+pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {
+    let (mut length, mut count) = (0, 0);
+    while let Some(digits) = prompt[length..].strip_prefix("[Image #") {
+        let Some(end) = digits.find(']') else { break };
+        if end == 0 || !digits[..end].bytes().all(|b| b.is_ascii_digit()) {
+            break;
+        }
+        length += "[Image #".len() + end + 1;
+        count += 1;
+    }
+    (length, count)
 }
 
 /// Whether a Claude `Stop` pauses for background work that will wake the turn

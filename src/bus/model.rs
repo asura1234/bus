@@ -206,7 +206,7 @@ impl Prompt {
     }
 
     fn matches_callback_payload(&self, payload: &str) -> bool {
-        normalized_payload(payload) == normalized_payload(&self.rendered_payload())
+        payload_matches(payload, &self.rendered_payload())
     }
 }
 
@@ -365,7 +365,7 @@ pub(crate) struct Request {
 impl Request {
     pub(crate) fn matches_callback_payload(&self, payload: &str) -> bool {
         match &self.submitted_payload {
-            Some(typed) => normalized_payload(payload) == normalized_payload(typed),
+            Some(typed) => payload_matches(payload, typed),
             None => self.prompt.matches_callback_payload(payload),
         }
     }
@@ -389,6 +389,59 @@ fn clock(at_ms: u64) -> String {
         .and_then(crate::platform::local_datetime_at)
         .map(|local| format!("{:02}:{:02}", local.hour(), local.minute()))
         .unwrap_or_else(|| "--:--".into())
+}
+
+/// Whether a provider's submit hook reports the prompt Bus typed as `typed`.
+///
+/// Claude Code (2.1.291) turns each typed line that is one quoted image path
+/// into an image attachment: its hook reports one `[Image #N]` placeholder per
+/// image first (N counts the session's images), then the remaining lines with
+/// blank ones dropped. Only that exact shape matches besides the typed text.
+fn payload_matches(payload: &str, typed: &str) -> bool {
+    let payload = normalized_payload(payload);
+    let typed = normalized_payload(typed);
+    if payload == typed {
+        return true;
+    }
+    let (length, images) = crate::bus::callbacks::claude_image_placeholders(&payload);
+    let mut lifted = 0;
+    let remaining = typed
+        .split('\n')
+        .filter(|line| {
+            let image = is_quoted_image_path(line);
+            lifted += usize::from(image);
+            !image && !line.trim().is_empty()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    images > 0 && images == lifted && payload[length..] == remaining
+}
+
+/// Whether `line` is exactly one path quoted the way `Prompt::rendered_payload`
+/// quotes attachments, naming an image Claude Code attaches.
+fn is_quoted_image_path(line: &str) -> bool {
+    let Some(path) = line
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return false;
+    };
+    let mut escaped = false;
+    for character in path.chars() {
+        match (escaped, character) {
+            (false, '\\') => escaped = true,
+            (false, '"') => return false,
+            _ => escaped = false,
+        }
+    }
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["png", "jpg", "jpeg", "gif", "webp"]
+                .iter()
+                .any(|image| extension.eq_ignore_ascii_case(image))
+        })
 }
 
 fn normalized_payload(value: &str) -> String {
@@ -2995,6 +3048,103 @@ mod tests {
             CallbackDisposition::AcceptedBinding
         );
         assert!(state.request(request).expect("request").trusted_start_bound);
+    }
+
+    #[test]
+    fn claude_attached_image_binds_its_trusted_start() {
+        // Shapes captured from Claude Code 2.1.291: a pasted line that is one
+        // quoted image path becomes an `[Image #N]` attachment (N counts the
+        // session's images), reported first, and blank lines are dropped; a
+        // long remainder keeps its paste framing.
+        let short = "Reply with just: pong\n\n\nsecond para  \n\nthird";
+        let long = "for orchestrator agents in MASTER I just need \nso it should look like\n\n\
+                    bus orchestrator Idle x\n"
+            .repeat(4);
+        let cases = [
+            (short, "[Image #1]Reply with just: pong\nsecond para  \nthird".to_owned()),
+            (
+                long.as_str(),
+                format!(
+                    "[Image #17]\n\n<pasted_content id=\"8f5d\">\n{}\n</pasted_content id=\"8f5d\">\n",
+                    long.trim_end().replace("\n\n", "\n")
+                ),
+            ),
+            ("", "[Image #3]".to_owned()),
+        ];
+        for (n, (text, hook_prompt)) in cases.into_iter().enumerate() {
+            let (mut state, room, _, claude) = state_with_room_and_agents();
+            if !text.is_empty() {
+                state.set_draft_text(room, text).expect("draft text");
+            }
+            state
+                .attach_file(room, PathBuf::from("/tmp/bus/paste-e8d63c50.png"))
+                .expect("attach");
+            state
+                .set_draft_recipients(room, [claude])
+                .expect("recipients");
+            let request = state.submit_draft(room, 10).expect("submit")[0];
+            state
+                .begin_submission(request, "launch-claude", 15)
+                .expect("begin");
+            let hook = serde_json::json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "claude-session",
+                "prompt_id": "claude-prompt",
+                "prompt": hook_prompt,
+            });
+            let crate::bus::callbacks::Parsed::Started {
+                session,
+                turn,
+                prompt,
+            } = crate::bus::callbacks::parse(Provider::ClaudeCode, &hook).expect("parse")
+            else {
+                panic!("UserPromptSubmit must parse as a start");
+            };
+            let start = |id: &str, prompt: String| ProviderCallback {
+                callback_id: id.into(),
+                sequence: 16,
+                occurred_at_ms: 16,
+                agent_id: claude,
+                launch_id: "launch-claude".into(),
+                provider_session_id: Some(session.clone()),
+                provider_turn_id: Some(format!("{turn}-{id}")),
+                provider_prompt_id: Some(format!("{turn}-{id}")),
+                prompt_payload: Some(prompt),
+                kind: CallbackEventKind::PromptStarted,
+            };
+            // Different text, or more images than the request attached, is another turn.
+            for (wrong, payload) in [
+                ("text", format!("{prompt} extra")),
+                ("images", format!("[Image #9]{prompt}")),
+            ] {
+                assert_ne!(
+                    state.accept_callback(start(wrong, payload)),
+                    CallbackDisposition::AcceptedBinding,
+                    "case {n}: {wrong}"
+                );
+            }
+            assert_eq!(
+                state.accept_callback(start("image-start", prompt)),
+                CallbackDisposition::AcceptedBinding,
+                "case {n}"
+            );
+            assert!(state.request(request).expect("request").trusted_start_bound);
+        }
+    }
+
+    #[test]
+    fn claude_image_placeholders_only_stand_for_lone_image_path_lines() {
+        let typed = "Look\n\n\"/tmp/a.png\"";
+        assert!(payload_matches("[Image #2]Look", typed));
+        assert!(payload_matches("Look\n\n\"/tmp/a.png\"", typed));
+        // Two paths on one line, or a non-image file, stay as typed.
+        assert!(!payload_matches(
+            "[Image #1]Look",
+            "Look\n\"/tmp/a.png\" \"/tmp/b.png\""
+        ));
+        assert!(!payload_matches("[Image #1]Look", "Look\n\"/tmp/a.diff\""));
+        assert!(!payload_matches("[Image #1]", "Look\n\"/tmp/a.png\""));
+        assert!(!payload_matches("[Image #x]Look", typed));
     }
 
     #[test]
