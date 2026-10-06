@@ -175,7 +175,7 @@ impl TerminalState {
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
-        let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
+        let previous_presentation = self.effective_presentation_at(now, true);
         let has_set_fields = report.title.is_some()
             || report.display_agent.is_some()
             || !report.state_labels.is_empty();
@@ -293,17 +293,16 @@ impl TerminalState {
         })
     }
     pub fn effective_title(&self) -> Option<String> {
-        self.effective_presentation_for_state_at(self.state, Instant::now())
-            .title
+        self.effective_presentation_at(Instant::now(), true).title
     }
 
     pub fn effective_display_agent(&self) -> Option<String> {
-        self.effective_presentation_for_state_at(self.state, Instant::now())
+        self.effective_presentation_at(Instant::now(), true)
             .display_agent
     }
 
     pub fn effective_presentation(&self) -> EffectivePresentation {
-        self.effective_presentation_for_state_at(self.state, Instant::now())
+        self.effective_presentation_at(Instant::now(), true)
     }
 
     pub fn next_agent_metadata_expiry(&self) -> Option<Instant> {
@@ -354,12 +353,8 @@ impl TerminalState {
         let previous_agent_label = self.effective_agent_label().map(str::to_string);
         let previous_known_agent = self.effective_known_agent();
         let previous_state = self.state;
-        let previous_presentation =
-            self.effective_presentation_for_state_at_ignoring_ttl(previous_state, now);
+        let previous_presentation = self.effective_presentation_at(now, false);
         for source in expired_sources {
-            if let Some(metadata) = self.agent_metadata.get_mut(&source) {
-                metadata.expiry_event_pending = false;
-            }
             self.agent_metadata.remove(&source);
         }
 
@@ -378,26 +373,13 @@ impl TerminalState {
 
     pub(super) fn effective_presentation_for_state_at(
         &self,
-        state: AgentState,
-        now: Instant,
-    ) -> EffectivePresentation {
-        self.effective_presentation_for_state_at_with_ttl(state, now, true)
-    }
-
-    fn effective_presentation_for_state_at_ignoring_ttl(
-        &self,
-        state: AgentState,
-        now: Instant,
-    ) -> EffectivePresentation {
-        self.effective_presentation_for_state_at_with_ttl(state, now, false)
-    }
-
-    fn effective_presentation_for_state_at_with_ttl(
-        &self,
         _state: AgentState,
         now: Instant,
-        enforce_ttl: bool,
     ) -> EffectivePresentation {
+        self.effective_presentation_at(now, true)
+    }
+
+    fn effective_presentation_at(&self, now: Instant, enforce_ttl: bool) -> EffectivePresentation {
         let mut presentation = EffectivePresentation::empty();
         presentation.title = self.newest_metadata_title(now, enforce_ttl);
         presentation.display_agent = self.newest_metadata_display_agent(now, enforce_ttl);
