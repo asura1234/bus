@@ -243,23 +243,23 @@ class EndToEndEnvironmentTests(unittest.TestCase):
         self.assertEqual(env, {"PATH": "/bin", "HOME": "/home/me", "CODEX_HOME": "/codex",
                                "BUS_DATA_DIR": "/run/data", "TERM": "xterm-256color"})
 
-    def test_binary_prefers_bus_then_herdr_or_an_explicit_path(self):
+    def test_binary_is_the_debug_bus_build_or_an_explicit_path(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
             debug = root / "target/debug"
             debug.mkdir(parents=True)
             with self.assertRaises(SystemExit):
                 e2e.find_binary(root=root)
-            for name in ("herdr", "bus"):
+            for name in ("bus", "other"):
                 (debug / name).write_text("#!/bin/sh\n")
                 (debug / name).chmod(0o755)
-                self.assertEqual(e2e.find_binary(root=root), (debug / name).resolve())
-            self.assertEqual(e2e.find_binary(str(debug / "herdr"), root=root), (debug / "herdr").resolve())
+            self.assertEqual(e2e.find_binary(root=root), (debug / "bus").resolve())
+            self.assertEqual(e2e.find_binary(str(debug / "other"), root=root), (debug / "other").resolve())
             (debug / "bus").chmod(0o644)
-            self.assertEqual(e2e.find_binary(root=root), (debug / "herdr").resolve())
+            with self.assertRaises(SystemExit):
+                e2e.find_binary(root=root)
 
-    def test_only_the_herdr_binary_needs_the_bus_flag(self):
-        self.assertEqual(e2e.bus_argv(Path("/x/herdr")), ["/x/herdr", "--bus", "--dev"])
+    def test_bus_launches_in_dev_mode(self):
         self.assertEqual(e2e.bus_argv(Path("/x/bus")), ["/x/bus", "--dev"])
 
 

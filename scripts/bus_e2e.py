@@ -64,7 +64,7 @@ def parse_args(argv=None, which=shutil.which):
     parser.add_argument("--providers", help="Comma list of claude,codex,cursor (default: all installed)")
     parser.add_argument("--cases", default=",".join(CASES), help="Comma list of " + ",".join(CASES))
     parser.add_argument("--keep", action="store_true", help="Leave the Bus data directory for debugging")
-    parser.add_argument("--binary", help="Bus binary (default: target/debug/bus, else target/debug/herdr)")
+    parser.add_argument("--binary", help="Bus binary (default: target/debug/bus)")
     parser.add_argument("--timeout", type=float, default=300, help="Seconds per message to settle (default: 300)")
     args = parser.parse_args(argv)
     try:
@@ -82,7 +82,7 @@ def parse_args(argv=None, which=shutil.which):
 
 
 def find_binary(explicit=None, root=ROOT):
-    candidates = [Path(explicit)] if explicit else [root / "target/debug/bus", root / "target/debug/herdr"]
+    candidates = [Path(explicit)] if explicit else [root / "target/debug/bus"]
     for path in candidates:
         if path.is_file() and os.access(path, os.X_OK):
             return path.resolve()
@@ -91,8 +91,7 @@ def find_binary(explicit=None, root=ROOT):
 
 
 def bus_argv(binary):
-    # The herdr-named binary needs --bus; the renamed bus binary launches Bus directly.
-    return [str(binary), "--bus", "--dev"] if Path(binary).name == "herdr" else [str(binary), "--dev"]
+    return [str(binary), "--dev"]
 
 
 def scrubbed_env(environ, data_dir):
