@@ -125,19 +125,28 @@ fn who(name: &str, room: &str, id: AgentId) -> String {
     }
 }
 
-/// 给人看的一行：要批准的命令，或问题本身。
+/// The command and its reason, or the question. Never hide a later command line.
 fn wants_line(name: &str, text: &str) -> String {
     let lines: Vec<&str> = text
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect();
-    if let Some(command) = lines.iter().find_map(|line| {
-        line.strip_prefix("$ ")
-            .map(str::trim)
-            .filter(|command| !command.is_empty())
-    }) {
-        return format!("{name} wants to run: {command}");
+    if let Some(start) = lines.iter().position(|line| line.starts_with("$ ")) {
+        let command = lines[start..]
+            .iter()
+            .map(|line| line.strip_prefix("$ ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut notice = format!("{name} wants to run: {command}");
+        if let Some(reason) = lines[..start]
+            .iter()
+            .position(|line| line.starts_with("Reason:"))
+        {
+            notice.push('\n');
+            notice.push_str(&lines[reason..start].join("\n"));
+        }
+        return notice;
     }
     let asks_to_run = lines.iter().any(|line| {
         let lower = line.to_lowercase();

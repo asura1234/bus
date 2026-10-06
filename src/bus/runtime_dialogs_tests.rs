@@ -178,6 +178,34 @@ fn notice_names_the_command_and_leaves_the_fingerprint_out() {
 }
 
 #[test]
+fn approval_notice_retains_every_command_line_and_the_reason() {
+    let observed = json!({"dialog":{
+        "text":"Would you like to run the following command?\n\nReason: Capture Claude's custom answer control\nin the isolated Bus.\n\n$ sed -n 1280,1344p src/app/api/agents.rs\nsed -n 385,402p src/bus/control_cli.rs\npython3 /private/tmp/bus-question-probe.py /private/tmp/bq cli ...",
+        "options":[], "hint":"Press enter to confirm or esc to cancel"
+    }, "fingerprint":"SECRET"});
+    let notice = dialog_notice(AgentId(61), "Codex", "dev", &observed);
+    assert!(notice.contains("Codex wants to run: sed -n 1280,1344p src/app/api/agents.rs\nsed -n 385,402p src/bus/control_cli.rs\npython3 /private/tmp/bus-question-probe.py /private/tmp/bq cli ..."), "{notice}");
+    assert!(
+        notice.contains("Reason: Capture Claude's custom answer control\nin the isolated Bus."),
+        "{notice}"
+    );
+    assert!(!notice.contains("SECRET"));
+    let commands = (0..16)
+        .map(|n| format!("printf command-{n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let screen=format!("Would you like to run the following command?\n\nReason: Check every line in this native prompt\n\n$ {commands}\n\n› 1. Allow once\n  2. Abort\n\nPress enter to confirm or esc to cancel\n");
+    let parsed = crate::detect::dialog::parse(&screen).unwrap();
+    let observed = json!({"dialog":{"text":parsed.text,"options":[]}});
+    let notice = dialog_notice(AgentId(61), "Codex", "dev", &observed);
+    assert!(notice.contains(&commands), "{notice}");
+    assert!(
+        notice.contains("Reason: Check every line in this native prompt"),
+        "{notice}"
+    );
+}
+
+#[test]
 fn free_text_notice_retains_the_question_and_names_answer_without_a_fingerprint() {
     let observed = json!({"dialog":{"kind":"question","text":"Which token?\nPlease give the complete value.","options":[],"hint":"enter submit ctrl+] skip shift+→ main prompt"},"fingerprint":"SECRET"});
     let notice = dialog_notice(AgentId(61), "Codex", "dev", &observed);
