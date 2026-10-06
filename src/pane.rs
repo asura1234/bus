@@ -154,7 +154,6 @@ impl PaneLaunchEnv {
 }
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
-    cmd.env_remove("CODEX_THREAD_ID");
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }
@@ -175,6 +174,33 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
         PaneLaunchIdentity::OmitPane => {
             cmd.env_remove(crate::integration::HERDR_PANE_ID_ENV_VAR);
         }
+    }
+    // New panes and cold resumes are independent provider sessions, even when
+    // Bus itself was started from an agent's tool. Strip the parent's identity,
+    // child/transcript flags and tool IPC after overrides have been applied.
+    // Keep configuration (CLAUDE_CONFIG_DIR, ANTHROPIC_*, CODEX_HOME, etc.);
+    // these prefixes also contain user settings, so do not remove them wholesale.
+    for key in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SSE_PORT",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_SANDBOXED",
+        "CLAUDE_PID",
+        "CLAUDE_JOB_DIR",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "CODEX_SANDBOX",
+        "CODEX_SANDBOX_NETWORK_DISABLED",
+        "CODEX_PERMISSION_PROFILE",
+        "CODEX_ESCALATE_SOCKET",
+        "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+    ] {
+        cmd.env_remove(key);
     }
 }
 
@@ -3530,6 +3556,81 @@ mod tests {
         apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
 
         assert!(cmd.get_env("CODEX_THREAD_ID").is_none());
+    }
+
+    #[test]
+    fn pane_launch_env_isolates_agent_sessions_without_losing_configuration() {
+        // Session context exported by Claude's Bash tool and Codex's exec tool.
+        let session = [
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_CHILD_SESSION", "1"),
+            ("CLAUDE_CODE_ENTRYPOINT", "cli"),
+            ("CLAUDE_CODE_SESSION_ID", "outer-claude"),
+            ("CLAUDE_CODE_SESSION_ATTENDED", "0"),
+            ("CLAUDE_CODE_SSE_PORT", "12345"),
+            ("CLAUDE_CODE_MESSAGING_SOCKET", "/outer/message.sock"),
+            ("CLAUDE_CODE_MESSAGING_TOKEN", "outer-message-token"),
+            ("CLAUDE_CODE_SANDBOXED", "1"),
+            ("CLAUDE_PID", "123"),
+            ("CLAUDE_JOB_DIR", "/outer/job"),
+            ("CODEX_THREAD_ID", "outer-thread"),
+            ("CODEX_SESSION_ID", "outer-codex"),
+            ("CODEX_SANDBOX", "seatbelt"),
+            ("CODEX_SANDBOX_NETWORK_DISABLED", "1"),
+            ("CODEX_PERMISSION_PROFILE", ":workspace"),
+            ("CODEX_ESCALATE_SOCKET", "/outer/escalate.sock"),
+            ("CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN", "outer-exec-token"),
+        ];
+        let config = [
+            ("CLAUDE_CONFIG_DIR", "/user/claude"),
+            ("CLAUDE_CODE_EXECPATH", "/user/bin/claude"),
+            ("CLAUDE_CODE_SHELL", "/bin/zsh"),
+            ("CLAUDE_CODE_SUBAGENT_MODEL", "haiku"),
+            ("CLAUDE_CODE_USE_BEDROCK", "1"),
+            ("CLAUDE_EFFORT", "medium"),
+            ("ANTHROPIC_API_KEY", "user-api-key"),
+            ("ANTHROPIC_BASE_URL", "https://provider.example"),
+            ("CODEX_HOME", "/user/codex"),
+            ("CODEX_API_KEY", "user-codex-key"),
+            ("CODEX_MANAGED_BY_NPM", "1"),
+            ("CODEX_CI", "1"),
+            ("OPENAI_API_KEY", "user-openai-key"),
+            ("HTTP_PROXY", "http://proxy.example"),
+            ("PATH", "/user/bin"),
+        ];
+        // Both a new shell and a resumed agent reach the same pane-env boundary.
+        // Explicit launch env must not put a parent's session context back.
+        for restore_from_launch_env in [false, true] {
+            let mut cmd = CommandBuilder::new("shell");
+            cmd.env_clear();
+            for (key, value) in session.into_iter().chain(config) {
+                cmd.env(key, value);
+            }
+            let mut extra = vec![
+                ("BUS_LAUNCH_ID".into(), "own-launch".into()),
+                ("BUS_CALLBACK_DIR".into(), "/own/callbacks".into()),
+            ];
+            if restore_from_launch_env {
+                extra.extend(session.map(|(key, value)| (key.into(), value.into())));
+            }
+            apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::from_extra(extra));
+
+            for (key, _) in session {
+                assert!(
+                    cmd.get_env(key).is_none(),
+                    "inherited session marker: {key}"
+                );
+            }
+            for (key, value) in config {
+                assert_eq!(cmd.get_env(key), Some(std::ffi::OsStr::new(value)), "{key}");
+            }
+            for (key, value) in [
+                ("BUS_LAUNCH_ID", "own-launch"),
+                ("BUS_CALLBACK_DIR", "/own/callbacks"),
+            ] {
+                assert_eq!(cmd.get_env(key), Some(std::ffi::OsStr::new(value)), "{key}");
+            }
+        }
     }
 
     #[test]
