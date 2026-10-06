@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.09.13.3"
+version = "2026.10.06.1"
 min_engine_version = 3
-updated_at = "2026-09-13T06:55:22Z"
+updated_at = "2026-10-06T15:23:00Z"
 
 [[rules]]
 id = "osc_title_blocked"
@@ -10,6 +10,30 @@ priority = 1100
 region = "osc_title"
 visible_blocker = true
 contains = ["Action Required"]
+
+# 折叠的 "? N question / to answer" 会留在屏幕上，Codex 仍把标题写成 Action Required。
+# 同时有 "Working (... esc to interrupt)" 或 "Waiting for background terminal
+# (... esc to interrupt)" 时，这一轮还在跑。
+[[rules]]
+id = "activity_with_stale_question"
+state = "working"
+priority = 1150
+region = "whole_recent"
+visible_working = true
+all = [
+  { line_regex = ['(?i)^[•◦]\s+\S.*esc to interrupt'] },
+  { regex = ['(?m)^\s*\?\s+[0-9]+\s+questions?\s*$'] },
+  { contains = ["to answer"] },
+]
+not = [
+  { contains = ["press enter to confirm or esc to cancel"] },
+  { contains = ["enter to submit answer"] },
+  { contains = ["enter to submit all"] },
+  { contains = ["allow command?"] },
+  { contains = ["press enter to continue"] },
+  { contains = ["■ Conversation interrupted"] },
+  { contains = ["↑/↓ to scroll"] },
+]
 
 [[rules]]
 id = "osc_title_working"

@@ -6,6 +6,10 @@
 pub(crate) mod dialog;
 pub mod manifest;
 
+#[cfg(test)]
+#[path = "codex_activity_tests.rs"]
+mod codex_activity_tests;
+
 /// The detected state of a terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentState {
