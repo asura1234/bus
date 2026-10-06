@@ -223,18 +223,19 @@ impl RawInputByteFramer {
         let mut chunks = self.drain_available_chunks();
 
         if let Some(family) = self.discard_until {
-            if family == ControlStringFamily::HostReplyCsi {
-                return chunks;
-            }
-            if family == ControlStringFamily::OrphanedSgrMouseTail {
-                self.buffer.clear();
-                self.discard_until = None;
-                self.discarded_tail_bytes = 0;
-                return chunks;
-            }
+            let keep_discarding = match family {
+                ControlStringFamily::HostReplyCsi => return chunks,
+                ControlStringFamily::OrphanedSgrMouseTail => {
+                    self.buffer.clear();
+                    self.discard_until = None;
+                    self.discarded_tail_bytes = 0;
+                    return chunks;
+                }
+                ControlStringFamily::Osc => plausible_osc_tail(&self.buffer),
+                ControlStringFamily::StTerminated => self.buffer.last() == Some(&ESC),
+            };
 
             let keep_split_st = self.buffer.last() == Some(&ESC);
-            let keep_discarding = plausible_control_string_tail(family, &self.buffer);
             self.discarded_tail_bytes = self.discarded_tail_bytes.saturating_add(self.buffer.len());
             self.buffer.clear();
             if keep_discarding && self.discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES {
@@ -488,35 +489,28 @@ impl RawInputByteFramer {
 
 const MAX_DISCARDED_CONTROL_TAIL_BYTES: usize = 128;
 
-fn plausible_control_string_tail(family: ControlStringFamily, buffer: &[u8]) -> bool {
-    match family {
-        ControlStringFamily::Osc => buffer.iter().all(|byte| {
-            byte.is_ascii_digit()
-                || matches!(
-                    *byte,
-                    b';' | b':'
-                        | b'/'
-                        | b'#'
-                        | b'?'
-                        | b'.'
-                        | b'_'
-                        | b'-'
-                        | b'+'
-                        | b'r'
-                        | b'g'
-                        | b'b'
-                        | b'R'
-                        | b'G'
-                        | b'B'
-                        | ESC
-                )
-        }),
-        ControlStringFamily::StTerminated => buffer.last() == Some(&ESC),
-        ControlStringFamily::HostReplyCsi => false,
-        ControlStringFamily::OrphanedSgrMouseTail => buffer
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || matches!(*byte, b';' | b'M' | b'm')),
-    }
+fn plausible_osc_tail(buffer: &[u8]) -> bool {
+    buffer.iter().all(|byte| {
+        byte.is_ascii_digit()
+            || matches!(
+                *byte,
+                b';' | b':'
+                    | b'/'
+                    | b'#'
+                    | b'?'
+                    | b'.'
+                    | b'_'
+                    | b'-'
+                    | b'+'
+                    | b'r'
+                    | b'g'
+                    | b'b'
+                    | b'R'
+                    | b'G'
+                    | b'B'
+                    | ESC
+            )
+    })
 }
 
 #[cfg(any(unix, test))]
@@ -631,15 +625,9 @@ enum ControlStringFamily {
     OrphanedSgrMouseTail,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ControlString {
-    Complete {
-        len: usize,
-        family: ControlStringFamily,
-    },
-    Incomplete {
-        family: ControlStringFamily,
-    },
+    Complete { len: usize },
+    Incomplete { family: ControlStringFamily },
 }
 
 fn parse_host_color_scheme_report(buffer: &[u8]) -> Option<HostAppearance> {
@@ -711,7 +699,7 @@ fn control_string(buffer: &[u8]) -> Option<ControlString> {
     };
 
     Some(match control_string_terminator_for_family(buffer, family) {
-        Some(len) => ControlString::Complete { len, family },
+        Some(len) => ControlString::Complete { len },
         None => ControlString::Incomplete { family },
     })
 }
@@ -788,7 +776,7 @@ fn complete_escape_sequence_len(buffer: &[u8]) -> Option<usize> {
 
     if let Some(control) = control_string(buffer) {
         return match control {
-            ControlString::Complete { len, .. } => Some(len),
+            ControlString::Complete { len } => Some(len),
             ControlString::Incomplete { .. } => None,
         };
     }
@@ -1606,9 +1594,6 @@ mod tests {
                     parse_fixture_modifiers(columns[4]),
                 );
             } else {
-                if columns.len() == 5 {
-                    columns.push("");
-                }
                 let (bytes_hex, code, modifiers) = match columns.len() {
                     6 => {
                         if columns[1].chars().all(|ch| ch.is_ascii_hexdigit()) {
