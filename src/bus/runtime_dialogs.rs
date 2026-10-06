@@ -38,13 +38,13 @@ impl Worker {
                 .room(agent.room_id)
                 .map_or_else(String::new, |room| room.name.clone());
             let text = match wait.as_deref() {
-                Some(BLOCKED) => Some(format!(
+                Some(BLOCKED) => format!(
                     "{name} (agent {}) in room {room} is blocked, but Bus cannot read a dialog on its screen. Inspect it with:\nbus agent read {} --source visible",
                     id.0, id.0
-                )),
+                ),
                 Some(_) => match self.observe_dialog(id) {
                     Ok(observed) if !observed["dialog"].is_null() => {
-                        Some(dialog_notice(id, &name, &room, &observed))
+                        dialog_notice(id, &name, &room, &observed)
                     }
                     // Closed or changed since the poll; the next poll decides.
                     Ok(_) => continue,
@@ -56,15 +56,13 @@ impl Worker {
                 },
                 // 保留已发出的 blocked 标记，屏幕来回闪时不再把同一条通知发第二次。
                 None if agent.dialog_notice.as_deref() == Some(BLOCKED) => continue,
-                None => Some(match agent.dialog_answer {
+                None => match agent.dialog_answer {
                     Some(option) => format!("answered: option {option}"),
                     None => "answered".to_owned(),
-                }),
+                },
             };
             let mut state = self.state.clone();
-            if let Some(text) = text {
-                post_dialog_notice(&mut state, id, text)?;
-            }
+            post_dialog_notice(&mut state, id, text)?;
             state
                 .set_dialog_notice(id, wait)
                 .map_err(|error| error.to_string())?;
