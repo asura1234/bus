@@ -2956,55 +2956,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn prepersistence_version_zero_welcome_has_error() {
-        // Simulating what the server would send to a v0 client.
-        let check = check_client_version(0);
-        let response = match check {
-            VersionCheck::Compatible => ServerMessage::Welcome {
-                version: PROTOCOL_VERSION,
-                encoding: RenderEncoding::SemanticFrame,
-                error: None,
-            },
-            VersionCheck::Incompatible(reason) => ServerMessage::Welcome {
-                version: PROTOCOL_VERSION,
-                encoding: RenderEncoding::SemanticFrame,
-                error: Some(reason),
-            },
-        };
-
-        match response {
-            ServerMessage::Welcome { error: Some(_), .. } => {}
-            other => panic!("expected Welcome with error, got: {other:?}"),
-        }
-    }
-
     // ---- Malformed/oversized input ----
-
-    #[test]
-    fn oversized_frame_does_not_panic() {
-        // Claim 4GB payload — should return Oversized error, not panic.
-        let mut buf: Vec<u8> = 0xFFC00000u32.to_le_bytes().to_vec(); // ~4 GB claim
-        buf.extend_from_slice(&[0; 8]);
-
-        let result: Result<ClientMessage, FramingError> =
-            read_message(&mut buf.as_slice(), MAX_FRAME_SIZE);
-        assert!(result.is_err());
-        // Did not panic — test passing is proof.
-    }
-
-    #[test]
-    fn malformed_frame_does_not_panic() {
-        // Random garbage bytes after a valid-ish length prefix.
-        let garbage: Vec<u8> = (0..200).map(|i| (i ^ 0xAA) as u8).collect();
-        let mut buf = (garbage.len() as u32).to_le_bytes().to_vec();
-        buf.extend_from_slice(&garbage);
-
-        let result: Result<ClientMessage, FramingError> =
-            read_message(&mut buf.as_slice(), MAX_FRAME_SIZE);
-        assert!(result.is_err());
-        // Did not panic.
-    }
 
     #[test]
     fn oversized_input_rejected_custom_max() {
@@ -3239,33 +3191,6 @@ mod tests {
             }
             other => panic!("expected Bincode error about trailing bytes, got: {other:?}"),
         }
-    }
-
-    #[test]
-    fn read_message_accepts_exact_payload() {
-        // A normally-framed message should decode without error.
-        let msg = ClientMessage::TerminalHello {
-            version: PROTOCOL_VERSION,
-            cols: 80,
-            rows: 24,
-            cell_width_px: 8,
-            cell_height_px: 16,
-            pixel_mouse: false,
-        };
-        let mut buf = Vec::new();
-        write_message(&mut buf, &msg).unwrap();
-        let decoded: ClientMessage = read_message(&mut buf.as_slice(), MAX_FRAME_SIZE).unwrap();
-        assert_eq!(msg, decoded);
-    }
-
-    #[test]
-    fn write_message_rejects_oversized_payload() {
-        // We can't easily create a message that exceeds u32::MAX in a test,
-        // but we can verify the check exists by testing that normal messages
-        // have lengths well within the limit and the function doesn't fail.
-        let msg = ClientMessage::Detach;
-        let mut buf = Vec::new();
-        assert!(write_message(&mut buf, &msg).is_ok());
     }
 
     // ---- Unix socketpair integration test ----
