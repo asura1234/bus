@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""校验 review.md，并确定性渲染开发者可读的聊天回复。"""
+"""Validate review.md and deterministically render the developer-readable chat response."""
 
 from __future__ import annotations
 
@@ -61,7 +61,7 @@ LEGAL_VERDICTS: Mapping[ReviewMode, set[str]] = {
 
 
 class ReviewArtifactError(ValueError):
-    """review artifact 不完整、格式非法或彼此不兼容。"""
+    """A review artifact is incomplete, malformed, or incompatible with another."""
 
 
 @dataclass(frozen=True)

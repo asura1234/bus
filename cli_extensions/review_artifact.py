@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""校验 review.md，并确定性渲染开发者可读的聊天回复。"""
+"""Validate review.md and deterministically render the developer-readable chat response."""
 
 from __future__ import annotations
 
@@ -38,9 +38,10 @@ def atomic_write(path: Path, content: str) -> None:
     descriptor, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     temp_path = Path(temp_name)
     try:
-        # `newline="\n"` 不是讲究：文本模式默认 `newline=None`，写时把 `\n` 翻译成
-        # `os.linesep`，Windows 上得到 CRLF。而这些产物按 canonical LF 消费，
-        # 于是整条 review 链在 Windows 上必然失败——不是测试问题，是产品不可用。
+        # `newline="\n"` is not fussiness: text mode defaults to `newline=None`, which translates `\n`
+        # to `os.linesep` on write and yields CRLF on Windows. These artifacts are consumed as canonical
+        # LF, so the whole review chain would inevitably fail on Windows — not a test problem, the
+        # product would be unusable.
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
             stream.write(content)
             stream.flush()
@@ -55,7 +56,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     render = subparsers.add_parser(
         "render-response",
-        help="校验完整 artifact，并生成唯一聊天回复",
+        help="Validate the complete artifact and generate the only chat response",
     )
     render.add_argument("--review-file", type=Path, required=True)
     render.add_argument("--output", type=Path, required=True)
