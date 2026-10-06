@@ -114,8 +114,8 @@ from plan_execution_gate import (  # noqa: E402
     check_size_token,
 )
 from plan_template_check import (  # noqa: E402
+    TEMPLATE_PATH,
     check_template_match,
-    detect_template,
 )
 from verify_task_graph import (  # noqa: E402
     check_final_gate_contract,
@@ -175,7 +175,7 @@ def prereq_failures(text: str, *, check_only: bool = False) -> list[str]:
     )
     failures: list[str] = []
 
-    _, template_path = detect_template(text)
+    template_path = TEMPLATE_PATH
     if template_path.is_file():
         failures.extend(check_template_match(text, template_path.read_text()))
     else:

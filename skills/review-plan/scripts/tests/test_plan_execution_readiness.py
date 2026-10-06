@@ -33,7 +33,7 @@ class PlanExecutionReadinessTest(unittest.TestCase):
 """
         fake_template = Path(__file__)
         with (
-            patch.object(plan_execution_gate, "detect_template", return_value=(None, fake_template)),
+            patch.object(plan_execution_gate, "TEMPLATE_PATH", fake_template),
             patch.object(plan_execution_gate, "check_template_match", return_value=[]),
             patch.object(plan_execution_gate, "check_goal_required", return_value=None),
             patch.object(plan_execution_gate, "check_goal_section", return_value=None),

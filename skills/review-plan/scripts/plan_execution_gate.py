@@ -29,8 +29,8 @@ from pathlib import Path
 # Co-located sibling script — works when invoked as a file path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plan_template_check import (  # noqa: E402
+    TEMPLATE_PATH,
     check_template_match,
-    detect_template,
 )
 from verify_task_graph import (  # noqa: E402
     CREATED_DATE_LABEL_RE,
@@ -228,7 +228,7 @@ def gate(text: str) -> list[str]:
     failures: list[str] = []
 
     # 0. Plan must be generated from the canonical template.
-    _, template_path = detect_template(text)
+    template_path = TEMPLATE_PATH
     if template_path.is_file():
         for tmpl_failure in check_template_match(text, template_path.read_text()):
             failures.append(tmpl_failure)

@@ -51,11 +51,6 @@ PLAN_BLOCK_OPEN_RE_TEMPLATE = r"<!--\s*{name}：开始[^>]*-->"
 PLAN_BLOCK_CLOSE_RE_TEMPLATE = r"<!--\s*{name}：结束\s*-->"
 
 
-def detect_template(plan_text: str) -> tuple[str, Path]:
-    # Single canonical template in this repo; signature kept for gate compatibility.
-    return ("regular", TEMPLATE_PATH)
-
-
 # Sections the gate does NOT require of a plan. Two reasons a section lands here:
 #   - added to the template AFTER plans were already in flight — a newly-required H2
 #     must not invalidate every historical plan (plans are immutable snapshots tied to
@@ -120,7 +115,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     plan_text = plan_path.read_text()
-    _, template_path = detect_template(plan_text)
+    template_path = TEMPLATE_PATH
     if not template_path.is_file():
         print(f"error: template {template_path} not found", file=sys.stderr)
         return 2
