@@ -206,8 +206,9 @@ fn enter_adds_a_prompt_line_and_ctrl_enter_adds_the_orchestrator_with_it() {
     typed(&mut ui, "orch");
     ui.action(render::Action::Orchestrates);
     ui.action(render::Action::Provider(Provider::ClaudeCode));
-    if let Some(forms::Form::Agent { cwd, .. }) = &mut ui.form {
+    if let Some(forms::Form::Agent { cwd, args, .. }) = &mut ui.form {
         *cwd = editor::Editor::new("/repo".into());
+        **args = editor::Editor::new("--model sonnet".into());
     }
     ui.action(render::Action::Field(forms::PROMPT_FIELD));
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
@@ -223,6 +224,7 @@ fn enter_adds_a_prompt_line_and_ctrl_enter_adds_the_orchestrator_with_it() {
         &p.command,
         BusCommand::AddOrchestrator(input, spec)
             if input.cwd == "/repo"
+                && input.extra_args == "--model sonnet"
                 && input.provider == Provider::ClaudeCode
                 && spec.room == Some(other)
                 && spec.system_prompt.as_deref() == Some(text.as_str())

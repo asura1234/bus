@@ -34,6 +34,8 @@ const DOCS: &[(&str, &str)] = &[
 ];
 /// The prompt file in a launch's callback folder; resumes deliver it again.
 pub(crate) const PROMPT_FILE: &str = "system-prompt.md";
+/// Marks a launch that adopted an existing provider session.
+const ADOPTED_FILE: &str = "adopted-session";
 const UNASSIGNED_ROOM_NAME: &str = "none yet (the human assigns one)";
 const UNASSIGNED_ROOM_ID: &str = "ROOM";
 
@@ -94,23 +96,44 @@ pub(crate) fn write_docs(data_dir: &Path) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// Writes the prompt into a launch's callback folder.
-pub(crate) fn write_prompt(spool: &Path, text: &str) -> Result<PathBuf, String> {
+/// Writes the prompt into a launch's callback folder, marking a launch that
+/// adopted an existing session so its resumes deliver the prompt the same way.
+pub(crate) fn write_prompt(spool: &Path, text: &str, adopted: bool) -> Result<PathBuf, String> {
     let path = spool.join(PROMPT_FILE);
     atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())?;
+    if adopted {
+        atomic_write(&spool.join(ADOPTED_FILE), b"").map_err(|e| e.to_string())?;
+    }
     Ok(path)
 }
 
 /// The Bus-owned launch arguments that deliver the prompt, or `None` when the
-/// provider has no launch option for one (Cursor): Bus then sends the prompt
-/// as the agent's first message.
-pub(crate) fn prompt_args(provider: Provider, path: &Path) -> Result<Option<Vec<String>>, String> {
+/// provider cannot take it at launch: Bus then sends it as the first message.
+/// `adopted` means the launch resumes a session that started outside Bus.
+pub(crate) fn prompt_args(
+    provider: Provider,
+    path: &Path,
+    adopted: bool,
+) -> Result<Option<Vec<String>>, String> {
     Ok(match provider {
-        // Appends to Claude Code's default prompt; a file keeps the typed command short.
-        Provider::ClaudeCode => Some(vec![
-            "--append-system-prompt-file".into(),
-            path.to_string_lossy().into_owned(),
-        ]),
+        // Appends to Claude Code's default prompt; a file keeps the typed command
+        // short. Claude records a session's system prompt on its first request
+        // and replays that record on resume, so an adopted session must render
+        // the prompt fresh to see the appended file.
+        Provider::ClaudeCode => {
+            let mut args = Vec::new();
+            if adopted {
+                args.extend(["--system-prompt-snapshot".into(), "off".into()]);
+            }
+            args.extend([
+                "--append-system-prompt-file".into(),
+                path.to_string_lossy().into_owned(),
+            ]);
+            Some(args)
+        }
+        // A resumed Codex thread keeps the developer_instructions it started
+        // with and ignores new ones, so an adopted thread gets a message.
+        Provider::Codex if adopted => None,
         // Codex adds developer_instructions as a developer message beside its
         // base instructions. It has no file variant, so the text goes inline as
         // a one-line TOML string (JSON string escapes are valid TOML).
@@ -129,13 +152,14 @@ pub(crate) fn resume_prompt_args(provider: Provider, spool: &Path) -> Result<Vec
     if !path.is_file() {
         return Ok(Vec::new());
     }
-    Ok(prompt_args(provider, &path)?.unwrap_or_default())
+    let adopted = spool.join(ADOPTED_FILE).is_file();
+    Ok(prompt_args(provider, &path, adopted)?.unwrap_or_default())
 }
 
-/// The first message for a provider without a system-prompt launch option.
+/// The first message when the provider cannot take the prompt at launch.
 pub(crate) fn prompt_message(text: &str) -> String {
     format!(
-        "Bus: this is your system prompt (your provider has no launch option for one). Follow it for this whole session, then reply briefly that you are ready.\n\n{text}"
+        "Bus: this is your system prompt; Bus could not set it at launch for this provider or session. Follow it for the rest of this session, then reply briefly that you are ready.\n\n{text}"
     )
 }
 

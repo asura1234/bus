@@ -515,9 +515,9 @@ mod tests {
         for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
             let fixture = Fixture::new(provider);
             let spool = fixture.root.join("callbacks/owned-launch");
-            let path = crate::bus::orchestrator::write_prompt(&spool, "Run pr-1.").unwrap();
+            let path = crate::bus::orchestrator::write_prompt(&spool, "Run pr-1.", false).unwrap();
             let extras = fixture.load().unwrap();
-            let expected = crate::bus::orchestrator::prompt_args(provider, &path)
+            let expected = crate::bus::orchestrator::prompt_args(provider, &path, false)
                 .unwrap()
                 .unwrap_or_default();
             assert!(extras.args.ends_with(&expected), "{:?}", extras.args);

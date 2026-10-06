@@ -63,24 +63,24 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
 fn each_provider_gets_its_own_prompt_delivery() {
     let spool = temp_root("args");
     private_dir(&spool).unwrap();
-    let path = write_prompt(&spool, "Line \"one\".\nLine two.").unwrap();
+    let path = write_prompt(&spool, "Line \"one\".\nLine two.", false).unwrap();
     assert_eq!(path, spool.join(PROMPT_FILE));
 
     assert_eq!(
-        prompt_args(Provider::ClaudeCode, &path).unwrap(),
+        prompt_args(Provider::ClaudeCode, &path, false).unwrap(),
         Some(vec![
             "--append-system-prompt-file".into(),
             path.to_string_lossy().into_owned()
         ])
     );
-    let codex = prompt_args(Provider::Codex, &path).unwrap().unwrap();
+    let codex = prompt_args(Provider::Codex, &path, false).unwrap().unwrap();
     assert_eq!(codex[0], "-c");
     let value = codex[1].strip_prefix("developer_instructions=").unwrap();
     assert!(!value.contains('\n'), "one typed line: {value}");
     // The value parses as a TOML string back to the exact prompt.
     let parsed: toml::Value = toml::from_str(&format!("v = {value}")).unwrap();
     assert_eq!(parsed["v"].as_str(), Some("Line \"one\".\nLine two."));
-    assert_eq!(prompt_args(Provider::Cursor, &path).unwrap(), None);
+    assert_eq!(prompt_args(Provider::Cursor, &path, false).unwrap(), None);
 
     assert_eq!(resume_prompt_args(Provider::Codex, &spool).unwrap(), codex);
     assert!(resume_prompt_args(Provider::Cursor, &spool)
@@ -88,6 +88,34 @@ fn each_provider_gets_its_own_prompt_delivery() {
         .is_empty());
     std::fs::remove_file(&path).unwrap();
     assert!(resume_prompt_args(Provider::ClaudeCode, &spool)
+        .unwrap()
+        .is_empty());
+    std::fs::remove_dir_all(spool).unwrap();
+}
+
+#[test]
+fn an_adopted_session_renders_the_prompt_fresh_or_gets_it_as_a_message() {
+    let spool = temp_root("adopted");
+    private_dir(&spool).unwrap();
+    let path = write_prompt(&spool, "Run pr-1.", true).unwrap();
+    let claude = vec![
+        "--system-prompt-snapshot".to_owned(),
+        "off".into(),
+        "--append-system-prompt-file".into(),
+        path.to_string_lossy().into_owned(),
+    ];
+    assert_eq!(
+        prompt_args(Provider::ClaudeCode, &path, true).unwrap(),
+        Some(claude.clone())
+    );
+    assert_eq!(prompt_args(Provider::Codex, &path, true).unwrap(), None);
+    assert_eq!(prompt_args(Provider::Cursor, &path, true).unwrap(), None);
+    // Resumes after a restart keep rendering it fresh.
+    assert_eq!(
+        resume_prompt_args(Provider::ClaudeCode, &spool).unwrap(),
+        claude
+    );
+    assert!(resume_prompt_args(Provider::Codex, &spool)
         .unwrap()
         .is_empty());
     std::fs::remove_dir_all(spool).unwrap();

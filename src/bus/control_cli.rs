@@ -55,6 +55,8 @@ agent add --room master --orchestrates ROOM, or agent orchestrate to reassign or
 A MASTER agent launches with an orchestrator system prompt, the built-in one unless
 --system-prompt or --system-prompt-file replaces it; {{ROOM_NAME}} {{ROOM_ID}} {{AGENT_NAME}}
 {{DOCS}} are filled in. Reassigning sends the orchestrator a message naming its new room.
+--args \"--resume SESSION_ID\" (claude, cursor) or \"resume SESSION_ID\" (codex) adopts an
+existing provider session by its UUID; quit that session elsewhere first.
 Use --to all explicitly for all room agents.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.

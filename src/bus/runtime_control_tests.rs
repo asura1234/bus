@@ -1992,3 +1992,84 @@ fn dev_master_agent_add_sends_cursor_its_custom_prompt_as_the_first_message() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dev_agent_add_adopts_an_existing_session_once_and_prompts_it_the_reviewed_way() {
+    let (mut worker, room, agent, dir) = fixture();
+    worker.transport = Box::new(NoTabs);
+    let session = "160d1f8b-9023-44b8-9bc7-24333effb185";
+    let added = call(
+        &mut worker,
+        "adopt-claude",
+        "agent.add",
+        json!({
+            "room":"master","name":"orch","provider":"claude","orchestrates":"test",
+            "cwd": dir.to_string_lossy(), "extra_args": format!("--model sonnet --resume {session}")
+        }),
+    );
+    assert!(
+        error_message(&added).contains("no tabs in tests"),
+        "{added:?}"
+    );
+    let orch = worker.state.agents().find(|a| a.name == "orch").unwrap().id;
+    let spool = launch_spool(&worker, orch);
+    assert!(spool.join("adopted-session").is_file());
+    assert_eq!(
+        crate::bus::orchestrator::resume_prompt_args(Provider::ClaudeCode, &spool).unwrap()[..2],
+        ["--system-prompt-snapshot".to_owned(), "off".into()]
+    );
+    assert!(messages_to(&worker, orch).is_empty());
+
+    // The provider hook binds the session; nobody else may adopt it then.
+    let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = Some(session.into());
+    worker
+        .state
+        .set_agent_runtime_identity(agent, identity)
+        .unwrap();
+    let taken = call(
+        &mut worker,
+        "adopt-again",
+        "agent.add",
+        json!({
+            "room":"test","name":"twin","provider":"claude",
+            "cwd": dir.to_string_lossy(), "extra_args": format!("--resume {session}")
+        }),
+    );
+    assert!(
+        error_message(&taken).contains("already belongs to Bus agent codex1"),
+        "{taken:?}"
+    );
+    assert!(!worker.state.agents().any(|a| a.name == "twin"));
+    let _ = room;
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_adopted_codex_orchestrator_gets_its_prompt_as_the_first_message() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    worker.transport = Box::new(NoTabs);
+    let added = call(
+        &mut worker,
+        "adopt-codex",
+        "agent.add",
+        json!({
+            "room":"master","name":"orch","provider":"codex","consent_project_hooks":true,
+            "cwd": dir.to_string_lossy(),
+            "extra_args": "resume 01a10f9e-71ac-79e2-81b2-56f26341e7e4"
+        }),
+    );
+    assert!(
+        error_message(&added).contains("no tabs in tests"),
+        "{added:?}"
+    );
+    let orch = worker.state.agents().find(|a| a.name == "orch").unwrap().id;
+    let told = messages_to(&worker, orch);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(told[0].contains("# Bus orchestrator"), "{told:?}");
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

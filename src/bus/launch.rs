@@ -34,6 +34,8 @@ pub(crate) struct PathSuggestion {
 pub(crate) struct PreparedLaunch {
     pub(crate) cwd: PathBuf,
     pub(crate) args: Vec<String>,
+    /// The existing provider session this launch resumes instead of starting one.
+    pub(crate) adopted_session: Option<String>,
     pub(crate) env: HashMap<String, String>,
     pub(crate) manifest: Manifest,
 }
@@ -84,6 +86,93 @@ pub(crate) fn canonical_directory(input: &str) -> Result<PathBuf, String> {
         return Err("Agent PWD must be an existing directory".into());
     }
     Ok(path)
+}
+
+/// Takes the reviewed resume form out of the user's launch args so the agent
+/// adopts an existing provider session: `--resume ID` for Claude Code and
+/// Cursor, a leading `resume ID` subcommand for Codex. The ID must be a session
+/// UUID. Pickers and `--continue`/`--last` stay outside the allowlist, so the
+/// remaining args still go through [`validate_args`].
+pub(crate) fn take_adopted_session(
+    provider: Provider,
+    args: &mut Vec<String>,
+) -> Result<Option<String>, String> {
+    let mut found = None;
+    let mut index = 0;
+    while index < args.len() {
+        let attached = match provider {
+            // A subcommand only counts first; later it may be an option value.
+            Provider::Codex if index == 0 && args[0] == "resume" => None,
+            Provider::Codex => break,
+            Provider::ClaudeCode | Provider::Cursor if args[index] == "--resume" => None,
+            Provider::ClaudeCode | Provider::Cursor => {
+                match args[index].strip_prefix("--resume=") {
+                    Some(value) => Some(value.to_owned()),
+                    None => {
+                        index += 1;
+                        continue;
+                    }
+                }
+            }
+        };
+        if found.is_some() {
+            return Err("Give at most one session to resume".into());
+        }
+        args.remove(index);
+        let value = match attached {
+            Some(value) => value,
+            None if index < args.len() => args.remove(index),
+            None => String::new(),
+        };
+        if !is_session_uuid(&value) {
+            return Err(format!(
+                "Resume needs a session ID (a UUID), not {value:?}; pickers, --continue and --last are not supported"
+            ));
+        }
+        found = Some(value);
+    }
+    Ok(found)
+}
+
+/// The adopted session in an agent's launch args, without the other checks.
+pub(crate) fn adopted_session(
+    provider: Provider,
+    extra_args: &str,
+) -> Result<Option<String>, String> {
+    let mut args = super::files::parse_path_tokens(extra_args).map_err(|e| e.to_string())?;
+    take_adopted_session(provider, &mut args)
+}
+
+fn is_session_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.char_indices().all(|(index, c)| match index {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// The user's validated launch args with Bus's runtime args, led by the resume
+/// form when the agent adopts an existing session.
+fn launch_args(
+    provider: Provider,
+    extra_args: &str,
+) -> Result<(Vec<String>, Option<String>), String> {
+    let mut args = super::files::parse_path_tokens(extra_args).map_err(|e| e.to_string())?;
+    let adopted = take_adopted_session(provider, &mut args)?;
+    validate_args(provider, &args)?;
+    if let Some(session) = &adopted {
+        args.splice(0..0, resume_args(provider, session));
+    }
+    args.extend(runtime_args(provider));
+    Ok((args, adopted))
+}
+
+/// The provider argv that resumes `session`; Codex's is a leading subcommand.
+fn resume_args(provider: Provider, session: &str) -> Vec<String> {
+    match provider {
+        Provider::Codex => vec!["resume".into(), session.into()],
+        Provider::ClaudeCode | Provider::Cursor => vec!["--resume".into(), session.into()],
+    }
 }
 
 enum LaunchOption {
@@ -294,9 +383,7 @@ pub(crate) fn prepare(
     if input.name.trim().is_empty() {
         return Err("Agent name is required".into());
     }
-    let mut args = super::files::parse_path_tokens(&input.extra_args).map_err(|e| e.to_string())?;
-    validate_args(input.provider, &args)?;
-    args.extend(runtime_args(input.provider));
+    let (mut args, adopted_session) = launch_args(input.provider, &input.extra_args)?;
     let available = std::env::var_os("PATH").is_some_and(|path| {
         std::env::split_paths(&path).any(|dir| dir.join(executable(input.provider)).is_file())
     });
@@ -347,6 +434,7 @@ pub(crate) fn prepare(
     Ok(PreparedLaunch {
         cwd,
         args,
+        adopted_session,
         env,
         manifest,
     })
@@ -513,6 +601,78 @@ mod tests {
             let args = super::super::files::parse_path_tokens(input).unwrap();
             assert!(
                 validate_args(provider, &args).is_err(),
+                "accepted {provider:?}: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn launch_args_adopt_one_session_by_uuid_in_each_providers_resume_form() {
+        let id = "160d1f8b-9023-44b8-9bc7-24333effb185";
+        let owned = |args: &[&str]| args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            launch_args(
+                Provider::ClaudeCode,
+                &format!("--model sonnet --resume {id}")
+            )
+            .unwrap(),
+            (
+                owned(&["--resume", id, "--model", "sonnet"]),
+                Some(id.into())
+            )
+        );
+        assert_eq!(
+            launch_args(Provider::Cursor, &format!("--resume={id}")).unwrap(),
+            (owned(&["--resume", id]), Some(id.into()))
+        );
+        assert_eq!(
+            launch_args(Provider::Codex, &format!("resume {id} -m gpt-test")).unwrap(),
+            (
+                owned(&["resume", id, "-m", "gpt-test", "--no-daemon"]),
+                Some(id.into())
+            )
+        );
+        // A later "resume" is an option value, not the subcommand.
+        assert_eq!(
+            launch_args(Provider::Codex, "--model resume").unwrap(),
+            (owned(&["--model", "resume", "--no-daemon"]), None)
+        );
+        for (provider, input) in [
+            (Provider::ClaudeCode, "--resume"),
+            (Provider::ClaudeCode, "--resume not-a-uuid"),
+            (
+                Provider::ClaudeCode,
+                "--resume 160d1f8b-9023-44b8-9bc7-24333effb18",
+            ),
+            (
+                Provider::ClaudeCode,
+                "--resume 160d1f8b_9023-44b8-9bc7-24333effb185",
+            ),
+            (
+                Provider::ClaudeCode,
+                &format!("--resume {id} --resume {id}"),
+            ),
+            (Provider::ClaudeCode, &format!("--resume {id} --continue")),
+            (
+                Provider::ClaudeCode,
+                &format!("--resume {id} --fork-session"),
+            ),
+            (
+                Provider::ClaudeCode,
+                "-r 160d1f8b-9023-44b8-9bc7-24333effb185",
+            ),
+            (Provider::ClaudeCode, "--continue"),
+            (Provider::ClaudeCode, &format!("--session-id {id}")),
+            (Provider::Codex, "resume --last"),
+            (Provider::Codex, "resume"),
+            (Provider::Codex, &format!("resume {id} resume {id}")),
+            (Provider::Codex, &format!("-m gpt resume {id}")),
+            (Provider::Codex, &format!("resume {id} --all")),
+            (Provider::Cursor, "--resume --continue"),
+            (Provider::Cursor, "--continue"),
+        ] {
+            assert!(
+                launch_args(provider, input).is_err(),
                 "accepted {provider:?}: {input}"
             );
         }

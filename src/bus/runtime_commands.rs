@@ -309,6 +309,17 @@ impl Worker {
     ) -> Result<(), String> {
         let orchestrates = orchestrator.as_ref().and_then(|spec| spec.room);
         let cwd = launch::canonical_directory(&input.cwd)?;
+        // One provider session belongs to one Bus agent.
+        if let Some(session) = launch::adopted_session(input.provider, &input.extra_args)? {
+            if let Some(owner) = self.state.agents().find(|agent| {
+                agent.runtime_identity.session_id.as_deref() == Some(session.as_str())
+            }) {
+                return Err(format!(
+                    "Session {session} already belongs to Bus agent {}",
+                    owner.name
+                ));
+            }
+        }
         let mut state = self.state.clone();
         let id = state
             .create_agent(input.room, &input.name, input.provider, cwd.clone(), None)
@@ -353,8 +364,9 @@ impl Worker {
                 .as_deref()
                 .unwrap_or(orchestrator::DEFAULT_PROMPT);
             let text = orchestrator::fill(template, &values);
-            let path = orchestrator::write_prompt(&spool, &text)?;
-            match orchestrator::prompt_args(input.provider, &path)? {
+            let adopted = prepared.adopted_session.is_some();
+            let path = orchestrator::write_prompt(&spool, &text, adopted)?;
+            match orchestrator::prompt_args(input.provider, &path, adopted)? {
                 Some(args) => prepared.args.extend(args),
                 // Queued until the agent is ready, like any room message.
                 None => {
