@@ -426,7 +426,7 @@ fn agent_status(agent: &Agent) -> &'static str {
     {
         "Not ready"
     } else {
-        status(agent.status)
+        status(agent.shown_status())
     }
 }
 
@@ -1558,7 +1558,7 @@ impl BusUi {
                             },
                             a.name,
                             provider(a.provider),
-                            status_name(a.status)
+                            status_name(a.shown_status())
                         ),
                         Some(a.id),
                     )

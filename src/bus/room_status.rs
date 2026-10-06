@@ -1,17 +1,29 @@
-use super::model::{BusState, RoomId, RuntimeStatus};
+use super::model::{Agent, BusState, RoomId, RuntimeStatus};
+
+impl Agent {
+    /// The status Bus shows for this agent: a visible choice dialog blocks it
+    /// whatever its provider reports (Codex reports Idle while it waits on an
+    /// approval). Agent rows and room status both use it, so they agree.
+    pub(crate) fn shown_status(&self) -> RuntimeStatus {
+        if self.dialog {
+            RuntimeStatus::Blocked
+        } else {
+            self.status
+        }
+    }
+}
 
 impl BusState {
-    /// A room's activity from its agents: `Blocked` if any agent is blocked or
-    /// waits on a dialog, else `Working` if any works, else `Idle` (including a
-    /// room without agents).
+    /// A room's activity from its agents' shown status: `Blocked` if any agent
+    /// is blocked (including on a dialog), else `Working` if any works, else
+    /// `Idle` (including a room without agents).
     pub(crate) fn room_status(&self, room: RoomId) -> RuntimeStatus {
         let mut status = RuntimeStatus::Idle;
         for agent in self.agents().filter(|agent| agent.room_id == room) {
-            if agent.dialog || agent.status == RuntimeStatus::Blocked {
-                return RuntimeStatus::Blocked;
-            }
-            if agent.status == RuntimeStatus::Working {
-                status = RuntimeStatus::Working;
+            match agent.shown_status() {
+                RuntimeStatus::Blocked => return RuntimeStatus::Blocked,
+                RuntimeStatus::Working => status = RuntimeStatus::Working,
+                _ => {}
             }
         }
         status
@@ -69,5 +81,45 @@ mod tests {
             .unwrap();
         assert_eq!(state.room_status(master), RuntimeStatus::Working);
         assert_eq!(state.room_status(empty), RuntimeStatus::Idle);
+    }
+
+    #[test]
+    fn a_visible_dialog_blocks_the_agent_row_and_the_room_alike() {
+        let mut state = BusState::default();
+        let room = state.create_room("work").unwrap();
+        let codex = state
+            .create_agent(room, "codex", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        let other = state
+            .create_agent(room, "other", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        state
+            .observe_status(other, RuntimeStatus::Working, 1)
+            .unwrap();
+
+        // Codex reports Idle while its approval dialog is on screen.
+        state.observe_status(codex, RuntimeStatus::Idle, 1).unwrap();
+        state.observe_dialog(codex, true).unwrap();
+        assert_eq!(
+            state.agent(codex).unwrap().shown_status(),
+            RuntimeStatus::Blocked
+        );
+        assert_eq!(state.room_status(room), RuntimeStatus::Blocked);
+
+        // The dialog closes: row and room follow on the same state change.
+        state.observe_dialog(codex, false).unwrap();
+        assert_eq!(
+            state.agent(codex).unwrap().shown_status(),
+            RuntimeStatus::Idle
+        );
+        assert_eq!(state.room_status(room), RuntimeStatus::Working);
+
+        // Deleting a blocked agent unblocks the room.
+        state
+            .observe_status(codex, RuntimeStatus::Blocked, 1)
+            .unwrap();
+        assert_eq!(state.room_status(room), RuntimeStatus::Blocked);
+        state.delete_agent(codex).unwrap();
+        assert_eq!(state.room_status(room), RuntimeStatus::Working);
     }
 }

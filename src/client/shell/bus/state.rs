@@ -816,7 +816,7 @@ impl BusUi {
                         && !agent.session_binding_invalidated
                         && !agent.deletion_pending
                         && matches!(
-                            agent.status,
+                            agent.shown_status(),
                             RuntimeStatus::Working | RuntimeStatus::Blocked
                         )
                 })

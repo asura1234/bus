@@ -638,3 +638,42 @@ fn orchestrators_are_green_in_work_room_messages_in_both_palettes() {
         );
     }
 }
+
+#[test]
+fn an_agent_waiting_on_a_dialog_reads_blocked_on_its_row_and_its_room() {
+    let (ui, _, pr, _, _) = master_fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let codex = snapshot
+        .state
+        .create_agent(pr, "codex-dev", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    snapshot.state.confirm_hook_setup(codex).unwrap();
+    // Codex reports Idle while its approval dialog is on screen.
+    snapshot
+        .state
+        .observe_status(codex, RuntimeStatus::Idle, 1)
+        .unwrap();
+    snapshot.state.observe_dialog(codex, true).unwrap();
+    let mut ui = BusUi::new(Arc::new(snapshot));
+    ui.open_room(pr);
+    let rows = sidebar_rows(&mut ui);
+
+    assert_eq!(rows[5], "# pr-123        Blocked ×", "{rows:?}");
+    let agent_row = rows
+        .iter()
+        .find(|row| row.starts_with("codex-dev"))
+        .expect("agent row");
+    assert!(agent_row.contains("Blocked"), "{rows:?}");
+    assert!(!agent_row.contains("Idle"), "{rows:?}");
+
+    // The dialog closes: both rows follow the same state change.
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.observe_dialog(codex, false).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    let rows = sidebar_rows(&mut ui);
+    assert_eq!(rows[5], "# pr-123           Idle ×", "{rows:?}");
+    assert!(rows
+        .iter()
+        .any(|row| row.starts_with("codex-dev") && row.contains("Idle")));
+}
