@@ -173,7 +173,7 @@ Run H restack PLAN; when it is not `current`, run Restack mode.
 PLAN = argument, else the plan for the current branch's source; ERROR if missing,
   or if no argument was given and its source.branch is not the current branch.
 git fetch origin
-FOR each part with a PR and landed false:
+FOR each part in `H check PLAN` order (parents first) with a PR and landed false:
   IF gh pr view <pr> --json state reports MERGED:
     H record PLAN --part <id> --landed
 result = H restack PLAN
