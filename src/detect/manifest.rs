@@ -255,21 +255,9 @@ fn build_manifest_cache() -> ManifestCache {
     }
 }
 
-#[allow(dead_code)] // shim for existing callers; detect_with_osc is the real path
-pub fn detect(agent: Agent, screen_content: &str) -> AgentDetection {
-    detect_with_osc(
-        agent,
-        DetectionInput {
-            screen: screen_content,
-            osc_title: "",
-            osc_progress: "",
-        },
-    )
-}
-
 pub fn detect_with_osc(agent: Agent, input: DetectionInput<'_>) -> AgentDetection {
     let Some(loaded) = load_manifest(agent) else {
-        return fallback_explain(Some(agent), None).into_detection();
+        return fallback_explain(agent, None).into_detection();
     };
     evaluate_loaded_manifest(agent, input, loaded).into_detection()
 }
@@ -288,7 +276,7 @@ pub fn explain(agent: Agent, screen_content: &str) -> DetectionExplain {
 
 pub fn explain_with_input(agent: Agent, input: DetectionInput<'_>) -> DetectionExplain {
     let Some(loaded) = load_manifest(agent) else {
-        return fallback_explain(Some(agent), None);
+        return fallback_explain(agent, None);
     };
     evaluate_loaded_manifest(agent, input, loaded)
 }
@@ -355,7 +343,7 @@ fn evaluate_loaded_manifest(
     }
 
     let Some((rule, region_name)) = matched else {
-        return fallback_explain(Some(agent), Some((loaded, evaluated_rules)));
+        return fallback_explain(agent, Some((loaded, evaluated_rules)));
     };
 
     let state = rule
@@ -390,7 +378,7 @@ fn evaluate_loaded_manifest(
 }
 
 fn fallback_explain(
-    agent: Option<Agent>,
+    agent: Agent,
     context: Option<(LoadedManifest, Vec<EvaluatedRule>)>,
 ) -> DetectionExplain {
     let (source, evaluated_rules, warning, manifest_version) = context
@@ -403,15 +391,10 @@ fn fallback_explain(
             )
         })
         .unwrap_or((None, Vec::new(), None, None));
-    let known_agent = agent.is_some();
 
     DetectionExplain {
-        agent: agent.map(|agent| agent_label(agent).to_string()),
-        state: if known_agent {
-            AgentState::Idle
-        } else {
-            AgentState::Unknown
-        },
+        agent: Some(agent_label(agent).to_string()),
+        state: AgentState::Idle,
         source,
         matched_rule: None,
         screen_detection_skipped: false,
@@ -420,7 +403,7 @@ fn fallback_explain(
         visible_working: false,
         skip_state_update: false,
         skipped_update_reason: None,
-        fallback_reason: known_agent.then(|| DEFAULT_KNOWN_AGENT_IDLE_FALLBACK.to_string()),
+        fallback_reason: Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK.to_string()),
         evaluated_rules,
         warning,
         manifest_version,
