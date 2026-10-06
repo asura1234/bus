@@ -284,15 +284,55 @@ fn project_root(cwd: &Path) -> PathBuf {
     }
 }
 
-fn hook_command(binary: &Path, provider: Provider) -> String {
-    // Hook definitions are shell commands; provider launch arguments never are.
-    let quoted = crate::platform::remote_reattach_program(&binary.to_string_lossy());
-    let adapter = match provider {
+fn hook_adapter(provider: Provider) -> &'static str {
+    match provider {
         Provider::Codex => "codex-hook",
         Provider::ClaudeCode => "claude-hook",
         Provider::Cursor => "cursor-hook",
+    }
+}
+
+fn hook_command(binary: &Path, provider: Provider) -> String {
+    // Hook definitions are shell commands; provider launch arguments never are.
+    let quoted = crate::platform::remote_reattach_program(&binary.to_string_lossy());
+    format!("{quoted} --bus-callback {}", hook_adapter(provider))
+}
+
+fn hook_entry(provider: Provider, command: &str) -> Value {
+    if provider == Provider::Cursor {
+        json!({"command":command})
+    } else {
+        json!({"hooks":[{"type":"command","command":command,"timeout":5}]})
+    }
+}
+
+/// Whether `entry` is one Bus wrote for `provider` from any Bus executable: its
+/// exact shape, with a command that is one program quoted the way Bus quotes it
+/// plus this provider's callback. A moved or rebuilt binary leaves these behind.
+fn is_owned_entry(entry: &Value, provider: Provider) -> bool {
+    let command = if provider == Provider::Cursor {
+        &entry["command"]
+    } else {
+        &entry["hooks"][0]["command"]
     };
-    format!("{quoted} --bus-callback {adapter}")
+    let Some(command) = command.as_str() else {
+        return false;
+    };
+    let Some(program) =
+        command.strip_suffix(&format!(" --bus-callback {}", hook_adapter(provider)))
+    else {
+        return false;
+    };
+    let path = match program
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+    {
+        Some(quoted) => quoted.replace("'\\''", "'"),
+        None => program.to_owned(),
+    };
+    !path.is_empty()
+        && crate::platform::remote_reattach_program(&path) == program
+        && *entry == hook_entry(provider, command)
 }
 
 fn hook_entries(provider: Provider, binary: &Path) -> Vec<(&'static str, Value)> {
@@ -309,16 +349,7 @@ fn hook_entries(provider: Provider, binary: &Path) -> Vec<(&'static str, Value)>
     };
     events
         .iter()
-        .map(|event| {
-            (
-                *event,
-                if provider == Provider::Cursor {
-                    json!({"command":command})
-                } else {
-                    json!({"hooks":[{"type":"command","command":command,"timeout":5}]})
-                },
-            )
-        })
+        .map(|event| (*event, hook_entry(provider, &command)))
         .collect()
 }
 
@@ -340,7 +371,20 @@ fn merge_hooks(mut document: Value, provider: Provider, binary: &Path) -> Result
             .or_insert(json!([]))
             .as_array_mut()
             .ok_or("Hook event must contain an array")?;
-        if group.contains(&owned) {
+        // Entries from another Bus executable move to this one, in place.
+        let mut placed = false;
+        group.retain_mut(|entry| {
+            if !is_owned_entry(entry, provider) {
+                return true;
+            }
+            if placed {
+                return false;
+            }
+            placed = true;
+            *entry = owned.clone();
+            true
+        });
+        if placed {
             continue;
         }
         if group
@@ -719,8 +763,53 @@ mod tests {
             merge_hooks(merged.clone(), Provider::Codex, binary).unwrap(),
             merged
         );
-        assert!(merge_hooks(merged, Provider::Codex, Path::new("/tmp/other-bus")).is_err());
         assert!(hook_command(binary, Provider::Codex).starts_with("'/tmp/a path/it'\\''s bus' "));
+    }
+
+    #[test]
+    fn hook_merge_moves_bus_entries_from_another_executable_and_fails_closed_on_lookalikes() {
+        let old = Path::new("/tmp/a path/it's bus-frozen");
+        let current = Path::new("/repo/target/debug/bus");
+        for provider in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor] {
+            let user = if provider == Provider::Cursor {
+                json!({"command":"existing"})
+            } else {
+                json!({"hooks":[{"type":"command","command":"existing"}]})
+            };
+            let mut stale = merge_hooks(json!({"other":true}), provider, old).unwrap();
+            for (event, _) in hook_entries(provider, old) {
+                let group = stale["hooks"][event].as_array_mut().unwrap();
+                group.insert(0, user.clone());
+                group.push(user.clone());
+            }
+            let moved = merge_hooks(stale, provider, current).unwrap();
+            assert_eq!(moved["other"], true);
+            for (event, owned) in hook_entries(provider, current) {
+                // The Bus entry keeps its place between the user's own hooks.
+                assert_eq!(moved["hooks"][event], json!([user, owned, user]));
+            }
+            assert_eq!(
+                merge_hooks(moved.clone(), provider, current).unwrap(),
+                moved
+            );
+        }
+
+        // Only Bus's exact entry shape and quoting count as owned.
+        let owned = |command: &str| json!({"hooks":{"Stop":[{"hooks":[{"type":"command","command":command,"timeout":5}]}]}});
+        for lookalike in [
+            owned("sh -c 'bus' --bus-callback codex-hook"),
+            owned("/tmp/bus --bus-callback codex-hook; rm -rf /"),
+            owned("'/tmp/bus' --bus-callback codex-hook"),
+            owned("/tmp/bus --bus-callback claude-hook"),
+            owned(" --bus-callback codex-hook"),
+            json!({"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/tmp/bus --bus-callback codex-hook","timeout":5,"extra":1}]}]}}),
+            json!({"hooks":{"Stop":[{"matcher":"x","hooks":[{"type":"command","command":"/tmp/bus --bus-callback codex-hook","timeout":5}]}]}}),
+        ] {
+            assert!(
+                merge_hooks(lookalike.clone(), Provider::Codex, current).is_err(),
+                "{lookalike}"
+            );
+        }
     }
 
     #[test]
@@ -743,8 +832,6 @@ mod tests {
             1
         );
         install_hooks(&path, Provider::Cursor, binary).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), installed);
-        assert!(install_hooks(&path, Provider::Cursor, Path::new("/tmp/different bus")).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), installed);
         std::fs::write(&path, b"corrupt original").unwrap();
         assert!(install_hooks(&path, Provider::Cursor, binary).is_err());
