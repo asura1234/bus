@@ -85,17 +85,41 @@ rules, decision rules, and a log.
 
 ## Keep the room readable at a glance
 
-The human watches many rooms. Keep the room notes short and current, so one
-look tells them the state:
+The room notes are the human's status board. They watch many rooms and must
+never need to ask an orchestrator for a status update, so keeping the notes
+current is a standing duty, not something done on request. Rewrite them on
+every state change:
+
+- a task assigned, finished or failed,
+- an agent waiting at a dialog (permission, trust, question),
+- a decision made, by you or the human.
+
+Use one fixed shape with short lines, so every room reads the same:
+
+1. `Workflow: <path>`, the room's workflow file.
+2. `WAITING ON YOU:` with one item per decision, keypress or approval the
+   human must give. It goes at the top; leave the heading out when nothing
+   waits on the human.
+3. `Now:` what is running, and which agent runs it.
+4. `DONE / OPEN:` a checklist of the workflow's steps, `[x]` done, `[ ]` open.
 
 ```sh
 bus room notes "$room_id" --text "Workflow: ~/bus-data/workflows/pr-123.md
+WAITING ON YOU:
+- Approve claude-dev's push of feat/gallery (bus agent dialog claude-dev)
+- Pick a gallery list: native list or RN lib (both pass benchmarks)
 Now: review round 2 (claude-review, codex-review)
-Waiting on: human regression test
-Decided: dropped the RN gallery lib, using native list (benchmarks)"
+DONE / OPEN:
+[x] Spec agreed
+[x] Implement gallery (claude-dev)
+[x] CI green
+[ ] Review until all ready (round 2 of 4)
+[ ] Human regression test
+[ ] Merge (human)"
 ```
 
-Update it when the state changes, not on every message.
+`room notes` replaces the whole field, so always send the full board. Update it
+when the state changes, not on every message.
 
 ## Coordinate parallel work
 
