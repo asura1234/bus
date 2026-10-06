@@ -588,12 +588,6 @@ pub enum ClientMessage {
         events: Vec<ClientPaneInputEvent>,
     },
 
-    /// Deliver client-classified semantic input to the active popup terminal.
-    ClientShellPopupInput {
-        terminal_id: String,
-        events: Vec<ClientPaneInputEvent>,
-    },
-
     /// Invoke one endpoint operation through this client shell's selected connection.
     ClientShellEndpointRequest { boot_id: String, request: String },
 
@@ -675,7 +669,6 @@ pub enum ClientHostThemeUpdate {
 pub enum ClientClipboardImageTarget {
     DirectTerminal,
     Pane(String),
-    Popup(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -915,70 +908,17 @@ pub struct ClientShellSnapshot {
     pub boot_id: String,
     /// Monotonic replacement revision within one endpoint boot.
     pub revision: u64,
-    /// Endpoint startup/reload config warning, filtered for client-owned keybindings.
+    /// Endpoint startup/reload config warning.
     pub config_diagnostic: Option<String>,
-    /// Endpoint's normalized built-in keybindings, used only when a remote client selects server bindings.
-    pub server_keybindings_toml: Option<String>,
     pub focused_workspace_id: Option<String>,
     pub focused_tab_id: Option<String>,
     pub focused_pane_id: Option<String>,
-    pub tab_bar_right: Vec<ClientShellTabStatusSegment>,
-    pub tab_bar_right_separator: String,
     pub agent_view_label: Option<String>,
     pub agent_order: Vec<String>,
     pub workspaces: Vec<ClientShellWorkspace>,
     pub tabs: Vec<ClientShellTab>,
     pub panes: Vec<ClientShellPane>,
     pub agents: Vec<ClientShellAgent>,
-    pub commands: Vec<ClientShellCommand>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ClientShellCommandAction {
-    Shell,
-    Pane,
-    Popup,
-    /// A future endpoint action kind that this client cannot execute.
-    #[serde(other)]
-    Unknown,
-}
-
-impl From<crate::config::CustomCommandAction> for ClientShellCommandAction {
-    fn from(action: crate::config::CustomCommandAction) -> Self {
-        match action {
-            crate::config::CustomCommandAction::Shell => Self::Shell,
-            crate::config::CustomCommandAction::Pane => Self::Pane,
-            crate::config::CustomCommandAction::Popup => Self::Popup,
-        }
-    }
-}
-
-impl TryFrom<ClientShellCommandAction> for crate::config::CustomCommandAction {
-    type Error = ();
-
-    fn try_from(action: ClientShellCommandAction) -> Result<Self, Self::Error> {
-        match action {
-            ClientShellCommandAction::Shell => Ok(Self::Shell),
-            ClientShellCommandAction::Pane => Ok(Self::Pane),
-            ClientShellCommandAction::Popup => Ok(Self::Popup),
-            ClientShellCommandAction::Unknown => Err(()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClientShellCommand {
-    pub command_id: String,
-    pub binding_label: String,
-    pub binding_labels: Vec<String>,
-    pub action: ClientShellCommandAction,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClientShellTabStatusSegment {
-    pub text: String,
-    pub accent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1102,7 +1042,6 @@ impl From<ratatui::layout::Rect> for SurfaceRect {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SurfaceGraphicsTarget {
     Pane { pane_id: String },
-    Popup { terminal_id: String },
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -1181,14 +1120,7 @@ pub struct PaneSurfaceFrame {
     pub frame: FrameData,
     pub panes: Vec<PaneSurfacePane>,
     pub splits: Vec<PaneSurfaceSplit>,
-    pub popup: Option<Box<ClientShellPopupSurface>>,
     pub graphics: SurfaceGraphicsScene,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ClientShellPopupSize {
-    Cells(u16),
-    Percent(u8),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1212,19 +1144,6 @@ pub struct PaneSurfacePatch {
     pub panes: Vec<PaneSurfacePane>,
     /// Final cursor relative to the pane surface.
     pub cursor: Option<CursorState>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClientShellPopupSurface {
-    pub terminal_id: String,
-    pub title: String,
-    pub width: Option<ClientShellPopupSize>,
-    pub height: Option<ClientShellPopupSize>,
-    pub frame: FrameData,
-    pub mouse_reporting: bool,
-    pub sgr_pixel_mouse: bool,
-    pub pixel_width: u32,
-    pub pixel_height: u32,
 }
 
 /// Terminal ANSI bytes encoded by the server for network-efficient clients.
@@ -1747,7 +1666,7 @@ mod tests {
                 bincode::config::standard(),
             )
             .unwrap(),
-            [20, 0, 0]
+            [19, 0, 0]
         );
     }
 
@@ -1896,18 +1815,11 @@ mod tests {
             13
         );
         assert_eq!(
-            tag(&ClientMessage::ClientShellPopupInput {
-                terminal_id: "popup".into(),
-                events: Vec::new(),
-            }),
-            14
-        );
-        assert_eq!(
             tag(&ClientMessage::ClientShellEndpointRequest {
                 boot_id: "boot".into(),
                 request: "{}".into(),
             }),
-            15
+            14
         );
         assert_eq!(
             tag(&ClientMessage::AttachMouse {
@@ -1917,25 +1829,25 @@ mod tests {
                 modifiers: 0,
                 lines: 1,
             }),
-            16
+            15
         );
         assert_eq!(
             tag(&ClientMessage::ClientShellHostTheme {
                 update: ClientHostThemeUpdate::Appearance(ClientHostAppearance::Dark),
             }),
-            17
+            16
         );
-        assert_eq!(tag(&ClientMessage::ClientShellFocus { focused: true }), 18);
+        assert_eq!(tag(&ClientMessage::ClientShellFocus { focused: true }), 17);
         assert_eq!(
             tag(&ClientMessage::ClientShellMouseCapture { enabled: true }),
-            19
+            18
         );
         assert_eq!(
             tag(&ClientMessage::EndpointControl {
                 kind: String::new(),
                 data: String::new(),
             }),
-            20
+            19
         );
     }
 
@@ -2128,7 +2040,7 @@ mod tests {
         assert_eq!(decoded, request);
         assert_eq!(
             encoded_sha256(&request),
-            "de5693585a01f6b0d5ee07c51b6ddf79ee9f67dbf183255822d31f35210f5ffb"
+            "9c1ad1fea42444d06dfe82f1ccc44ba5069a13eaa8f6bed92f8ed673235331be"
         );
 
         let response = ServerMessage::ClientShellEndpointResponseChunk {
@@ -2358,7 +2270,6 @@ mod tests {
             frame: frame.clone(),
             panes: Vec::new(),
             splits: Vec::new(),
-            popup: None,
             graphics: SurfaceGraphicsScene::default(),
         });
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
@@ -2367,7 +2278,7 @@ mod tests {
         assert_eq!(msg, decoded);
         assert_eq!(
             encoded_sha256(&msg),
-            "7c016f7b21ddb5ac79212cf65a968b93eb292b5305b941263e89ffaa40158ee3"
+            "67a1d5a4bcc19a5f0aa9811b0e8f55c7445db97606adcebf967bea217ee95cc5"
         );
         match decoded {
             ServerMessage::PaneSurface(surface) => {
@@ -2447,7 +2358,6 @@ mod tests {
             },
             panes: Vec::new(),
             splits: Vec::new(),
-            popup: None,
             graphics: SurfaceGraphicsScene {
                 assets: vec![SurfaceGraphicsAsset {
                     key: key.clone(),
@@ -2475,7 +2385,7 @@ mod tests {
 
         assert_eq!(
             encoded_sha256(&message),
-            "49c4efec0f1456c8ca4112ddf6ead1ab75d0224007576c2ccc18c3fca55a69f0"
+            "efa9a530ef3d6f16a25aa8806daead3fcba9dd6dca6222ec5c8ae17d5c01cf29"
         );
     }
 
@@ -2526,7 +2436,6 @@ mod tests {
             },
             panes: Vec::new(),
             splits: Vec::new(),
-            popup: None,
             graphics: SurfaceGraphicsScene::default(),
         };
         assert_eq!(tag(&ServerMessage::PaneSurface(empty_frame())), 13);
@@ -2576,15 +2485,9 @@ mod tests {
             boot_id: "boot-1".into(),
             revision: 1,
             config_diagnostic: Some("endpoint config warning".into()),
-            server_keybindings_toml: Some("[keys]\nprefix = \"ctrl+a\"\n".into()),
             focused_workspace_id: Some("w1".into()),
             focused_tab_id: Some("w1:t1".into()),
             focused_pane_id: Some("w1:p1".into()),
-            tab_bar_right: vec![ClientShellTabStatusSegment {
-                text: "host".into(),
-                accent: false,
-            }],
-            tab_bar_right_separator: " · ".into(),
             agent_view_label: None,
             agent_order: Vec::new(),
             workspaces: vec![ClientShellWorkspace {
@@ -2619,13 +2522,6 @@ mod tests {
                 right_click_passthrough: false,
             }],
             agents: Vec::new(),
-            commands: vec![ClientShellCommand {
-                command_id: "cmd_0123456789abcdef0123456789abcdef".into(),
-                binding_label: "prefix+z".into(),
-                binding_labels: vec!["prefix+z".into()],
-                action: ClientShellCommandAction::Shell,
-                description: Some("deploy".into()),
-            }],
         }));
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ServerMessage, _) =
@@ -2872,7 +2768,6 @@ mod tests {
             frame,
             panes: Vec::new(),
             splits: Vec::new(),
-            popup: None,
             graphics: SurfaceGraphicsScene::default(),
         });
 

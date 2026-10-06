@@ -40,58 +40,26 @@ use crate::raw_input::RawInputEvent;
 #[cfg(test)]
 use crossterm::event::KeyCode;
 
-fn target_event_message(target: ClientInputTarget, event: ClientPaneInputEvent) -> ClientMessage {
-    match target {
-        ClientInputTarget::Pane(pane_id) => ClientMessage::ClientShellPaneInput {
-            pane_id,
-            events: vec![event],
-        },
-        ClientInputTarget::Popup(terminal_id) => ClientMessage::ClientShellPopupInput {
-            terminal_id,
-            events: vec![event],
-        },
-    }
-}
-
 fn push_target_event(
     target: ClientInputTarget,
     event: ClientPaneInputEvent,
     outcome: &mut ClientShellInput,
 ) {
-    match target {
-        ClientInputTarget::Pane(pane_id) => {
-            if let Some(ClientMessage::ClientShellPaneInput {
-                pane_id: pending_pane,
-                events,
-            }) = outcome.requests.last_mut()
-            {
-                if *pending_pane == pane_id {
-                    events.push(event);
-                    return;
-                }
-            }
-            outcome.requests.push(target_event_message(
-                ClientInputTarget::Pane(pane_id),
-                event,
-            ));
-        }
-        ClientInputTarget::Popup(terminal_id) => {
-            if let Some(ClientMessage::ClientShellPopupInput {
-                terminal_id: pending_terminal,
-                events,
-            }) = outcome.requests.last_mut()
-            {
-                if *pending_terminal == terminal_id {
-                    events.push(event);
-                    return;
-                }
-            }
-            outcome.requests.push(target_event_message(
-                ClientInputTarget::Popup(terminal_id),
-                event,
-            ));
+    let ClientInputTarget::Pane(pane_id) = target;
+    if let Some(ClientMessage::ClientShellPaneInput {
+        pane_id: pending_pane,
+        events,
+    }) = outcome.requests.last_mut()
+    {
+        if *pending_pane == pane_id {
+            events.push(event);
+            return;
         }
     }
+    outcome.requests.push(ClientMessage::ClientShellPaneInput {
+        pane_id,
+        events: vec![event],
+    });
 }
 
 fn contains(rect: Rect, point: (u16, u16)) -> bool {

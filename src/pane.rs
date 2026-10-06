@@ -119,7 +119,6 @@ enum PaneLaunchIdentity {
         tab_id: String,
         pane_id: String,
     },
-    OmitPane,
 }
 
 impl PaneLaunchEnv {
@@ -143,11 +142,6 @@ impl PaneLaunchEnv {
         };
         self
     }
-
-    pub(crate) fn without_pane_identity(mut self) -> Self {
-        self.identity = PaneLaunchIdentity::OmitPane;
-        self
-    }
 }
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
@@ -167,9 +161,6 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
             cmd.env(self::env::HERDR_WORKSPACE_ID_ENV_VAR, workspace_id);
             cmd.env(self::env::HERDR_TAB_ID_ENV_VAR, tab_id);
             cmd.env(self::env::HERDR_PANE_ID_ENV_VAR, pane_id);
-        }
-        PaneLaunchIdentity::OmitPane => {
-            cmd.env_remove(self::env::HERDR_PANE_ID_ENV_VAR);
         }
     }
     // New panes and cold resumes are independent provider sessions, even when
@@ -217,6 +208,7 @@ struct SpawnInitialState<'a> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentDetection {
     Enabled,
+    #[cfg(test)]
     Disabled,
 }
 
@@ -1582,7 +1574,8 @@ impl PaneRuntime {
         )
     }
 
-    // Runtime construction needs to thread PTY size, environment, theme, and render hooks together.
+    /// Test helper: runs `command` through `/bin/sh -c` in a real PTY.
+    #[cfg(all(test, unix))]
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_shell_command(
         pane_id: PaneId,
@@ -1599,7 +1592,11 @@ impl PaneRuntime {
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
-        let mut cmd = crate::platform::pane_custom_command_pty_builder(command);
+        let mut cmd = portable_pty::CommandBuilder::from_argv(vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            command.into(),
+        ]);
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);

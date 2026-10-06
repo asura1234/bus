@@ -149,33 +149,14 @@ impl ClientShellState {
                 RawInputEvent::Text(text) => {
                     let text = text.into_string();
                     self.prepare_committed_text(&mut outcome);
-                    if let Some(target) = self.popup_input_target() {
-                        super::push_target_event(
-                            target,
-                            ClientPaneInputEvent::TextCommit(text),
-                            &mut outcome,
-                        );
-                    } else {
-                        self.push_focused_pane_event(
-                            ClientPaneInputEvent::TextCommit(text),
-                            &mut outcome,
-                        );
-                    }
+                    self.push_focused_pane_event(
+                        ClientPaneInputEvent::TextCommit(text),
+                        &mut outcome,
+                    );
                 }
                 RawInputEvent::Paste(text) => {
                     self.prepare_committed_text(&mut outcome);
-                    if let Some(target) = self.popup_input_target() {
-                        super::push_target_event(
-                            target,
-                            ClientPaneInputEvent::Paste(text),
-                            &mut outcome,
-                        );
-                    } else {
-                        self.push_focused_pane_event(
-                            ClientPaneInputEvent::Paste(text),
-                            &mut outcome,
-                        );
-                    }
+                    self.push_focused_pane_event(ClientPaneInputEvent::Paste(text), &mut outcome);
                 }
                 RawInputEvent::Mouse(mouse) => self.handle_mouse(mouse, &mut outcome),
                 RawInputEvent::OuterFocusGained => {
@@ -299,11 +280,7 @@ impl ClientShellState {
                 width_px: gesture.hit.pixel_width,
                 height_px: gesture.hit.pixel_height,
             });
-            let target = if gesture.hit.popup {
-                ClientInputTarget::Popup(gesture.hit.pane_id)
-            } else {
-                ClientInputTarget::Pane(gesture.hit.pane_id)
-            };
+            let target = ClientInputTarget::Pane(gesture.hit.pane_id);
             super::push_target_event(
                 target,
                 ClientPaneInputEvent::Mouse {
@@ -329,11 +306,7 @@ impl ClientShellState {
     ) {
         match plan {
             crate::input::RepeatPlan::Forwarded(target) => {
-                let pane_blocked_by_popup = matches!(&target, ClientInputTarget::Pane(_))
-                    && self.popup_terminal_id.is_some();
-                if !pane_blocked_by_popup {
-                    self.push_pane_key(target, key, outcome);
-                }
+                self.push_pane_key(target, key, outcome);
             }
             crate::input::RepeatPlan::Reprocess {
                 context,
@@ -368,9 +341,6 @@ impl ClientShellState {
         key: &crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) -> Option<ClientInputTarget> {
-        if let Some(target) = self.popup_input_target() {
-            return Some(target);
-        }
         if matches!(key.code, KeyCode::Modifier(_)) {
             return None;
         }
@@ -399,10 +369,6 @@ impl ClientShellState {
 
     fn input_context(&self) -> ClientInputContext {
         ClientInputContext {
-            popup_terminal_id: self.popup_input_target().and_then(|target| match target {
-                ClientInputTarget::Popup(terminal_id) => Some(terminal_id),
-                ClientInputTarget::Pane(_) => None,
-            }),
             retained_selection: self
                 .selection
                 .as_ref()
@@ -414,12 +380,6 @@ impl ClientShellState {
         self.snapshot
             .as_deref()
             .and_then(|snapshot| snapshot.focused_pane_id.clone())
-    }
-
-    fn popup_input_target(&self) -> Option<ClientInputTarget> {
-        self.popup_terminal_id
-            .as_ref()
-            .map(|terminal_id| ClientInputTarget::Popup(terminal_id.clone()))
     }
 
     fn push_pane_key(

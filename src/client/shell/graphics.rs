@@ -23,20 +23,12 @@ impl ClientShellState {
                 .is_some_and(|selection| selection.is_visible());
         let visibility = if local_cover {
             crate::kitty_graphics::surface::Visibility::Hidden
-        } else if self.hits.popup.is_some() {
-            crate::kitty_graphics::surface::Visibility::Popup
         } else {
             crate::kitty_graphics::surface::Visibility::Main
         };
-        let popup_origin = self
-            .hits
-            .popup
-            .as_ref()
-            .map(|popup| (popup.inner_rect.x, popup.inner_rect.y));
         frame.graphics = self.graphics.encode(
             visibility,
             (layout.pane_surface.x, layout.pane_surface.y),
-            popup_origin,
             self.graphics_cell_size,
         );
     }

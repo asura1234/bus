@@ -532,43 +532,6 @@ impl Workspace {
         self.close_tab(self.active_tab)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn split_focused_command(
-        &mut self,
-        direction: Direction,
-        rows: u16,
-        cols: u16,
-        cwd: Option<PathBuf>,
-        command: &str,
-        extra_env: Vec<(String, String)>,
-        scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-    ) -> std::io::Result<crate::workspace::tab::NewPane> {
-        let pane_number = self.next_public_pane_number;
-        let tab_number = self
-            .active_tab()
-            .map(|tab| tab.number)
-            .expect("workspace must always have at least one tab");
-        let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env);
-        let new_pane = self
-            .active_tab_mut()
-            .expect("workspace must always have at least one tab")
-            .split_focused_command(
-                direction,
-                rows,
-                cols,
-                cwd,
-                command,
-                &launch_env,
-                scrollback_limit_bytes,
-                host_terminal_theme,
-                host_terminal_appearance,
-            )?;
-        self.register_new_pane_with_number(new_pane.pane_id, pane_number);
-        Ok(new_pane)
-    }
-
     // Workspace split routing carries pane identity, geometry, host context, and focus policy.
     #[allow(clippy::too_many_arguments)]
     pub fn split_pane(
@@ -632,38 +595,6 @@ impl Workspace {
             extra_env,
             focus_new_pane,
             None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn split_pane_argv_command(
-        &mut self,
-        pane_id: PaneId,
-        direction: Direction,
-        rows: u16,
-        cols: u16,
-        cwd: Option<PathBuf>,
-        argv: &[String],
-        extra_env: Vec<(String, String)>,
-        scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        focus_new_pane: bool,
-    ) -> Option<std::io::Result<(usize, crate::workspace::tab::NewPane)>> {
-        self.split_pane_with_runtime(
-            pane_id,
-            direction,
-            None,
-            rows,
-            cols,
-            cwd,
-            scrollback_limit_bytes,
-            host_terminal_theme,
-            host_terminal_appearance,
-            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
-            extra_env,
-            focus_new_pane,
-            Some(argv),
         )
     }
 

@@ -10,7 +10,6 @@ pub(crate) mod client_transport;
 pub(crate) mod clients;
 pub(crate) mod clipboard_image;
 pub mod headless;
-pub(crate) mod keybindings;
 pub(crate) mod notifications;
 pub(crate) mod pane_input;
 #[cfg(test)]

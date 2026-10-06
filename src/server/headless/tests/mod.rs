@@ -49,7 +49,6 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
     let should_quit = Arc::new(AtomicBool::new(false));
     #[cfg(windows)]
     spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
-    let server_keybindings = app_keybindings(&app);
     let headless_size = app.state.headless_size;
 
     HeadlessServer {
@@ -65,13 +64,10 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         next_client_id: 1,
         foreground_client_id: None,
         tab_geometry_controllers: HashMap::new(),
-        popup_owner_tab_id: None,
         client_shell_boot_id: "test-boot".into(),
         sent_window_title: None,
         api_window_title: None,
-        server_keybindings,
         server_config_diagnostic: None,
-        server_config_diagnostic_without_keybindings: None,
         terminal_attach_owners: HashMap::new(),
         pending_alt_screen_reads: Vec::new(),
         deferred_alt_screen_reads: Vec::new(),
@@ -727,7 +723,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
     server.app.state.mode = crate::app::Mode::Terminal;
-    server.server_config_diagnostic_without_keybindings = Some("endpoint config warning".into());
+    server.server_config_diagnostic = Some("endpoint config warning".into());
 
     let (writer, control_rx, render_rx) = test_client_writer();
     assert!(
@@ -1181,63 +1177,6 @@ async fn full_render_backpressure_does_not_disable_responsive_peer_patches() {
         read_server_message(slow_render.recv().expect("slow full recovery surface")),
         ServerMessage::PaneSurface(_)
     ));
-
-    shutdown_test_runtimes(&mut server);
-}
-
-#[tokio::test]
-async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
-    let mut server = test_headless_server();
-    server.server_config_diagnostic = Some("server keybinding warning\ntheme warning".into());
-    server.server_config_diagnostic_without_keybindings = Some("theme warning".into());
-
-    let (local_writer, local_control, _local_render) = test_client_writer();
-    assert!(
-        server.handle_server_event(ServerEvent::ClientShellConnected {
-            client_id: 13,
-            surface_cols: 80,
-            surface_rows: 23,
-            cell_width_px: 0,
-            cell_height_px: 0,
-            pixel_mouse: false,
-            direct_graphics: false,
-            endpoint_keybindings: false,
-            mouse_capture: false,
-            surface_active: true,
-            writer: local_writer,
-        })
-    );
-    let local_snapshot = client_shell_snapshot(read_server_message(
-        local_control.recv().expect("local shell snapshot"),
-    ));
-    assert_eq!(
-        local_snapshot.config_diagnostic.as_deref(),
-        Some("theme warning")
-    );
-
-    let (endpoint_writer, endpoint_control, _endpoint_render) = test_client_writer();
-    assert!(
-        server.handle_server_event(ServerEvent::ClientShellConnected {
-            client_id: 14,
-            surface_cols: 80,
-            surface_rows: 23,
-            cell_width_px: 0,
-            cell_height_px: 0,
-            pixel_mouse: false,
-            direct_graphics: false,
-            endpoint_keybindings: true,
-            mouse_capture: false,
-            surface_active: true,
-            writer: endpoint_writer,
-        })
-    );
-    let endpoint_snapshot = client_shell_snapshot(read_server_message(
-        endpoint_control.recv().expect("endpoint shell snapshot"),
-    ));
-    assert_eq!(
-        endpoint_snapshot.config_diagnostic.as_deref(),
-        Some("server keybinding warning\ntheme warning")
-    );
 
     shutdown_test_runtimes(&mut server);
 }
@@ -1949,11 +1888,6 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
         crate::protocol::ClientClipboardImageTarget::DirectTerminal,
         "/tmp/wrong-target.png".into(),
     ));
-    assert!(!server.paste_client_clipboard_image_path(
-        11,
-        crate::protocol::ClientClipboardImageTarget::Popup("missing-popup".into()),
-        "/tmp/wrong-target.png".into(),
-    ));
     assert!(input_rx.try_recv().is_err());
 
     let (workspace_index, runtime_pane_id) = server
@@ -2032,345 +1966,6 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
     );
     assert!(!input_rx.recv().await.expect("encoded release").is_empty());
     assert_eq!(server.foreground_client_id, None);
-    shutdown_test_runtimes(&mut server);
-}
-
-#[tokio::test]
-async fn client_shell_streams_and_targets_popup_terminal_content() {
-    let mut server = test_headless_server();
-    let mut pane_input = install_focused_test_runtime(&mut server, b"base-pane");
-    let (popup_runtime, mut popup_input) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            40,
-            12,
-            0,
-            b"POPUP_SHELL_LIVE\x1b_Ga=T,f=32,t=d,i=9,p=4,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\",
-            4,
-        );
-    let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
-
-    let (writer, control_rx, render_rx) = test_client_writer();
-    assert!(
-        server.handle_server_event(ServerEvent::ClientShellConnected {
-            client_id: 12,
-            surface_cols: 80,
-            surface_rows: 23,
-            cell_width_px: 10,
-            cell_height_px: 20,
-            pixel_mouse: false,
-            direct_graphics: false,
-            endpoint_keybindings: false,
-            mouse_capture: false,
-            surface_active: true,
-            writer,
-        })
-    );
-    let _snapshot = client_shell_snapshot(read_server_message(
-        control_rx.recv().expect("shell snapshot"),
-    ));
-
-    server.render_and_stream();
-    let ServerMessage::PaneSurface(surface) =
-        read_server_message(render_rx.recv().expect("popup surface"))
-    else {
-        panic!("expected pane surface");
-    };
-    let popup = surface.popup.as_deref().expect("popup terminal surface");
-    assert_eq!(popup.terminal_id, popup_terminal_id.as_str());
-    assert!(frame_text(&popup.frame).contains("POPUP_SHELL_LIVE"));
-    assert_eq!((popup.frame.width, popup.frame.height), (37, 9));
-    assert!(popup.frame.cursor.is_some());
-    assert_eq!(surface.graphics.assets.len(), 1);
-    assert_eq!(surface.graphics.placements.len(), 1);
-    assert!(matches!(
-        surface.graphics.placements[0].asset.source,
-        crate::protocol::SurfaceGraphicsSource::Terminal {
-            target: crate::protocol::SurfaceGraphicsTarget::Popup { .. },
-            image_id: 9,
-        }
-    ));
-
-    assert!(
-        !server.handle_server_event(ServerEvent::ClientShellPaneInput {
-            client_id: 12,
-            pane_id: server.app.session_snapshot().focused_pane_id.unwrap(),
-            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
-                "must-not-leak".into(),
-            )],
-        })
-    );
-    assert!(pane_input.try_recv().is_err());
-
-    assert!(server.handle_server_event(ServerEvent::ClientShellResize {
-        client_id: 12,
-        surface_cols: 60,
-        surface_rows: 15,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: false,
-    }));
-    assert_eq!(
-        server
-            .app
-            .terminal_runtimes
-            .get(&popup_terminal_id)
-            .expect("popup runtime")
-            .current_size(),
-        (5, 27)
-    );
-
-    assert!(
-        !server.handle_server_event(ServerEvent::ClientShellPopupInput {
-            client_id: 12,
-            terminal_id: popup_terminal_id.to_string(),
-            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
-                "typed".into()
-            )],
-        })
-    );
-    assert_eq!(
-        popup_input.try_recv().expect("popup input"),
-        Bytes::from_static(b"typed")
-    );
-    assert!(server.paste_client_clipboard_image_path(
-        12,
-        crate::protocol::ClientClipboardImageTarget::Popup(popup_terminal_id.to_string()),
-        "/tmp/popup-image.png".into(),
-    ));
-    assert_eq!(
-        popup_input.try_recv().expect("popup clipboard image path"),
-        Bytes::from_static(b"/tmp/popup-image.png")
-    );
-    assert!(!server.paste_client_clipboard_image_path(
-        12,
-        crate::protocol::ClientClipboardImageTarget::Popup("stale-popup".into()),
-        "/tmp/wrong-popup.png".into(),
-    ));
-    assert!(popup_input.try_recv().is_err());
-
-    assert!(
-        !server.handle_server_event(ServerEvent::ClientShellPopupInput {
-            client_id: 12,
-            terminal_id: "stale-popup".into(),
-            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
-                "wrong".into()
-            )],
-        })
-    );
-    assert!(popup_input.try_recv().is_err());
-
-    assert!(server.app.close_popup_pane());
-    server.render_and_stream();
-    let ServerMessage::PaneSurface(surface) =
-        read_server_message(render_rx.recv().expect("popup close surface"))
-    else {
-        panic!("expected pane surface after popup close");
-    };
-    assert!(surface.popup.is_none());
-    shutdown_test_runtimes(&mut server);
-}
-
-#[tokio::test]
-async fn terminal_popup_is_visible_and_modal_only_on_its_owning_tab() {
-    let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("tab-popup");
-    let first_pane = workspace.tabs[0].root_pane;
-    let second_tab = workspace.test_add_tab(Some("second"));
-    let second_pane = workspace.tabs[second_tab].root_pane;
-    workspace.insert_test_runtime(
-        first_pane,
-        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"FIRST"),
-    );
-    let (second_runtime, mut second_input) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            80, 23, 0, b"SECOND", 4,
-        );
-    workspace.insert_test_runtime(second_pane, second_runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
-    let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
-    let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
-    let second_pane_id = server.app.public_pane_id(0, second_pane).unwrap();
-
-    let (first_control, first_render) = connect_matching_test_shell(&mut server, 31);
-    let (second_control, second_render) = connect_matching_test_shell(&mut server, 32);
-    let _ = first_control.recv().expect("first snapshot");
-    let _ = second_control.recv().expect("second snapshot");
-    assert!(server.focus_shell_client_on_tab(32, &second_tab_id));
-    assert!(server.claim_shell_tab_geometry(32, false));
-
-    let (popup_runtime, mut popup_input) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            40,
-            12,
-            0,
-            b"POPUP\x1b[>3u",
-            4,
-        );
-    let (_, popup_terminal_id) = server.app.install_test_popup_runtime(popup_runtime);
-    server.popup_owner_tab_id = Some(first_tab_id);
-    assert!(server.apply_shell_tab_geometry(31, false));
-    let popup_size = server
-        .app
-        .terminal_runtimes
-        .get(&popup_terminal_id)
-        .unwrap()
-        .current_size();
-    connect_pending_terminal_client(&mut server, 33);
-    assert!(
-        server.handle_server_event(ServerEvent::ClientAttachTerminal {
-            client_id: 33,
-            terminal_id: popup_terminal_id.to_string(),
-            takeover: false,
-        })
-    );
-    assert_ne!(
-        server
-            .app
-            .terminal_runtimes
-            .get(&popup_terminal_id)
-            .unwrap()
-            .current_size(),
-        popup_size
-    );
-    assert!(server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 33 }));
-    assert_eq!(
-        server
-            .app
-            .terminal_runtimes
-            .get(&popup_terminal_id)
-            .unwrap()
-            .current_size(),
-        popup_size
-    );
-    server.render_and_stream();
-    assert!(recv_pane_surface(&first_render, "popup owner surface")
-        .popup
-        .is_some());
-    assert!(recv_pane_surface(&second_render, "other tab surface")
-        .popup
-        .is_none());
-
-    server.handle_server_event(ServerEvent::ClientShellPaneInput {
-        client_id: 32,
-        pane_id: second_pane_id,
-        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
-            "typed".into(),
-        )],
-    });
-    assert_eq!(
-        second_input.try_recv().expect("other tab input"),
-        Bytes::from_static(b"typed")
-    );
-
-    let popup_key = |kind| crate::protocol::ClientPaneInputEvent::Key {
-        code: crate::protocol::ClientKeyCode::Char('x'),
-        modifiers: 0,
-        kind,
-        repeat_count: 1,
-        shifted_codepoint: None,
-        generated_text: (kind == crate::protocol::ClientKeyKind::Press).then(|| "x".into()),
-        tracks_release: true,
-        physical_key_id: Some(0x2d),
-        windows_record: None,
-    };
-    server.handle_server_event(ServerEvent::ClientShellPopupInput {
-        client_id: 31,
-        terminal_id: popup_terminal_id.to_string(),
-        events: vec![popup_key(crate::protocol::ClientKeyKind::Press)],
-    });
-    assert!(
-        !tokio::time::timeout(Duration::from_secs(1), popup_input.recv())
-            .await
-            .expect("popup press timed out")
-            .expect("popup press")
-            .is_empty()
-    );
-    assert!(server.focus_shell_client_on_tab(31, &second_tab_id));
-    server.handle_server_event(ServerEvent::ClientShellPopupInput {
-        client_id: 31,
-        terminal_id: popup_terminal_id.to_string(),
-        events: vec![popup_key(crate::protocol::ClientKeyKind::Release)],
-    });
-    assert!(
-        !tokio::time::timeout(Duration::from_secs(1), popup_input.recv())
-            .await
-            .expect("popup release timed out")
-            .expect("popup release after navigation")
-            .is_empty()
-    );
-
-    assert!(
-        !server.handle_server_event(ServerEvent::ClientShellPopupInput {
-            client_id: 32,
-            terminal_id: popup_terminal_id.to_string(),
-            events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
-                "wrong".into()
-            )],
-        })
-    );
-    assert!(popup_input.try_recv().is_err());
-
-    shutdown_test_runtimes(&mut server);
-}
-
-#[tokio::test]
-async fn client_shell_release_under_popup_renders_when_it_resets_scrollback() {
-    let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("popup-release-scroll");
-    let pane_id = workspace.tabs[0].root_pane;
-    let (runtime, mut input_rx) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            80,
-            2,
-            10_000,
-            b"one\r\ntwo\r\nthree\r\n\x1b[>3u",
-            4,
-        );
-    runtime.scroll_up(1);
-    assert!(runtime
-        .scroll_metrics()
-        .is_some_and(|metrics| metrics.offset_from_bottom > 0));
-    workspace.insert_test_runtime(pane_id, runtime);
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
-    let popup_runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(20, 5, b"");
-    server.app.install_test_popup_runtime(popup_runtime);
-    server.clients.insert(
-        11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            None,
-        ),
-    );
-    server.foreground_client_id = Some(11);
-
-    let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
-        client_id: 11,
-        pane_id: public_pane_id,
-        events: vec![crate::protocol::ClientPaneInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('x'),
-            modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Release,
-            repeat_count: 1,
-            shifted_codepoint: None,
-            generated_text: None,
-            tracks_release: true,
-            physical_key_id: Some(0x2d),
-            windows_record: None,
-        }],
-    });
-
-    assert!(render_impact);
-    assert!(!input_rx.recv().await.expect("encoded release").is_empty());
     shutdown_test_runtimes(&mut server);
 }
 
@@ -2544,19 +2139,6 @@ fn install_focused_test_runtime(
     server.app.state.selected = 0;
     server.app.state.mode = crate::app::Mode::Terminal;
     input_rx
-}
-
-#[test]
-fn server_keybinding_filter_keeps_whole_config_failures() {
-    assert!(!config::is_keybinding_config_diagnostic(
-        "config parse error: invalid value at `keys.new_tab = @`; using defaults"
-    ));
-    assert!(!config::is_keybinding_config_diagnostic(
-        "config read error: permission denied at keys.toml; using defaults"
-    ));
-    assert!(config::is_keybinding_config_diagnostic(
-        "unsafe direct keybinding: keys.close_pane would intercept typing"
-    ));
 }
 
 #[test]
@@ -3913,32 +3495,6 @@ fn client_page_keys_forward_when_modified_or_owned_by_application() {
         .expect("application PageUp");
         assert_eq!(
             input_rx.try_recv().expect("forwarded application PageUp"),
-            Bytes::from_static(b"\x1b[5~")
-        );
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
-    });
-}
-
-#[test]
-fn client_popup_plain_page_key_remains_popup_input() {
-    with_terminal_attach_runtime(b"", 0, |runtime, input_rx| {
-        apply_client_popup_input_events(
-            runtime,
-            &[client_page_key(
-                crate::protocol::ClientKeyCode::PageUp,
-                crossterm::event::KeyModifiers::empty(),
-                crate::protocol::ClientKeyKind::Press,
-            )],
-        )
-        .expect("popup PageUp");
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded popup PageUp"),
             Bytes::from_static(b"\x1b[5~")
         );
         assert_eq!(

@@ -164,19 +164,15 @@ mod tests {
             boot_id: "boot".into(),
             revision: 1,
             config_diagnostic: None,
-            server_keybindings_toml: None,
             focused_workspace_id: None,
             focused_tab_id: None,
             focused_pane_id: None,
-            tab_bar_right: Vec::new(),
-            tab_bar_right_separator: String::new(),
             agent_view_label: None,
             agent_order: Vec::new(),
             workspaces: Vec::new(),
             tabs: Vec::new(),
             panes: Vec::new(),
             agents: Vec::new(),
-            commands: Vec::new(),
         }
     }
 
@@ -237,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_json_tolerates_future_fields_and_command_actions() {
+    fn snapshot_json_tolerates_future_fields() {
         let mut snapshot = match snapshot_message(&snapshot()).unwrap() {
             ServerMessage::EndpointControl { data, .. } => {
                 serde_json::from_str::<serde_json::Value>(&data).unwrap()
@@ -245,19 +241,9 @@ mod tests {
             _ => unreachable!(),
         };
         snapshot["future_projection"] = serde_json::json!({"enabled": true});
-        snapshot["commands"] = serde_json::json!([{
-            "command_id": "future",
-            "binding_label": "x",
-            "binding_labels": ["x"],
-            "action": "FutureAction",
-            "description": null
-        }]);
 
         let decoded: ClientShellSnapshot = serde_json::from_value(snapshot).unwrap();
-        assert_eq!(
-            decoded.commands[0].action,
-            crate::protocol::ClientShellCommandAction::Unknown
-        );
+        assert_eq!(decoded.boot_id, "boot");
     }
 
     #[test]

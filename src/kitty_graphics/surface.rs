@@ -7,9 +7,7 @@ use super::{
     clipped_placement, collect_visible_placements, encode_graphics_update_incremental,
     HostCellSize, HostGraphicsCache, HostPlacement, HostSourceKey, ImageSignature,
 };
-use crate::ghostty::{
-    KittyImageDescriptor, KittyImageFormat, KittyImagePlacement, KittyPlacementRenderInfo,
-};
+use crate::ghostty::{KittyImageFormat, KittyImagePlacement, KittyPlacementRenderInfo};
 use crate::layout::PaneId;
 use crate::protocol::{
     SurfaceGraphicsAsset, SurfaceGraphicsAssetKey, SurfaceGraphicsFormat, SurfaceGraphicsPlacement,
@@ -33,7 +31,6 @@ impl DeliveryCache {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Visibility {
     Main,
-    Popup,
     Hidden,
 }
 
@@ -122,7 +119,6 @@ impl ClientState {
         &mut self,
         visibility: Visibility,
         main_origin: (u16, u16),
-        popup_origin: Option<(u16, u16)>,
         cell_size: HostCellSize,
     ) -> Vec<u8> {
         let mut bytes = self.take_pending_cleanup();
@@ -154,7 +150,6 @@ impl ClientState {
                     self.assets.get(&placement.asset).map(Vec::as_slice),
                     visibility,
                     main_origin,
-                    popup_origin,
                     cell_size,
                 )
             })
@@ -181,7 +176,6 @@ pub(crate) fn host_image_id(scope: &str, key: &SurfaceGraphicsAssetKey) -> u32 {
 pub(crate) fn collect_scene(
     app: &crate::app::App,
     surface: crate::ui::TabSurfaceView<'_>,
-    popup_content_size: Option<(u16, u16)>,
     cell_size: HostCellSize,
     delivered: &DeliveryCache,
 ) -> (SurfaceGraphicsScene, DeliveryCache) {
@@ -198,17 +192,6 @@ pub(crate) fn collect_scene(
                 targets.insert(pane.id, SurfaceGraphicsTarget::Pane { pane_id: public_id });
             }
         }
-    }
-    let popup_target = app.state.popup_pane.as_ref().map(|popup| {
-        (
-            popup.pane_id,
-            SurfaceGraphicsTarget::Popup {
-                terminal_id: popup.terminal_id.to_string(),
-            },
-        )
-    });
-    if let Some((pane_id, target)) = popup_target.as_ref() {
-        targets.insert(*pane_id, target.clone());
     }
 
     // Reconstruct only the small image-signature index expected by the existing
@@ -233,14 +216,10 @@ pub(crate) fn collect_scene(
                     );
                 }
             }
-            SurfaceGraphicsSource::Terminal {
-                target: SurfaceGraphicsTarget::Popup { .. },
-                ..
-            }
-            | SurfaceGraphicsSource::PaneLayer { .. } => {}
+            SurfaceGraphicsSource::PaneLayer { .. } => {}
         }
     }
-    let mut host_placements = collect_visible_placements(
+    let host_placements = collect_visible_placements(
         &app.state,
         &app.terminal_runtimes,
         surface,
@@ -248,42 +227,6 @@ pub(crate) fn collect_scene(
         &uploaded_images,
         &delivered_terminal_images,
     );
-
-    if let (Some(popup), Some((width, height)), Some((_, target))) = (
-        app.state.popup_pane.as_ref(),
-        popup_content_size,
-        popup_target.as_ref(),
-    ) {
-        if let Some(runtime) = app.terminal_runtimes.get(&popup.terminal_id) {
-            let mut requested = HashSet::new();
-            for placement in runtime.kitty_image_placements_with_data_filter(|descriptor| {
-                let key = asset_key_from_descriptor(
-                    SurfaceGraphicsSource::Terminal {
-                        target: target.clone(),
-                        image_id: descriptor.image_id,
-                    },
-                    descriptor,
-                );
-                !delivered.assets.contains(&key) && requested.insert(key)
-            }) {
-                host_placements.push(HostPlacement {
-                    pane_id: popup.pane_id,
-                    host_image_id: None,
-                    area: Rect::new(0, 0, width, height),
-                    cell_size,
-                    source_key: HostSourceKey::Terminal {
-                        pane_id: popup.pane_id,
-                        image_id: placement.image_id,
-                    },
-                    placement,
-                    scrollback_offset: runtime
-                        .scroll_metrics()
-                        .map(|metrics| metrics.offset_from_bottom as u32)
-                        .unwrap_or(0),
-                });
-            }
-        }
-    }
 
     let mut placements = Vec::new();
     let mut asset_data = HashMap::<SurfaceGraphicsAssetKey, Vec<u8>>::new();
@@ -389,24 +332,6 @@ fn image_signature_from_asset(key: &SurfaceGraphicsAssetKey) -> ImageSignature {
     }
 }
 
-fn asset_key_from_descriptor(
-    source: SurfaceGraphicsSource,
-    descriptor: KittyImageDescriptor,
-) -> SurfaceGraphicsAssetKey {
-    SurfaceGraphicsAssetKey {
-        source,
-        image_width: descriptor.image_width,
-        image_height: descriptor.image_height,
-        format: match descriptor.format {
-            KittyImageFormat::Rgb => SurfaceGraphicsFormat::Rgb,
-            KittyImageFormat::Rgba => SurfaceGraphicsFormat::Rgba,
-            KittyImageFormat::Png => SurfaceGraphicsFormat::Png,
-        },
-        data_len: descriptor.data_len as u64,
-        data_fingerprint: descriptor.data_fingerprint,
-    }
-}
-
 fn asset_key(
     source: SurfaceGraphicsSource,
     placement: &KittyImagePlacement,
@@ -431,23 +356,15 @@ fn client_host_placement(
     data: Option<&[u8]>,
     visibility: Visibility,
     main_origin: (u16, u16),
-    popup_origin: Option<(u16, u16)>,
     cell_size: HostCellSize,
 ) -> Option<HostPlacement> {
     let origin = match (&placement.asset.source, visibility) {
         (
             SurfaceGraphicsSource::Terminal {
-                target: SurfaceGraphicsTarget::Popup { .. },
-                ..
-            },
-            Visibility::Popup,
-        ) => popup_origin?,
-        (
-            SurfaceGraphicsSource::Terminal {
                 target: SurfaceGraphicsTarget::Pane { .. },
                 ..
             },
-            Visibility::Main | Visibility::Popup,
+            Visibility::Main,
         ) => main_origin,
         _ => return None,
     };
@@ -587,7 +504,6 @@ mod tests {
         let first = state.encode(
             Visibility::Main,
             (10, 5),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -599,7 +515,6 @@ mod tests {
         let second = state.encode(
             Visibility::Main,
             (10, 5),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -627,78 +542,15 @@ mod tests {
             width_px: 8,
             height_px: 16,
         };
-        let _ = state.encode(Visibility::Main, (4, 2), None, cell);
+        let _ = state.encode(Visibility::Main, (4, 2), cell);
 
-        let hidden = state.encode(Visibility::Hidden, (4, 2), None, cell);
+        let hidden = state.encode(Visibility::Hidden, (4, 2), cell);
         assert!(String::from_utf8_lossy(&hidden).contains("a=d,d=i"));
 
-        let restored = state.encode(Visibility::Main, (4, 2), None, cell);
+        let restored = state.encode(Visibility::Main, (4, 2), cell);
         let restored = String::from_utf8_lossy(&restored);
         assert!(restored.contains("a=p"));
         assert!(!restored.contains("a=t,t=d"));
-    }
-
-    #[test]
-    fn popup_candidates_use_client_resolved_popup_inner_origin() {
-        let mut state = ClientState::default();
-        state.set_scope("endpoint-a:boot-1");
-        let image = asset(
-            SurfaceGraphicsTarget::Popup {
-                terminal_id: "terminal-popup".into(),
-            },
-            13,
-            vec![9, 8, 7, 6],
-        );
-        state.set_scene(scene(image, 2, 1));
-
-        let bytes = state.encode(
-            Visibility::Popup,
-            (20, 4),
-            Some((30, 10)),
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        );
-        assert!(String::from_utf8_lossy(&bytes).contains("\u{1b}[12;33H"));
-    }
-
-    #[test]
-    fn popup_visibility_keeps_uncovered_main_scene_placements() {
-        let mut state = ClientState::default();
-        state.set_scope("endpoint-a:boot-1");
-        let main = asset(
-            SurfaceGraphicsTarget::Pane {
-                pane_id: "w1:p1".into(),
-            },
-            20,
-            vec![1, 2, 3, 4],
-        );
-        let popup = asset(
-            SurfaceGraphicsTarget::Popup {
-                terminal_id: "popup-1".into(),
-            },
-            21,
-            vec![4, 3, 2, 1],
-        );
-        let mut graphics = scene(main, 0, 0);
-        let popup_scene = scene(popup, 0, 0);
-        graphics.assets.extend(popup_scene.assets);
-        graphics.placements.extend(popup_scene.placements);
-        state.set_scene(graphics);
-
-        let bytes = String::from_utf8(state.encode(
-            Visibility::Popup,
-            (2, 1),
-            Some((20, 10)),
-            HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            },
-        ))
-        .unwrap();
-        assert!(bytes.contains("\u{1b}[2;3H"), "{bytes}");
-        assert!(bytes.contains("\u{1b}[11;21H"), "{bytes}");
     }
 
     #[test]
@@ -716,7 +568,6 @@ mod tests {
         let _ = state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,
@@ -749,7 +600,6 @@ mod tests {
         let bytes = state.encode(
             Visibility::Main,
             (0, 0),
-            None,
             HostCellSize {
                 width_px: 8,
                 height_px: 16,

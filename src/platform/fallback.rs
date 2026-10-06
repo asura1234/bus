@@ -65,45 +65,13 @@ pub(crate) fn hostname() -> Option<String> {
     None
 }
 
+#[cfg(test)]
 pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {
     None
 }
 
 pub(crate) fn local_datetime_at(_seconds: i64) -> Option<time::PrimitiveDateTime> {
     None
-}
-
-pub(crate) fn status_commands_supported() -> bool {
-    false
-}
-
-pub(crate) fn configure_status_command(_process: &mut std::process::Command) {}
-
-pub(crate) struct StatusCommandGuard;
-
-impl StatusCommandGuard {
-    pub(crate) fn new(_child: &tokio::process::Child) -> std::io::Result<Self> {
-        Ok(Self)
-    }
-
-    pub(crate) fn terminate(&mut self) {}
-}
-
-fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
-    vec!["/bin/sh".into(), flag.into(), command.into()]
-}
-
-pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
-    let argv = raw_command_argv(command, "-lc");
-    let mut command = std::process::Command::new(&argv[0]);
-    command.args(&argv[1..]);
-    command
-}
-
-pub(crate) fn pane_custom_command_pty_builder_platform(
-    command: &str,
-) -> portable_pty::CommandBuilder {
-    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-c"))
 }
 
 pub(crate) fn interactive_shell_command(_argv: &[String], _shell_name: &str) -> Option<String> {

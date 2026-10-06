@@ -5,15 +5,6 @@ impl HeadlessServer {
         &self,
         client_id: u64,
     ) -> Option<(&crate::terminal::TerminalRuntime, crate::layout::PaneId)> {
-        if self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id) {
-            if let Some(popup) = &self.app.state.popup_pane {
-                return self
-                    .app
-                    .terminal_runtimes
-                    .get(&popup.terminal_id)
-                    .map(|runtime| (runtime, popup.pane_id));
-            }
-        }
         let target = self.shell_target_for_client(client_id)?;
         let tab = self
             .app
@@ -241,11 +232,6 @@ impl HeadlessServer {
                 } else {
                     pane_ids.extend(tab.layout.pane_ids());
                 }
-                if self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id) {
-                    if let Some(popup) = &self.app.state.popup_pane {
-                        pane_ids.insert(popup.pane_id);
-                    }
-                }
             }
         }
         if !direct_terminal_targets.is_empty() {
@@ -256,11 +242,6 @@ impl HeadlessServer {
                             .contains(pane.attached_terminal_id.as_str())
                             .then_some(pane_id)
                     }));
-                }
-            }
-            if let Some(popup) = &self.app.state.popup_pane {
-                if direct_terminal_targets.contains(popup.terminal_id.as_str()) {
-                    pane_ids.insert(popup.pane_id);
                 }
             }
         }
@@ -323,15 +304,6 @@ impl HeadlessServer {
         &self,
         pane_id: crate::layout::PaneId,
     ) -> Option<&crate::terminal::TerminalId> {
-        if let Some(popup) = self
-            .app
-            .state
-            .popup_pane
-            .as_ref()
-            .filter(|popup| popup.pane_id == pane_id)
-        {
-            return Some(&popup.terminal_id);
-        }
         self.app
             .find_pane(pane_id)
             .map(|(_, pane)| &pane.attached_terminal_id)
@@ -341,15 +313,6 @@ impl HeadlessServer {
         self.clients.iter().any(|(&client_id, client)| {
             if !client.is_active_shell_client() || client.writer.is_none() {
                 return false;
-            }
-            if self
-                .app
-                .state
-                .popup_pane
-                .as_ref()
-                .is_some_and(|popup| popup.pane_id == pane_id)
-            {
-                return self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
             }
             let Some(target) = self.shell_target_for_client(client_id) else {
                 return false;
@@ -401,8 +364,6 @@ impl HeadlessServer {
         for (client_id, (cols, rows), cell_size, _is_foreground, mode) in render_targets {
             let area = Rect::new(0, 0, cols, rows);
             let shell_target = self.shell_target_for_client(client_id);
-            let shell_tab_id = self.shell_tab_id_for_client(client_id);
-            let shell_shows_popup = shell_tab_id.as_deref() == self.popup_owner_tab_id.as_deref();
             let mut shell_projection_revision = 0;
             if matches!(mode, ClientConnectionMode::ClientShell) {
                 let location = self
@@ -419,11 +380,7 @@ impl HeadlessServer {
                     None,
                     location.as_ref(),
                 );
-                candidate.config_diagnostic = if client.shell_uses_endpoint_keybindings {
-                    self.server_config_diagnostic.clone()
-                } else {
-                    self.server_config_diagnostic_without_keybindings.clone()
-                };
+                candidate.config_diagnostic = self.server_config_diagnostic.clone();
                 candidate.revision = client.shell_projection_revision;
                 if client.shell_snapshot.as_ref() != Some(&candidate) {
                     client.shell_projection_revision =
@@ -479,7 +436,6 @@ impl HeadlessServer {
                         frame,
                         panes,
                         splits,
-                        popup,
                         graphics,
                         graphics_delivery: next_graphics_delivery,
                     } = render_client_shell_pane_surface(
@@ -487,7 +443,6 @@ impl HeadlessServer {
                         shell_target,
                         area,
                         false,
-                        shell_shows_popup,
                         render_cell_size,
                         &shell_graphics_delivery,
                     );
@@ -495,7 +450,7 @@ impl HeadlessServer {
                         "full_render.render_tab_surface_virtual",
                         render_started,
                     );
-                    surface_parts = Some((panes, splits, popup, graphics, next_graphics_delivery));
+                    surface_parts = Some((panes, splits, graphics, next_graphics_delivery));
                     frame
                 }
                 ClientConnectionMode::TerminalPending => continue,
@@ -544,13 +499,11 @@ impl HeadlessServer {
                 crate::render_prof::event("full_render.writer_missing");
                 continue;
             };
-            let has_graphics = surface_parts
-                .as_ref()
-                .is_some_and(|(_, _, _, graphics, _)| {
-                    !graphics.assets.is_empty() || !graphics.placements.is_empty()
-                });
+            let has_graphics = surface_parts.as_ref().is_some_and(|(_, _, graphics, _)| {
+                !graphics.assets.is_empty() || !graphics.placements.is_empty()
+            });
             let mut next_shell_graphics_delivery = None;
-            let prepared = if let Some((panes, splits, popup, graphics, delivery)) = surface_parts {
+            let prepared = if let Some((panes, splits, graphics, delivery)) = surface_parts {
                 next_shell_graphics_delivery = Some(delivery);
                 client
                     .render_state
@@ -561,7 +514,6 @@ impl HeadlessServer {
                         frame,
                         panes,
                         splits,
-                        popup,
                         graphics,
                     })
             } else {

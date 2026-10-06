@@ -92,10 +92,4 @@ pub enum AppEvent {
         pane_id: PaneId,
         cwd: std::path::PathBuf,
     },
-    /// A configured tab bar status command finished.
-    TabBarCommandFinished {
-        generation: u64,
-        segment_index: usize,
-        result: Result<Option<String>, String>,
-    },
 }

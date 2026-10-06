@@ -26,11 +26,6 @@ enum RuntimeExitAction {
 impl App {
     pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
         match ev {
-            AppEvent::TabBarCommandFinished {
-                generation,
-                segment_index,
-                result,
-            } => self.handle_tab_bar_command_finished(generation, segment_index, result),
             ev @ AppEvent::TerminalBell { .. } => {
                 self.handle_internal_event(ev);
                 false
@@ -57,26 +52,7 @@ impl App {
             return Vec::new();
         }
 
-        if let AppEvent::TabBarCommandFinished {
-            generation,
-            segment_index,
-            result,
-        } = ev
-        {
-            let _ = self.handle_tab_bar_command_finished(generation, segment_index, result);
-            return Vec::new();
-        }
-
         if let AppEvent::PaneDied { pane_id, .. } = &ev {
-            if self
-                .state
-                .popup_pane
-                .as_ref()
-                .is_some_and(|popup| popup.pane_id == *pane_id)
-            {
-                self.close_popup_pane();
-                return Vec::new();
-            }
             let previous_toast = self.state.toast.clone();
             if let Some(update) = self
                 .state
@@ -687,9 +663,6 @@ impl App {
             Method::NotificationShow(params) => {
                 return self.handle_notification_show(request.id, params);
             }
-            Method::CommandInvoke(params) => {
-                return self.handle_command_invoke(request.id, params);
-            }
             Method::ClientWindowTitleSet(_) | Method::ClientWindowTitleClear(_) => {
                 return responses::encode_success(
                     request.id,
@@ -786,9 +759,6 @@ impl App {
             }
             Method::PaneResize(params) => return self.handle_pane_resize(request.id, params),
             Method::PaneScroll(params) => return self.handle_pane_scroll(request.id, params),
-            Method::PaneEditScrollback(target) => {
-                return self.handle_pane_edit_scrollback(request.id, target);
-            }
             Method::PaneSelectionRead(params) => {
                 return self.handle_pane_selection_read(request.id, params);
             }
@@ -830,13 +800,6 @@ impl App {
             Method::PaneClose(target) => return self.handle_pane_close(request.id, target),
             Method::PaneCloseIfIdentity(params) => {
                 return self.handle_pane_close_if_identity(request.id, params)
-            }
-            Method::PopupClose(_) => {
-                return if self.close_popup_pane() {
-                    responses::encode_success(request.id, ResponseResult::Ok {})
-                } else {
-                    responses::encode_error(request.id, "popup_not_open", "no popup is open")
-                };
             }
             Method::PaneSendKeys(params) => return self.handle_pane_send_keys(request.id, params),
             _ => {

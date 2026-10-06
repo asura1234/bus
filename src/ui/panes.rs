@@ -14,7 +14,6 @@ use super::widgets::panel_contrast_fg;
 use crate::app::state::Palette;
 use crate::app::AppState;
 use crate::layout::PaneInfo;
-use crate::popup_size::resolve_popup_geometry;
 use crate::terminal::{TerminalRuntime, TerminalRuntimeRegistry};
 
 pub(crate) fn pane_is_scrolled_back(rt: &TerminalRuntime) -> bool {
@@ -410,37 +409,6 @@ pub(super) fn render_panes(
     }
 
     render_pane_borders(app, ws, pane_infos, split_borders, frame);
-}
-
-pub(crate) fn popup_pane_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {
-    let popup = app.popup_pane.as_ref()?;
-    resolve_popup_geometry(popup.width, popup.height, area)
-        .map(|geometry| (geometry.outer, geometry.inner))
-}
-
-pub(super) fn resize_popup_pane(
-    app: &AppState,
-    terminal_runtimes: &TerminalRuntimeRegistry,
-    area: Rect,
-    cell_size: crate::kitty_graphics::HostCellSize,
-) {
-    let Some(popup) = app.popup_pane.as_ref() else {
-        return;
-    };
-    let Some((_outer, inner)) = popup_pane_rects(app, area) else {
-        return;
-    };
-    if app.direct_attach_resize_locks.contains(&popup.terminal_id) {
-        return;
-    }
-    if let Some(rt) = terminal_runtimes.get(&popup.terminal_id) {
-        rt.resize(
-            inner.height,
-            inner.width,
-            cell_size.width_px,
-            cell_size.height_px,
-        );
-    }
 }
 
 #[derive(Clone, Copy, Default)]

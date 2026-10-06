@@ -27,7 +27,6 @@ pub(crate) type RenderTarget = (
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClientShellInputTarget {
     Pane(String),
-    Popup(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

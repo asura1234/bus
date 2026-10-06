@@ -12,10 +12,11 @@ use super::{
     LimitedRead, Signal,
 };
 
+#[cfg(test)]
+pub(crate) use super::unix_common::local_datetime;
 pub(crate) use super::unix_common::{
-    configure_status_command, create_remote_private_dir, create_remote_ssh_config_file, hostname,
-    local_datetime, local_datetime_at, remote_reattach_program, status_commands_supported,
-    wait_client_stream_readable, StatusCommandGuard,
+    create_remote_private_dir, create_remote_ssh_config_file, hostname, local_datetime_at,
+    remote_reattach_program, wait_client_stream_readable,
 };
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
@@ -85,23 +86,6 @@ fn process_detection_mode() -> ProcessDetectionMode {
             ProcessDetectionMode::Native
         })
     })
-}
-
-fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
-    vec!["/bin/sh".into(), flag.into(), command.into()]
-}
-
-pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
-    let argv = raw_command_argv(command, "-lc");
-    let mut command = std::process::Command::new(&argv[0]);
-    command.args(&argv[1..]);
-    command
-}
-
-pub(crate) fn pane_custom_command_pty_builder_platform(
-    command: &str,
-) -> portable_pty::CommandBuilder {
-    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-c"))
 }
 
 pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<Vec<String>> {

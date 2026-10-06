@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 pub mod agents;
-pub mod commands;
 pub mod common;
 pub mod events;
 pub mod panes;
@@ -12,7 +11,6 @@ pub mod tabs;
 pub mod workspaces;
 
 pub use agents::*;
-pub use commands::*;
 pub use common::*;
 pub use events::*;
 pub use panes::*;
@@ -47,8 +45,6 @@ pub enum Method {
     ServerReloadConfig(EmptyParams),
     #[serde(rename = "notification.show")]
     NotificationShow(NotificationShowParams),
-    #[serde(rename = "command.invoke")]
-    CommandInvoke(CommandInvokeParams),
     #[serde(rename = "client.window_title.set")]
     ClientWindowTitleSet(ClientWindowTitleSetParams),
     #[serde(rename = "client.window_title.clear")]
@@ -149,8 +145,6 @@ pub enum Method {
     PaneResize(PaneResizeParams),
     #[serde(rename = "pane.scroll")]
     PaneScroll(PaneScrollParams),
-    #[serde(rename = "pane.edit_scrollback")]
-    PaneEditScrollback(PaneTarget),
     #[serde(rename = "pane.selection.read")]
     PaneSelectionRead(PaneSelectionReadParams),
     #[serde(rename = "pane.copy_motion")]
@@ -191,8 +185,6 @@ pub enum Method {
     PaneReleaseAgent(PaneReleaseAgentParams),
     #[serde(rename = "pane.close")]
     PaneClose(PaneTarget),
-    #[serde(rename = "popup.close")]
-    PopupClose(EmptyParams),
     #[serde(rename = "events.subscribe")]
     EventsSubscribe(EventsSubscribeParams),
     #[serde(rename = "events.wait")]

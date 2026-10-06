@@ -24,7 +24,6 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
         &request.method,
         Method::ServerReloadConfig(_)
             | Method::NotificationShow(_)
-            | Method::CommandInvoke(_)
             | Method::WorkspaceCreate(_)
             | Method::WorkspaceFocus(_)
             | Method::WorkspaceRename(_)
@@ -56,7 +55,6 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::PaneFocusDirection(_)
             | Method::PaneResize(_)
             | Method::PaneScroll(_)
-            | Method::PaneEditScrollback(_)
             | Method::PaneFocus(_)
             | Method::PaneInputSet(_)
             | Method::PaneRename(_)
@@ -67,7 +65,6 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::PaneReleaseAgent(_)
             | Method::PaneClose(_)
             | Method::PaneCloseIfIdentity(_)
-            | Method::PopupClose(_)
     )
 }
 

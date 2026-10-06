@@ -128,7 +128,6 @@ impl ClientRenderState {
                     && last.frame == surface.frame
                     && last.panes == surface.panes
                     && last.splits == surface.splits
-                    && last.popup == surface.popup
                     && last.graphics.placements == surface.graphics.placements
             })
         {
@@ -423,11 +422,9 @@ pub(crate) fn render_terminal_virtual(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::ClientShellPopupSurface;
 
-    fn popup_surface(content: &str) -> PaneSurfaceFrame {
-        let pane = ratatui::buffer::Buffer::with_lines(["pane"]);
-        let popup = ratatui::buffer::Buffer::with_lines([content]);
+    fn surface(content: &str) -> PaneSurfaceFrame {
+        let pane = ratatui::buffer::Buffer::with_lines([content]);
         PaneSurfaceFrame {
             boot_id: "boot-1".into(),
             projection_revision: 1,
@@ -435,45 +432,21 @@ mod tests {
             frame: FrameData::from_ratatui_buffer_with_hyperlinks(&pane, None, &[]),
             panes: Vec::new(),
             splits: Vec::new(),
-            popup: Some(Box::new(ClientShellPopupSurface {
-                terminal_id: "popup-terminal".into(),
-                title: "popup".into(),
-                width: None,
-                height: None,
-                frame: FrameData::from_ratatui_buffer_with_hyperlinks(&popup, None, &[]),
-                mouse_reporting: false,
-                sgr_pixel_mouse: false,
-                pixel_width: 0,
-                pixel_height: 0,
-            })),
             graphics: crate::protocol::SurfaceGraphicsScene::default(),
         }
-    }
-
-    #[test]
-    fn popup_only_surface_changes_are_not_deduplicated() {
-        let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
-        let prepared = state
-            .prepare_pane_surface(popup_surface("first"))
-            .expect("initial surface");
-        state.commit_sent_frame(prepared);
-
-        assert!(state
-            .prepare_pane_surface(popup_surface("second"))
-            .is_some());
     }
 
     #[test]
     fn forced_full_surface_keeps_the_connection_revision_monotonic() {
         let mut state = ClientRenderState::new(RenderEncoding::SemanticFrame);
         let prepared = state
-            .prepare_pane_surface(popup_surface("first"))
+            .prepare_pane_surface(surface("first"))
             .expect("initial surface");
         state.commit_sent_frame(prepared);
         state.request_repaint();
 
         let prepared = state
-            .prepare_pane_surface(popup_surface("replacement"))
+            .prepare_pane_surface(surface("replacement"))
             .expect("forced replacement surface");
         assert!(matches!(
             prepared.message(),

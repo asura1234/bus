@@ -236,7 +236,6 @@ impl HeadlessServer {
 
         if pty_sources.is_empty()
             || self.app.full_redraw_pending
-            || self.app.state.popup_pane.is_some()
             || self.app.state.reveal_hidden_cursor_for_cjk_ime
         {
             fallback!("unsafe_state");
@@ -275,7 +274,6 @@ impl HeadlessServer {
                 || surface.projection_revision != client.shell_projection_revision
                 || surface.frame.width != *cols
                 || surface.frame.height != *rows
-                || surface.popup.is_some()
                 || !surface.graphics.assets.is_empty()
                 || !surface.frame.graphics.is_empty()
             {

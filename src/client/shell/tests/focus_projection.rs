@@ -43,84 +43,6 @@ fn composition_places_the_surface_at_its_origin() {
 }
 
 #[test]
-fn client_composes_popup_terminal_content_inside_client_owned_chrome() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface_with_popup());
-
-    let frame = state.compose(106, 20).expect("popup frame");
-    let popup = state.hits.popup.as_ref().expect("popup hit geometry");
-    assert_eq!(popup.rect.width, 12);
-    assert_eq!(popup.rect.height, 5);
-    assert_eq!(popup.inner_rect.width, 9);
-    assert_eq!(popup.inner_rect.height, 3);
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(text.contains("popup tit"));
-    assert!(text.contains("popup-liv"));
-    assert_eq!(
-        frame.cursor.as_ref().map(|cursor| (cursor.x, cursor.y)),
-        Some((popup.inner_rect.x + 2, popup.inner_rect.y + 1))
-    );
-}
-
-#[test]
-fn popup_target_survives_surface_invalidation_during_resize() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface_with_popup());
-    state.invalidate_pane_surface();
-
-    assert!(matches!(
-        &state.handle_input_bytes(b"x").requests[..],
-        [ClientMessage::ClientShellPopupInput { terminal_id, .. }]
-            if terminal_id == "terminal-popup"
-    ));
-    let mouse = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: 0,
-        row: 0,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(mouse.requests.is_empty());
-    assert!(mouse.actions.is_empty());
-}
-
-#[test]
-fn popup_close_reprocesses_held_key_repeats_into_the_focused_pane() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface_with_popup());
-
-    let press = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
-        KeyCode::Char('x'),
-        KeyModifiers::empty(),
-    ))]);
-    assert!(matches!(
-        &press.requests[..],
-        [ClientMessage::ClientShellPopupInput { .. }]
-    ));
-
-    state.set_pane_surface(surface());
-    let repeat = state.handle_raw_events(vec![RawInputEvent::Key(
-        crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
-            .with_kind(crossterm::event::KeyEventKind::Repeat),
-    )]);
-    assert!(matches!(
-        &repeat.requests[..],
-        [ClientMessage::ClientShellPaneInput { pane_id, .. }] if pane_id == "pane_1"
-    ));
-}
-
-#[test]
 fn focus_loss_releases_held_pane_keys_before_reporting_focus() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
@@ -212,52 +134,6 @@ fn focus_gain_reports_focus_and_honors_redraw_policy() {
         &gained.requests[..],
         [ClientMessage::ClientShellFocus { focused: true }]
     ));
-}
-
-#[test]
-fn pane_mouse_release_survives_popup_open_transition() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    let mut pane_surface = surface();
-    pane_surface.panes[0].mouse_reporting = true;
-    state.set_pane_surface(pane_surface);
-    state.compose(106, 20).expect("pane frame");
-    let pane = state.hits.panes[0].clone();
-
-    let down = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: pane.inner_rect.x,
-        row: pane.inner_rect.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(matches!(
-        &down.requests[..],
-        [ClientMessage::ClientShellPaneInput { .. }]
-    ));
-    assert!(state.pane_mouse_gesture.is_some());
-
-    state.set_pane_surface(surface_with_popup());
-    let up = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Up(MouseButton::Left),
-        column: 0,
-        row: 0,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(matches!(
-        &up.requests[..],
-        [ClientMessage::ClientShellPaneInput { pane_id, events }]
-            if pane_id == "pane_1"
-                && matches!(
-                    &events[..],
-                    [ClientPaneInputEvent::Mouse {
-                        kind: crate::protocol::ClientMouseKind::Up(
-                            crate::protocol::ClientMouseButton::Left
-                        ),
-                        ..
-                    }]
-                )
-    ));
-    assert!(state.pane_mouse_gesture.is_none());
 }
 
 #[test]

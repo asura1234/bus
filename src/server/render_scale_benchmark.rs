@@ -88,7 +88,6 @@ impl RenderPipeline {
             target,
             Rect::new(0, 0, surface_size.cols, surface_size.rows),
             true,
-            true,
             HostCellSize {
                 width_px: 1,
                 height_px: 1,
@@ -106,7 +105,6 @@ impl RenderPipeline {
             frame: rendered.frame,
             panes: rendered.panes,
             splits: rendered.splits,
-            popup: rendered.popup,
             graphics: rendered.graphics,
         });
         black_box(

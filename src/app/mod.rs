@@ -13,13 +13,10 @@ pub(crate) use api::test_support::exiting_test_command;
 mod api_helpers;
 pub(crate) use api_helpers::limit_snapshot_lines;
 mod creation;
-mod custom_commands;
 mod ids;
-mod popup;
 mod runtime;
 mod session;
 pub mod state;
-mod tab_bar_status;
 mod terminal_targets;
 mod terminal_titles;
 mod theme_sync;
@@ -91,10 +88,6 @@ pub struct App {
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
     pane_exit_checkpoint_pending: bool,
     pub(crate) detached_process_children: Vec<std::process::Child>,
-    tab_bar_status_generation: u64,
-    tab_bar_datetimes: Vec<tab_bar_status::TabBarDatetimeRuntime>,
-    tab_bar_commands: Vec<tab_bar_status::TabBarCommandRuntime>,
-    next_tab_bar_datetime_refresh: Option<Instant>,
     /// Parsed `ui.window_title` plus the hostname resolved when it was applied.
     window_title_template: Option<(crate::config::WindowTitleTemplate, String)>,
     pub(crate) persist_pane_history: bool,
@@ -107,8 +100,6 @@ pub struct App {
     pub(crate) full_redraw_pending: bool,
     pub(crate) overlay_panes: HashMap<crate::layout::PaneId, OverlayPaneState>,
     pub(crate) config_reloaded_from_disk: bool,
-    client_shell_keybindings_profile: Option<String>,
-    endpoint_commands: custom_commands::EndpointCommandRegistry,
 }
 
 pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
@@ -281,7 +272,6 @@ impl App {
         api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
         event_hub: crate::api::EventHub,
     ) -> Self {
-        let (prefix_code, prefix_mods) = config.prefix_key();
         crate::kitty_graphics::set_enabled(config.kitty_graphics_enabled());
         let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
         let render_notify = Arc::new(Notify::new());
@@ -362,8 +352,6 @@ impl App {
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
             outer_terminal_focus: None,
-            prefix_code,
-            prefix_mods,
             headless_size: config.headless_size(),
             agent_panel_sort,
             agent_view_override: None,
@@ -376,8 +364,6 @@ impl App {
             pane_scrollbars: config.ui.pane_scrollbars,
             pane_gaps: config.ui.pane_gaps,
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
-            tab_bar_right: Vec::new(),
-            tab_bar_right_separator: String::new(),
             reveal_hidden_cursor_for_cjk_ime: config.experimental.reveal_hidden_cursor_for_cjk_ime,
             cjk_ime_agent_filter_configured: !config.experimental.cjk_ime_agents.is_empty(),
             cjk_ime_agents: parse_cjk_ime_agents(&config.experimental.cjk_ime_agents),
@@ -389,13 +375,11 @@ impl App {
             pane_scrollback_limit_bytes: config.advanced.scrollback_limit_bytes,
             sound: config.ui.sound.clone(),
             toast_config: config.ui.toast.clone(),
-            keybinds: config.keybinds(),
             palette: theme_palette,
             theme_name,
             theme_runtime,
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
-            popup_pane: None,
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
@@ -412,9 +396,6 @@ impl App {
                 .get(idx)
                 .and_then(|ws| ws.focused_pane_id().map(|pane_id| (idx, pane_id)))
         });
-        let client_shell_keybindings_profile = config.local_keybindings_profile_toml().ok();
-        let endpoint_commands =
-            custom_commands::EndpointCommandRegistry::new(&state.keybinds.custom_commands);
 
         let mut app = Self {
             config_diagnostic_deadline: None,
@@ -432,10 +413,6 @@ impl App {
             session_save_thread: None,
             pane_exit_checkpoint_pending: false,
             detached_process_children: Vec::new(),
-            tab_bar_status_generation: 0,
-            tab_bar_datetimes: Vec::new(),
-            tab_bar_commands: Vec::new(),
-            next_tab_bar_datetime_refresh: None,
             window_title_template: None,
             persist_pane_history: config.experimental.pane_history,
             last_render_at: None,
@@ -449,10 +426,7 @@ impl App {
             full_redraw_pending: false,
             overlay_panes: HashMap::new(),
             config_reloaded_from_disk: false,
-            client_shell_keybindings_profile,
-            endpoint_commands,
         };
-        app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
         app.configure_window_title(&config.ui.window_title);
         app
     }
@@ -516,8 +490,6 @@ impl App {
                 }
             }
         };
-        self.endpoint_commands =
-            custom_commands::EndpointCommandRegistry::new(&self.state.keybinds.custom_commands);
         self.sync_toast_deadline(previous_toast);
         report
     }
@@ -533,30 +505,6 @@ impl App {
         let invalid_section =
             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
 
-        if !invalid_section("keys") {
-            match config.live_keybinds_with_diagnostics() {
-                Ok((live, keybind_diagnostics)) => {
-                    self.state.prefix_code = live.prefix.0;
-                    self.state.prefix_mods = live.prefix.1;
-                    self.state.keybinds = live.keybinds;
-                    match config.local_keybindings_profile_toml() {
-                        Ok(profile) => self.client_shell_keybindings_profile = Some(profile),
-                        Err(err) => diagnostics.push(format!(
-                            "failed to publish server keybindings: {err}; kept previous keybindings"
-                        )),
-                    }
-                    diagnostics.extend(keybind_diagnostics);
-                }
-                Err(keybind_diagnostics) => {
-                    diagnostics.extend(
-                        keybind_diagnostics
-                            .into_iter()
-                            .map(|diagnostic| format!("{diagnostic}; kept current keybinds")),
-                    );
-                }
-            }
-        }
-
         if !invalid_section("ui") {
             // Validate sidebar bounds before they reach any `u16::clamp` call.
             // On `min > max`, treat the entire `[ui]` section as invalid: keep
@@ -566,9 +514,6 @@ impl App {
                 diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
             } else {
                 diagnostics.extend(config.ui.sound.diagnostics());
-                diagnostics.extend(crate::config::tab_bar_right_diagnostics(
-                    &config.ui.tab_bar_right,
-                ));
                 diagnostics.extend(crate::config::window_title_diagnostics(
                     &config.ui.window_title,
                 ));
@@ -581,10 +526,6 @@ impl App {
                 self.state.pane_gaps = config.ui.pane_gaps;
                 self.state.show_agent_labels_on_pane_borders =
                     config.ui.show_agent_labels_on_pane_borders;
-                self.configure_tab_bar_status(
-                    &config.ui.tab_bar_right,
-                    &config.ui.tab_bar_right_separator,
-                );
                 self.configure_window_title(&config.ui.window_title);
                 self.state.agent_panel_sort =
                     agent_panel_sort_from_config(config.ui.agent_panel_sort);
@@ -688,7 +629,6 @@ mod tests {
     use crate::config::Config;
     use crate::detect::{Agent, AgentState};
     use crate::workspace::Workspace;
-    use crossterm::event::{KeyCode, KeyModifiers};
     use std::sync::Mutex;
 
     fn test_app() -> App {
@@ -726,37 +666,6 @@ mod tests {
                 .as_nanos()
         );
         std::env::temp_dir().join(unique).join("config.toml")
-    }
-
-    #[test]
-    fn tab_bar_command_events_render_only_when_visible_output_changes() {
-        if !crate::platform::status_commands_supported() {
-            return;
-        }
-
-        let mut app = test_app();
-        app.configure_tab_bar_status(
-            &[crate::config::TabBarRightEntryConfig::Command {
-                command: "status".into(),
-                interval_seconds: 5,
-                timeout_seconds: 2,
-            }],
-            " ",
-        );
-        let generation = app.tab_bar_status_generation;
-        let event = |generation, output: Option<&str>| AppEvent::TabBarCommandFinished {
-            generation,
-            segment_index: 0,
-            result: Ok(output.map(str::to_string)),
-        };
-
-        assert!(!app.handle_internal_event_with_render_impact(event(generation, None)));
-        assert!(app.handle_internal_event_with_render_impact(event(generation, Some("ready"))));
-        assert!(!app.handle_internal_event_with_render_impact(event(generation, Some("ready"))));
-        assert!(!app.handle_internal_event_with_render_impact(event(
-            generation.wrapping_add(1),
-            Some("stale"),
-        )));
     }
 
     #[test]
@@ -1098,7 +1007,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nnew_workspace = \"prefix+m\"\nprefix = \"ctrl+a\"\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"herdr\"\n",
+            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"herdr\"\n",
         )
         .unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
@@ -1108,8 +1017,6 @@ mod tests {
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
         assert_eq!(app.state.headless_size, (160, 50));
-        assert_eq!(app.state.prefix_code, KeyCode::Char('a'));
-        assert_eq!(app.state.prefix_mods, KeyModifiers::CONTROL);
         assert_eq!(
             app.state.toast_config.delivery,
             crate::config::ToastDelivery::Herdr
@@ -1159,26 +1066,6 @@ mod tests {
                     .to_owned()
             ]
         );
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn reload_config_requests_client_reload_for_key_only_change() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("reload-config-key-only");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "[keys]\nprefix = \"ctrl+a\"\n").unwrap();
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        let mut app = test_app();
-        app.state.request_client_config_reload = false;
-        let report = app.reload_config();
-
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
-        assert_eq!(app.state.prefix_code, KeyCode::Char('a'));
-        assert!(app.state.request_client_config_reload);
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -1313,39 +1200,6 @@ mod tests {
     }
 
     #[test]
-    fn reload_config_disables_invalid_binding_but_applies_valid_keymap_and_other_sections() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("reload-config-invalid-keybind");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            "[keys]\nnew_workspace = \"wat\"\n[ui.toast]\ndelivery = \"terminal\"\n",
-        )
-        .unwrap();
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        let mut app = test_app();
-        let original_prefix = (app.state.prefix_code, app.state.prefix_mods);
-        let report = app.reload_config();
-
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
-        assert!(report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.contains("keys.new_workspace") && diagnostic.contains("disabling binding")
-        }));
-        assert_eq!(
-            (app.state.prefix_code, app.state.prefix_mods),
-            original_prefix
-        );
-        assert!(app.state.keybinds.new_workspace.bindings.is_empty());
-        assert_eq!(
-            app.state.toast_config.delivery,
-            crate::config::ToastDelivery::Terminal
-        );
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
     fn reload_config_applies_known_sibling_and_summarizes_unknown_key() {
         let _guard = config_env_lock().lock().unwrap();
         let path = temp_config_path("reload-config-unknown-key");
@@ -1411,39 +1265,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
     #[test]
-    fn reload_config_keeps_current_state_on_invalid_toml() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("reload-config-invalid-toml");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "[keys\nnew_workspace = \"g\"\n").unwrap();
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        let mut app = test_app();
-        let original_prefix = (app.state.prefix_code, app.state.prefix_mods);
-        let original_keybinds = app.state.keybinds.new_workspace.clone();
-        let original_toast_delivery = app.state.toast_config.delivery;
-        let report = app.reload_config();
-
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Failed);
-        assert_eq!(
-            (app.state.prefix_code, app.state.prefix_mods),
-            original_prefix
-        );
-        assert_eq!(app.state.keybinds.new_workspace, original_keybinds);
-        assert_eq!(app.state.toast_config.delivery, original_toast_delivery);
-        assert!(app
-            .state
-            .config_diagnostic
-            .as_deref()
-            .is_some_and(|message| {
-                message == "config.toml invalid; keeping current config; herdr config check"
-            }));
-        assert!(app.state.toast.is_none());
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-    #[test]
     fn read_only_api_requests_do_not_force_rerender() {
         let read_only = crate::api::schema::Request {
             id: "req_1".into(),
@@ -1497,17 +1318,6 @@ mod tests {
                 crate::api::schema::AgentViewClearParams::default(),
             ),
         };
-        let command_invoke = crate::api::schema::Request {
-            id: "req_10".into(),
-            method: crate::api::schema::Method::CommandInvoke(
-                crate::api::schema::CommandInvokeParams {
-                    command_id: "cmd_boot_1_0".into(),
-                    workspace_id: Some("w1".into()),
-                    tab_id: Some("w1:t1".into()),
-                    pane_id: Some("w1:p1".into()),
-                },
-            ),
-        };
 
         assert!(!crate::api::request_changes_ui(&read_only));
         assert!(crate::api::request_changes_ui(&mutating));
@@ -1516,7 +1326,6 @@ mod tests {
         assert!(crate::api::request_changes_ui(&pane_focus_direction));
         assert!(crate::api::request_changes_ui(&pane_resize));
         assert!(crate::api::request_changes_ui(&agent_view));
-        assert!(crate::api::request_changes_ui(&command_invoke));
     }
 
     #[test]

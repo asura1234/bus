@@ -1,18 +1,9 @@
-use crate::config::{Keybinds, NewTerminalCwdConfig, SoundConfig, ToastConfig};
-use crossterm::event::{KeyCode, KeyModifiers};
+use crate::config::{NewTerminalCwdConfig, SoundConfig, ToastConfig};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::detect::AgentState;
 use crate::layout::{PaneId, PaneInfo};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PopupPaneState {
-    pub pane_id: PaneId,
-    pub terminal_id: crate::terminal::TerminalId,
-    pub width: Option<crate::popup_size::PopupSize>,
-    pub height: Option<crate::popup_size::PopupSize>,
-}
 
 use crate::terminal_theme::{HostAppearance, TerminalTheme};
 use crate::workspace::Workspace;
@@ -754,12 +745,6 @@ pub(crate) struct PaneFocusTarget {
 
 /// All application state — pure data, no channels or async runtime.
 /// Testable without PTYs or a tokio runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TabBarStatusSegment {
-    Zoom,
-    Text(Option<String>),
-}
-
 pub struct AppState {
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
@@ -786,8 +771,6 @@ pub struct AppState {
     /// None means unsupported or not yet reported, which preserves active-pane suppression.
     pub outer_terminal_focus: Option<bool>,
     // Config
-    pub prefix_code: KeyCode,
-    pub prefix_mods: KeyModifiers,
     /// Virtual terminal size (columns, rows) used when no client is attached.
     pub(crate) headless_size: (u16, u16),
     pub agent_panel_sort: AgentPanelSort,
@@ -802,8 +785,6 @@ pub struct AppState {
     pub pane_scrollbars: bool,
     pub pane_gaps: bool,
     pub show_agent_labels_on_pane_borders: bool,
-    pub tab_bar_right: Vec<TabBarStatusSegment>,
-    pub tab_bar_right_separator: String,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
     pub reveal_hidden_cursor_for_cjk_ime: bool,
@@ -820,7 +801,6 @@ pub struct AppState {
     pub pane_scrollback_limit_bytes: usize,
     pub sound: SoundConfig,
     pub toast_config: ToastConfig,
-    pub keybinds: Keybinds,
     /// UI color palette — all sidebar/UI colors centralized for theming.
     pub palette: Palette,
     /// Currently applied theme name (for settings UI).
@@ -831,8 +811,6 @@ pub struct AppState {
     pub host_terminal_appearance: Option<HostAppearance>,
     /// True when the foreground host explicitly reported appearance via Mode 2031.
     pub host_terminal_appearance_explicit: bool,
-    /// Session-modal terminal popup. This is intentionally outside workspace layouts.
-    pub(crate) popup_pane: Option<PopupPaneState>,
     /// Resolved host terminal default colors for theming embedded panes.
     pub host_terminal_theme: TerminalTheme,
     /// Last known foreground host terminal cell size in pixels.
@@ -967,8 +945,6 @@ impl AppState {
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
             outer_terminal_focus: None,
-            prefix_code: KeyCode::Char('b'),
-            prefix_mods: KeyModifiers::CONTROL,
             headless_size: (
                 crate::config::DEFAULT_HEADLESS_COLS,
                 crate::config::DEFAULT_HEADLESS_ROWS,
@@ -984,8 +960,6 @@ impl AppState {
             pane_scrollbars: true,
             pane_gaps: false,
             show_agent_labels_on_pane_borders: false,
-            tab_bar_right: Vec::new(),
-            tab_bar_right_separator: " ".into(),
             reveal_hidden_cursor_for_cjk_ime: false,
             cjk_ime_agent_filter_configured: false,
             cjk_ime_agents: Vec::new(),
@@ -1000,7 +974,6 @@ impl AppState {
                 ..SoundConfig::default()
             },
             toast_config: ToastConfig::default(),
-            keybinds: Keybinds::default(),
             palette: Palette::catppuccin(),
             theme_name: "catppuccin".to_string(),
             theme_runtime: ThemeRuntimeConfig {
@@ -1013,7 +986,6 @@ impl AppState {
             },
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
-            popup_pane: None,
             host_terminal_theme: TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
@@ -1179,19 +1151,6 @@ impl AppState {
                 &notification.workspace_id,
                 notification.pane_id,
                 "pending agent notification",
-            );
-        }
-        if let Some(popup) = &self.popup_pane {
-            assert!(
-                self.terminals.contains_key(&popup.terminal_id),
-                "popup {:?} references missing terminal {}",
-                popup.pane_id,
-                popup.terminal_id
-            );
-            assert!(
-                !attached_terminal_ids.contains(&popup.terminal_id),
-                "popup terminal {} must not be attached to a tiled pane",
-                popup.terminal_id
             );
         }
     }

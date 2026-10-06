@@ -97,6 +97,7 @@ pub(crate) fn hostname() -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+#[cfg(test)]
 pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {
     let mut timestamp: libc::time_t = 0;
     if unsafe { libc::time(&mut timestamp) } == -1 {
@@ -112,51 +113,6 @@ pub(crate) fn local_datetime_at(seconds: i64) -> Option<time::PrimitiveDateTime>
         return None;
     }
     datetime_from_tm(&local)
-}
-
-pub(crate) fn status_commands_supported() -> bool {
-    true
-}
-
-pub(crate) fn configure_status_command(process: &mut std::process::Command) {
-    use std::os::unix::process::CommandExt;
-
-    process.process_group(0);
-}
-
-pub(crate) struct StatusCommandGuard {
-    process_group_id: Option<i32>,
-}
-
-impl StatusCommandGuard {
-    pub(crate) fn new(child: &tokio::process::Child) -> std::io::Result<Self> {
-        let process_id = child
-            .id()
-            .ok_or_else(|| std::io::Error::other("status command has no process id"))?;
-        let process_group_id = i32::try_from(process_id)
-            .map_err(|_| std::io::Error::other("status command process id exceeds i32"))?;
-        Ok(Self {
-            process_group_id: Some(process_group_id),
-        })
-    }
-}
-
-impl StatusCommandGuard {
-    pub(crate) fn terminate(&mut self) {
-        if let Some(process_group_id) = self.process_group_id.take() {
-            // The command was spawned as this process group's leader. Killing the
-            // group also cleans up background descendants on completion/cancellation.
-            unsafe {
-                libc::kill(-process_group_id, libc::SIGKILL);
-            }
-        }
-    }
-}
-
-impl Drop for StatusCommandGuard {
-    fn drop(&mut self) {
-        self.terminate();
-    }
 }
 
 fn datetime_from_tm(value: &libc::tm) -> Option<time::PrimitiveDateTime> {

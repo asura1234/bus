@@ -221,22 +221,6 @@ fn request_round_trips_for_agent_explain() {
 }
 
 #[test]
-fn command_invoke_request_round_trips_without_command_text() {
-    let request = Request {
-        id: "req_command".into(),
-        method: Method::CommandInvoke(CommandInvokeParams {
-            command_id: "cmd_0123456789abcdef0123456789abcdef".into(),
-            workspace_id: Some("w1".into()),
-            tab_id: Some("w1:t1".into()),
-            pane_id: Some("w1:p1".into()),
-        }),
-    };
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "command.invoke");
-    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
-}
-
-#[test]
 fn notification_show_request_parses() {
     let json = r#"{"id":"req_1","method":"notification.show","params":{"title":"build failed","body":"api workspace","position":"top-left","sound":"request"}}"#;
     let request: Request = serde_json::from_str(json).unwrap();
@@ -1035,17 +1019,4 @@ fn pane_link_activate_round_trips() {
     let json = serde_json::to_string(&response).unwrap();
     let restored: ResponseResult = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, response);
-}
-
-#[test]
-fn popup_close_request_round_trips() {
-    let request = Request {
-        id: "popup-close".into(),
-        method: Method::PopupClose(EmptyParams::default()),
-    };
-
-    let json = serde_json::to_value(request).unwrap();
-
-    assert_eq!(json["method"], "popup.close");
-    assert_eq!(json["params"], serde_json::json!({}));
 }

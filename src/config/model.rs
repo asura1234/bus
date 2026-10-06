@@ -1,11 +1,10 @@
-use std::{collections::BTreeSet, num::NonZeroUsize};
+use std::num::NonZeroUsize;
 
 use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
-    ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
-    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
+    SidebarConfig, SoundConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
     DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
@@ -252,7 +251,6 @@ pub struct Config {
     pub terminal: TerminalConfig,
     pub session: SessionConfig,
     pub server: ServerConfig,
-    pub keys: KeysConfig,
     pub ui: UiConfig,
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
@@ -263,482 +261,6 @@ pub struct LoadedConfig {
     pub config: Config,
     pub diagnostics: Vec<String>,
     pub invalid_sections: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct KeysConfig {
-    /// Prefix key to enter prefix mode (e.g. "ctrl+b", "f12", "esc").
-    pub prefix: String,
-    /// Open keybinding help. Default: "prefix+?"
-    pub help: BindingConfig,
-    /// Open settings. Default: "prefix+s"
-    pub settings: BindingConfig,
-    /// Create a new workspace. Default: "prefix+shift+n"
-    pub new_workspace: BindingConfig,
-    /// Rename the selected workspace. Default: "prefix+shift+w"
-    pub rename_workspace: BindingConfig,
-    /// Close the selected workspace. Default: "prefix+shift+d"
-    pub close_workspace: BindingConfig,
-    /// Open the workspace navigation surface. Default: "prefix+w"
-    pub workspace_picker: BindingConfig,
-    /// Open the session navigator. Default: "prefix+g"
-    pub goto: BindingConfig,
-    /// Move workspace selection up in navigate mode. Default: "up".
-    pub navigate_workspace_up: BindingConfig,
-    /// Move workspace selection down in navigate mode. Default: "down".
-    pub navigate_workspace_down: BindingConfig,
-    /// Focus the pane to the left in navigate mode. Default: "h". Left arrow is always an alias.
-    pub navigate_pane_left: BindingConfig,
-    /// Focus the pane below in navigate mode. Default: "j".
-    pub navigate_pane_down: BindingConfig,
-    /// Focus the pane above in navigate mode. Default: "k".
-    pub navigate_pane_up: BindingConfig,
-    /// Focus the pane to the right in navigate mode. Default: "l". Right arrow is always an alias.
-    pub navigate_pane_right: BindingConfig,
-    /// Detach the current client from its Herdr server. Default: "prefix+q".
-    pub detach: BindingConfig,
-    /// Reload config.toml in the running app/server. Default: "prefix+shift+r".
-    pub reload_config: BindingConfig,
-    /// Focus the currently visible notification target. Default: "prefix+o".
-    pub open_notification_target: BindingConfig,
-    /// Select the previous workspace. Unset by default.
-    pub previous_workspace: BindingConfig,
-    /// Select the next workspace. Unset by default.
-    pub next_workspace: BindingConfig,
-    /// Focus the previous agent shown in the agent panel. Unset by default.
-    pub previous_agent: BindingConfig,
-    /// Focus the next agent shown in the agent panel. Unset by default.
-    pub next_agent: BindingConfig,
-    /// Focus an agent by index 1-9. Unset by default.
-    pub focus_agent: BindingConfig,
-    /// Create a new tab in the active workspace. Default: "prefix+c"
-    pub new_tab: BindingConfig,
-    /// Rename the active tab. Default: "prefix+shift+t".
-    pub rename_tab: BindingConfig,
-    /// Select the previous tab. Default: "prefix+p".
-    pub previous_tab: BindingConfig,
-    /// Select the next tab. Default: "prefix+n".
-    pub next_tab: BindingConfig,
-    /// Move the active tab one position toward the front. Unset by default.
-    pub move_tab_previous: BindingConfig,
-    /// Move the active tab one position toward the back. Unset by default.
-    pub move_tab_next: BindingConfig,
-    /// Switch to tab 1-9. Default: "prefix+1..9".
-    pub switch_tab: BindingConfig,
-    /// Switch to workspace 1-9 from prefix mode. Unset by default.
-    pub switch_workspace: BindingConfig,
-    /// Close the active tab. Default: "prefix+shift+x".
-    pub close_tab: BindingConfig,
-    /// Rename the focused pane. Default: "prefix+shift+p".
-    pub rename_pane: BindingConfig,
-    /// Open the focused pane scrollback in $EDITOR. Default: "prefix+e".
-    pub edit_scrollback: BindingConfig,
-    /// Enter keyboard copy mode for the focused pane. Default: "prefix+[".
-    pub copy_mode: BindingConfig,
-    /// Focus the pane to the left. Default: "prefix+h".
-    pub focus_pane_left: BindingConfig,
-    /// Focus the pane below. Default: "prefix+j".
-    pub focus_pane_down: BindingConfig,
-    /// Focus the pane above. Default: "prefix+k".
-    pub focus_pane_up: BindingConfig,
-    /// Focus the pane to the right. Default: "prefix+l".
-    pub focus_pane_right: BindingConfig,
-    /// Swap the focused pane with the pane to the left. Default: "prefix+shift+h".
-    pub swap_pane_left: BindingConfig,
-    /// Swap the focused pane with the pane below. Default: "prefix+shift+j".
-    pub swap_pane_down: BindingConfig,
-    /// Swap the focused pane with the pane above. Default: "prefix+shift+k".
-    pub swap_pane_up: BindingConfig,
-    /// Swap the focused pane with the pane to the right. Default: "prefix+shift+l".
-    pub swap_pane_right: BindingConfig,
-    /// Cycle to the next pane. Default: "prefix+tab".
-    pub cycle_pane_next: BindingConfig,
-    /// Cycle to the previous pane. Default: "prefix+shift+tab".
-    pub cycle_pane_previous: BindingConfig,
-    /// Focus the last focused pane across workspaces and tabs. Unset by default.
-    pub last_pane: BindingConfig,
-    /// Split pane vertically (side by side). Default: "prefix+v"
-    pub split_vertical: BindingConfig,
-    /// Split pane horizontally (stacked). Default: "prefix+minus"
-    pub split_horizontal: BindingConfig,
-    /// Close the focused pane. Default: "prefix+x"
-    pub close_pane: BindingConfig,
-    /// Toggle zoom for the focused pane. Default: "prefix+z"
-    #[serde(alias = "fullscreen")]
-    pub zoom: BindingConfig,
-    /// Enter resize mode. Default: "prefix+r"
-    pub resize_mode: BindingConfig,
-    /// Resize the focused pane toward the left. Unset by default.
-    pub resize_pane_left: BindingConfig,
-    /// Resize the focused pane downward. Unset by default.
-    pub resize_pane_down: BindingConfig,
-    /// Resize the focused pane upward. Unset by default.
-    pub resize_pane_up: BindingConfig,
-    /// Resize the focused pane toward the right. Unset by default.
-    pub resize_pane_right: BindingConfig,
-    /// Toggle sidebar collapse. Default: "prefix+b"
-    pub toggle_sidebar: BindingConfig,
-    /// Optional indexed shortcuts expanded over number keys 1-9.
-    pub indexed: IndexedKeysConfig,
-    /// Prefix-mode custom command bindings.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub command: Vec<CommandKeybindConfig>,
-    #[serde(skip_serializing)]
-    pub(crate) user_fields: BTreeSet<&'static str>,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-#[serde(default)]
-pub(crate) struct KeysConfigOverlay {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    prefix: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    help: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    settings: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    new_workspace: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rename_workspace: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    close_workspace: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    workspace_picker: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    goto: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    navigate_workspace_up: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    navigate_workspace_down: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    navigate_pane_left: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    navigate_pane_down: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    navigate_pane_up: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    navigate_pane_right: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    detach: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reload_config: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    open_notification_target: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    previous_workspace: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    next_workspace: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    previous_agent: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    next_agent: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    focus_agent: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    new_tab: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rename_tab: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    previous_tab: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    next_tab: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    move_tab_previous: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    move_tab_next: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    switch_tab: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    switch_workspace: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    close_tab: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rename_pane: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    edit_scrollback: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    copy_mode: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    focus_pane_left: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    focus_pane_down: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    focus_pane_up: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    focus_pane_right: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    swap_pane_left: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    swap_pane_down: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    swap_pane_up: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    swap_pane_right: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cycle_pane_next: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cycle_pane_previous: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_pane: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    split_vertical: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    split_horizontal: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    close_pane: Option<BindingConfig>,
-    #[serde(alias = "fullscreen", skip_serializing_if = "Option::is_none")]
-    zoom: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    resize_mode: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    resize_pane_left: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    resize_pane_down: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    resize_pane_up: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    resize_pane_right: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    toggle_sidebar: Option<BindingConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    indexed: Option<IndexedKeysConfig>,
-    #[serde(skip_serializing)]
-    command: Option<Vec<CommandKeybindConfig>>,
-}
-
-impl KeysConfigOverlay {
-    pub(crate) fn set_prefix(&mut self, prefix: String) {
-        self.prefix = Some(prefix);
-    }
-}
-
-impl<'de> Deserialize<'de> for KeysConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let input = KeysConfigOverlay::deserialize(deserializer)?;
-        let mut keys = KeysConfig::default();
-
-        macro_rules! apply_field {
-            ($field:ident) => {
-                if let Some(value) = input.$field {
-                    keys.$field = value;
-                    keys.user_fields.insert(stringify!($field));
-                }
-            };
-        }
-
-        apply_field!(prefix);
-        apply_field!(help);
-        apply_field!(settings);
-        apply_field!(new_workspace);
-        apply_field!(rename_workspace);
-        apply_field!(close_workspace);
-        apply_field!(workspace_picker);
-        apply_field!(goto);
-        apply_field!(navigate_workspace_up);
-        apply_field!(navigate_workspace_down);
-        apply_field!(navigate_pane_left);
-        apply_field!(navigate_pane_down);
-        apply_field!(navigate_pane_up);
-        apply_field!(navigate_pane_right);
-        apply_field!(detach);
-        apply_field!(reload_config);
-        apply_field!(open_notification_target);
-        apply_field!(previous_workspace);
-        apply_field!(next_workspace);
-        apply_field!(previous_agent);
-        apply_field!(next_agent);
-        apply_field!(focus_agent);
-        apply_field!(new_tab);
-        apply_field!(rename_tab);
-        apply_field!(previous_tab);
-        apply_field!(next_tab);
-        apply_field!(move_tab_previous);
-        apply_field!(move_tab_next);
-        apply_field!(switch_tab);
-        apply_field!(switch_workspace);
-        apply_field!(close_tab);
-        apply_field!(rename_pane);
-        apply_field!(edit_scrollback);
-        apply_field!(copy_mode);
-        apply_field!(focus_pane_left);
-        apply_field!(focus_pane_down);
-        apply_field!(focus_pane_up);
-        apply_field!(focus_pane_right);
-        apply_field!(swap_pane_left);
-        apply_field!(swap_pane_down);
-        apply_field!(swap_pane_up);
-        apply_field!(swap_pane_right);
-        apply_field!(cycle_pane_next);
-        apply_field!(cycle_pane_previous);
-        apply_field!(last_pane);
-        apply_field!(split_vertical);
-        apply_field!(split_horizontal);
-        apply_field!(close_pane);
-        apply_field!(zoom);
-        apply_field!(resize_mode);
-        apply_field!(resize_pane_left);
-        apply_field!(resize_pane_down);
-        apply_field!(resize_pane_up);
-        apply_field!(resize_pane_right);
-        apply_field!(toggle_sidebar);
-        apply_field!(indexed);
-        apply_field!(command);
-
-        Ok(keys)
-    }
-}
-
-impl KeysConfig {
-    pub(crate) fn key_field_is_user_configured(&self, field: &str) -> bool {
-        self.user_fields.contains(field)
-    }
-
-    pub(crate) fn local_profile(&self, keybinds: &Keybinds) -> KeysConfigOverlay {
-        let mut profile = KeysConfigOverlay::default();
-
-        macro_rules! copy_user_field {
-            ($field:ident) => {
-                if self.user_fields.contains(stringify!($field)) {
-                    profile.$field = Some(self.$field.clone());
-                }
-            };
-        }
-        macro_rules! copy_effective_action_field {
-            ($field:ident, $target:expr) => {
-                if self.user_fields.contains(stringify!($field)) {
-                    profile.$field = Some(self.$field.clone());
-                } else if binding_config_is_effective(&self.$field, &$target) {
-                    profile.$field = Some(self.$field.clone());
-                } else if binding_config_has_values(&self.$field) {
-                    profile.$field = Some(BindingConfig::empty());
-                }
-            };
-        }
-        macro_rules! copy_effective_indexed_field {
-            ($field:ident, $target:expr) => {
-                if self.user_fields.contains(stringify!($field)) {
-                    profile.$field = Some(self.$field.clone());
-                } else if let Some(effective) = effective_indexed_config(&self.$field, &$target) {
-                    profile.$field = Some(effective);
-                } else if binding_config_has_values(&self.$field) {
-                    profile.$field = Some(BindingConfig::empty());
-                }
-            };
-        }
-
-        profile.prefix = Some(self.prefix.clone());
-        copy_effective_action_field!(help, keybinds.help);
-        copy_effective_action_field!(settings, keybinds.settings);
-        copy_effective_action_field!(new_workspace, keybinds.new_workspace);
-        copy_effective_action_field!(rename_workspace, keybinds.rename_workspace);
-        copy_effective_action_field!(close_workspace, keybinds.close_workspace);
-        copy_effective_action_field!(workspace_picker, keybinds.workspace_picker);
-        copy_effective_action_field!(goto, keybinds.goto);
-        copy_effective_action_field!(navigate_workspace_up, keybinds.navigate.workspace_up);
-        copy_effective_action_field!(navigate_workspace_down, keybinds.navigate.workspace_down);
-        copy_effective_action_field!(navigate_pane_left, keybinds.navigate.pane_left);
-        copy_effective_action_field!(navigate_pane_down, keybinds.navigate.pane_down);
-        copy_effective_action_field!(navigate_pane_up, keybinds.navigate.pane_up);
-        copy_effective_action_field!(navigate_pane_right, keybinds.navigate.pane_right);
-        copy_effective_action_field!(detach, keybinds.detach);
-        copy_effective_action_field!(reload_config, keybinds.reload_config);
-        copy_effective_action_field!(open_notification_target, keybinds.open_notification_target);
-        copy_effective_action_field!(previous_workspace, keybinds.previous_workspace);
-        copy_effective_action_field!(next_workspace, keybinds.next_workspace);
-        copy_effective_action_field!(previous_agent, keybinds.previous_agent);
-        copy_effective_action_field!(next_agent, keybinds.next_agent);
-        copy_effective_indexed_field!(focus_agent, keybinds.focus_agent);
-        copy_effective_action_field!(new_tab, keybinds.new_tab);
-        copy_effective_action_field!(rename_tab, keybinds.rename_tab);
-        copy_effective_action_field!(previous_tab, keybinds.previous_tab);
-        copy_effective_action_field!(next_tab, keybinds.next_tab);
-        copy_effective_action_field!(move_tab_previous, keybinds.move_tab_previous);
-        copy_effective_action_field!(move_tab_next, keybinds.move_tab_next);
-        copy_effective_indexed_field!(switch_tab, keybinds.switch_tab);
-        copy_effective_indexed_field!(switch_workspace, keybinds.switch_workspace);
-        copy_effective_action_field!(close_tab, keybinds.close_tab);
-        copy_effective_action_field!(rename_pane, keybinds.rename_pane);
-        copy_effective_action_field!(edit_scrollback, keybinds.edit_scrollback);
-        copy_effective_action_field!(copy_mode, keybinds.copy_mode);
-        copy_effective_action_field!(focus_pane_left, keybinds.focus_pane_left);
-        copy_effective_action_field!(focus_pane_down, keybinds.focus_pane_down);
-        copy_effective_action_field!(focus_pane_up, keybinds.focus_pane_up);
-        copy_effective_action_field!(focus_pane_right, keybinds.focus_pane_right);
-        copy_effective_action_field!(swap_pane_left, keybinds.swap_pane_left);
-        copy_effective_action_field!(swap_pane_down, keybinds.swap_pane_down);
-        copy_effective_action_field!(swap_pane_up, keybinds.swap_pane_up);
-        copy_effective_action_field!(swap_pane_right, keybinds.swap_pane_right);
-        copy_effective_action_field!(cycle_pane_next, keybinds.cycle_pane_next);
-        copy_effective_action_field!(cycle_pane_previous, keybinds.cycle_pane_previous);
-        copy_effective_action_field!(last_pane, keybinds.last_pane);
-        copy_effective_action_field!(split_vertical, keybinds.split_vertical);
-        copy_effective_action_field!(split_horizontal, keybinds.split_horizontal);
-        copy_effective_action_field!(close_pane, keybinds.close_pane);
-        copy_effective_action_field!(zoom, keybinds.zoom);
-        copy_effective_action_field!(resize_mode, keybinds.resize_mode);
-        copy_effective_action_field!(resize_pane_left, keybinds.resize_pane_left);
-        copy_effective_action_field!(resize_pane_down, keybinds.resize_pane_down);
-        copy_effective_action_field!(resize_pane_up, keybinds.resize_pane_up);
-        copy_effective_action_field!(resize_pane_right, keybinds.resize_pane_right);
-        copy_effective_action_field!(toggle_sidebar, keybinds.toggle_sidebar);
-        copy_user_field!(indexed);
-
-        profile
-    }
-}
-
-fn binding_config_has_values(config: &BindingConfig) -> bool {
-    config.has_values()
-}
-
-fn binding_config_is_effective(config: &BindingConfig, keybinds: &ActionKeybinds) -> bool {
-    !binding_config_has_values(config) || !keybinds.bindings.is_empty()
-}
-
-fn effective_indexed_config(
-    config: &BindingConfig,
-    keybinds: &[IndexedKeybind],
-) -> Option<BindingConfig> {
-    if !binding_config_has_values(config) {
-        return Some(config.clone());
-    }
-
-    let expected_labels = config.indexed_labels();
-    if expected_labels.is_empty() {
-        return None;
-    }
-
-    let effective_labels: Vec<String> = expected_labels
-        .iter()
-        .filter(|expected| {
-            keybinds
-                .iter()
-                .any(|binding| binding.label.as_str() == expected.as_str())
-        })
-        .cloned()
-        .collect();
-
-    if effective_labels.is_empty() {
-        None
-    } else if effective_labels.len() == expected_labels.len() {
-        Some(config.clone())
-    } else {
-        Some(BindingConfig::Many(effective_labels))
-    }
-}
-
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct IndexedKeysConfig {
-    /// Modifier combo for tab shortcuts 1-9. Unset by default.
-    pub tabs: String,
-    /// Modifier combo for workspace shortcuts 1-9. Unset by default.
-    pub workspaces: String,
-    /// Modifier combo for agent shortcuts 1-9. Unset by default.
-    pub agents: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
@@ -853,10 +375,6 @@ pub struct UiConfig {
     pub hide_tab_bar_when_single_tab: bool,
     /// Desktop tab row placement. Default: top.
     pub tab_bar_position: TabBarPositionConfig,
-    /// Ordered entries shown at the right edge of the desktop tab row. Empty by default.
-    pub tab_bar_right: Vec<TabBarRightEntryConfig>,
-    /// Text inserted between visible right-side tab bar entries. Default: one space.
-    pub tab_bar_right_separator: String,
     /// Format for the outer terminal window title. Empty leaves the title alone.
     /// Default: "{hostname}: {workspace}".
     pub window_title: String,
@@ -965,71 +483,6 @@ pub struct ExperimentalConfig {
     pub switch_ascii_input_source_in_prefix: bool,
 }
 
-impl Default for KeysConfig {
-    fn default() -> Self {
-        Self {
-            prefix: "ctrl+b".into(),
-            help: BindingConfig::one("prefix+?"),
-            settings: BindingConfig::one("prefix+s"),
-            new_workspace: BindingConfig::one("prefix+shift+n"),
-            rename_workspace: BindingConfig::one("prefix+shift+w"),
-            close_workspace: BindingConfig::one("prefix+shift+d"),
-            workspace_picker: BindingConfig::one("prefix+w"),
-            goto: BindingConfig::one("prefix+g"),
-            navigate_workspace_up: BindingConfig::one("up"),
-            navigate_workspace_down: BindingConfig::one("down"),
-            navigate_pane_left: BindingConfig::one("h"),
-            navigate_pane_down: BindingConfig::one("j"),
-            navigate_pane_up: BindingConfig::one("k"),
-            navigate_pane_right: BindingConfig::one("l"),
-            detach: BindingConfig::one("prefix+q"),
-            reload_config: BindingConfig::one("prefix+shift+r"),
-            open_notification_target: BindingConfig::one("prefix+o"),
-            previous_workspace: BindingConfig::empty(),
-            next_workspace: BindingConfig::empty(),
-            previous_agent: BindingConfig::empty(),
-            next_agent: BindingConfig::empty(),
-            focus_agent: BindingConfig::empty(),
-            new_tab: BindingConfig::one("prefix+c"),
-            rename_tab: BindingConfig::one("prefix+shift+t"),
-            previous_tab: BindingConfig::one("prefix+p"),
-            next_tab: BindingConfig::one("prefix+n"),
-            move_tab_previous: BindingConfig::empty(),
-            move_tab_next: BindingConfig::empty(),
-            switch_tab: BindingConfig::one("prefix+1..9"),
-            switch_workspace: BindingConfig::empty(),
-            close_tab: BindingConfig::one("prefix+shift+x"),
-            rename_pane: BindingConfig::one("prefix+shift+p"),
-            edit_scrollback: BindingConfig::one("prefix+e"),
-            copy_mode: BindingConfig::one("prefix+["),
-            focus_pane_left: BindingConfig::one("prefix+h"),
-            focus_pane_down: BindingConfig::one("prefix+j"),
-            focus_pane_up: BindingConfig::one("prefix+k"),
-            focus_pane_right: BindingConfig::one("prefix+l"),
-            swap_pane_left: BindingConfig::one("prefix+shift+h"),
-            swap_pane_down: BindingConfig::one("prefix+shift+j"),
-            swap_pane_up: BindingConfig::one("prefix+shift+k"),
-            swap_pane_right: BindingConfig::one("prefix+shift+l"),
-            cycle_pane_next: BindingConfig::one("prefix+tab"),
-            cycle_pane_previous: BindingConfig::one("prefix+shift+tab"),
-            last_pane: BindingConfig::empty(),
-            split_vertical: BindingConfig::one("prefix+v"),
-            split_horizontal: BindingConfig::one("prefix+minus"),
-            close_pane: BindingConfig::one("prefix+x"),
-            zoom: BindingConfig::one("prefix+z"),
-            resize_mode: BindingConfig::one("prefix+r"),
-            resize_pane_left: BindingConfig::empty(),
-            resize_pane_down: BindingConfig::empty(),
-            resize_pane_up: BindingConfig::empty(),
-            resize_pane_right: BindingConfig::empty(),
-            toggle_sidebar: BindingConfig::one("prefix+b"),
-            indexed: IndexedKeysConfig::default(),
-            command: Vec::new(),
-            user_fields: BTreeSet::new(),
-        }
-    }
-}
-
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
@@ -1055,8 +508,6 @@ impl Default for UiConfig {
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
             tab_bar_position: TabBarPositionConfig::Top,
-            tab_bar_right: Vec::new(),
-            tab_bar_right_separator: " ".into(),
             window_title: super::window_title::default_window_title(),
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
@@ -1299,8 +750,6 @@ status_indicators = "symbols"
             default_config.ui.tab_bar_position,
             TabBarPositionConfig::Top
         );
-        assert!(default_config.ui.tab_bar_right.is_empty());
-        assert_eq!(default_config.ui.tab_bar_right_separator, " ");
 
         let toml = r#"
 [ui]
@@ -1311,14 +760,6 @@ pane_gaps = true
 show_agent_labels_on_pane_borders = true
 hide_tab_bar_when_single_tab = true
 tab_bar_position = "bottom"
-tab_bar_right = [
-  { type = "zoom" },
-  { type = "hostname" },
-  { type = "datetime", format = "%H:%M" },
-  { type = "text", text = "prod" },
-  { type = "command", command = "status.sh", interval_seconds = 10, timeout_seconds = 3 },
-]
-tab_bar_right_separator = " · "
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.pane_borders, PaneBordersConfig::Always);
@@ -1328,12 +769,6 @@ tab_bar_right_separator = " · "
         assert!(config.ui.show_agent_labels_on_pane_borders);
         assert!(config.ui.hide_tab_bar_when_single_tab);
         assert_eq!(config.ui.tab_bar_position, TabBarPositionConfig::Bottom);
-        assert_eq!(config.ui.tab_bar_right.len(), 5);
-        assert!(matches!(
-            config.ui.tab_bar_right[1],
-            TabBarRightEntryConfig::Hostname
-        ));
-        assert_eq!(config.ui.tab_bar_right_separator, " · ");
     }
 
     #[test]

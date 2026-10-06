@@ -107,7 +107,6 @@ impl ClientShellState {
             || patch.projection_revision != current.projection_revision
             || patch.base_surface_revision != current.surface_revision
             || patch.surface_revision != current.surface_revision.saturating_add(1)
-            || current.popup.is_some()
             || !current.graphics.placements.is_empty()
         {
             return ClientPaneSurfacePatchOutcome::Rejected;

@@ -125,12 +125,7 @@ fn pane_split_drag_uses_projected_handle_and_stable_tab_path() {
     ));
     let mut replacement = snapshot();
     replacement.revision = 2;
-    replacement
-        .tab_bar_right
-        .push(crate::protocol::ClientShellTabStatusSegment {
-            text: "updated".into(),
-            accent: false,
-        });
+    replacement.agent_view_label = Some("updated".into());
     let mut replacement_surface = surface();
     replacement_surface.projection_revision = 2;
     replacement_surface.splits.push(PaneSurfaceSplit {

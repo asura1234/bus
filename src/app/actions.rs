@@ -1638,7 +1638,6 @@ impl AppState {
                 }
                 Vec::new()
             }
-            AppEvent::TabBarCommandFinished { .. } => Vec::new(),
         }
     }
 

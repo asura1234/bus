@@ -56,13 +56,12 @@ use crate::server::clients::{
     latest_shell_client, render_targets, terminal_stream_client_ids, ClientConnection,
     ClientConnectionMode, ClientShellInputTarget, DeferredRender,
 };
-use crate::server::keybindings::{app_keybindings, apply_keybindings};
 use crate::server::notifications::{
     should_forward_toast_to_clients, toast_message_from_state_change, toast_notify_kind,
 };
 use crate::server::pane_input::{
-    apply_client_pane_input_events, apply_client_popup_input_events, apply_terminal_attach_input,
-    apply_terminal_attach_scroll, terminal_attach_mouse_position,
+    apply_client_pane_input_events, apply_terminal_attach_input, apply_terminal_attach_scroll,
+    terminal_attach_mouse_position,
 };
 use crate::server::socket_paths::{
     client_socket_path, prepare_socket_path, restrict_socket_permissions,
@@ -177,8 +176,6 @@ pub struct HeadlessServer {
     foreground_client_id: Option<u64>,
     /// Ephemeral shell connection controlling PTY geometry for each stable tab id.
     tab_geometry_controllers: HashMap<String, u64>,
-    /// Stable tab id whose viewers may see and interact with the one terminal popup.
-    popup_owner_tab_id: Option<String>,
     /// Process-local identity used to reject shell replacements from an earlier server boot.
     client_shell_boot_id: String,
     /// Outer window title last pushed, paired with the client that received it.
@@ -189,12 +186,8 @@ pub struct HeadlessServer {
     /// Window title set through `client.window_title.set`. While present it wins
     /// over the configured `ui.window_title` until the API clears it again.
     api_window_title: Option<String>,
-    /// Server-owned keybindings, restored when foreground clients use server mode.
-    server_keybindings: crate::config::LiveKeybindConfig,
     /// Full server config warning shown to clients that use server keybindings.
     server_config_diagnostic: Option<String>,
-    /// Server config warning with keybinding diagnostics removed for local-keybinding clients.
-    server_config_diagnostic_without_keybindings: Option<String>,
     /// Writable direct attach owner per terminal id string.
     terminal_attach_owners: HashMap<String, u64>,
     /// Deferred application-history reads currently driving alternate-screen viewports.
@@ -294,10 +287,8 @@ impl HeadlessServer {
         #[cfg(windows)]
         spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
 
-        let server_keybindings = app_keybindings(&app);
         let headless_size = app.state.headless_size;
-        let (server_config_diagnostic, server_config_diagnostic_without_keybindings) =
-            server_config_diagnostic_summaries(config_diagnostics);
+        let server_config_diagnostic = config::config_diagnostic_summary(config_diagnostics);
         Ok(Self {
             app,
             _api_tx: api_tx,
@@ -311,7 +302,6 @@ impl HeadlessServer {
             next_client_id: 1,
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
-            popup_owner_tab_id: None,
             client_shell_boot_id: format!(
                 "{}-{}",
                 std::process::id(),
@@ -322,9 +312,7 @@ impl HeadlessServer {
             ),
             sent_window_title: None,
             api_window_title: None,
-            server_keybindings,
             server_config_diagnostic,
-            server_config_diagnostic_without_keybindings,
             terminal_attach_owners: HashMap::new(),
             pending_alt_screen_reads: Vec::new(),
             deferred_alt_screen_reads: Vec::new(),
@@ -682,9 +670,6 @@ impl HeadlessServer {
             self.app.state.outer_terminal_focus = None;
             self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
             self.sync_runtime_view_geometry();
-            let server_keybindings = self.server_keybindings.clone();
-            apply_keybindings(&mut self.app, &server_keybindings);
-            self.sync_visible_server_config_diagnostic(false);
             return;
         };
         let Some(client) = self.clients.get(&client_id) else {
@@ -693,9 +678,6 @@ impl HeadlessServer {
             self.app.state.outer_terminal_focus = None;
             self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
             self.sync_runtime_view_geometry();
-            let server_keybindings = self.server_keybindings.clone();
-            apply_keybindings(&mut self.app, &server_keybindings);
-            self.sync_visible_server_config_diagnostic(false);
             return;
         };
 
@@ -715,9 +697,6 @@ impl HeadlessServer {
         self.sync_runtime_view_geometry();
         self.app.state.outer_terminal_focus = outer_terminal_focus;
         self.app.state.host_cell_size = host_cell_size;
-        let server_keybindings = self.server_keybindings.clone();
-        apply_keybindings(&mut self.app, &server_keybindings);
-        self.sync_visible_server_config_diagnostic(false);
         if outer_terminal_focus == Some(true) {
             self.app.state.mark_active_tab_seen();
         }
@@ -728,31 +707,11 @@ impl HeadlessServer {
         self.app.set_host_terminal_theme(host_terminal_theme);
     }
 
-    fn sync_visible_server_config_diagnostic(&mut self, uses_local_keybindings: bool) {
-        let visible = if uses_local_keybindings {
-            &self.server_config_diagnostic_without_keybindings
-        } else {
-            &self.server_config_diagnostic
-        };
-        if self.app.state.config_diagnostic == self.server_config_diagnostic
-            || self.app.state.config_diagnostic == self.server_config_diagnostic_without_keybindings
-        {
-            self.app.state.config_diagnostic = visible.clone();
-        }
-    }
-
     fn reload_server_config(&mut self, notify_success: bool) -> crate::config::ConfigReloadReport {
-        let server_keybindings = self.server_keybindings.clone();
-        apply_keybindings(&mut self.app, &server_keybindings);
         let report = self.app.apply_config_from_disk(notify_success);
         self.app.take_config_reloaded_from_disk();
-        self.server_keybindings = app_keybindings(&self.app);
         self.headless_size = self.app.state.headless_size;
-        let (server_config_diagnostic, server_config_diagnostic_without_keybindings) =
-            server_config_diagnostic_summaries(&report.diagnostics);
-        self.server_config_diagnostic = server_config_diagnostic;
-        self.server_config_diagnostic_without_keybindings =
-            server_config_diagnostic_without_keybindings;
+        self.server_config_diagnostic = config::config_diagnostic_summary(&report.diagnostics);
         self.sync_foreground_client_state();
         report
     }
@@ -868,12 +827,6 @@ impl HeadlessServer {
                     };
                     apply_client_pane_input_events(runtime, &[held.release])
                 }
-                ClientShellInputTarget::Popup(terminal_id) => {
-                    let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) else {
-                        continue;
-                    };
-                    apply_client_popup_input_events(runtime, &[held.release])
-                }
             };
             if let Err(err) = result {
                 warn!(client_id, err = %err, "client shell teardown release failed");
@@ -980,23 +933,10 @@ impl HeadlessServer {
                 })
             }
             protocol::ClientClipboardImageTarget::Pane(pane_id) => {
-                self.app.state.popup_pane.is_none()
-                    && self
-                        .clients
-                        .get(&client_id)
-                        .is_some_and(ClientConnection::is_active_shell_client)
-                    && self.app.parse_pane_id(pane_id).is_some()
-            }
-            protocol::ClientClipboardImageTarget::Popup(terminal_id) => {
                 self.clients
                     .get(&client_id)
                     .is_some_and(ClientConnection::is_active_shell_client)
-                    && self
-                        .app
-                        .state
-                        .popup_pane
-                        .as_ref()
-                        .is_some_and(|popup| popup.terminal_id.as_str() == terminal_id)
+                    && self.app.parse_pane_id(pane_id).is_some()
             }
         }
     }
@@ -1047,11 +987,7 @@ impl HeadlessServer {
                 else {
                     return false;
                 };
-                let popup_blocks_input = self.app.state.popup_pane.is_some()
-                    && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
-                if popup_blocks_input
-                    || !self.shell_client_views_pane(client_id, workspace_index, runtime_pane_id)
-                {
+                if !self.shell_client_views_pane(client_id, workspace_index, runtime_pane_id) {
                     return false;
                 }
                 let foreground_changed = self.promote_client_to_foreground(client_id);
@@ -1068,41 +1004,6 @@ impl HeadlessServer {
                     &[protocol::ClientPaneInputEvent::Paste(path)],
                 ) {
                     warn!(client_id, pane_id, err = %err, "client shell clipboard image paste failed");
-                }
-                true
-            }
-            protocol::ClientClipboardImageTarget::Popup(terminal_id) => {
-                if !self
-                    .clients
-                    .get(&client_id)
-                    .is_some_and(ClientConnection::is_active_shell_client)
-                {
-                    return false;
-                }
-                let Some(popup_terminal_id) = self
-                    .app
-                    .state
-                    .popup_pane
-                    .as_ref()
-                    .map(|popup| popup.terminal_id.clone())
-                else {
-                    return false;
-                };
-                if popup_terminal_id.as_str() != terminal_id
-                    || self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id)
-                {
-                    return false;
-                }
-                let foreground_changed = self.promote_client_to_foreground(client_id);
-                let geometry_changed = self.claim_shell_tab_geometry(client_id, false);
-                let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
-                    return foreground_changed | geometry_changed;
-                };
-                if let Err(err) = apply_client_popup_input_events(
-                    runtime,
-                    &[protocol::ClientPaneInputEvent::Paste(path)],
-                ) {
-                    warn!(client_id, terminal_id, err = %err, "client shell popup clipboard image paste failed");
                 }
                 true
             }
@@ -1720,11 +1621,7 @@ impl HeadlessServer {
                 connection.shell_mouse_capture = mouse_capture;
                 connection.shell_surface_active = surface_active;
                 connection.shell_projection_revision = 1;
-                let config_diagnostic = if endpoint_keybindings {
-                    self.server_config_diagnostic.as_deref()
-                } else {
-                    self.server_config_diagnostic_without_keybindings.as_deref()
-                };
+                let config_diagnostic = self.server_config_diagnostic.as_deref();
                 let seed_snapshot = client_shell_snapshot(
                     &self.app,
                     &self.client_shell_boot_id,
@@ -1745,9 +1642,6 @@ impl HeadlessServer {
                 connection.shell_location = Some(location);
                 connection.shell_snapshot = Some(seed_snapshot);
                 self.clients.insert(client_id, connection);
-                if self.app.state.popup_pane.is_some() && self.popup_owner_tab_id.is_none() {
-                    self.popup_owner_tab_id = self.shell_tab_id_for_client(client_id);
-                }
                 self.send_to_client(client_id, snapshot_message);
                 if surface_active {
                     self.foreground_client_id = Some(client_id);
@@ -2091,11 +1985,7 @@ impl HeadlessServer {
                     runtime.current_size(),
                     runtime.pixel_size(),
                 );
-                let popup_blocks_input = self.app.state.popup_pane.is_some()
-                    && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
-                if popup_blocks_input
-                    || !self.shell_client_views_pane(client_id, workspace_index, runtime_pane_id)
-                {
+                if !self.shell_client_views_pane(client_id, workspace_index, runtime_pane_id) {
                     let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
                         &self.app.terminal_runtimes,
                         workspace_index,
@@ -2141,83 +2031,6 @@ impl HeadlessServer {
                 let scroll_before = runtime.scroll_metrics();
                 if let Err(err) = apply_client_pane_input_events(runtime, &events) {
                     warn!(client_id, pane_id, err = %err, "targeted client shell input failed");
-                }
-                foreground_changed | geometry_changed || runtime.scroll_metrics() != scroll_before
-            }
-            ServerEvent::ClientShellPopupInput {
-                client_id,
-                terminal_id,
-                events,
-            } => {
-                if !self
-                    .clients
-                    .get(&client_id)
-                    .is_some_and(ClientConnection::is_active_shell_client)
-                {
-                    return false;
-                }
-                let pixel_mouse = self.clients.get(&client_id).is_some_and(|client| {
-                    client.pixel_mouse && client.host_sgr_pixels_active == Some(true)
-                });
-                let mut events = events;
-                let Some(popup_terminal_id) = self
-                    .app
-                    .state
-                    .popup_pane
-                    .as_ref()
-                    .map(|popup| popup.terminal_id.clone())
-                else {
-                    return false;
-                };
-                if popup_terminal_id.as_str() != terminal_id {
-                    return false;
-                }
-                let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
-                    return false;
-                };
-                super::pane_input::downgrade_ineligible_pixel_mouse(
-                    &mut events,
-                    pixel_mouse,
-                    runtime.current_size(),
-                    runtime.pixel_size(),
-                );
-                if self.popup_owner_tab_id != self.shell_tab_id_for_client(client_id) {
-                    let releases = events
-                        .into_iter()
-                        .filter(client_pane_input_releases_press)
-                        .collect::<Vec<_>>();
-                    if releases.is_empty() {
-                        return false;
-                    }
-                    if let Some(client) = self.clients.get_mut(&client_id) {
-                        client.track_shell_input(
-                            ClientShellInputTarget::Popup(terminal_id.clone()),
-                            &releases,
-                        );
-                    }
-                    let scroll_before = runtime.scroll_metrics();
-                    if let Err(err) = apply_client_popup_input_events(runtime, &releases) {
-                        warn!(client_id, terminal_id, err = %err, "targeted client popup release failed");
-                    }
-                    return runtime.scroll_metrics() != scroll_before;
-                }
-                let interaction = client_pane_input_has_interaction(&events);
-                if let Some(client) = self.clients.get_mut(&client_id) {
-                    client.track_shell_input(
-                        ClientShellInputTarget::Popup(terminal_id.clone()),
-                        &events,
-                    );
-                }
-                let foreground_changed =
-                    interaction && self.promote_client_to_foreground(client_id);
-                let geometry_changed =
-                    interaction && self.claim_shell_tab_geometry(client_id, false);
-                let Some(runtime) = self.app.terminal_runtimes.get(&popup_terminal_id) else {
-                    return foreground_changed | geometry_changed;
-                };
-                let scroll_before = runtime.scroll_metrics();
-                if let Err(err) = apply_client_popup_input_events(runtime, &events) {
-                    warn!(client_id, terminal_id, err = %err, "targeted client popup input failed");
                 }
                 foreground_changed | geometry_changed || runtime.scroll_metrics() != scroll_before
             }
@@ -2911,8 +2724,6 @@ impl HeadlessServer {
             changed = true;
         }
 
-        changed |= self.app.handle_tab_bar_status_tasks(now);
-
         if geometry_dirty {
             self.app.pending_agent_resume_deadline = None;
         } else {
@@ -3008,13 +2819,6 @@ fn sanitize_notification_text(value: &str, max_chars: usize) -> Option<String> {
     }
     let sanitized = sanitized.trim().to_string();
     (!sanitized.is_empty()).then_some(sanitized)
-}
-
-fn server_config_diagnostic_summaries(diagnostics: &[String]) -> (Option<String>, Option<String>) {
-    (
-        config::config_diagnostic_summary(diagnostics),
-        config::config_diagnostic_summary_without_keybindings(diagnostics),
-    )
 }
 
 // ---------------------------------------------------------------------------

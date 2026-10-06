@@ -223,9 +223,6 @@ impl ClientShellState {
         mut snapshot: Box<ClientShellSnapshot>,
         acknowledge_surface: bool,
     ) {
-        snapshot
-            .commands
-            .retain(|command| command.action != crate::protocol::ClientShellCommandAction::Unknown);
         let Some(index) = self
             .endpoints
             .iter()

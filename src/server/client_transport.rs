@@ -444,12 +444,6 @@ pub(crate) enum ServerEvent {
         pane_id: String,
         events: Vec<ClientPaneInputEvent>,
     },
-    /// A client-owned shell delivered semantic input to its active popup terminal.
-    ClientShellPopupInput {
-        client_id: u64,
-        terminal_id: String,
-        events: Vec<ClientPaneInputEvent>,
-    },
     /// A client-owned shell published one host terminal theme observation.
     ClientShellHostTheme {
         client_id: u64,
@@ -1127,50 +1121,6 @@ fn client_read_loop_with_endpoint_controls(
                     }
                 }
             }
-            ClientMessage::ClientShellPopupInput {
-                terminal_id,
-                events,
-            } => match pane_input_event_limit(&events) {
-                InputEventLimit::WithinLimits => ServerEvent::ClientShellPopupInput {
-                    client_id,
-                    terminal_id,
-                    events,
-                },
-                InputEventLimit::TooManyEvents => {
-                    warn!(
-                        client_id,
-                        count = events.len(),
-                        "oversized popup input batch, closing"
-                    );
-                    let _ = server_event_tx
-                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
-                    break;
-                }
-                InputEventLimit::PasteTooLarge { size } => {
-                    warn!(
-                        client_id,
-                        size,
-                        max = MAX_INPUT_PAYLOAD,
-                        "oversized popup paste, rejecting"
-                    );
-                    ServerEvent::ClientPasteRejected {
-                        client_id,
-                        size,
-                        max: MAX_INPUT_PAYLOAD,
-                    }
-                }
-                InputEventLimit::InputPayloadTooLarge { size } => {
-                    warn!(
-                        client_id,
-                        size,
-                        max = MAX_INPUT_PAYLOAD,
-                        "oversized popup input, closing"
-                    );
-                    let _ = server_event_tx
-                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
-                    break;
-                }
-            },
             ClientMessage::ClientShellEndpointRequest { boot_id, request } => {
                 if boot_id.len() > crate::server::client_commands::MAX_ENDPOINT_BOOT_ID_BYTES
                     || request.len() > crate::server::client_commands::MAX_ENDPOINT_COMMAND_BYTES

@@ -7,14 +7,12 @@ use super::{model::LoadedConfig, Config, CONFIG_PATH_ENV_VAR};
 const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "advanced",
     "experimental",
-    "keys",
     "onboarding",
     "server",
     "session",
     "terminal",
     "theme",
     "ui",
-    "update",
 ];
 
 pub fn app_dir_name() -> &'static str {
@@ -283,14 +281,6 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.theme = section,
-    );
-    load_live_section(
-        table,
-        "keys",
-        "keybinding config",
-        &mut diagnostics,
-        &mut invalid_sections,
-        |section| config.keys = section,
     );
     load_live_section(
         table,
@@ -710,15 +700,6 @@ accentt = "#ffffff"
 [advanced]
 scrollback_lines = 42
 
-[keys]
-fullscreen = "prefix+z"
-new_tabb = "prefix+t"
-
-[[keys.command]]
-key = "prefix+g"
-command = "git status"
-descrption = "status"
-
 [ui]
 mouse_capture = false
 mouse_captur = true
@@ -740,8 +721,6 @@ claude = [["terminal_title"]]
             vec![
                 "unknown config key plugin; ignoring key",
                 "unknown config key theme.custom.accentt; ignoring key",
-                "unknown config key keys.command.0.descrption; ignoring key",
-                "unknown config key keys.new_tabb; ignoring key",
                 "unknown config key ui.\"foo.?.bar\"; ignoring key",
                 "unknown config key ui.\"foo.bar\"; ignoring key",
                 "unknown config key ui.mouse_captur; ignoring key",
@@ -755,13 +734,6 @@ claude = [["terminal_title"]]
             loaded.config.ui.toast.delivery,
             super::super::ToastDelivery::Herdr
         );
-        assert!(loaded
-            .config
-            .keybinds()
-            .zoom
-            .bindings
-            .iter()
-            .any(|binding| binding.label == "prefix+z"));
     }
 
     #[test]

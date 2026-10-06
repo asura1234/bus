@@ -14,12 +14,10 @@ const ENDPOINT_RESPONSE_CHUNK_BYTES: usize = 512 * 1024;
 
 const CLIENT_SHELL_METHODS: &[&str] = &[
     "client_shell.surface.set",
-    "command.invoke",
     "layout.set_split_ratio",
     "pane.close",
     "pane.copy_motion",
     "pane.copy_search",
-    "pane.edit_scrollback",
     "pane.focus",
     "pane.focus_direction",
     "pane.input.set",

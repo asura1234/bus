@@ -25,10 +25,6 @@ pub struct NewPane {
 }
 
 enum SplitCommand<'a> {
-    Shell {
-        command: &'a str,
-        launch_env: &'a PaneLaunchEnv,
-    },
     Argv {
         argv: &'a [String],
         launch_env: &'a PaneLaunchEnv,
@@ -205,38 +201,6 @@ impl Tab {
         self.custom_name = Some(name);
     }
 
-    pub fn split_focused_command(
-        &mut self,
-        direction: Direction,
-        rows: u16,
-        cols: u16,
-        cwd: Option<PathBuf>,
-        command: &str,
-        launch_env: &PaneLaunchEnv,
-        scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-    ) -> std::io::Result<NewPane> {
-        self.split_pane_with_runtime(
-            self.layout.focused(),
-            true,
-            direction,
-            None,
-            rows,
-            cols,
-            cwd,
-            scrollback_limit_bytes,
-            host_terminal_theme,
-            host_terminal_appearance,
-            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
-            launch_env,
-            Some(SplitCommand::Shell {
-                command,
-                launch_env,
-            }),
-        )
-    }
-
     /// Split `target` with a shell pane. Focus moves to the new pane only when
     /// `focus_new_pane` is set; a spawn failure rolls the layout back without
     /// touching focus or its history.
@@ -343,24 +307,6 @@ impl Tab {
             None
         };
         let runtime = match command {
-            Some(SplitCommand::Shell {
-                command,
-                launch_env,
-            }) => TerminalRuntime::spawn_shell_command(
-                new_id,
-                rows,
-                cols,
-                actual_cwd.clone(),
-                command,
-                launch_env,
-                crate::pane::AgentDetection::Enabled,
-                scrollback_limit_bytes,
-                host_terminal_theme,
-                host_terminal_appearance,
-                self.events.clone(),
-                self.render_notify.clone(),
-                self.render_dirty.clone(),
-            ),
             Some(SplitCommand::Argv { argv, launch_env }) => TerminalRuntime::spawn_argv_command(
                 new_id,
                 rows,

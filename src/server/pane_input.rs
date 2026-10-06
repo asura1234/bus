@@ -207,13 +207,6 @@ pub(super) fn apply_client_pane_input_events(
     apply_client_terminal_input_events(runtime, events, true)
 }
 
-pub(super) fn apply_client_popup_input_events(
-    runtime: &crate::terminal::TerminalRuntime,
-    events: &[ClientPaneInputEvent],
-) -> Result<(), String> {
-    apply_client_terminal_input_events(runtime, events, false)
-}
-
 fn apply_client_terminal_input_events(
     runtime: &crate::terminal::TerminalRuntime,
     events: &[ClientPaneInputEvent],

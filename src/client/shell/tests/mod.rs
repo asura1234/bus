@@ -12,12 +12,9 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
         boot_id: "boot-1".into(),
         revision: 1,
         config_diagnostic: None,
-        server_keybindings_toml: None,
         focused_workspace_id: Some("ws_1".into()),
         focused_tab_id: Some("tab_1".into()),
         focused_pane_id: Some("pane_1".into()),
-        tab_bar_right: Vec::new(),
-        tab_bar_right_separator: " ".into(),
         agent_view_label: None,
         agent_order: Vec::new(),
         workspaces: vec![ClientShellWorkspace {
@@ -52,7 +49,6 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
             right_click_passthrough: false,
         }],
         agents: Vec::new(),
-        commands: Vec::new(),
     }
 }
 
@@ -97,7 +93,6 @@ pub(super) fn surface() -> PaneSurfaceFrame {
             pixel_height: 0,
         }],
         splits: Vec::new(),
-        popup: None,
         graphics: crate::protocol::SurfaceGraphicsScene::default(),
     }
 }
@@ -136,37 +131,11 @@ fn pane_scroll_result(
     }
 }
 
-fn surface_with_popup() -> PaneSurfaceFrame {
-    let mut surface = surface();
-    let popup_buffer = Buffer::with_lines(["popup-live", "", ""]);
-    surface.popup = Some(Box::new(crate::protocol::ClientShellPopupSurface {
-        terminal_id: "terminal-popup".into(),
-        title: "popup title".into(),
-        width: Some(crate::protocol::ClientShellPopupSize::Cells(12)),
-        height: Some(crate::protocol::ClientShellPopupSize::Cells(5)),
-        frame: FrameData::from_ratatui_buffer_with_hyperlinks(
-            &popup_buffer,
-            Some(crate::protocol::CursorState {
-                x: 2,
-                y: 1,
-                visible: true,
-                shape: 1,
-            }),
-            &[],
-        ),
-        mouse_reporting: true,
-        sgr_pixel_mouse: false,
-        pixel_width: 0,
-        pixel_height: 0,
-    }));
-    surface
-}
-
 mod endpoint_notices;
 mod endpoint_requests;
+mod focus_projection;
 #[path = "input.rs"]
 mod input_domain;
 mod mouse_selection;
-mod popup_focus_projection;
 mod selection_copy;
 mod startup_diagnostics;

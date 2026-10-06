@@ -79,7 +79,6 @@ pub(super) struct ClientShellLayout {
 #[derive(Default)]
 pub(super) struct ShellHitMap {
     pub(super) panes: Vec<PaneHit>,
-    pub(super) popup: Option<PaneHit>,
     pub(super) pane_splits: Vec<PaneSplitHit>,
     pub(super) notification_toast: Rect,
 }
@@ -91,7 +90,6 @@ pub(super) struct PaneHit {
     pub(super) scrollbar_rect: Option<Rect>,
     pub(super) scroll: Option<crate::pane::ScrollMetrics>,
     pub(super) pane_id: String,
-    pub(super) popup: bool,
     pub(super) mouse_reporting: bool,
     pub(super) sgr_pixel_mouse: bool,
     pub(super) pixel_width: u32,
@@ -213,12 +211,10 @@ pub(crate) struct ClientShellEndpointError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ClientInputTarget {
     Pane(String),
-    Popup(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ClientInputContext {
-    pub(super) popup_terminal_id: Option<String>,
     pub(super) retained_selection: bool,
 }
 
@@ -268,7 +264,6 @@ pub(crate) struct ClientShellState {
     pub(super) pending_pane_surface: Option<PaneSurfaceFrame>,
     pub(super) graphics: crate::kitty_graphics::surface::ClientState,
     pub(super) graphics_cell_size: crate::kitty_graphics::HostCellSize,
-    pub(super) popup_terminal_id: Option<String>,
     pub(super) chrome_drag: Option<ClientChromeDrag>,
     pub(super) last_composed_size: Option<(u16, u16)>,
     pub(super) hits: ShellHitMap,
@@ -319,7 +314,6 @@ impl ClientShellState {
                 width_px: 1,
                 height_px: 1,
             },
-            popup_terminal_id: None,
             chrome_drag: None,
             last_composed_size: None,
             hits: ShellHitMap::default(),
@@ -381,7 +375,6 @@ impl ClientShellState {
         self.pane_surface = None;
         self.pending_pane_surface = None;
         self.input_leases = ClientInputLeases::default();
-        self.popup_terminal_id = None;
         self.chrome_drag = None;
         self.last_composed_size = None;
         self.pending_requests.clear();
@@ -406,10 +399,7 @@ impl ClientShellState {
         self.host_mouse_pixels = None;
     }
 
-    pub(super) fn apply_active_snapshot(&mut self, mut snapshot: Box<ClientShellSnapshot>) {
-        snapshot
-            .commands
-            .retain(|command| command.action != crate::protocol::ClientShellCommandAction::Unknown);
+    pub(super) fn apply_active_snapshot(&mut self, snapshot: Box<ClientShellSnapshot>) {
         let graphics_scope = format!(
             "{}:{}",
             self.active_endpoint_id.storage_key(),
@@ -547,31 +537,6 @@ impl ClientShellState {
             self.hits = ShellHitMap::default();
         }
         self.acknowledge_active_surface_agents(&surface);
-        let previous_popup = self.popup_terminal_id.clone();
-        let next_popup = surface
-            .popup
-            .as_deref()
-            .map(|popup| popup.terminal_id.clone());
-        if previous_popup != next_popup {
-            if let Some(terminal_id) = previous_popup.as_ref() {
-                self.input_leases
-                    .remove_target(&ClientInputTarget::Popup(terminal_id.clone()));
-            }
-            self.selection = None;
-            self.last_pane_click = None;
-            self.selection_autoscroll = None;
-            self.selection_autoscroll_deadline = None;
-            self.selection_highlight_clear_deadline = None;
-            self.pending_word_selection = None;
-            self.chrome_drag = None;
-            if self.pane_mouse_gesture.as_ref().is_some_and(|gesture| {
-                gesture.hit.popup && previous_popup.as_deref() == Some(gesture.hit.pane_id.as_str())
-            }) {
-                self.pane_mouse_gesture = None;
-            }
-            self.hits.popup = None;
-            self.endpoint_error = None;
-        }
         let selection_content_changed = self.selection.as_ref().is_some_and(|selection| {
             let Some(previous_surface) = self.pane_surface.as_ref() else {
                 return false;
@@ -621,7 +586,6 @@ impl ClientShellState {
                 self.pane_scroll_targets.remove(&pane.pane_id);
             }
         }
-        self.popup_terminal_id = next_popup;
         self.graphics
             .set_scene(std::mem::take(&mut surface.graphics));
         self.pane_surface = Some(surface);

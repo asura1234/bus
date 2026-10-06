@@ -155,56 +155,19 @@ pub(super) fn snapshot(
         .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
         .collect();
 
-    let zoomed = focused_tab_id
-        .as_deref()
-        .and_then(|tab_id| app.parse_tab_id(tab_id))
-        .and_then(|(workspace_index, tab_index)| {
-            app.state
-                .workspaces
-                .get(workspace_index)?
-                .tabs
-                .get(tab_index)
-        })
-        .is_some_and(|tab| tab.zoomed);
-    let tab_bar_right = app
-        .state
-        .tab_bar_right
-        .iter()
-        .filter_map(|segment| match segment {
-            crate::app::state::TabBarStatusSegment::Zoom if zoomed => {
-                Some(protocol::ClientShellTabStatusSegment {
-                    text: "ZOOM".to_owned(),
-                    accent: true,
-                })
-            }
-            crate::app::state::TabBarStatusSegment::Text(Some(text)) if !text.is_empty() => {
-                Some(protocol::ClientShellTabStatusSegment {
-                    text: text.clone(),
-                    accent: false,
-                })
-            }
-            crate::app::state::TabBarStatusSegment::Zoom
-            | crate::app::state::TabBarStatusSegment::Text(_) => None,
-        })
-        .collect();
-
     protocol::ClientShellSnapshot {
         boot_id: boot_id.to_owned(),
         revision,
         config_diagnostic: config_diagnostic.map(str::to_owned),
-        server_keybindings_toml: app.client_shell_keybindings_profile().map(str::to_owned),
         focused_workspace_id,
         focused_tab_id,
         focused_pane_id,
-        tab_bar_right,
-        tab_bar_right_separator: app.state.tab_bar_right_separator.clone(),
         agent_view_label,
         agent_order,
         workspaces,
         tabs,
         panes,
         agents,
-        commands: app.client_shell_command_manifest(),
     }
 }
 
@@ -212,7 +175,6 @@ pub(super) struct RenderedPaneSurface {
     pub(super) frame: FrameData,
     pub(super) panes: Vec<protocol::PaneSurfacePane>,
     pub(super) splits: Vec<protocol::PaneSurfaceSplit>,
-    pub(super) popup: Option<Box<protocol::ClientShellPopupSurface>>,
     pub(super) graphics: protocol::SurfaceGraphicsScene,
     pub(super) graphics_delivery: crate::kitty_graphics::surface::DeliveryCache,
 }
@@ -222,7 +184,6 @@ pub(super) fn render_pane_surface(
     target: Option<crate::ui::TabSurfaceTarget>,
     area: Rect,
     resize_panes: bool,
-    show_popup: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
     graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
 ) -> RenderedPaneSurface {
@@ -349,14 +310,10 @@ pub(super) fn render_pane_surface(
             })
         })
         .collect();
-    let popup = show_popup
-        .then(|| render_popup_surface(app, area, resize_panes, cell_size))
-        .flatten();
     let (graphics, next_graphics_delivery) = crate::server::client_shell_graphics::collect(
         app,
         &layout.pane_infos,
         &layout.split_borders,
-        popup.as_deref(),
         target,
         cell_size,
         graphics_delivery,
@@ -365,85 +322,8 @@ pub(super) fn render_pane_surface(
         frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
         panes,
         splits,
-        popup,
         graphics,
         graphics_delivery: next_graphics_delivery,
-    }
-}
-
-fn render_popup_surface(
-    app: &app::App,
-    area: Rect,
-    resize_runtime: bool,
-    cell_size: crate::kitty_graphics::HostCellSize,
-) -> Option<Box<protocol::ClientShellPopupSurface>> {
-    let popup = app.state.popup_pane.as_ref()?;
-    let geometry = if resize_runtime {
-        resize_popup_runtime(app, area, cell_size)?
-    } else {
-        crate::popup_size::resolve_popup_geometry(popup.width, popup.height, area)?
-    };
-    let runtime = app.terminal_runtimes.get(&popup.terminal_id)?;
-    let content_area = Rect::new(0, 0, geometry.inner.width, geometry.inner.height);
-    let (buffer, cursor) =
-        crate::server::render_stream::render_terminal_virtual(runtime, content_area);
-    let hyperlinks = runtime.visible_hyperlinks(content_area);
-    let title = app
-        .state
-        .terminals
-        .get(&popup.terminal_id)
-        .and_then(|terminal| terminal.manual_label.clone())
-        .unwrap_or_else(|| "popup".to_owned());
-    let (pixel_width, pixel_height) = if cell_size.is_known() {
-        (
-            u32::from(content_area.width) * cell_size.width_px,
-            u32::from(content_area.height) * cell_size.height_px,
-        )
-    } else {
-        (0, 0)
-    };
-    Some(Box::new(protocol::ClientShellPopupSurface {
-        terminal_id: popup.terminal_id.to_string(),
-        title,
-        width: popup.width.map(client_popup_size),
-        height: popup.height.map(client_popup_size),
-        frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
-        mouse_reporting: runtime.mouse_reporting_enabled(),
-        sgr_pixel_mouse: runtime.sgr_pixel_mouse_enabled(),
-        pixel_width,
-        pixel_height,
-    }))
-}
-
-pub(super) fn resize_popup_runtime(
-    app: &app::App,
-    area: Rect,
-    cell_size: crate::kitty_graphics::HostCellSize,
-) -> Option<crate::popup_size::PopupResolvedGeometry> {
-    let popup = app.state.popup_pane.as_ref()?;
-    let geometry = crate::popup_size::resolve_popup_geometry(popup.width, popup.height, area)?;
-    let runtime = app.terminal_runtimes.get(&popup.terminal_id)?;
-    if !app
-        .state
-        .direct_attach_resize_locks
-        .contains(&popup.terminal_id)
-    {
-        runtime.resize(
-            geometry.inner.height,
-            geometry.inner.width,
-            cell_size.width_px,
-            cell_size.height_px,
-        );
-    }
-    Some(geometry)
-}
-
-fn client_popup_size(size: crate::popup_size::PopupSize) -> protocol::ClientShellPopupSize {
-    match size {
-        crate::popup_size::PopupSize::Cells(cells) => protocol::ClientShellPopupSize::Cells(cells),
-        crate::popup_size::PopupSize::Percent(percent) => {
-            protocol::ClientShellPopupSize::Percent(percent)
-        }
     }
 }
 

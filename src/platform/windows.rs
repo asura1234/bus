@@ -89,16 +89,13 @@ use windows_sys::{
             Diagnostics::{
                 Debug::ReadProcessMemory,
                 ToolHelp::{
-                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First,
-                    Thread32Next, PROCESSENTRY32W, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD,
-                    THREADENTRY32,
+                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+                    TH32CS_SNAPPROCESS,
                 },
             },
             JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
-                JobObjectExtendedLimitInformation, QueryInformationJobObject,
-                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
             Memory::{
                 GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, VirtualQueryEx, GMEM_MOVEABLE,
@@ -106,11 +103,10 @@ use windows_sys::{
             },
             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
             Threading::{
-                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
-                QueryFullProcessImageNameW, ResumeThread, TerminateProcess, CREATE_NO_WINDOW,
-                CREATE_SUSPENDED, DETACHED_PROCESS, PROCESS_BASIC_INFORMATION,
-                PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
-                THREAD_SUSPEND_RESUME,
+                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
+                QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW, DETACHED_PROCESS,
+                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
             },
         },
         UI::{
@@ -415,6 +411,7 @@ pub(crate) fn hostname() -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
+#[cfg(test)]
 pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {
     let mut timestamp: libc::time_t = 0;
     if unsafe { libc::time(&mut timestamp) } == -1 {
@@ -538,12 +535,6 @@ fn next_pane_runtime_marker() -> String {
     format!("{:x}-{timestamp:x}-{counter:x}", std::process::id())
 }
 
-fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString {
-    comspec
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
-}
-
 pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
     let shell_name = shell_name.to_ascii_lowercase();
     let powershell = shell_name.contains("powershell") || shell_name.contains("pwsh");
@@ -619,178 +610,6 @@ fn cmd_encoded_powershell_command(script: &str) -> String {
         .collect::<Vec<_>>();
     let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
     format!("powershell.exe -NoLogo -NoProfile -EncodedCommand {encoded}")
-}
-
-pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
-    detached_custom_command_process_with_comspec(command, std::env::var_os("ComSpec"))
-}
-
-pub(crate) fn status_commands_supported() -> bool {
-    true
-}
-
-pub(crate) fn configure_status_command(process: &mut std::process::Command) {
-    use std::os::windows::process::CommandExt;
-
-    // The process must not run before it is assigned to the kill-on-close job.
-    process.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
-}
-
-pub(crate) struct StatusCommandGuard {
-    job: usize,
-}
-
-impl StatusCommandGuard {
-    pub(crate) fn new(child: &tokio::process::Child) -> std::io::Result<Self> {
-        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if job.is_null() {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let limits_size = match u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()) {
-            Ok(size) => size,
-            Err(_) => {
-                unsafe {
-                    CloseHandle(job);
-                }
-                return Err(std::io::Error::other("job limits size exceeds u32"));
-            }
-        };
-        if unsafe {
-            SetInformationJobObject(
-                job,
-                JobObjectExtendedLimitInformation,
-                std::ptr::from_ref(&limits).cast(),
-                limits_size,
-            )
-        } == 0
-        {
-            let error = std::io::Error::last_os_error();
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(error);
-        }
-
-        let Some(process) = child.raw_handle() else {
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(std::io::Error::other(
-                "status command has no process handle",
-            ));
-        };
-        if unsafe { AssignProcessToJobObject(job, process.cast()) } == 0 {
-            let error = std::io::Error::last_os_error();
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(error);
-        }
-        if let Err(error) = resume_suspended_process(child.id()) {
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(error);
-        }
-
-        Ok(Self { job: job as usize })
-    }
-}
-
-fn resume_suspended_process(process_id: Option<u32>) -> std::io::Result<()> {
-    let process_id =
-        process_id.ok_or_else(|| std::io::Error::other("status command has no process id"))?;
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    let result = (|| {
-        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
-        entry.dwSize = u32::try_from(size_of::<THREADENTRY32>())
-            .map_err(|_| std::io::Error::other("thread entry size exceeds u32"))?;
-        if unsafe { Thread32First(snapshot, &mut entry) } == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        loop {
-            if entry.th32OwnerProcessID == process_id {
-                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-                if thread.is_null() {
-                    return Err(std::io::Error::last_os_error());
-                }
-                let resume_result = unsafe { ResumeThread(thread) };
-                let resume_error = (resume_result == u32::MAX).then(std::io::Error::last_os_error);
-                unsafe {
-                    CloseHandle(thread);
-                }
-                if let Some(error) = resume_error {
-                    return Err(error);
-                }
-                return Ok(());
-            }
-            if unsafe { Thread32Next(snapshot, &mut entry) } == 0 {
-                return Err(std::io::Error::other(
-                    "status command primary thread was not found",
-                ));
-            }
-        }
-    })();
-
-    unsafe {
-        CloseHandle(snapshot);
-    }
-    result
-}
-
-impl StatusCommandGuard {
-    pub(crate) fn terminate(&mut self) {
-        if self.job != 0 {
-            // KILL_ON_JOB_CLOSE terminates the shell and every descendant still in
-            // the job, including on task cancellation and config reload.
-            unsafe {
-                CloseHandle(self.job as HANDLE);
-            }
-            self.job = 0;
-        }
-    }
-}
-
-impl Drop for StatusCommandGuard {
-    fn drop(&mut self) {
-        self.terminate();
-    }
-}
-
-fn detached_custom_command_process_with_comspec(
-    command: &str,
-    comspec: Option<std::ffi::OsString>,
-) -> std::process::Command {
-    use std::os::windows::process::CommandExt;
-
-    let mut process = std::process::Command::new(raw_command_shell(comspec));
-    process.arg("/d").arg("/c").raw_arg(command);
-    process
-}
-
-pub(crate) fn pane_custom_command_pty_builder_platform(
-    command: &str,
-) -> portable_pty::CommandBuilder {
-    pane_custom_command_pty_builder_with_comspec(command, std::env::var_os("ComSpec"))
-}
-
-fn pane_custom_command_pty_builder_with_comspec(
-    command: &str,
-    comspec: Option<std::ffi::OsString>,
-) -> portable_pty::CommandBuilder {
-    let mut builder = portable_pty::CommandBuilder::new(raw_command_shell(comspec));
-    builder.arg("/d");
-    builder.arg("/c");
-    builder.raw_arg(command);
-    builder
 }
 
 pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<Vec<String>> {
@@ -2653,97 +2472,11 @@ mod tests {
             );
         }
 
-        let command = format!(
-            r#""{}" windows_background_and_server_daemon_commands_do_not_have_consoles"#,
-            test_exe.display()
-        );
-        let status = crate::platform::detached_custom_command_process(&command)
-            .env(CONSOLE_TEST_CHILD_ENV, "detached custom command descendant")
-            .env(CONSOLE_TEST_PARENT_PID_ENV, &parent_pid)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("spawn detached custom command test child");
-        assert!(
-            status.success(),
-            "detached custom command descendant opened or inherited a console"
-        );
-
         if allocated_console {
             unsafe {
                 FreeConsole();
             }
         }
-    }
-
-    fn argv_strings(argv: &[std::ffi::OsString]) -> Vec<String> {
-        argv.into_iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    #[test]
-    fn pane_custom_command_uses_cmd() {
-        let builder = super::pane_custom_command_pty_builder_with_comspec(
-            "echo hello",
-            Some(r"C:\Windows\System32\cmd.exe".into()),
-        );
-
-        assert_eq!(
-            argv_strings(builder.get_argv()),
-            [r"C:\Windows\System32\cmd.exe", "/d", "/c"]
-        );
-    }
-
-    #[test]
-    fn detached_custom_command_uses_cmd() {
-        let expected_shell = std::env::var_os("ComSpec")
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
-            .to_string_lossy()
-            .into_owned();
-
-        let process = super::detached_custom_command_process_platform("echo hello");
-
-        assert_eq!(process.get_program().to_string_lossy(), expected_shell);
-        assert_eq!(
-            process
-                .get_args()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-            ["/d", "/c", "echo hello"]
-        );
-    }
-
-    #[test]
-    fn custom_command_falls_back_when_comspec_is_empty() {
-        let builder =
-            super::pane_custom_command_pty_builder_with_comspec("echo hello", Some("".into()));
-
-        assert_eq!(
-            argv_strings(builder.get_argv()),
-            [r"C:\Windows\System32\cmd.exe", "/d", "/c"]
-        );
-    }
-
-    #[test]
-    fn detached_custom_command_preserves_quoted_command_tail() {
-        let path = std::env::temp_dir().join(format!(
-            "herdr-raw-command-quotes-{}.txt",
-            std::process::id()
-        ));
-        let command = format!(r#"echo "hi" > "{}""#, path.display());
-
-        let status = super::detached_custom_command_process_platform(&command)
-            .status()
-            .expect("spawn raw command");
-
-        assert!(status.success(), "{status:?}");
-        let content = std::fs::read_to_string(&path).expect("read command output");
-        let _ = std::fs::remove_file(&path);
-        assert!(content.contains(r#""hi""#), "{content:?}");
-        assert!(!content.contains(r#"\"hi\""#), "{content:?}");
     }
 
     #[test]

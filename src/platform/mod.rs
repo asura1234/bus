@@ -47,16 +47,6 @@ pub(crate) fn classify_child_exit(_status: &portable_pty::ExitStatus) -> ChildEx
     ChildExitReason::Exited
 }
 
-pub(crate) fn detached_custom_command_process(command: &str) -> std::process::Command {
-    let mut process = detached_custom_command_process_platform(command);
-    configure_background_command(&mut process);
-    process
-}
-
-pub(crate) fn pane_custom_command_pty_builder(command: &str) -> portable_pty::CommandBuilder {
-    pane_custom_command_pty_builder_platform(command)
-}
-
 pub(crate) fn apply_pane_runtime_marker(command: &mut portable_pty::CommandBuilder) {
     apply_pane_runtime_marker_platform(command);
 }
@@ -78,11 +68,12 @@ pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
 #[cfg(not(windows))]
 fn apply_pane_runtime_marker_platform(_command: &mut portable_pty::CommandBuilder) {}
 
+#[cfg(any(windows, test))]
 pub(crate) fn configure_background_command(command: &mut std::process::Command) {
     configure_background_command_platform(command);
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), test))]
 fn configure_background_command_platform(_command: &mut std::process::Command) {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,29 +402,6 @@ mod tests {
         for program in ["vim", "nvim", "cargo", "test-runner", "opencode"] {
             assert!(!is_pane_shell_process_name(program), "{program}");
         }
-    }
-
-    #[test]
-    fn detached_custom_command_preserves_unix_login_shell_flag() {
-        let cmd = detached_custom_command_process("echo hello");
-        assert_eq!(cmd.get_program(), std::ffi::OsStr::new("/bin/sh"));
-        assert_eq!(
-            cmd.get_args().collect::<Vec<_>>(),
-            [
-                std::ffi::OsStr::new("-lc"),
-                std::ffi::OsStr::new("echo hello")
-            ]
-        );
-    }
-
-    #[test]
-    fn pane_custom_command_builder_preserves_unix_shell_flag() {
-        let expected: Vec<std::ffi::OsString> =
-            vec!["/bin/sh".into(), "-c".into(), "echo hello".into()];
-        assert_eq!(
-            pane_custom_command_pty_builder("echo hello").get_argv(),
-            &expected
-        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

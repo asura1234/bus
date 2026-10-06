@@ -8,7 +8,6 @@ mod tab_surface;
 mod text;
 mod widgets;
 
-use self::panes::resize_popup_pane;
 pub(crate) use self::panes::{
     apply_pane_chrome, pane_inner_rect, pane_is_scrolled_back, render_selection_highlight,
 };
@@ -78,7 +77,6 @@ fn compute_view_internal(
 
     if resize_panes {
         resize_background_tab_panes(app, terminal_runtimes, area, cell_size);
-        resize_popup_pane(app, terminal_runtimes, area, cell_size);
     }
 
     app.view = crate::app::ViewState {

@@ -26,7 +26,6 @@ mod noninteractive_process;
 mod pane;
 mod persist;
 mod platform;
-mod popup_size;
 mod protocol;
 mod pty;
 mod raw_input;

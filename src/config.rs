@@ -1,20 +1,13 @@
-use crossterm::event::{KeyCode, KeyModifiers};
-
 mod io;
-mod keybinds;
+mod key_combo;
 mod model;
 mod sidebar;
 mod sound;
-mod tab_bar;
 mod theme;
 mod window_title;
 
 pub use self::{
     io::{config_diagnostic_summary, config_dir, load_live_config, state_dir},
-    keybinds::{
-        format_key_combo, ActionKeybinds, BindingConfig, CommandKeybindConfig, CustomCommandAction,
-        CustomCommandKeybind, IndexedKeybind, Keybinds, LiveKeybindConfig,
-    },
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
         ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, PaneBordersConfig,
@@ -23,44 +16,20 @@ pub use self::{
     },
     sidebar::{AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SpacesSidebarConfig},
     sound::SoundConfig,
-    tab_bar::TabBarRightEntryConfig,
     theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig},
     window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
 };
 
-pub(crate) use self::keybinds::parse_key_combo;
+pub(crate) use self::key_combo::parse_key_combo;
 #[cfg(test)]
 pub(crate) use self::{io::config_path, sidebar::SpaceSidebarToken, theme::THEME_NAMES};
 pub(crate) use self::{
-    tab_bar::{
-        parse_tab_bar_datetime_format, tab_bar_right_diagnostics,
-        MAX_TAB_BAR_COMMAND_INTERVAL_SECONDS, MAX_TAB_BAR_COMMAND_TIMEOUT_SECONDS,
-        MAX_TAB_BAR_RIGHT_ENTRIES,
-    },
     theme::canonical_theme_name,
     window_title::{sanitize_window_title_text, window_title_diagnostics},
 };
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
 
-pub(crate) fn is_keybinding_config_diagnostic(diagnostic: &str) -> bool {
-    if diagnostic.starts_with("config parse error:") || diagnostic.starts_with("config read error:")
-    {
-        return false;
-    }
-    diagnostic.contains("keybinding") || diagnostic.contains("keys.")
-}
-
-pub(crate) fn config_diagnostic_summary_without_keybindings(
-    diagnostics: &[String],
-) -> Option<String> {
-    let diagnostics = diagnostics
-        .iter()
-        .filter(|diagnostic| !is_keybinding_config_diagnostic(diagnostic))
-        .cloned()
-        .collect::<Vec<_>>();
-    config_diagnostic_summary(&diagnostics)
-}
 pub const DEFAULT_SCROLLBACK_LIMIT_BYTES: usize = 10_000_000;
 pub const DEFAULT_MOUSE_SCROLL_LINES: usize = 3;
 pub const DEFAULT_MOBILE_WIDTH_THRESHOLD: u16 = 64;
@@ -86,23 +55,11 @@ impl Config {
             .unwrap_or(true)
     }
 
-    pub fn prefix_key(&self) -> (KeyCode, KeyModifiers) {
-        self.validated_keybinds().1
-    }
-
-    /// Parsed keybinds for Herdr actions.
-    pub fn keybinds(&self) -> Keybinds {
-        self.validated_keybinds().3
-    }
-
     pub fn collect_diagnostics(&self) -> Vec<String> {
-        let (prefix_diag, _, keybind_diags, _) = self.validated_keybinds();
-        prefix_diag
+        self.theme
+            .diagnostics()
             .into_iter()
-            .chain(keybind_diags)
-            .chain(self.theme.diagnostics())
             .chain(self.ui.sound.diagnostics())
-            .chain(tab_bar_right_diagnostics(&self.ui.tab_bar_right))
             .chain(window_title_diagnostics(&self.ui.window_title))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
@@ -136,198 +93,11 @@ impl Config {
                 )
             })
     }
-
-    pub(crate) fn live_keybinds_with_diagnostics(
-        &self,
-    ) -> Result<(LiveKeybindConfig, Vec<String>), Vec<String>> {
-        let (prefix_diag, prefix, keybind_diags, keybinds) = self.validated_keybinds();
-        if let Some(prefix_diag) = prefix_diag {
-            Err(std::iter::once(prefix_diag).chain(keybind_diags).collect())
-        } else {
-            Ok((LiveKeybindConfig { prefix, keybinds }, keybind_diags))
-        }
-    }
-
-    pub(crate) fn local_keybindings_profile_toml(&self) -> Result<String, toml::ser::Error> {
-        #[derive(serde::Serialize)]
-        struct KeysProfile {
-            keys: model::KeysConfigOverlay,
-        }
-
-        let mut keys = self.keys.local_profile(&self.keybinds());
-        keys.set_prefix(format_key_combo(self.prefix_key()));
-        toml::to_string_pretty(&KeysProfile { keys })
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn local_keybindings_profile_includes_defaults_and_excludes_commands() {
-        let config: Config = toml::from_str(
-            r#"
-[keys]
-prefix = "ctrl+a"
-new_tab = "prefix+t"
-
-[[keys.command]]
-key = "prefix+g"
-command = "lazygit"
-"#,
-        )
-        .unwrap();
-
-        let profile = config.local_keybindings_profile_toml().unwrap();
-        assert!(profile.contains("[keys]"));
-        assert!(profile.contains("prefix = \"ctrl+a\""));
-        assert!(profile.contains("new_tab = \"prefix+t\""));
-        assert!(profile.contains("next_tab = \"prefix+n\""));
-        assert!(!profile.contains("lazygit"));
-        assert!(!profile.contains("command ="));
-        assert!(!profile.contains("[[keys.command]]"));
-    }
-
-    #[test]
-    fn local_keybindings_profile_preserves_user_default_provenance() {
-        let config: Config = toml::from_str(
-            r#"
-[keys]
-zoom = "prefix+?"
-"#,
-        )
-        .unwrap();
-
-        let profile = config.local_keybindings_profile_toml().unwrap();
-        let round_tripped: Config = toml::from_str(&profile).unwrap();
-
-        assert!(profile.contains("zoom = \"prefix+?\""));
-        assert!(!profile.contains("help = \"prefix+?\""));
-        assert!(round_tripped
-            .keybinds()
-            .zoom
-            .bindings
-            .iter()
-            .any(|binding| binding.label == "prefix+?"));
-        assert!(round_tripped.keybinds().help.bindings.is_empty());
-    }
-
-    #[test]
-    fn local_keybindings_profile_omits_default_displaced_by_user_prefix() {
-        let config: Config = toml::from_str(
-            r#"
-[keys]
-prefix = "n"
-"#,
-        )
-        .unwrap();
-
-        let profile = config.local_keybindings_profile_toml().unwrap();
-        let round_tripped: Config = toml::from_str(&profile).unwrap();
-
-        assert!(profile.contains("prefix = \"n\""));
-        assert!(!profile.contains("next_tab = \"prefix+n\""));
-        assert!(round_tripped.keybinds().next_tab.bindings.is_empty());
-    }
-
-    #[test]
-    fn local_keybindings_profile_preserves_legacy_indexed_tab_source() {
-        let config: Config = toml::from_str(
-            r#"
-[keys.indexed]
-tabs = "ctrl"
-"#,
-        )
-        .unwrap();
-
-        let profile = config.local_keybindings_profile_toml().unwrap();
-        let round_tripped: Config = toml::from_str(&profile).unwrap();
-        let keybinds = round_tripped.keybinds();
-        let switch_tab_labels: Vec<_> = keybinds
-            .switch_tab
-            .iter()
-            .map(|binding| binding.label.as_str())
-            .collect();
-
-        assert!(profile.contains("[keys.indexed]"));
-        assert!(profile.contains("tabs = \"ctrl\""));
-        assert!(!profile.contains("switch_tab = \"prefix+1..9\""));
-        assert_eq!(switch_tab_labels.len(), 9);
-        assert!(switch_tab_labels
-            .iter()
-            .all(|label| label.starts_with("ctrl+")));
-    }
-
-    #[test]
-    fn local_keybindings_profile_keeps_invalid_legacy_indexed_default_disabled() {
-        let config: Config = toml::from_str(
-            r#"
-[keys.indexed]
-tabs = "bogus"
-"#,
-        )
-        .unwrap();
-
-        let profile = config.local_keybindings_profile_toml().unwrap();
-        let round_tripped: Config = toml::from_str(&profile).unwrap();
-
-        assert!(profile.contains("[keys.indexed]"));
-        assert!(profile.contains("tabs = \"bogus\""));
-        assert!(!profile.contains("switch_tab = \"prefix+1..9\""));
-        assert!(round_tripped.keybinds().switch_tab.is_empty());
-    }
-
-    #[test]
-    fn local_keybindings_profile_keeps_default_displaced_by_omitted_command_disabled() {
-        let config: Config = toml::from_str(
-            r#"
-[[keys.command]]
-key = "prefix+n"
-command = "echo next"
-"#,
-        )
-        .unwrap();
-
-        let profile = config.local_keybindings_profile_toml().unwrap();
-        let round_tripped: Config = toml::from_str(&profile).unwrap();
-
-        assert!(!profile.contains("[[keys.command]]"));
-        assert!(!profile.contains("command ="));
-        assert!(profile.contains("next_tab = \"\""));
-        assert!(round_tripped.keybinds().next_tab.bindings.is_empty());
-    }
-
-    #[test]
-    fn local_keybindings_profile_preserves_partially_displaced_indexed_default() {
-        let config: Config = toml::from_str(
-            r#"
-[[keys.command]]
-key = "prefix+1"
-command = "echo one"
-"#,
-        )
-        .unwrap();
-
-        let profile = config.local_keybindings_profile_toml().unwrap();
-        let round_tripped: Config = toml::from_str(&profile).unwrap();
-        let keybinds = round_tripped.keybinds();
-        let switch_tab_labels: Vec<_> = keybinds
-            .switch_tab
-            .iter()
-            .map(|binding| binding.label.as_str())
-            .collect();
-
-        assert!(!profile.contains("[[keys.command]]"));
-        assert!(!profile.contains("switch_tab = \"prefix+1..9\""));
-        assert!(profile.contains("\"prefix+2\""));
-        assert!(profile.contains("\"prefix+9\""));
-        assert!(!switch_tab_labels.contains(&"prefix+1"));
-        assert_eq!(switch_tab_labels.len(), 8);
-        assert!(switch_tab_labels
-            .iter()
-            .all(|label| label.starts_with("prefix+")));
-    }
 
     #[test]
     fn ui_host_cursor_defaults_to_auto_and_parses_overrides() {
