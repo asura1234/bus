@@ -1029,3 +1029,75 @@ fn thumbnails_show_only_when_wholly_visible_and_uncovered() {
     assert!(ui.view.thumbnails.is_empty(), "forms cover the history");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn recipient_picker_hides_history_thumbnails_that_cover_its_rows() {
+    let dir = thumbnail_dir("recipient-picker");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    for index in 0..10 {
+        snapshot
+            .state
+            .create_agent(
+                room,
+                &format!("reviewer-{index}"),
+                Provider::Codex,
+                "/project".into(),
+                None,
+            )
+            .unwrap();
+    }
+    ui.receive_snapshot(Arc::new(snapshot));
+    exchange_with_files(&mut ui, room, agent, &[image]);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 30);
+    assert_eq!(ui.view.thumbnails.len(), 1);
+    let original = ui.view.thumbnails[0].clone();
+    assert!(!ui.thumbnail_graphics().is_empty());
+
+    ui.action(render::Action::Recipients);
+    ui.compute_view(100, 30);
+    let original_rect =
+        ratatui::layout::Rect::new(original.x, original.y, original.cols, original.rows);
+    assert!(
+        ui.view
+            .hits
+            .iter()
+            .any(|hit| matches!(hit.action, render::Action::Recipient(_))
+                && hit.rect.intersects(original_rect)),
+        "the recipient picker must cover the prior thumbnail in this fixture"
+    );
+    let retained = ui.view.thumbnails.iter().any(|thumbnail| {
+        let rect =
+            ratatui::layout::Rect::new(thumbnail.x, thumbnail.y, thumbnail.cols, thumbnail.rows);
+        ui.view.hits.iter().any(|hit| {
+            matches!(hit.action, render::Action::Recipient(_)) && hit.rect.intersects(rect)
+        })
+    });
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        !retained,
+        "Kitty images draw over text and must not obscure recipient choices"
+    );
+}
+
+#[test]
+fn file_detail_popup_hides_history_thumbnails_it_covers() {
+    let dir = thumbnail_dir("detail-popup");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[image]);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 30);
+    assert_eq!(ui.view.thumbnails.len(), 1);
+
+    // A path long enough to wrap over every history row above the composer.
+    ui.detail_path = Some(format!("/{}", "deep/".repeat(200)));
+    ui.compute_view(100, 30);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        ui.view.thumbnails.is_empty(),
+        "the file detail popup covers the thumbnail rows"
+    );
+}

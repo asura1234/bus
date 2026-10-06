@@ -1318,6 +1318,8 @@ impl BusUi {
                 view.cursor = None;
             }
             view.selection.retain(|rect| !rect.intersects(popup));
+            view.thumbnails
+                .retain(|thumbnail| !thumbnail.rect().intersects(popup));
         }
         if self.recipient_menu {
             let agents: Vec<_> = self
@@ -1370,6 +1372,9 @@ impl BusUi {
             view.cursor = None;
             let menu = Rect::new(x, y, width, height);
             view.selection.retain(|rect| !rect.intersects(menu));
+            // Kitty images draw over text, so they would hide the choices.
+            view.thumbnails
+                .retain(|thumbnail| !thumbnail.rect().intersects(menu));
         }
     }
     fn delete_view(&self, view: &mut View, area: Rect) {

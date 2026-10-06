@@ -29,6 +29,12 @@ pub(super) struct Placement {
     pub rows: u16,
 }
 
+impl Placement {
+    pub fn rect(&self) -> ratatui::layout::Rect {
+        ratatui::layout::Rect::new(self.x, self.y, self.cols, self.rows)
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Thumbnails {
     /// Host cell size when the terminal can show Kitty graphics.
