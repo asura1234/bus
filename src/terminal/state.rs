@@ -265,7 +265,7 @@ impl TerminalState {
         agent: Option<Agent>,
         fallback_state: AgentState,
     ) -> Option<EffectiveStateChange> {
-        self.set_detected_state_with_visible_blocker(agent, fallback_state, false, false, false)
+        self.set_detected_state_with_visible_blocker(agent, fallback_state, false, false)
     }
 
     #[cfg(test)]
@@ -291,7 +291,6 @@ impl TerminalState {
         agent: Option<Agent>,
         fallback_state: AgentState,
         visible_blocker: bool,
-        _ignored_screen_idle: bool,
         process_exited: bool,
     ) -> Option<EffectiveStateChange> {
         self.set_detected_state_with_screen_signals_at(
@@ -2385,7 +2384,6 @@ mod tests {
             AgentState::Blocked,
             true,
             false,
-            false,
         );
 
         assert_eq!(terminal.fallback_state, AgentState::Idle);
@@ -3512,7 +3510,6 @@ mod tests {
             AgentState::Blocked,
             true,
             false,
-            false,
         );
 
         assert_eq!(terminal.fallback_state, AgentState::Blocked);
@@ -3544,7 +3541,6 @@ mod tests {
             AgentState::Blocked,
             true,
             false,
-            false,
         );
 
         assert_eq!(terminal.fallback_state, AgentState::Idle);
@@ -3567,7 +3563,6 @@ mod tests {
         let change = terminal.set_detected_state_with_visible_blocker(
             Some(Agent::Codex),
             AgentState::Blocked,
-            false,
             false,
             false,
         );
@@ -3594,7 +3589,6 @@ mod tests {
             AgentState::Blocked,
             true,
             false,
-            false,
         );
 
         assert_eq!(terminal.state, AgentState::Blocked);
@@ -3617,7 +3611,6 @@ mod tests {
             Some(Agent::Codex),
             AgentState::Blocked,
             true,
-            false,
             false,
         );
 
@@ -3884,7 +3877,6 @@ mod tests {
             Some(Agent::Codex),
             AgentState::Idle,
             false,
-            true,
             false,
         );
 
@@ -4066,7 +4058,6 @@ mod tests {
         terminal.set_detected_state_with_visible_blocker(
             Some(Agent::Codex),
             AgentState::Idle,
-            false,
             false,
             true,
         );
