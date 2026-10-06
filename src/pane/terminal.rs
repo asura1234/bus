@@ -1184,7 +1184,9 @@ impl GhosttyPaneTerminal {
         {
             return None;
         }
-        appearance.map(|appearance| Bytes::from_static(appearance.color_scheme_report()))
+        Some(Bytes::from_static(
+            appearance.unwrap().color_scheme_report(),
+        ))
     }
 
     pub fn has_transient_default_color_override(&self) -> bool {
@@ -2985,8 +2987,11 @@ fn respond_to_default_color_event(
     terminator: OscTerminator,
 ) -> Option<Bytes> {
     match event {
-        DefaultColorEvent::Query(_) | DefaultColorEvent::PaletteQuery(_) => {
-            default_color_event_response(core, event, terminator)
+        DefaultColorEvent::Query(query) => {
+            default_color_event_response(core, event, terminator, query.osc_number().to_string())
+        }
+        DefaultColorEvent::PaletteQuery(index) => {
+            default_color_event_response(core, event, terminator, format!("4;{index}"))
         }
         DefaultColorEvent::Set(query) => {
             mark_child_default_color_changed(core, query, true);
@@ -3004,18 +3009,10 @@ fn default_color_event_response(
     core: &mut GhosttyPaneCore,
     event: DefaultColorEvent,
     terminator: OscTerminator,
+    command: String,
 ) -> Option<Bytes> {
-    let command = default_color_event_command(event)?;
     let color = default_color_event_color(core, event)?;
     Some(osc_rgb_response(&command, color, terminator))
-}
-
-fn default_color_event_command(event: DefaultColorEvent) -> Option<String> {
-    match event {
-        DefaultColorEvent::Query(query) => Some(query.osc_number().to_string()),
-        DefaultColorEvent::PaletteQuery(index) => Some(format!("4;{index}")),
-        DefaultColorEvent::Set(_) | DefaultColorEvent::Reset(_) => None,
-    }
 }
 
 fn default_color_event_color(
