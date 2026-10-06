@@ -157,6 +157,7 @@ Send the finalized audit path and diff-check result to the waiting PR finalizer.
 - Insert the goal and non-goal sections from GOAL_CONTEXT_FILE verbatim, without labels, summaries, translations, or separators.
 - Populate the documentation section by running the canonical docs audit renderer against the latest audit and inserting stdout verbatim.
 - Populate testing only with the final PASS gate-and-fix artifact and Head, the finalized documentation audit plus git diff --check, and other verification actually run in this invocation. Every item is checked. Put unperformed E2E, review, or manual verification in notes as pending.
+- When the diff touches delivery, callbacks or launch, run `just e2e` before merging (live model usage, so gates never run it); record its table under testing, or list it as pending in notes.
 
 Write final_body_file under temp, then Run:
 

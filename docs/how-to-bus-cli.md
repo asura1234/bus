@@ -630,6 +630,48 @@ normally, with these changes:
 - `<root>/private/orchestrator-credentials.json` is no longer read. Delete it
   yourself if you no longer need the API key it holds.
 
+## End-to-end check
+
+`scripts/bus_e2e.py` checks message round trips against real Claude Code,
+Codex and Cursor agents. It spends real model usage, so it runs only with
+`--allow-live-models`, which `just e2e` passes for you:
+
+```sh
+just e2e
+just e2e --providers claude,codex --cases single,resume
+```
+
+Each run starts its own Bus from `target/debug/bus` (or `target/debug/herdr`,
+or `--binary PATH`) in a pseudo-terminal with a fresh owner-only
+`BUS_DATA_DIR` under `temp/e2e/<timestamp>/`, after removing every inherited
+`BUS_*`, `HERDR_*` and `CLAUDE_CODE_*` variable, so it never touches another
+Bus. It drives that Bus only through these control commands, and the agents
+work in a scratch repository it recreates at `temp/e2e/workspace`. Folder
+trust and update prompts are answered with `agent dialog` and `agent choose`.
+At the end it quits Bus, stops its server, and kills any process still holding
+the run's directories. `--keep` leaves the data directory for debugging.
+
+| Case | Checks |
+| --- | --- |
+| `single` | The reply equals the token and the request settles with no agent error. |
+| `queued` | Three messages sent at once all settle, replied in order. |
+| `multi` | One message to every selected provider. |
+| `background` | Claude ends a turn with a background shell running; the reply is recorded and the next message still delivers. |
+| `dialog` | The agent raises a dialog mid-turn; it is answered through Bus and the reply lands. |
+| `resume` | Bus quits and restarts on the same data directory; each agent relaunches into its session and a new round trip works. |
+
+`--providers` defaults to every installed provider CLI and `--cases` to all of
+them. A case a provider cannot run is reported `SKIP` with the reason: the
+background case is Claude-only, and the dialog case skips when the provider's
+own settings approve the command without asking (Cursor with Run Everything).
+Claude raises its dialog with a question, because its auto mode approves
+commands by itself and Bus refuses permission launch args. The run prints a
+table of every provider and case with its result and time, writes
+`temp/e2e/<timestamp>/report.json` with the commands and last status of each
+failure, and exits non-zero when any case fails.
+
+Run `just e2e` before merging changes that touch delivery, callbacks or launch.
+
 ## Diagnose failures
 
 Start with the durable control state and diagnostics:

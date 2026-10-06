@@ -161,7 +161,9 @@ A typical PR review loop, run by the orchestrator:
    recommendation, form your own, and pick the best (best-of-N). If the
    recommendations disagree sharply, stop and ask the human.
 4. Repeat until every reviewer says ready.
-5. Tell the human the branch is ready for their regression test before merge.
+5. If the branch touches delivery, callbacks or launch, have an agent run
+   `just e2e` (live round trips with every provider) and report its table.
+6. Tell the human the branch is ready for their regression test before merge.
 
 ## Unblock agents
 
