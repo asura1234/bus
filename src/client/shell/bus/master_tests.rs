@@ -66,7 +66,7 @@ fn sidebar_lists_master_first_without_a_header_above_rooms() {
     assert!(rows[3].starts_with("ROOMS"), "{rows:?}");
     assert!(rows[3].ends_with('+'), "{rows:?}");
     assert!(rows[5].starts_with("# pr-123 ◆"), "{rows:?}");
-    assert_eq!(rows[6], "# pr-456");
+    assert_eq!(rows[6], "# pr-456           Idle");
     assert!(
         !rows.iter().any(|row| row.trim() == "MASTER"),
         "no MASTER section header: {rows:?}"
@@ -116,6 +116,61 @@ fn master_agents_show_three_lines_without_an_expand_control() {
     };
     assert_eq!(hit_row(render::Action::Reassign(orchestrator)), [12]);
     assert!(hit_row(render::Action::Agent(orchestrator)).contains(&11));
+}
+
+#[test]
+fn room_rows_show_status_and_keep_marker_and_unread_count_readable() {
+    let (ui, master, pr, other, orchestrator) = master_fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let worker = snapshot
+        .state
+        .create_agent(other, "worker", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    for agent in [orchestrator, worker] {
+        snapshot.state.confirm_hook_setup(agent).unwrap();
+    }
+    snapshot
+        .state
+        .observe_status(orchestrator, RuntimeStatus::Working, 1)
+        .unwrap();
+    snapshot.state.observe_dialog(worker, true).unwrap();
+    let mut value = serde_json::to_value(&snapshot.state).unwrap();
+    value["rooms"][pr.0.to_string()]["name"] = serde_json::json!("a-very-long-room-name");
+    value["rooms"][pr.0.to_string()]["unread_count"] = serde_json::json!(7);
+    snapshot.state = serde_json::from_value(value).unwrap();
+    snapshot.revision += 1;
+    let mut ui = BusUi::new(Arc::new(snapshot));
+    ui.open_room(other);
+    let rows = sidebar_rows(&mut ui);
+
+    assert_eq!(rows[1], "# MASTER        Working", "{rows:?}");
+    // The name gives way so the marker, unread count and status all fit.
+    assert_eq!(rows[5], "# a-very-lon… ◆  7 Idle", "{rows:?}");
+    assert_eq!(rows[6], "# pr-456        Blocked ×", "{rows:?}");
+
+    let status_hit = |room: RoomId| {
+        ui.view
+            .hits
+            .iter()
+            .filter(|hit| hit.action == render::Action::Room(room))
+            .max_by_key(|hit| hit.rect.x)
+            .unwrap()
+            .rect
+    };
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    // Rooms share the agents' animated status colors.
+    let blocked = status_hit(other);
+    assert_eq!(blocked.width, 7);
+    assert_eq!(
+        buffer[(blocked.x, blocked.y)].fg,
+        ratatui::style::Color::Rgb(128, 44, 52)
+    );
+    let working = status_hit(master);
+    assert_eq!(
+        buffer[(working.x, working.y)].fg,
+        ratatui::style::Color::Rgb(102, 255, 102)
+    );
 }
 
 #[test]

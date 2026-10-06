@@ -13,6 +13,7 @@ mod local_sessions_tests;
 pub(crate) mod model;
 pub(crate) mod orchestrator;
 pub(crate) mod resume_launch;
+mod room_status;
 pub(crate) mod runtime;
 pub(crate) mod settings;
 pub(crate) mod store;

@@ -2690,14 +2690,20 @@ fn sidebar_calls_an_unconfirmed_idle_agent_not_ready() {
     ui.compute_view(100, 30);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
     ui.render(&mut buffer);
-    let mut sidebar = String::new();
-    for y in 0..ui.view.sidebar.height {
-        for x in 0..ui.view.sidebar.width {
-            sidebar.push_str(buffer[(x, y)].symbol());
-        }
-    }
-    assert!(sidebar.contains("Not ready"), "{sidebar}");
-    assert!(!sidebar.contains("Idle"), "{sidebar}");
+    let sidebar: Vec<String> = (0..ui.view.sidebar.height)
+        .map(|y| {
+            (0..ui.view.sidebar.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    // The room row shows its own status; the agent row never says Idle.
+    let agent_row = sidebar
+        .iter()
+        .find(|row| row.contains("author"))
+        .expect("agent row");
+    assert!(agent_row.contains("Not ready"), "{sidebar:?}");
+    assert!(!agent_row.contains("Idle"), "{sidebar:?}");
 }
 
 fn mouse(ui: &mut BusUi, kind: crossterm::event::MouseEventKind, column: u16, row: u16) {

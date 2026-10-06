@@ -794,18 +794,25 @@ impl BusUi {
     fn tick_status_animation(&mut self, now: std::time::Instant) -> bool {
         const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-        let animated_status_visible = self.room.is_some_and(|room| {
-            self.snapshot.state.agents().any(|agent| {
-                agent.room_id == room
-                    && agent.hook_setup_confirmed
-                    && !agent.session_binding_invalidated
-                    && !agent.deletion_pending
-                    && matches!(
-                        agent.status,
-                        RuntimeStatus::Working | RuntimeStatus::Blocked
-                    )
-            })
+        let room_animated = self.snapshot.state.rooms().any(|room| {
+            matches!(
+                self.snapshot.state.room_status(room.id),
+                RuntimeStatus::Working | RuntimeStatus::Blocked
+            )
         });
+        let animated_status_visible = room_animated
+            || self.room.is_some_and(|room| {
+                self.snapshot.state.agents().any(|agent| {
+                    agent.room_id == room
+                        && agent.hook_setup_confirmed
+                        && !agent.session_binding_invalidated
+                        && !agent.deletion_pending
+                        && matches!(
+                            agent.status,
+                            RuntimeStatus::Working | RuntimeStatus::Blocked
+                        )
+                })
+            });
         if !animated_status_visible {
             self.status_animation_phase = 0;
             self.status_animation_last_tick = None;

@@ -466,8 +466,8 @@ fn working_status_colors(word: &str, keyframe: usize) -> Vec<Color> {
         .collect()
 }
 
-fn animated_agent_status_colors(agent: &Agent, phase: u8) -> Option<Vec<Color>> {
-    let word = agent_status(agent);
+/// Animated colors for a status word shown on an agent or room row.
+fn animated_status_colors(word: &str, phase: u8) -> Option<Vec<Color>> {
     match word {
         "Working" => {
             let keyframe = usize::from(phase / 2);
@@ -577,16 +577,33 @@ pub(super) fn sidebar_room_row(state: &BusState, room: RoomId) -> Option<usize> 
         .map(|index| first + index)
 }
 
-/// Marks a work room that has an orchestrator, then its unread count.
-pub(super) fn room_label(state: &BusState, room: &Room) -> String {
-    let mut label = format!("# {}", room.name);
+/// Marks a work room that has an orchestrator, then its unread count. The
+/// name is truncated so the marker and count fit in `width` cells.
+pub(super) fn room_label(state: &BusState, room: &Room, width: usize) -> String {
+    let mut suffix = String::new();
     if room.kind == RoomKind::Work && state.orchestrator_of(room.id).is_some() {
-        label.push_str(" ◆");
+        suffix.push_str(" ◆");
     }
     if room.unread_count > 0 {
-        label.push_str(&format!("  {}", room.unread_count));
+        suffix.push_str(&format!("  {}", room.unread_count));
     }
-    label
+    let room_width = width.saturating_sub(2 + cells(&suffix));
+    let name = if cells(&room.name) <= room_width {
+        room.name.clone()
+    } else {
+        let mut name = String::new();
+        let mut used = 0;
+        for c in room.name.chars() {
+            if used + cell_width(c) + 1 > room_width {
+                break;
+            }
+            used += cell_width(c);
+            name.push(c);
+        }
+        name.push('…');
+        name
+    };
+    format!("# {name}{suffix}")
 }
 
 /// The MASTER line under an agent's provider: the room it orchestrates, or
@@ -701,11 +718,14 @@ impl BusUi {
                 continue;
             };
             y = y.max(row + 1);
-            let rect = at(1, row, sw.saturating_sub(2));
+            // The status sits left of the delete button, as on agent rows.
+            let right = status(self.snapshot.state.room_status(room.id));
+            let name_width = sw.saturating_sub(right.len() as u16 + 3);
+            let rect = at(1, row, name_width);
             if rect.height == 0 {
                 continue;
             }
-            let label = room_label(&self.snapshot.state, room);
+            let label = room_label(&self.snapshot.state, room, usize::from(name_width));
             if let Some(rename) = self
                 .rename
                 .as_ref()
@@ -720,6 +740,15 @@ impl BusUi {
                     Some(room.id) == self.room && self.terminal.is_none(),
                     false,
                 );
+            }
+            let status_rect = at(
+                sidebar.width.saturating_sub(right.len() as u16 + 4),
+                row,
+                right.len() as u16,
+            );
+            view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
+            if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
+                view.color_last_row_characters(status_rect, colors);
             }
             // MASTER is permanent, so it never offers a delete button.
             if Some(room.id) == self.room && room.kind == RoomKind::Work {
@@ -782,7 +811,7 @@ impl BusUi {
                 false,
                 true,
             );
-            if let Some(colors) = animated_agent_status_colors(agent, self.status_animation_phase) {
+            if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
                 view.color_last_row_characters(status_rect, colors);
             }
             view.row(
