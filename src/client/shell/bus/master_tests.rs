@@ -53,31 +53,113 @@ fn deletable_rooms(ui: &BusUi) -> Vec<RoomId> {
         .collect()
 }
 
+fn hit_rows(ui: &BusUi, action: render::Action) -> Vec<u16> {
+    ui.view
+        .hits
+        .iter()
+        .filter(|hit| hit.action == action)
+        .map(|hit| hit.rect.y)
+        .collect()
+}
+
+fn click(ui: &mut BusUi, row: u16) {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    super::mouse(ui, MouseEventKind::Down(MouseButton::Left), 3, row);
+}
+
 #[test]
-fn sidebar_lists_master_first_without_a_header_above_rooms() {
-    let (mut ui, master, pr, _, _) = master_fixture();
+fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
+    let (mut ui, master, pr, other, orchestrator) = master_fixture();
     // Work rooms stay the landing room; MASTER is not the default.
     assert_eq!(ui.room, Some(pr));
+    let mut snapshot = (*ui.snapshot).clone();
+    let worker = snapshot
+        .state
+        .create_agent(pr, "worker", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(pr);
+    let rows = sidebar_rows(&mut ui);
+    assert_eq!(rows[0], "", "{rows:?}");
+    assert!(rows[1].starts_with("# MASTER"), "{rows:?}");
+    assert_eq!(rows[2], "", "{rows:?}");
+    assert!(
+        rows[3].starts_with("ROOMS") && rows[3].ends_with('+'),
+        "{rows:?}"
+    );
+    assert!(rows[5].starts_with("# pr-123 ◆"), "{rows:?}");
+    assert_eq!(rows[6], "# pr-456           Idle", "{rows:?}");
+    assert!(rows[7].starts_with('─'), "{rows:?}");
+    assert!(
+        rows[8].starts_with("AGENTS") && rows[8].ends_with('+'),
+        "{rows:?}"
+    );
+    assert!(rows[10].starts_with("worker"), "{rows:?}");
+    assert!(
+        !rows.iter().any(|row| row.trim() == "MASTER"),
+        "no MASTER section header: {rows:?}"
+    );
+    assert!(!rows.iter().any(|row| row.starts_with("claude-orch")));
+
+    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1, 1]);
+    assert_eq!(hit_rows(&ui, render::Action::NewRoom), [3]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [5, 5]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [6, 6]);
+    assert_eq!(hit_rows(&ui, render::Action::NewAgent), [8]);
+    assert_eq!(hit_rows(&ui, render::Action::Agent(worker))[0], 10);
+    assert!(hit_rows(&ui, render::Action::Agent(orchestrator)).is_empty());
+
+    click(&mut ui, 6);
+    assert_eq!(ui.room, Some(other));
+}
+
+#[test]
+fn master_sidebar_lists_its_agents_before_rooms() {
+    let (mut ui, master, pr, other, orchestrator) = master_fixture();
     ui.open_room(master);
     let rows = sidebar_rows(&mut ui);
     assert_eq!(rows[0], "", "{rows:?}");
     assert!(rows[1].starts_with("# MASTER"), "{rows:?}");
     assert_eq!(rows[2], "", "{rows:?}");
-    assert!(rows[3].starts_with("ROOMS"), "{rows:?}");
-    assert!(rows[3].ends_with('+'), "{rows:?}");
-    assert!(rows[5].starts_with("# pr-123 ◆"), "{rows:?}");
-    assert_eq!(rows[6], "# pr-456           Idle");
     assert!(
-        !rows.iter().any(|row| row.trim() == "MASTER"),
-        "no MASTER section header: {rows:?}"
+        rows[3].starts_with("AGENTS") && rows[3].ends_with('+'),
+        "{rows:?}"
     );
+    assert!(rows[5].starts_with("claude-orch"), "{rows:?}");
+    assert_eq!(rows[6], "Claude Code", "{rows:?}");
+    assert_eq!(rows[7], "#pr-123", "{rows:?}");
+    assert_eq!(rows[8], "", "{rows:?}");
+    assert!(rows[9].starts_with('─'), "{rows:?}");
+    assert!(
+        rows[10].starts_with("ROOMS") && rows[10].ends_with('+'),
+        "{rows:?}"
+    );
+    assert!(rows[12].starts_with("# pr-123 ◆"), "{rows:?}");
+    assert_eq!(rows[13], "# pr-456           Idle", "{rows:?}");
     // The open MASTER room never offers deletion.
     assert!(deletable_rooms(&ui).is_empty());
-    assert!(rows[7].starts_with('─'), "{rows:?}");
-    assert!(rows[8].starts_with("AGENTS"), "{rows:?}");
-    assert!(rows[10].starts_with("claude-orch"), "{rows:?}");
-    assert_eq!(rows[11], "Claude Code", "{rows:?}");
-    assert_eq!(rows[12], "#pr-123", "{rows:?}");
+
+    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1, 1]);
+    assert_eq!(hit_rows(&ui, render::Action::NewAgent), [3]);
+    assert_eq!(
+        hit_rows(&ui, render::Action::Agent(orchestrator)),
+        [5, 5, 6]
+    );
+    assert_eq!(hit_rows(&ui, render::Action::Reassign(orchestrator)), [7]);
+    assert_eq!(hit_rows(&ui, render::Action::NewRoom), [10]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [12, 12]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [13, 13]);
+    assert_eq!(
+        render::sidebar_room_row(&ui.snapshot.state, other, Some(master)),
+        Some(13)
+    );
+
+    // Clicking a room under MASTER's agents opens it in the work order.
+    click(&mut ui, 13);
+    assert_eq!(ui.room, Some(other));
+    let rows = sidebar_rows(&mut ui);
+    assert!(rows[3].starts_with("ROOMS"), "{rows:?}");
+    assert_eq!(hit_rows(&ui, render::Action::Room(other)), [6, 6]);
 }
 
 #[test]
@@ -95,11 +177,12 @@ fn master_agents_show_three_lines_without_an_expand_control() {
     });
     ui.open_room(master);
     let rows = sidebar_rows(&mut ui);
-    assert!(rows[10].starts_with("claude-orch"), "{rows:?}");
-    assert_eq!(rows[11], "Claude Code", "{rows:?}");
-    assert_eq!(rows[12], "#pr-123", "{rows:?}");
-    // Even disclosed, no branch or cwd lines follow.
-    assert!(rows[13..28].iter().all(|row| row.is_empty()), "{rows:?}");
+    assert!(rows[5].starts_with("claude-orch"), "{rows:?}");
+    assert_eq!(rows[6], "Claude Code", "{rows:?}");
+    assert_eq!(rows[7], "#pr-123", "{rows:?}");
+    // Even disclosed, no branch or cwd lines follow before the divider.
+    assert_eq!(rows[8], "", "{rows:?}");
+    assert!(rows[9].starts_with('─'), "{rows:?}");
     assert!(!rows.iter().any(|row| row.contains("/repo")), "{rows:?}");
     assert!(!ui
         .view
@@ -114,8 +197,8 @@ fn master_agents_show_three_lines_without_an_expand_control() {
             .map(|hit| hit.rect.y)
             .collect::<Vec<_>>()
     };
-    assert_eq!(hit_row(render::Action::Reassign(orchestrator)), [12]);
-    assert!(hit_row(render::Action::Agent(orchestrator)).contains(&11));
+    assert_eq!(hit_row(render::Action::Reassign(orchestrator)), [7]);
+    assert!(hit_row(render::Action::Agent(orchestrator)).contains(&6));
 }
 
 #[test]

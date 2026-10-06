@@ -430,7 +430,7 @@ impl BusUi {
     }
     pub fn open_room(&mut self, room: RoomId) {
         self.clear_selection();
-        if let Some(row) = super::render::sidebar_room_row(&self.snapshot.state, room)
+        if let Some(row) = super::render::sidebar_room_row(&self.snapshot.state, room, Some(room))
             .filter(|_| self.view.sidebar_body.height > 0)
         {
             let capacity = usize::from(self.view.sidebar_body.height.max(1));

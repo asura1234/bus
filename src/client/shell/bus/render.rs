@@ -558,18 +558,37 @@ impl BusUi {
 /// Rows taken by the MASTER room entry and the gap before ROOMS.
 const MASTER_SECTION_ROWS: usize = 2;
 
-/// The logical sidebar row of a room: MASTER is the first entry, alone above
-/// the ROOMS list.
-pub(super) fn sidebar_room_row(state: &BusState, room: RoomId) -> Option<usize> {
-    let master = state.master_room().map(|master| master.id);
-    if master == Some(room) {
+/// Rows of a MASTER agent: name, provider, orchestrated room and a gap.
+const MASTER_AGENT_ROWS: usize = 4;
+
+/// The logical row of the ROOMS header while `selected` is open. With MASTER
+/// open, its AGENTS section sits between MASTER and ROOMS.
+fn sidebar_rooms_header(state: &BusState, selected: Option<RoomId>) -> usize {
+    let Some(master) = state.master_room().map(|master| master.id) else {
+        return 1;
+    };
+    if selected != Some(master) {
+        return 1 + MASTER_SECTION_ROWS;
+    }
+    let agents = state
+        .agents()
+        .filter(|agent| agent.room_id == master)
+        .count();
+    // AGENTS header, gap, the agents, then the divider.
+    1 + MASTER_SECTION_ROWS + 2 + agents * MASTER_AGENT_ROWS + 1
+}
+
+/// The logical sidebar row of a room while `selected` is open: MASTER is the
+/// first entry, alone above the rest; work rooms follow the ROOMS header.
+pub(super) fn sidebar_room_row(
+    state: &BusState,
+    room: RoomId,
+    selected: Option<RoomId>,
+) -> Option<usize> {
+    if state.master_room().is_some_and(|master| master.id == room) {
         return Some(1);
     }
-    let first = if master.is_some() {
-        3 + MASTER_SECTION_ROWS
-    } else {
-        3
-    };
+    let first = sidebar_rooms_header(state, selected) + 2;
     state
         .rooms()
         .filter(|candidate| candidate.kind == RoomKind::Work)
@@ -658,7 +677,7 @@ impl BusUi {
                     .master_room()
                     .is_some_and(|master| master.id == agent.room_id)
                 {
-                    return (agent, true, Vec::new(), 4);
+                    return (agent, true, Vec::new(), MASTER_AGENT_ROWS);
                 }
                 let paths = if agent.details_disclosed {
                     wrap(&agent.cwd.to_string_lossy(), sw)
@@ -699,10 +718,23 @@ impl BusUi {
                 Rect::default()
             }
         };
-        let rooms_header = if self.snapshot.state.master_room().is_some() {
-            1 + MASTER_SECTION_ROWS
+        // A work room lists ROOMS, then its AGENTS; MASTER lists its
+        // orchestrator AGENTS first, so it is clear whose agents they are.
+        let master_open = self
+            .snapshot
+            .state
+            .master_room()
+            .is_some_and(|master| Some(master.id) == self.room);
+        let rooms_header = sidebar_rooms_header(&self.snapshot.state, self.room);
+        let work_rooms = rooms
+            .iter()
+            .filter(|room| room.kind == RoomKind::Work)
+            .count();
+        let (divider_row, agents_header) = if master_open {
+            (rooms_header - 1, 1 + MASTER_SECTION_ROWS)
         } else {
-            1
+            let divider = rooms_header + 2 + work_rooms;
+            (divider, divider + 1)
         };
         view.row(at(1, rooms_header, sw), "ROOMS", None, false, true);
         view.row(
@@ -712,12 +744,10 @@ impl BusUi {
             false,
             false,
         );
-        let mut y = rooms_header + 2;
         for room in &rooms {
-            let Some(row) = sidebar_room_row(&self.snapshot.state, room.id) else {
+            let Some(row) = sidebar_room_row(&self.snapshot.state, room.id, self.room) else {
                 continue;
             };
-            y = y.max(row + 1);
             // The status sits left of the delete button, as on agent rows.
             let right = status(self.snapshot.state.room_status(room.id));
             let name_width = sw.saturating_sub(right.len() as u16 + 3);
@@ -761,8 +791,8 @@ impl BusUi {
                 );
             }
         }
-        view.sidebar_divider = at(1, y, sw);
-        y += 1;
+        view.sidebar_divider = at(1, divider_row, sw);
+        let mut y = agents_header;
         view.row(at(1, y, sw), "AGENTS", None, false, true);
         view.row(
             at(sidebar.width.saturating_sub(3), y, 1),
