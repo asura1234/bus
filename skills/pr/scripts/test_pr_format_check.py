@@ -201,15 +201,16 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertTrue(any("大小" in problem for problem in problems))
 
     def test_placeholders_are_derived_from_the_template(self) -> None:
-        """占位符必须来自模板本身，而不是脚本里写死的一份清单。
+        """Placeholders must come from the template itself, not from a list hard-coded in the script.
 
-        写死的清单只覆盖当时想到的几个：模板里的目标槽位与 `[变更项 2]` 都可能
-        漏网，留着它们的 PR 正文照样判通过——门禁的全部意义正是挡住这类残留。
+        A hard-coded list covers only the few thought of at the time: the template's goal slots and
+        `[变更项 2]` could both slip through, and a PR body that keeps them would still pass, while the
+        whole point of the gate is to block exactly this residue.
         """
         self.assertIn("[变更项 2]", self.placeholders)
         self.assertIn("[目标原文或 agent 撰写的目标]", self.placeholders)
         self.assertIn("[非目标原文或无]", self.placeholders)
-        # 标题小节的示例不是正文槽位：正文完全可能正当地讨论该用哪个类型。
+        # Title-section examples are not body slots: the body may legitimately discuss which type to use.
         for title_example in ("[feat]", "[fix]", "[infra]", "[类型]"):
             self.assertNotIn(title_example, self.placeholders)
 
@@ -225,10 +226,10 @@ class PrFormatCheckTest(unittest.TestCase):
             )
 
     def test_placeholder_inside_a_fence_is_not_residue(self) -> None:
-        """围栏内的占位符是**引用**而不是残留。
+        """A placeholder inside a fence is a **quotation**, not residue.
 
-        未勾选 checkbox 与 HTML 注释都按「代码块外」判定，占位符若改扫原始正文，一份
-        正当引用了模板片段的 PR 会被判成没填完。
+        Unchecked checkboxes and HTML comments are both judged "outside code fences"; if placeholders
+        scanned the raw body, a PR that legitimately quotes a template fragment would be judged unfinished.
         """
         body = valid_body().replace(
             "无 UI 变更",
