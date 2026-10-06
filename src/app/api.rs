@@ -735,6 +735,9 @@ impl App {
             Method::AgentDialogChoose(params) => {
                 return self.handle_agent_dialog_choose(request.id, params)
             }
+            Method::AgentDialogAnswer(params) => {
+                return self.handle_agent_dialog_answer(request.id, params)
+            }
             Method::AgentExplain(target) => return self.handle_agent_explain(request.id, target),
             Method::AgentSendKeys(params) => {
                 return self.handle_agent_send_keys(request.id, params)

@@ -390,6 +390,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentRead(_) => "agent.read",
         Method::AgentDialogObserve(_) => "agent.dialog.observe",
         Method::AgentDialogChoose(_) => "agent.dialog.choose",
+        Method::AgentDialogAnswer(_) => "agent.dialog.answer",
         Method::AgentExplain(_) => "agent.explain",
         Method::AgentSendKeys(_) => "agent.send_keys",
         Method::AgentRename(_) => "agent.rename",

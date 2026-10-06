@@ -102,6 +102,8 @@ pub(crate) enum DialogChoice {
     Stale,
     /// The option does not exist or the current selection is not visible.
     Unreachable,
+    /// Text answering is only available on a focused free-text question.
+    NotQuestion,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2626,6 +2628,67 @@ impl PaneRuntime {
         Ok(DialogChoice::Sent(
             keys.into_iter().map(str::to_owned).collect(),
         ))
+    }
+
+    pub(crate) fn try_answer_dialog(
+        &self,
+        expected_digest: &str,
+        text: Option<String>,
+        skip: bool,
+    ) -> Result<DialogChoice, String> {
+        crate::api::schema::AgentDialogAnswerParams::validate_answer(text.as_deref(), skip)?;
+        let _content_write_guard = match self.content_write_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(dialog) = crate::detect::dialog::parse(&self.terminal.visible_ansi())
+            .filter(|dialog| dialog.digest() == expected_digest)
+        else {
+            return Ok(DialogChoice::Stale);
+        };
+        let Some(input) = dialog.input else {
+            return Ok(DialogChoice::NotQuestion);
+        };
+        let (code, modifiers, key) = if skip && input.skip_key == "ctrl+]" {
+            (
+                crossterm::event::KeyCode::Char(']'),
+                crossterm::event::KeyModifiers::CONTROL,
+                "ctrl+]",
+            )
+        } else if skip {
+            (
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+                "esc",
+            )
+        } else {
+            (
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+                "enter",
+            )
+        };
+        let key_bytes = Bytes::from(
+            self.encode_terminal_key(crossterm::event::KeyEvent::new(code, modifiers).into()),
+        );
+        if let Some(text) = text {
+            if !self.bracketed_paste_enabled() && text.contains(['\n', '\t']) {
+                return Err("Multiline answers require bracketed paste support".into());
+            }
+            self.io
+                .queue_user_input_submission(
+                    self.paste_payload(text),
+                    key_bytes,
+                    DIALOG_CONFIRM_DELAY,
+                    None,
+                )
+                .map_err(|error| error.to_string())?;
+        } else {
+            self.io
+                .try_send_bytes(key_bytes)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(DialogChoice::Sent(vec![key.into()]))
     }
 
     pub fn queue_user_input_submission(

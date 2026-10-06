@@ -8,6 +8,106 @@ fn labels(dialog: &Dialog) -> Vec<(u32, &str, bool)> {
         .collect()
 }
 
+const CODEX_TEXT_QUESTION: &str = concat!(
+    "• Working (1m 28s • esc to interrupt)\n\n",
+    "• Queued follow-up inputs\n\n",
+    "  What token should Bus use?\n\n",
+    "  Type your answer\n\n",
+    "  enter submit   ctrl+] skip   shift+→ main prompt\n",
+);
+
+const CURSOR_OTHER: &str = concat!(
+    "┌──────────────────────────────────────────────────────────┐\n",
+    "│ Clarifying Questions                                    │\n",
+    "│ Question 1 of 1                                         │\n",
+    "│ 1. What token should Bus use?                            │\n",
+    "│     [ ] Alpha                                           │\n",
+    "│     [ ] Beta                                            │\n",
+    "│   › [ ] Other: (type to answer)                          │\n",
+    "│ ↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip │\n",
+    "└──────────────────────────────────────────────────────────┘\n",
+);
+
+#[test]
+fn codex_free_text_question_has_no_options_and_tracks_input_edits() {
+    let dialog = parse(CODEX_TEXT_QUESTION).unwrap();
+    assert_eq!(dialog.kind, DialogKind::Question);
+    assert_eq!(dialog.text, "What token should Bus use?");
+    assert!(dialog.options.is_empty());
+    assert!(dialog.keys_for(1).is_none());
+    assert_eq!(dialog.input.as_ref().unwrap().skip_key, "ctrl+]");
+    let edited = parse(&CODEX_TEXT_QUESTION.replace("Type your answer", "MY_TOKEN")).unwrap();
+    assert_eq!(dialog.id(), edited.id());
+    assert_ne!(dialog.digest(), edited.digest());
+    assert_eq!(edited.input.unwrap().value, "MY_TOKEN");
+    let glyphs = CODEX_TEXT_QUESTION
+        .replace("ctrl+]", "⌃]")
+        .replace("shift+→", "⇧→");
+    assert_eq!(parse(&glyphs).unwrap().kind, DialogKind::Question);
+    let counted = CODEX_TEXT_QUESTION.replace("What token", "1 of 2\n\n  What token");
+    assert_eq!(parse(&counted).unwrap().text, "What token should Bus use?");
+    let stale_choices = format!("› 1. Old\n  2. Options\n\n{CODEX_TEXT_QUESTION}");
+    assert_eq!(parse(&stale_choices).unwrap().kind, DialogKind::Question);
+}
+
+#[test]
+fn text_question_controls_are_live_only_at_the_bottom() {
+    for screen in [
+        format!("{CODEX_TEXT_QUESTION}\n› Ask Codex to do anything\n"),
+        CODEX_TEXT_QUESTION.replace("ctrl+] skip", "esc cancel"),
+        CODEX_TEXT_QUESTION.replace("• Queued follow-up inputs", "Transcript excerpt"),
+        "What token should Bus use?\nType your answer\n".to_owned(),
+        "• Queued follow-up inputs\n? 1 question\nshift+← to answer\n› Ask Codex to do anything\n"
+            .to_owned(),
+        format!("{CURSOR_OTHER}\n⬢ Working · ctrl+c to stop\n"),
+    ] {
+        assert!(parse(&screen).is_none(), "{screen}");
+    }
+}
+
+#[test]
+fn cursor_other_text_question_requires_the_focused_other_row() {
+    let dialog = parse(CURSOR_OTHER).unwrap();
+    assert_eq!(dialog.kind, DialogKind::Question);
+    assert_eq!(dialog.text, "What token should Bus use?");
+    assert_eq!(dialog.input.as_ref().unwrap().skip_key, "esc");
+    let edited = parse(&CURSOR_OTHER.replace("(type to answer)", "MY_TOKEN")).unwrap();
+    assert_eq!(dialog.id(), edited.id());
+    assert_ne!(dialog.digest(), edited.digest());
+    let chooser = CURSOR_OTHER
+        .replace("› [ ] Other:", "  [ ] Other:")
+        .replace("    [ ] Alpha", "  › [ ] Alpha");
+    assert!(parse(&chooser).is_none());
+    let wrapped = CURSOR_OTHER.replace(
+        "1. What token should Bus use?",
+        "1. What token\n│    should Bus use?",
+    );
+    assert_eq!(parse(&wrapped).unwrap().text, "What token\nshould Bus use?");
+    let wrapped_input = CURSOR_OTHER.replace("(type to answer)", "first line\n│       second line");
+    let wrapped_input = parse(&wrapped_input).unwrap();
+    assert_eq!(wrapped_input.id(), dialog.id());
+    assert_eq!(
+        wrapped_input.input.unwrap().value,
+        "first line\nsecond line"
+    );
+}
+
+#[test]
+fn claude_focused_custom_answer_is_a_text_question_before_enter() {
+    let screen = CLAUDE_QUESTION
+        .replace("❯ 1. Redis", "  1. Redis")
+        .replace("  3. Type something.", "❯ 3. Type something.")
+        .replace("Esc to cancel", "ctrl+g to edit in Vim · Esc to cancel");
+    let dialog = parse(&screen).unwrap();
+    assert_eq!(dialog.kind, DialogKind::Question);
+    assert_eq!(dialog.text, "Which storage should the cache use?");
+    assert_eq!(dialog.input.as_ref().unwrap().skip_key, "esc");
+    let edited = parse(&screen.replace("Type something.", "MY_TOKEN")).unwrap();
+    assert_eq!(dialog.id(), edited.id());
+    assert_ne!(dialog.digest(), edited.digest());
+    assert!(parse(&format!("{screen}\n❯ A new prompt\n")).is_none());
+}
+
 // Captured from a Claude Code Bash approval at its resting cursor position.
 const CLAUDE_BASH: &str = concat!(
     "────────────────────────────────────────────────────────────────\n",

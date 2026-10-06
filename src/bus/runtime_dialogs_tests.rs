@@ -8,12 +8,14 @@ use std::sync::{Arc, Mutex};
 struct Screen {
     dialog: bool,
     blocked: bool,
+    question: bool,
 }
 
 struct FakeServer(Arc<Mutex<Screen>>);
 
 fn dialog() -> schema::AgentDialog {
     schema::AgentDialog {
+        kind: schema::AgentDialogKind::Choice,
         text: "Do you want to proceed?".into(),
         options: vec![
             schema::AgentDialogOption {
@@ -53,10 +55,18 @@ impl Transport for FakeServer {
                     pane_id: "pane".into(),
                     session_id: None,
                     content_revision: 4,
-                    dialog: screen.dialog.then(dialog),
+                    dialog: screen.dialog.then(|| {
+                        let mut dialog=dialog();
+                        if screen.question {
+                            dialog.kind=schema::AgentDialogKind::Question;
+                            dialog.text="What token should Bus use?".into();
+                            dialog.options.clear();
+                        }
+                        dialog
+                    }),
                 },
             }),
-            Method::AgentDialogChoose(_) => {
+            Method::AgentDialogChoose(_) | Method::AgentDialogAnswer(_) => {
                 self.0.lock().unwrap().dialog = false;
                 Ok(ResponseResult::AgentDialogChosen {
                     choice: schema::AgentDialogChooseResult {
@@ -168,6 +178,14 @@ fn notice_names_the_command_and_leaves_the_fingerprint_out() {
 }
 
 #[test]
+fn free_text_notice_retains_the_question_and_names_answer_without_a_fingerprint() {
+    let observed = json!({"dialog":{"kind":"question","text":"Which token?\nPlease give the complete value.","options":[],"hint":"enter submit ctrl+] skip shift+→ main prompt"},"fingerprint":"SECRET"});
+    let notice = dialog_notice(AgentId(61), "Codex", "dev", &observed);
+    assert_eq!(notice, "Codex in dev (agent 61)\nWhich token?\nPlease give the complete value.\n\nAnswer: bus agent dialog 61, then bus agent answer 61 --text \"...\" or bus agent answer 61 --skip");
+    assert!(!notice.contains("SECRET"));
+}
+
+#[test]
 fn the_same_blocked_notice_is_not_posted_again_after_a_flicker() {
     let (mut worker, agent, room, _, screen, dir) = worker(false);
     screen.lock().unwrap().blocked = true;
@@ -225,6 +243,35 @@ fn orchestrator_is_told_once_per_dialog_and_when_it_closes_on_its_own() {
     let sent = messages_to(&worker, orchestrator);
     assert_eq!(sent.len(), 2, "{sent:?}");
     assert_eq!(sent[1], "answered");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn master_receives_a_text_question_and_a_generic_answer_notice() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    screen.lock().unwrap().dialog = true;
+    screen.lock().unwrap().question = true;
+    polls(&mut worker, 3);
+    let sent = messages_to(&worker, orchestrator);
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].contains("What token should Bus use?"));
+    assert!(sent[0].contains(&format!("bus agent answer {} --text", agent.0)));
+    assert!(!sent[0].contains("fingerprint"));
+    assert!(notices(&worker, room).is_empty());
+    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        worker
+            .answer_dialog(agent, Some("token"), false, &fingerprint)
+            .unwrap()["outcome"],
+        "closed"
+    );
+    polls(&mut worker, 3);
+    assert_eq!(messages_to(&worker, orchestrator)[1], "answered");
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

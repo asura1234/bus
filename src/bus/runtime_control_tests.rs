@@ -778,7 +778,9 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
     struct Native {
         shown: bool,
         written: bool,
+        question: bool,
         choices: Vec<schema::AgentDialogChooseParams>,
+        answers: Vec<schema::AgentDialogAnswerParams>,
     }
     struct DialogTransport(Arc<Mutex<Native>>);
     fn observation(shown: bool) -> schema::AgentDialogObservation {
@@ -788,6 +790,7 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
             session_id: None,
             content_revision: 22,
             dialog: shown.then(|| schema::AgentDialog {
+                kind: schema::AgentDialogKind::Choice,
                 text: "Do you trust the contents of this directory?".into(),
                 options: vec![
                     schema::AgentDialogOption {
@@ -813,8 +816,15 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
             match method {
                 Method::AgentDialogObserve(params) => {
                     assert_eq!(params.target, "w1:p2");
+                    let mut observed = observation(native.shown);
+                    if native.question {
+                        if let Some(dialog) = &mut observed.dialog {
+                            dialog.kind = schema::AgentDialogKind::Question;
+                            dialog.options.clear();
+                        }
+                    }
                     Ok(ResponseResult::AgentDialog {
-                        observation: observation(native.shown),
+                        observation: observed,
                     })
                 }
                 Method::AgentDialogChoose(params) => {
@@ -830,6 +840,24 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
                             } else {
                                 vec![]
                             },
+                            observation: observation(native.shown),
+                        },
+                    })
+                }
+                Method::AgentDialogAnswer(params) => {
+                    let keys = if params.skip {
+                        vec!["ctrl+]".into()]
+                    } else {
+                        vec!["enter".into()]
+                    };
+                    native.answers.push(params);
+                    let written = native.written;
+                    native.shown = !written;
+                    Ok(ResponseResult::AgentDialogChosen {
+                        choice: schema::AgentDialogChooseResult {
+                            written,
+                            reason: (!written).then(|| "stale_or_changed_dialog".into()),
+                            keys: if written { keys } else { vec![] },
                             observation: observation(native.shown),
                         },
                     })
@@ -931,6 +959,71 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
     assert_eq!(native.lock().unwrap().choices.len(), 2);
     let saved = worker.store.load().unwrap().unwrap();
     assert!(saved.dialog_fingerprint_consumed(&fresh));
+    assert!(worker
+        .answer_dialog(agent, Some("token"), false, &fresh)
+        .is_err());
+    native.lock().unwrap().question = true;
+    native.lock().unwrap().shown = true;
+    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (text, skip) in [(None, false), (Some("token"), true), (Some(" "), false)] {
+        assert!(worker
+            .answer_dialog(agent, text, skip, &fingerprint)
+            .is_err());
+    }
+    relaunch(&mut worker, "other-launch");
+    assert!(worker
+        .answer_dialog(agent, Some("token"), false, &fingerprint)
+        .is_err());
+    relaunch(&mut worker, "launch");
+    assert!(native.lock().unwrap().answers.is_empty());
+    native.lock().unwrap().written = false;
+    assert!(worker
+        .answer_dialog(agent, Some("token"), false, &fingerprint)
+        .is_err());
+    assert_eq!(native.lock().unwrap().answers.len(), 1);
+    assert!(worker
+        .answer_dialog(agent, Some("token"), false, &fingerprint)
+        .is_err());
+    assert_eq!(native.lock().unwrap().answers.len(), 1);
+    native.lock().unwrap().written = true;
+    let fresh = worker.observe_dialog(agent).unwrap()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let answered = worker
+        .answer_dialog(agent, Some("token"), false, &fresh)
+        .unwrap();
+    assert_eq!(answered["outcome"], "closed");
+    assert!(answered.get("option").is_none());
+    assert!(worker.state.agent(agent).unwrap().dialog_answer.is_none());
+    // A real newly reported question clears any previously recorded option.
+    worker
+        .state
+        .set_dialog_notice(agent, Some("question".into()))
+        .unwrap();
+    native.lock().unwrap().shown = true;
+    let fresh = worker.observe_dialog(agent).unwrap()["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let skipped = worker.answer_dialog(agent, None, true, &fresh).unwrap();
+    assert_eq!(skipped["outcome"], "closed");
+    assert_eq!(skipped["keys"], json!(["ctrl+]"]));
+    assert!(worker.state.agent(agent).unwrap().dialog_answer.is_none());
+    assert!(worker.answer_dialog(agent, None, true, &fresh).is_err());
+    assert!(worker
+        .store
+        .load()
+        .unwrap()
+        .unwrap()
+        .dialog_fingerprint_consumed(&fresh));
+    let answers = &native.lock().unwrap().answers;
+    assert_eq!(answers[1].text.as_deref(), Some("token"));
+    assert_eq!(answers[2].text, None);
+    assert!(answers[2].skip);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

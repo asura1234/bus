@@ -1,7 +1,16 @@
 id = "codex"
-version = "2026.10.06.1"
+version = "2026.10.06.2"
 min_engine_version = 3
 updated_at = "2026-10-06T15:23:00Z"
+
+[[rules]]
+id = "expanded_text_question"
+state = "blocked"
+priority = 1160
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+contains = ["Queued follow-up inputs"]
+regex = ['(?mi)^\s*enter\s+submit\s+(?:ctrl\+\]|⌃\])\s+skip\s+(?:shift\+→|⇧→)\s+main prompt\s*\z']
 
 [[rules]]
 id = "osc_title_blocked"

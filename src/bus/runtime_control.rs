@@ -100,6 +100,7 @@ impl Worker {
             "agent.read" => (&["agent", "source", "lines"], false),
             "agent.dialog.observe" => (&["agent"], false),
             "agent.dialog.choose" => (&["agent", "option", "fingerprint"], true),
+            "agent.dialog.answer" => (&["agent", "text", "skip", "fingerprint"], true),
             "agent.focus" => (&["agent"], true),
             "agent.clear" => (&["agent"], true),
             "message.send" => (&["room", "to", "text", "files", "as", "queue"], true),
@@ -372,6 +373,16 @@ impl Worker {
                     .parse::<u32>()
                     .map_err(|_| "Option must be a number")?;
                 self.choose_dialog_option(agent, option, required(p, "fingerprint")?)
+            }
+            "agent.dialog.answer" => {
+                let agent = self.dev_agent(required(p, "agent")?, None)?;
+                let text = if p["text"].is_null() {
+                    None
+                } else {
+                    optional_text(p, "text")?
+                };
+                let skip = optional_bool(p, "skip")?;
+                self.answer_dialog(agent, text, skip, required(p, "fingerprint")?)
             }
             "agent.clear" => {
                 let agent = self.dev_agent(required(p, "agent")?, None)?;
@@ -923,6 +934,28 @@ impl Worker {
         option: u32,
         fingerprint: &str,
     ) -> Result<Value, String> {
+        self.send_dialog_answer(id, Some(option), None, false, fingerprint)
+    }
+
+    pub(super) fn answer_dialog(
+        &mut self,
+        id: AgentId,
+        text: Option<&str>,
+        skip: bool,
+        fingerprint: &str,
+    ) -> Result<Value, String> {
+        schema::AgentDialogAnswerParams::validate_answer(text, skip)?;
+        self.send_dialog_answer(id, None, text, skip, fingerprint)
+    }
+
+    fn send_dialog_answer(
+        &mut self,
+        id: AgentId,
+        option: Option<u32>,
+        text: Option<&str>,
+        skip: bool,
+        fingerprint: &str,
+    ) -> Result<Value, String> {
         let claims = decode_dialog_fingerprint(fingerprint)?;
         if claims.agent_id != id {
             return Err("Dialog fingerprint belongs to another agent".into());
@@ -936,8 +969,11 @@ impl Worker {
         {
             return Err("Agent launch or session changed; observe the dialog again".into());
         }
-        if option == 0 || option > claims.options {
+        if option.is_some_and(|option| option == 0 || option > claims.options) {
             return Err(format!("Option must be between 1 and {}", claims.options));
+        }
+        if option.is_none() && claims.options != 0 {
+            return Err("This is a choice dialog; use agent choose".into());
         }
         if self.state.dialog_fingerprint_consumed(fingerprint) {
             return Err("Dialog fingerprint was already used; observe the dialog again".into());
@@ -945,16 +981,26 @@ impl Worker {
         let mut consumed = self.state.clone();
         consumed.consume_dialog_fingerprint(fingerprint.to_owned());
         self.save(consumed)?;
-        let native =
-            self.transport
-                .request(Method::AgentDialogChoose(schema::AgentDialogChooseParams {
-                    target: pane_id.clone(),
-                    expected_terminal_id: terminal_id.clone(),
-                    expected_pane_id: pane_id.clone(),
-                    expected_session_id: session_id.clone(),
-                    expected_dialog_digest: claims.dialog_digest.clone(),
-                    option,
-                }));
+        let method = match option {
+            Some(option) => Method::AgentDialogChoose(schema::AgentDialogChooseParams {
+                target: pane_id.clone(),
+                expected_terminal_id: terminal_id.clone(),
+                expected_pane_id: pane_id.clone(),
+                expected_session_id: session_id.clone(),
+                expected_dialog_digest: claims.dialog_digest.clone(),
+                option,
+            }),
+            None => Method::AgentDialogAnswer(schema::AgentDialogAnswerParams {
+                target: pane_id.clone(),
+                expected_terminal_id: terminal_id.clone(),
+                expected_pane_id: pane_id.clone(),
+                expected_session_id: session_id.clone(),
+                expected_dialog_digest: claims.dialog_digest.clone(),
+                text: text.map(str::to_owned),
+                skip,
+            }),
+        };
+        let native = self.transport.request(method);
         let keys = match native {
             Ok(ResponseResult::AgentDialogChosen { choice }) if choice.written => choice.keys,
             Ok(ResponseResult::AgentDialogChosen { choice }) => {
@@ -972,11 +1018,24 @@ impl Worker {
             }
         };
         // Its closing is expected now, so no "closed on its own" follow-up.
-        let mut answered = self.state.clone();
-        answered
-            .mark_dialog_answered(id, option)
-            .map_err(|error| error.to_string())?;
-        self.save(answered)?;
+        if let Some(option) = option {
+            let mut answered = self.state.clone();
+            answered
+                .mark_dialog_answered(id, option)
+                .map_err(|error| error.to_string())?;
+            self.save(answered)?;
+        } else {
+            let mut answered = self.state.clone();
+            let notice = answered
+                .agent(id)
+                .and_then(|agent| agent.dialog_notice.clone());
+            // A text answer has no numbered choice, including if it replaces
+            // an earlier choice before the notice poll catches up.
+            answered
+                .set_dialog_notice(id, notice)
+                .map_err(|error| error.to_string())?;
+            self.save(answered)?;
+        }
         // Moves are confirmed after a short delay, so watch until the dialog
         // closes or another one replaces it.
         let mut outcome = "unchanged";
@@ -993,7 +1052,13 @@ impl Worker {
             outcome = match &observation.dialog {
                 None => "closed",
                 Some(dialog) if dialog.digest == claims.dialog_digest => "unchanged",
-                Some(dialog) if dialog.id == claims.dialog_shape => "selection_moved",
+                Some(dialog) if dialog.id == claims.dialog_shape => {
+                    if option.is_some() {
+                        "selection_moved"
+                    } else {
+                        "input_changed"
+                    }
+                }
                 Some(_) => "replaced",
             };
             after = observation.dialog;
@@ -1001,18 +1066,24 @@ impl Worker {
                 break;
             }
         }
-        Ok(json!({
+        let mut result = json!({
             "agent_id": id,
-            "option": option,
             "keys": keys,
             "outcome": outcome,
             "dialog": after.as_ref().map(dialog_json),
-        }))
+        });
+        if let Some(option) = option {
+            result["option"] = json!(option);
+        } else {
+            result["skipped"] = json!(skip);
+        }
+        Ok(result)
     }
 }
 
 fn dialog_json(dialog: &schema::AgentDialog) -> Value {
     json!({
+        "kind": dialog.kind,
         "text": dialog.text,
         "options": dialog.options,
         "hint": dialog.hint,

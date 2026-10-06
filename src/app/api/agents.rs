@@ -3,9 +3,10 @@ use std::time::Duration;
 use bytes::Bytes;
 
 use crate::api::schema::{
-    AgentDialog, AgentDialogChooseParams, AgentDialogChooseResult, AgentDialogObservation,
-    AgentDialogOption, AgentPromptParams, AgentRenameParams, AgentSendKeysParams, AgentStartParams,
-    AgentTarget, PaneReadResult, ResponseResult,
+    AgentDialog, AgentDialogAnswerParams, AgentDialogChooseParams, AgentDialogChooseResult,
+    AgentDialogKind, AgentDialogObservation, AgentDialogOption, AgentPromptParams,
+    AgentRenameParams, AgentSendKeysParams, AgentStartParams, AgentTarget, PaneReadResult,
+    ResponseResult,
 };
 use crate::app::App;
 
@@ -495,6 +496,80 @@ impl App {
             Ok(crate::pane::DialogChoice::Unreachable) => {
                 (Vec::new(), Some("option_missing_or_selection_not_visible"))
             }
+            Ok(crate::pane::DialogChoice::NotQuestion) => {
+                (Vec::new(), Some("not_a_free_text_question"))
+            }
+            Err(error) => return encode_error(id, "dialog_write_failed", error),
+        };
+        let Some(observation) = dialog_observation(&agent, runtime) else {
+            return encode_error(
+                id,
+                "dialog_observation_unavailable",
+                "Agent screen changed while the result was being reported",
+            );
+        };
+        encode_success(
+            id,
+            ResponseResult::AgentDialogChosen {
+                choice: AgentDialogChooseResult {
+                    written: reason.is_none(),
+                    reason: reason.map(str::to_owned),
+                    keys,
+                    observation,
+                },
+            },
+        )
+    }
+
+    pub(super) fn handle_agent_dialog_answer(
+        &mut self,
+        id: String,
+        params: AgentDialogAnswerParams,
+    ) -> String {
+        if let Err(error) =
+            AgentDialogAnswerParams::validate_answer(params.text.as_deref(), params.skip)
+        {
+            return encode_error(id, "invalid_params", error);
+        }
+        self.reconcile_managed_agent_target(&params.target);
+        let agent = match self.agent_info_for_target(&params.target) {
+            Ok(agent) => agent,
+            Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
+        };
+        let session = agent.agent_session.as_ref().map(|session| &session.value);
+        if agent.terminal_id != params.expected_terminal_id
+            || agent.pane_id != params.expected_pane_id
+            || params
+                .expected_session_id
+                .as_ref()
+                .is_some_and(|expected| session != Some(expected))
+        {
+            return encode_error(
+                id,
+                "agent_identity_changed",
+                "Agent terminal, pane, or session identity changed; no keys were sent",
+            );
+        }
+        let resolved = match self.resolve_agent_target(&params.target) {
+            Ok(resolved) => resolved,
+            Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
+        };
+        let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
+            return agent_not_found(id, &params.target);
+        };
+        let (keys, reason) = match runtime.try_answer_dialog(
+            &params.expected_dialog_digest,
+            params.text,
+            params.skip,
+        ) {
+            Ok(crate::pane::DialogChoice::Sent(keys)) => (keys, None),
+            Ok(crate::pane::DialogChoice::Stale) => (Vec::new(), Some("stale_or_changed_dialog")),
+            Ok(crate::pane::DialogChoice::NotQuestion) => {
+                (Vec::new(), Some("not_a_free_text_question"))
+            }
+            Ok(crate::pane::DialogChoice::Unreachable) => {
+                (Vec::new(), Some("question_input_unavailable"))
+            }
             Err(error) => return encode_error(id, "dialog_write_failed", error),
         };
         let Some(observation) = dialog_observation(&agent, runtime) else {
@@ -644,6 +719,10 @@ fn dialog_observation(
             .map(|session| session.value.clone()),
         content_revision,
         dialog: crate::detect::dialog::parse(&screen).map(|dialog| AgentDialog {
+            kind: match dialog.kind {
+                crate::detect::dialog::DialogKind::Choice => AgentDialogKind::Choice,
+                crate::detect::dialog::DialogKind::Question => AgentDialogKind::Question,
+            },
             id: dialog.id(),
             digest: dialog.digest(),
             text: dialog.text,
@@ -1267,6 +1346,118 @@ mod tests {
             panic!("unexpected choice response: {response}");
         };
         choice
+    }
+
+    const CODEX_TEXT_DIALOG: &[u8] = "• Queued follow-up inputs\r\n\r\nWhat token should Bus use?\r\n\r\nType your answer\r\n\r\nenter submit   ctrl+] skip   shift+→ main prompt\r\n".as_bytes();
+
+    fn answer_params(
+        observation: &AgentDialogObservation,
+        text: Option<&str>,
+        skip: bool,
+    ) -> AgentDialogAnswerParams {
+        AgentDialogAnswerParams {
+            target: "reviewer".into(),
+            expected_terminal_id: observation.terminal_id.clone(),
+            expected_pane_id: observation.pane_id.clone(),
+            expected_session_id: observation.session_id.clone(),
+            expected_dialog_digest: observation.dialog.as_ref().unwrap().digest.clone(),
+            text: text.map(str::to_owned),
+            skip,
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_answer_pastes_literal_text_then_enters_and_encodes_skip() {
+        let (mut app, mut writes) = app_with_dialog(CODEX_TEXT_DIALOG, Some("session"));
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(b"\x1b[?2004h");
+        let observation = observe_dialog(&mut app);
+        assert_eq!(
+            observation.dialog.as_ref().unwrap().kind,
+            AgentDialogKind::Question
+        );
+        let params = answer_params(&observation, Some("hello 世界"), false);
+        let choice = chosen(&app.handle_agent_dialog_answer("answer".into(), params));
+        assert!(choice.written);
+        assert_eq!(choice.keys, ["enter"]);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from("\x1b[200~hello 世界\x1b[201~")
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from_static(b"\r")
+        );
+        let skipped = chosen(
+            &app.handle_agent_dialog_answer("skip".into(), answer_params(&observation, None, true)),
+        );
+        assert!(skipped.written);
+        assert_eq!(skipped.keys, ["ctrl+]"]);
+        assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\x1d"));
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_answer_sends_nothing_for_changed_identity_screen_or_invalid_text() {
+        let (mut app, mut writes) = app_with_dialog(CODEX_TEXT_DIALOG, Some("session"));
+        let observed = observe_dialog(&mut app);
+        for field in ["terminal", "pane", "session", "digest"] {
+            let mut params = answer_params(&observed, Some("token"), false);
+            match field {
+                "terminal" => params.expected_terminal_id = "wrong".into(),
+                "pane" => params.expected_pane_id = "wrong".into(),
+                "session" => params.expected_session_id = Some("wrong".into()),
+                _ => params.expected_dialog_digest = "wrong".into(),
+            }
+            let result = app.handle_agent_dialog_answer("reject".into(), params);
+            if field == "digest" {
+                assert!(!chosen(&result).written);
+            } else {
+                assert!(serde_json::from_str::<crate::api::schema::ErrorResponse>(&result).is_ok());
+            }
+            assert!(writes.try_recv().is_err());
+        }
+        for (text, skip) in [
+            (Some("token"), true),
+            (None, false),
+            (Some(" "), false),
+            (Some("a\x1d"), false),
+            (Some("a\x1b[201~"), false),
+        ] {
+            let result = app
+                .handle_agent_dialog_answer("invalid".into(), answer_params(&observed, text, skip));
+            assert!(serde_json::from_str::<crate::api::schema::ErrorResponse>(&result).is_ok());
+            assert!(writes.try_recv().is_err());
+        }
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let edited = format!(
+            "\x1b[2J\x1b[H{}",
+            String::from_utf8_lossy(CODEX_TEXT_DIALOG).replace("Type your answer", "human edit")
+        );
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(edited.as_bytes());
+        let stale = chosen(
+            &app.handle_agent_dialog_answer("edited".into(), answer_params(&observed, None, true)),
+        );
+        assert!(!stale.written);
+        assert!(writes.try_recv().is_err());
+        let (mut app, mut writes) = app_with_dialog(CLAUDE_BASH_DIALOG, None);
+        let observed = observe_dialog(&mut app);
+        let result = chosen(&app.handle_agent_dialog_answer(
+            "choice".into(),
+            answer_params(&observed, Some("token"), false),
+        ));
+        assert!(!result.written);
+        assert_eq!(result.reason.as_deref(), Some("not_a_free_text_question"));
+        assert!(writes.try_recv().is_err());
     }
 
     #[tokio::test]

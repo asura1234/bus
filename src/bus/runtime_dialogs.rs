@@ -2,7 +2,7 @@
 use super::*;
 use serde_json::Value;
 
-/// The notice key for a blocked screen without a readable numbered dialog.
+/// The notice key for a blocked screen without a readable dialog.
 pub(super) const BLOCKED: &str = "blocked";
 /// Polls a change must hold before Bus reports it, so a redraw never counts.
 const STEADY_POLLS: u8 = 2;
@@ -39,7 +39,7 @@ impl Worker {
                 .map_or_else(String::new, |room| room.name.clone());
             let text = match wait.as_deref() {
                 Some(BLOCKED) => Some(format!(
-                    "{name} (agent {}) in room {room} is blocked, but Bus cannot read a numbered dialog on its screen. Inspect it with:\nbus agent read {} --source visible",
+                    "{name} (agent {}) in room {room} is blocked, but Bus cannot read a dialog on its screen. Inspect it with:\nbus agent read {} --source visible",
                     id.0, id.0
                 )),
                 Some(_) => match self.observe_dialog(id) {
@@ -82,7 +82,13 @@ fn dialog_notice(id: AgentId, name: &str, room: &str, observed: &Value) -> Strin
     if let Some(question) = dialog["text"]
         .as_str()
         .filter(|text| !text.is_empty())
-        .map(|text| wants_line(name, text))
+        .map(|text| {
+            if dialog["kind"] == "question" {
+                text.to_owned()
+            } else {
+                wants_line(name, text)
+            }
+        })
         .filter(|line| !line.is_empty())
     {
         text.push_str(&question);
@@ -100,10 +106,14 @@ fn dialog_notice(id: AgentId, name: &str, room: &str, observed: &Value) -> Strin
             }
         ));
     }
-    text.push_str(&format!(
-        "\nAnswer: bus agent dialog {id}, then bus agent choose {id} --option N",
-        id = id.0
-    ));
+    if dialog["kind"] == "question" {
+        text.push_str(&format!("\nAnswer: bus agent dialog {id}, then bus agent answer {id} --text \"...\" or bus agent answer {id} --skip", id = id.0));
+    } else {
+        text.push_str(&format!(
+            "\nAnswer: bus agent dialog {id}, then bus agent choose {id} --option N",
+            id = id.0
+        ));
+    }
     text
 }
 

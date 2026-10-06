@@ -30,9 +30,21 @@ pub struct AgentDialogOption {
     pub selected: bool,
 }
 
-/// A numbered choice dialog: a permission, trust or question prompt.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDialogKind {
+    #[default]
+    Choice,
+    Question,
+}
+
+/// A choice dialog or a focused free-text question.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentDialog {
+    #[serde(default)]
+    pub kind: AgentDialogKind,
     /// The question or title above the options.
     pub text: String,
     pub options: Vec<AgentDialogOption>,
@@ -68,6 +80,39 @@ pub struct AgentDialogChooseParams {
     pub expected_session_id: Option<String>,
     pub expected_dialog_digest: String,
     pub option: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentDialogAnswerParams {
+    pub target: String,
+    pub expected_terminal_id: String,
+    pub expected_pane_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_session_id: Option<String>,
+    pub expected_dialog_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub skip: bool,
+}
+
+impl AgentDialogAnswerParams {
+    pub(crate) fn validate_answer(text: Option<&str>, skip: bool) -> Result<(), &'static str> {
+        if skip == text.is_some() {
+            return Err("Provide exactly one of text or skip");
+        }
+        if text.is_some_and(|text| text.trim().is_empty()) {
+            return Err("Answer text must not be blank");
+        }
+        if text.is_some_and(|text| {
+            text.chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t')
+        }) {
+            return Err("Answer text contains terminal control characters");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

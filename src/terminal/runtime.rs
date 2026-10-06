@@ -354,6 +354,15 @@ impl TerminalRuntime {
         self.0.try_choose_dialog_option(expected_digest, option)
     }
 
+    pub(crate) fn try_answer_dialog(
+        &self,
+        expected_digest: &str,
+        text: Option<String>,
+        skip: bool,
+    ) -> Result<crate::pane::DialogChoice, String> {
+        self.0.try_answer_dialog(expected_digest, text, skip)
+    }
+
     pub fn queue_user_input_submission(
         &self,
         text: Bytes,

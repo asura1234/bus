@@ -624,6 +624,7 @@ fn agent_dialog_observation_round_trips_with_and_without_a_dialog() {
     for dialog in [
         None,
         Some(AgentDialog {
+            kind: AgentDialogKind::Choice,
             text: "Do you want to proceed?".into(),
             options: vec![AgentDialogOption {
                 number: 1,
@@ -650,6 +651,35 @@ fn agent_dialog_observation_round_trips_with_and_without_a_dialog() {
             result
         );
     }
+}
+
+#[test]
+fn agent_dialog_answer_schema_round_trips_and_old_dialogs_default_to_choice() {
+    let request = Request {
+        id: "answer".into(),
+        method: Method::AgentDialogAnswer(AgentDialogAnswerParams {
+            target: "pane".into(),
+            expected_terminal_id: "terminal".into(),
+            expected_pane_id: "pane".into(),
+            expected_session_id: None,
+            expected_dialog_digest: "digest".into(),
+            text: Some("token".into()),
+            skip: false,
+        }),
+    };
+    let mut value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["method"], "agent.dialog.answer");
+    assert_eq!(
+        serde_json::from_value::<Request>(value.clone()).unwrap(),
+        request
+    );
+    value["params"]["keys"] = serde_json::json!(["enter"]);
+    assert!(serde_json::from_value::<Request>(value).is_err());
+    let old = serde_json::json!({"text":"Allow?","options":[],"id":"id","digest":"digest"});
+    assert_eq!(
+        serde_json::from_value::<AgentDialog>(old).unwrap().kind,
+        AgentDialogKind::Choice
+    );
 }
 
 #[test]

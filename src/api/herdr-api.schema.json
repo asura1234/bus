@@ -1061,6 +1061,46 @@
     },
     "request": {
       "$defs": {
+        "AgentDialogAnswerParams": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_dialog_digest": {
+              "type": "string"
+            },
+            "expected_pane_id": {
+              "type": "string"
+            },
+            "expected_session_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expected_terminal_id": {
+              "type": "string"
+            },
+            "skip": {
+              "default": false,
+              "type": "boolean"
+            },
+            "target": {
+              "type": "string"
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "target",
+            "expected_terminal_id",
+            "expected_pane_id",
+            "expected_dialog_digest"
+          ],
+          "type": "object"
+        },
         "AgentDialogChooseParams": {
           "additionalProperties": false,
           "properties": {
@@ -4341,6 +4381,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.dialog.answer",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentDialogAnswerParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.explain",
               "type": "string"
             },
@@ -5397,7 +5453,7 @@
     "success_response": {
       "$defs": {
         "AgentDialog": {
-          "description": "A numbered choice dialog: a permission, trust or question prompt.",
+          "description": "A choice dialog or a focused free-text question.",
           "properties": {
             "digest": {
               "description": "Identifies this exact dialog, including its selected option.",
@@ -5413,6 +5469,10 @@
             "id": {
               "description": "Identifies the question and options, whichever option is selected.",
               "type": "string"
+            },
+            "kind": {
+              "$ref": "#/schemas/success_response/$defs/AgentDialogKind",
+              "default": "choice"
             },
             "options": {
               "items": {
@@ -5460,6 +5520,13 @@
             "observation"
           ],
           "type": "object"
+        },
+        "AgentDialogKind": {
+          "enum": [
+            "choice",
+            "question"
+          ],
+          "type": "string"
         },
         "AgentDialogObservation": {
           "properties": {

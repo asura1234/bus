@@ -34,6 +34,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent read AGENT [--source recent] --lines N
   agent dialog AGENT
   agent choose AGENT --option N --fingerprint FINGERPRINT
+  agent answer AGENT (--text TEXT | --skip) --fingerprint FINGERPRINT
   agent focus AGENT
   agent clear AGENT
   agent rename AGENT NAME
@@ -62,9 +63,10 @@ A MASTER agent launches with an orchestrator system prompt, the built-in one unl
 --args \"--resume SESSION_ID\" (claude, cursor) or \"resume SESSION_ID\" (codex) adopts an
 existing provider session by its UUID; quit that session elsewhere first.
 Use --to all explicitly for all room agents.
-agent dialog shows a numbered choice dialog (permission, trust or question prompt) and a
-single-use fingerprint; agent choose answers it with Up/Down and Enter, only while that
-exact dialog is still shown. Bus messages a room's orchestrator about each dialog, and
+agent dialog shows a choice dialog or focused free-text question and a single-use
+fingerprint. agent choose selects an option with Up/Down and Enter; agent answer pastes
+text and presses Enter, or skips the question. Both require the exact observed dialog.
+Bus messages a room's orchestrator about each dialog, and
 wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
@@ -152,7 +154,7 @@ fn dialog_response(id: &str, last_status: Value) -> Response {
     let mut response = Response::failure(
         id,
         "agent_waiting_on_dialog",
-        "A recipient is waiting on a dialog; answer it with agent dialog and agent choose, then wait again",
+        "A recipient is waiting on a dialog; use agent dialog, then agent choose or agent answer, then wait again",
     );
     response.result = last_status;
     response
@@ -323,6 +325,18 @@ fn cli() -> Command {
                     subcommand("choose")
                         .arg(value_arg("agent").required(true))
                         .arg(option("option"))
+                        .arg(option("fingerprint")),
+                )
+                .subcommand(
+                    subcommand("answer")
+                        .arg(value_arg("agent").required(true))
+                        .arg(
+                            value_arg("text")
+                                .long("text")
+                                .required_unless_present("skip")
+                                .conflicts_with("skip"),
+                        )
+                        .arg(flag("skip").required_unless_present("text"))
                         .arg(option("fingerprint")),
                 )
                 .subcommand(subcommand("focus").arg(value_arg("agent").required(true)))
@@ -551,6 +565,11 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
                     "option": required(args, "option")?,
                     "fingerprint": required(args, "fingerprint")?,
                 }),
+            ),
+            Some(("answer", args)) => (
+                "agent.dialog.answer",
+                json!({"agent": required(args, "agent")?, "text":if args.get_flag("skip") {None} else {Some(required(args,"text")?)},
+                    "skip":args.get_flag("skip"), "fingerprint":required(args,"fingerprint")?}),
             ),
             Some(("setup-confirm", args)) => (
                 "agent.setup-confirm",
@@ -1180,6 +1199,57 @@ mod tests {
             &["agent", "approve-once", "Reviewer", "--fingerprint", "f"],
         ] {
             assert!(command(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn agent_answer_requires_a_fingerprint_and_exactly_one_answer_mode() {
+        let text = command(&[
+            "agent",
+            "answer",
+            "61",
+            "--text",
+            "MY TOKEN",
+            "--fingerprint",
+            "f",
+        ])
+        .unwrap();
+        assert_eq!(text.method, "agent.dialog.answer");
+        assert_eq!(
+            text.params,
+            json!({"agent":"61","text":"MY TOKEN","skip":false,"fingerprint":"f"})
+        );
+        let skip = command(&["agent", "answer", "61", "--skip", "--fingerprint", "f"]).unwrap();
+        assert_eq!(
+            skip.params,
+            json!({"agent":"61","text":null,"skip":true,"fingerprint":"f"})
+        );
+        for args in [
+            vec!["agent", "answer", "61", "--text", "ok"],
+            vec!["agent", "answer", "61", "--fingerprint", "f"],
+            vec![
+                "agent",
+                "answer",
+                "61",
+                "--text",
+                "ok",
+                "--skip",
+                "--fingerprint",
+                "f",
+            ],
+            vec!["agent", "answer", "61", "--text", " ", "--fingerprint", "f"],
+            vec![
+                "agent",
+                "answer",
+                "61",
+                "--skip",
+                "--keys",
+                "enter",
+                "--fingerprint",
+                "f",
+            ],
+        ] {
+            assert!(command(&args).is_err(), "{args:?}");
         }
     }
 

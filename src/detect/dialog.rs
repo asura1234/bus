@@ -1,4 +1,4 @@
-//! Choice dialogs on an agent's visible screen, provider-neutral.
+//! Choice dialogs and focused text questions on an agent's visible screen.
 //!
 //! Permission prompts, trust prompts and question panels from Claude Code,
 //! Codex and similar TUIs all render a contiguous block of `1. ...`, `2. ...`
@@ -18,8 +18,23 @@ const HINT_WORDS: &[&str] = &[
 ];
 const MAX_TITLE_LINES: usize = 12;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DialogKind {
+    Choice,
+    Question,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QuestionInput {
+    /// Included in the digest so a human's edit invalidates an observation.
+    pub(crate) value: String,
+    pub(crate) skip_key: &'static str,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Dialog {
+    pub(crate) kind: DialogKind,
+    pub(crate) input: Option<QuestionInput>,
     /// The question or title above the options, blank runs collapsed.
     pub(crate) text: String,
     pub(crate) options: Vec<DialogOption>,
@@ -40,6 +55,10 @@ impl Dialog {
     pub(crate) fn id(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.text.as_bytes());
+        hasher.update(format!("\0{:?}", self.kind));
+        if let Some(input) = &self.input {
+            hasher.update(input.skip_key.as_bytes());
+        }
         for option in &self.options {
             hasher.update(format!("\0{}\0{}", option.number, option.label));
         }
@@ -49,7 +68,10 @@ impl Dialog {
     /// Identifies this exact dialog, including which option is selected.
     pub(crate) fn digest(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(self.text.as_bytes());
+        hasher.update(self.id().as_bytes());
+        if let Some(input) = &self.input {
+            hasher.update(input.value.as_bytes());
+        }
         for option in &self.options {
             hasher.update(format!(
                 "\0{}\0{}\0{}",
@@ -175,7 +197,120 @@ fn is_hint(line: &str) -> bool {
 pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     let (texts, styles) = styled_lines(screen);
     let lines: Vec<&str> = texts.iter().map(String::as_str).collect();
-    numbered(&lines, &styles).or_else(|| unnumbered(&lines))
+    numbered(&lines, &styles)
+        .or_else(|| unnumbered(&lines))
+        .or_else(|| text_question(&lines))
+}
+
+fn codex_text_footer(line: &str) -> bool {
+    let lower = unboxed(line).trim().to_lowercase();
+    lower.contains("enter")
+        && lower.contains("submit")
+        && lower.contains("skip")
+        && (lower.contains("ctrl+]") || lower.contains("⌃]"))
+        && lower.contains("main prompt")
+}
+
+/// A live footer must be last: a composer or activity below makes it transcript.
+fn text_question(lines: &[&str]) -> Option<Dialog> {
+    let footer = lines.iter().rposition(|line| {
+        let text = unboxed(line).trim();
+        !text.is_empty() && !is_separator(text)
+    })?;
+    let hint = unboxed(lines[footer]).trim();
+    if codex_text_footer(hint) {
+        let header = lines[..footer].iter().rposition(|line| {
+            unboxed(line)
+                .trim()
+                .trim_start_matches(['•', '◦'])
+                .trim()
+                .eq_ignore_ascii_case("Queued follow-up inputs")
+        })?;
+        let input =
+            (header + 1..footer).rfind(|&index| !unboxed(lines[index]).trim().is_empty())?;
+        let mut input_start = input;
+        while input_start > header + 1 && !unboxed(lines[input_start - 1]).trim().is_empty() {
+            input_start -= 1;
+        }
+        let value = lines[input_start..=input]
+            .iter()
+            .map(|line| unboxed(line).trim())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let question = lines[header + 1..input_start]
+            .iter()
+            .map(|line| unboxed(line).trim())
+            .filter(|line| {
+                let words: Vec<_> = line.split_whitespace().collect();
+                !line.is_empty()
+                    && !matches!(words.as_slice(), [n, "of", m]
+                        if n.parse::<u32>().is_ok() && m.parse::<u32>().is_ok())
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return question_dialog(question, hint, &value, "Type your answer", "ctrl+]");
+    }
+    // Cursor's Other input is editable only while that checkbox row is focused.
+    if hint == "↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip"
+    {
+        let active = lines[..footer].iter().rposition(|line| {
+            marked_label(line).is_some_and(|(_, label)| {
+                label.starts_with("[ ] Other:") || label.starts_with("[x] Other:")
+            })
+        })?;
+        let (_, label) = marked_label(lines[active])?;
+        let value = std::iter::once(label.split_once("Other:")?.1.trim())
+            .chain(
+                lines[active + 1..footer]
+                    .iter()
+                    .map(|line| unboxed(line).trim())
+                    .filter(|line| !line.is_empty()),
+            )
+            .collect::<Vec<_>>()
+            .join("\n");
+        let question_at = lines[..active]
+            .iter()
+            .rposition(|line| option_line(line).is_some())?;
+        let first = option_line(lines[question_at])?.label;
+        let question = std::iter::once(first.as_str())
+            .chain(
+                lines[question_at + 1..active]
+                    .iter()
+                    .map(|line| unboxed(line).trim())
+                    .take_while(|line| !line.trim_start_matches(MARKERS).trim().starts_with('['))
+                    .filter(|line| !line.is_empty()),
+            )
+            .collect::<Vec<_>>()
+            .join("\n");
+        return question_dialog(question, hint, &value, "(type to answer)", "esc");
+    }
+    None
+}
+
+fn question_dialog(
+    text: String,
+    hint: &str,
+    value: &str,
+    placeholder: &str,
+    skip_key: &'static str,
+) -> Option<Dialog> {
+    if text.is_empty() {
+        return None;
+    }
+    Some(Dialog {
+        kind: DialogKind::Question,
+        input: Some(QuestionInput {
+            value: if value == placeholder {
+                String::new()
+            } else {
+                value.to_owned()
+            },
+            skip_key,
+        }),
+        text,
+        options: Vec::new(),
+        hint: Some(hint.to_owned()),
+    })
 }
 
 /// A selected option without a number, such as `❯ No, exit`.
@@ -222,6 +357,8 @@ fn unnumbered(lines: &[&str]) -> Option<Dialog> {
         return None;
     }
     Some(Dialog {
+        kind: DialogKind::Choice,
+        input: None,
         text: title(&lines[..start]),
         options: (start..end)
             .map(|index| DialogOption {
@@ -305,9 +442,13 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
         .map(|line| (*line).to_owned());
     // A live input prompt below means the list is transcript: dialogs replace
     // the composer. Without a key hint, the list also needs a marked option.
-    let prompt_below = after
-        .iter()
-        .any(|line| line.starts_with(MARKERS) && option_line(line).is_none());
+    let prompt_below = after.iter().any(|line| {
+        (line.starts_with(MARKERS) && option_line(line).is_none())
+            || line
+                .trim_start_matches(['•', '◦'])
+                .trim()
+                .eq_ignore_ascii_case("Queued follow-up inputs")
+    });
     let marked = options.iter().any(|option| option.selected);
     if prompt_below || (hint.is_none() && !marked) {
         return None;
@@ -326,7 +467,32 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
             options[index].selected = true;
         }
     }
+    // Claude's custom answer is editable at the resting selection, before
+    // Enter. Its editor hint only appears while that text field is focused.
+    if let Some(hint) = hint
+        .as_deref()
+        .filter(|hint| hint.contains("ctrl+g to edit") && hint.contains("Esc to cancel"))
+    {
+        if let Some(selected) = options.iter().find(|option| option.selected) {
+            if selected.number as usize == options.len() - 1
+                && options
+                    .last()
+                    .is_some_and(|option| option.label == "Chat about this")
+            {
+                let question = title(&lines[..start])
+                    .lines()
+                    .filter(|line| !line.starts_with('☐'))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .trim()
+                    .to_owned();
+                return question_dialog(question, hint, &selected.label, "Type something.", "esc");
+            }
+        }
+    }
     Some(Dialog {
+        kind: DialogKind::Choice,
+        input: None,
         text: title(&lines[..start]),
         options: options
             .into_iter()

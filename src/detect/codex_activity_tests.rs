@@ -69,3 +69,17 @@ fn a_live_permission_dialog_still_blocks_beside_the_stale_banner() {
     assert_eq!(result.state, AgentState::Blocked);
     assert!(result.visible_blocker);
 }
+
+#[test]
+fn expanded_codex_text_question_blocks_while_collapsed_questions_stay_working() {
+    for footer in [
+        "enter submit   ctrl+] skip   shift+→ main prompt",
+        "enter submit   ⌃] skip   ⇧→ main prompt",
+    ] {
+        let screen = format!("• Working (17s • esc to interrupt)\n• Queued follow-up inputs\nWhat token should Bus use?\nType your answer\n{footer}\n");
+        let result = explain(&screen, "[ ! ] Action Required | bus");
+        assert_eq!(result.state, AgentState::Blocked, "{screen}");
+        assert!(result.visible_blocker);
+        assert_eq!(result.matched_rule.unwrap().id, "expanded_text_question");
+    }
+}
