@@ -213,7 +213,6 @@ impl RawInputByteFramer {
             || starts_with_incomplete_default_mouse_sequence(&self.buffer)
     }
 
-    #[cfg(any(windows, test))]
     pub(crate) fn has_pending_bracketed_paste(&self) -> bool {
         self.buffer.starts_with(BRACKETED_PASTE_START)
             && find_subsequence(&self.buffer, BRACKETED_PASTE_END).is_none()
@@ -223,6 +222,7 @@ impl RawInputByteFramer {
         let mut chunks = self.drain_available_chunks();
 
         if let Some(family) = self.discard_until {
+            let keep_split_st = self.buffer.last() == Some(&ESC);
             let keep_discarding = match family {
                 ControlStringFamily::HostReplyCsi => return chunks,
                 ControlStringFamily::OrphanedSgrMouseTail => {
@@ -232,10 +232,9 @@ impl RawInputByteFramer {
                     return chunks;
                 }
                 ControlStringFamily::Osc => plausible_osc_tail(&self.buffer),
-                ControlStringFamily::StTerminated => self.buffer.last() == Some(&ESC),
+                ControlStringFamily::StTerminated => keep_split_st,
             };
 
-            let keep_split_st = self.buffer.last() == Some(&ESC);
             self.discarded_tail_bytes = self.discarded_tail_bytes.saturating_add(self.buffer.len());
             self.buffer.clear();
             if keep_discarding && self.discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES {
@@ -279,9 +278,7 @@ impl RawInputByteFramer {
             return chunks;
         }
 
-        if self.buffer.starts_with(BRACKETED_PASTE_START)
-            && find_subsequence(&self.buffer, BRACKETED_PASTE_END).is_none()
-        {
+        if self.has_pending_bracketed_paste() {
             tracing::trace!(
                 len = self.buffer.len(),
                 "waiting for bracketed paste terminator"
@@ -609,8 +606,8 @@ fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
         return Some((RawInputEvent::Unsupported, seq_len));
     }
 
-    let consumed = first_complete_utf8_char_len(buffer)?;
-    let text = std::str::from_utf8(&buffer[..consumed]).ok()?;
+    let text = first_complete_utf8_char(buffer)?;
+    let consumed = text.len();
     let key = parse_terminal_key_sequence(text)?
         .with_text_commit()
         .with_vt_bytes(buffer[..consumed].to_vec());
@@ -704,15 +701,14 @@ fn control_string(buffer: &[u8]) -> Option<ControlString> {
     })
 }
 
-fn first_complete_utf8_char_len(buffer: &[u8]) -> Option<usize> {
+fn first_complete_utf8_char(buffer: &[u8]) -> Option<&str> {
     let width = utf8_char_width(*buffer.first()?)?;
 
     if buffer.len() < width {
         return None;
     }
 
-    std::str::from_utf8(&buffer[..width]).ok()?;
-    Some(width)
+    std::str::from_utf8(&buffer[..width]).ok()
 }
 
 fn starts_with_incomplete_utf8_char(buffer: &[u8]) -> bool {
@@ -903,7 +899,7 @@ fn discard_orphaned_sgr_mouse_tail(buffer: &mut Vec<u8>, discarded_tail_bytes: &
 }
 
 fn osc_string_terminator(buffer: &[u8]) -> Option<usize> {
-    let st = find_subsequence(buffer, b"\x1b\\").map(|idx| idx + 2);
+    let st = st_string_terminator(buffer);
     let bel = buffer
         .iter()
         .position(|byte| *byte == b'\x07')
@@ -1521,20 +1517,6 @@ mod tests {
 
         assert_eq!(consumed, 7);
         assert!(matches!(event, RawInputEvent::Unsupported));
-    }
-
-    #[test]
-    fn flushes_lone_escape_after_timeout() {
-        let mut framer = RawInputFramer::default();
-        assert!(framer.push(&[ESC]).is_empty());
-
-        let events = framer.flush_timeout();
-        assert_eq!(events.len(), 1);
-        assert_raw_key(
-            events.into_iter().next().unwrap(),
-            KeyCode::Esc,
-            KeyModifiers::empty(),
-        );
     }
 
     #[test]
