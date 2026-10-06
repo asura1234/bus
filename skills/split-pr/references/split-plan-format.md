@@ -5,8 +5,13 @@ parses it fail-closed; a later run reads it to restack the branches after a
 parent changes or lands.
 
 Path: `temp/split-pr/<source-branch-slug>/plan.json`, where the slug replaces
-every `/` in the source branch with `-`. The file is ignored by Git and is
-written by the agent once, then updated only through `split_plan.py record`.
+every `/` in the source branch with `-`. Distinct branches can share a slug
+(`feat/a-b`, `feat/a/b`), so `source.branch` is the plan's identity: a plan
+whose `source.branch` is not the branch being split is a collision, never a
+plan to reuse. The file is ignored by Git and is
+edited by hand only while classifying and confirming the split; after that it
+changes only through `split_plan.py record`, which alone writes `onto`, `tip`,
+`pr` and `landed`.
 
 ## Structure
 
@@ -29,7 +34,7 @@ written by the agent once, then updated only through `split_plan.py record`.
       "landed": false
     }
   ],
-  "left_on_source": ["<40-hex source commit>"]
+  "left_on_source": [{"sha": "<40-hex source commit>", "reason": "<why it stays on the source>"}]
 }
 ```
 
@@ -39,8 +44,8 @@ written by the agent once, then updated only through `split_plan.py record`.
   keys are errors.
 - `base.ref` is an explicit `origin/<branch>` ref. The GitHub base of a root PR
   is `<branch>`.
-- `multi_parent` is `wait` or `merge` and applies to every part with two or
-  more open parents (see `guide.md`).
+- `multi_parent` is `wait` or `merge` and applies to every part whose base is
+  a merge: two or more open parents, or a partial fan-in (see `guide.md`).
 - `parts` has at least two entries. `id` and `branch` are unique; `branch` is
   never the source branch or the base branch.
 - `depends_on` lists part ids, without duplicates, self-references, or cycles.
@@ -51,10 +56,13 @@ written by the agent once, then updated only through `split_plan.py record`.
 - Every non-merge commit in `base.sha..source.sha` appears in at least one part
   or in `left_on_source`, never both. The source range must not contain merge
   commits.
+- `left_on_source` entries have exactly `sha` (full SHA, no duplicates) and a
+  non-empty `reason`, so a later restack can still report why the commit stayed.
 - `onto` is the commit the part's own commits sit on: the base, the single open
-  parent's tip, or the merge commit of the open parents. `tip` is the branch tip
+  parent's tip, or the merge commit of its base refs (the open parents, plus
+  `base.ref` in a partial fan-in). `tip` is the branch tip
   when last recorded. Both are `null` until `record`; `tip` requires `onto`.
-- `pr` is `null` or the PR number. `landed` is `true` only after the PR merged,
+- `pr` is `null` or the PR number; non-null numbers are unique across parts. `landed` is `true` only after the PR merged,
   requires `pr`, and requires every parent to be landed.
 
 ## Derived values
@@ -65,7 +73,9 @@ written by the agent once, then updated only through `split_plan.py record`.
   most one parent and one child), otherwise `mixed`;
 - dependency order: Kahn's algorithm, ties in plan order;
 - a part's base: `base.ref` when no parent is open, the open parent's branch
-  when one is open, otherwise `merge(<parent branches>)`; under `merge` the
+  when it is the only parent, otherwise `merge(<refs>)` of the open parent
+  branches, led by `base.ref` when some parent already landed (a partial
+  fan-in: the open parent predates the landed code); under `merge` the
   published integration base is `<branch>--base`.
 
 ## Malformed examples
@@ -74,3 +84,4 @@ written by the agent once, then updated only through `split_plan.py record`.
 - `"depends_on": ["c"]` on part `a` while `c` depends on `a`: cycle.
 - `"landed": true, "pr": null`: landing needs a PR.
 - `"commits": ["1a2b3c4"]`: abbreviated SHA.
+- `"left_on_source": ["<sha>"]`: a left commit without its reason.

@@ -10,6 +10,7 @@ import copy
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -18,9 +19,11 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from split_plan import PlanError, main, parse_plan, shape  # noqa: E402
+from split_plan import main  # noqa: E402
+from split_plan_model import PlanError, parse_plan, shape  # noqa: E402
+
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "t",
@@ -80,7 +83,6 @@ class Repo:
         self.git("switch", "-q", "master")
 
     def run(self, *args: str) -> str:
-        """Run split_plan main inside the repo; return stdout, raise on failure."""
         code, out, err = self.run_status(*args)
         if code != 0:
             raise AssertionError(f"split_plan {args} exited {code}: {err}{out}")
@@ -123,7 +125,7 @@ def plan_data(repo: Repo, parts: list[dict], *, policy: str = "wait", left: list
         "base": {"ref": "origin/master", "sha": repo.base},
         "multi_parent": policy,
         "parts": parts,
-        "left_on_source": list(left),
+        "left_on_source": [{"sha": sha, "reason": "serves only the source branch"} for sha in left],
     }
 
 
@@ -188,6 +190,9 @@ class ValidationTest(ScenarioTest):
             "short sha": lambda d: d["parts"][0].update(commits=[r.c1[:9]]),
             "tip without onto": lambda d: d["parts"][0].update(tip=r.c1),
             "single part": lambda d: d.update(parts=d["parts"][:1]),
+            "duplicate pr": lambda d: [d["parts"][i].update(pr=7) for i in (0, 1)],
+            "left as bare sha": lambda d: d.update(left_on_source=[r.c4]),
+            "left without reason": lambda d: d.update(left_on_source=[{"sha": r.c4, "reason": " "}]),
         }
         for name, mutate in cases.items():
             with self.subTest(name):
@@ -201,7 +206,7 @@ class ValidationTest(ScenarioTest):
         cases = {
             "commit unassigned": lambda d: d["parts"].pop(),
             "commit outside range": lambda d: d["parts"][0]["commits"].append(r.base),
-            "assigned and left": lambda d: d["left_on_source"].append(r.c1),
+            "assigned and left": lambda d: d["left_on_source"].append({"sha": r.c1, "reason": "x"}),
             "out of source order": lambda d: d["parts"][0].update(commits=[r.c3, r.c1]),
             "invalid branch": lambda d: d["parts"][0].update(branch="bad..name"),
         }
@@ -227,6 +232,19 @@ class ValidationTest(ScenarioTest):
         self.assertIn("Files per part:", out)
         self.assertIn("    d --> b", out)
         self.assertIn("    a --> base", out)
+
+    def test_render_lists_left_commits_with_their_reason(self) -> None:
+        r = self.repo
+        out = r.run("render", self.write_plan(self.train()))
+        self.assertIn(f"- {r.c2[:9]}: serves only the source branch", out)
+
+    def test_render_counts_the_effective_diff_not_commit_churn(self) -> None:
+        r = self.repo
+        data = plan_data(r, [part("a", [r.c1, r.c3]), part("b", [r.c2])], left=[r.c4])
+        out = r.run("render", self.write_plan(data))
+        # c1 adds five lines and c3 rewrites one of them: the PR shows +5 / -0.
+        self.assertRegex(out, r"\| 1 \| a: .* \| 1 \| \+5 / -0 \|")
+        self.assertNotIn("~", out.split("Source total")[0])
 
 
 class ProbeTest(ScenarioTest):
@@ -386,6 +404,69 @@ class StackTest(ScenarioTest):
         )
         self.assertNotIn("retarget", steps["c"])
 
+    def test_restack_partial_fan_in_keeps_the_landed_parent(self) -> None:
+        r = self.repo
+        path = self.write_plan(self.mixed(policy="merge"))
+        r.build("split/a", r.base, r.c1)
+        r.build("split/b", r.base, r.c2)
+        r.build("split/c", "split/a", r.c3)
+        r.git("switch", "-q", "--detach", "split/a")
+        r.git("merge", "-q", "--no-ff", "-m", "chore: integrate a, b for d", "split/b")
+        merge = r.git("rev-parse", "HEAD")
+        r.git("switch", "-q", "master")
+        r.build("split/d", merge, r.c4)
+        for pid, number in (("a", 11), ("b", 12), ("c", 13)):
+            r.run("record", path, "--part", pid, "--pr", str(number))
+        r.run("record", path, "--part", "d", "--onto", merge, "--pr", "14")
+        r.git("switch", "-q", "--detach", r.base)
+        r.git("merge", "-q", "--squash", "split/a")
+        r.git("commit", "-q", "-m", "feat: part a (#11)")
+        r.git("update-ref", "refs/remotes/origin/master", r.git("rev-parse", "HEAD"))
+        r.git("switch", "-q", "master")
+        r.run("record", path, "--part", "a", "--landed")
+        steps = {s["part"]: s for s in json.loads(r.run("restack", path))["steps"]}
+        self.assertEqual(sorted(steps), ["c", "d"])
+        step = steps["d"]
+        # b still sits on the old base, so d must merge in the base that holds a.
+        self.assertEqual(step["onto_ref"], "merge(origin/master, split/b)")
+        self.assertEqual(step["commands"][0], "git switch --detach origin/master")
+        self.assertEqual(
+            step["commands"][1], 'git merge --no-ff -m "chore: integrate master, b for d" refs/heads/split/b'
+        )
+        self.assertIn("push_base", step)
+        self.assertNotIn("retarget", step)
+        self.assertIn("merge of `master`, #12", r.run("stack", path, "--part", "d"))
+        for pid in ("c", "d"):
+            for command in steps[pid]["commands"]:
+                r.git(*shlex.split(command)[1:])
+            r.git("switch", "-q", "master")
+        r.run("record", path, "--part", "c")
+        code, _out, err = r.run_status("record", path, "--part", "d")
+        self.assertEqual(code, 2)
+        self.assertIn("--onto", err)
+        r.run("record", path, "--part", "d", "--onto", r.git("rev-parse", "split/d^"))
+        self.assertEqual(r.git("show", "split/d:a.txt"), "a1\na2\na3\na4\nA5")
+        self.assertEqual(r.git("show", "split/d:b.txt"), "b1\nb2\nb3\nb4\nB5")
+        self.assertEqual(json.loads(r.run("restack", path))["status"], "current")
+        # An unrelated base advance does not make the integration base stale.
+        r.git("switch", "-q", "--detach", "origin/master")
+        r.write("core.txt", "core moved\n")
+        r.commit("chore: unrelated")
+        r.git("update-ref", "refs/remotes/origin/master", r.git("rev-parse", "HEAD"))
+        r.git("switch", "-q", "master")
+        self.assertEqual(json.loads(r.run("restack", path))["status"], "current")
+
+    def test_partial_fan_in_keeps_waiting_under_wait_policy(self) -> None:
+        r = self.repo
+        data = self.mixed()
+        for raw, number in zip(data["parts"], (11, 12, 13, 14)):
+            raw["pr"] = number
+        data["parts"][0]["landed"] = True
+        path = self.write_plan(data)
+        code, _out, err = r.run_status("stack", path, "--part", "d")
+        self.assertEqual(code, 2)
+        self.assertIn("multi_parent=wait", err)
+
     def test_stack_lines(self) -> None:
         r = self.repo
         data = self.mixed()
@@ -394,8 +475,7 @@ class StackTest(ScenarioTest):
         path = self.write_plan(data)
         self.assertEqual(
             r.run("stack", path, "--part", "c").strip(),
-            "- **Stack**: part 3/4 of the `feat/source` split (mixed); base `split/a`; "
-            "depends on #11; merge after it.",
+            "- **Stack**: part 3/4 of the `feat/source` split (mixed); base `split/a`; depends on #11; merge after it.",
         )
         self.assertIn("Stacked on this: #13, #14.", r.run("stack", path, "--part", "a"))
         code, _out, err = r.run_status("stack", path, "--part", "d")
@@ -423,6 +503,86 @@ class StackTest(ScenarioTest):
         code, out, _err = r.run_status("coverage", path)
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(out)["differs"], ["a.txt", "b.txt"])
+
+    def test_coverage_with_left_on_source_still_catches_a_dropped_hunk(self) -> None:
+        r = self.repo
+        data = plan_data(r, [part("a", [r.c1, r.c3]), part("b", [r.c2])], left=[r.c4])
+        path = self.write_plan(data)
+        r.build("split/a", r.base, r.c1)  # c3 forgotten; c4 stays on the source and also edits a.txt
+        r.build("split/b", r.base, r.c2)
+        r.run("record", path, "--part", "a")
+        r.run("record", path, "--part", "b")
+        code, out, _err = r.run_status("coverage", path)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out), {"status": "fail", "differs": ["a.txt"]})
+
+    def test_coverage_with_left_on_source_rejects_an_extra_file(self) -> None:
+        r = self.repo
+        data = plan_data(r, [part("a", [r.c1, r.c3]), part("b", [r.c2])], left=[r.c4])
+        path = self.write_plan(data)
+        r.build("split/a", r.base, r.c1, r.c3)
+        r.build("split/b", r.base, r.c2)
+        r.run("record", path, "--part", "a")
+        r.run("record", path, "--part", "b")
+        out = json.loads(r.run("coverage", path))
+        self.assertEqual(out, {"status": "review-left-on-source", "differs": ["a.txt", "b.txt"]})
+        r.git("switch", "-q", "split/b")
+        r.write("x.txt", "stray\n")
+        r.commit("chore: stray file")
+        r.git("switch", "-q", "master")
+        code, out, _err = r.run_status("coverage", path)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out), {"status": "fail", "differs": ["x.txt"]})
+
+    def test_coverage_catches_a_hunk_duplicated_by_hunk_split_parts(self) -> None:
+        r = self.repo
+        # c2 is shared: a takes none of its hunks, b takes its only hunk.
+        data = plan_data(r, [part("a", [r.c1, r.c2]), part("b", [r.c2])], left=[r.c3, r.c4])
+        path = self.write_plan(data)
+        r.build("split/a", r.base, r.c1)
+        r.build("split/b", r.base, r.c2)
+        r.run("record", path, "--part", "a")
+        r.run("record", path, "--part", "b")
+        self.assertEqual(json.loads(r.run("coverage", path))["status"], "review-left-on-source")
+        r.git("switch", "-q", "split/a")
+        r.git("cherry-pick", r.c2)  # the same hunk now sits in two parts
+        r.git("switch", "-q", "master")
+        r.run("record", path, "--part", "a")
+        code, out, _err = r.run_status("coverage", path)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out), {"status": "fail", "differs": ["b.txt"]})
+
+    def test_coverage_catches_a_tree_entry_duplicated_by_hunk_split_parts(self) -> None:
+        r = self.repo
+        # Empty-file additions and mode-only changes have no text lines, so the line
+        # balance cannot see two parts carrying them.
+        r.git("switch", "-q", "feat/source")
+        r.write("empty.txt", "")
+        (r.root / "core.txt").chmod(0o755)
+        c5 = r.commit("chore: empty file and mode")
+        r.source = c5
+        r.git("switch", "-q", "master")
+        data = plan_data(r, [part("a", [r.c1, c5]), part("b", [r.c2, c5])], left=[r.c3, r.c4])
+        path = self.write_plan(data)
+        r.build("split/a", r.base, r.c1, c5)
+        r.build("split/b", r.base, r.c2, c5)  # every change of c5 sits in two parts
+        r.run("record", path, "--part", "a")
+        r.run("record", path, "--part", "b")
+        code, out, _err = r.run_status("coverage", path)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out), {"status": "fail", "differs": ["core.txt", "empty.txt"]})
+
+    def test_coverage_catches_a_hunk_built_into_the_wrong_part(self) -> None:
+        r = self.repo
+        data = plan_data(r, [part("a", [r.c1]), part("b", [r.c2, r.c3], ["a"])], left=[r.c4])
+        path = self.write_plan(data)
+        r.build("split/a", r.base, r.c1, r.c3)  # the c3 hunk that belongs to b was built into a
+        r.build("split/b", "split/a", r.c2)
+        r.run("record", path, "--part", "a")
+        r.run("record", path, "--part", "b")
+        code, out, _err = r.run_status("coverage", path)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out), {"status": "fail", "differs": ["a.txt"]})
 
 
 if __name__ == "__main__":

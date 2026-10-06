@@ -11,8 +11,9 @@ code is not wrong; it is a dependency, and the plan says so explicitly.
 Split by purpose first. Size decides whether a purpose is still too big to
 review: a smaller review surface exposes more issues, and reviewers (Codex
 especially) miss things in large diffs. `H render` reports each part's file
-count and +/- lines so the user can see that. Treat the numbers as rough: a
-part with a hunk-split commit (`~`) counts that whole commit.
+count and +/- lines of its PR diff (its state against its parents' state) so
+the user can see that. Numbers marked `~` are rough: the part's ancestry has a
+hunk-split commit or does not replay cleanly, so they sum each whole commit.
 
 When a part is large (tens of files or thousands of changed lines), offer a
 further split into sub-purposes that are each independently valuable and
@@ -57,8 +58,11 @@ natural base. Both policies build and verify the branch now, on a local merge
 of its parents, so the dependency is proven immediately. They differ in
 publication:
 
-- `wait` (default): publish the part only once at most one parent is still
-  open; until then it stays a verified local branch. Every published PR shows
+- `wait` (default): publish the part only once its base is a single branch;
+  until then it stays a verified local branch. When one parent lands while
+  another is still open (a partial fan-in), the open parent predates the
+  landed code, so the part's base becomes a merge of `base.ref` and the open
+  parents and it keeps waiting. Every published PR shows
   exactly its own diff and restacks with a plain `git rebase --onto`. Cost: the
   part's review starts later.
 - `merge`: publish now on an integration branch `<branch>--base` that merges the
@@ -73,10 +77,12 @@ train. Offer it in the plan when it fits.
 ## PR integration
 
 The `pr` skill rebases onto `origin/master` and asserts base `master`, so it is
-correct only for parts with no open parent. A stacked part is published by
-`split-pr` itself as a Draft PR whose base is its parent branch, with a body
-that passes `pr_format_check.py --phase draft`. Once its parents land and it is
-restacked onto the base, it is an ordinary branch and `pr` finalizes it.
+correct only for parts with no open parent on an `origin/master` base. A stacked
+part, or any part of a split from another base, is published by `split-pr`
+itself as a Draft PR whose base is its parent branch (or the base branch), with
+a body that passes `pr_format_check.py --phase draft`. Once its parents land and
+it is restacked onto an `origin/master` base, it is an ordinary branch and `pr`
+finalizes it.
 
 Independent PRs never wait for each other. The publish phase runs in waves of
 parts whose parents already have PRs, one subagent per part, so parallel parts

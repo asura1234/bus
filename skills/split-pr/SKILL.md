@@ -17,7 +17,9 @@ PLAN    temp/split-pr/<source-branch with / replaced by ->/plan.json
 RULES
 - Read guide.md before classifying parts or dependencies.
 - Read references/split-plan-format.md before writing the plan.
-- The plan changes only through `H record`, except the initial write.
+- Edit PLAN by hand only in CLASSIFY and CONFIRM (including a return to CONFIRM
+  from BUILD); everywhere else it changes only through `H record`. Never
+  hand-edit onto, tip, pr or landed.
 - Never push to `upstream`, never push the source or base branch, never
   force-push without `--force-with-lease=<ref>:<expected sha>`.
 - Never delete the source branch, a part branch, or a remote branch.
@@ -41,7 +43,8 @@ base_sha = git merge-base <base_ref> HEAD
 source_sha = git rev-parse HEAD
 ERROR if tracked changes are uncommitted: everything to split must be committed.
 ERROR if git rev-list --merges <base_sha>..HEAD is nonempty (linearize first).
-ERROR if PLAN already exists for this source: offer restack mode instead.
+IF PLAN exists: STOP. Offer restack mode when its source.branch equals source;
+  otherwise another branch shares PLAN's slug: report the collision.
 
 ========== CLASSIFY ==========
 Inspect git log --reverse --stat <base_sha>..HEAD and every commit's diff.
@@ -49,7 +52,7 @@ Group commits into parts by purpose (guide.md "Parts"). A commit that serves
 two parts is split by hunk; list it in both parts.
 For each pair of parts, decide depends_on from evidence (guide.md
 "Dependencies are proven, not guessed"). Commits that belong to no part go to
-left_on_source with a reason.
+left_on_source with the reason, recorded in PLAN.
 Name branches `codex/<topic>` unless the user gave exact names.
 multi_parent = --multi-parent or `wait`.
 Write PLAN. Run:
@@ -92,9 +95,16 @@ FOR part in order:
   IF verification fails because the part needs another part's code:
     the dependency was missed: STOP building, add the edge, back to CONFIRM.
   H record PLAN --part <id> [--onto <merge sha> for several open parents]
-Run H coverage PLAN. `fail` means the union of the part branches differs from
-the source tree: a hunk was dropped or duplicated. Fix the branch and rerecord.
-`review-left-on-source` must list only files of left_on_source commits.
+Run H coverage PLAN. `fail` means a hunk was dropped, duplicated across parts,
+built into the wrong part, or a stray change was added: the union of the part
+branches differs from the source tree without the left_on_source commits, the
+parts' own diffs (lines and file modes) do not sum to that tree, or a part
+without hunk-split commits differs from its commits replayed onto its base. Fix the branch and rerecord.
+`review-left-on-source` lists the files the left_on_source commits leave
+different from the source. Coverage cannot tell which part a hunk of a
+hunk-split commit belongs to (the plan does not record it): for each part with
+such a commit, read git diff <onto>...<branch> and confirm every hunk serves
+that part's purpose.
 
 IF --publish absent: go to RETURN.
 ```
@@ -107,8 +117,8 @@ WHILE some part is unpublished and not waiting:
   wave = every unpublished part whose parents all have a recorded PR or landed
          (in parallel: all parts in the first wave; in a train: one part per
          wave, bottom first; in a mixed graph: every part whose parents are done)
-  Skip parts with several open parents under multi_parent == wait: they stay
-  local and verified until a parent lands.
+  Skip parts whose base is a merge (render's Base column) under
+  multi_parent == wait: they stay local and verified until it is one branch.
   Before a wave that holds a stacked part, H restack PLAN must report `current`
   (a previous wave's `pr` may have rebased a root); otherwise run Restack mode.
   The parts in a wave are independent PRs: spawn one subagent per part, all in
@@ -118,18 +128,21 @@ WHILE some part is unpublished and not waiting:
     H record PLAN --part <id> --pr <number>   (record moved tips first)
   A failed subagent stops further waves; report its part and blocker.
 
-Subagent task for a root part (no open parent):
+Subagent task for a root part (no open parent) when base_ref is origin/master:
   invoke `pr` in the part worktree. It rebases onto origin/master and opens the
-  Draft PR against the base. Return the PR number and whether the rebase moved
+  Draft PR against master. Return the PR number and whether the rebase moved
   the branch.
 
-Subagent task for a stacked part (one open parent, or several under `merge`):
-    base_branch = the open parent's branch, or <branch>--base under `merge`
+Subagent task for a stacked part (one open parent, or a merge base under `merge`),
+or a root part when base_ref is not origin/master (`pr` only targets master):
+    base_branch = the open parent's branch, <branch>--base under `merge`, or
+                  base_ref without `origin/` for a root part
     IF base_branch == <branch>--base:
       ERROR if it exists on origin with a different SHA than recorded onto;
       git push origin <onto>:refs/heads/<branch>--base
-    ERROR if git ls-remote --exit-code origin refs/heads/<branch> succeeds.
-    git push origin refs/heads/<branch>:refs/heads/<branch>
+    IF git ls-remote --exit-code origin refs/heads/<branch> succeeds:
+      ERROR unless that SHA equals the local branch tip (a resumed publish);
+    ELSE: git push origin refs/heads/<branch>:refs/heads/<branch>
     Write goal and non-goal files from this part's purpose, then:
       python3 skills/pr/scripts/pr_goal_context.py --branch <branch> \
         --output <ctx> --goal-file <goal> --non-goal-file <non-goals>
@@ -139,7 +152,9 @@ Subagent task for a stacked part (one open parent, or several under `merge`):
       python3 skills/pr/scripts/pr_format_check.py --phase draft \
         --template skills/pr/references/pr-template.md --title "<title>" \
         --body-file <body> --goal-context-file <ctx> --locked-goal-file <locked goal>
-    gh pr create --draft --base <base_branch> --head <branch> --title "<title>" --body-file <body>
+    existing = gh pr list --head <branch> --base <base_branch> --state open --json number
+    IF existing: gh pr edit <number> --title "<title>" --body-file <body>
+    ELSE: gh pr create --draft --base <base_branch> --head <branch> --title "<title>" --body-file <body>
     Return the PR number.
 
 After every part is published, set each PR's `- **Stack**:` bullet in 摘要 to
@@ -152,7 +167,8 @@ Run H restack PLAN; when it is not `current`, run Restack mode.
 ## Restack mode
 
 ```text
-PLAN = argument, else the plan for the current branch's source; ERROR if missing.
+PLAN = argument, else the plan for the current branch's source; ERROR if missing,
+  or if no argument was given and its source.branch is not the current branch.
 git fetch origin
 FOR each part with a PR and landed false:
   IF gh pr view <pr> --json state reports MERGED:
@@ -167,15 +183,17 @@ FOR step in result.steps (already in dependency order):
   commits win over nothing; never drop a parent change); if unsure, run
   git rebase --abort and STOP with the conflicting files.
   Verify as in BUILD (diff check, cargo check, focused tests).
-  H record PLAN --part <id> [--onto <merge sha> when several parents are open]
+  H record PLAN --part <id> [--onto <merge sha> when step.onto_ref is merge(...)]
   IF --publish AND step.push_base present: run step.push_base.
   IF --publish AND step.push present: run step.push.
   IF --publish AND step.retarget present: run step.retarget.
   IF --publish AND the part has no PR yet and is now publishable: publish it
     as in Publish.
 Rerun H restack PLAN; it must report `current`.
-A part whose parents have all landed is an ordinary branch on the base: invoke
-`pr` for it to converge gates and finalize the body when --publish is given.
+A part whose parents have all landed is an ordinary branch on the base: when
+--publish is given and base_ref is origin/master, invoke `pr` for it to converge
+gates and finalize the body; on any other base `pr` would rebase it onto master,
+so leave it on its retargeted base.
 ```
 
 ## RETURN
@@ -186,7 +204,9 @@ Report:
 - per part: branch, base, depends on, source commits or hunks, verification run,
   PR number and URL when published, and whether it waits for parents;
 - content left on the source branch and why;
-- `H coverage` result;
+- `H coverage` result from BUILD; it is not rerun after publishing, so a tip
+  moved by `pr` (rebase, gate fixes) or by restack is verified by that step's
+  own checks, not by coverage;
 - every force-push and retarget performed in restack mode.
 
 Keep the source branch until every part is verified and the user explicitly
