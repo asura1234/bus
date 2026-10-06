@@ -199,8 +199,8 @@ pub(super) fn begin_endpoint_activation(
                     state
                         .shell
                         .as_ref()
-                        .map(|shell| shell.endpoint_label(&endpoint_id).to_owned())
-                        .unwrap_or_else(|| format!("{endpoint_id:?}"))
+                        .expect("checked client shell")
+                        .endpoint_label(&endpoint_id)
                 ),
                 false,
             );
