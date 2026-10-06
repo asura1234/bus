@@ -477,7 +477,7 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
                 "room.notes",
                 json!({
                     "room": required(args, "room")?,
-                    "text": args.get_one::<String>("text").map(String::as_str).unwrap_or(""),
+                    "text": args.get_one::<String>("text").map(String::as_str).unwrap(),
                 }),
             ),
             Some(("delete", args)) => (
