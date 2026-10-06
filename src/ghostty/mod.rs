@@ -1478,18 +1478,8 @@ impl Terminal {
             return Ok(Vec::new());
         }
 
-        let mut iterator: ffi::GhosttyKittyGraphicsPlacementIterator = ptr::null_mut();
-        unsafe {
-            ffi::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iterator)
-                .into_result()?;
-            ffi::ghostty_kitty_graphics_get(
-                graphics,
-                ffi::GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
-                (&mut iterator as *mut ffi::GhosttyKittyGraphicsPlacementIterator).cast(),
-            )
-            .into_result()?;
-        }
-        let _guard = KittyPlacementIteratorGuard { raw: iterator };
+        let guard = KittyPlacementIteratorGuard::new(graphics)?;
+        let iterator = guard.raw;
 
         let mut placements = Vec::new();
         let mut storage_has_placements = false;
@@ -1817,6 +1807,23 @@ struct KittyPlacementIteratorGuard {
     raw: ffi::GhosttyKittyGraphicsPlacementIterator,
 }
 
+impl KittyPlacementIteratorGuard {
+    fn new(graphics: ffi::GhosttyKittyGraphics) -> Result<Self, Error> {
+        let mut iterator: ffi::GhosttyKittyGraphicsPlacementIterator = ptr::null_mut();
+        unsafe {
+            ffi::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iterator)
+                .into_result()?;
+            ffi::ghostty_kitty_graphics_get(
+                graphics,
+                ffi::GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
+                (&mut iterator as *mut ffi::GhosttyKittyGraphicsPlacementIterator).cast(),
+            )
+            .into_result()?;
+        }
+        Ok(Self { raw: iterator })
+    }
+}
+
 impl Drop for KittyPlacementIteratorGuard {
     fn drop(&mut self) {
         unsafe { ffi::ghostty_kitty_graphics_placement_iterator_free(self.raw) }
@@ -1955,18 +1962,8 @@ fn kitty_placement_bool(
 fn kitty_virtual_placement_specs(
     graphics: ffi::GhosttyKittyGraphics,
 ) -> Result<Vec<KittyVirtualPlacementSpec>, Error> {
-    let mut iterator: ffi::GhosttyKittyGraphicsPlacementIterator = ptr::null_mut();
-    unsafe {
-        ffi::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iterator)
-            .into_result()?;
-        ffi::ghostty_kitty_graphics_get(
-            graphics,
-            ffi::GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
-            (&mut iterator as *mut ffi::GhosttyKittyGraphicsPlacementIterator).cast(),
-        )
-        .into_result()?;
-    }
-    let _guard = KittyPlacementIteratorGuard { raw: iterator };
+    let guard = KittyPlacementIteratorGuard::new(graphics)?;
+    let iterator = guard.raw;
 
     let mut specs = Vec::new();
     while unsafe { ffi::ghostty_kitty_graphics_placement_next(iterator) } {
