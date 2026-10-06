@@ -550,6 +550,51 @@ fn host_placement_id(source_key: &HostSourceKey, placement: &KittyImagePlacement
     1 + ((hasher.finish() as u32) % 900_000)
 }
 
+/// Kitty regular-file transmission (`t=f`) wrapped in a cursor save/restore.
+/// Kept as a low-level encoder for Bus image thumbnails.
+#[allow(dead_code)]
+#[cfg(unix)]
+pub(crate) fn encode_kitty_regular_file(
+    out: &mut Vec<u8>,
+    leading: &[u8],
+    control: &str,
+    path: &str,
+) {
+    let payload = base64::engine::general_purpose::STANDARD.encode(path.as_bytes());
+    out.extend_from_slice(b"\x1b7");
+    out.extend_from_slice(leading);
+    let _ = write!(out, "\x1b_G{control},t=f;{payload}\x1b\\");
+    out.extend_from_slice(b"\x1b8");
+}
+
+/// Transmit-and-display (`a=T`) of an inline placement in one command.
+/// Kept as a low-level encoder for Bus image thumbnails.
+#[allow(dead_code)]
+fn encode_transmit_and_display(
+    out: &mut Vec<u8>,
+    placement: &HostPlacement,
+    clipped: ClippedPlacement,
+    format_code: u32,
+    host_id: u32,
+    host_placement_id: u32,
+) -> bool {
+    if placement.placement.data.is_empty() {
+        return false;
+    }
+    let _ = write!(out, "\x1b[{};{}H", clipped.y + 1, clipped.x + 1);
+    let mut control = format!(
+        "a=T,t=d,f={format_code},s={},v={},i={host_id},p={host_placement_id},c={},r={},z={},C=1,q=2",
+        placement.placement.image_width,
+        placement.placement.image_height,
+        clipped.cols,
+        clipped.rows,
+        placement.placement.z,
+    );
+    append_placement_controls(&mut control, clipped);
+    encode_kitty_data(out, &control, &placement.placement.data);
+    true
+}
+
 fn encode_delete_image(out: &mut Vec<u8>, id: u32) {
     let _ = write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\");
 }
@@ -1098,5 +1143,21 @@ mod tests {
             &oversized,
             &mut requested,
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn regular_file_command_is_rgba_quiet_zero_and_path_encoded() {
+        let mut bytes = Vec::new();
+        encode_kitty_regular_file(
+            &mut bytes,
+            b"\x1b[2;3H",
+            "a=T,f=32,s=3,v=2,i=42,p=7,c=3,r=2,z=0,C=1,q=0",
+            "/private/frame",
+        );
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.starts_with("\x1b7\x1b[2;3H\x1b_Ga=T,f=32"));
+        assert!(text.contains(",C=1,q=0,t=f;L3ByaXZhdGUvZnJhbWU="));
+        assert!(text.ends_with("\x1b\\\x1b8"));
     }
 }
