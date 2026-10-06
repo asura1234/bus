@@ -337,15 +337,6 @@ impl KeyboardProtocol {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MouseProtocolEncoding {
-    Default,
-    Utf8,
-    Sgr,
-    SgrPixels,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

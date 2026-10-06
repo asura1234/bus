@@ -1,19 +1,13 @@
 use std::fmt::Write as _;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::model::KITTY_FLAG_REPORT_ALL_KEYS;
-use super::{KeyboardProtocol, MouseProtocolEncoding, TerminalKey};
+use super::{KeyboardProtocol, TerminalKey};
 
 const KITTY_FLAG_REPORT_EVENT_TYPES: u16 = 0b0000_0010;
 const KITTY_FLAG_REPORT_ALTERNATE_KEYS: u16 = 0b0000_0100;
 const KITTY_FLAG_REPORT_ASSOCIATED_TEXT: u16 = 0b0001_0000;
-
-/// Encode a key event for a PTY child using the pane's negotiated keyboard protocol.
-#[allow(dead_code)] // exercised in input unit tests; production uses TerminalRuntime helpers
-pub fn encode_key(key: KeyEvent, protocol: KeyboardProtocol) -> Vec<u8> {
-    encode_terminal_key(key.into(), protocol)
-}
 
 pub fn encode_terminal_key(key: TerminalKey, protocol: KeyboardProtocol) -> Vec<u8> {
     // A zero Unicode value on this Windows character event means the host layout is
@@ -67,122 +61,6 @@ pub fn encode_terminal_key(key: TerminalKey, protocol: KeyboardProtocol) -> Vec<
         return Vec::new();
     }
     encode_legacy(key)
-}
-
-#[allow(dead_code)] // exercised in input unit tests; production uses TerminalRuntime helpers
-pub fn encode_cursor_key(code: KeyCode, application_cursor: bool) -> Vec<u8> {
-    match (code, application_cursor) {
-        (KeyCode::Up, true) => b"\x1bOA".to_vec(),
-        (KeyCode::Down, true) => b"\x1bOB".to_vec(),
-        (KeyCode::Right, true) => b"\x1bOC".to_vec(),
-        (KeyCode::Left, true) => b"\x1bOD".to_vec(),
-        (KeyCode::Up, false) => b"\x1b[A".to_vec(),
-        (KeyCode::Down, false) => b"\x1b[B".to_vec(),
-        (KeyCode::Right, false) => b"\x1b[C".to_vec(),
-        (KeyCode::Left, false) => b"\x1b[D".to_vec(),
-        _ => encode_legacy(KeyEvent::new(code, KeyModifiers::empty()).into()),
-    }
-}
-
-#[allow(dead_code)] // exercised in input unit tests; pane runtime uses backend helpers
-pub fn encode_mouse_scroll(
-    kind: MouseEventKind,
-    column: u16,
-    row: u16,
-    modifiers: KeyModifiers,
-    encoding: MouseProtocolEncoding,
-) -> Option<Vec<u8>> {
-    let button = match kind {
-        MouseEventKind::ScrollUp => 64u16,
-        MouseEventKind::ScrollDown => 65u16,
-        MouseEventKind::ScrollLeft => 66u16,
-        MouseEventKind::ScrollRight => 67u16,
-        _ => return None,
-    };
-    encode_mouse_cb(button, false, column, row, modifiers, encoding)
-}
-
-#[allow(dead_code)] // exercised in input unit tests; pane runtime uses backend helpers
-pub fn encode_mouse_button(
-    kind: MouseEventKind,
-    column: u16,
-    row: u16,
-    modifiers: KeyModifiers,
-    encoding: MouseProtocolEncoding,
-) -> Option<Vec<u8>> {
-    let (button, release) = match kind {
-        MouseEventKind::Down(MouseButton::Left) => (0u16, false),
-        MouseEventKind::Down(MouseButton::Middle) => (1u16, false),
-        MouseEventKind::Down(MouseButton::Right) => (2u16, false),
-        MouseEventKind::Up(MouseButton::Left) => (0u16, true),
-        MouseEventKind::Up(MouseButton::Middle) => (1u16, true),
-        MouseEventKind::Up(MouseButton::Right) => (2u16, true),
-        MouseEventKind::Drag(MouseButton::Left) => (32u16, false),
-        MouseEventKind::Drag(MouseButton::Middle) => (33u16, false),
-        MouseEventKind::Drag(MouseButton::Right) => (34u16, false),
-        _ => return None,
-    };
-    encode_mouse_cb(button, release, column, row, modifiers, encoding)
-}
-
-#[allow(dead_code)] // only reached through mouse encoding helpers above
-fn encode_mouse_cb(
-    base_button: u16,
-    release: bool,
-    column: u16,
-    row: u16,
-    modifiers: KeyModifiers,
-    encoding: MouseProtocolEncoding,
-) -> Option<Vec<u8>> {
-    let mut cb = match (encoding, release) {
-        (MouseProtocolEncoding::Sgr | MouseProtocolEncoding::SgrPixels, true) => base_button,
-        (_, true) => 3,
-        (_, false) => base_button,
-    };
-    if modifiers.contains(KeyModifiers::SHIFT) {
-        cb += 4;
-    }
-    if modifiers.contains(KeyModifiers::ALT) {
-        cb += 8;
-    }
-    if modifiers.contains(KeyModifiers::CONTROL) {
-        cb += 16;
-    }
-
-    let column = column as u32 + 1;
-    let row = row as u32 + 1;
-
-    match encoding {
-        MouseProtocolEncoding::Sgr | MouseProtocolEncoding::SgrPixels => Some(
-            format!(
-                "\x1b[<{cb};{column};{row}{}",
-                if release { 'm' } else { 'M' }
-            )
-            .into_bytes(),
-        ),
-        MouseProtocolEncoding::Default => {
-            let cb = u8::try_from(cb + 32).ok()?;
-            let column = u8::try_from(column + 32).ok()?;
-            let row = u8::try_from(row + 32).ok()?;
-            Some(vec![0x1b, b'[', b'M', cb, column, row])
-        }
-        MouseProtocolEncoding::Utf8 => {
-            let mut bytes = Vec::with_capacity(16);
-            bytes.extend_from_slice(b"\x1b[M");
-            push_mouse_codepoint(&mut bytes, cb as u32 + 32)?;
-            push_mouse_codepoint(&mut bytes, column + 32)?;
-            push_mouse_codepoint(&mut bytes, row + 32)?;
-            Some(bytes)
-        }
-    }
-}
-
-#[allow(dead_code)] // only reached through mouse encoding helpers above
-fn push_mouse_codepoint(bytes: &mut Vec<u8>, value: u32) -> Option<()> {
-    let ch = char::from_u32(value)?;
-    let mut buf = [0u8; 4];
-    bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
-    Some(())
 }
 
 /// CSI u encoding: \e[{codepoint};{modifiers}u
@@ -558,6 +436,10 @@ mod tests {
     use super::*;
     use crate::input::parse_terminal_key_sequence;
 
+    fn encode_key(key: KeyEvent, protocol: KeyboardProtocol) -> Vec<u8> {
+        encode_terminal_key(key.into(), protocol)
+    }
+
     fn assert_terminal_key_eq(
         actual: TerminalKey,
         code: KeyCode,
@@ -653,46 +535,6 @@ mod tests {
     fn legacy_alt_backspace_sends_escape_delete() {
         let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT);
         assert_eq!(encode_key(key, KeyboardProtocol::Legacy), b"\x1b\x7f");
-    }
-
-    #[test]
-    fn application_cursor_keys_use_ss3_sequences() {
-        assert_eq!(encode_cursor_key(KeyCode::Up, true), b"\x1bOA");
-        assert_eq!(encode_cursor_key(KeyCode::Down, true), b"\x1bOB");
-    }
-
-    #[test]
-    fn normal_cursor_keys_use_csi_sequences() {
-        assert_eq!(encode_cursor_key(KeyCode::Up, false), b"\x1b[A");
-        assert_eq!(encode_cursor_key(KeyCode::Down, false), b"\x1b[B");
-    }
-
-    #[test]
-    fn sgr_mouse_scroll_encodes_wheel_button_and_coordinates() {
-        let encoded = encode_mouse_scroll(
-            crossterm::event::MouseEventKind::ScrollDown,
-            4,
-            6,
-            KeyModifiers::SHIFT,
-            MouseProtocolEncoding::Sgr,
-        )
-        .expect("mouse scroll should encode");
-
-        assert_eq!(encoded, b"\x1b[<69;5;7M");
-    }
-
-    #[test]
-    fn sgr_mouse_release_keeps_button_code() {
-        let encoded = encode_mouse_button(
-            crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
-            11,
-            9,
-            KeyModifiers::empty(),
-            MouseProtocolEncoding::Sgr,
-        )
-        .expect("mouse release should encode");
-
-        assert_eq!(encoded, b"\x1b[<0;12;10m");
     }
 
     #[test]
