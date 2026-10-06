@@ -189,43 +189,11 @@ impl ClientShellState {
                 let Some(snapshot) = self.snapshot.as_deref() else {
                     return;
                 };
-                let selection = (action == crate::protocol::ClientShellCommandAction::PluginAction)
-                    .then(|| {
-                        let selection = self.selection.as_ref()?;
-                        if !selection.is_visible() {
-                            return None;
-                        }
-                        if snapshot.focused_pane_id.as_deref() != Some(selection.pane_id.as_str()) {
-                            return None;
-                        }
-                        let content_revision = self
-                            .pane_surface
-                            .as_ref()?
-                            .panes
-                            .iter()
-                            .find(|pane| pane.pane_id == selection.pane_id)?
-                            .content_revision;
-                        let (anchor, cursor) = selection.ordered_cells();
-                        Some(crate::api::schema::PaneSelectionReadParams {
-                            pane_id: selection.pane_id.clone(),
-                            anchor: crate::api::schema::PaneTextPoint {
-                                row: anchor.0,
-                                col: anchor.1,
-                            },
-                            cursor: crate::api::schema::PaneTextPoint {
-                                row: cursor.0,
-                                col: cursor.1,
-                            },
-                            content_revision: Some(content_revision),
-                        })
-                    })
-                    .flatten();
                 let params = crate::api::schema::CommandInvokeParams {
                     command_id,
                     workspace_id: snapshot.focused_workspace_id.clone(),
                     tab_id: snapshot.focused_tab_id.clone(),
                     pane_id: snapshot.focused_pane_id.clone(),
-                    selection,
                 };
                 if action == crate::protocol::ClientShellCommandAction::Popup {
                     self.popup_pending = true;

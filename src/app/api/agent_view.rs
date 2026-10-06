@@ -12,21 +12,6 @@ impl App {
         if let Err(message) = crate::app::agent_view::validate_agent_view(&mut params) {
             return encode_error(id, "invalid_agent_view", message);
         }
-        if let Some(plugin_id) = params.source.strip_prefix("plugin:") {
-            let Some(plugin_id) = super::plugins::normalize_plugin_id(plugin_id) else {
-                return encode_error(
-                    id,
-                    "invalid_agent_view",
-                    "plugin-owned agent view source has an invalid plugin id",
-                );
-            };
-            let Some(plugin) = self.state.installed_plugins.get(&plugin_id) else {
-                return encode_error(id, "plugin_not_found", "plugin not found");
-            };
-            if !plugin.enabled {
-                return encode_error(id, "plugin_disabled", "plugin is disabled");
-            }
-        }
         let source = params.source.clone();
         let label = params.label.clone();
         self.replace_agent_view_override(Some(params));
@@ -69,20 +54,6 @@ impl App {
                 label: active.and_then(|view| view.label.clone()),
             },
         )
-    }
-
-    pub(crate) fn clear_agent_view_for_source(&mut self, source: &str) -> bool {
-        if self
-            .state
-            .agent_view_override
-            .as_ref()
-            .is_some_and(|active| active.source == source)
-        {
-            self.replace_agent_view_override(None);
-            true
-        } else {
-            false
-        }
     }
 
     fn replace_agent_view_override(&mut self, view: Option<AgentViewSetParams>) {

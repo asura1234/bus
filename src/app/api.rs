@@ -7,7 +7,6 @@ mod integrations;
 mod layouts;
 mod pane_graphics;
 mod panes;
-pub(crate) mod plugins;
 pub(super) mod responses;
 mod session;
 mod tabs;
@@ -123,37 +122,6 @@ impl App {
         } = ev
         {
             let _ = self.handle_tab_bar_command_finished(generation, segment_index, result);
-            return Vec::new();
-        }
-
-        if let AppEvent::PluginCommandFinished {
-            log_id,
-            finished_unix_ms,
-            exit_code,
-            stdout,
-            stderr,
-            error,
-        } = ev
-        {
-            self.state.plugin_commands_in_flight =
-                self.state.plugin_commands_in_flight.saturating_sub(1);
-            if let Some(log) = self
-                .state
-                .plugin_command_logs
-                .iter_mut()
-                .find(|log| log.log_id == log_id)
-            {
-                log.finished_unix_ms = Some(finished_unix_ms);
-                log.exit_code = exit_code;
-                log.stdout = Some(stdout);
-                log.stderr = Some(stderr);
-                log.error = error;
-                log.status = if log.error.is_none() && log.exit_code == Some(0) {
-                    crate::api::schema::PluginCommandStatus::Succeeded
-                } else {
-                    crate::api::schema::PluginCommandStatus::Failed
-                };
-            }
             return Vec::new();
         }
 
@@ -746,7 +714,6 @@ impl App {
     }
 
     pub(super) fn emit_event(&mut self, event: crate::api::schema::EventEnvelope) {
-        self.run_plugin_event_hooks(&event);
         self.event_hub.push(event);
     }
 
@@ -760,8 +727,6 @@ impl App {
     }
 
     pub(crate) fn emit_workspace_token_updated(&mut self, ws_idx: usize) {
-        // Token updates bypass plugin hooks so a hook cannot refresh its own
-        // token and recursively trigger workspace.updated.
         self.event_hub.push(crate::api::schema::EventEnvelope {
             event: crate::api::schema::EventKind::WorkspaceMetadataUpdated,
             data: crate::api::schema::EventData::WorkspaceMetadataUpdated {
@@ -1198,39 +1163,6 @@ impl App {
             }
             Method::IntegrationUninstall(params) => {
                 return self.handle_integration_uninstall(request.id, params);
-            }
-            Method::PluginLink(params) => {
-                return self.handle_plugin_link(request.id, params);
-            }
-            Method::PluginList(params) => {
-                return self.handle_plugin_list(request.id, params);
-            }
-            Method::PluginUnlink(params) => {
-                return self.handle_plugin_unlink(request.id, params);
-            }
-            Method::PluginEnable(params) => {
-                return self.handle_plugin_enable(request.id, params);
-            }
-            Method::PluginDisable(params) => {
-                return self.handle_plugin_disable(request.id, params);
-            }
-            Method::PluginActionList(params) => {
-                return self.handle_plugin_action_list(request.id, params);
-            }
-            Method::PluginActionInvoke(params) => {
-                return self.handle_plugin_action_invoke(request.id, params);
-            }
-            Method::PluginLogList(params) => {
-                return self.handle_plugin_log_list(request.id, params);
-            }
-            Method::PluginPaneOpen(params) => {
-                return self.handle_plugin_pane_open(request.id, params);
-            }
-            Method::PluginPaneFocus(params) => {
-                return self.handle_plugin_pane_focus(request.id, params);
-            }
-            Method::PluginPaneClose(params) => {
-                return self.handle_plugin_pane_close(request.id, params);
             }
             _ => {
                 return responses::encode_error(

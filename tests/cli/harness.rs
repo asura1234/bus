@@ -23,10 +23,6 @@ pub(super) fn unique_test_dir() -> PathBuf {
     PathBuf::from(format!("/tmp/hcli-{}-{nanos}", std::process::id()))
 }
 
-pub(super) fn managed_github_plugin_dir(config_home: &Path) -> PathBuf {
-    config_home.join("herdr-dev").join("plugins").join("github")
-}
-
 pub(super) fn path_missing_or_empty(path: &Path) -> bool {
     match fs::read_dir(path) {
         Ok(mut entries) => entries.next().is_none(),

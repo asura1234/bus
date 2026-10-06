@@ -716,10 +716,7 @@ impl AppState {
         }
     }
 
-    pub(crate) fn remove_plugin_pane_records(
-        &mut self,
-        pane_ids: impl IntoIterator<Item = PaneId>,
-    ) {
+    pub(crate) fn forget_closed_pane_focus(&mut self, pane_ids: impl IntoIterator<Item = PaneId>) {
         let pane_ids = pane_ids.into_iter().collect::<Vec<_>>();
         if self
             .previous_pane_focus
@@ -727,9 +724,6 @@ impl AppState {
             .is_some_and(|focus| pane_ids.contains(&focus.pane_id))
         {
             self.previous_pane_focus = None;
-        }
-        for pane_id in pane_ids {
-            self.plugin_panes.remove(&pane_id);
         }
     }
 
@@ -753,7 +747,7 @@ impl AppState {
             .active
             .and_then(|idx| self.workspaces.get(idx))
             .map(|ws| ws.id.clone());
-        self.remove_plugin_pane_records(pane_ids);
+        self.forget_closed_pane_focus(pane_ids);
         for idx in close_indices.iter().rev() {
             self.workspaces.remove(*idx);
         }
@@ -1027,7 +1021,7 @@ impl AppState {
         let should_close_workspace = active
             .and_then(|i| self.workspaces.get_mut(i))
             .is_some_and(|ws| ws.close_focused());
-        self.remove_plugin_pane_records(pane_ids);
+        self.forget_closed_pane_focus(pane_ids);
         if should_close_workspace {
             if let Some(active) = active {
                 self.selected = active;
@@ -1085,7 +1079,7 @@ impl AppState {
             let closing_tab_id =
                 public_tab_id_for_index(ws, ws.active_tab).unwrap_or_else(|| workspace_id.clone());
             ws.close_active_tab();
-            self.remove_plugin_pane_records(pane_ids);
+            self.forget_closed_pane_focus(pane_ids);
             self.remove_unattached_terminal_ids(terminal_ids);
             crate::logging::tab_closed(&workspace_id, &closing_tab_id);
         }
@@ -1807,7 +1801,6 @@ impl AppState {
             AppEvent::WorktreeAddFinished(_) => Vec::new(),
             AppEvent::WorktreeRemoveFinished(_) => Vec::new(),
             AppEvent::TabBarCommandFinished { .. } => Vec::new(),
-            AppEvent::PluginCommandFinished { .. } => Vec::new(),
         }
     }
 
@@ -2174,7 +2167,7 @@ impl AppState {
 
     fn handle_pane_died(&mut self, pane_id: PaneId) {
         self.pending_agent_notifications.remove(&pane_id);
-        self.remove_plugin_pane_records([pane_id]);
+        self.forget_closed_pane_focus([pane_id]);
         let ws_idx = self
             .workspaces
             .iter()
@@ -3982,19 +3975,11 @@ mod tests {
     #[test]
     fn close_pane_removes_from_workspace() {
         let mut state = app_with_workspaces(&["test"]);
-        let closed = state.workspaces[0].test_split(Direction::Horizontal);
+        state.workspaces[0].test_split(Direction::Horizontal);
         state.ensure_test_terminals();
         assert_eq!(state.workspaces[0].panes.len(), 2);
-        state.plugin_panes.insert(
-            closed,
-            crate::app::state::PluginPaneRecord {
-                plugin_id: "example.pane".into(),
-                entrypoint: "board".into(),
-            },
-        );
         state.close_pane();
         assert_eq!(state.workspaces[0].panes.len(), 1);
-        assert!(!state.plugin_panes.contains_key(&closed));
         state.assert_invariants_for_test();
     }
 
@@ -4057,17 +4042,9 @@ mod tests {
         state.workspaces[0].switch_tab(tab_idx);
         let pane_id = state.workspaces[0].tabs[tab_idx].root_pane;
         let terminal_id = state.terminal_id_for_pane(0, pane_id).unwrap();
-        state.plugin_panes.insert(
-            pane_id,
-            crate::app::state::PluginPaneRecord {
-                plugin_id: "example.pane".into(),
-                entrypoint: "board".into(),
-            },
-        );
         state.close_tab();
 
         assert!(!state.terminals.contains_key(&terminal_id));
-        assert!(!state.plugin_panes.contains_key(&pane_id));
         state.assert_invariants_for_test();
     }
 
@@ -4076,17 +4053,9 @@ mod tests {
         let mut state = app_with_workspaces(&["one", "two"]);
         let pane_id = state.workspaces[0].tabs[0].root_pane;
         let terminal_id = state.terminal_id_for_pane(0, pane_id).unwrap();
-        state.plugin_panes.insert(
-            pane_id,
-            crate::app::state::PluginPaneRecord {
-                plugin_id: "example.pane".into(),
-                entrypoint: "board".into(),
-            },
-        );
         state.close_selected_workspace();
 
         assert!(!state.terminals.contains_key(&terminal_id));
-        assert!(!state.plugin_panes.contains_key(&pane_id));
         state.assert_invariants_for_test();
     }
 

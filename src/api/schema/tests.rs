@@ -314,7 +314,6 @@ fn command_invoke_request_round_trips_without_command_text() {
             workspace_id: Some("w1".into()),
             tab_id: Some("w1:t1".into()),
             pane_id: Some("w1:p1".into()),
-            selection: None,
         }),
     };
     let json = serde_json::to_value(&request).unwrap();
@@ -1016,119 +1015,6 @@ fn worktree_lifecycle_events_round_trip() {
 }
 
 #[test]
-fn plugin_link_list_unlink_round_trip() {
-    let link = Request {
-        id: "plugin_link".into(),
-        method: Method::PluginLink(PluginLinkParams {
-            path: "/plugins/worktree-bootstrap".into(),
-            enabled: true,
-            source: None,
-        }),
-    };
-    let json = serde_json::to_string(&link).unwrap();
-    assert!(json.contains("\"method\":\"plugin.link\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, link);
-
-    let list = Request {
-        id: "plugin_list".into(),
-        method: Method::PluginList(PluginListParams {
-            plugin_id: Some("example.worktree-bootstrap".into()),
-        }),
-    };
-    let json = serde_json::to_string(&list).unwrap();
-    assert!(json.contains("\"method\":\"plugin.list\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, list);
-
-    let unlink = Request {
-        id: "plugin_unlink".into(),
-        method: Method::PluginUnlink(PluginUnlinkParams {
-            plugin_id: "example.worktree-bootstrap".into(),
-        }),
-    };
-    let json = serde_json::to_string(&unlink).unwrap();
-    assert!(json.contains("\"method\":\"plugin.unlink\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, unlink);
-
-    let plugin = InstalledPluginInfo {
-        plugin_id: "example.worktree-bootstrap".into(),
-        name: "Worktree Bootstrap".into(),
-        version: "0.1.0".into(),
-        min_herdr_version: crate::build_info::BASE_VERSION.into(),
-        description: Some("Prepare new worktrees".into()),
-        manifest_path: "/plugins/worktree-bootstrap/herdr-plugin.toml".into(),
-        plugin_root: "/plugins/worktree-bootstrap".into(),
-        enabled: true,
-        platforms: None,
-        build: vec![PluginManifestBuild {
-            platforms: None,
-            command: vec!["bun".into(), "install".into()],
-        }],
-        startup: vec![],
-        actions: vec![PluginManifestAction {
-            id: "bootstrap".into(),
-            title: "Bootstrap worktree".into(),
-            description: None,
-            contexts: vec![PluginActionContext::Workspace],
-            platforms: None,
-            command: vec!["bun".into(), "run".into(), "bootstrap.ts".into()],
-        }],
-        events: vec![PluginManifestEventHook {
-            on: "worktree.created".into(),
-            platforms: None,
-            command: vec!["bun".into(), "run".into(), "bootstrap.ts".into()],
-        }],
-        panes: vec![PluginManifestPane {
-            id: "board".into(),
-            title: "Board".into(),
-            description: None,
-            platforms: None,
-            placement: PluginPanePlacement::Overlay,
-            width: None,
-            height: None,
-            command: vec!["bun".into(), "run".into(), "board.ts".into()],
-        }],
-        link_handlers: vec![PluginManifestLinkHandler {
-            id: "github-pr".into(),
-            title: "Open GitHub PR".into(),
-            pattern: "^https://github.com/[^/]+/[^/]+/(issues|pull)/[0-9]+$".into(),
-            action: "bootstrap".into(),
-            platforms: None,
-        }],
-        source: Default::default(),
-        warnings: vec![],
-    };
-
-    for response in [
-        SuccessResponse {
-            id: "plugin_link".into(),
-            result: ResponseResult::PluginLinked {
-                plugin: plugin.clone(),
-            },
-        },
-        SuccessResponse {
-            id: "plugin_list".into(),
-            result: ResponseResult::PluginList {
-                plugins: vec![plugin.clone()],
-            },
-        },
-        SuccessResponse {
-            id: "plugin_unlink".into(),
-            result: ResponseResult::PluginUnlinked {
-                plugin_id: plugin.plugin_id.clone(),
-                removed: true,
-            },
-        },
-    ] {
-        let json = serde_json::to_string(&response).unwrap();
-        let restored: SuccessResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored, response);
-    }
-}
-
-#[test]
 fn layout_export_apply_round_trip() {
     let root = LayoutNode::Split {
         direction: SplitDirection::Right,
@@ -1413,79 +1299,6 @@ fn pane_link_activate_round_trips() {
     let json = serde_json::to_string(&response).unwrap();
     let restored: ResponseResult = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, response);
-}
-
-#[test]
-fn plugin_action_list_and_invoke_round_trips() {
-    let list = Request {
-        id: "req_plugin_action_list".into(),
-        method: Method::PluginActionList(PluginActionListParams {
-            plugin_id: Some("example.issue-flow".into()),
-        }),
-    };
-    let json = serde_json::to_value(&list).unwrap();
-    assert_eq!(json["method"], "plugin.action.list");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, list);
-
-    let invoke = Request {
-        id: "req_plugin_action_invoke".into(),
-        method: Method::PluginActionInvoke(PluginActionInvokeParams {
-            plugin_id: Some("example.issue-flow".into()),
-            action_id: "assign-issue".into(),
-            context: None,
-        }),
-    };
-    let json = serde_json::to_value(&invoke).unwrap();
-    assert_eq!(json["method"], "plugin.action.invoke");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, invoke);
-
-    let action_info = PluginActionInfo {
-        plugin_id: "example.issue-flow".into(),
-        action_id: "assign-issue".into(),
-        title: "Assign Issue".into(),
-        description: Some("Open the issue assignment UI".into()),
-        contexts: vec![PluginActionContext::Workspace, PluginActionContext::Pane],
-        command: vec!["assign".into(), "--issue".into()],
-        platforms: Some(vec![PluginPlatform::Linux, PluginPlatform::Macos]),
-    };
-    assert_eq!(
-        action_info.qualified_id(),
-        "example.issue-flow.assign-issue"
-    );
-    let json = serde_json::to_string(&action_info).unwrap();
-    let restored: PluginActionInfo = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, action_info);
-}
-
-#[test]
-fn plugin_pane_open_request_round_trips() {
-    let request = Request {
-        id: "req_plugin_pane".into(),
-        method: Method::PluginPaneOpen(PluginPaneOpenParams {
-            plugin_id: "example.board".into(),
-            entrypoint: "board".into(),
-            placement: Some(PluginPanePlacement::Popup),
-            width: Some(crate::popup_size::PopupSize::Cells(90)),
-            height: Some(crate::popup_size::PopupSize::Percent(80)),
-            workspace_id: None,
-            target_pane_id: None,
-            direction: None,
-            cwd: Some("/tmp".into()),
-            focus: true,
-            env: [("HERDR_ROLE".to_string(), "board".to_string())].into(),
-        }),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "plugin.pane.open");
-    assert_eq!(json["params"]["placement"], "popup");
-    assert_eq!(json["params"]["width"], 90);
-    assert_eq!(json["params"]["height"], "80%");
-    assert_eq!(json["params"]["env"]["HERDR_ROLE"], "board");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
 }
 
 #[test]

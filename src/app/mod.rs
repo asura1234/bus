@@ -51,13 +51,6 @@ use crate::events::AppEvent;
 
 pub use state::{AppState, Mode, ToastKind, ViewState};
 
-pub(crate) fn load_plugin_manifest(
-    path: &str,
-    enabled: bool,
-) -> Result<crate::api::schema::InstalledPluginInfo, (&'static str, String)> {
-    api::plugins::load_plugin_manifest(path, enabled)
-}
-
 /// Full application: AppState + runtime concerns (event channels, async I/O).
 #[derive(Debug, Clone)]
 pub(crate) struct OverlayPaneState {
@@ -72,7 +65,6 @@ pub(crate) struct OverlayPaneState {
 pub(crate) struct AppPolicy {
     pub(crate) restore_session: bool,
     pub(crate) persist_session: bool,
-    pub(crate) persist_plugin_registry: bool,
     pub(crate) background_updates: bool,
 }
 
@@ -80,7 +72,6 @@ impl AppPolicy {
     pub(crate) const PRODUCTION: Self = Self {
         restore_session: true,
         persist_session: true,
-        persist_plugin_registry: true,
         background_updates: true,
     };
 
@@ -88,7 +79,6 @@ impl AppPolicy {
     pub(crate) const TEST: Self = Self {
         restore_session: false,
         persist_session: false,
-        persist_plugin_registry: false,
         background_updates: false,
     };
 
@@ -96,7 +86,6 @@ impl AppPolicy {
     pub(crate) const HANDOFF_REPLACEMENT: Self = Self {
         restore_session: false,
         persist_session: true,
-        persist_plugin_registry: true,
         background_updates: true,
     };
 }
@@ -169,22 +158,6 @@ fn auto_updates_enabled(background_updates: bool) -> bool {
 
 fn background_update_check_enabled(background_updates: bool, check_enabled: bool) -> bool {
     auto_updates_enabled(background_updates) && check_enabled
-}
-
-fn load_plugin_registry(
-    persist_plugin_registry: bool,
-) -> crate::app::state::InstalledPluginRegistry {
-    if !persist_plugin_registry {
-        return std::collections::HashMap::new();
-    }
-    let entries = crate::persist::plugin_registry::load();
-    let entries = crate::persist::plugin_registry::reload_manifests(entries, |path, enabled| {
-        crate::app::api::plugins::load_plugin_manifest(path, enabled).map_err(|(_, msg)| msg)
-    });
-    entries
-        .into_iter()
-        .map(|plugin| (plugin.plugin_id.clone(), plugin))
-        .collect()
 }
 
 fn agent_panel_sort_from_config(
@@ -513,12 +486,7 @@ impl App {
             integration_recommendations: crate::integration::integration_recommendations(),
             agent_manifest_summaries,
             agent_manifest_update_status: crate::detect::manifest_update::load_status(),
-            installed_plugins: load_plugin_registry(policy.persist_plugin_registry),
-            plugin_panes: std::collections::HashMap::new(),
             popup_pane: None,
-            plugin_command_logs: Vec::new(),
-            next_plugin_command_log_id: 1,
-            plugin_commands_in_flight: 0,
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
@@ -2179,7 +2147,6 @@ mod tests {
                     workspace_id: Some("w1".into()),
                     tab_id: Some("w1:t1".into()),
                     pane_id: Some("w1:p1".into()),
-                    selection: None,
                 },
             ),
         };

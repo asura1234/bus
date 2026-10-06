@@ -5,7 +5,6 @@ mod agents;
 mod harness;
 mod hooks;
 mod panes;
-mod plugins;
 mod protocol;
 mod protocol_guard;
 mod sessions;

@@ -81,12 +81,6 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::PaneClose(_)
             | Method::PaneCloseIfIdentity(_)
             | Method::PopupClose(_)
-            | Method::PluginUnlink(_)
-            | Method::PluginDisable(_)
-            | Method::PluginActionInvoke(_)
-            | Method::PluginPaneOpen(_)
-            | Method::PluginPaneFocus(_)
-            | Method::PluginPaneClose(_)
     )
 }
 

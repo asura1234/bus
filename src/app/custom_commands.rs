@@ -92,36 +92,15 @@ impl App {
         if let Err((code, message)) = self.focus_client_shell_command_target(&params) {
             return crate::app::api::responses::encode_error(id, code, message);
         }
-        let selected_text = if binding.action == crate::config::CustomCommandAction::PluginAction {
-            let Some(selection) = params.selection.as_ref() else {
-                return self.execute_custom_command_response(id, &binding, None);
-            };
-            if params.pane_id.as_deref() != Some(selection.pane_id.as_str()) {
-                return crate::app::api::responses::encode_error(
-                    id,
-                    "command_target_mismatch",
-                    "command selection does not belong to the requested pane",
-                );
-            }
-            match self.pane_selection_text(selection) {
-                Ok(text) => Some(text),
-                Err((code, message)) => {
-                    return crate::app::api::responses::encode_error(id, code, message);
-                }
-            }
-        } else {
-            None
-        };
-        self.execute_custom_command_response(id, &binding, selected_text)
+        self.execute_custom_command_response(id, &binding)
     }
 
     fn execute_custom_command_response(
         &mut self,
         id: String,
         binding: &crate::config::CustomCommandKeybind,
-        selected_text: Option<String>,
     ) -> String {
-        match self.execute_custom_command_binding(binding, selected_text) {
+        match self.execute_custom_command_binding(binding) {
             Ok(()) => crate::app::api::responses::encode_success(
                 id,
                 crate::api::schema::ResponseResult::Ok {},
@@ -212,7 +191,6 @@ impl App {
     pub(crate) fn execute_custom_command_binding(
         &mut self,
         binding: &crate::config::CustomCommandKeybind,
-        selected_text: Option<String>,
     ) -> io::Result<()> {
         match binding.action {
             crate::config::CustomCommandAction::Shell => self.spawn_custom_command(binding),
@@ -220,9 +198,6 @@ impl App {
                 self.spawn_pane_command(&binding.command, Vec::new())
             }
             crate::config::CustomCommandAction::Popup => self.spawn_custom_popup_command(binding),
-            crate::config::CustomCommandAction::PluginAction => self
-                .invoke_plugin_action_from_keybind(binding.command.clone(), selected_text)
-                .map_err(io::Error::other),
         }
     }
 
@@ -497,7 +472,7 @@ impl App {
             };
             ws.tabs
                 .get_mut(tab_idx)
-                .ok_or_else(|| std::io::Error::other("plugin overlay tab disappeared"))?
+                .ok_or_else(|| std::io::Error::other("overlay tab disappeared"))?
                 .zoomed = true;
             self.overlay_panes.insert(
                 new_pane.pane_id,
@@ -630,7 +605,6 @@ mod tests {
                 workspace_id: None,
                 tab_id: None,
                 pane_id: None,
-                selection: None,
             },
         );
         let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
@@ -679,53 +653,10 @@ mod tests {
                 workspace_id: None,
                 tab_id: None,
                 pane_id: None,
-                selection: None,
             },
         );
         let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(error.error.code, "command_not_found");
-    }
-
-    #[tokio::test]
-    async fn plugin_command_rejects_stale_client_selection_before_invocation() {
-        let mut app = test_app();
-        let workspace = crate::workspace::Workspace::test_new("plugin-selection");
-        let pane_id = workspace.tabs[0].root_pane;
-        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
-        app.state.workspaces = vec![workspace];
-        app.state.ensure_test_terminals();
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        app.terminal_runtimes.insert(
-            terminal_id,
-            crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"selected text\n"),
-        );
-        let mut plugin = binding(crate::config::CustomCommandAction::PluginAction);
-        plugin.command = "missing.plugin-action".into();
-        install(&mut app, plugin);
-        let command_id = app.client_shell_command_manifest()[0].command_id.clone();
-        let workspace_id = app.public_workspace_id(0);
-        let tab_id = app.public_tab_id(0, 0).unwrap();
-        let pane_id = app.public_pane_id(0, pane_id).unwrap();
-
-        let response = app.handle_command_invoke(
-            "request-selection".into(),
-            crate::api::schema::CommandInvokeParams {
-                command_id,
-                workspace_id: Some(workspace_id),
-                tab_id: Some(tab_id),
-                pane_id: Some(pane_id.clone()),
-                selection: Some(crate::api::schema::PaneSelectionReadParams {
-                    pane_id,
-                    anchor: crate::api::schema::PaneTextPoint { row: 0, col: 0 },
-                    cursor: crate::api::schema::PaneTextPoint { row: 0, col: 7 },
-                    content_revision: Some(u64::MAX),
-                }),
-            },
-        );
-
-        let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
-        assert_eq!(error.error.code, "stale_content");
     }
 
     #[cfg(unix)]
@@ -753,7 +684,6 @@ mod tests {
                 workspace_id: None,
                 tab_id: None,
                 pane_id: None,
-                selection: None,
             },
         );
         let success: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();

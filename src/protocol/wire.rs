@@ -968,7 +968,6 @@ pub enum ClientShellCommandAction {
     Shell,
     Pane,
     Popup,
-    PluginAction,
     /// A future endpoint action kind that this client cannot execute.
     #[serde(other)]
     Unknown,
@@ -980,7 +979,6 @@ impl From<crate::config::CustomCommandAction> for ClientShellCommandAction {
             crate::config::CustomCommandAction::Shell => Self::Shell,
             crate::config::CustomCommandAction::Pane => Self::Pane,
             crate::config::CustomCommandAction::Popup => Self::Popup,
-            crate::config::CustomCommandAction::PluginAction => Self::PluginAction,
         }
     }
 }
@@ -993,7 +991,6 @@ impl TryFrom<ClientShellCommandAction> for crate::config::CustomCommandAction {
             ClientShellCommandAction::Shell => Ok(Self::Shell),
             ClientShellCommandAction::Pane => Ok(Self::Pane),
             ClientShellCommandAction::Popup => Ok(Self::Popup),
-            ClientShellCommandAction::PluginAction => Ok(Self::PluginAction),
             ClientShellCommandAction::Unknown => Err(()),
         }
     }

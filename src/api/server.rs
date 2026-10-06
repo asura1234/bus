@@ -485,17 +485,6 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::IntegrationList(_) => "integration.list",
         Method::IntegrationInstall(_) => "integration.install",
         Method::IntegrationUninstall(_) => "integration.uninstall",
-        Method::PluginLink(_) => "plugin.link",
-        Method::PluginList(_) => "plugin.list",
-        Method::PluginUnlink(_) => "plugin.unlink",
-        Method::PluginEnable(_) => "plugin.enable",
-        Method::PluginDisable(_) => "plugin.disable",
-        Method::PluginActionList(_) => "plugin.action.list",
-        Method::PluginActionInvoke(_) => "plugin.action.invoke",
-        Method::PluginLogList(_) => "plugin.log.list",
-        Method::PluginPaneOpen(_) => "plugin.pane.open",
-        Method::PluginPaneFocus(_) => "plugin.pane.focus",
-        Method::PluginPaneClose(_) => "plugin.pane.close",
     }
 }
 

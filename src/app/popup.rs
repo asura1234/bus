@@ -64,38 +64,6 @@ impl App {
         )
     }
 
-    pub(crate) fn spawn_popup_argv_command(
-        &mut self,
-        argv: &[String],
-        cwd: Option<PathBuf>,
-        extra_env: Vec<(String, String)>,
-        geometry: PopupGeometry,
-    ) -> std::io::Result<()> {
-        self.spawn_popup_command(
-            cwd,
-            extra_env,
-            geometry,
-            |pane_id, rows, cols, cwd, launch_env, app| {
-                TerminalRuntime::spawn_argv_command(
-                    pane_id,
-                    rows,
-                    cols,
-                    cwd,
-                    argv,
-                    launch_env,
-                    crate::pane::AgentDetection::Disabled,
-                    app.state.pane_scrollback_limit_bytes,
-                    app.state.host_terminal_theme,
-                    app.state.host_terminal_appearance,
-                    app.event_tx.clone(),
-                    app.render_notify.clone(),
-                    app.render_dirty.clone(),
-                )
-                .map(|runtime| (runtime, Some(argv.to_vec())))
-            },
-        )
-    }
-
     fn spawn_popup_command<F>(
         &mut self,
         cwd: Option<PathBuf>,

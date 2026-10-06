@@ -638,21 +638,11 @@ mod tests {
         app.state.selected = 1;
         app.state.mode = crate::app::Mode::Terminal;
         app.state.ensure_test_terminals();
-        let closed_pane_ids = [0, 2].map(|index| app.state.workspaces[index].tabs[0].root_pane);
         let closed_terminal_ids = [0, 2].map(|index| {
             app.state
                 .terminal_id_for_pane(index, app.state.workspaces[index].tabs[0].root_pane)
                 .expect("closed workspace pane has a terminal")
         });
-        for pane_id in closed_pane_ids {
-            app.state.plugin_panes.insert(
-                pane_id,
-                crate::app::state::PluginPaneRecord {
-                    plugin_id: "example.pane".into(),
-                    entrypoint: "board".into(),
-                },
-            );
-        }
         app.state.assert_invariants_for_test();
 
         let parent_id = app.public_workspace_id(0);
@@ -675,9 +665,6 @@ mod tests {
         assert_eq!(app.state.workspaces[0].id, survivor_id);
         for terminal_id in closed_terminal_ids {
             assert!(!app.state.terminals.contains_key(&terminal_id));
-        }
-        for pane_id in closed_pane_ids {
-            assert!(!app.state.plugin_panes.contains_key(&pane_id));
         }
         assert!(app.state.terminal_runtime_shutdowns.is_empty());
         app.state.assert_invariants_for_test();

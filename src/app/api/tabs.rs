@@ -243,7 +243,7 @@ impl App {
             let workspace = self.workspace_info(ws_idx);
             self.state.selected = ws_idx;
             self.state.close_selected_workspace();
-            self.state.remove_plugin_pane_records(pane_ids);
+            self.state.forget_closed_pane_focus(pane_ids);
             self.shutdown_detached_terminal_runtimes();
             self.emit_event(EventEnvelope {
                 event: EventKind::TabClosed,
@@ -272,7 +272,7 @@ impl App {
                 format!("tab {} could not be closed", target.tab_id),
             );
         }
-        self.state.remove_plugin_pane_records(pane_ids);
+        self.state.forget_closed_pane_focus(pane_ids);
         self.state.remove_unattached_terminal_ids(terminal_ids);
         self.shutdown_detached_terminal_runtimes();
         self.schedule_session_save();

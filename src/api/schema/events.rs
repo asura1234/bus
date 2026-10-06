@@ -221,6 +221,7 @@ pub enum EventKind {
 }
 
 impl EventKind {
+    #[cfg(test)]
     pub fn dot_name(self) -> &'static str {
         match self {
             EventKind::WorkspaceCreated => "workspace.created",
@@ -283,45 +284,9 @@ pub const KNOWN_EVENT_KINDS: &[EventKind] = &[
     EventKind::LayoutUpdated,
 ];
 
-pub const PLUGIN_HOOK_EVENT_KINDS: &[EventKind] = &[
-    EventKind::WorkspaceCreated,
-    EventKind::WorkspaceUpdated,
-    EventKind::WorkspaceClosed,
-    EventKind::WorkspaceRenamed,
-    EventKind::WorkspaceMoved,
-    EventKind::WorkspaceReordered,
-    EventKind::WorkspaceFocused,
-    EventKind::WorktreeCreated,
-    EventKind::WorktreeOpened,
-    EventKind::WorktreeRemoved,
-    EventKind::TabCreated,
-    EventKind::TabClosed,
-    EventKind::TabRenamed,
-    EventKind::TabMoved,
-    EventKind::TabFocused,
-    EventKind::PaneCreated,
-    EventKind::PaneClosed,
-    EventKind::PaneFocused,
-    EventKind::PaneMoved,
-    EventKind::PaneExited,
-    EventKind::PaneAgentDetected,
-    EventKind::PaneAgentStatusChanged,
-];
-
 #[cfg(test)]
 pub fn known_event_names() -> Vec<&'static str> {
     KNOWN_EVENT_KINDS
-        .iter()
-        .copied()
-        .map(EventKind::dot_name)
-        .collect()
-}
-
-/// Event names that manifest `[[events]] on` hooks can reference. This is
-/// intentionally narrower than `EventKind` until high-volume output-change hook
-/// semantics are implemented.
-pub fn plugin_hook_event_names() -> Vec<&'static str> {
-    PLUGIN_HOOK_EVENT_KINDS
         .iter()
         .copied()
         .map(EventKind::dot_name)
@@ -345,16 +310,6 @@ mod known_event_name_tests {
             from_kind, known,
             "known_event_names() out of sync with EventKind"
         );
-    }
-
-    #[test]
-    fn plugin_hook_event_names_exclude_high_volume_events() {
-        let names = plugin_hook_event_names();
-        assert!(!names.contains(&"pane.output_changed"));
-        assert!(!names.contains(&"layout.updated"));
-        assert!(!names.contains(&"workspace.metadata_updated"));
-        assert!(!names.contains(&"pane.updated"));
-        assert!(names.contains(&"pane.moved"));
     }
 }
 
