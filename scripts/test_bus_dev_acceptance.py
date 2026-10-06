@@ -90,7 +90,7 @@ class AcceptanceObservationTests(unittest.TestCase):
         self.assertNotIn("approve-once", guide)
         self.assertIn("request recover REQUEST_ID --confirm", guide)
         self.assertIn("agent orchestrate AGENT (--room ROOM | --none)", guide)
-        self.assertIn("agent add ... --orchestrates ROOM", guide)
+        self.assertIn("agent add --room master ... [--orchestrates ROOM]", guide)
         self.assertIn("same persisted message status", guide)
         self.assertIn("waiting CLI process exits or Bus restarts", guide)
         self.assertIn("Every session has exactly one MASTER room", guide)
