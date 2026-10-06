@@ -6,7 +6,6 @@ pub(super) fn dispatch_client_shell_actions(
     endpoints: &mut endpoint::EndpointRegistry,
     mut shell: Option<&mut shell::ClientShellState>,
     detached_process_children: &mut Vec<std::process::Child>,
-    event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
 ) -> Result<(Vec<crossterm::event::MouseEvent>, bool), ClientError> {
     let mut replay_mouse = Vec::new();
     let mut repaint = false;
@@ -36,16 +35,6 @@ pub(super) fn dispatch_client_shell_actions(
                     repaint = true;
                 }
             }
-            shell::ClientShellAction::ActivateEndpoint {
-                endpoint_id,
-                target,
-            } => {
-                let _ = event_tx.try_send(ClientLoopEvent::ActivateEndpoint {
-                    endpoint_id,
-                    target,
-                    force: false,
-                });
-            }
             shell::ClientShellAction::OpenSafeWebUrl(url) => {
                 if crate::app::actions::safe_web_url(&url).is_some() {
                     match crate::platform::open_url(&url) {
@@ -56,12 +45,6 @@ pub(super) fn dispatch_client_shell_actions(
                 }
             }
             shell::ClientShellAction::ReplayMouse(events) => replay_mouse.extend(events),
-            shell::ClientShellAction::Keybind(action) => {
-                debug!(
-                    ?action,
-                    "client shell action awaits its presentation family"
-                );
-            }
         }
     }
     // A source-off-first handoff leaves the registry's committed identity pointing at a
@@ -98,10 +81,10 @@ pub(super) fn client_shell_resize_message(
 pub(super) fn sync_client_shell_keyboard_report_all(
     state: &mut ClientState,
 ) -> Result<(), ClientError> {
-    let Some(shell) = state.shell.as_ref() else {
+    if state.shell.is_none() {
         return Ok(());
-    };
-    let desired = state.pane_keyboard_report_all || shell.host_keyboard_report_all_requested();
+    }
+    let desired = state.pane_keyboard_report_all;
     if desired == state.keyboard_report_all_active {
         return Ok(());
     }
@@ -109,24 +92,6 @@ pub(super) fn sync_client_shell_keyboard_report_all(
         .map_err(ClientError::ConnectionFailed)?;
     state.keyboard_report_all_active = desired;
     Ok(())
-}
-
-pub(super) fn apply_client_shell_input_source_changes(
-    state: &mut ClientState,
-    prefix_input_source: &mut impl crate::platform::PrefixInputSource,
-) {
-    let changes = state
-        .shell
-        .as_mut()
-        .map(shell::ClientShellState::take_input_source_changes)
-        .unwrap_or_default();
-    for active in changes {
-        if active {
-            prefix_input_source.switch_to_ascii();
-        } else {
-            prefix_input_source.restore();
-        }
-    }
 }
 
 fn install_pending_activation(
@@ -157,21 +122,14 @@ pub(super) fn begin_endpoint_activation(
     pending: &mut Option<endpoint::PendingEndpointActivation>,
     next_surface_serial: &mut u64,
     endpoint_id: endpoint::ClientEndpointId,
-    target: Option<shell::ClientEndpointFocusTarget>,
     force: bool,
     now: std::time::Instant,
-    event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
 ) -> Result<(), ClientError> {
     if let Some(activation) = pending.as_mut() {
-        if activation.can_retarget(&endpoint_id) {
-            let retarget_error = activation.retarget(target, endpoints).err();
-            if let Some(error) = retarget_error {
-                rollback_endpoint_activation(state, endpoints, pending, error, false);
-            }
-        } else {
+        if !activation.can_retarget(&endpoint_id) {
             // Once rollback starts, even a request for the original target is a new intent. It
             // replaces the retained successor instead of mutating the transaction being retired.
-            let outcome = activation.supersede(endpoint_id, target, endpoints);
+            let outcome = activation.supersede(endpoint_id, endpoints);
             if let endpoint::ActivationRollback::Unavailable(message) = outcome {
                 *pending = None;
                 present_handoff_unavailable(state, message);
@@ -185,22 +143,6 @@ pub(super) fn begin_endpoint_activation(
             .connection(&endpoint_id)
             .is_some_and(|connection| connection.surface_active);
     if already_active {
-        if let (Some(shell), Some(target)) = (state.shell.as_mut(), target) {
-            let actions = shell.focus_endpoint_target(target);
-            let (_, repaint) = dispatch_client_shell_actions(
-                actions,
-                endpoint_commands,
-                endpoints,
-                Some(shell),
-                &mut state.detached_process_children,
-                event_tx,
-            )?;
-            if repaint {
-                if let Some(frame) = shell.compose(state.reported_size.0, state.reported_size.1) {
-                    state.present_frame(frame);
-                }
-            }
-        }
         return Ok(());
     }
     let Some(shell) = state.shell.as_ref() else {
@@ -218,7 +160,6 @@ pub(super) fn begin_endpoint_activation(
         shell,
         endpoints,
         endpoint_id.clone(),
-        target,
         resize,
         *next_surface_serial,
         now,
@@ -364,7 +305,6 @@ pub(super) fn complete_endpoint_activation(
     if let Some(intent) = successor {
         return Ok(Some(ClientLoopEvent::ActivateEndpoint {
             endpoint_id: intent.endpoint_id,
-            target: intent.target,
             force: true,
         }));
     }
@@ -411,7 +351,6 @@ pub(super) fn install_client_shell_snapshot(
     snapshot: Box<crate::protocol::ClientShellSnapshot>,
     projection_pending: bool,
     endpoints: &mut endpoint::EndpointRegistry,
-    prefix_input_source: &mut impl crate::platform::PrefixInputSource,
 ) -> Result<(), ClientError> {
     let Some(connection) = endpoints.connection(endpoint_id) else {
         return Ok(());
@@ -456,7 +395,6 @@ pub(super) fn install_client_shell_snapshot(
     } else {
         (None, None, Vec::new())
     };
-    apply_client_shell_input_source_changes(state, prefix_input_source);
     state.present_graphics(&graphics_cleanup);
     if let Some(resize) = resize {
         endpoints.send_to(endpoint_id, &resize);
@@ -478,10 +416,7 @@ pub(super) fn finish_client_shell_input(
     endpoints: &mut endpoint::EndpointRegistry,
     pending_activation: &mut Option<endpoint::PendingEndpointActivation>,
     endpoint_commands: &mut endpoint_commands::EndpointCommands,
-    prefix_input_source: &mut impl crate::platform::PrefixInputSource,
-    event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
 ) -> Result<bool, ClientError> {
-    apply_client_shell_input_source_changes(state, prefix_input_source);
     if outcome.detach {
         let _ = write_to_server(endpoints, &ClientMessage::Detach);
         return Ok(true);
@@ -521,7 +456,6 @@ pub(super) fn finish_client_shell_input(
         endpoints,
         state.shell.as_mut(),
         &mut state.detached_process_children,
-        event_tx,
     )?;
     let frame = if dispatch_repaint {
         state

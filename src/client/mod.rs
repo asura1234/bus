@@ -94,7 +94,7 @@ use frame_output::{
 #[cfg(test)]
 use handshake::direct_graphics_profile_values;
 use handshake::do_handshake;
-use notifications::{handle_notify, handle_shell_notification_effects};
+use notifications::handle_notify;
 #[cfg(test)]
 use notifications::{handle_notify_with_notifiers, sound_from_notify_message};
 
@@ -137,8 +137,6 @@ fn run_client_with_mode(
     let shell_config = client_rendered_shell.then(|| {
         shell::ClientShellConfig::from_config(&loaded_config.config)
             .with_startup_config_diagnostic(startup_config_diagnostic)
-            .with_startup_onboarding(loaded_config.config.should_show_onboarding())
-            .with_local_endpoint(&socket_path)
     });
     let mouse_capture = loaded_config.config.ui.mouse_capture;
     let mouse_scroll_lines = loaded_config.config.ui.mouse_scroll_lines();
@@ -491,10 +489,6 @@ async fn run_client_loop(
     let mut next_surface_serial = 1_u64;
     let mut pending_activation: Option<endpoint::PendingEndpointActivation> = None;
     let mut scheduled_activation = None;
-    // This (foreground) client owns the prefix ASCII input-source switch
-    // (implemented on macOS and Windows; a no-op on other platforms).
-    let mut prefix_input_source = crate::platform::RealPrefixInputSource::default();
-
     // Main event loop.
     let mut client_timer = timer::ClientLoopTimer::new();
     #[cfg(windows)]
@@ -535,9 +529,6 @@ async fn run_client_loop(
             }
         };
         let now = std::time::Instant::now();
-        if let Some(shell) = state.shell.as_mut() {
-            shell.tick_popup_pending(now);
-        }
 
         match event {
             #[cfg(unix)]
@@ -566,8 +557,6 @@ async fn run_client_loop(
                         &mut write_stream,
                         &mut pending_activation,
                         &mut endpoint_commands,
-                        &mut prefix_input_source,
-                        &event_tx,
                     )? {
                         return Ok(());
                     }
@@ -663,8 +652,6 @@ async fn run_client_loop(
                         &mut write_stream,
                         &mut pending_activation,
                         &mut endpoint_commands,
-                        &mut prefix_input_source,
-                        &event_tx,
                     )? {
                         return Ok(());
                     }
@@ -719,8 +706,6 @@ async fn run_client_loop(
                         &mut write_stream,
                         &mut pending_activation,
                         &mut endpoint_commands,
-                        &mut prefix_input_source,
-                        &event_tx,
                     )? {
                         return Ok(());
                     }
@@ -799,11 +784,7 @@ async fn run_client_loop(
                     state.present_frame(frame);
                 }
             }
-            ClientLoopEvent::ActivateEndpoint {
-                endpoint_id,
-                target,
-                force,
-            } => {
+            ClientLoopEvent::ActivateEndpoint { endpoint_id, force } => {
                 begin_endpoint_activation(
                     &mut state,
                     &mut write_stream,
@@ -811,10 +792,8 @@ async fn run_client_loop(
                     &mut pending_activation,
                     &mut next_surface_serial,
                     endpoint_id,
-                    target,
                     force,
                     now,
-                    &event_tx,
                 )?;
             }
             ClientLoopEvent::ServerMessage {
@@ -897,10 +876,6 @@ async fn run_client_loop(
                         } else {
                             None
                         };
-                        apply_client_shell_input_source_changes(
-                            &mut state,
-                            &mut prefix_input_source,
-                        );
                         if let Some(frame) = composed {
                             state.present_frame(frame);
                         }
@@ -930,10 +905,6 @@ async fn run_client_loop(
                             Some(shell::ClientPaneSurfacePatchOutcome::Applied(None)) => true,
                             Some(shell::ClientPaneSurfacePatchOutcome::Rejected) | None => false,
                         };
-                        apply_client_shell_input_source_changes(
-                            &mut state,
-                            &mut prefix_input_source,
-                        );
                         if compose_fallback {
                             let composed = state.shell.as_mut().and_then(|shell| {
                                 shell.compose(state.reported_size.0, state.reported_size.1)
@@ -988,28 +959,7 @@ async fn run_client_loop(
                             handle_notify(kind, &message, body.as_deref(), &state.sound_config);
                         }
                     }
-                    ServerMessage::SemanticNotification(event) => {
-                        if state.shell.is_some() {
-                            let (effects, frame) = {
-                                let shell = state.shell.as_mut().expect("checked shell mode");
-                                let (effects, repaint) = shell.receive_notification(
-                                    &endpoint_id,
-                                    event,
-                                    std::time::Instant::now(),
-                                );
-                                let frame = repaint
-                                    .then(|| {
-                                        shell.compose(state.reported_size.0, state.reported_size.1)
-                                    })
-                                    .flatten();
-                                (effects, frame)
-                            };
-                            handle_shell_notification_effects(effects, &state.sound_config);
-                            if let Some(frame) = frame {
-                                state.present_frame(frame);
-                            }
-                        }
-                    }
+                    ServerMessage::SemanticNotification(_) => {}
                     ServerMessage::ClientShellError { message } => {
                         if let Some(shell) = state.shell.as_mut() {
                             if shell.receive_endpoint_error(message) {
@@ -1117,20 +1067,12 @@ async fn run_client_loop(
                                 }
                             },
                         );
-                        if let Some(shell) = state.shell.as_mut() {
-                            shell.reconcile_input_source();
-                        }
-                        apply_client_shell_input_source_changes(
-                            &mut state,
-                            &mut prefix_input_source,
-                        );
                         let (replay_mouse, dispatch_repaint) = dispatch_client_shell_actions(
                             actions,
                             &mut endpoint_commands,
                             &mut write_stream,
                             state.shell.as_mut(),
                             &mut state.detached_process_children,
-                            &event_tx,
                         )?;
                         let repaint = repaint || dispatch_repaint;
                         if replay_mouse.is_empty() {
@@ -1161,8 +1103,6 @@ async fn run_client_loop(
                                 &mut write_stream,
                                 &mut pending_activation,
                                 &mut endpoint_commands,
-                                &mut prefix_input_source,
-                                &event_tx,
                             )? {
                                 return Ok(());
                             }
@@ -1195,7 +1135,6 @@ async fn run_client_loop(
                         &mut pending_activation,
                         &host_mouse_capture_active,
                         &host_sgr_pixels_active,
-                        &mut prefix_input_source,
                     )?,
                     ServerMessage::MouseCapture {
                         enabled,
@@ -1297,7 +1236,6 @@ async fn run_client_loop(
                             snapshot,
                             projection_pending,
                             &mut write_stream,
-                            &mut prefix_input_source,
                         )?;
                         if matches!(
                             activation_progress,
@@ -1327,7 +1265,6 @@ async fn run_client_loop(
                         if activation_ready && needs_surface && pending_activation.is_none() {
                             scheduled_activation = Some(ClientLoopEvent::ActivateEndpoint {
                                 endpoint_id: selected_endpoint,
-                                target: None,
                                 force: false,
                             });
                         }
@@ -1402,7 +1339,7 @@ async fn run_client_loop(
                             write_stream.accepts(&expired.endpoint_id, expired.generation)
                         })
                         .collect::<Vec<_>>();
-                    let (effects, outcome, frame) = {
+                    let (outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
                         outcome.repaint |= shell.tick_bus();
@@ -1419,15 +1356,13 @@ async fn run_client_loop(
                             outcome.repaint |= repaint;
                             outcome.actions.extend(actions);
                         }
-                        let (effects, notification_repaint) = shell.tick_notifications(now);
-                        outcome.repaint |= notification_repaint | shell.tick_copy_feedback(now);
+                        outcome.repaint |= shell.tick_copy_feedback(now);
                         let frame = outcome
                             .repaint
                             .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
                             .flatten();
-                        (effects, outcome, frame)
+                        (outcome, frame)
                     };
-                    handle_shell_notification_effects(effects, &state.sound_config);
                     if finish_client_shell_input(
                         &mut state,
                         outcome,
@@ -1435,8 +1370,6 @@ async fn run_client_loop(
                         &mut write_stream,
                         &mut pending_activation,
                         &mut endpoint_commands,
-                        &mut prefix_input_source,
-                        &event_tx,
                     )? {
                         return Ok(());
                     }

@@ -2,8 +2,8 @@ use super::*;
 use crate::api::schema::AgentStatus;
 use crate::protocol::ClientShellWorkspace;
 use crate::protocol::{
-    ClientShellAgent, ClientShellPane, ClientShellTab, ClientShellWorktree, PaneSurfacePane,
-    PaneSurfaceSplit, PaneSurfaceSplitDirection, SurfaceRect,
+    ClientShellPane, ClientShellTab, PaneSurfacePane, PaneSurfaceSplit, PaneSurfaceSplitDirection,
+    SurfaceRect,
 };
 use crossterm::event::MouseEvent;
 
@@ -57,28 +57,6 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
         }],
         agents: Vec::new(),
         commands: Vec::new(),
-    }
-}
-
-fn worktree_list_result(open_workspace_id: Option<&str>) -> crate::api::schema::ResponseResult {
-    crate::api::schema::ResponseResult::WorktreeList {
-        source: crate::api::schema::WorktreeSourceInfo {
-            repo_key: "repo-key".into(),
-            repo_name: "repo".into(),
-            repo_root: "/repo".into(),
-            source_checkout_path: "/repo".into(),
-            source_workspace_id: Some("ws_1".into()),
-        },
-        worktrees: vec![crate::api::schema::WorktreeInfo {
-            path: "/repo-feature".into(),
-            branch: Some("feature".into()),
-            is_bare: false,
-            is_detached: false,
-            is_prunable: false,
-            is_linked_worktree: true,
-            open_workspace_id: open_workspace_id.map(str::to_owned),
-            label: "repo".into(),
-        }],
     }
 }
 
@@ -162,21 +140,6 @@ fn pane_scroll_result(
     }
 }
 
-fn copy_search_result(
-    matches: Vec<crate::api::schema::PaneTextRange>,
-    current: Option<u32>,
-) -> crate::api::schema::ResponseResult {
-    let total = matches.len() as u64;
-    crate::api::schema::ResponseResult::PaneCopySearch {
-        pane_id: "pane_1".into(),
-        content_revision: 0,
-        matches,
-        total,
-        current,
-        current_global: current.map(u64::from),
-    }
-}
-
 fn surface_with_popup() -> PaneSurfaceFrame {
     let mut surface = surface();
     let popup_buffer = Buffer::with_lines(["popup-live", "", ""]);
@@ -203,13 +166,11 @@ fn surface_with_popup() -> PaneSurfaceFrame {
     surface
 }
 
-mod agents_worktrees_notifications;
-mod chrome_context;
-mod copy;
+mod endpoint_notices;
 mod endpoint_requests;
 #[path = "input.rs"]
 mod input_domain;
-mod keybindings_settings;
 mod mouse_selection;
 mod popup_focus_projection;
-mod startup_overlays;
+mod selection_copy;
+mod startup_diagnostics;

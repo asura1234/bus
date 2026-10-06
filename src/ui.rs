@@ -12,9 +12,11 @@ use self::panes::resize_popup_pane;
 pub(crate) use self::panes::{
     apply_pane_chrome, pane_inner_rect, pane_is_scrolled_back, render_selection_highlight,
 };
+#[cfg(test)]
+pub(crate) use self::scrollbar::scrollbar_thumb;
 pub(crate) use self::scrollbar::{
     render_pane_scrollbar_buffer, scrollbar_offset_from_drag_row, scrollbar_offset_from_row,
-    scrollbar_thumb, scrollbar_thumb_grab_offset,
+    scrollbar_thumb_grab_offset,
 };
 pub(crate) use self::sidebar::{agent_panel_entries_from, AgentPanelEntry};
 use self::status::copy_feedback_rect;

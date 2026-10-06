@@ -10,19 +10,6 @@ fn is_retained_selection_copy_key(key: &crate::input::TerminalKey) -> bool {
         && matches!(key.modifiers, KeyModifiers::CONTROL | KeyModifiers::SUPER)
 }
 
-pub(super) fn is_modal_paste_shortcut_for_platform(
-    key: &crate::input::TerminalKey,
-    macos: bool,
-) -> bool {
-    matches!(key.code, KeyCode::Char('v' | 'V'))
-        && (key.modifiers.contains(KeyModifiers::CONTROL)
-            || macos && key.modifiers.contains(KeyModifiers::SUPER))
-}
-
-fn is_modal_paste_shortcut(key: &crate::input::TerminalKey) -> bool {
-    is_modal_paste_shortcut_for_platform(key, cfg!(target_os = "macos"))
-}
-
 fn host_theme_update(event: &RawInputEvent) -> Option<crate::protocol::ClientHostThemeUpdate> {
     use crate::protocol::{
         ClientHostAppearance, ClientHostDefaultColorKind, ClientHostThemeUpdate,
@@ -77,13 +64,6 @@ fn push_host_theme_update(
 }
 
 impl ClientShellState {
-    pub(crate) fn host_keyboard_report_all_requested(&self) -> bool {
-        matches!(
-            self.mode,
-            ClientShellMode::Prefix | ClientShellMode::Navigate
-        )
-    }
-
     #[cfg(any(unix, test))]
     pub(crate) fn handle_input_bytes(&mut self, data: &[u8]) -> ClientShellInput {
         self.handle_raw_events(crate::raw_input::parse_raw_input_bytes_sync(data))
@@ -127,19 +107,13 @@ impl ClientShellState {
         )
     }
 
-    fn prepare_committed_text(&mut self, text: &str, outcome: &mut ClientShellInput) -> bool {
-        if self.insert_copy_search_text(text) {
-            outcome.repaint = true;
-            return true;
-        }
+    fn prepare_committed_text(&mut self, outcome: &mut ClientShellInput) {
         self.pending_word_selection = None;
-        if self.copy_or_terminal_mode() != ClientShellMode::Copy && self.selection.take().is_some()
-        {
+        if self.selection.take().is_some() {
             self.stop_selection_autoscroll();
             self.selection_highlight_clear_deadline = None;
             outcome.repaint = true;
         }
-        false
     }
 
     pub(crate) fn replay_mouse_events(
@@ -174,47 +148,33 @@ impl ClientShellState {
                 RawInputEvent::Key(key) => self.handle_key(key, &mut outcome),
                 RawInputEvent::Text(text) => {
                     let text = text.into_string();
-                    if self.prepare_committed_text(&text, &mut outcome) {
-                        self.reconcile_input_source();
-                        continue;
-                    }
+                    self.prepare_committed_text(&mut outcome);
                     if let Some(target) = self.popup_input_target() {
                         super::push_target_event(
                             target,
                             ClientPaneInputEvent::TextCommit(text),
                             &mut outcome,
                         );
-                    } else if !self.popup_pending {
-                        if self.insert_overlay_text(&text) {
-                            outcome.repaint = true;
-                        } else if self.overlay.is_none() && self.mode == ClientShellMode::Terminal {
-                            self.push_focused_pane_event(
-                                ClientPaneInputEvent::TextCommit(text),
-                                &mut outcome,
-                            );
-                        }
+                    } else {
+                        self.push_focused_pane_event(
+                            ClientPaneInputEvent::TextCommit(text),
+                            &mut outcome,
+                        );
                     }
                 }
                 RawInputEvent::Paste(text) => {
-                    if self.prepare_committed_text(&text, &mut outcome) {
-                        self.reconcile_input_source();
-                        continue;
-                    }
+                    self.prepare_committed_text(&mut outcome);
                     if let Some(target) = self.popup_input_target() {
                         super::push_target_event(
                             target,
                             ClientPaneInputEvent::Paste(text),
                             &mut outcome,
                         );
-                    } else if !self.popup_pending {
-                        if self.insert_overlay_text(&text) {
-                            outcome.repaint = true;
-                        } else if self.overlay.is_none() && self.mode == ClientShellMode::Terminal {
-                            self.push_focused_pane_event(
-                                ClientPaneInputEvent::Paste(text),
-                                &mut outcome,
-                            );
-                        }
+                    } else {
+                        self.push_focused_pane_event(
+                            ClientPaneInputEvent::Paste(text),
+                            &mut outcome,
+                        );
                     }
                 }
                 RawInputEvent::Mouse(mouse) => self.handle_mouse(mouse, &mut outcome),
@@ -267,9 +227,7 @@ impl ClientShellState {
                 | RawInputEvent::HostCellSizeReport { .. }
                 | RawInputEvent::Unsupported => {}
             }
-            self.reconcile_input_source();
         }
-        outcome.repaint |= self.resume_mobile_switcher_if_ready();
         outcome
     }
 
@@ -278,10 +236,6 @@ impl ClientShellState {
         key: crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) {
-        if self.copy_operation_in_flight {
-            self.copy_input_queue.push_back(key);
-            return;
-        }
         let lease_key = crate::input::InputLeaseKey::new(LOCAL_INPUT_SOURCE, &key);
         let key = self.input_leases.normalize_press(&lease_key, key);
         match key.kind {
@@ -364,7 +318,6 @@ impl ClientShellState {
                 outcome,
             );
         }
-        self.copy_input_queue.clear();
     }
 
     fn execute_repeat_plan(
@@ -377,7 +330,7 @@ impl ClientShellState {
         match plan {
             crate::input::RepeatPlan::Forwarded(target) => {
                 let pane_blocked_by_popup = matches!(&target, ClientInputTarget::Pane(_))
-                    && (self.popup_pending || self.popup_terminal_id.is_some());
+                    && self.popup_terminal_id.is_some();
                 if !pane_blocked_by_popup {
                     self.push_pane_key(target, key, outcome);
                 }
@@ -410,86 +363,19 @@ impl ClientShellState {
         }
     }
 
-    pub(super) fn modal_paste_target_active(&self) -> bool {
-        if self.popup_pending || self.popup_input_target().is_some() {
-            return false;
-        }
-        if self
-            .copy_mode
-            .as_ref()
-            .is_some_and(|copy_mode| copy_mode.search_prompt.is_some())
-        {
-            return self.overlay.is_none();
-        }
-        matches!(
-            self.overlay.as_ref(),
-            Some(ClientShellOverlay::Rename(_))
-                | Some(ClientShellOverlay::WorktreeCreate(
-                    ClientWorktreeCreateOverlay {
-                        creating: false,
-                        ..
-                    }
-                ))
-                | Some(ClientShellOverlay::WorktreeOpen(
-                    ClientWorktreeOpenOverlay {
-                        search_focused: true,
-                        opening: false,
-                        ..
-                    }
-                ))
-                | Some(ClientShellOverlay::Navigator(ClientNavigatorOverlay {
-                    search_focused: true,
-                    ..
-                }))
-                | Some(ClientShellOverlay::Help(ClientHelpOverlay {
-                    search_focused: true,
-                    ..
-                }))
-        )
-    }
-
-    pub(super) fn handle_modal_paste_shortcut_with(
-        &mut self,
-        key: &crate::input::TerminalKey,
-        outcome: &mut ClientShellInput,
-        read_clipboard_text: impl FnOnce() -> Option<String>,
-    ) -> bool {
-        if !is_modal_paste_shortcut(key) || !self.modal_paste_target_active() {
-            return false;
-        }
-        if let Some(text) = read_clipboard_text() {
-            let inserted = self.insert_copy_search_text(&text) || self.insert_overlay_text(&text);
-            outcome.repaint |= inserted;
-        }
-        true
-    }
-
     fn route_key_press(
         &mut self,
         key: &crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) -> Option<ClientInputTarget> {
-        if self.handle_modal_paste_shortcut_with(key, outcome, crate::platform::read_clipboard_text)
-        {
-            return None;
-        }
         if let Some(target) = self.popup_input_target() {
             return Some(target);
-        }
-        if self.popup_pending {
-            return None;
-        }
-        if self.overlay.is_some() {
-            self.route_overlay_key(key, outcome);
-            return None;
         }
         if matches!(key.code, KeyCode::Modifier(_)) {
             return None;
         }
         self.pending_word_selection = None;
-        if self.mode != ClientShellMode::Copy
-            && self.copy_or_terminal_mode() != ClientShellMode::Copy
-            && !self.config.copy_on_select
+        if !self.config.copy_on_select
             && is_retained_selection_copy_key(key)
             && self
                 .selection
@@ -503,433 +389,20 @@ impl ClientShellState {
             outcome.repaint = true;
             return None;
         }
-        if self.mode != ClientShellMode::Copy
-            && self.copy_or_terminal_mode() != ClientShellMode::Copy
-            && self.selection.take().is_some()
-        {
+        if self.selection.take().is_some() {
             self.stop_selection_autoscroll();
             self.selection_highlight_clear_deadline = None;
             outcome.repaint = true;
         }
-
-        match self.mode {
-            ClientShellMode::Terminal => {
-                if let Some(binding) =
-                    crate::input::resolve_direct_binding(&self.config.keybinds.keybinds, key)
-                {
-                    self.record_binding(binding, outcome);
-                    return None;
-                }
-                if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
-                    self.mode = ClientShellMode::Prefix;
-                    outcome.repaint = true;
-                    return None;
-                }
-                self.focused_pane_id().map(ClientInputTarget::Pane)
-            }
-            ClientShellMode::Prefix => {
-                let return_mode = if self.copy_mode.as_ref().is_some_and(|copy_mode| {
-                    self.focused_pane_id().as_deref() == Some(copy_mode.pane_id.as_str())
-                }) {
-                    ClientShellMode::Copy
-                } else {
-                    ClientShellMode::Terminal
-                };
-                if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
-                    self.mode = return_mode;
-                    outcome.repaint = true;
-                    return self.focused_pane_id().map(ClientInputTarget::Pane);
-                }
-                if key.code == KeyCode::Esc {
-                    self.mode = return_mode;
-                    outcome.repaint = true;
-                    return None;
-                }
-                if let Some(binding) =
-                    crate::input::resolve_prefix_binding(&self.config.keybinds.keybinds, key)
-                {
-                    self.mode = return_mode;
-                    outcome.repaint = true;
-                    self.record_binding(binding, outcome);
-                    return None;
-                }
-                self.mode = return_mode;
-                outcome.repaint = true;
-                None
-            }
-            ClientShellMode::Navigate => {
-                self.route_navigate_key(key, outcome);
-                None
-            }
-            ClientShellMode::Resize => {
-                self.route_resize_key(key, outcome);
-                None
-            }
-            ClientShellMode::Copy => {
-                if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
-                    self.mode = ClientShellMode::Prefix;
-                    outcome.repaint = true;
-                } else {
-                    self.route_copy_mode_key(key, outcome);
-                }
-                None
-            }
-        }
-    }
-
-    pub(super) fn copy_or_terminal_mode(&self) -> ClientShellMode {
-        if self.copy_mode.as_ref().is_some_and(|copy_mode| {
-            self.focused_pane_id().as_deref() == Some(copy_mode.pane_id.as_str())
-        }) {
-            ClientShellMode::Copy
-        } else {
-            ClientShellMode::Terminal
-        }
-    }
-
-    fn route_navigate_key(
-        &mut self,
-        key: &crate::input::TerminalKey,
-        outcome: &mut ClientShellInput,
-    ) {
-        use crate::input::{KeybindAction, KeybindDispatch, KeybindMatch};
-
-        if key.code == KeyCode::Esc
-            || crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix)
-        {
-            self.mode = self.copy_or_terminal_mode();
-            self.navigate_workspace_id = None;
-            outcome.repaint = true;
-            return;
-        }
-
-        if self
-            .config
-            .keybinds
-            .keybinds
-            .navigate
-            .workspace_up
-            .matches_direct_key(key)
-        {
-            self.move_navigate_workspace(-1);
-            outcome.repaint = true;
-            return;
-        }
-        if self
-            .config
-            .keybinds
-            .keybinds
-            .navigate
-            .workspace_down
-            .matches_direct_key(key)
-        {
-            self.move_navigate_workspace(1);
-            outcome.repaint = true;
-            return;
-        }
-
-        if let Some(index) = ('1'..='9').position(|digit| {
-            crate::config::terminal_key_matches_combo(
-                key,
-                (KeyCode::Char(digit), KeyModifiers::empty()),
-            )
-        }) {
-            let valid = self.snapshot.as_deref().is_some_and(|snapshot| {
-                self.navigation_workspace_entries(snapshot)
-                    .get(index)
-                    .is_some()
-            });
-            if valid {
-                self.mode = ClientShellMode::Terminal;
-                self.navigate_workspace_id = None;
-                self.record_binding(
-                    KeybindMatch::Action(KeybindAction::SwitchWorkspace(index)),
-                    outcome,
-                );
-                outcome.repaint = true;
-            }
-            return;
-        }
-
-        let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
-        if modifiers.is_empty() {
-            match code {
-                KeyCode::Enter => {
-                    let selected = self.navigate_workspace_id.clone();
-                    self.mode = ClientShellMode::Terminal;
-                    self.navigate_workspace_id = None;
-                    if let Some(workspace_id) = selected {
-                        self.push_endpoint_method(
-                            crate::api::schema::Method::WorkspaceFocus(
-                                crate::api::schema::WorkspaceTarget { workspace_id },
-                            ),
-                            outcome,
-                        );
-                    }
-                    outcome.repaint = true;
-                    return;
-                }
-                KeyCode::Tab => {
-                    self.record_navigate_binding(
-                        KeybindMatch::Action(KeybindAction::CyclePaneNext),
-                        false,
-                        outcome,
-                    );
-                    return;
-                }
-                KeyCode::BackTab => {
-                    self.record_navigate_binding(
-                        KeybindMatch::Action(KeybindAction::CyclePanePrevious),
-                        false,
-                        outcome,
-                    );
-                    return;
-                }
-                KeyCode::Left => {
-                    self.record_navigate_binding(
-                        KeybindMatch::Action(KeybindAction::FocusPaneLeft),
-                        true,
-                        outcome,
-                    );
-                    return;
-                }
-                KeyCode::Right => {
-                    self.record_navigate_binding(
-                        KeybindMatch::Action(KeybindAction::FocusPaneRight),
-                        true,
-                        outcome,
-                    );
-                    return;
-                }
-                _ => {}
-            }
-        }
-
-        let pane_action = [
-            (
-                &self.config.keybinds.keybinds.navigate.pane_left,
-                KeybindAction::FocusPaneLeft,
-            ),
-            (
-                &self.config.keybinds.keybinds.navigate.pane_down,
-                KeybindAction::FocusPaneDown,
-            ),
-            (
-                &self.config.keybinds.keybinds.navigate.pane_up,
-                KeybindAction::FocusPaneUp,
-            ),
-            (
-                &self.config.keybinds.keybinds.navigate.pane_right,
-                KeybindAction::FocusPaneRight,
-            ),
-        ]
-        .into_iter()
-        .find_map(|(bindings, action)| bindings.matches_direct_key(key).then_some(action));
-        if let Some(action) = pane_action {
-            self.record_navigate_binding(KeybindMatch::Action(action), true, outcome);
-            return;
-        }
-
-        let binding = crate::input::resolve_non_indexed_action(
-            &self.config.keybinds.keybinds,
-            key,
-            KeybindDispatch::Prefix,
-        )
-        .filter(|action| {
-            !matches!(
-                action,
-                KeybindAction::FocusPaneLeft
-                    | KeybindAction::FocusPaneDown
-                    | KeybindAction::FocusPaneUp
-                    | KeybindAction::FocusPaneRight
-            )
-        })
-        .map(KeybindMatch::Action)
-        .or_else(|| {
-            crate::input::resolve_custom_command(
-                &self.config.keybinds.keybinds,
-                key,
-                KeybindDispatch::Prefix,
-            )
-            .map(KeybindMatch::Command)
-        })
-        .or_else(|| {
-            crate::input::resolve_indexed_action(
-                &self.config.keybinds.keybinds,
-                key,
-                KeybindDispatch::Prefix,
-            )
-            .map(KeybindMatch::Action)
-        });
-        if let Some(binding) = binding {
-            self.record_navigate_binding(binding, false, outcome);
-        }
-    }
-
-    fn record_navigate_binding(
-        &mut self,
-        binding: crate::input::KeybindMatch,
-        preserve_navigate: bool,
-        outcome: &mut ClientShellInput,
-    ) {
-        use crate::input::{KeybindAction, KeybindMatch};
-
-        if !self.indexed_navigation_target_exists(&binding) {
-            return;
-        }
-
-        if let KeybindMatch::Action(KeybindAction::CyclePaneNext) = binding {
-            self.cycle_pane(false, outcome);
-        } else if let KeybindMatch::Action(KeybindAction::CyclePanePrevious) = binding {
-            self.cycle_pane(true, outcome);
-        } else {
-            if !preserve_navigate {
-                self.mode = ClientShellMode::Terminal;
-            }
-            self.record_binding(binding, outcome);
-        }
-        if !preserve_navigate {
-            if self.mode == ClientShellMode::Navigate {
-                self.mode = self.copy_or_terminal_mode();
-            }
-            self.navigate_workspace_id = None;
-        }
-        outcome.repaint = true;
-    }
-
-    pub(super) fn indexed_navigation_target_exists(
-        &self,
-        binding: &crate::input::KeybindMatch,
-    ) -> bool {
-        use crate::input::{KeybindAction, KeybindMatch};
-
-        match binding {
-            KeybindMatch::Action(KeybindAction::SwitchWorkspace(index)) => {
-                self.snapshot.as_deref().is_some_and(|snapshot| {
-                    self.navigation_workspace_entries(snapshot)
-                        .get(*index)
-                        .is_some()
-                })
-            }
-            KeybindMatch::Action(KeybindAction::SwitchTab(index)) => self
-                .snapshot
-                .as_deref()
-                .and_then(|snapshot| {
-                    let workspace_id = snapshot.focused_workspace_id.as_deref()?;
-                    snapshot
-                        .tabs
-                        .iter()
-                        .filter(|tab| tab.workspace_id == workspace_id)
-                        .nth(*index)
-                })
-                .is_some(),
-            KeybindMatch::Action(KeybindAction::FocusAgent(index)) => {
-                super::aggregate_navigation::online_agent_targets(
-                    &self.endpoints,
-                    self.config.agent_panel_sort,
-                )
-                .get(*index)
-                .is_some()
-            }
-            _ => true,
-        }
-    }
-
-    fn move_navigate_workspace(&mut self, delta: isize) {
-        let Some(snapshot) = self.snapshot.as_deref() else {
-            return;
-        };
-        let entries = self.navigation_workspace_entries(snapshot);
-        if entries.is_empty() {
-            return;
-        }
-        let current = self
-            .navigate_workspace_id
-            .as_deref()
-            .and_then(|selected| {
-                entries
-                    .iter()
-                    .position(|entry| snapshot.workspaces[entry.index].workspace_id == selected)
-            })
-            .unwrap_or(0);
-        let next = (current as isize + delta).rem_euclid(entries.len() as isize) as usize;
-        let workspace_id = snapshot.workspaces[entries[next].index]
-            .workspace_id
-            .clone();
-        self.navigate_workspace_id = Some(workspace_id);
-    }
-
-    fn cycle_pane(&mut self, reverse: bool, outcome: &mut ClientShellInput) {
-        let Some(snapshot) = self.snapshot.as_deref() else {
-            return;
-        };
-        let Some(surface) = self.pane_surface.as_ref() else {
-            return;
-        };
-        if surface.panes.is_empty() {
-            return;
-        }
-        let current = snapshot
-            .focused_pane_id
-            .as_deref()
-            .and_then(|focused| {
-                surface
-                    .panes
-                    .iter()
-                    .position(|pane| pane.pane_id == focused)
-            })
-            .unwrap_or(0);
-        let next = if reverse {
-            (current + surface.panes.len() - 1) % surface.panes.len()
-        } else {
-            (current + 1) % surface.panes.len()
-        };
-        let pane_id = surface.panes[next].pane_id.clone();
-        self.push_endpoint_method(
-            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget { pane_id }),
-            outcome,
-        );
-    }
-
-    fn route_resize_key(
-        &mut self,
-        key: &crate::input::TerminalKey,
-        outcome: &mut ClientShellInput,
-    ) {
-        let resize_bindings = &self.config.keybinds.keybinds.resize_mode;
-        if key.code == KeyCode::Esc
-            || key.code == KeyCode::Enter
-            || resize_bindings.matches_prefix_key(key)
-            || resize_bindings.matches_direct_key(key)
-        {
-            self.mode = self.copy_or_terminal_mode();
-            outcome.repaint = true;
-            return;
-        }
-
-        let action = match key.code {
-            KeyCode::Char('h') | KeyCode::Left => Some(crate::input::KeybindAction::ResizePaneLeft),
-            KeyCode::Char('j') | KeyCode::Down => Some(crate::input::KeybindAction::ResizePaneDown),
-            KeyCode::Char('k') | KeyCode::Up => Some(crate::input::KeybindAction::ResizePaneUp),
-            KeyCode::Char('l') | KeyCode::Right => {
-                Some(crate::input::KeybindAction::ResizePaneRight)
-            }
-            _ => None,
-        };
-        if let Some(action) = action {
-            self.record_binding(crate::input::KeybindMatch::Action(action), outcome);
-        }
+        self.focused_pane_id().map(ClientInputTarget::Pane)
     }
 
     fn input_context(&self) -> ClientInputContext {
         ClientInputContext {
-            mode: self.mode,
-            overlay: self.overlay.as_ref().map(ClientShellOverlay::kind),
             popup_terminal_id: self.popup_input_target().and_then(|target| match target {
                 ClientInputTarget::Popup(terminal_id) => Some(terminal_id),
                 ClientInputTarget::Pane(_) => None,
             }),
-            popup_pending: self.popup_pending,
             retained_selection: self
                 .selection
                 .as_ref()

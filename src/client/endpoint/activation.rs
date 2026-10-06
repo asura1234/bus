@@ -19,7 +19,6 @@ impl PendingEndpointActivation {
         shell: &crate::client::shell::ClientShellState,
         endpoints: &mut EndpointRegistry,
         target: ClientEndpointId,
-        focus: Option<crate::client::shell::ClientEndpointFocusTarget>,
         resize: crate::protocol::ClientMessage,
         serial: u64,
         now: Instant,
@@ -58,7 +57,7 @@ impl PendingEndpointActivation {
         }
 
         let source_is_target = source.endpoint_id == target_lease.endpoint_id;
-        // Validate every typed lifecycle and optional focus envelope before the first transport
+        // Validate every typed lifecycle envelope before the first transport
         // write. Any error above this line is guaranteed not to have changed either endpoint.
         let source_release_request = (source_available && !source_is_target)
             .then(|| {
@@ -76,21 +75,12 @@ impl PendingEndpointActivation {
             true,
         )
         .map_err(|error| ActivationBeginError::Preflight(error.to_string()))?;
-        if let Some(target) = focus.as_ref() {
-            focus_request(
-                &target_lease.boot_id,
-                format!("client-shell-focus:{serial}:1"),
-                target,
-            )
-            .map_err(|error| ActivationBeginError::Preflight(error.to_string()))?;
-        }
 
         endpoints.freeze_input();
         let mut activation = Self {
             source,
             source_available,
             target: target_lease,
-            focus,
             host_focused: shell.host_focus_baseline(),
             resize: resize.clone(),
             phase: ActivationPhase::ReleasingSource {
@@ -98,7 +88,6 @@ impl PendingEndpointActivation {
             },
             deadline: now + ACTIVATION_TIMEOUT,
             epoch: serial,
-            next_focus_serial: 0,
             rollback_error: None,
             successor: None,
         };
@@ -179,13 +168,9 @@ impl PendingEndpointActivation {
     pub(crate) fn supersede(
         &mut self,
         endpoint_id: ClientEndpointId,
-        target: Option<crate::client::shell::ClientEndpointFocusTarget>,
         endpoints: &mut EndpointRegistry,
     ) -> ActivationRollback {
-        self.successor = Some(EndpointActivationIntent {
-            endpoint_id,
-            target,
-        });
+        self.successor = Some(EndpointActivationIntent { endpoint_id });
         // Source-on is already ordered and must finish before any replacement is allowed to
         // begin. Later rapid selections only replace the retained intent; they never turn a
         // safe restoration into an unavailable state.
@@ -230,11 +215,10 @@ impl PendingEndpointActivation {
             }
             ActivationPhase::ActivatingTarget {
                 request_id: expected,
-                focus_request_id,
                 ..
             } => {
                 endpoint_matches(&self.target, endpoint_id, generation, boot_id)
-                    && (expected == request_id || focus_request_id.as_deref() == Some(request_id))
+                    && expected == request_id
             }
             ActivationPhase::ReleasingTargetForRollback {
                 request_id: expected,
@@ -319,37 +303,6 @@ impl PendingEndpointActivation {
                     }
                 };
                 *acknowledged_revision = Some(revision);
-                self.progress()
-            }
-            ActivationPhase::ActivatingTarget {
-                focus_request_id,
-                focus_request_target,
-                focus_acknowledged,
-                ..
-            } if focus_request_id.as_deref() == Some(request_id) => {
-                let requested = focus_request_target.clone();
-                let Some(requested) = requested else {
-                    return SurfaceActivationProgress::Stale;
-                };
-                if !focus_result_matches(Some(&requested), &result) {
-                    return SurfaceActivationProgress::Rejected {
-                        message: "endpoint focus returned an unexpected result".into(),
-                        source_release_rejected: false,
-                    };
-                }
-                *focus_request_id = None;
-                *focus_request_target = None;
-                if self.focus != Some(requested) {
-                    *focus_acknowledged = false;
-                    if let Err(message) = self.send_latest_focus(endpoints) {
-                        return SurfaceActivationProgress::Rejected {
-                            message,
-                            source_release_rejected: false,
-                        };
-                    }
-                    return self.progress();
-                }
-                *focus_acknowledged = true;
                 self.progress()
             }
             ActivationPhase::ReleasingTargetForRollback { .. } => {
@@ -499,29 +452,6 @@ impl PendingEndpointActivation {
         }
         *ready = true;
         SurfaceActivationProgress::Ready
-    }
-
-    /// A same-endpoint navigation request replaces the desired target but never joins the
-    /// in-flight focus RPC. Once that request resolves, `send_latest_focus` sends only the most
-    /// recent desired target.
-    pub(crate) fn retarget(
-        &mut self,
-        focus: Option<crate::client::shell::ClientEndpointFocusTarget>,
-        endpoints: &mut EndpointRegistry,
-    ) -> Result<(), String> {
-        self.focus = focus;
-        if let ActivationPhase::ActivatingTarget {
-            focus_request_id,
-            focus_acknowledged,
-            ..
-        } = &mut self.phase
-        {
-            *focus_acknowledged = self.focus.is_none() && focus_request_id.is_none();
-        } else {
-            // The latest target is retained and will be sent immediately after source release.
-            return Ok(());
-        }
-        self.send_latest_focus(endpoints)
     }
 
     pub(crate) fn update_resize(
@@ -833,9 +763,6 @@ impl PendingEndpointActivation {
         self.phase = ActivationPhase::ActivatingTarget {
             request_id: request_id.clone(),
             acknowledged_revision: None,
-            focus_request_id: None,
-            focus_request_target: None,
-            focus_acknowledged: self.focus.is_none(),
             evidence: ActivationEvidence::default(),
         };
         send_surface_activation(
@@ -844,11 +771,7 @@ impl PendingEndpointActivation {
             request_id,
             &resize,
             self.host_focused,
-        )?;
-
-        // From this point the target may have processed surface.set(true). Optional navigation
-        // is serialized through one coalescing focus lane.
-        self.send_latest_focus(endpoints)
+        )
     }
 
     fn start_presentation_sync(
@@ -933,73 +856,16 @@ impl PendingEndpointActivation {
         )
     }
 
-    fn send_latest_focus(&mut self, endpoints: &mut EndpointRegistry) -> Result<(), String> {
-        let desired = self.focus.clone();
-        let Some(desired) = desired else {
-            if let ActivationPhase::ActivatingTarget {
-                focus_request_id,
-                focus_acknowledged,
-                ..
-            } = &mut self.phase
-            {
-                if focus_request_id.is_none() {
-                    *focus_acknowledged = true;
-                }
-            }
-            return Ok(());
-        };
-        if !matches!(
-            &self.phase,
-            ActivationPhase::ActivatingTarget {
-                focus_request_id: None,
-                ..
-            }
-        ) {
-            return Ok(());
-        }
-        let request_id = self
-            .next_focus_request_id()
-            .expect("desired focus creates a request id");
-        if let ActivationPhase::ActivatingTarget {
-            focus_request_id,
-            focus_request_target,
-            focus_acknowledged,
-            ..
-        } = &mut self.phase
-        {
-            *focus_acknowledged = false;
-            *focus_request_id = Some(request_id.clone());
-            *focus_request_target = Some(desired.clone());
-        }
-        let request = focus_request(&self.target.boot_id, request_id, &desired)
-            .map_err(|error| error.to_string())?;
-        if endpoints.send_to(&self.target.endpoint_id, &request) != EndpointSendOutcome::Sent {
-            return Err("endpoint focus could not be sent".into());
-        }
-        Ok(())
-    }
-
-    fn next_focus_request_id(&mut self) -> Option<String> {
-        self.focus.as_ref()?;
-        self.next_focus_serial = self.next_focus_serial.saturating_add(1);
-        Some(format!(
-            "client-shell-focus:{}:{}",
-            self.epoch, self.next_focus_serial
-        ))
-    }
-
     fn progress(&self) -> SurfaceActivationProgress {
         match &self.phase {
             ActivationPhase::ActivatingTarget {
                 acknowledged_revision,
-                focus_acknowledged,
                 evidence,
                 ..
             } if acknowledged_revision.is_some_and(|revision| {
-                *focus_acknowledged
-                    && evidence
-                        .coherent_surface(revision, self.geometry())
-                        .is_some_and(|surface| self.target_matches(surface))
+                evidence
+                    .coherent_surface(revision, self.geometry())
+                    .is_some()
             }) =>
             {
                 SurfaceActivationProgress::Ready
@@ -1022,29 +888,6 @@ impl PendingEndpointActivation {
                 SurfaceActivationProgress::Ready
             }
             _ => SurfaceActivationProgress::Pending,
-        }
-    }
-
-    fn target_matches(&self, surface: &crate::protocol::PaneSurfaceFrame) -> bool {
-        let evidence = match &self.phase {
-            ActivationPhase::ActivatingTarget { evidence, .. } => evidence,
-            _ => return false,
-        };
-        match &self.focus {
-            Some(crate::client::shell::ClientEndpointFocusTarget::Pane(pane_id)) => {
-                evidence.focused_pane_id.as_deref() == Some(pane_id)
-                    && surface
-                        .panes
-                        .iter()
-                        .any(|pane| pane.focused && &pane.pane_id == pane_id)
-            }
-            Some(crate::client::shell::ClientEndpointFocusTarget::Tab(tab_id)) => {
-                evidence.focused_tab_id.as_deref() == Some(tab_id)
-            }
-            Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(workspace_id)) => {
-                evidence.focused_workspace_id.as_deref() == Some(workspace_id)
-            }
-            None => true,
         }
     }
 }

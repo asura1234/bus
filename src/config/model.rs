@@ -69,14 +69,7 @@ pub enum StatusIndicatorStyle {
     Symbols,
 }
 
-impl StatusIndicatorStyle {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Dots => "dots",
-            Self::Symbols => "symbols",
-        }
-    }
-}
+impl StatusIndicatorStyle {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -152,14 +145,7 @@ fn parse_right_click_passthrough_modifier(value: &str) -> Option<Option<KeyModif
 pub struct ToastConfig {
     pub delivery: ToastDelivery,
     pub delay_seconds: u64,
-    pub herdr: HerdrToastConfig,
     pub clipboard: ClipboardToastConfig,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default)]
-pub struct HerdrToastConfig {
-    pub position: ToastHerdrPosition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -1137,16 +1123,7 @@ impl Default for ToastConfig {
         Self {
             delivery: ToastDelivery::Off,
             delay_seconds: 1,
-            herdr: HerdrToastConfig::default(),
             clipboard: ClipboardToastConfig::default(),
-        }
-    }
-}
-
-impl Default for HerdrToastConfig {
-    fn default() -> Self {
-        Self {
-            position: ToastHerdrPosition::BottomRight,
         }
     }
 }
@@ -1171,7 +1148,6 @@ impl<'de> Deserialize<'de> for ToastConfig {
             delivery: Option<ToastDelivery>,
             enabled: Option<bool>,
             delay_seconds: Option<u64>,
-            herdr: HerdrToastConfig,
             clipboard: ClipboardToastConfig,
         }
 
@@ -1191,7 +1167,6 @@ impl<'de> Deserialize<'de> for ToastConfig {
         Ok(Self {
             delivery,
             delay_seconds,
-            herdr: raw.herdr,
             clipboard: raw.clipboard,
         })
     }
@@ -1708,9 +1683,6 @@ mouse_scroll_lines = 0
 delivery = "terminal"
 delay_seconds = 2
 
-[ui.toast.herdr]
-position = "top-left"
-
 [ui.toast.clipboard]
 enabled = false
 position = "top-center"
@@ -1718,7 +1690,6 @@ position = "top-center"
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.toast.delivery, ToastDelivery::Terminal);
         assert_eq!(config.ui.toast.delay_seconds, 2);
-        assert_eq!(config.ui.toast.herdr.position, ToastHerdrPosition::TopLeft);
         assert!(!config.ui.toast.clipboard.enabled);
         assert_eq!(
             config.ui.toast.clipboard.position,
@@ -1731,10 +1702,6 @@ position = "top-center"
         let config = Config::default();
         assert_eq!(config.ui.toast.delivery, ToastDelivery::Off);
         assert_eq!(config.ui.toast.delay_seconds, 1);
-        assert_eq!(
-            config.ui.toast.herdr.position,
-            ToastHerdrPosition::BottomRight
-        );
         assert!(config.ui.toast.clipboard.enabled);
         assert_eq!(
             config.ui.toast.clipboard.position,
@@ -1796,18 +1763,6 @@ delay_seconds = {}
         let error = toml::from_str::<Config>(&toml).unwrap_err().to_string();
 
         assert!(error.contains("ui.toast.delay_seconds must be between 0 and 3600"));
-    }
-
-    #[test]
-    fn missing_onboarding_shows_setup() {
-        let config = Config::default();
-        assert!(config.should_show_onboarding());
-    }
-
-    #[test]
-    fn onboarding_false_skips_setup() {
-        let config: Config = toml::from_str("onboarding = false").unwrap();
-        assert!(!config.should_show_onboarding());
     }
 
     #[test]

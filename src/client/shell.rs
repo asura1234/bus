@@ -1,83 +1,44 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 mod actions;
 mod agent_sidebar;
-mod aggregate_navigation;
 mod bus;
 mod composition;
 mod config;
-mod context_menu;
-mod copy_mode;
 mod endpoint_agent_state;
 mod endpoint_agents;
-mod endpoint_navigation;
 mod endpoint_notices;
 mod endpoints;
 pub(super) use endpoints::*;
 mod graphics;
 mod input;
-mod input_source;
 mod mouse;
-mod notification_policy;
-mod notifications;
-mod overlay_input;
-mod preferences;
 mod render;
-mod settings;
 mod state;
 mod surface_patch;
-mod worktrees;
 
 pub(crate) use state::*;
 #[cfg(test)]
 pub(super) use surface_patch::apply_composed_surface_patch;
 pub(super) use surface_patch::{ClientComposedSurfacePatch, ClientPaneSurfacePatchOutcome};
 
-use crossterm::event::KeyCode;
 #[cfg(test)]
 use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use unicode_width::UnicodeWidthStr;
 
 use super::endpoint::{ClientEndpointId, ClientEndpointStatus};
 use crate::app::state::Palette;
-use crate::config::{
-    Config, LiveKeybindConfig, SidebarCollapsedModeConfig, SpacesSidebarConfig,
-    TabBarPositionConfig,
-};
+use crate::config::Config;
 use crate::protocol::{
     ClientMessage, ClientMousePosition, ClientPaneInputEvent, ClientShellSnapshot,
-    ClientSurfaceSize, FrameData, PaneSurfaceFrame, SemanticNotification, SemanticNotificationKind,
-    SemanticNotificationSound,
+    ClientSurfaceSize, FrameData, PaneSurfaceFrame,
 };
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
-
-fn delete_overlay_word(rename: &mut ClientRenameOverlay) {
-    if rename.replace_on_type {
-        rename.input.clear();
-        rename.replace_on_type = false;
-        return;
-    }
-    while rename.input.chars().last().is_some_and(char::is_whitespace) {
-        rename.input.pop();
-    }
-    let Some(word) = rename
-        .input
-        .chars()
-        .last()
-        .map(|character| character.is_alphanumeric() || character == '_')
-    else {
-        return;
-    };
-    while rename.input.chars().last().is_some_and(|character| {
-        !character.is_whitespace() && (character.is_alphanumeric() || character == '_') == word
-    }) {
-        rename.input.pop();
-    }
-}
+#[cfg(test)]
+use crossterm::event::KeyCode;
 
 fn target_event_message(target: ClientInputTarget, event: ClientPaneInputEvent) -> ClientMessage {
     match target {
@@ -187,31 +148,6 @@ fn pane_surface_topology_signature(surface: &PaneSurfaceFrame) -> u64 {
     hash
 }
 
-fn status_icon(
-    status: crate::api::schema::AgentStatus,
-    style: crate::config::StatusIndicatorStyle,
-) -> &'static str {
-    use crate::api::schema::AgentStatus;
-    use crate::config::StatusIndicatorStyle;
-    match (style, status) {
-        (
-            StatusIndicatorStyle::Dots,
-            AgentStatus::Working | AgentStatus::Blocked | AgentStatus::Done,
-        ) => "●",
-        (StatusIndicatorStyle::Dots, AgentStatus::Idle) => "○",
-        (StatusIndicatorStyle::Dots, AgentStatus::Unknown) => "·",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Blocked) => "×",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Working) => "◐",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Done) => "✓",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Idle) => "○",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Unknown) => "·",
-    }
-}
-
-fn status_dot(status: crate::api::schema::AgentStatus) -> &'static str {
-    status_icon(status, crate::config::StatusIndicatorStyle::Dots)
-}
-
 fn status_priority(status: crate::api::schema::AgentStatus) -> u8 {
     use crate::api::schema::AgentStatus;
     match status {
@@ -220,27 +156,6 @@ fn status_priority(status: crate::api::schema::AgentStatus) -> u8 {
         AgentStatus::Working => 2,
         AgentStatus::Idle => 1,
         AgentStatus::Unknown => 0,
-    }
-}
-
-fn status_color(
-    status: crate::api::schema::AgentStatus,
-    palette: &Palette,
-) -> ratatui::style::Color {
-    use crate::api::schema::AgentStatus;
-    match status {
-        AgentStatus::Working => palette.yellow,
-        AgentStatus::Blocked => palette.red,
-        AgentStatus::Done => palette.teal,
-        AgentStatus::Idle => palette.green,
-        AgentStatus::Unknown => palette.overlay0,
-    }
-}
-
-fn panel_contrast_fg(palette: &Palette) -> ratatui::style::Color {
-    match palette.panel_bg {
-        ratatui::style::Color::Reset => palette.surface_dim,
-        color => color,
     }
 }
 

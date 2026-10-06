@@ -277,13 +277,6 @@ pub(crate) fn client_theme_runtime_from_config(config: &Config) -> state::ThemeR
     theme_runtime_config(config, true)
 }
 
-pub(crate) fn client_palette_for_theme(
-    runtime: &state::ThemeRuntimeConfig,
-    name: &str,
-) -> state::Palette {
-    resolve_palette_for_theme_name(name, "catppuccin", runtime, None)
-}
-
 pub(crate) fn client_palette_from_config(config: &Config) -> state::Palette {
     let runtime = client_theme_runtime_from_config(config);
     resolve_effective_theme(&runtime, None).0
@@ -737,7 +730,7 @@ mod tests {
     use crate::config::Config;
     use crate::detect::{Agent, AgentState};
     use crate::workspace::Workspace;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::KeyCode;
     use std::sync::Mutex;
 
     fn test_app() -> App {
@@ -1220,57 +1213,6 @@ mod tests {
     }
 
     #[test]
-    fn reload_config_updates_live_state() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("reload-config-success");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nnew_workspace = \"prefix+m\"\nprefix = \"ctrl+a\"\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"herdr\"\n",
-        )
-        .unwrap();
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        let mut app = test_app();
-        let report = app.reload_config();
-
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
-        assert_eq!(app.state.headless_size, (160, 50));
-        assert_eq!(app.state.prefix_code, KeyCode::Char('a'));
-        assert_eq!(app.state.prefix_mods, KeyModifiers::CONTROL);
-        assert!(app
-            .state
-            .keybinds
-            .new_workspace
-            .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
-        assert_eq!(
-            app.state.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
-        );
-        assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
-        let report = app.reload_config();
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
-        assert!(app.state.request_client_config_reload);
-        assert_eq!(app.state.default_shell, "nu");
-        assert_eq!(
-            app.state.shell_mode,
-            crate::config::ShellModeConfig::NonLogin
-        );
-        assert_eq!(
-            app.state.new_terminal_cwd,
-            crate::config::NewTerminalCwdConfig::Home
-        );
-        assert!(app.state.config_diagnostic.is_none());
-        let toast = app.state.toast.as_ref().unwrap();
-        assert_eq!(toast.kind, crate::app::state::ToastKind::UpdateInstalled);
-        assert_eq!(toast.title, "reloaded config");
-        assert_eq!(toast.context, "using config.toml");
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
     fn reload_config_keeps_kitty_graphics_until_restart() {
         let _guard = config_env_lock().lock().unwrap();
         let path = temp_config_path("reload-config-kitty-graphics");
@@ -1506,70 +1448,6 @@ mod tests {
             Some("config.toml has unknown keys; herdr config check")
         );
 
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn reload_config_user_binding_displaces_default_without_rejecting_prefix() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("reload-config-user-binding-displaces-default");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            "[keys]\nprefix = \"ctrl+space\"\nprevious_workspace = \"prefix+shift+l\"\n",
-        )
-        .unwrap();
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        let mut app = test_app();
-        let report = app.reload_config();
-
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
-        assert_eq!(app.state.prefix_code, KeyCode::Char(' '));
-        assert_eq!(app.state.prefix_mods, KeyModifiers::CONTROL);
-        assert!(app
-            .state
-            .keybinds
-            .previous_workspace
-            .matches_prefix(&KeyEvent::new(KeyCode::Char('l'), KeyModifiers::SHIFT)));
-        assert!(app.state.keybinds.swap_pane_right.bindings.is_empty());
-        assert!(app.state.config_diagnostic.is_none());
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn reload_config_preserves_invalid_ui_section_but_applies_valid_keys() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("reload-config-invalid-ui-section");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            &path,
-            "[keys]\nnew_workspace = \"prefix+m\"\n[ui.toast]\ndelivery = \"desktop\"\n",
-        )
-        .unwrap();
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-        let report = app.reload_config();
-
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
-        assert!(report
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("invalid ui config")));
-        assert!(app
-            .state
-            .keybinds
-            .new_workspace
-            .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
-        assert_eq!(
-            app.state.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
-        );
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }

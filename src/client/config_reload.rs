@@ -10,7 +10,6 @@ pub(super) fn apply_reload(
     pending_activation: &mut Option<endpoint::PendingEndpointActivation>,
     host_mouse_capture_active: &std::sync::atomic::AtomicBool,
     host_sgr_pixels_active: &std::sync::atomic::AtomicBool,
-    prefix_input_source: &mut impl crate::platform::PrefixInputSource,
 ) -> Result<(), ClientError> {
     let previous_mouse_capture = state.shell_mouse_capture_preference;
     let mut mouse_capture = previous_mouse_capture;
@@ -72,7 +71,6 @@ pub(super) fn apply_reload(
     } else {
         (None, None)
     };
-    apply_client_shell_input_source_changes(state, prefix_input_source);
     if let Some(resize) = resize {
         if let Some(activation) = pending_activation.as_mut() {
             if let Err(error) = activation.update_resize(resize, endpoints) {

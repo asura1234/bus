@@ -58,24 +58,16 @@ fn fast_path_blocker(
     state: &ClientShellState,
     patch: &crate::protocol::PaneSurfacePatch,
 ) -> Option<&'static str> {
-    if state.mode != ClientShellMode::Terminal {
-        Some("client_surface_patch.fallback.mode")
-    } else if state.overlay.is_some() {
-        Some("client_surface_patch.fallback.overlay")
-    } else if state.endpoint_error.is_some() {
+    if state.endpoint_error.is_some() {
         Some("client_surface_patch.fallback.endpoint_error")
     } else if state.config_diagnostic.is_some() {
         Some("client_surface_patch.fallback.config_diagnostic")
     } else if state.visible_endpoint_notice.is_some() {
         Some("client_surface_patch.fallback.endpoint_notice")
-    } else if state.visible_notification.is_some() {
-        Some("client_surface_patch.fallback.notification")
     } else if state.copy_feedback.is_some() {
         Some("client_surface_patch.fallback.copy_feedback")
     } else if state.selection.is_some() {
         Some("client_surface_patch.fallback.selection")
-    } else if state.copy_mode.is_some() {
-        Some("client_surface_patch.fallback.copy_mode")
     } else if state.selection_highlight_clear_deadline.is_some() {
         Some("client_surface_patch.fallback.selection_deadline")
     } else if patch.panes.iter().any(|pane| {
@@ -239,7 +231,6 @@ impl ClientShellState {
                     }
                 }
             }
-            self.reconcile_input_source();
         } else {
             let mut next = current.clone();
             if !apply_patch_to_surface(&mut next, &patch) {

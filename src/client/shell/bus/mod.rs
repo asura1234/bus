@@ -87,7 +87,6 @@ impl super::ClientShellState {
                 crate::bus::diagnostics::EXISTING_SERVER_NOTICE
             );
         }
-        self.overlay = None;
         self.bus = Some(bus);
         Ok(())
     }

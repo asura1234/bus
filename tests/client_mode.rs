@@ -687,14 +687,11 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     );
 
     let detach_watermark = output_len(&output_a);
-    client_a
-        ._master
-        .as_ref()
-        .expect("first client shell PTY")
-        .take_writer()
-        .expect("first client shell writer")
-        .write_all(b"\x02q")
-        .expect("detach first client shell");
+    // There are no client-owned keybindings; terminate the client the way a closed tab would.
+    let client_a_pid = client_a.child.process_id().expect("first client shell pid");
+    unsafe {
+        libc::kill(client_a_pid as libc::pid_t, libc::SIGTERM);
+    }
     let detach_output = drain_until_client_exits(&mut client_a, &output_a, detach_watermark);
     assert!(
         output_has_mouse_teardown(&detach_output),

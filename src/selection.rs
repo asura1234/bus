@@ -56,6 +56,7 @@ impl<P> Selection<P> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn absolute_anchor(pane_id: P, anchor: (u32, u16)) -> Self {
         Self {
             pane_id,

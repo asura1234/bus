@@ -1,27 +1,6 @@
 use super::super::{ClientEndpointId, EndpointRegistry, EndpointSendOutcome};
 use super::model::{ActivationEvidence, EndpointLease};
 
-pub(super) fn focus_result_matches(
-    focus: Option<&crate::client::shell::ClientEndpointFocusTarget>,
-    result: &crate::api::schema::ResponseResult,
-) -> bool {
-    match (focus, result) {
-        (
-            Some(crate::client::shell::ClientEndpointFocusTarget::Pane(expected)),
-            crate::api::schema::ResponseResult::PaneInfo { pane },
-        ) => pane.focused && &pane.pane_id == expected,
-        (
-            Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(expected)),
-            crate::api::schema::ResponseResult::WorkspaceInfo { workspace },
-        ) => workspace.focused && &workspace.workspace_id == expected,
-        (
-            Some(crate::client::shell::ClientEndpointFocusTarget::Tab(expected)),
-            crate::api::schema::ResponseResult::TabInfo { tab },
-        ) => tab.focused && &tab.tab_id == expected,
-        _ => false,
-    }
-}
-
 pub(super) fn endpoint_lease(
     shell: &crate::client::shell::ClientShellState,
     endpoints: &EndpointRegistry,
@@ -158,37 +137,6 @@ pub(super) fn surface_set_revision(
         } if *active == expected_active => Ok(*projection_revision),
         _ => Err("surface activation returned an invalid acknowledgement".into()),
     }
-}
-
-pub(super) fn focus_request(
-    boot_id: &str,
-    request_id: String,
-    focus: &crate::client::shell::ClientEndpointFocusTarget,
-) -> std::io::Result<crate::protocol::ClientMessage> {
-    let method = match focus {
-        crate::client::shell::ClientEndpointFocusTarget::Workspace(workspace_id) => {
-            crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
-                workspace_id: workspace_id.clone(),
-            })
-        }
-        crate::client::shell::ClientEndpointFocusTarget::Pane(pane_id) => {
-            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
-                pane_id: pane_id.clone(),
-            })
-        }
-        crate::client::shell::ClientEndpointFocusTarget::Tab(tab_id) => {
-            crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
-                tab_id: tab_id.clone(),
-            })
-        }
-    };
-    endpoint_request(
-        boot_id,
-        crate::api::schema::Request {
-            id: request_id,
-            method,
-        },
-    )
 }
 
 pub(super) fn surface_interest_request(

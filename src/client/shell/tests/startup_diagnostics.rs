@@ -43,36 +43,6 @@ fn startup_config_diagnostics_are_client_rendered_and_persist_until_replaced() {
 }
 
 #[test]
-fn endpoint_reload_result_does_not_override_snapshot_diagnostic_authority() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    let mut endpoint_snapshot = snapshot();
-    endpoint_snapshot.config_diagnostic = Some("endpoint warning".into());
-    state.set_snapshot(Box::new(endpoint_snapshot));
-    state.pending_requests.insert(
-        "reload-1".into(),
-        PendingEndpointRequest {
-            boot_id: "boot-1".into(),
-            method_name: "server.reload_config".into(),
-            confirmation_workspace_id: None,
-            kind: PendingEndpointKind::ReloadConfig,
-        },
-    );
-
-    state.handle_endpoint_result(
-        "boot-1",
-        "reload-1",
-        Ok(crate::api::schema::ResponseResult::ConfigReload {
-            status: crate::config::ConfigReloadStatus::Partial,
-            diagnostics: vec!["keybinding warning".into()],
-        }),
-    );
-    assert_eq!(state.config_diagnostic.as_deref(), Some("endpoint warning"));
-
-    state.set_snapshot(Box::new(snapshot()));
-    assert!(state.config_diagnostic.is_none());
-}
-
-#[test]
 fn live_client_config_keeps_sound_diagnostics() {
     let mut shell_config = ClientShellConfig::from_config(&Config::default());
     let mut config = Config::default();

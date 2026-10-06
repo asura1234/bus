@@ -4,37 +4,6 @@ use tracing::{debug, warn};
 
 use crate::protocol::NotifyKind;
 
-use super::shell;
-
-pub(super) fn handle_shell_notification_effects(
-    effects: Vec<shell::ClientShellNotificationEffect>,
-    sound_config: &crate::config::SoundConfig,
-) {
-    for effect in effects {
-        match effect {
-            shell::ClientShellNotificationEffect::Sound { sound, agent } => {
-                let agent = agent.as_deref().and_then(crate::detect::parse_agent_label);
-                if sound_config.allows(agent) {
-                    crate::sound::play(sound, sound_config);
-                }
-            }
-            shell::ClientShellNotificationEffect::Terminal { title, body } => {
-                if let Err(err) = crate::terminal_notify::show_notification(&title, body.as_deref())
-                {
-                    warn!(err = %err, "failed to emit terminal notification");
-                }
-            }
-            shell::ClientShellNotificationEffect::System { title, body } => {
-                if let Err(err) =
-                    crate::platform::show_desktop_notification(&title, body.as_deref())
-                {
-                    warn!(err = %err, "failed to emit system notification");
-                }
-            }
-        }
-    }
-}
-
 pub(super) fn handle_notify(
     kind: NotifyKind,
     message: &str,

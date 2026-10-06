@@ -1,35 +1,6 @@
 use super::*;
 use crate::client::endpoint::ClientEndpointId;
 
-fn pending_popup() -> (ClientShellState, Vec<ClientShellAction>) {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    let binding = crate::config::CustomCommandKeybind {
-        bindings: crate::config::ActionKeybinds::prefix("t"),
-        label: "prefix+t".into(),
-        command: "popup-command".into(),
-        action: crate::config::CustomCommandAction::Popup,
-        description: None,
-        width: None,
-        height: None,
-    };
-    let mut projection = snapshot();
-    projection
-        .commands
-        .push(crate::protocol::ClientShellCommand {
-            command_id: "cmd_popup".into(),
-            binding_label: binding.label.clone(),
-            binding_labels: binding.bindings.labels(),
-            action: crate::protocol::ClientShellCommandAction::Popup,
-            description: None,
-        });
-    state.set_snapshot(Box::new(projection));
-    state.set_pane_surface(surface());
-    let mut outcome = ClientShellInput::default();
-    state.record_binding(crate::input::KeybindMatch::Command(binding), &mut outcome);
-    assert!(state.popup_pending);
-    (state, outcome.actions)
-}
-
 fn request_id(actions: &[ClientShellAction]) -> &str {
     let [ClientShellAction::Endpoint { request, .. }] = actions else {
         panic!("expected one endpoint request");
@@ -37,19 +8,15 @@ fn request_id(actions: &[ClientShellAction]) -> &str {
     &request.id
 }
 
-#[test]
-fn cancelling_popup_request_unblocks_input_and_ignores_late_success() {
-    let (mut state, actions) = pending_popup();
-    let id = request_id(&actions);
-    assert!(state.cancel_endpoint_request(id));
-    assert!(!state.popup_pending);
-    assert!(state.pending_requests.is_empty());
-    assert!(state
-        .handle_endpoint_result("boot-1", id, Ok(crate::api::schema::ResponseResult::Ok {}))
-        .1
-        .is_empty());
-    assert!(!state.popup_pending);
-    assert!(!state.handle_input_bytes(b"x").requests.is_empty());
+fn focus_workspace(state: &mut ClientShellState) -> Vec<ClientShellAction> {
+    let mut outcome = ClientShellInput::default();
+    state.push_endpoint_method(
+        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
+            workspace_id: "ws_1".into(),
+        }),
+        &mut outcome,
+    );
+    outcome.actions
 }
 
 struct TestTransport {
@@ -71,9 +38,11 @@ fn stale_queued_request_is_cancelled_without_blocking_the_current_generation() {
     use crate::client::endpoint::{EndpointNegotiation, EndpointRegistry};
     use crate::client::endpoint_commands::EndpointCommands;
 
-    let (mut state, actions) = pending_popup();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let actions = focus_workspace(&mut state);
     let stale_id = request_id(&actions).to_owned();
-    let current = state.focus_endpoint_target(ClientEndpointFocusTarget::Workspace("ws_1".into()));
+    let current = focus_workspace(&mut state);
     let current_id = request_id(&current).to_owned();
     let mut commands = EndpointCommands::default();
     for (generation, actions) in [(1, actions), (2, current)] {
@@ -97,7 +66,6 @@ fn stale_queued_request_is_cancelled_without_blocking_the_current_generation() {
     let cancelled = commands.send_next(&ClientEndpointId::Local, &mut endpoints);
     assert_eq!(cancelled, vec![stale_id.clone()]);
     state.cancel_endpoint_request(&stale_id);
-    assert!(!state.popup_pending);
     assert!(!commands.accepts_response(&ClientEndpointId::Local, 1, "boot-1", &stale_id));
     assert!(commands.accepts_response(&ClientEndpointId::Local, 2, "boot-1", &current_id));
     assert!(state.pending_requests.contains_key(&current_id));

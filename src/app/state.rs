@@ -940,18 +940,6 @@ impl AppState {
     }
 }
 
-#[cfg(test)]
-pub fn key_matches(
-    key: &crossterm::event::KeyEvent,
-    expected_code: KeyCode,
-    expected_mods: KeyModifiers,
-) -> bool {
-    crate::config::terminal_key_matches_combo(
-        &crate::input::TerminalKey::from(*key),
-        (expected_code, expected_mods),
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -1228,7 +1216,6 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyEvent;
 
     #[test]
     fn pane_size_estimate_uses_headless_size_before_first_view() {
@@ -1392,32 +1379,5 @@ mod tests {
                 "theme should resolve: {name}"
             );
         }
-    }
-
-    #[test]
-    fn key_matches_requires_exact_modifiers() {
-        assert!(key_matches(
-            &KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
-            KeyCode::Char('b'),
-            KeyModifiers::CONTROL,
-        ));
-
-        assert!(!key_matches(
-            &KeyEvent::new(
-                KeyCode::Char('b'),
-                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-            ),
-            KeyCode::Char('b'),
-            KeyModifiers::CONTROL,
-        ));
-    }
-
-    #[test]
-    fn key_matches_letters_case_insensitively() {
-        assert!(key_matches(
-            &KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT),
-            KeyCode::Char('b'),
-            KeyModifiers::SHIFT,
-        ));
     }
 }

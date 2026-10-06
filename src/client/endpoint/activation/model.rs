@@ -70,11 +70,6 @@ pub(super) enum ActivationPhase {
     ActivatingTarget {
         request_id: String,
         acknowledged_revision: Option<u64>,
-        /// At most one focus request may be in flight. Retargets only replace `focus` until
-        /// this response arrives, at which point the latest target is sent.
-        focus_request_id: Option<String>,
-        focus_request_target: Option<crate::client::shell::ClientEndpointFocusTarget>,
-        focus_acknowledged: bool,
         evidence: ActivationEvidence,
     },
     ReleasingTargetForRollback {
@@ -139,7 +134,6 @@ pub(crate) enum ActivationCompletion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EndpointActivationIntent {
     pub(crate) endpoint_id: ClientEndpointId,
-    pub(crate) target: Option<crate::client::shell::ClientEndpointFocusTarget>,
 }
 
 /// Begin failures are separated by whether the transport may already have observed a lifecycle
@@ -160,13 +154,11 @@ pub(crate) struct PendingEndpointActivation {
     pub(super) source: EndpointLease,
     pub(super) source_available: bool,
     pub(super) target: EndpointLease,
-    pub(super) focus: Option<crate::client::shell::ClientEndpointFocusTarget>,
     pub(super) host_focused: bool,
     pub(super) resize: crate::protocol::ClientMessage,
     pub(super) phase: ActivationPhase,
     pub(super) deadline: Instant,
     pub(super) epoch: u64,
-    pub(super) next_focus_serial: u64,
     pub(super) rollback_error: Option<String>,
     /// A different endpoint was selected while this source-off-first transaction was in flight.
     /// Keep only the latest intent until source restoration commits.

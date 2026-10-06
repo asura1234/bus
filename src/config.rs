@@ -8,23 +8,17 @@ mod sound;
 mod tab_bar;
 mod theme;
 mod window_title;
-mod write;
 
 pub use self::{
-    io::{
-        config_diagnostic_summary, config_dir, config_path, load_live_config, remove_section_key,
-        state_dir, upsert_section_bool, upsert_section_value,
-    },
+    io::{config_diagnostic_summary, config_dir, load_live_config, state_dir},
     keybinds::{
-        format_key_combo, normalize_key_combo, terminal_key_matches_combo, ActionKeybinds,
-        BindingConfig, CommandKeybindConfig, CustomCommandAction, CustomCommandKeybind,
-        IndexedKeybind, Keybinds, LiveKeybindConfig,
+        format_key_combo, ActionKeybinds, BindingConfig, CommandKeybindConfig, CustomCommandAction,
+        CustomCommandKeybind, IndexedKeybind, Keybinds, LiveKeybindConfig,
     },
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
         ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, PaneBordersConfig,
-        ShellModeConfig, SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
-        ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
+        ShellModeConfig, ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
         MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
@@ -33,12 +27,13 @@ pub use self::{
     },
     sound::SoundConfig,
     tab_bar::TabBarRightEntryConfig,
-    theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig, THEME_NAMES},
+    theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig},
     window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
 };
 
 pub(crate) use self::keybinds::parse_key_combo;
-pub(crate) use self::write::{write_edit, ConfigEdit};
+#[cfg(test)]
+pub(crate) use self::{io::config_path, theme::THEME_NAMES};
 pub(crate) use self::{
     tab_bar::{
         parse_tab_bar_datetime_format, tab_bar_right_diagnostics,
@@ -48,8 +43,6 @@ pub(crate) use self::{
     theme::canonical_theme_name,
     window_title::{sanitize_window_title_text, window_title_diagnostics},
 };
-
-pub(crate) use self::{keybinds::CommandKeybindType, model::KeysConfig};
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
 
@@ -89,10 +82,6 @@ pub(crate) fn test_config_env_lock() -> &'static std::sync::Mutex<()> {
 }
 
 impl Config {
-    pub fn should_show_onboarding(&self) -> bool {
-        self.onboarding.unwrap_or(true)
-    }
-
     pub fn kitty_graphics_enabled(&self) -> bool {
         self.terminal
             .kitty_graphics

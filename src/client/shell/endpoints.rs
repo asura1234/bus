@@ -13,13 +13,6 @@ pub(crate) struct ClientShellEndpoint {
     pub(crate) methods: Option<HashSet<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ClientEndpointFocusTarget {
-    Workspace(String),
-    Tab(String),
-    Pane(String),
-}
-
 impl ClientShellState {
     pub(crate) fn set_endpoint_status(
         &mut self,
@@ -174,10 +167,6 @@ impl ClientShellState {
         &self.active_endpoint_id == endpoint_id
     }
 
-    pub(crate) fn multi_endpoint_active(&self) -> bool {
-        self.endpoints.len() > 1
-    }
-
     #[cfg(test)]
     pub(crate) fn set_snapshot(&mut self, snapshot: Box<ClientShellSnapshot>) {
         let endpoint_id = self.active_endpoint_id.clone();
@@ -253,13 +242,6 @@ impl ClientShellState {
                 })
         {
             return;
-        }
-        let boot_changed = self.endpoints[index]
-            .snapshot
-            .as_deref()
-            .is_some_and(|previous| previous.boot_id != snapshot.boot_id);
-        if boot_changed {
-            self.retire_endpoint_notifications(endpoint_id);
         }
         self.endpoints[index]
             .agent_presentation
