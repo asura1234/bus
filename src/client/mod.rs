@@ -1116,6 +1116,9 @@ async fn run_client_loop(
                 state.reported_cell_size = (cell_width_px, cell_height_px);
                 state.pixel_geometry_exact = pixel_geometry_exact;
                 // Resizing invalidates both the host-side blit baseline and pane hit geometry.
+                // The next frame clears the screen even at an unchanged size: the host
+                // may show cells from the resize that no frame drew.
+                state.blit_encoder.invalidate();
                 state.request_repaint();
                 if let Some(shell) = state.shell.as_mut() {
                     shell.set_graphics_cell_size(cell_width_px, cell_height_px);

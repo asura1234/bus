@@ -133,6 +133,14 @@ impl BlitEncoder {
         }
     }
 
+    /// Forgets the presented frame, so the next one clears the screen and
+    /// redraws every cell. A host resize can leave cells the encoder never
+    /// drew (Terminal.app keeps text beyond a narrowed edge), even when the
+    /// window ends up the size of the last frame.
+    pub(crate) fn invalidate(&mut self) {
+        self.last_frame = None;
+    }
+
     pub(crate) fn commit(&mut self, frame: FrameData, encoded: EncodedBlit) {
         self.last_visible_cursor = encoded.next_last_visible_cursor;
         self.last_cursor_shape = encoded.next_last_cursor_shape;
@@ -1747,6 +1755,76 @@ mod tests {
                 "row {row} keeps a cell from the wider frame: {graphemes:?}"
             );
         }
+    }
+
+    /// Replays a host terminal that, like Terminal.app, keeps cells beyond a
+    /// narrowed window: the emulator grid stays at the widest size, and text
+    /// the host revealed is written into it directly.
+    fn host_text(terminal: &crate::ghostty::Terminal, width: u16, rows: u32) -> Vec<String> {
+        (0..rows)
+            .map(|row| {
+                (0..width)
+                    .map(|col| {
+                        let (_, graphemes) = terminal.screen_cell(col, row).unwrap();
+                        graphemes
+                            .first()
+                            .and_then(|code| char::from_u32(*code))
+                            .unwrap_or(' ')
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn present_resized(
+        encoder: &mut BlitEncoder,
+        terminal: &mut crate::ghostty::Terminal,
+        frame: FrameData,
+    ) {
+        // What the client does for every resize event.
+        encoder.invalidate();
+        let encoded = encoder.encode(&frame, true);
+        assert!(encoded.full);
+        assert!(String::from_utf8_lossy(&encoded.bytes).contains("\x1b[2J"));
+        terminal.write(&encoded.bytes);
+        encoder.commit(frame, encoded);
+    }
+
+    #[test]
+    fn every_resize_clears_cells_the_host_kept_beyond_the_frame() {
+        let mut encoder = BlitEncoder::new();
+        let mut terminal = crate::ghostty::Terminal::new(6, 2, 0).unwrap();
+        let wide = make_frame(6, 2, vec![make_cell("W", 0, 0, 0); 12]);
+        let initial = encoder.encode(&wide, false);
+        terminal.write(&initial.bytes);
+        encoder.commit(wide, initial);
+
+        // Wider, then narrower: the wide frame's right cells must go.
+        present_resized(
+            &mut encoder,
+            &mut terminal,
+            make_frame(4, 2, vec![make_cell("n", 0, 0, 0); 8]),
+        );
+        assert_eq!(host_text(&terminal, 6, 2), ["nnnn  ", "nnnn  "]);
+
+        // Narrower, then wider: the host reveals old text it kept at the
+        // right edge; the wider frame covers it.
+        terminal.write(b"\x1b[1;5Hru\x1b[2;5Hfi");
+        present_resized(
+            &mut encoder,
+            &mut terminal,
+            make_frame(6, 2, vec![make_cell(" ", 0, 0, 0); 12]),
+        );
+        assert_eq!(host_text(&terminal, 6, 2), ["      ", "      "]);
+
+        // A drag that ends at the frame's own size still clears.
+        terminal.write(b"\x1b[1;5Hll\x1b[2;5Hom");
+        present_resized(
+            &mut encoder,
+            &mut terminal,
+            make_frame(6, 2, vec![make_cell(" ", 0, 0, 0); 12]),
+        );
+        assert_eq!(host_text(&terminal, 6, 2), ["      ", "      "]);
     }
 
     #[test]
