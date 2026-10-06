@@ -394,6 +394,12 @@ pub(crate) fn dispatch(args: &[String]) -> Option<io::Result<()>> {
     if args.get(1).map(String::as_str) != Some("--bus-callback") {
         return None;
     }
+    if args.get(2).map(String::as_str) == Some("claude-statusline") {
+        if args.len() == 3 {
+            super::usage::claude_statusline::run();
+        }
+        return Some(Ok(()));
+    }
     // Hooks run in short-lived processes before ordinary CLI initialization.
     // Serialize their rotating log writers separately from the callback spool.
     // A diagnostic failure must never prevent the callback itself being saved.

@@ -21,6 +21,70 @@ static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 mod resume_tests;
 
 #[test]
+fn claude_statusline_refresh_is_identity_bound_and_does_not_change_delivery_state() {
+    for mismatch in [
+        "none", "agent", "launch", "session", "provider", "missing", "corrupt",
+    ] {
+        let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+        let spool = dir.join("callbacks/launch");
+        let before = std::fs::read(dir.join("state.json")).unwrap();
+        let mut observation = json!({
+            "manifest":{"agent_id":agent,"provider":"claude_code","launch_id":"launch"},
+            "session_id":"session", "read_at_ms":io::now_ms(),
+            "windows":{"five_hour":{"used_percent":12.5,"resets_at":io::now_ms()/1000+300,"window_minutes":300},
+                       "weekly":{"used_percent":31,"resets_at":io::now_ms()/1000+10000,"window_minutes":10080}}
+        });
+        match mismatch {
+            "agent" => observation["manifest"]["agent_id"] = json!(999),
+            "launch" => observation["manifest"]["launch_id"] = json!("other"),
+            "session" => observation["session_id"] = json!("other"),
+            "provider" => observation["manifest"]["provider"] = json!("codex"),
+            _ => {}
+        }
+        if mismatch == "corrupt" {
+            std::fs::write(spool.join("usage.json"), b"corrupt").unwrap();
+        } else if mismatch != "missing" {
+            std::fs::write(
+                spool.join("usage.json"),
+                serde_json::to_vec(&observation).unwrap(),
+            )
+            .unwrap();
+        }
+        // Status lines redraw independently of Stop/SessionStart hooks: there
+        // are deliberately no event files in this callback poll.
+        worker.consume_callbacks(agent, &spool).unwrap();
+        worker.dev_enabled = true;
+        let response = worker.dev_response_with_events(
+            &crate::bus::control::Request {
+                id: "usage-state".into(),
+                method: "state".into(),
+                params: json!({}),
+            },
+            None,
+        );
+        assert!(response.ok, "{response:?}");
+        let usage = &response.result["usage"]["claude"];
+        if mismatch == "none" {
+            assert_eq!(usage["status"], "observed");
+            assert_eq!(usage["five_hour"]["used_percent"], 12.5);
+            assert_eq!(usage["weekly"]["used_percent"], 31.0);
+            assert_eq!(usage["observed_by_agent"], json!(agent));
+        } else {
+            assert_eq!(usage["status"], "unknown", "{mismatch}");
+        }
+        assert_eq!(std::fs::read(dir.join("state.json")).unwrap(), before);
+        assert!(worker
+            .state
+            .agent(agent)
+            .unwrap()
+            .actionable_error
+            .is_none());
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
 fn delivery_logs_explain_queued_hook_gate_once_without_prompt_contents() {
     let capture = crate::logging::test_capture::Capture::default();
     capture.run(|| {

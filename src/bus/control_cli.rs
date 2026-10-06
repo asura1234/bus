@@ -63,7 +63,8 @@ orchestrator; --to all then skips it.
 room seen clears a room's unread count without changing the visible Bus view.
 room sound turns that room's new-message sound on or off; MASTER starts on, work rooms off.
 state includes each agent's compactions and per-provider usage (5-hour and weekly used %).
-Usage status \"unknown\" means Bus has no data yet, never that the allowance is unused.
+Claude usage comes from its status line; Codex usage is read after each turn.
+Usage status \"unknown\" means data is missing or stale, never that the allowance is unused.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
 message status, wait and history keep raw Markdown and list attached files as absolute paths.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.

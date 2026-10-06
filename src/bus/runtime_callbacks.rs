@@ -350,6 +350,9 @@ impl Worker {
         if let Some(path) = rollout {
             self.refresh_codex_usage(id, &path);
         }
+        if let Some(agent) = self.state.agent(id) {
+            self.usage.refresh_claude(agent, dir);
+        }
         Ok(())
     }
 

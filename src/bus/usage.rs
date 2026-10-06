@@ -1,24 +1,30 @@
 //! Provider allowance snapshots for the dev `state` command.
 //!
 //! Every agent on one provider login shares its quota, so Bus keeps the newest
-//! snapshot per provider. Snapshots live only in the coordinator's memory and
-//! are never persisted: missing data must read as unknown, never as unused.
+//! snapshot per provider. Snapshots live in the coordinator's memory; Claude's
+//! launch spool is a transient input, never a saved-session quota cache.
 use std::{
+    collections::BTreeMap,
     io::{Read, Seek, SeekFrom},
     path::Path,
+    time::{Duration, Instant},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::model::AgentId;
+use super::model::{Agent, AgentId, Provider};
+
+#[path = "claude_statusline.rs"]
+pub(crate) mod claude_statusline;
 
 /// Enough rollout tail to reach the last `token_count` event after a turn.
 const ROLLOUT_TAIL_BYTES: u64 = 256 * 1024;
 const FIVE_HOUR_MINUTES: u64 = 300;
 const WEEKLY_MINUTES: u64 = 7 * 24 * 60;
+const STALE_AFTER_MS: u64 = 15 * 60 * 1000;
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct UsageWindow {
     pub(crate) used_percent: f64,
     /// Unix seconds, as the provider reports it.
@@ -27,7 +33,7 @@ pub(crate) struct UsageWindow {
 }
 
 /// Windows the provider reported. A `None` window was absent, so unknown.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct UsageWindows {
     pub(crate) five_hour: Option<UsageWindow>,
     pub(crate) weekly: Option<UsageWindow>,
@@ -40,18 +46,29 @@ pub(crate) struct UsageSnapshot {
     pub(crate) observed_by_agent: AgentId,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Usage {
     pub(crate) codex: Option<UsageSnapshot>,
+    pub(crate) claude: Option<UsageSnapshot>,
+    started_at_ms: u64,
+    claude_reads: BTreeMap<AgentId, Instant>,
+}
+
+impl Default for Usage {
+    fn default() -> Self {
+        Self {
+            codex: None,
+            claude: None,
+            started_at_ms: super::io::now_ms(),
+            claude_reads: BTreeMap::new(),
+        }
+    }
 }
 
 impl Usage {
     pub(crate) fn state_json(&self) -> Value {
         json!({
-            // TODO(bus-usage): Claude only exposes `rate_limits` to its statusline
-            // command. Collecting it needs a statusLine tap in the per-launch
-            // claude-settings.json written by src/bus/launch.rs (deferred).
-            "claude": unknown("Claude allowance is not collected yet"),
+            "claude": self.claude_json(super::io::now_ms()),
             "codex": match &self.codex {
                 None => unknown("No Codex turn has reported rate limits since Bus started"),
                 Some(snapshot) => json!({
@@ -64,6 +81,68 @@ impl Usage {
             },
             "cursor": unknown("Cursor has no local allowance source"),
         })
+    }
+
+    fn claude_json(&self, now_ms: u64) -> Value {
+        let Some(snapshot) = &self.claude else {
+            return unknown("No Claude status line has reported rate limits since Bus started");
+        };
+        if snapshot.read_at_ms > now_ms || now_ms - snapshot.read_at_ms >= STALE_AFTER_MS {
+            return unknown("Claude allowance observation is stale");
+        }
+        let current = |w: &&UsageWindow| w.resets_at.is_none_or(|at| at > now_ms / 1000);
+        let five_hour = snapshot.windows.five_hour.as_ref().filter(current);
+        let weekly = snapshot.windows.weekly.as_ref().filter(current);
+        if five_hour.is_none() && weekly.is_none() {
+            return unknown("Claude allowance windows are missing or expired");
+        }
+        json!({"status":"observed", "five_hour":five_hour, "weekly":weekly,
+            "read_at_ms":snapshot.read_at_ms, "observed_by_agent":snapshot.observed_by_agent})
+    }
+
+    /// Advisory only: no State mutation, delivery errors, or event-spool growth.
+    pub(crate) fn refresh_claude(&mut self, agent: &Agent, spool: &Path) {
+        if agent.provider != Provider::ClaudeCode || agent.session_binding_invalidated {
+            return;
+        }
+        let now = Instant::now();
+        if self
+            .claude_reads
+            .get(&agent.id)
+            .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(1))
+        {
+            return;
+        }
+        self.claude_reads.insert(agent.id, now);
+        let Ok(record) = claude_statusline::read_usage(spool) else {
+            return;
+        };
+        if record.manifest.agent_id != agent.id
+            || record.manifest.provider != agent.provider
+            || Some(record.manifest.launch_id.as_str())
+                != agent.runtime_identity.launch_id.as_deref()
+            || Some(record.session_id.as_str()) != agent.runtime_identity.session_id.as_deref()
+        {
+            return;
+        }
+        self.merge_claude(record);
+    }
+
+    fn merge_claude(&mut self, record: claude_statusline::Observation) {
+        if record.read_at_ms < self.started_at_ms
+            || record.read_at_ms > super::io::now_ms()
+            || self
+                .claude
+                .as_ref()
+                .is_some_and(|old| old.read_at_ms >= record.read_at_ms)
+        {
+            return;
+        }
+        self.claude = Some(UsageSnapshot {
+            windows: record.windows,
+            read_at_ms: record.read_at_ms,
+            observed_by_agent: record.manifest.agent_id,
+        });
     }
 }
 
@@ -128,6 +207,56 @@ fn codex_rate_limits(line: &str) -> Option<UsageWindows> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_merge_uses_newest_observation_and_expires_without_claiming_unused_quota() {
+        let now = super::super::io::now_ms();
+        let mut usage = Usage {
+            started_at_ms: now - 1000,
+            ..Usage::default()
+        };
+        let observation = |agent, at| claude_statusline::Observation {
+            manifest: super::super::callbacks::Manifest {
+                agent_id: AgentId(agent),
+                provider: Provider::ClaudeCode,
+                launch_id: "launch".into(),
+            },
+            session_id: "session".into(),
+            read_at_ms: at,
+            windows: UsageWindows {
+                five_hour: Some(UsageWindow {
+                    used_percent: 20.0,
+                    resets_at: Some(now / 1000 + 10),
+                    window_minutes: FIVE_HOUR_MINUTES,
+                }),
+                weekly: Some(UsageWindow {
+                    used_percent: 40.0,
+                    resets_at: Some(now / 1000 + 10000),
+                    window_minutes: WEEKLY_MINUTES,
+                }),
+            },
+        };
+        usage.merge_claude(observation(1, now - 2000));
+        assert!(
+            usage.claude.is_none(),
+            "old spool is not a new observation after restart"
+        );
+        usage.merge_claude(observation(1, now - 900));
+        usage.merge_claude(observation(2, now - 500));
+        usage.merge_claude(observation(1, now - 800));
+        assert_eq!(usage.claude_json(now)["observed_by_agent"], 2);
+        assert_eq!(usage.claude_json(now)["five_hour"]["used_percent"], 20.0);
+        assert_eq!(usage.claude_json(now + 10000)["five_hour"], Value::Null);
+        assert_eq!(
+            usage.claude_json(now + 10000)["weekly"]["used_percent"],
+            40.0
+        );
+        assert_eq!(usage.claude_json(now + STALE_AFTER_MS)["status"], "unknown");
+        let mut missing = observation(2, now);
+        missing.windows = UsageWindows::default();
+        usage.merge_claude(missing);
+        assert_eq!(usage.claude_json(now)["status"], "unknown");
+    }
 
     fn token_count(limits: Value) -> String {
         json!({"timestamp":"2026-10-05T00:00:00Z","type":"event_msg",
@@ -226,6 +355,7 @@ mod tests {
                 read_at_ms: 9,
                 observed_by_agent: AgentId(3),
             }),
+            ..Usage::default()
         };
         assert_eq!(
             usage.state_json()["codex"],

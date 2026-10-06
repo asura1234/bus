@@ -422,6 +422,8 @@ pub(crate) fn prepare(
     if input.provider == Provider::ClaudeCode {
         let settings = spool.join("claude-settings.json");
         install_hooks(&settings, input.provider, binary)?;
+        super::usage::claude_statusline::install(&spool, &project_root(&cwd), binary)
+            .map_err(|e| e.to_string())?;
         args.extend(["--settings".into(), settings.to_string_lossy().into_owned()]);
     }
     let env = HashMap::from([
