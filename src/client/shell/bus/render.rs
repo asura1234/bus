@@ -1664,6 +1664,7 @@ impl BusUi {
                 args,
                 field,
                 orchestrates,
+                prompt,
             } => {
                 for (index, label, editor) in [
                     (0, "Name", Some(name)),
@@ -1718,6 +1719,26 @@ impl BusUi {
                         false,
                     );
                     y += 2;
+                }
+                if let Some(prompt) = prompt {
+                    let index = super::forms::PROMPT_FIELD;
+                    view.row(
+                        Rect::new(x, y, width, 1),
+                        "System prompt (Enter adds a line, Ctrl+Enter adds the agent)",
+                        Some(Action::Field(index)),
+                        false,
+                        true,
+                    );
+                    y += 1;
+                    // Leave room for the buttons and an error below.
+                    let height = main.bottom().saturating_sub(y + 8).clamp(3, 16);
+                    view.editor(
+                        Rect::new(x, y, width, height),
+                        &prompt.editor,
+                        Some(Action::Field(index)),
+                        *field == index,
+                    );
+                    y += height + 1;
                 }
             }
             Form::Consent { notice, .. } => {

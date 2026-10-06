@@ -1,17 +1,14 @@
-//! A MASTER orchestrator's Bus-owned working folder: its system prompt as
-//! CLAUDE.md and AGENTS.md, the workflow-create skill, and the Bus docs the
-//! prompt references. Every provider reads these files from its working
-//! directory, so no launch flags are needed.
+//! A MASTER orchestrator's system prompt and the Bus docs it references. The
+//! prompt is a Bus-owned file in the launch's callback folder, delivered with
+//! each provider's own launch option; nothing is written into the agent's PWD.
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
-use super::io::{atomic_write, digest, private_dir};
-use super::model::RoomId;
+use super::io::{atomic_write, private_dir};
+use super::model::{Provider, RoomId};
 
 /// The default orchestrator system prompt, with `{{...}}` placeholders.
 pub(crate) const DEFAULT_PROMPT: &str = include_str!("prompts/orchestrator.md");
-const WORKFLOW_CREATE_SKILL: &str = include_str!("../../skills/workflow-create/SKILL.md");
+const WORKFLOW_CREATE: &str = include_str!("../../skills/workflow-create/SKILL.md");
 /// The docs the prompt references, written under `<BUS_DATA_DIR>/docs/`.
 const DOCS: &[(&str, &str)] = &[
     (
@@ -35,10 +32,8 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../docs/workflows/cross-repo-feature.md"),
     ),
 ];
-/// Claude Code reads CLAUDE.md; Codex and Cursor read AGENTS.md.
-const PROMPT_FILES: [&str; 2] = ["CLAUDE.md", "AGENTS.md"];
-/// Claude Code discovers `.claude/skills`; Codex and Cursor discover `.agents/skills`.
-const SKILL_DIRS: [&str; 2] = [".claude/skills", ".agents/skills"];
+/// The prompt file in a launch's callback folder; resumes deliver it again.
+pub(crate) const PROMPT_FILE: &str = "system-prompt.md";
 const UNASSIGNED_ROOM_NAME: &str = "none yet (the human assigns one)";
 const UNASSIGNED_ROOM_ID: &str = "ROOM";
 
@@ -52,15 +47,11 @@ pub(crate) struct OrchestratorSpec {
 }
 
 /// The values the prompt placeholders are filled with.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PromptValues {
     pub room: Option<(String, RoomId)>,
     pub agent: String,
     pub docs: PathBuf,
-}
-
-pub(crate) fn default_folder(data_dir: &Path, agent_name: &str) -> PathBuf {
-    data_dir.join("orchestrators").join(agent_name.trim())
 }
 
 pub(crate) fn docs_dir(data_dir: &Path) -> PathBuf {
@@ -79,64 +70,23 @@ pub(crate) fn fill(template: &str, values: &PromptValues) -> String {
         .replace("{{DOCS}}", &values.docs.to_string_lossy())
 }
 
-/// The template a submitted prompt came from: the text itself when it still has
-/// placeholders, the default when it is the default filled in, otherwise none
-/// (a custom prompt Bus cannot re-fill).
-fn template_of(text: Option<&str>, values: &PromptValues) -> Option<String> {
-    match text {
-        None => Some(DEFAULT_PROMPT.into()),
-        Some(text) if text.contains("{{") => Some(text.into()),
-        Some(text) if text == fill(DEFAULT_PROMPT, values) => Some(DEFAULT_PROMPT.into()),
-        Some(_) => None,
-    }
-}
-
-/// What Bus wrote into a folder, so it can tell later whether the human edited it.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct Record {
-    template: Option<String>,
-    values: PromptValues,
-    /// SHA-256 of each prompt file as Bus wrote it.
-    hashes: Vec<(String, String)>,
-}
-
-fn record_path(data_dir: &Path, folder: &Path) -> PathBuf {
-    data_dir.join("orchestrator-prompts").join(format!(
-        "{}.json",
-        digest(folder.to_string_lossy().as_bytes())
-    ))
-}
-
-fn load_record(data_dir: &Path, folder: &Path) -> Option<Record> {
-    let bytes = std::fs::read(record_path(data_dir, folder)).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn save_record(data_dir: &Path, folder: &Path, record: &Record) -> Result<(), String> {
-    let path = record_path(data_dir, folder);
-    private_dir(path.parent().expect("record has a parent")).map_err(|e| e.to_string())?;
-    let bytes = serde_json::to_vec_pretty(record).map_err(|e| e.to_string())?;
-    atomic_write(&path, &bytes).map_err(|e| e.to_string())
-}
-
-fn file_hash(path: &Path) -> Option<String> {
-    std::fs::read(path).ok().map(|bytes| digest(&bytes))
-}
-
-fn written_by_bus(record: Option<&Record>, folder: &Path, file: &str) -> bool {
-    let current = file_hash(&folder.join(file));
-    record.is_some_and(|record| {
-        record
-            .hashes
-            .iter()
-            .any(|(name, hash)| name == file && Some(hash) == current.as_ref())
-    })
+/// The workflow-create guide as a doc: the repository skill without its
+/// frontmatter, which only skill loaders read.
+fn workflow_create_doc() -> &'static str {
+    WORKFLOW_CREATE
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map_or(WORKFLOW_CREATE, |(_, body)| body.trim_start())
 }
 
 /// Writes the embedded Bus docs under `<data_dir>/docs/` and returns that folder.
 pub(crate) fn write_docs(data_dir: &Path) -> Result<PathBuf, String> {
     let root = docs_dir(data_dir);
-    for (name, text) in DOCS {
+    let docs = DOCS
+        .iter()
+        .copied()
+        .chain([("workflow-create.md", workflow_create_doc())]);
+    for (name, text) in docs {
         let path = root.join(name);
         private_dir(path.parent().expect("doc has a parent")).map_err(|e| e.to_string())?;
         atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())?;
@@ -144,139 +94,60 @@ pub(crate) fn write_docs(data_dir: &Path) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// Creates the default folder owner-only when it is missing; a custom folder
-/// must already exist.
-pub(crate) fn ensure_folder(
-    data_dir: &Path,
-    folder: &Path,
-    agent_name: &str,
-) -> Result<(), String> {
-    if folder == default_folder(data_dir, agent_name) {
-        private_dir(folder).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+/// Writes the prompt into a launch's callback folder.
+pub(crate) fn write_prompt(spool: &Path, text: &str) -> Result<PathBuf, String> {
+    let path = spool.join(PROMPT_FILE);
+    atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
-/// Rejects an agent name that would not be one folder under `orchestrators/`.
-pub(crate) fn check_folder_name(agent_name: &str) -> Result<(), String> {
-    let name = agent_name.trim();
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
-        return Err(format!(
-            "Orchestrator name {name:?} cannot name its working folder; choose another name or give a PWD"
-        ));
-    }
-    Ok(())
-}
-
-/// Writes the prompt files and skills into `folder`. Refuses to replace a
-/// CLAUDE.md or AGENTS.md that Bus did not write there.
-pub(crate) fn write_folder(
-    data_dir: &Path,
-    folder: &Path,
-    system_prompt: Option<&str>,
-    values: &PromptValues,
-) -> Result<(), String> {
-    let record = load_record(data_dir, folder);
-    for file in PROMPT_FILES {
-        if folder.join(file).exists() && !written_by_bus(record.as_ref(), folder, file) {
-            return Err(format!(
-                "{} already exists and was not written by Bus; remove it or choose another PWD",
-                folder.join(file).display()
-            ));
+/// The Bus-owned launch arguments that deliver the prompt, or `None` when the
+/// provider has no launch option for one (Cursor): Bus then sends the prompt
+/// as the agent's first message.
+pub(crate) fn prompt_args(provider: Provider, path: &Path) -> Result<Option<Vec<String>>, String> {
+    Ok(match provider {
+        // Appends to Claude Code's default prompt; a file keeps the typed command short.
+        Provider::ClaudeCode => Some(vec![
+            "--append-system-prompt-file".into(),
+            path.to_string_lossy().into_owned(),
+        ]),
+        // Codex adds developer_instructions as a developer message beside its
+        // base instructions. It has no file variant, so the text goes inline as
+        // a one-line TOML string (JSON string escapes are valid TOML).
+        Provider::Codex => {
+            let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+            let value = serde_json::to_string(&text).map_err(|e| e.to_string())?;
+            Some(vec!["-c".into(), format!("developer_instructions={value}")])
         }
+        Provider::Cursor => None,
+    })
+}
+
+/// Prompt arguments for a resumed launch whose callback folder holds a prompt.
+pub(crate) fn resume_prompt_args(provider: Provider, spool: &Path) -> Result<Vec<String>, String> {
+    let path = spool.join(PROMPT_FILE);
+    if !path.is_file() {
+        return Ok(Vec::new());
     }
-    let template = template_of(system_prompt, values);
-    let text = match (&template, system_prompt) {
-        (Some(template), _) => fill(template, values),
-        (None, Some(text)) => text.to_owned(),
-        (None, None) => unreachable!("no text always uses the default template"),
-    };
-    for dir in SKILL_DIRS {
-        let path = folder.join(dir).join("workflow-create/SKILL.md");
-        private_dir(path.parent().expect("skill has a parent")).map_err(|e| e.to_string())?;
-        atomic_write(&path, WORKFLOW_CREATE_SKILL.as_bytes()).map_err(|e| e.to_string())?;
-    }
-    let hashes = write_prompts(folder, &text, &PROMPT_FILES)?;
-    save_record(
-        data_dir,
-        folder,
-        &Record {
-            template,
-            values: values.clone(),
-            hashes,
-        },
+    Ok(prompt_args(provider, &path)?.unwrap_or_default())
+}
+
+/// The first message for a provider without a system-prompt launch option.
+pub(crate) fn prompt_message(text: &str) -> String {
+    format!(
+        "Bus: this is your system prompt (your provider has no launch option for one). Follow it for this whole session, then reply briefly that you are ready.\n\n{text}"
     )
 }
 
-fn write_prompts(
-    folder: &Path,
-    text: &str,
-    files: &[&str],
-) -> Result<Vec<(String, String)>, String> {
-    files
-        .iter()
-        .map(|file| {
-            atomic_write(&folder.join(file), text.as_bytes()).map_err(|e| e.to_string())?;
-            Ok(((*file).to_owned(), digest(text.as_bytes())))
-        })
-        .collect()
-}
-
-/// The outcome of re-filling the prompt for a new room.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct Retarget {
-    pub rewritten: Vec<PathBuf>,
-    /// Files left alone because the human edited them or the prompt was custom.
-    pub kept: Vec<PathBuf>,
-}
-
-impl Retarget {
-    pub(crate) fn notice(&self) -> Option<String> {
-        if self.kept.is_empty() {
-            return None;
-        }
-        let files: Vec<_> = self.kept.iter().map(|p| p.display().to_string()).collect();
-        Some(format!(
-            "Kept {} unchanged: edited since Bus wrote it, or a custom prompt; update its room by hand.",
-            files.join(" and ")
-        ))
+/// Tells an orchestrator its new room: its system prompt is fixed at launch.
+pub(crate) fn reassigned_message(agent: &str, room: Option<(&str, RoomId)>) -> String {
+    match room {
+        Some((name, id)) => format!(
+            "Bus: you now orchestrate room {name} (id {id}). This replaces the room in your system prompt. Send to it with `bus send --room {id} --as {agent} ...`; start with `bus state` and `bus history --room {id}`.",
+            id = id.0
+        ),
+        None => "Bus: you no longer orchestrate a room. Wait for the human to assign one.".into(),
     }
-}
-
-/// Re-fills the room placeholders after a reassignment, file by file, only
-/// where the file is still exactly what Bus wrote. Folders Bus never wrote
-/// are left alone.
-pub(crate) fn retarget(
-    data_dir: &Path,
-    folder: &Path,
-    room: Option<(String, RoomId)>,
-) -> Result<Retarget, String> {
-    let Some(mut record) = load_record(data_dir, folder) else {
-        return Ok(Retarget::default());
-    };
-    let mut outcome = Retarget::default();
-    record.values.room = room;
-    let Some(template) = record.template.clone() else {
-        outcome.kept = PROMPT_FILES.iter().map(|f| folder.join(f)).collect();
-        return Ok(outcome);
-    };
-    let text = fill(&template, &record.values);
-    let mut hashes = Vec::new();
-    for file in PROMPT_FILES {
-        if written_by_bus(Some(&record), folder, file) {
-            hashes.extend(write_prompts(folder, &text, &[file])?);
-            outcome.rewritten.push(folder.join(file));
-        } else {
-            outcome.kept.push(folder.join(file));
-        }
-    }
-    // Keep the old hash for a file the human edited, so it stays "edited".
-    record
-        .hashes
-        .retain(|(name, _)| !hashes.iter().any(|(n, _)| n == name));
-    record.hashes.extend(hashes);
-    save_record(data_dir, folder, &record)?;
-    Ok(outcome)
 }
 
 #[cfg(test)]

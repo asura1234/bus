@@ -414,18 +414,17 @@ impl BusUi {
             }
             BusEvent::SetupRequired {
                 input,
-                orchestrates,
+                orchestrator,
                 notice,
             } => {
                 self.suggestions.entries.clear();
                 self.suggestions.query_id += 1;
                 self.form = Some(Form::Consent {
                     input,
-                    orchestrates,
+                    orchestrator,
                     notice,
                 });
             }
-            BusEvent::Notice(notice) => self.show_toast(notice),
             _ => {}
         }
     }

@@ -48,11 +48,8 @@ pub(crate) enum BusCommand {
     Submit(RoomId),
     SetDetails(AgentId, bool),
     AddAgent(AddAgent),
-    /// Adds a MASTER agent that orchestrates the given work room.
-    AddOrchestrator(AddAgent, RoomId),
-    /// Adds a MASTER agent with its Bus-owned folder and system prompt; an
-    /// empty PWD uses the default folder.
-    AddMasterAgent(AddAgent, super::orchestrator::OrchestratorSpec),
+    /// Adds a MASTER agent, launched with its orchestrator system prompt.
+    AddOrchestrator(AddAgent, super::orchestrator::OrchestratorSpec),
     SetOrchestrates(AgentId, Option<RoomId>),
     FocusTerminal(AgentId),
     CompleteHookSetup(AgentId),
@@ -86,8 +83,6 @@ pub(crate) enum BusEvent {
         result: Result<Vec<launch::PathSuggestion>, String>,
     },
     AgentAdded(AgentId),
-    /// Something the human should know about a command that succeeded.
-    Notice(String),
     RoomCreated(RoomId),
     TerminalFocused {
         agent: AgentId,
@@ -95,7 +90,7 @@ pub(crate) enum BusEvent {
     },
     SetupRequired {
         input: AddAgent,
-        orchestrates: Option<RoomId>,
+        orchestrator: Option<super::orchestrator::OrchestratorSpec>,
         notice: launch::SetupNotice,
     },
     /// A deletion finished, but these terminals were no longer Bus-owned and were left open.

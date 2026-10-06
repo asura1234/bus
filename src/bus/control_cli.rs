@@ -28,8 +28,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   room sound ROOM (--on | --off)
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks] [--orchestrates ROOM]
-  agent add --room master --name NAME --provider claude|codex|cursor [--orchestrates ROOM]
-            [--system-prompt TEXT | --system-prompt-file PATH] [--pwd PATH]
+            [--system-prompt TEXT | --system-prompt-file PATH]
   agent orchestrate AGENT (--room ROOM | --none)
   agent read AGENT --source visible
   agent read AGENT [--source recent] --lines N
@@ -53,10 +52,9 @@ Every command accepts --request-id STRING and emits one JSON response.
 ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) for the
 MASTER room. Only MASTER agents orchestrate, each at most one work room: use
 agent add --room master --orchestrates ROOM, or agent orchestrate to reassign or unassign.
-A MASTER agent's --pwd defaults to its Bus-owned folder <BUS_DATA_DIR>/orchestrators/NAME;
-Bus writes its system prompt there as CLAUDE.md and AGENTS.md (default: the built-in
-orchestrator prompt; {{ROOM_NAME}} {{ROOM_ID}} {{AGENT_NAME}} {{DOCS}} are filled in) plus
-the workflow-create skill. Reassigning re-fills the room unless those files were edited.
+A MASTER agent launches with an orchestrator system prompt, the built-in one unless
+--system-prompt or --system-prompt-file replaces it; {{ROOM_NAME}} {{ROOM_ID}} {{AGENT_NAME}}
+{{DOCS}} are filled in. Reassigning sends the orchestrator a message naming its new room.
 Use --to all explicitly for all room agents.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
@@ -246,7 +244,7 @@ fn cli() -> Command {
                         .arg(option("room"))
                         .arg(option("name"))
                         .arg(option("provider").value_parser(["claude", "codex", "cursor"]))
-                        .arg(value_arg("pwd").long("pwd"))
+                        .arg(option("pwd"))
                         .arg(Arg::new("args").long("args").allow_hyphen_values(true))
                         .arg(flag("consent-hooks"))
                         .arg(value_arg("orchestrates").long("orchestrates"))
@@ -430,14 +428,10 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             Some(("add", args)) => {
                 let mut params = json!({
                     "room": required(args, "room")?, "name": required(args, "name")?,
-                    "provider": required(args, "provider")?,
+                    "provider": required(args, "provider")?, "cwd": required(args, "pwd")?,
                     "extra_args": args.get_one::<String>("args").map(String::as_str).unwrap_or(""),
                     "consent_project_hooks": args.get_flag("consent-hooks"),
                 });
-                // A MASTER agent defaults to its Bus-owned folder; Bus requires a PWD elsewhere.
-                if let Some(pwd) = args.get_one::<String>("pwd") {
-                    params["cwd"] = json!(pwd);
-                }
                 if let Some(room) = args.get_one::<String>("orchestrates") {
                     params["orchestrates"] = json!(room);
                 }
@@ -580,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_add_reads_the_system_prompt_file_and_leaves_pwd_to_the_runtime() {
+    fn agent_add_reads_the_system_prompt_file() {
         let path = std::env::temp_dir().join(format!("bus-prompt-{}.md", std::process::id()));
         std::fs::write(&path, "You run {{ROOM_NAME}}.\n").unwrap();
         let parsed = command(&[
@@ -592,6 +586,8 @@ mod tests {
             "orch",
             "--provider",
             "cursor",
+            "--pwd",
+            "/repo",
             "--orchestrates",
             "pr-1",
             "--system-prompt-file",
@@ -601,7 +597,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         assert_eq!(parsed.params["system_prompt"], "You run {{ROOM_NAME}}.\n");
         assert_eq!(parsed.params["orchestrates"], "pr-1");
-        assert!(parsed.params.get("cwd").is_none());
+        assert_eq!(parsed.params["cwd"], "/repo");
     }
 
     #[test]
@@ -665,7 +661,7 @@ mod tests {
         }
         assert!(HELP.contains("agent orchestrate AGENT (--room ROOM | --none)"));
         assert!(HELP.contains("[--orchestrates ROOM]"));
-        assert!(HELP.contains("[--system-prompt TEXT | --system-prompt-file PATH] [--pwd PATH]"));
+        assert!(HELP.contains("[--system-prompt TEXT | --system-prompt-file PATH]"));
     }
 
     #[test]
@@ -790,13 +786,15 @@ mod tests {
                     "codex-orch",
                     "--provider",
                     "codex",
+                    "--pwd",
+                    "/repo",
                     "--system-prompt",
                     "Run {{ROOM_NAME}}.",
                 ],
                 "agent.add",
                 json!({
                     "room": "master", "name": "codex-orch", "provider": "codex",
-                    "extra_args": "", "consent_project_hooks": false,
+                    "cwd": "/repo", "extra_args": "", "consent_project_hooks": false,
                     "system_prompt": "Run {{ROOM_NAME}}."
                 }),
             ),
@@ -988,11 +986,23 @@ mod tests {
                 "agent",
                 "add",
                 "--room",
+                "7",
+                "--name",
+                "Reviewer",
+                "--provider",
+                "codex",
+            ],
+            &[
+                "agent",
+                "add",
+                "--room",
                 "master",
                 "--name",
                 "orch",
                 "--provider",
                 "codex",
+                "--pwd",
+                "/tmp",
                 "--system-prompt",
                 "x",
                 "--system-prompt-file",
@@ -1007,6 +1017,8 @@ mod tests {
                 "orch",
                 "--provider",
                 "codex",
+                "--pwd",
+                "/tmp",
                 "--system-prompt-file",
                 "/nonexistent/bus-prompt.md",
             ],

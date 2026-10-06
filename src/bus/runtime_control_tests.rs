@@ -1859,45 +1859,68 @@ impl Transport for NoTabs {
     }
 }
 
+fn launch_spool(worker: &Worker, agent: AgentId) -> PathBuf {
+    let launch = worker
+        .state
+        .agent(agent)
+        .unwrap()
+        .runtime_identity
+        .launch_id
+        .clone();
+    worker.data_dir.join("callbacks").join(launch.unwrap())
+}
+
+fn messages_to(worker: &Worker, agent: AgentId) -> Vec<String> {
+    worker
+        .state
+        .requests()
+        .filter(|r| r.agent_id == agent)
+        .map(|r| r.prompt.text.clone())
+        .collect()
+}
+
 #[test]
-fn dev_master_agent_add_defaults_to_its_folder_and_prompt_and_reassign_refills_it() {
+fn dev_master_agent_add_launches_with_its_prompt_and_leaves_the_pwd_alone() {
     let (mut worker, room, _agent, dir) = fixture();
     worker.transport = Box::new(NoTabs);
+    let pwd = dir.join("repo");
+    std::fs::create_dir(&pwd).unwrap();
     let added = call(
         &mut worker,
         "add-orch",
         "agent.add",
-        json!({"room":"master","name":"orch","provider":"claude","orchestrates":"test"}),
+        json!({
+            "room":"master","name":"orch","provider":"claude",
+            "cwd": pwd.to_string_lossy(), "orchestrates":"test"
+        }),
     );
-    // The agent exists and its folder is ready; only its terminal was refused.
+    // The agent exists and its launch is prepared; only its terminal was refused.
     assert!(
         error_message(&added).contains("no tabs in tests"),
         "{added:?}"
     );
-    let folder = dir.join("orchestrators/orch");
     let orch = worker.state.agents().find(|a| a.name == "orch").unwrap().id;
-    assert_eq!(
-        worker.state.agent(orch).unwrap().cwd,
-        folder.canonicalize().unwrap()
-    );
     assert_eq!(worker.state.agent(orch).unwrap().orchestrates, Some(room));
-    let claude = std::fs::read_to_string(folder.join("CLAUDE.md")).unwrap();
+    assert_eq!(std::fs::read_dir(&pwd).unwrap().count(), 0, "PWD untouched");
+    let prompt =
+        std::fs::read_to_string(launch_spool(&worker, orch).join("system-prompt.md")).unwrap();
     assert!(
-        claude.contains(&format!(
+        prompt.contains(&format!(
             "Your room: test (id {}). Your agent name: orch.",
             room.0
         )),
-        "{claude}"
+        "{prompt}"
     );
-    assert!(claude.contains(&format!("{}/how-to-bus-cli.md", dir.join("docs").display())));
+    assert!(prompt.contains(&format!(
+        "{}/workflow-create.md",
+        dir.join("docs").display()
+    )));
+    assert!(dir.join("docs/workflow-create.md").is_file());
     assert!(dir.join("docs/orchestrator-guide.md").is_file());
-    assert_eq!(
-        std::fs::read_to_string(folder.join("AGENTS.md")).unwrap(),
-        claude
+    assert!(
+        messages_to(&worker, orch).is_empty(),
+        "Claude takes a launch option"
     );
-    assert!(folder
-        .join(".agents/skills/workflow-create/SKILL.md")
-        .is_file());
 
     let other = worker.state.create_room("other").unwrap();
     let moved = call(
@@ -1907,12 +1930,6 @@ fn dev_master_agent_add_defaults_to_its_folder_and_prompt_and_reassign_refills_i
         json!({"agent":"orch","room":"other"}),
     );
     assert!(moved.ok, "{moved:?}");
-    assert!(moved.result.get("notice").is_none(), "{moved:?}");
-    assert!(std::fs::read_to_string(folder.join("CLAUDE.md"))
-        .unwrap()
-        .contains(&format!("Your room: other (id {})", other.0)));
-
-    std::fs::write(folder.join("AGENTS.md"), "edited").unwrap();
     let cleared = call(
         &mut worker,
         "orch-none",
@@ -1920,16 +1937,18 @@ fn dev_master_agent_add_defaults_to_its_folder_and_prompt_and_reassign_refills_i
         json!({"agent":"orch","room":null}),
     );
     assert!(cleared.ok, "{cleared:?}");
+    let told = messages_to(&worker, orch);
+    assert_eq!(told.len(), 2, "{told:?}");
     assert!(
-        cleared.result["notice"]
-            .as_str()
-            .unwrap()
-            .contains("AGENTS.md"),
-        "{cleared:?}"
+        told[0].contains(&format!("room other (id {})", other.0)),
+        "{told:?}"
     );
-    assert_eq!(
-        std::fs::read_to_string(folder.join("AGENTS.md")).unwrap(),
-        "edited"
+    assert!(told[1].contains("no longer orchestrate"), "{told:?}");
+    assert!(
+        prompt
+            == std::fs::read_to_string(launch_spool(&worker, orch).join("system-prompt.md"))
+                .unwrap(),
+        "the launch prompt is fixed"
     );
 
     drop(worker);
@@ -1937,50 +1956,38 @@ fn dev_master_agent_add_defaults_to_its_folder_and_prompt_and_reassign_refills_i
 }
 
 #[test]
-fn dev_agent_add_takes_a_custom_prompt_and_pwd_only_where_they_apply() {
+fn dev_master_agent_add_sends_cursor_its_custom_prompt_as_the_first_message() {
     let (mut worker, _room, _agent, dir) = fixture();
     worker.transport = Box::new(NoTabs);
-    let custom = dir.join("custom");
-    std::fs::create_dir(&custom).unwrap();
     let added = call(
         &mut worker,
-        "add-custom",
+        "add-cursor",
         "agent.add",
         json!({
-            "room":"master","name":"orch","provider":"claude",
-            "cwd": custom.to_string_lossy(), "system_prompt":"You are {{AGENT_NAME}}."
+            "room":"master","name":"orch","provider":"cursor","consent_project_hooks":true,
+            "cwd": dir.to_string_lossy(), "system_prompt":"You are {{AGENT_NAME}}."
         }),
     );
     assert!(
         error_message(&added).contains("no tabs in tests"),
         "{added:?}"
     );
-    assert_eq!(
-        std::fs::read_to_string(custom.join("CLAUDE.md")).unwrap(),
-        "You are orch."
-    );
-    assert!(!dir.join("orchestrators/orch").exists());
+    let orch = worker.state.agents().find(|a| a.name == "orch").unwrap().id;
+    let told = messages_to(&worker, orch);
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(told[0].ends_with("\n\nYou are orch."), "{told:?}");
 
-    let agents_before = worker.state.agents().count();
-    for (params, error) in [
-        (
-            json!({"room":"test","name":"w","provider":"codex"}),
-            "--pwd is required",
-        ),
-        (
-            json!({"room":"test","name":"w","provider":"codex",
-                "cwd": dir.to_string_lossy(), "system_prompt":"x"}),
-            "only to MASTER",
-        ),
-        (
-            json!({"room":"master","name":"a/b","provider":"claude"}),
-            "cannot name its working folder",
-        ),
-    ] {
-        let rejected = call(&mut worker, error, "agent.add", params);
-        assert!(error_message(&rejected).contains(error), "{rejected:?}");
-    }
-    assert_eq!(worker.state.agents().count(), agents_before);
+    let rejected = call(
+        &mut worker,
+        "add-work-prompt",
+        "agent.add",
+        json!({"room":"test","name":"w","provider":"codex",
+            "cwd": dir.to_string_lossy(), "system_prompt":"x"}),
+    );
+    assert!(
+        error_message(&rejected).contains("only to MASTER"),
+        "{rejected:?}"
+    );
 
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

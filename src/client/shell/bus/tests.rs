@@ -1429,6 +1429,7 @@ fn agent_enter_adds_from_non_model_fields_with_its_own_directory_and_escape_canc
             args: Box::new(editor::Editor::new("--model sonnet".into())),
             field,
             orchestrates: None,
+            prompt: None,
         });
         // Suggestions must not hijack Enter; Tab remains path completion.
         ui.suggestions
@@ -2663,7 +2664,7 @@ fn hook_consent_clears_old_pwd_suggestions_before_enter_can_confirm() {
             extra_args: String::new(),
             consent_project_hooks: false,
         },
-        orchestrates: None,
+        orchestrator: None,
         notice: crate::bus::launch::SetupNotice {
             path: "/project/.codex/hooks.json".into(),
             message: "review hooks".into(),

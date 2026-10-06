@@ -134,8 +134,128 @@ fn adding_an_agent_in_master_asks_which_unorchestrated_room_it_orchestrates() {
     ui.action(render::Action::Add);
     assert!(ui.pending.iter().any(|p| matches!(
         &p.command,
-        BusCommand::AddOrchestrator(input, room)
-            if input.room == master && input.name == "codex-orch" && *room == other
+        BusCommand::AddOrchestrator(input, spec)
+            if input.room == master && input.name == "codex-orch" && spec.room == Some(other)
+    )));
+}
+
+fn typed(ui: &mut BusUi, text: &str) {
+    for c in text.chars() {
+        key(ui, KeyCode::Char(c), KeyModifiers::NONE);
+    }
+}
+
+fn prompt_text(ui: &BusUi) -> String {
+    match &ui.form {
+        Some(forms::Form::Agent {
+            prompt: Some(prompt),
+            ..
+        }) => prompt.editor.text.clone(),
+        _ => panic!("no MASTER agent form"),
+    }
+}
+
+fn expected_prompt(agent: &str, room: Option<(&str, RoomId)>) -> String {
+    let docs = crate::bus::entry::data_dir().map_or_else(
+        || std::path::PathBuf::from("<BUS_DATA_DIR>/docs"),
+        |data| crate::bus::orchestrator::docs_dir(&data),
+    );
+    crate::bus::orchestrator::fill(
+        crate::bus::orchestrator::DEFAULT_PROMPT,
+        &crate::bus::orchestrator::PromptValues {
+            room: room.map(|(name, id)| (name.into(), id)),
+            agent: agent.into(),
+            docs,
+        },
+    )
+}
+
+#[test]
+fn the_master_agent_form_prefills_the_prompt_and_refills_it_until_edited() {
+    let (mut ui, master, _, other, _) = master_fixture();
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    assert!(matches!(
+        &ui.form,
+        Some(forms::Form::Agent { cwd, .. }) if cwd.text == "~/"
+    ));
+    assert_eq!(prompt_text(&ui), expected_prompt("", None));
+    assert!(room_screen(&mut ui, 100, 40).contains("System prompt"));
+
+    typed(&mut ui, "orch");
+    assert_eq!(prompt_text(&ui), expected_prompt("orch", None));
+    ui.action(render::Action::Orchestrates);
+    assert_eq!(
+        prompt_text(&ui),
+        expected_prompt("orch", Some(("pr-456", other)))
+    );
+
+    ui.action(render::Action::Field(forms::PROMPT_FIELD));
+    typed(&mut ui, "Mine. ");
+    let edited = prompt_text(&ui);
+    assert!(edited.starts_with("Mine. # Bus orchestrator"), "{edited}");
+    ui.action(render::Action::Orchestrates);
+    assert_eq!(prompt_text(&ui), edited, "an edited prompt is kept");
+}
+
+#[test]
+fn enter_adds_a_prompt_line_and_ctrl_enter_adds_the_orchestrator_with_it() {
+    let (mut ui, master, _, other, _) = master_fixture();
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    typed(&mut ui, "orch");
+    ui.action(render::Action::Orchestrates);
+    ui.action(render::Action::Provider(Provider::ClaudeCode));
+    if let Some(forms::Form::Agent { cwd, .. }) = &mut ui.form {
+        *cwd = editor::Editor::new("/repo".into());
+    }
+    ui.action(render::Action::Field(forms::PROMPT_FIELD));
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(!ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::AddOrchestrator(..))));
+    let text = prompt_text(&ui);
+    assert!(text.starts_with('\n'), "{text:?}");
+
+    key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
+    assert!(ui.pending.iter().any(|p| matches!(
+        &p.command,
+        BusCommand::AddOrchestrator(input, spec)
+            if input.cwd == "/repo"
+                && input.provider == Provider::ClaudeCode
+                && spec.room == Some(other)
+                && spec.system_prompt.as_deref() == Some(text.as_str())
+    )));
+}
+
+#[test]
+fn hook_consent_keeps_the_orchestrator_prompt() {
+    let (mut ui, master, _, other, _) = master_fixture();
+    let spec = crate::bus::orchestrator::OrchestratorSpec {
+        room: Some(other),
+        system_prompt: Some("Run pr-456.".into()),
+    };
+    ui.receive_event(BusEvent::SetupRequired {
+        input: crate::bus::launch::AddAgent {
+            room: master,
+            name: "codex-orch".into(),
+            provider: Provider::Codex,
+            cwd: "/repo".into(),
+            extra_args: String::new(),
+            consent_project_hooks: false,
+        },
+        orchestrator: Some(spec.clone()),
+        notice: crate::bus::launch::SetupNotice {
+            path: "/repo/.codex/hooks.json".into(),
+            message: "review hooks".into(),
+        },
+    });
+    ui.action(render::Action::Add);
+    assert!(ui.pending.iter().any(|p| matches!(
+        &p.command,
+        BusCommand::AddOrchestrator(input, queued)
+            if input.consent_project_hooks && *queued == spec
     )));
 }
 

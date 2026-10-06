@@ -91,22 +91,43 @@ impl Worker {
                 return Ok(());
             }
             BusCommand::AddAgent(input) => return self.add_agent(input, None, events),
-            BusCommand::AddOrchestrator(input, room) => {
-                let spec = OrchestratorSpec {
-                    room: Some(room),
-                    system_prompt: None,
-                };
-                return self.add_agent(input, Some(spec), events);
-            }
-            BusCommand::AddMasterAgent(input, spec) => {
+            BusCommand::AddOrchestrator(input, spec) => {
                 return self.add_agent(input, Some(spec), events)
             }
             BusCommand::SetOrchestrates(agent, room) => {
+                let previous = state.agent(agent).and_then(|a| a.orchestrates);
                 state
                     .set_agent_orchestrates(agent, room)
                     .map_err(|e| e.to_string())?;
-                self.save(state)?;
-                return self.retarget_prompt(agent, room, events);
+                // The system prompt is fixed at launch, so tell the orchestrator.
+                if previous != room {
+                    let name = state
+                        .agent(agent)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_default();
+                    let target = room.and_then(|room| state.room(room));
+                    let text = orchestrator::reassigned_message(
+                        &name,
+                        target.map(|room| (room.name.as_str(), room.id)),
+                    );
+                    let master = state
+                        .agent(agent)
+                        .map(|a| a.room_id)
+                        .ok_or("Unknown agent")?;
+                    state
+                        .submit_message_from(
+                            master,
+                            Draft {
+                                text,
+                                files: Vec::new(),
+                                recipient_ids: [agent].into_iter().collect(),
+                            },
+                            Author::Human,
+                            crate::bus::io::now_ms(),
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
+                Ok(())
             }
             BusCommand::FocusTerminal(id) => {
                 let agent = state.agent(id).ok_or("Unknown agent")?;
@@ -280,65 +301,20 @@ impl Worker {
         )
     }
 
-    /// Re-fills a reassigned orchestrator's room placeholders where the human
-    /// has not edited its prompt files.
-    fn retarget_prompt(
-        &mut self,
-        agent: AgentId,
-        room: Option<RoomId>,
-        events: &mpsc::Sender<BusEvent>,
-    ) -> Result<(), String> {
-        let Some(folder) = self.state.agent(agent).map(|a| a.cwd.clone()) else {
-            return Ok(());
-        };
-        let room = room
-            .and_then(|room| self.state.room(room))
-            .map(|room| (room.name.clone(), room.id));
-        orchestrator::write_docs(&self.data_dir)?;
-        let outcome = orchestrator::retarget(&self.data_dir, &folder, room)?;
-        if let Some(notice) = outcome.notice() {
-            let _ = events.send(BusEvent::Notice(notice));
-        }
-        Ok(())
-    }
-
     fn add_agent(
         &mut self,
-        mut input: AddAgent,
+        input: AddAgent,
         orchestrator: Option<OrchestratorSpec>,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let orchestrates = orchestrator.as_ref().and_then(|spec| spec.room);
-        if orchestrator.is_some() {
-            if input.cwd.trim().is_empty() {
-                orchestrator::check_folder_name(&input.name)?;
-                input.cwd = orchestrator::default_folder(&self.data_dir, &input.name)
-                    .to_string_lossy()
-                    .into_owned();
-            }
-            // Validate the agent and its MASTER assignment before creating its folder.
-            let mut scratch = self.state.clone();
-            let id = scratch
-                .create_agent(
-                    input.room,
-                    &input.name,
-                    input.provider,
-                    input.cwd.clone().into(),
-                    None,
-                )
-                .map_err(|e| e.to_string())?;
-            scratch
-                .set_agent_orchestrates(id, orchestrates)
-                .map_err(|e| e.to_string())?;
-            orchestrator::ensure_folder(&self.data_dir, Path::new(&input.cwd), &input.name)?;
-        }
         let cwd = launch::canonical_directory(&input.cwd)?;
         let mut state = self.state.clone();
         let id = state
             .create_agent(input.room, &input.name, input.provider, cwd.clone(), None)
             .map_err(|e| e.to_string())?;
         // Validate the assignment before any consent prompt or launch side effect.
-        if orchestrates.is_some() {
+        if orchestrator.is_some() {
             state
                 .set_agent_orchestrates(id, orchestrates)
                 .map_err(|e| e.to_string())?;
@@ -347,12 +323,23 @@ impl Worker {
             if let Some(notice) = launch::setup_notice(input.provider, &cwd) {
                 let _ = events.send(BusEvent::SetupRequired {
                     input,
-                    orchestrates,
+                    orchestrator,
                     notice,
                 });
                 return Ok(());
             }
         }
+        let prepared = launch::prepare(
+            &input,
+            id,
+            &self.data_dir,
+            &std::env::current_exe().map_err(|e| e.to_string())?,
+        )?;
+        let mut prepared = prepared;
+        let spool = self
+            .data_dir
+            .join("callbacks")
+            .join(&prepared.manifest.launch_id);
         if let Some(spec) = &orchestrator {
             let values = orchestrator::PromptValues {
                 room: orchestrates
@@ -361,19 +348,32 @@ impl Worker {
                 agent: state.agent(id).map(|a| a.name.clone()).unwrap_or_default(),
                 docs: orchestrator::write_docs(&self.data_dir)?,
             };
-            orchestrator::write_folder(
-                &self.data_dir,
-                &cwd,
-                spec.system_prompt.as_deref(),
-                &values,
-            )?;
+            let template = spec
+                .system_prompt
+                .as_deref()
+                .unwrap_or(orchestrator::DEFAULT_PROMPT);
+            let text = orchestrator::fill(template, &values);
+            let path = orchestrator::write_prompt(&spool, &text)?;
+            match orchestrator::prompt_args(input.provider, &path)? {
+                Some(args) => prepared.args.extend(args),
+                // Queued until the agent is ready, like any room message.
+                None => {
+                    let master = input.room;
+                    state
+                        .submit_message_from(
+                            master,
+                            Draft {
+                                text: orchestrator::prompt_message(&text),
+                                files: Vec::new(),
+                                recipient_ids: [id].into_iter().collect(),
+                            },
+                            Author::Human,
+                            crate::bus::io::now_ms(),
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
+            }
         }
-        let prepared = launch::prepare(
-            &input,
-            id,
-            &self.data_dir,
-            &std::env::current_exe().map_err(|e| e.to_string())?,
-        )?;
         let identity = AgentRuntimeIdentity {
             launch_id: Some(prepared.manifest.launch_id),
             ..Default::default()

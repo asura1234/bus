@@ -165,17 +165,20 @@ fn load(
             spool.to_string_lossy().into_owned(),
         ),
     ];
-    Ok(LaunchExtras {
-        env,
-        args: if agent.provider == Provider::ClaudeCode {
-            vec![
-                "--settings".into(),
-                hook_path.to_string_lossy().into_owned(),
-            ]
-        } else {
-            super::launch::runtime_args(agent.provider)
-        },
-    })
+    let mut args = if agent.provider == Provider::ClaudeCode {
+        vec![
+            "--settings".into(),
+            hook_path.to_string_lossy().into_owned(),
+        ]
+    } else {
+        super::launch::runtime_args(agent.provider)
+    };
+    // An orchestrator's system prompt is a launch option; deliver it again.
+    args.extend(super::orchestrator::resume_prompt_args(
+        agent.provider,
+        &spool,
+    )?);
+    Ok(LaunchExtras { env, args })
 }
 
 fn read_json(path: &Path) -> Result<serde_json::Value, String> {
@@ -504,6 +507,21 @@ mod tests {
                 }
             );
             assert_eq!(fixture.plan, original);
+        }
+    }
+
+    #[test]
+    fn bus_resume_delivers_an_orchestrator_prompt_again() {
+        for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+            let fixture = Fixture::new(provider);
+            let spool = fixture.root.join("callbacks/owned-launch");
+            let path = crate::bus::orchestrator::write_prompt(&spool, "Run pr-1.").unwrap();
+            let extras = fixture.load().unwrap();
+            let expected = crate::bus::orchestrator::prompt_args(provider, &path)
+                .unwrap()
+                .unwrap_or_default();
+            assert!(extras.args.ends_with(&expected), "{:?}", extras.args);
+            assert_eq!(provider == Provider::Cursor, expected.is_empty());
         }
     }
 

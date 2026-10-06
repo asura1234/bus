@@ -52,6 +52,7 @@ Tab / Shift+Tab  Move fields
 Up / Down      Select path suggestions or agent type
 Tab            Complete a selected path
 Enter          Add agent / room; complete or add file
+               (in a MASTER agent's system prompt, add a line)
 Ctrl+Enter     Confirm form
 Esc            Cancel
 

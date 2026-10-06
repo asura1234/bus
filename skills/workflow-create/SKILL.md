@@ -9,8 +9,8 @@ A workflow is a living plan for one Bus room. You draft it with the human before
 kickoff and rewrite it whenever it stops matching reality. Nothing executes it;
 it is the shared picture of the work.
 
-`DOCS` below is the Bus docs folder named in your instructions (the References
-section of your CLAUDE.md or AGENTS.md).
+`DOCS` below is the Bus docs folder named in your system prompt, where Bus
+writes this guide as `workflow-create.md`.
 
 ## 1. Gather what you need
 
@@ -49,8 +49,9 @@ Always add:
 
 ## 3. Write workflow.md
 
-Copy `DOCS/templates/workflow-template.md` to `workflow.md` in your working
-folder and fill every section:
+Copy `DOCS/templates/workflow-template.md` to `DOCS/../workflows/<room>.md`,
+next to the docs and outside every repository, unless the human wants it
+elsewhere (for example tracked in a repository). Fill every section:
 
 - **Graph:** mermaid `flowchart TD`. Nodes are agent tasks named
   `agent: task`, diamonds are decisions with labeled edges, red (`:::human`)

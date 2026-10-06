@@ -1,10 +1,12 @@
 use super::*;
 use super::{
     editor::Editor,
-    forms::{Form, Orchestrates, Rename, RenameTarget, ORCHESTRATES_FIELD},
+    forms::{
+        Form, Orchestrates, PromptField, Rename, RenameTarget, ORCHESTRATES_FIELD, PROMPT_FIELD,
+    },
     render::Action,
 };
-use crate::bus::{launch::AddAgent, model::*, runtime::BusCommand};
+use crate::bus::{launch::AddAgent, model::*, orchestrator::OrchestratorSpec, runtime::BusCommand};
 use crate::{client::shell::ClientShellInput, raw_input::RawInputEvent};
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
@@ -446,6 +448,7 @@ impl BusUi {
             };
             choice.0 = choices[next];
         }
+        self.refill_orchestrator_prompt();
     }
     pub(super) fn is_master_room(&self, room: RoomId) -> bool {
         self.snapshot
@@ -504,10 +507,7 @@ impl BusUi {
             Action::Agent(agent) => self.open_terminal(agent),
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
             Action::NewAgent => {
-                let orchestrates = self
-                    .room
-                    .filter(|room| self.is_master_room(*room))
-                    .map(|_| Orchestrates::default());
+                let master = self.room.is_some_and(|room| self.is_master_room(room));
                 self.open_form(Form::Agent {
                     name: Editor::default(),
                     provider: None,
@@ -515,8 +515,15 @@ impl BusUi {
                     cwd: Editor::new("~/".into()),
                     args: Box::new(Editor::default()),
                     field: 0,
-                    orchestrates,
-                })
+                    orchestrates: master.then(Orchestrates::default),
+                    prompt: master.then(|| {
+                        Box::new(PromptField {
+                            editor: Editor::default(),
+                            filled: String::new(),
+                        })
+                    }),
+                });
+                self.refill_orchestrator_prompt();
             }
             Action::Orchestrates => {
                 if let Some(Form::Agent { field, .. }) = &mut self.form {
@@ -648,6 +655,7 @@ impl BusUi {
             if let Some(editor) = form.editor_mut() {
                 editor.insert(text);
             }
+            self.refill_orchestrator_prompt();
             self.query_paths();
             return;
         }
@@ -1233,6 +1241,20 @@ impl BusUi {
             }
             return;
         }
+        // The system prompt is multi-line: Enter adds a line, Ctrl+Enter adds the agent.
+        if code == KeyCode::Enter
+            && !modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(
+                self.form,
+                Some(Form::Agent {
+                    field: PROMPT_FIELD,
+                    ..
+                })
+            )
+        {
+            self.insert("\n");
+            return;
+        }
         if code == KeyCode::Enter && matches!(self.form, Some(Form::Agent { .. })) {
             self.add();
             return;
@@ -1279,6 +1301,7 @@ impl BusUi {
                 editor.key(code, modifiers) || editor.cursor != before
             });
         if edited || !matches!(code, KeyCode::Char(_)) {
+            self.refill_orchestrator_prompt();
             self.query_paths();
         }
     }
@@ -1327,7 +1350,9 @@ impl BusUi {
         if self.pending.iter().any(|p| {
             matches!(
                 p.command,
-                BusCommand::AddAgent(_) | BusCommand::CreateRoom(_)
+                BusCommand::AddAgent(_)
+                    | BusCommand::AddOrchestrator(..)
+                    | BusCommand::CreateRoom(_)
             )
         }) {
             return;
@@ -1350,6 +1375,7 @@ impl BusUi {
                 cwd,
                 args,
                 orchestrates,
+                prompt,
                 ..
             } => {
                 let mut missing = Vec::new();
@@ -1373,6 +1399,14 @@ impl BusUi {
                     });
                     return;
                 }
+                let system_prompt = prompt.map(|prompt| prompt.editor.text);
+                if system_prompt
+                    .as_ref()
+                    .is_some_and(|text| text.trim().is_empty())
+                {
+                    self.error = Some("System prompt is required.".into());
+                    return;
+                }
                 self.error = None;
                 if let Some(room) = self.room {
                     let input = AddAgent {
@@ -1383,8 +1417,14 @@ impl BusUi {
                         extra_args: args.text,
                         consent_project_hooks: false,
                     };
-                    let command = match orchestrates.and_then(|choice| choice.0) {
-                        Some(target) => BusCommand::AddOrchestrator(input, target),
+                    let command = match orchestrates {
+                        Some(choice) => BusCommand::AddOrchestrator(
+                            input,
+                            OrchestratorSpec {
+                                room: choice.0,
+                                system_prompt,
+                            },
+                        ),
                         None => BusCommand::AddAgent(input),
                     };
                     self.queue(command, Effect::None);
@@ -1401,12 +1441,12 @@ impl BusUi {
             }
             Form::Consent {
                 mut input,
-                orchestrates,
+                orchestrator,
                 ..
             } => {
                 input.consent_project_hooks = true;
-                let command = match orchestrates {
-                    Some(room) => BusCommand::AddOrchestrator(input, room),
+                let command = match orchestrator {
+                    Some(spec) => BusCommand::AddOrchestrator(input, spec),
                     None => BusCommand::AddAgent(input),
                 };
                 self.queue(command, Effect::None);
