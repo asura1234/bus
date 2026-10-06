@@ -545,14 +545,16 @@ impl HeadlessServer {
         let active_shell_count = self
             .clients
             .values()
-            .filter(|client| client.is_active_shell_client() && client.writer.is_some())
+            .filter(|client| client.is_active_shell_client())
             .count();
         if active_shell_count != 1 {
             return false;
         }
-        let Some(client_id) = self.clients.iter().find_map(|(&client_id, client)| {
-            (client.is_active_shell_client() && client.writer.is_some()).then_some(client_id)
-        }) else {
+        let Some(client_id) = self
+            .clients
+            .iter()
+            .find_map(|(&client_id, client)| client.is_active_shell_client().then_some(client_id))
+        else {
             return false;
         };
         self.apply_shell_tab_geometry(client_id, start_pending_agent_resumes)
@@ -564,7 +566,7 @@ impl HeadlessServer {
     ) -> bool {
         let mut viewed_tabs = HashMap::<String, Vec<u64>>::new();
         for (&client_id, client) in &self.clients {
-            if !client.is_active_shell_client() || client.writer.is_none() {
+            if !client.is_active_shell_client() {
                 continue;
             }
             let Some(tab_id) = self.shell_tab_id_for_client(client_id) else {

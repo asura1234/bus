@@ -473,11 +473,7 @@ impl HeadlessServer {
             let Some(client) = self.clients.get_mut(&client_id) else {
                 continue;
             };
-            let Some(writer) = client.writer.as_ref().cloned() else {
-                client.defer_full_render();
-                deferred += 1;
-                continue;
-            };
+            let writer = client.writer.clone();
             // The published row patch cannot carry images. Reuse the retained text/layout
             // in a graphics-capable surface message rather than invoking the full renderer.
             let prepared = if graphics_delivery.is_some() {

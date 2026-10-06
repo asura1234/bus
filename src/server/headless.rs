@@ -751,7 +751,7 @@ impl HeadlessServer {
     fn app_client_count(&self) -> usize {
         self.clients
             .values()
-            .filter(|client| client.is_active_shell_client() && client.writer.is_some())
+            .filter(|client| client.is_active_shell_client())
             .count()
     }
 
@@ -1214,17 +1214,6 @@ impl HeadlessServer {
             self.sent_window_title = None;
             return false;
         };
-        // A detached client keeps its entry with no writer, and a targeted send
-        // to one reports success without queuing anything. Caching the title
-        // against that client would skip the send once it attaches again.
-        if self
-            .clients
-            .get(&client_id)
-            .is_none_or(|client| client.writer.is_none())
-        {
-            self.sent_window_title = None;
-            return false;
-        }
         let sent = self.send_to_client(
             client_id,
             ServerMessage::WindowTitle {
@@ -1315,11 +1304,9 @@ impl HeadlessServer {
 
         let mut broken_clients: Vec<u64> = Vec::new();
         for (&client_id, client) in &mut self.clients {
-            if let Some(writer) = &client.writer {
-                if writer.control.send(serialized.clone()).is_err() {
-                    debug!(client_id, "client writer channel closed during broadcast");
-                    broken_clients.push(client_id);
-                }
+            if client.writer.control.send(serialized.clone()).is_err() {
+                debug!(client_id, "client writer channel closed during broadcast");
+                broken_clients.push(client_id);
             }
         }
 
@@ -1350,10 +1337,7 @@ impl HeadlessServer {
             let Some(client) = self.clients.get(&client_id) else {
                 continue;
             };
-            let Some(writer) = &client.writer else {
-                continue;
-            };
-            if writer.control.send(serialized.clone()).is_ok() {
+            if client.writer.control.send(serialized.clone()).is_ok() {
                 sent = true;
             } else {
                 self.remove_client_and_resize_if_needed(client_id);
@@ -1382,15 +1366,13 @@ impl HeadlessServer {
         };
 
         if let Some(client) = self.clients.get(&client_id) {
-            if let Some(writer) = &client.writer {
-                if writer.control.send(serialized).is_err() {
-                    debug!(
-                        client_id,
-                        "client writer channel closed during targeted send"
-                    );
-                    self.remove_client_and_resize_if_needed(client_id);
-                    return false;
-                }
+            if client.writer.control.send(serialized).is_err() {
+                debug!(
+                    client_id,
+                    "client writer channel closed during targeted send"
+                );
+                self.remove_client_and_resize_if_needed(client_id);
+                return false;
             }
             true
         } else {
@@ -1568,7 +1550,7 @@ impl HeadlessServer {
                     observed,
                     last_activity,
                     protocol::RenderEncoding::TerminalAnsi,
-                    Some(writer),
+                    writer,
                 );
                 connection.pixel_mouse = pixel_mouse;
                 self.clients.insert(client_id, connection);
@@ -1609,7 +1591,7 @@ impl HeadlessServer {
                     observed,
                     last_activity,
                     protocol::RenderEncoding::SemanticFrame,
-                    Some(writer),
+                    writer,
                 );
                 connection.pixel_mouse = pixel_mouse && observed.is_known();
                 connection.direct_graphics = direct_graphics;

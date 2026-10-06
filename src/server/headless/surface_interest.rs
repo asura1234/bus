@@ -42,9 +42,7 @@ impl HeadlessServer {
             }
             client.clear_deferred_render();
             if !active {
-                if let Some(writer) = &client.writer {
-                    writer.discard_pending_render();
-                }
+                client.writer.discard_pending_render();
             }
             (changed, client.shell_projection_revision)
         };

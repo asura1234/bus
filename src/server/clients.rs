@@ -187,7 +187,7 @@ pub(crate) struct ClientConnection {
     /// Whether this shell uses the endpoint-owned keymap rather than a client-owned keymap.
     pub(crate) shell_uses_endpoint_keybindings: bool,
     /// Channels for sending framed ServerMessage data to the client writer thread.
-    pub(crate) writer: Option<ClientWriter>,
+    pub(crate) writer: ClientWriter,
 }
 
 impl ClientConnection {
@@ -197,7 +197,7 @@ impl ClientConnection {
         cell_size: crate::kitty_graphics::HostCellSize,
         last_activity: u64,
         render_encoding: RenderEncoding,
-        writer: Option<ClientWriter>,
+        writer: ClientWriter,
     ) -> Self {
         Self::new_with_mode(
             ClientConnectionMode::ClientShell,
@@ -215,7 +215,7 @@ impl ClientConnection {
         cell_size: crate::kitty_graphics::HostCellSize,
         last_activity: u64,
         render_encoding: RenderEncoding,
-        writer: Option<ClientWriter>,
+        writer: ClientWriter,
     ) -> Self {
         Self {
             mode,
@@ -492,13 +492,12 @@ pub(crate) fn render_targets(
     let mut targets: Vec<RenderTarget> = clients
         .iter()
         .filter(|(_, client)| {
-            client.writer.is_some()
-                && (client.is_shell_client()
-                    || matches!(
-                        client.mode,
-                        ClientConnectionMode::TerminalAttach { .. }
-                            | ClientConnectionMode::TerminalObserve { .. }
-                    ))
+            client.is_shell_client()
+                || matches!(
+                    client.mode,
+                    ClientConnectionMode::TerminalAttach { .. }
+                        | ClientConnectionMode::TerminalObserve { .. }
+                )
         })
         .map(|(&client_id, client)| {
             (
@@ -525,8 +524,17 @@ mod tests {
             crate::kitty_graphics::HostCellSize::default(),
             1,
             crate::protocol::RenderEncoding::SemanticFrame,
-            None,
+            unread_test_writer(),
         )
+    }
+
+    /// A writer for a client whose output the test never reads; its channels
+    /// stay open so sends succeed as they do for a live client.
+    fn unread_test_writer() -> crate::server::client_transport::ClientWriter {
+        let (control_tx, control_rx) = std::sync::mpsc::channel();
+        let (render_tx, render_rx) = std::sync::mpsc::sync_channel(1);
+        std::mem::forget((control_rx, render_rx));
+        crate::server::client_transport::ClientWriter::test_channel(control_tx, render_tx)
     }
 
     #[test]

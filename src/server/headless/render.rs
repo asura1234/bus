@@ -69,9 +69,7 @@ impl HeadlessServer {
             {
                 continue;
             }
-            let Some(writer) = &client.writer else {
-                continue;
-            };
+            let writer = &client.writer;
             let serialized = match Self::frame_server_message(&ServerMessage::MouseCapture {
                 enabled,
                 sgr_pixels,
@@ -125,9 +123,7 @@ impl HeadlessServer {
             if client.host_keyboard_report_all_active == Some(report_all) {
                 continue;
             }
-            let Some(writer) = &client.writer else {
-                continue;
-            };
+            let writer = &client.writer;
             let serialized = match Self::frame_server_message(
                 &ServerMessage::ClientShellKeyboardReportAll {
                     enabled: report_all,
@@ -173,9 +169,7 @@ impl HeadlessServer {
             if client.host_keyboard_protocol_active == Some((flags, modify_other_keys_level)) {
                 continue;
             }
-            let Some(writer) = &client.writer else {
-                continue;
-            };
+            let writer = &client.writer;
             let serialized =
                 match Self::frame_server_message(&ServerMessage::DirectTerminalKeyboardProtocol {
                     flags,
@@ -212,7 +206,7 @@ impl HeadlessServer {
         let mut pane_ids = HashSet::new();
         if has_app_target {
             for (&client_id, client) in &self.clients {
-                if !client.is_active_shell_client() || client.writer.is_none() {
+                if !client.is_active_shell_client() {
                     continue;
                 }
                 let Some(target) = self.shell_target_for_client(client_id) else {
@@ -251,11 +245,7 @@ impl HeadlessServer {
     fn pty_render_targets(&self) -> (bool, HashSet<&str>) {
         let mut has_app_target = false;
         let mut direct_terminal_targets = HashSet::new();
-        for client in self
-            .clients
-            .values()
-            .filter(|client| client.writer.is_some())
-        {
+        for client in self.clients.values() {
             match &client.mode {
                 ClientConnectionMode::ClientShell if client.shell_surface_active => {
                     has_app_target = true;
@@ -311,7 +301,7 @@ impl HeadlessServer {
 
     fn any_shell_surface_contains_pane(&self, pane_id: crate::layout::PaneId) -> bool {
         self.clients.iter().any(|(&client_id, client)| {
-            if !client.is_active_shell_client() || client.writer.is_none() {
+            if !client.is_active_shell_client() {
                 return false;
             }
             let Some(target) = self.shell_target_for_client(client_id) else {
@@ -402,11 +392,7 @@ impl HeadlessServer {
                             continue;
                         }
                     };
-                    let Some(writer) = client.writer.as_ref() else {
-                        broken_clients.push(client_id);
-                        continue;
-                    };
-                    if writer.control.send(framed).is_err() {
+                    if client.writer.control.send(framed).is_err() {
                         broken_clients.push(client_id);
                         continue;
                     }
@@ -495,10 +481,7 @@ impl HeadlessServer {
             let Some(client) = self.clients.get_mut(&client_id) else {
                 continue;
             };
-            let Some(writer) = client.writer.as_ref().cloned() else {
-                crate::render_prof::event("full_render.writer_missing");
-                continue;
-            };
+            let writer = client.writer.clone();
             let has_graphics = surface_parts.as_ref().is_some_and(|(_, _, graphics, _)| {
                 !graphics.assets.is_empty() || !graphics.placements.is_empty()
             });
