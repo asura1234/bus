@@ -559,7 +559,11 @@ class StackTest(ScenarioTest):
         # cannot see two parts carrying them twice.
         r.git("switch", "-q", "feat/source")
         r.write("empty.txt", "")
+        # Windows chmod cannot set the exec bit (core.filemode=false), so stage the mode in
+        # the index; the chmod keeps POSIX's `add -A` in commit() from restaging 644.
         (r.root / "core.txt").chmod(0o755)
+        r.git("add", "-A")
+        r.git("update-index", "--chmod=+x", "core.txt")
         c5 = r.commit("chore: empty file and mode")
         r.source = c5
         r.git("switch", "-q", "master")

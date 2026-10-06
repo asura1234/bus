@@ -35,10 +35,11 @@ RULES
 ========== PREFLIGHT ==========
 repo = git rev-parse --show-toplevel
 source = git branch --show-current
-ERROR if source empty (detached HEAD) or source equals the base branch.
+ERROR if source empty (detached HEAD).
 git fetch origin
 base_ref = --base or origin/master; ERROR unless it resolves. Never infer it
   from a remote's symbolic HEAD.
+ERROR if source equals base_ref without `origin/` (splitting the base branch).
 base_sha = git merge-base <base_ref> HEAD
 source_sha = git rev-parse HEAD
 ERROR if tracked changes are uncommitted: everything to split must be committed.
@@ -82,9 +83,11 @@ FOR part in order:
   IF several open:   in a detached scratch worktree at the first parent:
                        git merge --no-ff -m "chore: integrate <ids> for <id>" <other parent branches>
                      start = that merge commit (keep its SHA as onto)
-  Create the part worktree with worktree-new semantics:
-    git worktree add -b <branch> <path> <start>
   ERROR if <branch> already exists locally or on origin.
+  git branch --no-track <branch> <start>
+  Invoke `worktree-new <branch>`: it checks out the existing branch in a new
+  worktree and provisions its cargo dependencies (plain `git worktree add`
+  alone skips that provisioning).
   Reconstruct the part: git cherry-pick <commits>; for hunk-split commits apply
   only this part's hunks and commit them with the original subject. Never drop
   or duplicate a hunk.
@@ -178,8 +181,8 @@ IF result.status == current: report and stop.
 Show the steps to the user. They rewrite branch history; continue only with
 confirmation unless the user asked for the restack explicitly.
 FOR step in result.steps (already in dependency order):
-  in the part worktree, or a scratch worktree when the part has none, run
-  step.commands in order. On conflict: resolve by intent (the part's own
+  in the part worktree, or one from `worktree-new <branch>` when the part has
+  none, run step.commands in order. On conflict: resolve by intent (the part's own
   commits win over nothing; never drop a parent change); if unsure, run
   git rebase --abort and STOP with the conflicting files.
   Verify as in BUILD (diff check, cargo check, focused tests).
