@@ -227,6 +227,34 @@ fn dev_status_explains_gate_without_claiming_delivery() {
 }
 
 #[test]
+fn dev_status_lists_the_message_files_as_absolute_paths() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    let image = dir.join("shot.png");
+    std::fs::write(&image, b"png").unwrap();
+    let receipt = call(
+        &mut worker,
+        "send",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"see","files":[image]}),
+    );
+    assert!(receipt.ok, "{receipt:?}");
+    let status = call(
+        &mut worker,
+        "status",
+        "message.status",
+        json!({"message":receipt.result["message_id"].to_string()}),
+    );
+    assert!(status.ok, "{status:?}");
+    let files = status.result["files"].as_array().expect("files array");
+    assert_eq!(files.len(), 1);
+    let path = std::path::Path::new(files[0].as_str().unwrap());
+    assert!(path.is_absolute());
+    assert_eq!(path.file_name().unwrap(), "shot.png");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn room_orchestrator_core_human_abandon_idle_request_preserves_the_agent_and_queue() {
     let (mut worker, _room, agent, dir) = fixture();
     worker

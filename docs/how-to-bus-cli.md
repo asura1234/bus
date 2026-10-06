@@ -335,6 +335,11 @@ room history renders Markdown for every message, prompts and agent replies
 alike; a newline typed in a prompt stays a line break. Copying a message or
 quoting a reply preserves its raw Markdown source.
 
+Attached files and images appear as absolute paths: in each `history` prompt's
+`files`, and in the message-level `files` of `message status` and `wait`. Images
+pasted into the Bus composer are saved under `attachments/` in the Bus data
+directory, so those paths stay readable after the session ends.
+
 ## Build reliable automation
 
 Every command accepts a global `--request-id STRING`. Supply a stable unique ID
