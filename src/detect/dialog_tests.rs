@@ -229,7 +229,7 @@ fn digest_tracks_text_options_and_selection() {
 }
 
 #[test]
-fn keys_move_from_the_marked_option_or_use_advertised_digits() {
+fn keys_move_with_arrows_from_the_selected_option_then_enter() {
     let bash = parse(CLAUDE_BASH).unwrap();
     assert_eq!(bash.keys_for(1), Some(vec!["enter"]));
     assert_eq!(bash.keys_for(3), Some(vec!["down", "down", "enter"]));
@@ -245,12 +245,71 @@ fn keys_move_from_the_marked_option_or_use_advertised_digits() {
     let codex = parse(CODEX_COMMAND).unwrap();
     assert_eq!(codex.keys_for(2), Some(vec!["down", "enter"]));
 
-    let numbered =
-        parse("Pick one\n  1. Alpha\n  2. Beta\n\nPress a number 1-2 · Esc to cancel\n").unwrap();
-    assert_eq!(numbered.keys_for(2), Some(vec!["2"]));
+    // Number shortcuts are never typed, even when the hint offers them.
+    let numbered = parse(
+        "Pick one\n› 1. Alpha\n  2. Beta\n  3. Gamma\n\nPress a number 1-3 · Esc to cancel\n",
+    )
+    .unwrap();
+    assert_eq!(numbered.keys_for(3), Some(vec!["down", "down", "enter"]));
 
-    // An unmarked selection with no number hint cannot be reached safely.
+    // An unmarked, unstyled selection cannot be reached safely.
     let unmarked = parse("  1. Yes\n  2. No\n\nEnter to select · ↑/↓ to navigate\n").unwrap();
     assert_eq!(unmarked.selected(), None);
     assert_eq!(unmarked.keys_for(1), None);
+}
+
+#[test]
+fn highlighted_options_are_selected_when_no_marker_is_drawn() {
+    // Inverse video, as list pickers draw their cursor row.
+    let inverse = "Choose a model\n\n  1. Fast\n\x1b[7m  2. Balanced\x1b[0m\n  3. Thorough\n\nEnter to select · Esc to cancel\n";
+    let dialog = parse(inverse).unwrap();
+    assert_eq!(dialog.selected(), Some(2));
+    assert_eq!(dialog.options[1].label, "Balanced");
+    assert_eq!(dialog.keys_for(3), Some(vec!["down", "enter"]));
+
+    // One colored label among plain ones, in 256-color and truecolor forms.
+    for color in ["\x1b[38;5;75m", "\x1b[38;2;120;180;255m", "\x1b[1;36m"] {
+        let screen = format!(
+            "Run this command?\n  1. \x1b[0m{color}Run once\x1b[0m\n  2. Skip\n\nEnter to confirm · Esc\n"
+        );
+        assert_eq!(parse(&screen).unwrap().selected(), Some(1), "{color:?}");
+    }
+    let three = "Pick\n\x1b[32m  1. A\x1b[0m\n\x1b[32m  2. B\x1b[0m\n\x1b[33m  3. C\x1b[39m\n\nEnter to select\n";
+    assert_eq!(parse(three).unwrap().selected(), Some(3));
+
+    // Two differently colored options, or two filled ones, are ambiguous.
+    for ambiguous in [
+        "Pick\n\x1b[32m  1. A\x1b[0m\n\x1b[33m  2. B\x1b[0m\n\nEnter to select\n",
+        "Pick\n\x1b[7m  1. A\x1b[0m\n\x1b[44m  2. B\x1b[0m\n\nEnter to select\n",
+    ] {
+        assert_eq!(parse(ambiguous).unwrap().selected(), None);
+    }
+    // Without a key hint, highlight alone does not make a list a dialog.
+    assert_eq!(parse("  1. A\n\x1b[7m  2. B\x1b[0m\n"), None);
+}
+
+#[test]
+fn ansi_markers_and_hyperlinks_parse_like_plain_text() {
+    let styled = CLAUDE_BASH
+        .replace(" ❯ 1. Yes", "\x1b[38;5;153m ❯ 1. Yes\x1b[39m")
+        .replace(
+            "Bash command",
+            "\x1b]8;;https://x\x07Bash command\x1b]8;;\x1b\\",
+        );
+    assert_eq!(parse(&styled), parse(CLAUDE_BASH));
+}
+
+#[test]
+fn id_ignores_the_selection_but_not_the_question() {
+    let dialog = parse(CLAUDE_BASH).unwrap();
+    let moved = parse(
+        &CLAUDE_BASH
+            .replace(" ❯ 1. Yes", "   1. Yes")
+            .replace("   3. No", " ❯ 3. No"),
+    )
+    .unwrap();
+    assert_eq!(moved.id(), dialog.id());
+    assert_ne!(moved.digest(), dialog.digest());
+    let other = parse(&CLAUDE_BASH.replace("curl -sS", "curl -fsS")).unwrap();
+    assert_ne!(other.id(), dialog.id());
 }

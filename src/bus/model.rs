@@ -26,6 +26,8 @@ pub(crate) enum Author {
     Human,
     Orchestrator,
     Agent(AgentId),
+    /// Bus itself, such as a notice that an agent waits on a dialog.
+    Bus,
 }
 
 /// Unique recipients in the order the sender selected them.
@@ -232,6 +234,10 @@ pub(crate) struct Room {
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
+    /// Bus notices for the Human, such as an agent waiting on a dialog in a
+    /// room without an orchestrator. They have no recipients.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) notices: Vec<Prompt>,
     pub(crate) latest_replies: BTreeMap<AgentId, Reply>,
     #[serde(default)]
     pub(crate) deletion_pending: bool,
@@ -290,6 +296,13 @@ pub(crate) struct Agent {
     /// A numbered choice dialog is visible; answer it with `agent choose`.
     #[serde(default)]
     pub(crate) dialog: bool,
+    /// What Bus last reported this agent waiting on: a dialog `id`, or
+    /// `blocked` for a blocked screen without a readable dialog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dialog_notice: Option<String>,
+    /// The reported dialog was answered through Bus, so its closing is expected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dialog_answered: bool,
     pub(crate) actionable_error: Option<String>,
     pub(crate) current_request: Option<RequestId>,
     #[serde(default)]
@@ -640,6 +653,7 @@ impl BusState {
             Room {
                 id,
                 name,
+                notices: Vec::new(),
                 notes: String::new(),
                 draft: Draft::default(),
                 unread_count: 0,
@@ -687,6 +701,7 @@ impl BusState {
                     Room {
                         id: MASTER_ROOM_ID,
                         name: MASTER_ROOM_NAME.into(),
+                        notices: Vec::new(),
                         notes: String::new(),
                         draft: Draft::default(),
                         unread_count: 0,
@@ -844,6 +859,8 @@ impl BusState {
                 status: RuntimeStatus::Launching,
                 status_revision: 0,
                 dialog: false,
+                dialog_notice: None,
+                dialog_answered: false,
                 actionable_error: None,
                 current_request: None,
                 hook_setup_confirmed: false,
@@ -1384,6 +1401,59 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent))?
             .dialog = dialog;
         Ok(())
+    }
+
+    /// Records what Bus reported the agent waiting on, or `None` once it cleared.
+    pub(crate) fn set_dialog_notice(
+        &mut self,
+        agent: AgentId,
+        notice: Option<String>,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?;
+        agent.dialog_notice = notice;
+        agent.dialog_answered = false;
+        Ok(())
+    }
+
+    pub(crate) fn mark_dialog_answered(&mut self, agent: AgentId) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?
+            .dialog_answered = true;
+        Ok(())
+    }
+
+    /// Posts a Bus notice for the Human in `room`; it is delivered to no agent.
+    pub(crate) fn post_notice(
+        &mut self,
+        room: RoomId,
+        text: String,
+        now_ms: u64,
+    ) -> Result<PromptId, ModelError> {
+        const KEPT_NOTICES: usize = 50;
+        let id = PromptId(self.allocate_id());
+        let visible = self.visible_room == Some(room);
+        let room = self
+            .rooms
+            .get_mut(&room)
+            .ok_or(ModelError::UnknownRoom(room))?;
+        room.notices.push(Prompt {
+            id,
+            author: Author::Bus,
+            text,
+            files: Vec::new(),
+            recipient_ids: AgentRecipients::default(),
+            submitted_at_ms: now_ms,
+        });
+        let excess = room.notices.len().saturating_sub(KEPT_NOTICES);
+        room.notices.drain(..excess);
+        if !visible {
+            room.unread_count = room.unread_count.saturating_add(1);
+        }
+        Ok(id)
     }
 
     pub(crate) fn observe_status(

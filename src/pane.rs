@@ -3056,13 +3056,14 @@ impl PaneRuntime {
         self.terminal.visible_text()
     }
 
-    pub(crate) fn visible_text_snapshot_with_seq(&self) -> Option<(String, u64)> {
+    /// The visible screen with ANSI styling, as dialog detection reads it.
+    pub(crate) fn visible_ansi_snapshot_with_seq(&self) -> Option<(String, u64)> {
         for _ in 0..3 {
             let before = self.content_seq.load(Ordering::Acquire);
             if !before.is_multiple_of(2) {
                 continue;
             }
-            let text = self.terminal.visible_text();
+            let text = self.terminal.visible_ansi();
             let after = self.content_seq.load(Ordering::Acquire);
             if before == after {
                 return Some((text, after));
@@ -3211,7 +3212,7 @@ impl PaneRuntime {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let Some(dialog) = crate::detect::dialog::parse(&self.terminal.visible_text())
+        let Some(dialog) = crate::detect::dialog::parse(&self.terminal.visible_ansi())
             .filter(|dialog| dialog.digest() == expected_digest)
         else {
             return Ok(DialogChoice::Stale);

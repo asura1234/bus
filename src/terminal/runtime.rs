@@ -519,8 +519,8 @@ impl TerminalRuntime {
         None
     }
 
-    pub(crate) fn visible_text_snapshot_with_seq(&self) -> Option<(String, u64)> {
-        self.0.visible_text_snapshot_with_seq()
+    pub(crate) fn visible_ansi_snapshot_with_seq(&self) -> Option<(String, u64)> {
+        self.0.visible_ansi_snapshot_with_seq()
     }
 
     pub(crate) fn visible_text_snapshot_with_dimensions(&self) -> Option<(String, u16, u16, u64)> {

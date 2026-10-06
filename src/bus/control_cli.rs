@@ -60,7 +60,9 @@ A MASTER agent launches with an orchestrator system prompt, the built-in one unl
 existing provider session by its UUID; quit that session elsewhere first.
 Use --to all explicitly for all room agents.
 agent dialog shows a numbered choice dialog (permission, trust or question prompt) and a
-single-use fingerprint; agent choose answers it only while that exact dialog is still shown.
+single-use fingerprint; agent choose answers it with Up/Down and Enter, only while that
+exact dialog is still shown. Bus messages a room's orchestrator about each dialog, and
+wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
 room seen clears a room's unread count without changing the visible Bus view.
@@ -134,6 +136,17 @@ fn timeout_response(id: &str, last_status: Value) -> Response {
     response
 }
 
+/// A recipient waits on a dialog, so waiting longer would only run out the clock.
+fn dialog_response(id: &str, last_status: Value) -> Response {
+    let mut response = Response::failure(
+        id,
+        "agent_waiting_on_dialog",
+        "A recipient is waiting on a dialog; answer it with agent dialog and agent choose, then wait again",
+    );
+    response.result = last_status;
+    response
+}
+
 fn execute(
     command: ParsedCommand,
     mut send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
@@ -165,6 +178,12 @@ fn execute(
         response.id.clone_from(&id);
         if !response.ok || deadline.is_none() || response.result["complete"] == true {
             return response;
+        }
+        if response.result["waiting_on_dialog"]
+            .as_array()
+            .is_some_and(|agents| !agents.is_empty())
+        {
+            return dialog_response(&id, response.result);
         }
         last_status = response.result;
         if let Some(deadline) = deadline {
@@ -1301,5 +1320,27 @@ mod tests {
         assert_eq!(response["ok"], false);
         assert_eq!(response["error"]["code"], "timeout");
         assert_eq!(response["result"], status);
+    }
+
+    #[test]
+    fn wait_returns_as_soon_as_a_recipient_waits_on_a_dialog() {
+        let pending =
+            json!({"message_id": 19, "complete": false, "waiting_on_dialog": [], "requests": []});
+        let blocked = json!({"message_id": 19, "complete": false, "waiting_on_dialog": [7], "requests": [{
+            "request_id": 41, "agent_id": 7, "stage": "delivered", "dialog": true, "reply": null,
+        }]});
+        let mut calls = 0;
+        let (outcome, response) = run_captured(
+            &["wait", "--message", "19", "--timeout", "600"],
+            |request, _| {
+                calls += 1;
+                let status = if calls == 1 { &pending } else { &blocked };
+                Ok(Response::success(&request.id, status.clone()))
+            },
+        );
+        assert_eq!(calls, 2);
+        assert!(outcome.is_err());
+        assert_eq!(response["error"]["code"], "agent_waiting_on_dialog");
+        assert_eq!(response["result"], blocked);
     }
 }

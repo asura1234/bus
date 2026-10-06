@@ -5,6 +5,8 @@ mod callback_runtime;
 mod commands;
 #[path = "runtime_control.rs"]
 mod dev_control;
+#[path = "runtime_dialogs.rs"]
+mod dialogs;
 #[path = "runtime_resume.rs"]
 mod resume;
 use super::{
@@ -193,6 +195,8 @@ struct Worker {
     error: Option<String>,
     storage_failed: bool,
     branch_checks: BTreeMap<AgentId, std::time::Instant>,
+    /// Each agent's latest dialog wait and how many polls it has held.
+    dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
     delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
     dev_enabled: bool,
     dev_receipts: BTreeMap<String, (super::control::Request, super::control::Response)>,
@@ -236,6 +240,7 @@ impl Worker {
             error: None,
             storage_failed: false,
             branch_checks: BTreeMap::new(),
+            dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
             dev_enabled: false,
             dev_receipts: BTreeMap::new(),
@@ -433,6 +438,7 @@ impl Worker {
         };
         let mut state = self.state.clone();
         let mut rebound = Vec::new();
+        let mut waits = Vec::new();
         for agent in self.state.agents() {
             let info = infos
                 .iter()
@@ -512,9 +518,18 @@ impl Worker {
             state
                 .observe_status(agent.id, status, super::io::now_ms())
                 .map_err(|e| e.to_string())?;
+            let dialog_id = info.and_then(|info| info.dialog_id.clone());
             state
-                .observe_dialog(agent.id, info.is_some_and(|info| info.dialog))
+                .observe_dialog(agent.id, dialog_id.is_some())
                 .map_err(|e| e.to_string())?;
+            if info.is_some() {
+                waits.push((
+                    agent.id,
+                    dialog_id.or_else(|| {
+                        (status == RuntimeStatus::Blocked).then(|| dialogs::BLOCKED.to_owned())
+                    }),
+                ));
+            }
             if let Some(info) = info {
                 let cwd = info
                     .foreground_cwd
@@ -546,7 +561,7 @@ impl Worker {
                 previous_terminal_id = ?previous, terminal_id = current,
                 "Reconnected the saved provider conversation; request ownership preserved");
         }
-        Ok(())
+        self.notify_dialogs(waits)
     }
 
     #[cfg(test)]

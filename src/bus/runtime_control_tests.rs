@@ -802,6 +802,7 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
                     },
                 ],
                 hint: Some("Press enter to continue".into()),
+                id: "dialog-id".into(),
                 digest: "dialog-digest".into(),
             }),
         }

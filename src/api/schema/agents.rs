@@ -39,6 +39,8 @@ pub struct AgentDialog {
     /// The key hint below the options, such as `Esc to cancel`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Identifies the question and options, whichever option is selected.
+    pub id: String,
     /// Identifies this exact dialog, including its selected option.
     pub digest: String,
 }
@@ -280,9 +282,9 @@ pub struct AgentInfo {
     pub agent_status: AgentStatus,
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub screen_detection_skipped: bool,
-    /// A numbered choice dialog is visible and waits for an answer.
-    #[serde(default, skip_serializing_if = "super::is_false")]
-    pub dialog: bool,
+    /// The `id` of the numbered choice dialog waiting for an answer, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog_id: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub state_labels: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

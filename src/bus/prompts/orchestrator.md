@@ -43,10 +43,12 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   deleting work, changing the goal, or when reviewers or best-of-N candidates
   disagree sharply. If the human gave you authority for a decision, decide,
   log it, and tell them.
-- Agents stop at permission, trust and question dialogs; `bus state` marks
-  them `dialog: true`. Read one with `bus agent dialog AGENT` and answer it with
-  `bus agent choose AGENT --option N --fingerprint F`. Ask the human before
-  approving anything destructive or outward-facing.
+- Agents stop at permission, trust and question dialogs. Bus messages you
+  each one with its options and the `bus agent choose AGENT --option N
+  --fingerprint F` command to answer it, and `bus wait` returns early with
+  `agent_waiting_on_dialog`. Answer promptly; run `bus agent dialog AGENT` if
+  the fingerprint is stale. Ask the human before approving anything
+  destructive or outward-facing.
 - Delivery is not completion. A task is done when `bus message status` shows
   `complete: true` and you have read the reply.
 

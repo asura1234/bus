@@ -2,9 +2,11 @@
 //!
 //! Permission prompts, trust prompts and question panels from Claude Code,
 //! Codex and similar TUIs all render a contiguous block of `1. ...`, `2. ...`
-//! options, the selected one led by a marker such as `❯` or `›`, with the
-//! question above and usually a key hint below. Only the last numbered block
-//! on screen can be the live dialog; earlier ones are transcript.
+//! options, the selected one led by a marker such as `❯` or `›` or drawn
+//! highlighted, with the question above and usually a key hint below. Only the
+//! last numbered block on screen can be the live dialog; earlier ones are
+//! transcript. The screen may carry ANSI styling, which is how a highlighted
+//! selection is found when no marker is drawn.
 
 use sha2::{Digest, Sha256};
 
@@ -33,6 +35,17 @@ pub(crate) struct DialogOption {
 }
 
 impl Dialog {
+    /// Identifies this dialog by its question and options, whichever option is
+    /// selected, so a moved selection is still the same dialog.
+    pub(crate) fn id(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(self.text.as_bytes());
+        for option in &self.options {
+            hasher.update(format!("\0{}\0{}", option.number, option.label));
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
     /// Identifies this exact dialog, including which option is selected.
     pub(crate) fn digest(&self) -> String {
         let mut hasher = Sha256::new();
@@ -55,16 +68,11 @@ impl Dialog {
             .map(|option| option.number)
     }
 
-    /// The keys that choose `number`, or `None` when the dialog shows no way
-    /// to reach it safely. A hint that advertises number keys gets the digit;
-    /// otherwise the selection moves with arrows from the marked option and
-    /// Enter confirms. Without a marker the current selection is unknown.
+    /// The keys that choose `number`: arrows from the selected option, then
+    /// Enter. `None` when the option does not exist or no selection is visible.
     pub(crate) fn keys_for(&self, number: u32) -> Option<Vec<&'static str>> {
         if !self.options.iter().any(|option| option.number == number) {
             return None;
-        }
-        if self.hint.as_deref().is_some_and(advertises_number_keys) && number <= 9 {
-            return Some(vec![DIGITS[number as usize]]);
         }
         let selected = self.selected()?;
         let step = if number > selected { "down" } else { "up" };
@@ -74,19 +82,15 @@ impl Dialog {
     }
 }
 
-const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
-
-fn advertises_number_keys(hint: &str) -> bool {
-    let hint = hint.to_lowercase();
-    hint.contains("number") || hint.contains("1-") || hint.contains("1–")
-}
-
 struct OptionLine {
     selected: bool,
     number: u32,
     /// Column of the number, so wrapped label lines can be recognised.
     column: usize,
     label: String,
+    /// Character index of the label in its screen line, to read its style.
+    label_at: usize,
+    line: usize,
 }
 
 /// Strips terminal box borders, keeping the indentation inside them.
@@ -103,8 +107,8 @@ fn indentation(line: &str) -> usize {
     line.chars().take_while(|c| c.is_whitespace()).count()
 }
 
-fn option_line(line: &str) -> Option<OptionLine> {
-    let line = unboxed(line);
+fn option_line(full: &str) -> Option<OptionLine> {
+    let line = unboxed(full);
     let indent = indentation(line);
     let mut rest = line.trim_start();
     let mut selected = false;
@@ -124,11 +128,15 @@ fn option_line(line: &str) -> Option<OptionLine> {
     if label.is_empty() {
         return None;
     }
+    // `label` is a slice of `line`, which is a slice of the screen line.
+    let offset = label.as_ptr() as usize - full.as_ptr() as usize;
     Some(OptionLine {
         selected,
         number,
         column,
         label: label.to_owned(),
+        label_at: full[..offset].chars().count(),
+        line: 0,
     })
 }
 
@@ -159,9 +167,11 @@ fn is_hint(line: &str) -> bool {
     HINT_WORDS.iter().any(|word| line.contains(word))
 }
 
-/// The live dialog on `screen`, or `None` when no choice dialog is visible.
+/// The live dialog on `screen`, plain or ANSI-styled, or `None` when no choice
+/// dialog is visible.
 pub(crate) fn parse(screen: &str) -> Option<Dialog> {
-    let lines: Vec<&str> = screen.lines().collect();
+    let (texts, styles) = styled_lines(screen);
+    let lines: Vec<&str> = texts.iter().map(String::as_str).collect();
     // The last option numbered 1 starts the only block that can be live.
     let start = lines
         .iter()
@@ -169,10 +179,11 @@ pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     let mut options: Vec<OptionLine> = Vec::new();
     let mut end = start;
     for (index, line) in lines.iter().enumerate().skip(start) {
-        if let Some(option) = option_line(line) {
+        if let Some(mut option) = option_line(line) {
             if option.number as usize != options.len() + 1 {
                 break;
             }
+            option.line = index;
             options.push(option);
             end = index + 1;
             continue;
@@ -216,8 +227,23 @@ pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     let prompt_below = after
         .iter()
         .any(|line| line.starts_with(MARKERS) && option_line(line).is_none());
-    if prompt_below || (hint.is_none() && !options.iter().any(|option| option.selected)) {
+    let marked = options.iter().any(|option| option.selected);
+    if prompt_below || (hint.is_none() && !marked) {
         return None;
+    }
+    if !marked {
+        let label_styles: Vec<Style> = options
+            .iter()
+            .map(|option| {
+                styles[option.line]
+                    .get(option.label_at)
+                    .copied()
+                    .unwrap_or_default()
+            })
+            .collect();
+        if let Some(index) = highlighted(&label_styles) {
+            options[index].selected = true;
+        }
     }
     Some(Dialog {
         text: title(&lines[..start]),
@@ -260,6 +286,139 @@ fn title(above: &[&str]) -> String {
     }
     collected.reverse();
     collected.join("\n")
+}
+
+/// How one screen character is drawn, as far as selection highlights go.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Style {
+    bold: bool,
+    inverse: bool,
+    fg: Option<u32>,
+    bg: Option<u32>,
+}
+
+/// The option drawn unlike the others: the only inverse or filled one, or the
+/// only one styled differently from options that all agree. With two options
+/// the other one must be plain, or the highlight is ambiguous.
+fn highlighted(styles: &[Style]) -> Option<usize> {
+    let filled: Vec<usize> = (0..styles.len())
+        .filter(|&index| styles[index].inverse || styles[index].bg.is_some())
+        .collect();
+    if !filled.is_empty() {
+        return (filled.len() == 1).then(|| filled[0]);
+    }
+    let mut candidates = (0..styles.len()).filter(|&index| {
+        let mut others = styles
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != index)
+            .map(|(_, style)| style);
+        let Some(first) = others.next() else {
+            return false;
+        };
+        others.all(|style| style == first)
+            && *first != styles[index]
+            && (styles.len() >= 3 || *first == Style::default())
+    });
+    let found = candidates.next();
+    candidates.next().is_none().then_some(found).flatten()
+}
+
+/// Splits a screen into plain lines and the style of each of their characters,
+/// following SGR sequences and skipping every other escape sequence.
+fn styled_lines(screen: &str) -> (Vec<String>, Vec<Vec<Style>>) {
+    let mut texts = vec![String::new()];
+    let mut styles = vec![Vec::new()];
+    let mut style = Style::default();
+    let mut chars = screen.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => match chars.next() {
+                Some('[') => {
+                    let mut params = String::new();
+                    for c in chars.by_ref() {
+                        if ('\x40'..='\x7e').contains(&c) {
+                            if c == 'm' {
+                                apply_sgr(&mut style, &params);
+                            }
+                            break;
+                        }
+                        params.push(c);
+                    }
+                }
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\n' => {
+                texts.push(String::new());
+                styles.push(Vec::new());
+            }
+            '\r' => {}
+            c => {
+                texts.last_mut().unwrap().push(c);
+                styles.last_mut().unwrap().push(style);
+            }
+        }
+    }
+    (texts, styles)
+}
+
+fn apply_sgr(style: &mut Style, params: &str) {
+    let mut codes = params.split(';').peekable();
+    if params.is_empty() {
+        *style = Style::default();
+    }
+    while let Some(code) = codes.next() {
+        // Colon form: one parameter such as `38:2::255:0:0` or `48:5:236`.
+        if code.contains(':') {
+            let parts: Vec<u32> = code
+                .split(':')
+                .filter_map(|part| part.parse().ok())
+                .collect();
+            let color = match parts.as_slice() {
+                [_, 5, index] => Some(*index),
+                [_, 2, .., r, g, b] => Some(0x100_0000 | r << 16 | g << 8 | b),
+                _ => None,
+            };
+            match parts.first() {
+                Some(38) => style.fg = color,
+                Some(48) => style.bg = color,
+                _ => {}
+            }
+            continue;
+        }
+        let extended = |codes: &mut std::iter::Peekable<std::str::Split<'_, char>>| {
+            let mut next = || codes.next().and_then(|part| part.parse::<u32>().ok());
+            match next() {
+                Some(5) => next(),
+                Some(2) => {
+                    let (r, g, b) = (next()?, next()?, next()?);
+                    Some(0x100_0000 | r << 16 | g << 8 | b)
+                }
+                _ => None,
+            }
+        };
+        match code.parse::<u32>().unwrap_or(0) {
+            0 => *style = Style::default(),
+            1 => style.bold = true,
+            22 => style.bold = false,
+            7 => style.inverse = true,
+            27 => style.inverse = false,
+            code @ (30..=37 | 90..=97) => style.fg = Some(code),
+            39 => style.fg = None,
+            code @ (40..=47 | 100..=107) => style.bg = Some(code),
+            49 => style.bg = None,
+            38 => style.fg = extended(&mut codes),
+            48 => style.bg = extended(&mut codes),
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]

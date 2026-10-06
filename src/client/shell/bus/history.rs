@@ -157,6 +157,16 @@ impl History {
                 .requests
                 .insert(request.agent_id, request);
         }
+        // Bus notices for the Human read like messages addressed to nobody.
+        for prompt in &room.notices {
+            exchanges.insert(
+                (prompt.submitted_at_ms, prompt.id.0),
+                Exchange {
+                    prompt,
+                    requests: BTreeMap::new(),
+                },
+            );
+        }
         // Retain compatibility with saved latest-only records.
         if let Some(prompt) = room.latest_prompt.as_ref().filter(|prompt| {
             !exchanges
@@ -192,6 +202,9 @@ impl History {
                     header.push((", ".into(), Tone::Muted));
                 }
                 header.push((agent.name.clone(), Tone::Agent(agent.id)));
+            }
+            if prompt.recipient_ids.is_empty() {
+                header.push(("You".into(), Tone::You));
             }
             header.push((
                 format!("  {}", timestamp(prompt.submitted_at_ms, now)),
@@ -627,6 +640,7 @@ fn participant_label(state: &BusState, participant: &Author) -> String {
     match participant {
         Author::Human => "You".into(),
         Author::Orchestrator => "Orchestrator".into(),
+        Author::Bus => "Bus".into(),
         Author::Agent(id) => state
             .agent(*id)
             .map(|agent| agent.name.clone())
@@ -638,7 +652,7 @@ fn participant_tone(participant: &Author) -> Tone {
     match participant {
         Author::Agent(id) => Tone::Agent(*id),
         Author::Human => Tone::You,
-        Author::Orchestrator => Tone::Muted,
+        Author::Orchestrator | Author::Bus => Tone::Muted,
     }
 }
 
@@ -657,6 +671,7 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         }
     }
     room.latest_prompt.as_ref().map(|p| p.id.0).hash(&mut hash);
+    room.notices.last().map(|p| p.id.0).hash(&mut hash);
     for reply in room.latest_replies.values() {
         (reply.request_id.0, reply.received_at_ms).hash(&mut hash);
     }

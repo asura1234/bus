@@ -633,7 +633,7 @@ fn dialog_observation(
     agent: &crate::api::schema::AgentInfo,
     runtime: &crate::terminal::TerminalRuntime,
 ) -> Option<AgentDialogObservation> {
-    let (screen, content_revision) = runtime.visible_text_snapshot_with_seq()?;
+    let (screen, content_revision) = runtime.visible_ansi_snapshot_with_seq()?;
     Some(AgentDialogObservation {
         terminal_id: agent.terminal_id.clone(),
         pane_id: agent.pane_id.clone(),
@@ -643,6 +643,7 @@ fn dialog_observation(
             .map(|session| session.value.clone()),
         content_revision,
         dialog: crate::detect::dialog::parse(&screen).map(|dialog| AgentDialog {
+            id: dialog.id(),
             digest: dialog.digest(),
             text: dialog.text,
             options: dialog
@@ -1269,7 +1270,7 @@ mod tests {
     async fn agent_dialog_choose_moves_from_the_selected_option_then_confirms() {
         let (mut app, mut writes) = app_with_dialog(CLAUDE_BASH_DIALOG, Some("session"));
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        assert!(app.agent_info(0, pane_id).unwrap().dialog);
+        assert!(app.agent_info(0, pane_id).unwrap().dialog_id.is_some());
         let observation = observe_dialog(&mut app);
         let dialog = observation.dialog.clone().unwrap();
         assert_eq!(dialog.text, "Do you want to proceed?");
@@ -1287,6 +1288,33 @@ mod tests {
         assert_eq!(choice.keys, ["down", "down", "enter"]);
         let moves = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
         assert_eq!(moves.unwrap().unwrap(), Bytes::from_static(b"\x1b[B\x1b[B"));
+        let enter = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
+        assert_eq!(enter.unwrap().unwrap(), Bytes::from_static(b"\r"));
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_choose_finds_a_highlighted_selection_without_a_marker() {
+        // The cursor row is drawn in inverse video; no marker character.
+        let screen = b" Choose a model\r\n\r\n   1. Fast\r\n\x1b[7m   2. Balanced\x1b[0m\r\n   3. Thorough\r\n\r\n Enter to select \xc2\xb7 Esc to cancel\r\n";
+        let (mut app, mut writes) = app_with_dialog(screen, Some("session"));
+        let observation = observe_dialog(&mut app);
+        let dialog = observation.dialog.clone().unwrap();
+        let selected: Vec<_> = dialog
+            .options
+            .iter()
+            .map(|option| option.selected)
+            .collect();
+        assert_eq!(selected, [false, true, false]);
+        let choice = chosen(&choose(
+            &mut app,
+            &observation,
+            Some("session"),
+            &dialog.digest,
+            1,
+        ));
+        assert_eq!(choice.keys, ["up", "enter"]);
+        let moves = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
+        assert_eq!(moves.unwrap().unwrap(), Bytes::from_static(b"\x1b[A"));
         let enter = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
         assert_eq!(enter.unwrap().unwrap(), Bytes::from_static(b"\r"));
     }
@@ -1340,7 +1368,7 @@ mod tests {
             .test_process_pty_bytes(b"\x1b[2J\x1b[H\xe2\x9d\xaf \r\n");
         let idle = observe_dialog(&mut app);
         assert_eq!(idle.dialog, None);
-        assert!(!app.agent_info(0, pane_id).unwrap().dialog);
+        assert_eq!(app.agent_info(0, pane_id).unwrap().dialog_id, None);
         assert!(!chosen(&choose(&mut app, &idle, Some("session"), &digest, 1)).written);
         assert!(writes.try_recv().is_err());
     }

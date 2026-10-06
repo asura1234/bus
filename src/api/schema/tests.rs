@@ -733,6 +733,7 @@ fn agent_dialog_observation_round_trips_with_and_without_a_dialog() {
                 selected: true,
             }],
             hint: None,
+            id: "id".into(),
             digest: "digest".into(),
         }),
     ] {

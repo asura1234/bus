@@ -590,7 +590,7 @@ impl Worker {
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
     }
 
-    fn dev_message(&self, message: PromptId) -> Result<Value, String> {
+    pub(super) fn dev_message(&self, message: PromptId) -> Result<Value, String> {
         let mut requests = self
             .state
             .requests()
@@ -607,12 +607,23 @@ impl Worker {
                 .unwrap_or(usize::MAX)
         });
         Ok(
-            json!({"message_id":message,"files":requests[0].prompt.files,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"requests":requests.iter().map(|r| {
+            json!({"message_id":message,"files":requests[0].prompt.files,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"waiting_on_dialog":requests.iter().filter(|r| self.waiting_on_dialog(r)).map(|r| r.agent_id).collect::<Vec<_>>(),"requests":requests.iter().map(|r| {
             let agent = self.state.agent(r.agent_id);
             let stage = match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" };
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"reason":if r.phase==RequestPhase::Queued {agent.and_then(crate::bus::diagnostics::wait_reason)}else{None},"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
+            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"reason":if r.phase==RequestPhase::Queued {agent.and_then(crate::bus::diagnostics::wait_reason)}else{None},"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
         }).collect::<Vec<_>>()}),
         )
+    }
+
+    /// An unsettled request whose agent shows a dialog or a blocked screen.
+    fn waiting_on_dialog(&self, request: &Request) -> bool {
+        !matches!(
+            request.phase,
+            RequestPhase::Completed | RequestPhase::Abandoned
+        ) && self
+            .state
+            .agent(request.agent_id)
+            .is_some_and(|agent| agent.dialog || agent.status == RuntimeStatus::Blocked)
     }
 
     pub(super) fn dev_read(
@@ -807,7 +818,7 @@ impl Worker {
                 session_id,
                 content_revision: observation.content_revision,
                 dialog_digest: dialog.digest.clone(),
-                dialog_shape: dialog_shape(dialog),
+                dialog_shape: dialog.id.clone(),
                 options: dialog.options.len() as u32,
                 observed_at_ns: crate::bus::io::now_ns(),
             })?),
@@ -878,6 +889,12 @@ impl Worker {
                 ))
             }
         };
+        // Its closing is expected now, so no "closed on its own" follow-up.
+        let mut answered = self.state.clone();
+        answered
+            .mark_dialog_answered(id)
+            .map_err(|error| error.to_string())?;
+        self.save(answered)?;
         // Moves are confirmed after a short delay, so watch until the dialog
         // closes or another one replaces it.
         let mut outcome = "unchanged";
@@ -894,7 +911,7 @@ impl Worker {
             outcome = match &observation.dialog {
                 None => "closed",
                 Some(dialog) if dialog.digest == claims.dialog_digest => "unchanged",
-                Some(dialog) if dialog_shape(dialog) == claims.dialog_shape => "selection_moved",
+                Some(dialog) if dialog.id == claims.dialog_shape => "selection_moved",
                 Some(_) => "replaced",
             };
             after = observation.dialog;
@@ -910,15 +927,6 @@ impl Worker {
             "dialog": after.as_ref().map(dialog_json),
         }))
     }
-}
-
-fn dialog_shape(dialog: &schema::AgentDialog) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(dialog.text.as_bytes());
-    for option in &dialog.options {
-        hasher.update(format!("\0{}\0{}", option.number, option.label));
-    }
-    format!("{:x}", hasher.finalize())
 }
 
 fn dialog_json(dialog: &schema::AgentDialog) -> Value {

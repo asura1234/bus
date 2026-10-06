@@ -6873,6 +6873,10 @@
                 "null"
               ]
             },
+            "id": {
+              "description": "Identifies the question and options, whichever option is selected.",
+              "type": "string"
+            },
             "options": {
               "items": {
                 "$ref": "#/schemas/success_response/$defs/AgentDialogOption"
@@ -6887,6 +6891,7 @@
           "required": [
             "text",
             "options",
+            "id",
             "digest"
           ],
           "type": "object"
@@ -7006,9 +7011,12 @@
                 "null"
               ]
             },
-            "dialog": {
-              "description": "A numbered choice dialog is visible and waits for an answer.",
-              "type": "boolean"
+            "dialog_id": {
+              "description": "The `id` of the numbered choice dialog waiting for an answer, if any.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "display_agent": {
               "type": [
