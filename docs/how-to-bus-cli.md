@@ -646,7 +646,20 @@ bus quit
 ```
 
 A successful `quit` means the request was queued for the UI, which then saves
-unsent drafts and shuts the session down. It does not wait for the exit.
+unsent drafts and exits. It does not wait for the exit. The session's server and
+its agents keep running so `bus resume` can reattach to them.
+
+Stop the session's server and every agent pane it hosts:
+
+```sh
+bus stop
+```
+
+`stop` targets the same session as control commands (`BUS_DATA_DIR`, else the
+last opened session) and works without `--dev`. It waits until the server is
+gone and prints `{"stopped":true}`, or `{"stopped":false}` when no server was
+running. An attached UI loses its server and exits without saving drafts, so
+run `bus quit` (or press Ctrl+C) first, as the end-to-end check does.
 A destructive command without `--confirm` fails and names the missing flag.
 
 Deletion closes an agent's terminal only while the running server still

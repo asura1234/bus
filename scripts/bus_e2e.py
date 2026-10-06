@@ -268,9 +268,11 @@ class Bus:
             except subprocess.TimeoutExpired:
                 os.killpg(self.child.pid, signal.SIGTERM)
                 self.child.wait(timeout=5)
-        # The headless server outlives the client; stop it so agents exit too.
-        subprocess.run([str(self.binary), "session", "stop", "bus"], env=self.env, capture_output=True,
-                       timeout=20, check=False)
+        # The headless server outlives the client; stop it so agents exit too. Killing is the fallback.
+        stop = subprocess.run([str(self.binary), "stop"], env=self.env, capture_output=True, text=True,
+                              timeout=20, check=False)
+        report["stop"] = (stop.stdout.strip() if stop.returncode == 0
+                          else f"exit {stop.returncode}: {stop.stderr.strip()}")
         killed = []
         for sig in (signal.SIGTERM, signal.SIGKILL):
             deadline = time.monotonic() + 5

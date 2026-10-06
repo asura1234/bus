@@ -78,6 +78,9 @@ agent read also works while an agent is launching (e.g. to see a provider trust 
 runtime.session_verified is false until its provider session starts.
 agent details and settings color-blind set the TUI toggles; state shows both.
 quit queues the TUI's save-and-quit (as Ctrl+Q); its receipt only attests queuing.
+quit leaves the session server and its agents running for bus resume; to end them, run
+bus stop (no --dev needed), which stops the server, closes every agent pane and prints
+{\"stopped\":true}, or {\"stopped\":false} when no server was running.
 Commands only connect to the existing instance in BUS_DATA_DIR; they never start or enable it.";
 
 pub fn run(data_dir: &Path, args: &[String]) -> io::Result<()> {

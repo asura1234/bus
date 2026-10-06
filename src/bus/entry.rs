@@ -3,13 +3,14 @@ use std::{io, path::PathBuf};
 
 use super::local_sessions::{LocalSessionRegistry, ResumeTarget};
 
-const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last";
+const USAGE: &str = "Usage: bus [--dev] [--paths | --help]\n       bus sessions\n       bus [--dev] resume <session-id>\n       bus [--dev] resume --last\n       bus stop";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Action {
     Run,
     Sessions,
     Resume(ResumeTarget),
+    Stop,
     Paths,
     Help,
     Control(Vec<String>),
@@ -45,6 +46,10 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
             }
             "sessions" if action.is_none() => {
                 action = Some(Action::Sessions);
+                index += 1;
+            }
+            "stop" if action.is_none() => {
+                action = Some(Action::Stop);
                 index += 1;
             }
             "resume" if action.is_none() => {
@@ -119,7 +124,8 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             let session = registry.resume(target.clone()).map_err(io::Error::other)?;
             (session.root, Some(session.id))
         }
-        Action::Control(_) => match explicit_root {
+        // Stop targets the same session as control commands.
+        Action::Control(_) | Action::Stop => match explicit_root {
             Some(root) => (root, None),
             None => {
                 let session = registry
@@ -161,6 +167,16 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     crate::session::configure_from_args(&session).map_err(io::Error::other)?;
     match invocation.action {
         Action::Control(control_args) => super::control_cli::run(&root, &control_args),
+        Action::Stop => {
+            // Stopping the server closes every agent pane; an attached UI exits
+            // without saving drafts, so quit it first when one is open.
+            let running = crate::server::autodetect::is_server_listening();
+            if running {
+                crate::session::stop_active_server().map_err(io::Error::other)?;
+            }
+            println!("{}", serde_json::json!({"stopped": running}));
+            Ok(())
+        }
         Action::Run | Action::Resume(_) => {
             if let Some(id) = &local_session_id {
                 eprintln!("Bus session: {id}");
@@ -202,7 +218,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
 
 fn print_help() {
     println!("{}\n", super::control_cli::HELP);
-    println!("Bus — coordinate selected agents in native terminal rooms\n\n{USAGE}\n\nA plain `bus` launch always creates a new local session.\n`bus sessions` lists resumable sessions, their rooms, and recent activity.\n`bus resume <session-id>` resumes that exact session.\n`bus resume --last` resumes the last opened session.\n--dev enables developer log files, excluding input/content dumps.\nExisting servers keep their original log level; they are never automatically restarted.\n--paths shows data and log directories without starting a session.\nBUS_DATA_DIR is an exact isolated-root override for development and tests; it cannot be combined with resume.\n\nCtrl+Shift+R room · Ctrl+N agent · Ctrl+F files · F2 rename · F3 notes\n@ choose agents · + choose files (type the shifted symbols)\nEnter send · Shift+Enter (supported hosts) / Ctrl+J newline\nCtrl+A/E line start/end · Ctrl+R history search · Ctrl+Shift+E composer size\nF6 room · Ctrl+C save and quit (Ctrl+Q also works)\n\nBuilt on Herdr; upstream license and attribution are preserved.");
+    println!("Bus — coordinate selected agents in native terminal rooms\n\n{USAGE}\n\nA plain `bus` launch always creates a new local session.\n`bus sessions` lists resumable sessions, their rooms, and recent activity.\n`bus resume <session-id>` resumes that exact session.\n`bus resume --last` resumes the last opened session.\n`bus stop` stops the session's server and closes its agent panes; quit an open UI first.\n--dev enables developer log files, excluding input/content dumps.\nExisting servers keep their original log level; they are never automatically restarted.\n--paths shows data and log directories without starting a session.\nBUS_DATA_DIR is an exact isolated-root override for development and tests; it cannot be combined with resume.\n\nCtrl+Shift+R room · Ctrl+N agent · Ctrl+F files · F2 rename · F3 notes\n@ choose agents · + choose files (type the shifted symbols)\nEnter send · Shift+Enter (supported hosts) / Ctrl+J newline\nCtrl+A/E line start/end · Ctrl+R history search · Ctrl+Shift+E composer size\nF6 room · Ctrl+C save and quit (Ctrl+Q also works)\n\nBuilt on Herdr; upstream license and attribution are preserved.");
 }
 
 pub(crate) fn apply_config(config: &mut crate::config::Config) {
@@ -256,6 +272,21 @@ mod tests {
         ] {
             assert_eq!(parse_invocation(&invalid).unwrap_err(), USAGE);
         }
+    }
+
+    #[test]
+    fn stop_takes_no_arguments_and_accepts_dev() {
+        assert_eq!(
+            parse_invocation(&args(&["stop", "--dev"])).unwrap(),
+            Invocation {
+                dev: true,
+                action: Action::Stop,
+            }
+        );
+        assert_eq!(
+            parse_invocation(&args(&["stop", "bus"])).unwrap_err(),
+            USAGE
+        );
     }
 
     #[test]
