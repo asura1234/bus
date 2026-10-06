@@ -86,8 +86,9 @@ class DocsAuditTest(unittest.TestCase):
                 changed_paths=["../outside.ts"],
                 target_paths=[],
             )
-        # Windows 分隔符必须当场拒绝而不是被当成单段路径：后者会让深度算成 0，
-        # "从深到浅" 的目标顺序静默塌掉，且在 macOS 上永远复现不出来。
+        # Windows separators must be rejected on the spot rather than treated as a single-segment path:
+        # the latter computes depth 0, the "deepest to shallowest" target order silently collapses,
+        # and it never reproduces on macOS.
         with self.assertRaisesRegex(ValueError, "POSIX separators"):
             build_audit(
                 base="main",
@@ -110,9 +111,9 @@ class DocsAuditTest(unittest.TestCase):
             )
 
     def test_merge_orders_targets_by_directory_depth(self) -> None:
-        """多个 mapper 的输出合并去重后按目录深度从深到浅重排。
+        """Outputs of multiple mappers are merged, de-duplicated, and reordered by directory depth from deepest to shallowest.
 
-        深的先做：伞级文档要引用子模块的结论，反过来做会拿旧结论去校对新的。
+        Deeper first: an umbrella document cites the conclusions of its submodules; the reverse order would check new conclusions against stale ones.
         """
         merged = merge_mapper_targets(
             [
@@ -155,15 +156,13 @@ class DocsAuditTest(unittest.TestCase):
             (root / "skills" / "AGENTS.md").write_text("# Skills\n", encoding="utf-8")
             (module_root / "SKILL.md").write_text("# Example\n", encoding="utf-8")
             subprocess.run(["git", "-C", str(root), "add", "."], check=True)
-            subprocess.run(
-                ["git", "-C", str(root), "commit", "-qm", "baseline"], check=True
-            )
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "baseline"], check=True)
             (module_root / "SKILL.md").write_text("# Updated\n", encoding="utf-8")
             output_dir = root / "temp" / "audit"
 
-            # 用 sys.executable 而不是字面量 "python3"：Windows 上通常只有 python.exe，
-            # 字面量会以 FileNotFoundError 失败，而失败点在 subprocess 内部，读起来
-            # 完全不像「解释器名字写错了」。
+            # Use sys.executable instead of the literal "python3": Windows usually only has python.exe,
+            # the literal fails with FileNotFoundError, and since the failure is raised inside
+            # subprocess it reads nothing like "the interpreter name is wrong".
             result = subprocess.run(
                 [
                     sys.executable,
@@ -180,23 +179,74 @@ class DocsAuditTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            # 不用 check=True：CalledProcessError 只带退出码，子进程的 stderr 留在异常
-            # 对象里从不打印，CI 上的表现是「exit status 1」而没有任何原因可查。
+            # No check=True: CalledProcessError carries only the exit code, the child's stderr stays in the
+            # exception object and is never printed, so CI shows "exit status 1" with no cause to inspect.
             self.assertEqual(
                 result.returncode,
                 0,
-                f"prepare failed ({result.returncode})\n"
-                f"stdout: {result.stdout}\nstderr: {result.stderr}",
+                f"prepare failed ({result.returncode})\nstdout: {result.stdout}\nstderr: {result.stderr}",
             )
 
             audit_path = Path(result.stdout.strip())
             audit = json.loads(audit_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                audit["changedLeaves"], ["skills/example/SKILL.md"]
-            )
+            self.assertEqual(audit["changedLeaves"], ["skills/example/SKILL.md"])
             self.assertEqual(
                 [target["path"] for target in audit["targets"]],
                 [
+                    "skills/AGENTS.md",
+                ],
+            )
+
+    def test_prepare_all_modules_covers_every_existing_agents_document(self) -> None:
+        """The --all-modules target set does not depend on the diff: with no change at all,
+        every tracked AGENTS.md (first-party and vendored) must still become a target."""
+        script = Path(__file__).with_name("docs_audit.py")
+        with tempfile.TemporaryDirectory(prefix="docs-audit-all-") as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Test User"], check=True)
+            (root / "skills").mkdir()
+            (root / "skills" / "AGENTS.md").write_text("# Skills\n", encoding="utf-8")
+            vendored = root / "vendor" / "example" / "src"
+            vendored.mkdir(parents=True)
+            (root / "vendor" / "example" / "AGENTS.md").write_text("# Vendor\n", encoding="utf-8")
+            (vendored / "AGENTS.md").write_text("# Vendor src\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "baseline"], check=True)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "prepare",
+                    "--repo",
+                    str(root),
+                    "--base",
+                    "HEAD",
+                    "--all-modules",
+                    "--output-dir",
+                    str(root / "temp" / "audit"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"prepare failed ({result.returncode})\nstdout: {result.stdout}\nstderr: {result.stderr}",
+            )
+            audit = json.loads(Path(result.stdout.strip()).read_text(encoding="utf-8"))
+            self.assertEqual(audit["changedLeaves"], [])
+            self.assertEqual(
+                [target["path"] for target in audit["targets"]],
+                [
+                    "vendor/example/src/AGENTS.md",
+                    "vendor/example/AGENTS.md",
                     "skills/AGENTS.md",
                 ],
             )

@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""update-docs 的机械层：文档审计 artifact 的准备、状态记录、fail-closed 校验与渲染。
+"""Mechanical CLI for update-docs: run mappers from changed Git leaves to build an audit, and forward status recording/finalization/rendering.
 
-文档目标只有一类：`AGENTS.md`——模块根的那份是 as-built 模块 SOT（必备 section 见
-docs/templates/module-agents-template.md），伞级目录那份描述子树划分与入口。两者由
-scripts/lint/check-module-docs.mjs 用同一套模块发现规则映射出来。
+The construction and validation rules for audit.json itself live in audit_artifact.py in the same directory.
 
-mapper 仍是可重复参数：它是本脚本与门禁之间的接口，不是「有几类文档」的推论。多个 mapper
-的输出在这里合并去重并按目标所属目录深度从深到浅重排，形成单一 audit.json。语义审计与编辑
-由执行 agent 完成，本脚本只证明结构。
+There is one documentation target family: `AGENTS.md`. In Bus, `skills/AGENTS.md` owns workflow
+architecture, and vendored `AGENTS.md` files keep their upstream subtree contracts. The default Bus
+mapper (`bus_documentation_targets`) maps changed leaves onto that actually-existing surface; Bus
+intentionally has no repository-root AGENTS.md.
+
+The mapper remains a repeatable argument: it is the interface between this script and a gate, not
+an inference about "how many kinds of documents exist". The outputs of multiple mappers are merged,
+de-duplicated, and reordered here by owning-directory depth from deepest to shallowest into a single
+audit.json. The executing agent performs the semantic audit and editing; this script only proves
+structure.
 """
 
 import argparse
@@ -18,202 +23,19 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
 
-
-SCHEMA_VERSION = 1
-PENDING_STATUS = "pending"
-FINAL_STATUSES = {"created", "updated", "verified-current"}
-PR_STATUS = {
-    "created": "created",
-    "updated": "updated",
-    "verified-current": "verified current",
-}
-
-
-def _repository_path(value: str, *, field: str) -> str:
-    # 反斜杠必须当场拒绝：PurePosixPath 会把 "a\\b\\c.md" 当成**单个**路径段，深度算成 0，
-    # 于是模块文档与仓库根文档并列，"从深到浅" 的顺序在 Windows 上静默塌掉——不报错，
-    # 只是伞级文档先于它引用的模块文档被审计。契约是仓库相对的 POSIX 路径，就地 fail-closed。
-    if "\\" in value:
-        raise ValueError(
-            f"{field} must use POSIX separators, got a backslash path: {value!r}"
-        )
-    path = PurePosixPath(value)
-    if value == "" or path.is_absolute() or ".." in path.parts:
-        raise ValueError(f"{field} must be a repository-relative path: {value!r}")
-    normalized = path.as_posix()
-    if normalized == ".":
-        raise ValueError(f"{field} must be a repository-relative path: {value!r}")
-    return normalized
-
-
-def _unique_paths(values: Sequence[str], *, field: str) -> list[str]:
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        path = _repository_path(value, field=field)
-        if path in seen:
-            raise ValueError(f"duplicate {field}: {path}")
-        seen.add(path)
-        normalized.append(path)
-    return normalized
-
-
-def _target_depth(path: str) -> int:
-    """目标文档所属目录的深度。AGENTS.md 始终躺在它描述的那个目录里。"""
-    return len(PurePosixPath(path).parts) - 1
-
-
-def merge_mapper_targets(target_lists: Sequence[Sequence[str]]) -> list[str]:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for targets in target_lists:
-        for target in targets:
-            path = _repository_path(target, field="target")
-            if path in seen:
-                continue
-            seen.add(path)
-            merged.append(path)
-    return sorted(merged, key=lambda path: (-_target_depth(path), path))
-
-
-def build_audit(
-    *,
-    base: str,
-    merge_base: str,
-    changed_paths: Sequence[str],
-    target_paths: Sequence[str],
-) -> dict[str, Any]:
-    changed = _unique_paths(changed_paths, field="changed leaf")
-    targets = _unique_paths(target_paths, field="target")
-    return {
-        "schemaVersion": SCHEMA_VERSION,
-        "complete": False,
-        "base": base,
-        "mergeBase": merge_base,
-        "changedLeaves": changed,
-        "targets": [
-            {"path": path, "status": PENDING_STATUS, "reason": ""} for path in targets
-        ],
-        "verification": [],
-        "exclusions": [],
-    }
-
-
-def validate_audit(audit: dict[str, Any], *, require_complete: bool) -> None:
-    if audit.get("schemaVersion") != SCHEMA_VERSION:
-        raise ValueError("unsupported or missing schemaVersion")
-    if not isinstance(audit.get("base"), str) or not audit["base"]:
-        raise ValueError("base must be a non-empty string")
-    if not isinstance(audit.get("mergeBase"), str) or not audit["mergeBase"]:
-        raise ValueError("mergeBase must be a non-empty string")
-
-    changed_leaves = audit.get("changedLeaves")
-    if not isinstance(changed_leaves, list) or not all(
-        isinstance(path, str) for path in changed_leaves
-    ):
-        raise ValueError("changedLeaves must be a path array")
-    _unique_paths(changed_leaves, field="changed leaf")
-
-    targets = audit.get("targets")
-    if not isinstance(targets, list):
-        raise ValueError("targets must be an array")
-    seen: set[str] = set()
-    for target in targets:
-        if not isinstance(target, dict):
-            raise ValueError("target must be an object")
-        path_value = target.get("path")
-        if not isinstance(path_value, str):
-            raise ValueError("target path must be a string")
-        path = _repository_path(path_value, field="target")
-        if path in seen:
-            raise ValueError(f"duplicate target: {path}")
-        seen.add(path)
-        status = target.get("status")
-        if status not in FINAL_STATUSES | {PENDING_STATUS}:
-            raise ValueError(f"unknown status: {status!r}")
-        reason = target.get("reason")
-        if not isinstance(reason, str):
-            raise ValueError(f"target reason must be a string: {path}")
-        if status in FINAL_STATUSES and not reason.strip():
-            raise ValueError(f"resolved target requires a reason: {path}")
-        if require_complete and status == PENDING_STATUS:
-            raise ValueError(f"pending target: {path}")
-
-    verification = audit.get("verification")
-    exclusions = audit.get("exclusions")
-    if not isinstance(verification, list) or not all(
-        isinstance(item, str) and item.strip() for item in verification
-    ):
-        raise ValueError("verification must be an array of non-empty strings")
-    if not isinstance(exclusions, list) or not all(
-        isinstance(item, str) and item.strip() for item in exclusions
-    ):
-        raise ValueError("exclusions must be an array of non-empty strings")
-    complete = audit.get("complete")
-    if not isinstance(complete, bool):
-        raise ValueError("complete must be a boolean")
-    if require_complete and not complete:
-        raise ValueError("audit is not finalized")
-    if require_complete and targets and not verification:
-        raise ValueError("completed audit requires verification evidence")
-
-
-def record_target(
-    audit: dict[str, Any], *, path: str, status: str, reason: str
-) -> None:
-    validate_audit(audit, require_complete=False)
-    if audit["complete"]:
-        raise ValueError("cannot modify a finalized audit")
-    if status not in FINAL_STATUSES:
-        raise ValueError(f"unknown status: {status!r}")
-    if not reason.strip():
-        raise ValueError("resolved target requires a reason")
-    normalized_path = _repository_path(path, field="target")
-    for target in audit["targets"]:
-        if target["path"] == normalized_path:
-            target["status"] = status
-            target["reason"] = reason.strip()
-            return
-    raise ValueError(f"unknown target: {normalized_path}")
-
-
-def finalize_audit(
-    audit: dict[str, Any], *, verification: Sequence[str], exclusions: Sequence[str]
-) -> None:
-    validate_audit(audit, require_complete=False)
-    pending = [
-        target["path"]
-        for target in audit["targets"]
-        if target["status"] == PENDING_STATUS
-    ]
-    if pending:
-        raise ValueError(f"pending target: {pending[0]}")
-    normalized_verification = [item.strip() for item in verification if item.strip()]
-    normalized_exclusions = [item.strip() for item in exclusions if item.strip()]
-    if audit["targets"] and not normalized_verification:
-        raise ValueError("completed audit requires verification evidence")
-    audit["verification"] = normalized_verification
-    audit["exclusions"] = normalized_exclusions
-    audit["complete"] = True
-
-
-def render_pr_section(audit: dict[str, Any]) -> str:
-    validate_audit(audit, require_complete=True)
-    lines = ["## 文档同步", ""]
-    if not audit["targets"]:
-        lines.append("- [x] No affected documentation targets")
-    else:
-        lines.extend(
-            f"- [x] `{target['path']}` — {PR_STATUS[target['status']]}"
-            for target in audit["targets"]
-        )
-    return "\n".join(lines)
+from audit_artifact import (
+    build_audit,
+    finalize_audit,
+    merge_mapper_targets,
+    record_target,
+    render_pr_section,
+    repository_path,
+    validate_audit,
+)
 
 
 def _run_lines(command: Sequence[str], *, cwd: Path) -> list[str]:
-    result = subprocess.run(
-        command, cwd=cwd, check=True, capture_output=True, text=True
-    )
+    result = subprocess.run(command, cwd=cwd, check=True, capture_output=True, text=True)
     return [line for line in result.stdout.splitlines() if line]
 
 
@@ -233,7 +55,7 @@ def _changed_paths(repo: Path, merge_base: str) -> list[str]:
     changed: set[str] = set()
     for command in commands:
         changed.update(_run_lines(command, cwd=repo))
-    return sorted(_repository_path(path, field="changed leaf") for path in changed)
+    return sorted(repository_path(path, field="changed leaf") for path in changed)
 
 
 def bus_documentation_targets(repo: Path, changed_paths: Sequence[str]) -> list[str]:
@@ -241,9 +63,9 @@ def bus_documentation_targets(repo: Path, changed_paths: Sequence[str]) -> list[
 
     targets: set[str] = set()
     for changed in changed_paths:
-        if changed.startswith(
-            ("skills/", "docs/guides/", "docs/templates/", "cli_extensions/")
-        ) and changed != "skills/AGENTS.md":
+        if changed.startswith(("skills/", "docs/guides/", "docs/templates/", "cli_extensions/")) and (
+            changed != "skills/AGENTS.md"
+        ):
             targets.add("skills/AGENTS.md")
         path = PurePosixPath(changed).parent
         while path.as_posix() not in {".", ""}:
@@ -251,13 +73,11 @@ def bus_documentation_targets(repo: Path, changed_paths: Sequence[str]) -> list[
             if (repo / candidate).is_file():
                 targets.add(candidate.as_posix())
             path = path.parent
-    return sorted(targets, key=lambda path: (-_target_depth(path), path))
+    return merge_mapper_targets([sorted(targets)])
 
 
 def _write_json(path: Path, value: dict[str, Any]) -> None:
-    path.write_text(
-        f"{json.dumps(value, ensure_ascii=False, indent=2)}\n", encoding="utf-8"
-    )
+    path.write_text(f"{json.dumps(value, ensure_ascii=False, indent=2)}\n", encoding="utf-8")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -267,11 +87,22 @@ def _load_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def _all_module_targets(repo: Path, mapper: Path | None) -> list[str]:
+    """Whole-repo target set: every existing AGENTS.md, plus each module an explicit mapper discovers (which may not exist yet)."""
+    targets: set[str] = set()
+    if mapper is not None:
+        for line in _run_lines(["node", str(mapper), "--repo", str(repo), "--list-modules"], cwd=repo):
+            _kind, _, name = line.partition("\t")
+            if name:
+                targets.add(f"{name}/AGENTS.md")
+    for line in _run_lines(["git", "ls-files", "--", "*AGENTS.md", "AGENTS.md"], cwd=repo):
+        targets.add(line)
+    return sorted(targets)
+
+
 def _prepare(args: argparse.Namespace) -> str:
     repo = Path(args.repo).resolve()
-    actual_root = Path(
-        _run_lines(["git", "rev-parse", "--show-toplevel"], cwd=repo)[0]
-    ).resolve()
+    actual_root = Path(_run_lines(["git", "rev-parse", "--show-toplevel"], cwd=repo)[0]).resolve()
     if actual_root != repo:
         raise ValueError(f"--repo must be the Git root: {repo}")
     merge_base = _run_lines(["git", "merge-base", args.base, "HEAD"], cwd=repo)[0]
@@ -285,10 +116,15 @@ def _prepare(args: argparse.Namespace) -> str:
     changed_file = output_dir / "changed-files.txt"
     changed_file.write_text("".join(f"{path}\n" for path in changed), encoding="utf-8")
 
-    if args.mapper is None:
-        targets = bus_documentation_targets(repo, changed)
+    mapper_paths = [Path(mapper).resolve() for mapper in args.mapper or []]
+    if args.all_modules:
+        # Whole-repo scope: targets do not come from the diff walk but from "every existing
+        # AGENTS.md (plus every module an explicit mapper discovers)". Used for whole-repo audits
+        # unrelated to this change, such as template migrations or full backfills.
+        target_lists = [_all_module_targets(repo, mapper_paths[0] if mapper_paths else None)]
+    elif not mapper_paths:
+        target_lists = [bus_documentation_targets(repo, changed)]
     else:
-        mapper_paths = [Path(mapper).resolve() for mapper in args.mapper]
         target_lists = [
             _run_lines(
                 [
@@ -304,10 +140,8 @@ def _prepare(args: argparse.Namespace) -> str:
             )
             for mapper in mapper_paths
         ]
-        targets = merge_mapper_targets(target_lists)
-    (output_dir / "targets.txt").write_text(
-        "".join(f"{path}\n" for path in targets), encoding="utf-8"
-    )
+    targets = merge_mapper_targets(target_lists)
+    (output_dir / "targets.txt").write_text("".join(f"{path}\n" for path in targets), encoding="utf-8")
     audit = build_audit(
         base=args.base,
         merge_base=merge_base,
@@ -320,9 +154,7 @@ def _prepare(args: argparse.Namespace) -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Prepare and validate AGENTS.md documentation audits"
-    )
+    parser = argparse.ArgumentParser(description="Prepare and validate AGENTS.md documentation audits")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     prepare = subparsers.add_parser("prepare")
@@ -332,9 +164,14 @@ def _parser() -> argparse.ArgumentParser:
         "--mapper",
         action="append",
         default=None,
-        help="递归目标 mapper 脚本，可重复；缺省使用模块文档门禁 check-module-docs.mjs",
+        help="recursive target mapper script, repeatable; defaults to the built-in Bus AGENTS.md mapper",
     )
     prepare.add_argument("--output-dir")
+    prepare.add_argument(
+        "--all-modules",
+        action="store_true",
+        help="ignore the diff walk and list every existing AGENTS.md (plus modules an explicit mapper discovers) as targets",
+    )
 
     record = subparsers.add_parser("record")
     record.add_argument("--audit", required=True)
