@@ -184,9 +184,12 @@ only for an unrelated task that should get a turn and a reply of its own.
   sends you a message for each one: who is waiting, what they want, and the
   options with the selected one marked. Run `bus agent dialog AGENT` for a
   fresh fingerprint, then `bus agent choose AGENT --option N --fingerprint F`.
+  For a free-text question, use `bus agent answer AGENT --text "..."
+  --fingerprint F`, or `--skip` instead of `--text`. Notices retain every
+  command line and its `Reason:`, and never include a fingerprint.
   `bus wait` also stops early with `agent_waiting_on_dialog`. Decide, answer,
   and check the reported `outcome`. When the dialog closes, the next line is
-  `answered: option N` if Bus recorded the choice.
+  `answered: option N` if Bus recorded a numbered choice, otherwise `answered`.
   Ask the human before approving anything destructive or outward-facing.
 - **Stuck requests:** check `bus message status`, `bus diagnostics` and
   `bus agent read` before `bus request recover`.

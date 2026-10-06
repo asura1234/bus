@@ -517,10 +517,13 @@ marks such an agent `dialog: true`.
 
 Bus tells someone without being asked. Once a dialog has been on screen for
 about a second, Bus sends the room's orchestrator a message in MASTER, delivered
-like any other message: the agent and room, what it wants on one line, and
-the numbered options with the selected one marked. Key hints such as `Press
+like any other message: the agent and room, the question or complete command
+(including every command line and its `Reason:`), and the numbered options
+with the selected one marked. Key hints such as `Press
 enter to confirm or esc to cancel` are left out. The answer line is `bus agent
-dialog AGENT`, then `bus agent choose AGENT --option N`; the fingerprint is
+dialog AGENT`, then `bus agent choose AGENT --option N` for choices, or
+`bus agent answer AGENT --text "..."` / `bus agent answer AGENT --skip` for
+free-text questions; the fingerprint is
 not in the message, because `agent dialog` fetches a fresh one. A room without
 an orchestrator gets the same text as a Bus notice in the room itself, for the
 Human. Each dialog is reported once, a blocked screen without a readable
@@ -541,9 +544,11 @@ bus agent dialog "$agent_id"
 bus agent choose "$agent_id" --option 2 --fingerprint "$fingerprint"
 ```
 
-`agent dialog AGENT` returns `dialog` with `text` (the question above the
+`agent dialog AGENT` returns `dialog` with `kind` (`choice` or `question`),
+`text` (the question above the
 options), `options` (`number`, `label`, `selected`), and `hint` (the key hint
 below them), plus a `fingerprint`. Both are `null` when no dialog is visible.
+Free-text questions have an empty `options` array.
 It works while the agent is still launching, before its session starts.
 
 `agent choose AGENT --option N --fingerprint FINGERPRINT` sends keys only while
@@ -557,6 +562,35 @@ one. The result lists the `keys` sent and an
 (another dialog appeared), `selection_moved` (the selection changed but the
 dialog stayed), or `unchanged`. Nothing is sent when no dialog is visible, the
 option does not exist, or the selected option cannot be seen.
+
+To submit a free-text answer or skip it, fetch a fresh fingerprint and use
+exactly one of `--text` and `--skip`:
+
+```sh
+bus agent dialog "$agent_id"
+bus agent answer "$agent_id" --text "MY TOKEN" --fingerprint "$fingerprint"
+# Or, after fetching another fresh fingerprint:
+bus agent answer "$agent_id" --skip --fingerprint "$fingerprint"
+```
+
+`agent answer` uses the same identity and single-use fingerprint checks as
+`choose`, including the current input text. It pastes the literal text and
+presses Enter after the short confirmation delay; `--skip` sends Codex's
+Ctrl+] or the other providers' Esc. Its result includes `keys`, `skipped`, and
+the same `outcome` values, with `input_changed` for a question whose text field
+changed while it remained open. The closing notice is `answered`, with no
+option number. A numbered choice cannot be answered as text.
+
+Codex's expanded `Queued follow-up inputs` / `Type your answer` form is
+supported; its collapsed question banner remains a working state while the
+agent is running. Expand that banner in the native pane with Shift+Left.
+Claude Code's `AskUserQuestion` and Cursor's questions also support text
+answers when their custom input is focused: move to Claude's `Type something.`
+row or Cursor's `Other` row in the native pane, then use `agent dialog` and
+`agent answer`. Moving to a custom field requires native pane navigation;
+`choose` confirms a numbered option with Enter, and Cursor's checkbox chooser
+still needs its own navigation adapter. Unfocused custom fields are not
+treated as text questions.
 
 ## Build reliable automation
 
