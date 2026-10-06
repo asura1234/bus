@@ -25,13 +25,20 @@ pub(super) struct Line {
     pub tone: Tone,
     pub spans: Vec<(String, Tone)>,
     pub styles: Vec<(String, Style)>,
-    /// Durable Markdown source for a rendered agent-reply row. Every row of
-    /// one reply shares the same allocation so selection can copy the source
-    /// once instead of reconstructing it from the display projection.
-    pub raw_markdown: Option<(RequestId, Arc<str>)>,
+    /// Durable Markdown source for a rendered prompt or agent-reply row. Every
+    /// row of one message shares the same allocation so selection can copy the
+    /// source once instead of reconstructing it from the display projection.
+    pub raw_markdown: Option<(MarkdownSource, Arc<str>)>,
     /// Soft-wrapped continuation of the previous row, rejoined when copied.
     pub continued: bool,
     anchor: RowAnchor,
+}
+
+/// Identifies one rendered Markdown message in the room history.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum MarkdownSource {
+    Prompt(PromptId),
+    Reply(RequestId),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -70,10 +77,10 @@ pub(super) struct History {
     source: Option<(u64, RoomId)>,
     signature: u64,
     lines: Vec<Line>,
-    markdown: BTreeMap<RequestId, MarkdownReply>,
+    markdown: BTreeMap<MarkdownSource, MarkdownBlock>,
 }
 
-struct MarkdownReply {
+struct MarkdownBlock {
     source: Arc<str>,
     view: Option<MarkdownView>,
     width: Option<u16>,
@@ -173,12 +180,18 @@ impl History {
                 "",
                 RowAnchor::new(prompt.id, None, RowKind::PromptHeader),
             ));
-            push_body(
-                &mut lines,
-                &prompt.text,
-                width,
-                "",
-                RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+            let prompt_source = MarkdownSource::Prompt(prompt.id);
+            active_markdown.insert(prompt_source);
+            lines.extend(
+                self.markdown_block(prompt_source, &prompt.text)
+                    .lines(
+                        width,
+                        prompt_source,
+                        "",
+                        RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+                    )
+                    .iter()
+                    .cloned(),
             );
             for (index, path) in prompt.files.iter().enumerate() {
                 lines.push(Line {
@@ -230,17 +243,11 @@ impl History {
                 ));
                 let reply_anchor = RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyBody);
                 if let Some(request) = quote {
-                    active_markdown.insert(request);
-                    let markdown = self
-                        .markdown
-                        .entry(request)
-                        .or_insert_with(|| MarkdownReply::new(text));
-                    if markdown.source.as_ref() != text {
-                        *markdown = MarkdownReply::new(text);
-                    }
+                    let source = MarkdownSource::Reply(request);
+                    active_markdown.insert(source);
                     lines.extend(
-                        markdown
-                            .lines(width, request, "    ", reply_anchor)
+                        self.markdown_block(source, text)
+                            .lines(width, source, "    ", reply_anchor)
                             .iter()
                             .cloned(),
                     );
@@ -270,17 +277,34 @@ impl History {
             });
         }
         self.markdown
-            .retain(|request, _| active_markdown.contains(request));
+            .retain(|source, _| active_markdown.contains(source));
         self.key = Some(key);
         self.lines = lines;
         &self.lines
     }
+
+    fn markdown_block(&mut self, key: MarkdownSource, text: &str) -> &mut MarkdownBlock {
+        let block = self
+            .markdown
+            .entry(key)
+            .or_insert_with(|| MarkdownBlock::new(key, text));
+        if block.source.as_ref() != text {
+            *block = MarkdownBlock::new(key, text);
+        }
+        block
+    }
 }
 
-impl MarkdownReply {
-    fn new(source: &str) -> Self {
+impl MarkdownBlock {
+    fn new(key: MarkdownSource, source: &str) -> Self {
         let raw: Arc<str> = Arc::from(source);
-        let view = match MarkdownView::new(source) {
+        // People type prompts like chat messages, so every newline they enter
+        // is a line break. Agent replies keep standard Markdown paragraphs.
+        let rendered = match key {
+            MarkdownSource::Prompt(_) => std::borrow::Cow::Owned(source.replace('\n', "  \n")),
+            MarkdownSource::Reply(_) => std::borrow::Cow::Borrowed(source),
+        };
+        let view = match MarkdownView::new(&rendered) {
             Ok(mut view) => {
                 view.set_options(LayoutOptions {
                     theme: Theme {
@@ -311,7 +335,7 @@ impl MarkdownReply {
     fn lines(
         &mut self,
         width: u16,
-        request: RequestId,
+        request: MarkdownSource,
         indent: &str,
         anchor: RowAnchor,
     ) -> &[Line] {
@@ -336,7 +360,7 @@ impl MarkdownReply {
 fn prepared_markdown_lines(
     view: &mut MarkdownView,
     width: u16,
-    request: RequestId,
+    request: MarkdownSource,
     source: &Arc<str>,
     indent: &str,
     anchor: RowAnchor,
@@ -388,7 +412,7 @@ fn line_from_buffer(
     buffer: &Buffer,
     row: u16,
     width: u16,
-    request: RequestId,
+    request: MarkdownSource,
     source: &Arc<str>,
     indent: &str,
     continued: bool,
@@ -452,7 +476,7 @@ fn line_from_buffer(
 fn literal_reply_lines(
     source: &Arc<str>,
     width: u16,
-    request: RequestId,
+    request: MarkdownSource,
     indent: &str,
     anchor: RowAnchor,
 ) -> Vec<Line> {

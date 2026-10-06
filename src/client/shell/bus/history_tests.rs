@@ -36,6 +36,13 @@ fn saved_history(ui: &mut BusUi, room: RoomId, agent: AgentId, count: usize) -> 
     requests
 }
 
+fn is_reply(line: &history::Line) -> bool {
+    matches!(
+        line.raw_markdown,
+        Some((history::MarkdownSource::Reply(_), _))
+    )
+}
+
 fn saved_exchange(
     ui: &mut BusUi,
     room: RoomId,
@@ -62,7 +69,7 @@ fn saved_exchange(
 }
 
 #[test]
-fn agent_reply_markdown_is_rendered_while_prompt_stays_literal() {
+fn prompt_and_agent_reply_markdown_are_rendered() {
     use ratatui::{buffer::Buffer, layout::Rect, style::Modifier};
 
     let (mut ui, room, agent) = fixture();
@@ -70,7 +77,7 @@ fn agent_reply_markdown_is_rendered_while_prompt_stays_literal() {
         &mut ui,
         room,
         agent,
-        "**literal prompt**",
+        "**rendered prompt**\nsecond `line`",
         "# Heading\n\n- **bold** and `code`",
     );
     ui.compute_view(100, 40);
@@ -80,12 +87,24 @@ fn agent_reply_markdown_is_rendered_while_prompt_stays_literal() {
         .map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect())
         .collect();
 
+    assert!(!screen
+        .iter()
+        .any(|line| line.contains("**rendered prompt**")));
+    let prompt_row = screen
+        .iter()
+        .position(|line| line.contains("rendered prompt"))
+        .expect("rendered prompt");
     assert!(
-        screen
-            .iter()
-            .any(|line| line.contains("**literal prompt**")),
-        "user-authored prompts stay literal"
+        screen[prompt_row + 1].contains("second line"),
+        "a typed newline stays a line break: {:?}",
+        &screen[prompt_row..prompt_row + 2]
     );
+    let prompt_x = unicode_width::UnicodeWidthStr::width(
+        &screen[prompt_row][..screen[prompt_row].find("rendered prompt").unwrap()],
+    ) as u16;
+    assert!(buffer[(prompt_x, prompt_row as u16)]
+        .modifier
+        .contains(Modifier::BOLD));
     assert!(!screen.iter().any(|line| line.contains("# Heading")));
     assert!(!screen.iter().any(|line| line.contains("**bold**")));
     assert!(!screen.iter().any(|line| line.contains("`code`")));
@@ -187,8 +206,8 @@ fn selection_stopping_before_markdown_keeps_the_selected_line_end_in_both_direct
         .history
         .cached()
         .iter()
-        .position(|line| line.raw_markdown.is_some())
-        .expect("first Markdown row");
+        .position(|line| is_reply(line))
+        .expect("first Markdown reply row");
     let prompt_start = selection::Point {
         line: prompt,
         offset: 0,
@@ -247,6 +266,7 @@ fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
         .history
         .cached()
         .iter()
+        .filter(|line| is_reply(line))
         .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
         .expect("rendered reply source");
     ui.history
@@ -255,6 +275,7 @@ fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
         .history
         .cached()
         .iter()
+        .filter(|line| is_reply(line))
         .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
         .expect("rendered reply source after timestamp refresh");
 
@@ -282,7 +303,7 @@ fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
         .history
         .lines(&snapshot.state, room, 12, snapshot.revision, 1_000)
         .iter()
-        .filter(|line| line.raw_markdown.is_some())
+        .filter(|line| is_reply(line))
         .collect();
     let text = rendered
         .iter()

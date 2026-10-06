@@ -2281,17 +2281,12 @@ fn drag_copy(ui: &mut BusUi, from: (u16, u16), to: (u16, u16)) -> Option<String>
 }
 
 #[test]
-fn dragging_history_copies_rejoined_soft_wraps_and_highlights_the_cells() {
+fn dragging_a_rendered_prompt_copies_its_raw_source_and_highlights_it() {
     let (mut ui, room, agent) = fixture();
+    let source = "alpha **beta** gamma delta epsilon zeta eta theta\nsecond line";
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.state.set_draft_recipients(room, [agent]).unwrap();
-    snapshot
-        .state
-        .set_draft_text(
-            room,
-            "alpha beta gamma delta epsilon zeta eta theta\nsecond line",
-        )
-        .unwrap();
+    snapshot.state.set_draft_text(room, source).unwrap();
     snapshot.state.submit_draft(room, 1).unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
     ui.compute_view(60, 30);
@@ -2308,19 +2303,16 @@ fn dragging_history_copies_rejoined_soft_wraps_and_highlights_the_cells() {
     let first = row_of(&ui, "alpha beta");
     let second = row_of(&ui, "second");
     assert!(second > first + 1, "the long prompt must soft-wrap");
+    // Rendered Markdown has no stable offsets back into its source, so any
+    // selection touching the prompt copies the whole raw source.
     let copied = drag_copy(&mut ui, (text.x + 6, first), (text.x + 5, second));
-    assert_eq!(
-        copied.as_deref(),
-        Some("beta gamma delta epsilon zeta eta theta\nsecond")
-    );
+    assert_eq!(copied.as_deref(), Some(source));
     ui.compute_view(60, 30);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 30));
     ui.render(&mut buffer);
     let tint = ratatui::style::Color::Rgb(44, 88, 56);
-    assert_eq!(buffer[(text.x + 6, first)].bg, tint);
-    assert_ne!(buffer[(text.x + 5, first)].bg, tint);
-    assert_eq!(buffer[(text.x + 5, second)].bg, tint);
-    assert_ne!(buffer[(text.x + 6, second)].bg, tint);
+    assert_eq!(buffer[(text.x, first)].bg, tint);
+    assert_eq!(buffer[(text.x + 10, second)].bg, tint);
     // Typing ends the history selection.
     key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
     assert!(ui.history_selection.is_none());

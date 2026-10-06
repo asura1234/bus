@@ -329,10 +329,11 @@ bus request recover "$request_id" --confirm
 The generic form is `request recover REQUEST_ID --confirm`. It abandons only the
 exact confirmed current request and does not choose what happens to queued work.
 
-The control CLI always emits raw JSON. Agent reply text returned by `wait`,
-`message status`, and `history` remains raw Markdown. The interactive room
-history renders Markdown styling for agent replies only; human prompts remain
-literal, and copying or quoting a reply preserves its raw Markdown source.
+The control CLI always emits raw JSON. Prompt and reply text returned by
+`wait`, `message status`, and `history` remains raw Markdown. The interactive
+room history renders Markdown for every message, prompts and agent replies
+alike; a newline typed in a prompt stays a line break. Copying a message or
+quoting a reply preserves its raw Markdown source.
 
 ## Build reliable automation
 
