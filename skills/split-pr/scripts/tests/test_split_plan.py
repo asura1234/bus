@@ -83,6 +83,7 @@ class Repo:
         self.git("switch", "-q", "master")
 
     def run(self, *args: str) -> str:
+        """Run split_plan main inside the repo; return stdout, raise on failure."""
         code, out, err = self.run_status(*args)
         if code != 0:
             raise AssertionError(f"split_plan {args} exited {code}: {err}{out}")
@@ -427,7 +428,7 @@ class StackTest(ScenarioTest):
         steps = {s["part"]: s for s in json.loads(r.run("restack", path))["steps"]}
         self.assertEqual(sorted(steps), ["c", "d"])
         step = steps["d"]
-        # b still sits on the old base, so d must merge in the base that holds a.
+        # b still sits on the old base, so d must integrate the base that holds a.
         self.assertEqual(step["onto_ref"], "merge(origin/master, split/b)")
         self.assertEqual(step["commands"][0], "git switch --detach origin/master")
         self.assertEqual(
@@ -448,7 +449,7 @@ class StackTest(ScenarioTest):
         self.assertEqual(r.git("show", "split/d:a.txt"), "a1\na2\na3\na4\nA5")
         self.assertEqual(r.git("show", "split/d:b.txt"), "b1\nb2\nb3\nb4\nB5")
         self.assertEqual(json.loads(r.run("restack", path))["status"], "current")
-        # An unrelated base advance does not make the integration base stale.
+        # An unrelated base move does not make the integration stale.
         r.git("switch", "-q", "--detach", "origin/master")
         r.write("core.txt", "core moved\n")
         r.commit("chore: unrelated")
@@ -508,7 +509,7 @@ class StackTest(ScenarioTest):
         r = self.repo
         data = plan_data(r, [part("a", [r.c1, r.c3]), part("b", [r.c2])], left=[r.c4])
         path = self.write_plan(data)
-        r.build("split/a", r.base, r.c1)  # c3 forgotten; c4 stays on the source and also edits a.txt
+        r.build("split/a", r.base, r.c1)  # c3 forgotten; c4 is left and also edits a.txt
         r.build("split/b", r.base, r.c2)
         r.run("record", path, "--part", "a")
         r.run("record", path, "--part", "b")
@@ -545,7 +546,7 @@ class StackTest(ScenarioTest):
         r.run("record", path, "--part", "b")
         self.assertEqual(json.loads(r.run("coverage", path))["status"], "review-left-on-source")
         r.git("switch", "-q", "split/a")
-        r.git("cherry-pick", r.c2)  # the same hunk now sits in two parts
+        r.git("cherry-pick", r.c2)  # the same hunk now sits in both parts
         r.git("switch", "-q", "master")
         r.run("record", path, "--part", "a")
         code, out, _err = r.run_status("coverage", path)
@@ -554,8 +555,8 @@ class StackTest(ScenarioTest):
 
     def test_coverage_catches_a_tree_entry_duplicated_by_hunk_split_parts(self) -> None:
         r = self.repo
-        # Empty-file additions and mode-only changes have no text lines, so the line
-        # balance cannot see two parts carrying them.
+        # An added empty file and a mode-only change have no text lines, so a line balance
+        # cannot see two parts carrying them twice.
         r.git("switch", "-q", "feat/source")
         r.write("empty.txt", "")
         (r.root / "core.txt").chmod(0o755)
@@ -565,7 +566,7 @@ class StackTest(ScenarioTest):
         data = plan_data(r, [part("a", [r.c1, c5]), part("b", [r.c2, c5])], left=[r.c3, r.c4])
         path = self.write_plan(data)
         r.build("split/a", r.base, r.c1, c5)
-        r.build("split/b", r.base, r.c2, c5)  # every change of c5 sits in two parts
+        r.build("split/b", r.base, r.c2, c5)  # all of c5 lands in both parts
         r.run("record", path, "--part", "a")
         r.run("record", path, "--part", "b")
         code, out, _err = r.run_status("coverage", path)
@@ -576,7 +577,7 @@ class StackTest(ScenarioTest):
         r = self.repo
         data = plan_data(r, [part("a", [r.c1]), part("b", [r.c2, r.c3], ["a"])], left=[r.c4])
         path = self.write_plan(data)
-        r.build("split/a", r.base, r.c1, r.c3)  # the c3 hunk that belongs to b was built into a
+        r.build("split/a", r.base, r.c1, r.c3)  # b's c3 hunk built into a
         r.build("split/b", "split/a", r.c2)
         r.run("record", path, "--part", "a")
         r.run("record", path, "--part", "b")

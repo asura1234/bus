@@ -1,4 +1,4 @@
-"""Git object-level mechanics for split_plan.py; never touches a worktree."""
+"""Git object-space mechanics for split_plan.py; never touches a worktree."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from split_plan_model import Part, Plan, PlanError, _require, closure, shared_commits
 
 
-# --- git calls -------------------------------------------------------------
+# --- git -------------------------------------------------------------------
 
 
 def git(repo: Path, *args: str, check: bool = True, env: dict[str, str] | None = None) -> str:
@@ -68,11 +68,12 @@ def tree_numstat(repo: Path, old: str, new: str) -> dict[str, tuple[int, int]]:
 
 
 def part_size(repo: Path, plan: Plan, part: Part, position: dict[str, int]) -> tuple[list[str], int, int, bool]:
-    """The size of the part's PR diff; the last item is True when it is a churn estimate.
+    """Size of the part's PR diff; the last item is True when it is a churn estimate.
 
-    A PR shows the part's state against its parents' state, so commits that
-    rewrite the same line count once. A part whose ancestry has a hunk-split
-    commit, or that does not replay cleanly, falls back to summing per-commit churn.
+    The PR shows the part's state against its parents' state, so commits that
+    rewrite each other's lines count once. A part whose ancestry holds a
+    hunk-split commit, or that does not replay cleanly, falls back to summing
+    each commit's churn.
     """
     shared = shared_commits(plan)
     ancestry = closure(plan, part)
@@ -155,12 +156,12 @@ def check_against_git(repo: Path, plan: Plan) -> None:
 
 
 def change_balance(repo: Path, old: str, new: str) -> Counter[tuple[bytes, bytes, bytes]]:
-    """Net count of each (path, kind, value) from `old` to `new`; kind is `line` or `mode`.
+    """Per (path, kind, value) count gained from `old` to `new`; kind is `line` or `mode`.
 
-    The counts telescope along any commit chain, so the parts' own diffs sum to
-    the whole split's diff exactly when no hunk or tree entry sits in two parts.
-    Empty-file additions, deletions and chmods produce no text lines and are
-    seen only through the mode count (a missing side counts as `000000`).
+    These counts telescope along any chain of commits, so the parts' own diffs
+    sum to the split's total exactly when no hunk or tree entry sits in two parts.
+    Adding or deleting an empty file and chmod produce no text lines and are seen
+    only through the mode counts (a missing side counts as `000000`).
     """
     result = subprocess.run(
         [

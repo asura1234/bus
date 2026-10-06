@@ -1,4 +1,4 @@
-"""Plan model for split_plan.py: schema, validation and graph properties derived from the plan."""
+"""Plan model for split_plan.py: schema, validation and graph values derived from the plan."""
 
 from __future__ import annotations
 
@@ -230,17 +230,17 @@ def open_parents(plan: Plan, part: Part) -> list[Part]:
 
 
 def integrates_base(plan: Plan, part: Part) -> bool:
-    """Partial fan-in: one parent landed while another is still open.
+    """A partial fan-in: a parent landed while another is still open.
 
-    The open parent still sits on the old base without the landed parent's
-    code, so the part must integrate the current base as well.
+    The open parent still sits on the old base and lacks the landed parent's
+    code, so the part must integrate the current base alongside it.
     """
     parents = open_parents(plan, part)
     return bool(parents) and len(parents) < len(part.depends_on)
 
 
 def integration_refs(plan: Plan, part: Part) -> list[str]:
-    """The refs the part's base must merge; a single ref needs no integration merge."""
+    """Refs the part's base merges; a single ref means no integration merge."""
     refs = [p.branch for p in open_parents(plan, part)]
     return [plan.base_ref, *refs] if integrates_base(plan, part) else refs
 

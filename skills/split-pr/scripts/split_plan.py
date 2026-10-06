@@ -242,7 +242,7 @@ def cmd_coverage(repo: Path, plan: Plan) -> dict:
     expected = plan.source_sha
     if plan.left_on_source:
         # Compare against the source without the left commits, so a dropped hunk
-        # or a stray file cannot hide behind a path those commits also touched.
+        # or a stray file cannot hide behind a path those commits also touch.
         in_range = range_commits(repo, plan.base_sha, plan.source_sha, merges=False)
         left = set(plan.left_on_source)
         replayed = replay(repo, plan.base_sha, [sha for sha in in_range if sha not in left])
@@ -254,8 +254,8 @@ def cmd_coverage(repo: Path, plan: Plan) -> dict:
     diff = git(repo, "diff", "--name-only", state, expected)
     if diff:
         return {"status": "fail", "differs": diff.splitlines()}
-    # The union can equal the expected tree while a hunk or tree entry sits in
-    # the wrong part or in two parts at once (identical changes merge cleanly).
+    # The union can equal the expected tree while a hunk or tree entry sits in the
+    # wrong part or in two parts at once (identical changes merge cleanly).
     wrong: set[str] = set()
     shared = shared_commits(plan)
     total: Counter[tuple[bytes, bytes, bytes]] = Counter()

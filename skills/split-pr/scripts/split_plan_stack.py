@@ -1,4 +1,4 @@
-"""Restack steps and the Stack summary line for split_plan.py."""
+"""Restack steps and stack bullets for split_plan.py."""
 
 from __future__ import annotations
 
@@ -69,8 +69,8 @@ def cmd_restack(repo: Path, plan: Plan) -> dict:
             merged = set(git(repo, "rev-list", "--parents", "-n", "1", part.onto).split()[1:])
             tips = {rev(repo, f"refs/heads/{p.branch}") for p in parents}
             if landed:
-                # The base side only needs to be some base commit that already
-                # holds the landed parents; later base movement is rebase-origin-main's job.
+                # The base side only has to be some base commit that already holds
+                # the landed parents; a later base move is rebase-origin-main's job.
                 extra = merged - tips
                 moved = not (tips <= merged and len(extra) == 1 and is_ancestor(repo, extra.pop(), base_now))
             else:
