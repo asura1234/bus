@@ -119,14 +119,6 @@ fn spawn_client_process(
     }
 }
 
-fn spawn_client_shell_process(
-    config_home: &PathBuf,
-    runtime_dir: &PathBuf,
-    api_socket_path: &PathBuf,
-) -> SpawnedHerdr {
-    spawn_client_process(config_home, runtime_dir, api_socket_path)
-}
-
 fn spawn_server(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
@@ -268,11 +260,7 @@ fn client_sees_headless_startup_config_diagnostic() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let app_dir = if cfg!(debug_assertions) {
-        "herdr-dev"
-    } else {
-        "herdr"
-    };
+    let app_dir = app_dir_name();
     fs::create_dir_all(config_home.join(app_dir)).unwrap();
     fs::write(
         config_home.join(app_dir).join("config.toml"),
@@ -314,7 +302,7 @@ fn client_sees_headless_startup_config_diagnostic() {
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
-    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let client = spawn_client_process(&config_home, &runtime_dir, &api_socket);
     let output = spawn_pty_drain(
         client
             ._master
@@ -654,7 +642,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
         .to_string();
     send_pane_shell_command(&api_socket, &pane_id, "printf 'SHELL_LIFECYCLE_INITIAL\\n'");
 
-    let mut client_a = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let mut client_a = spawn_client_process(&config_home, &runtime_dir, &api_socket);
     let output_a = spawn_pty_drain(
         client_a
             ._master
@@ -694,7 +682,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
         &pane_id,
         "printf 'SHELL_LIFECYCLE_DETACHED\\n'",
     );
-    let mut client_b = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let mut client_b = spawn_client_process(&config_home, &runtime_dir, &api_socket);
     let output_b = spawn_pty_drain(
         client_b
             ._master
@@ -1275,7 +1263,7 @@ fn pane_spawn_cwd_fallback_in_server() {
         "fallback cwd should exist: {cwd}"
     );
 
-    let client_shell = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let client_shell = spawn_client_process(&config_home, &runtime_dir, &api_socket);
     let output = spawn_pty_drain(
         client_shell
             ._master
