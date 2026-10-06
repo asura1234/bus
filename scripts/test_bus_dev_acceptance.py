@@ -1,11 +1,15 @@
 """Acceptance-driver profiles and result validation; no live model calls."""
 import contextlib
 import io
+import json
+import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
 from scripts import bus_dev_acceptance as acceptance
+from scripts import bus_e2e as e2e
 
 
 class AcceptanceProfileTests(unittest.TestCase):
@@ -186,6 +190,144 @@ class AcceptanceObservationTests(unittest.TestCase):
         self.assertTrue(result["complete"])
         self.assertEqual([s["status"] for s in case["status_samples"]], ["working", "idle"])
         sleep.assert_called_once_with(0.2)
+
+
+def installed(*commands):
+    return lambda command: "/bin/" + command if command in commands else None
+
+
+def dialog(text, *labels):
+    return {"text": text, "options": [{"number": n, "label": label, "selected": n == 1}
+                                      for n, label in enumerate(labels, 1)]}
+
+
+class EndToEndArgumentTests(unittest.TestCase):
+    def parse(self, *argv, which=installed("claude", "codex", "cursor-agent")):
+        with contextlib.redirect_stderr(io.StringIO()):
+            return e2e.parse_args(list(argv), which=which)
+
+    def test_live_models_must_be_allowed_explicitly(self):
+        with self.assertRaises(SystemExit):
+            self.parse()
+        self.assertTrue(self.parse("--allow-live-models").allow_live_models)
+
+    def test_defaults_to_installed_providers_and_every_case(self):
+        args = self.parse("--allow-live-models", which=installed("codex", "claude"))
+        self.assertEqual(args.providers, ["claude", "codex"])
+        self.assertEqual(args.cases, list(e2e.CASES))
+        self.assertFalse(args.keep)
+        self.assertIsNone(args.binary)
+
+    def test_selection_keeps_canonical_order_and_rejects_unknown_or_missing(self):
+        args = self.parse("--allow-live-models", "--providers", "cursor,claude", "--cases", "resume, single")
+        self.assertEqual((args.providers, args.cases), (["claude", "cursor"], ["single", "resume"]))
+        for argv in (["--providers", "gemini"], ["--cases", "single,typo"], ["--cases", ","],
+                     ["--timeout", "5"]):
+            with self.assertRaises(SystemExit):
+                self.parse("--allow-live-models", *argv)
+        with self.assertRaises(SystemExit):
+            self.parse("--allow-live-models", "--providers", "cursor", which=installed("claude"))
+
+    def test_skip_reasons_for_unsupported_cases(self):
+        self.assertIsNone(e2e.case_support("claude", "background", ["claude"]))
+        self.assertIn("Claude", e2e.case_support("codex", "background", ["claude", "codex"]))
+        self.assertIn("two providers", e2e.case_support("cursor", "multi", ["cursor"]))
+        self.assertIsNone(e2e.case_support("cursor", "multi", ["claude", "cursor"]))
+
+
+class EndToEndEnvironmentTests(unittest.TestCase):
+    def test_inherited_bus_herdr_and_claude_code_variables_are_scrubbed(self):
+        env = e2e.scrubbed_env({"PATH": "/bin", "HOME": "/home/me", "BUS_DATA_DIR": "/human", "BUS_DEV": "1",
+                                "HERDR_SOCKET_PATH": "/sock", "HERDR_ENV": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",
+                                "CLAUDECODE": "1", "CODEX_HOME": "/codex"}, "/run/data")
+        self.assertEqual(env, {"PATH": "/bin", "HOME": "/home/me", "CODEX_HOME": "/codex",
+                               "BUS_DATA_DIR": "/run/data", "TERM": "xterm-256color"})
+
+    def test_binary_prefers_bus_then_herdr_or_an_explicit_path(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            debug = root / "target/debug"
+            debug.mkdir(parents=True)
+            with self.assertRaises(SystemExit):
+                e2e.find_binary(root=root)
+            for name in ("herdr", "bus"):
+                (debug / name).write_text("#!/bin/sh\n")
+                (debug / name).chmod(0o755)
+                self.assertEqual(e2e.find_binary(root=root), (debug / name).resolve())
+            self.assertEqual(e2e.find_binary(str(debug / "herdr"), root=root), (debug / "herdr").resolve())
+            (debug / "bus").chmod(0o644)
+            self.assertEqual(e2e.find_binary(root=root), (debug / "herdr").resolve())
+
+    def test_only_the_herdr_binary_needs_the_bus_flag(self):
+        self.assertEqual(e2e.bus_argv(Path("/x/herdr")), ["/x/herdr", "--bus", "--dev"])
+        self.assertEqual(e2e.bus_argv(Path("/x/bus")), ["/x/bus", "--dev"])
+
+
+class EndToEndDialogTests(unittest.TestCase):
+    def test_trust_prompts_are_accepted_and_update_prompts_skipped(self):
+        claude = dialog("Accessing workspace:", "No, exit", "Yes, I trust this folder")
+        self.assertEqual(e2e.pick_option(claude, "trust"), 2)
+        self.assertEqual(e2e.pick_option(dialog("Do you trust this directory?", "Yes, continue", "No, quit"),
+                                         "trust"), 1)
+        update = dialog("Update available · 0.1 -> 0.2", "Update now (runs `npm install -g @openai/codex`)",
+                        "Skip", "Skip until next version")
+        self.assertEqual(e2e.pick_option(update, "trust"), 2)
+        self.assertEqual(e2e.pick_option(update, "allow"), 2)
+
+    def test_permission_prompts_are_allowed_once_never_always(self):
+        codex = dialog("Would you like to run the following command?",
+                       "Yes, and don't ask again for this command (p)", "Yes, proceed (y)", "No (esc)")
+        self.assertEqual(e2e.pick_option(codex, "allow"), 2)
+        question = dialog("Continue the Bus e2e check?", "Yes Continue the check", "No Stop", "Type something.")
+        self.assertEqual(e2e.pick_option(question, "allow"), 1)
+
+    def test_unexpected_dialogs_fail_instead_of_guessing(self):
+        for purpose in ("trust", "allow"):
+            with self.assertRaises(AssertionError):
+                e2e.pick_option(dialog("Pick a model", "Opus", "Sonnet"), purpose)
+
+    def test_prompts_carry_the_token(self):
+        for provider in e2e.PROVIDERS:
+            self.assertIn("reply with exactly TOKEN", e2e.dialog_prompt(provider, "TOKEN"))
+        self.assertIn("AskUserQuestion", e2e.dialog_prompt("claude", "T"))
+        self.assertIn("escalated", e2e.dialog_prompt("codex", "T"))
+        self.assertIn("run_in_background", e2e.background_prompt("T"))
+
+
+class EndToEndReportTests(unittest.TestCase):
+    def test_rows_summary_and_table(self):
+        rows = [e2e.new_row("claude", "single"), e2e.new_row("codex", "background"),
+                e2e.new_row("cursor", "dialog")]
+        self.assertEqual(set(rows[0]), {"provider", "case", "result", "seconds", "reason", "commands",
+                                        "last_status"})
+        self.assertEqual(rows[0]["result"], "FAIL")
+        rows[0].update(result="PASS", seconds=3.25)
+        rows[1].update(result="SKIP", seconds=0.0, reason="not supported")
+        self.assertEqual(e2e.summarize(rows[:2]), {"passed": True, "PASS": 1, "FAIL": 0, "SKIP": 1})
+        self.assertFalse(e2e.summarize(rows)["passed"])
+        self.assertFalse(e2e.summarize(rows[1:2])["passed"], "all skipped is not a pass")
+        table = e2e.format_table(rows).splitlines()
+        self.assertEqual(table[0].split(), ["provider", "case", "result", "seconds", "detail"])
+        self.assertEqual(table[1].split(), ["claude", "single", "PASS", "3.2"])
+        self.assertEqual(table[2].split()[:4], ["codex", "background", "SKIP", "0.0"])
+        self.assertEqual(table[3].split(), ["cursor", "dialog", "FAIL"])
+        json.dumps(rows)
+
+    def test_settle_answers_dialogs_and_keeps_the_last_status(self):
+        run = e2e.Run.__new__(e2e.Run)
+        run.args = mock.Mock(timeout=30)
+        run.agents = {"claude": 3}
+        statuses = iter([{"complete": False, "waiting_on_dialog": [3], "requests": []},
+                         {"complete": True, "waiting_on_dialog": [], "requests": []}])
+        run.bus = mock.Mock(cli=lambda *argv, **_: next(statuses))
+        run.answer_dialogs = mock.Mock(return_value=True)
+        row = e2e.new_row("claude", "dialog")
+        with mock.patch.object(e2e.time, "sleep"):
+            result = run.settle([7], row)
+        self.assertTrue(result[7]["complete"])
+        run.answer_dialogs.assert_called_once_with("claude", "allow", row)
+        self.assertEqual(row["dialogs_answered"], 1)
+        self.assertTrue(row["last_status"]["complete"])
 
 
 if __name__ == "__main__":

@@ -19,6 +19,10 @@ maintenance-test:
     {{python}} skills/review-pr/scripts/test_review_round.py
     {{python}} skills/split-pr/scripts/test_split_plan.py
 
+# Live message round trips with real Claude Code, Codex and Cursor; spends model usage (e.g. `just e2e --providers claude`)
+e2e *args:
+    {{python}} scripts/bus_e2e.py --allow-live-models {{args}}
+
 # Run one nextest filter, e.g. `just test-one codex_stale_working`
 test-one filter:
     cargo nextest run --locked "{{filter}}" --status-level fail --final-status-level fail --failure-output final --success-output never
