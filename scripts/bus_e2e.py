@@ -32,7 +32,7 @@ E2E = ROOT / "temp/e2e"
 WORKSPACE = E2E / "workspace"
 # Provider name -> the executable Bus launches for it.
 PROVIDERS = {"claude": "claude", "codex": "codex", "cursor": "cursor-agent"}
-CASES = ("single", "queued", "multi", "background", "dialog", "resume")
+CASES = ("single", "queued", "steering", "multi", "background", "dialog", "resume")
 SCRUB_PREFIXES = ("BUS_", "HERDR_", "CLAUDE_CODE_")
 SCRUB_NAMES = ("CLAUDECODE",)
 
@@ -146,6 +146,18 @@ def dialog_prompt(provider, token):
     return ("We are testing Bus delivery of permission prompts. Do not use skills. "
             f"Run exactly this shell command once: `{command}`. {how} "
             f"Then reply with exactly {token} and nothing else.")
+
+
+def steering_task(token):
+    # Claude Code refuses a bare foreground `sleep`; a Python sleep is an ordinary command.
+    return ("We are testing Bus delivery. Do not use skills. Run the shell command "
+            "`python3 -c 'import time; time.sleep(40)'` in the foreground (not in the background) and "
+            f"wait for it to finish, then reply with exactly {token} and nothing else.")
+
+
+def steering_correction(old, new):
+    return (f"Correction to your current task: when it is done, reply with exactly {new} instead of {old}, "
+            "and nothing else.")
 
 
 def background_prompt(token):
@@ -382,9 +394,10 @@ class Run:
     def token(self, provider, case, n=1):
         return f"E2E_{provider.upper()}_{case.upper()}_{n}_{os.urandom(3).hex().upper()}"
 
-    def send(self, providers, text, row):
+    def send(self, providers, text, row, queue=False):
         to = ",".join(str(self.agents[p]) for p in providers)
-        return self.bus.cli("send", "--room", self.room, "--to", to, "--text", text, row=row)
+        extra = ["--queue"] if queue else []
+        return self.bus.cli("send", "--room", self.room, "--to", to, "--text", text, *extra, row=row)
 
     def settle(self, message_ids, row):
         """Poll until every message completes, answering dialogs on the way."""
@@ -438,7 +451,8 @@ class Run:
         tokens, ids = [], []
         for n in range(1, 4):
             tokens.append(self.token(provider, "queued", n))
-            ids.append(self.send([provider], round_trip_prompt(tokens[-1]), row)["message_id"])
+            # --queue gives each message its own turn instead of steering the first.
+            ids.append(self.send([provider], round_trip_prompt(tokens[-1]), row, queue=True)["message_id"])
         statuses = self.settle(ids, row)
         received = []
         for message_id, token in zip(ids, tokens):
@@ -446,6 +460,33 @@ class Run:
             self.verify(status, {self.agents[provider]: token}, row)
             received.append(status["requests"][0]["reply"]["received_at_ms"])
         assert received == sorted(received), f"replies out of order: {received}"
+
+    def case_steering(self, provider, row):
+        """A correction sent while the agent works joins its turn and shares one reply."""
+        old, new = self.token(provider, "steering", 1), self.token(provider, "steering", 2)
+        first = self.send([provider], steering_task(old), row)["message_id"]
+        deadline = time.monotonic() + 120
+        while True:  # Wait until the turn runs, bound by its submit hook.
+            status = row["last_status"] = self.bus.cli("message", "status", first)
+            agent = next(a for a in self.bus.cli("diagnostics")["agents"] if a["agent_id"] == self.agents[provider])
+            if status["requests"][0]["stage"] == "delivered" and agent["status"] == "working":
+                break
+            if status["complete"]:
+                raise AssertionError("the task finished before it could be steered")
+            for agent_id in status.get("waiting_on_dialog") or []:
+                self.answer_dialogs(provider, "allow", row)
+            assert time.monotonic() < deadline, f"task never started working: {agent}"
+            time.sleep(0.5)
+        time.sleep(3)
+        second = self.send([provider], steering_correction(old, new), row)["message_id"]
+        statuses = self.settle([first, second], row)
+        first_request = statuses[first]["requests"][0]
+        joined = statuses[second]["requests"][0]
+        row["steering"] = {"group": joined.get("group"), "first_turn": first_request.get("turn_id"),
+                           "joined_turn": joined.get("turn_id"), "start_bound": joined.get("start_bound")}
+        assert joined.get("group") == first_request["request_id"], f"correction did not join the turn: {joined}"
+        for status in (statuses[first], statuses[second]):
+            self.verify(status, {self.agents[provider]: new}, row)
 
     def case_background(self, provider, row):
         self.round_trip(provider, row, "background", text=background_prompt)
@@ -470,7 +511,7 @@ class Run:
                        "settings approved the command or it did not run it")
 
     def run_provider_cases(self, provider):
-        for case in ("single", "queued", "background", "dialog"):
+        for case in ("single", "queued", "steering", "background", "dialog"):
             if case not in self.args.cases:
                 continue
             self.run_case(provider, case, getattr(self, "case_" + case))
