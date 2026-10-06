@@ -1,10 +1,11 @@
 //! Inline image thumbnails for room-history attachments, drawn with the Kitty
-//! graphics protocol or iTerm2's inline image protocol. History reserves cell
+//! graphics protocol (kitty, Ghostty, WezTerm, iTerm2 3.7+) or, in older
+//! iTerm2, its inline image protocol. History reserves cell
 //! rows for each thumbnail; this module sizes them, decodes each image once,
 //! and emits only what changed between frames. Without a graphics protocol, a
 //! known cell size, or a readable image, history keeps showing the
 //! attachment's file name only (it always shows that row).
-use crate::kitty_graphics::{encode_delete_placement, encode_kitty_data, HostCellSize};
+use crate::kitty_graphics::{encode_delete_placement, HostCellSize};
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -27,8 +28,9 @@ pub(crate) enum Protocol {
     /// deleted by id.
     #[default]
     Kitty,
-    /// iTerm2 `OSC 1337 File=`: the image is painted into the cells it covers,
-    /// so it is redrawn after any repaint and erased by repainting its cells.
+    /// iTerm2 before 3.7, `OSC 1337 File=`: the image is painted into the
+    /// cells it covers, so it is redrawn after any repaint and erased by
+    /// repainting its cells; every scroll step re-sends it.
     Iterm2,
 }
 
@@ -168,8 +170,14 @@ impl Thumbnails {
         }
         let mut out = Vec::new();
         out.extend_from_slice(b"\x1b7");
-        for (id, copy, old) in &self.shown {
-            if !next.contains(&(*id, *copy, old.clone())) {
+        // A moved placement is re-placed under the same ids, which Kitty
+        // graphics define as a flicker-free move; only placements that are
+        // gone are deleted.
+        for (id, copy, _) in &self.shown {
+            if !next
+                .iter()
+                .any(|(next_id, next_copy, _)| (next_id, next_copy) == (id, copy))
+            {
                 encode_delete_placement(&mut out, *id, *copy);
             }
         }
@@ -178,7 +186,7 @@ impl Thumbnails {
                 continue;
             }
             if let Some(data) = self.pending_upload.remove(id) {
-                encode_kitty_data(&mut out, &format!("a=t,t=d,f=100,i={id},q=2"), &data);
+                encode_quiet_upload(&mut out, *id, &data);
                 self.uploaded.insert(*id);
             }
             if !self.uploaded.contains(id) {
@@ -256,6 +264,27 @@ impl Thumbnails {
         let id = FIRST_IMAGE_ID + self.next_id;
         self.next_id = self.next_id.wrapping_add(1) % 0x1_0000;
         id
+    }
+}
+
+/// Kitty upload of `png` as image `id`, in chunks that each carry `q=2`:
+/// iTerm2 answers a continuation chunk without it, and that reply would reach
+/// the client's input.
+pub(super) fn encode_quiet_upload(out: &mut Vec<u8>, id: u32, png: &[u8]) {
+    use base64::Engine as _;
+    // A multiple of 3 bytes, so each chunk's base64 has no padding mid-stream.
+    const CHUNK_BYTES: usize = 3072;
+    let mut chunks = png.chunks(CHUNK_BYTES).peekable();
+    let mut first = true;
+    while let Some(chunk) = chunks.next() {
+        let more = u8::from(chunks.peek().is_some());
+        let data = base64::engine::general_purpose::STANDARD.encode(chunk);
+        if first {
+            let _ = write!(out, "\x1b_Ga=t,t=d,f=100,i={id},q=2,m={more};{data}\x1b\\");
+            first = false;
+        } else {
+            let _ = write!(out, "\x1b_Gm={more},q=2;{data}\x1b\\");
+        }
     }
 }
 
@@ -352,10 +381,26 @@ pub(crate) fn host_graphics_protocol(var: impl Fn(&str) -> Option<String>) -> Op
         return Some(Protocol::Kitty);
     }
     // iTerm2 keeps TERM=xterm-256color; LC_TERMINAL also survives ssh.
-    if program == "iTerm.app" || var("LC_TERMINAL").as_deref() == Some("iTerm2") {
-        return Some(Protocol::Iterm2);
-    }
-    None
+    let version = if program == "iTerm.app" {
+        var("TERM_PROGRAM_VERSION")
+    } else if var("LC_TERMINAL").as_deref() == Some("iTerm2") {
+        var("LC_TERMINAL_VERSION")
+    } else {
+        return None;
+    };
+    // iTerm2 3.7 draws Kitty placements sized in cells and moves them by id,
+    // so scrolling never re-sends the image; older versions get inline images.
+    let kitty = version.is_some_and(|version| {
+        let mut parts = version
+            .split('.')
+            .map(|part| part.parse::<u32>().unwrap_or(0));
+        (parts.next().unwrap_or(0), parts.next().unwrap_or(0)) >= (3, 7)
+    });
+    Some(if kitty {
+        Protocol::Kitty
+    } else {
+        Protocol::Iterm2
+    })
 }
 
 #[cfg(test)]
@@ -454,10 +499,12 @@ mod tests {
         assert!(first.starts_with("\x1b7") && first.ends_with("\x1b8"));
         assert!(thumbnails.encode(&[at(5)]).is_empty(), "unchanged frame");
 
+        // Scrolling moves it: the same ids are placed again, which moves the
+        // placement without deleting it first (no blank frame).
         let moved = String::from_utf8(thumbnails.encode(&[at(7)])).unwrap();
         assert!(!moved.contains("a=t"), "data is uploaded once: {moved}");
-        assert!(moved.contains("a=d,d=i,i=1112866816,p=1"));
-        assert!(moved.contains("\x1b[8;4H"));
+        assert!(!moved.contains("a=d"), "a move never deletes: {moved}");
+        assert!(moved.contains("\x1b[8;4H\x1b_Ga=p,i=1112866816,p=1,"));
 
         let twice = String::from_utf8(thumbnails.encode(&[at(1), at(7)])).unwrap();
         assert!(twice.contains("p=2"), "a second copy has its own placement");
@@ -508,10 +555,34 @@ mod tests {
             (&[("TERM_PROGRAM", "ghostty")][..], Some(Kitty)),
             (&[("TERM_PROGRAM", "WezTerm")][..], Some(Kitty)),
             (&[("KITTY_WINDOW_ID", "1")][..], Some(Kitty)),
-            // iTerm2 keeps TERM=xterm-256color.
+            // iTerm2 keeps TERM=xterm-256color; 3.7 and later draw Kitty
+            // graphics, older versions only inline images.
             (
-                &[("TERM_PROGRAM", "iTerm.app"), ("TERM", "xterm-256color")][..],
+                &[
+                    ("TERM_PROGRAM", "iTerm.app"),
+                    ("TERM_PROGRAM_VERSION", "3.7.3"),
+                    ("TERM", "xterm-256color"),
+                ][..],
+                Some(Kitty),
+            ),
+            (
+                &[
+                    ("TERM_PROGRAM", "iTerm.app"),
+                    ("TERM_PROGRAM_VERSION", "3.10.0"),
+                ][..],
+                Some(Kitty),
+            ),
+            (
+                &[
+                    ("TERM_PROGRAM", "iTerm.app"),
+                    ("TERM_PROGRAM_VERSION", "3.6.11"),
+                ][..],
                 Some(Iterm2),
+            ),
+            (&[("TERM_PROGRAM", "iTerm.app")][..], Some(Iterm2)),
+            (
+                &[("LC_TERMINAL", "iTerm2"), ("LC_TERMINAL_VERSION", "3.7.0")][..],
+                Some(Kitty),
             ),
             (&[("LC_TERMINAL", "iTerm2")][..], Some(Iterm2)),
             (&[("TERM_PROGRAM", "Apple_Terminal")][..], None),
@@ -524,6 +595,32 @@ mod tests {
         ] {
             assert_eq!(host_graphics_protocol(env(pairs)), expected, "{pairs:?}");
         }
+    }
+
+    #[test]
+    fn kitty_uploads_keep_every_chunk_quiet() {
+        use base64::Engine as _;
+        let png: Vec<u8> = (0..7000u32).map(|n| n as u8).collect();
+        let mut out = Vec::new();
+        encode_quiet_upload(&mut out, 9, &png);
+        let out = String::from_utf8(out).unwrap();
+        let chunks: Vec<_> = out
+            .split("\x1b\\")
+            .filter(|chunk| !chunk.is_empty())
+            .collect();
+        assert_eq!(chunks.len(), 3, "7000 bytes in 3072-byte chunks");
+        assert!(chunks[0].starts_with("\x1b_Ga=t,t=d,f=100,i=9,q=2,m=1;"));
+        assert!(chunks[1].starts_with("\x1b_Gm=1,q=2;"));
+        assert!(chunks[2].starts_with("\x1b_Gm=0,q=2;"));
+        let decoded: Vec<u8> = chunks
+            .iter()
+            .flat_map(|chunk| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(chunk.split_once(';').unwrap().1)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(decoded, png);
     }
 
     #[test]
