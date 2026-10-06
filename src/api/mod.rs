@@ -23,7 +23,6 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
     matches!(
         &request.method,
         Method::ServerReloadConfig(_)
-            | Method::ServerReloadAgentManifests(_)
             | Method::NotificationShow(_)
             | Method::CommandInvoke(_)
             | Method::WorkspaceCreate(_)

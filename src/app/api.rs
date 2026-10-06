@@ -262,20 +262,11 @@ impl App {
             None
         };
 
-        let manifest_update_agents =
-            if let AppEvent::AgentDetectionManifestsUpdated { activated, .. } = &ev {
-                Some(activated.clone())
-            } else {
-                None
-            };
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
         let previous_toast = self.state.toast.clone();
         let mut pane_updates = self.state.handle_app_event(ev);
         if checkpointed_pane_exit {
             self.finish_checkpointed_pane_exit();
-        }
-        if let Some(agents) = manifest_update_agents {
-            self.reset_agent_detection_for_agents(&agents);
         }
         if let Some((pane_id, agent)) = released_agent {
             if pane_updates.iter().any(|update| update.pane_id == pane_id) {
@@ -323,29 +314,6 @@ impl App {
         self.shutdown_detached_terminal_runtimes();
         pane_updates.extend(worktree_restore_updates);
         pane_updates
-    }
-
-    fn reset_agent_detection_for_agents(&self, agents: &[crate::detect::Agent]) {
-        if agents.is_empty() {
-            return;
-        }
-        for (terminal_id, terminal) in &self.state.terminals {
-            let Some(agent) = terminal.effective_known_agent().or(terminal.detected_agent) else {
-                continue;
-            };
-            if !agents.contains(&agent) {
-                continue;
-            }
-            if let Some(runtime) = self.terminal_runtimes.get(terminal_id) {
-                runtime.reset_agent_detection();
-            }
-        }
-    }
-
-    fn reset_all_agent_detection_runtimes(&self) {
-        for runtime in self.terminal_runtimes.values() {
-            runtime.reset_agent_detection();
-        }
     }
 
     pub(crate) fn refresh_new_herdr_toast_context_for_update(
@@ -860,39 +828,6 @@ impl App {
                     },
                 }
             }
-            Method::ServerAgentManifests(_) => {
-                self.state.refresh_agent_manifest_summaries();
-                let update_status = crate::detect::manifest_update::load_status();
-                SuccessResponse {
-                    id: request.id,
-                    result: ResponseResult::AgentManifestStatus {
-                        last_check_unix: update_status.last_check_unix,
-                        last_result: update_status.last_result.clone(),
-                        manifests: self
-                            .state
-                            .agent_manifest_summaries
-                            .clone()
-                            .into_iter()
-                            .map(|summary| agent_manifest_info(summary, &update_status))
-                            .collect(),
-                    },
-                }
-            }
-            Method::ServerReloadAgentManifests(_) => {
-                let summaries = crate::detect::manifest::reload_manifests();
-                self.state.agent_manifest_summaries = summaries.clone();
-                let update_status = crate::detect::manifest_update::load_status();
-                self.reset_all_agent_detection_runtimes();
-                SuccessResponse {
-                    id: request.id,
-                    result: ResponseResult::AgentManifestReload {
-                        manifests: summaries
-                            .into_iter()
-                            .map(|summary| agent_manifest_info(summary, &update_status))
-                            .collect(),
-                    },
-                }
-            }
             Method::NotificationShow(params) => {
                 return self.handle_notification_show(request.id, params);
             }
@@ -1207,25 +1142,6 @@ fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> 
     (!sanitized.is_empty()).then_some(sanitized)
 }
 
-fn agent_manifest_info(
-    summary: crate::detect::manifest::AgentManifestSummary,
-    update_status: &crate::detect::manifest_update::ManifestUpdateStatus,
-) -> crate::api::schema::AgentManifestInfo {
-    let remote = update_status.agent_status(summary.agent);
-    crate::api::schema::AgentManifestInfo {
-        agent: crate::detect::agent_label(summary.agent).to_string(),
-        source: summary.active_source.label(),
-        source_kind: summary.active_source.kind().to_string(),
-        active_version: summary.active_version,
-        cached_remote_version: summary.cached_remote_version,
-        local_override_shadowing_remote: summary.local_override_shadowing_remote,
-        remote_update_result: remote.as_ref().map(|status| status.last_result.clone()),
-        remote_update_error: remote.as_ref().and_then(|status| status.last_error.clone()),
-        remote_last_checked_unix: remote.and_then(|status| status.last_checked_unix),
-        warning: summary.warning,
-    }
-}
-
 #[cfg(test)]
 pub(super) mod test_support {
     pub(crate) fn exiting_test_command() -> &'static str {
@@ -1291,129 +1207,6 @@ mod tests {
             },
         );
         app
-    }
-
-    #[tokio::test]
-    async fn manifest_activation_event_resets_matching_agent_detection_runtime() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-reset")];
-        app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        app.state
-            .terminals
-            .get_mut(&terminal_id)
-            .unwrap()
-            .detected_agent = Some(Agent::Codex);
-        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        let reset_notify = runtime.agent_detection_reset_notify_for_test();
-        app.terminal_runtimes.insert(terminal_id, runtime);
-
-        app.handle_internal_event(AppEvent::AgentDetectionManifestsUpdated {
-            updated: Vec::new(),
-            activated: vec![Agent::Codex],
-            status: crate::detect::manifest_update::ManifestUpdateStatus::default(),
-        });
-
-        tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            reset_notify.notified(),
-        )
-        .await
-        .expect("matching agent detection runtime should be reset");
-    }
-
-    #[tokio::test]
-    async fn server_reload_agent_manifests_resets_detection_runtimes() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-reload")];
-        app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        let reset_notify = runtime.agent_detection_reset_notify_for_test();
-        app.terminal_runtimes.insert(terminal_id, runtime);
-
-        let response = app.handle_api_request(crate::api::schema::Request {
-            id: "reload_manifests".into(),
-            method: crate::api::schema::Method::ServerReloadAgentManifests(
-                crate::api::schema::EmptyParams::default(),
-            ),
-        });
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
-        assert_eq!(response["result"]["type"], "agent_manifest_reload");
-        assert!(!response["result"]["manifests"]
-            .as_array()
-            .unwrap()
-            .is_empty());
-
-        tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            reset_notify.notified(),
-        )
-        .await
-        .expect("manual manifest reload should reset detection runtimes");
-    }
-
-    #[tokio::test]
-    async fn server_agent_manifests_reports_status_without_resetting_runtimes() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        app.state.workspaces = vec![crate::workspace::Workspace::test_new("manifest-status")];
-        app.state.ensure_test_terminals();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        let reset_notify = runtime.agent_detection_reset_notify_for_test();
-        app.terminal_runtimes.insert(terminal_id, runtime);
-
-        let response = app.handle_api_request(crate::api::schema::Request {
-            id: "manifest_status".into(),
-            method: crate::api::schema::Method::ServerAgentManifests(
-                crate::api::schema::EmptyParams::default(),
-            ),
-        });
-        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
-        assert_eq!(response["result"]["type"], "agent_manifest_status");
-        assert!(!response["result"]["manifests"]
-            .as_array()
-            .unwrap()
-            .is_empty());
-        assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(10),
-                reset_notify.notified(),
-            )
-            .await
-            .is_err(),
-            "status request should not reset detection runtimes"
-        );
     }
 
     #[tokio::test]

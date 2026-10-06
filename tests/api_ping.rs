@@ -311,51 +311,6 @@ fn ping_over_socket_returns_version() {
     cleanup_spawned_herdr(child, base);
 }
 
-#[test]
-fn server_reload_agent_manifests_reports_runtime_override() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
-
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
-    wait_for_socket(&socket_path, Duration::from_secs(5));
-
-    let override_dir = config_home.join("herdr-dev").join("agent-detection");
-    fs::create_dir_all(&override_dir).unwrap();
-    let override_path = override_dir.join("codex.toml");
-    fs::write(
-        &override_path,
-        r#"
-id = "codex"
-
-[[rules]]
-id = "reload_marker"
-state = "blocked"
-contains = ["server-reload-marker"]
-"#,
-    )
-    .unwrap();
-
-    let response = send_request(
-        &socket_path,
-        r#"{"id":"reload_manifests","method":"server.reload_agent_manifests","params":{}}"#,
-    );
-    assert_eq!(response["id"], "reload_manifests");
-    assert_eq!(response["result"]["type"], "agent_manifest_reload");
-    let manifests = response["result"]["manifests"].as_array().unwrap();
-    let codex = manifests
-        .iter()
-        .find(|manifest| manifest["agent"] == "codex")
-        .expect("codex manifest summary");
-    assert_eq!(codex["source_kind"], "local override");
-    assert_eq!(codex["source"], override_path.display().to_string());
-    assert!(codex.get("warning").is_none());
-
-    cleanup_spawned_herdr(child, base);
-}
-
 #[cfg(target_os = "linux")]
 #[test]
 fn shutdown_preserves_session_after_shell_is_signaled() {

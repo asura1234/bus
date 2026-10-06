@@ -49,10 +49,6 @@ pub enum Method {
     ServerStop(EmptyParams),
     #[serde(rename = "server.reload_config")]
     ServerReloadConfig(EmptyParams),
-    #[serde(rename = "server.agent_manifests")]
-    ServerAgentManifests(EmptyParams),
-    #[serde(rename = "server.reload_agent_manifests")]
-    ServerReloadAgentManifests(EmptyParams),
     #[serde(rename = "notification.show")]
     NotificationShow(NotificationShowParams),
     #[serde(rename = "command.invoke")]

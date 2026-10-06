@@ -2252,10 +2252,6 @@ impl PaneRuntime {
         self.detect_reset_notify.notify_one();
     }
 
-    pub fn reset_agent_detection(&self) {
-        self.detect_reset_notify.notify_one();
-    }
-
     #[cfg(test)]
     pub(crate) fn agent_detection_reset_notify_for_test(&self) -> Arc<Notify> {
         self.detect_reset_notify.clone()

@@ -3,9 +3,7 @@ use std::time::Instant;
 #[cfg(test)]
 use std::time::Duration;
 
-use super::{
-    background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL,
-};
+use super::{App, MIN_RENDER_INTERVAL};
 fn retain_detached_process_after_wait(
     pid: u32,
     result: std::io::Result<Option<std::process::ExitStatus>>,
@@ -94,21 +92,6 @@ impl App {
         }
     }
 
-    pub(crate) fn run_agent_manifest_update_check(&mut self) {
-        if !background_update_check_enabled(
-            self.policy.background_updates,
-            self.update_manifest_check_enabled,
-        ) {
-            self.next_agent_manifest_update_check = None;
-            return;
-        }
-
-        self.next_agent_manifest_update_check = Some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
-
-        let manifest_update_tx = self.event_tx.clone();
-        std::thread::spawn(move || crate::detect::manifest_update::auto_update(manifest_update_tx));
-    }
-
     pub(crate) fn next_headless_loop_deadline_with_git_refresh(
         &self,
         now: Instant,
@@ -131,7 +114,6 @@ impl App {
             include_git_refresh
                 .then(|| self.git_refresh_deadline())
                 .flatten(),
-            self.next_agent_manifest_update_check,
             self.agent_metadata_deadline,
             self.pending_agent_resume_deadline,
             self.session_save_deadline,

@@ -234,32 +234,6 @@ fn request_round_trips_for_server_reload_config() {
 }
 
 #[test]
-fn request_round_trips_for_server_reload_agent_manifests() {
-    let request = Request {
-        id: "req_reload_agent_manifests".into(),
-        method: Method::ServerReloadAgentManifests(EmptyParams::default()),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "server.reload_agent_manifests");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
-}
-
-#[test]
-fn request_round_trips_for_server_agent_manifests() {
-    let request = Request {
-        id: "req_agent_manifests".into(),
-        method: Method::ServerAgentManifests(EmptyParams::default()),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "server.agent_manifests");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
-}
-
-#[test]
 fn request_round_trips_for_agent_explain() {
     let request = Request {
         id: "req_agent_explain".into(),

@@ -207,7 +207,6 @@ fn print_help() {
 
 pub(crate) fn apply_config(config: &mut crate::config::Config) {
     config.onboarding = Some(false);
-    config.update.manifest_check = false;
     config.ui.sound.enabled = false;
 }
 

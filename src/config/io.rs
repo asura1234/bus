@@ -319,14 +319,6 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     );
     load_live_section(
         table,
-        "update",
-        "update config",
-        &mut diagnostics,
-        &mut invalid_sections,
-        |section| config.update = section,
-    );
-    load_live_section(
-        table,
         "ui",
         "ui config",
         &mut diagnostics,

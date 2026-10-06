@@ -11,20 +11,6 @@ use super::{
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
 
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(default)]
-pub struct UpdateConfig {
-    pub manifest_check: bool,
-}
-
-impl Default for UpdateConfig {
-    fn default() -> Self {
-        Self {
-            manifest_check: true,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ToastDelivery {
@@ -280,7 +266,6 @@ pub struct Config {
     pub terminal: TerminalConfig,
     pub session: SessionConfig,
     pub server: ServerConfig,
-    pub update: UpdateConfig,
     pub keys: KeysConfig,
     pub ui: UiConfig,
     pub worktrees: WorktreesConfig,

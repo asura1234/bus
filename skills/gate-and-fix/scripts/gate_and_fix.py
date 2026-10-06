@@ -24,7 +24,6 @@ SKILLS_PREFIX = "skills/"
 SKILL_CONTRACT_PREFIXES = ("cli_extensions/", "docs/guides/", "docs/templates/")
 CI_TOOLS = frozenset({"just", "cargo-nextest"})
 MAINTENANCE_TESTS = (
-    "scripts.test_agent_detection_manifest_check",
     "scripts.test_bus_dev_acceptance",
     "scripts.test_hermes_integration_asset",
     "scripts.test_package_windows_conpty",

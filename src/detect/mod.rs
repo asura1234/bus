@@ -5,7 +5,6 @@
 
 pub(crate) mod dialog;
 pub mod manifest;
-pub mod manifest_update;
 
 /// The detected state of a terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

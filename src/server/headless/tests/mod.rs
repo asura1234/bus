@@ -4566,16 +4566,6 @@ fn headless_scheduled_tasks_expire_agent_metadata() {
         }));
 }
 
-#[test]
-fn headless_scheduled_tasks_clears_disabled_agent_manifest_update_deadline() {
-    let mut server = test_headless_server();
-    let now = Instant::now();
-    server.app.next_agent_manifest_update_check = Some(now - Duration::from_millis(1));
-
-    assert!(!server.handle_scheduled_tasks_headless(now, false));
-    assert_eq!(server.app.next_agent_manifest_update_check, None);
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_client() {

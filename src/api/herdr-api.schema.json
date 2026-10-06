@@ -4431,38 +4431,6 @@
         {
           "properties": {
             "method": {
-              "const": "server.agent_manifests",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/EmptyParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "server.reload_agent_manifests",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/EmptyParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
               "const": "notification.show",
               "type": "string"
             },
@@ -6397,67 +6365,6 @@
             "pane_id",
             "focused",
             "revision"
-          ],
-          "type": "object"
-        },
-        "AgentManifestInfo": {
-          "properties": {
-            "active_version": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "agent": {
-              "type": "string"
-            },
-            "cached_remote_version": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "local_override_shadowing_remote": {
-              "type": "boolean"
-            },
-            "remote_last_checked_unix": {
-              "format": "uint64",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "remote_update_error": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "remote_update_result": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "source": {
-              "type": "string"
-            },
-            "source_kind": {
-              "type": "string"
-            },
-            "warning": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "agent",
-            "source",
-            "source_kind",
-            "local_override_shadowing_remote"
           ],
           "type": "object"
         },
@@ -9270,58 +9177,6 @@
                 "type",
                 "target",
                 "details"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "manifests": {
-                  "items": {
-                    "$ref": "#/schemas/success_response/$defs/AgentManifestInfo"
-                  },
-                  "type": "array"
-                },
-                "type": {
-                  "const": "agent_manifest_reload",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "manifests"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "last_check_unix": {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": [
-                    "integer",
-                    "null"
-                  ]
-                },
-                "last_result": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "manifests": {
-                  "items": {
-                    "$ref": "#/schemas/success_response/$defs/AgentManifestInfo"
-                  },
-                  "type": "array"
-                },
-                "type": {
-                  "const": "agent_manifest_status",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "manifests"
               ],
               "type": "object"
             },
