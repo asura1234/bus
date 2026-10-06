@@ -1671,6 +1671,7 @@ impl BusUi {
                 orchestrates,
                 prompt,
             } => {
+                let gap = agent_form_gap(main, form);
                 for (index, label, editor) in [
                     (0, "Name", Some(name)),
                     (1, "Agent", None),
@@ -1701,7 +1702,7 @@ impl BusUi {
                             false,
                         );
                     }
-                    y += 2;
+                    y += gap;
                 }
                 if let Some(choice) = orchestrates {
                     view.row(
@@ -1723,7 +1724,7 @@ impl BusUi {
                         *field == super::forms::ORCHESTRATES_FIELD,
                         false,
                     );
-                    y += 2;
+                    y += gap;
                 }
                 if let Some(prompt) = prompt {
                     let index = super::forms::PROMPT_FIELD;
@@ -1735,8 +1736,9 @@ impl BusUi {
                         true,
                     );
                     y += 1;
-                    // Leave room for the buttons and an error below.
-                    let height = main.bottom().saturating_sub(y + 8).clamp(3, 16);
+                    // The prompt takes what the buttons and a validation error leave.
+                    let below = if self.visible_error().is_some() { 7 } else { 3 };
+                    let height = main.bottom().saturating_sub(y + below).clamp(1, 16);
                     view.editor(
                         Rect::new(x, y, width, height),
                         &prompt.editor,
@@ -1807,12 +1809,14 @@ impl BusUi {
             ..
         } = form
         {
+            // Below the Agent field's value row.
+            let top = 6 + agent_form_gap(main, form);
             for (index, kind) in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor]
                 .into_iter()
                 .enumerate()
             {
                 view.row(
-                    Rect::new(x, 8 + index as u16, width, 1),
+                    Rect::new(x, top + index as u16, width, 1),
                     provider(kind),
                     Some(Action::Provider(kind)),
                     *provider_cursor == kind,
@@ -1962,5 +1966,17 @@ pub(in crate::client::shell) fn layout(
         pane_surface: Rect::new(width, 0, cols - width, rows),
         tab_bar: Rect::default(),
         mobile_header: Rect::default(),
+    }
+}
+
+/// Rows from one agent-form field to the next: the MASTER form, which adds a
+/// room and a prompt, drops the blank line in short terminals so its buttons
+/// and validation error stay on screen.
+fn agent_form_gap(main: Rect, form: &Form) -> u16 {
+    match form {
+        Form::Agent {
+            prompt: Some(_), ..
+        } if main.height < 34 => 1,
+        _ => 2,
     }
 }

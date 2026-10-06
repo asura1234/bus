@@ -363,3 +363,16 @@ fn unassigned_master_agents_show_none_and_work_agents_keep_their_detail_action()
         .iter()
         .any(|hit| hit.action == render::Action::Reassign(builder)));
 }
+
+#[test]
+fn master_agent_form_validation_errors_are_visible_in_a_24_row_terminal() {
+    let (mut ui, master, _, _, _) = master_fixture();
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    ui.action(render::Action::Add);
+    let screen = room_screen(&mut ui, 100, 24);
+    assert!(
+        screen.contains("Name and Model are required."),
+        "validation must explain why Add did not submit in a 24-row terminal: {screen}"
+    );
+}
