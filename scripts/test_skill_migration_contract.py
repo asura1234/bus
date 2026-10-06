@@ -8,9 +8,11 @@ REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
 CANONICAL_SKILLS = {
     "address-review-comments",
+    "best-of-n",
     "commit-and-push",
     "delete-dead-code",
     "gate-and-fix",
+    "merge-pr",
     "pr",
     "rebase-origin-main",
     "review-plan",
@@ -67,11 +69,14 @@ class SkillMigrationContractTest(unittest.TestCase):
             "docs/guides/plan-review-guide.md",
             "docs/guides/code-review-guide.md",
             "docs/guides/review-response-guide.md",
+            "docs/guides/architecture-principles.md",
             "docs/templates/plan-template.md",
             "docs/templates/module-agents-template.md",
             "cli_extensions/review_artifact.py",
             "cli_extensions/review_artifact_parser.py",
+            "cli_extensions/review_artifact_text.py",
             "cli_extensions/review_artifact_types.py",
+            "cli_extensions/review_round_common.py",
         )
         for relative in required:
             with self.subTest(path=relative):
@@ -111,6 +116,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             "docs/templates/plan-template.md",
             "docs/templates/workflow-template.md",
             "skills/delete-dead-code/references/dead-code-findings-format.md",
+            "skills/delete-dead-code/references/duplicate-findings-format.md",
             "skills/gate-and-fix/references/gate-round-format.md",
             "skills/pr/references/pr-template.md",
             "skills/split-pr/references/split-plan-format.md",

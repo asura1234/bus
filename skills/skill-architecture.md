@@ -1,111 +1,130 @@
 # Layered Skill Architecture
 
-This document defines the information layers, sources of truth, and artifact protocols for Bus workflow skills. The goal is to make workflows easy for agents to execute, mechanical constraints verifiable, and rules resistant to drift.
+This document defines the information layering, single sources of truth, and intermediate-artifact protocol of Bus workflow skills. The goal is to make skills easy for agents to execute, make mechanical constraints verifiable, and keep the same rule from scattering across several natural-language documents and drifting continuously.
 
-## Core model
+## Core principles
 
-A complete workflow skill has four responsibility layers:
+A complete workflow skill consists of four kinds of responsibility:
 
-| Layer | Medium | Owns | Does not own |
-| --- | --- | --- | --- |
-| Execution | `SKILL.md` | executable pseudocode, command order, branches, loops, stop conditions, and required reads | long rationale, full templates, hand-written parsing |
-| Principles | `guide.md` or shared guide | judgment rules, boundaries, priorities, risks, and exceptions | field order, fixed headings, mechanical validation |
-| Mechanics | Python scripts | parsing, normalization, identity, state, fail-closed gates, and deterministic rendering | semantic review conclusions or architecture choices |
-| Format | `*-format.md` | exact artifact structure, fields, enums, order, and empty values | workflow order, judgment principles, implementation |
+| Layer      | Medium                     | Owns                                                                                              | Does not own                                              |
+| ---------- | -------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Execution  | `SKILL.md`                 | executable pseudocode, command order, branches, loops, STOP conditions, when to read other SOTs   | long rationale, complete format templates, manual parsing |
+| Principles | `guide.md` or shared guide | judgment principles, boundaries, priorities, risks, and exceptions                                | field order, fixed headings, mechanical validation        |
+| Mechanics  | Python scripts             | parsing, normalization, validation, state computation, fail-closed gates, deterministic rendering | review conclusions that need semantic judgment, architecture trade-offs |
+| Format     | `*-format.md`              | the strict structure, fields, enums, order, and empty-value expression of intermediate and final artifacts | workflow order, judgment principles, script implementation details |
 
-One rule has one authoritative layer. Other layers may reference it but must not maintain an approximate duplicate.
+A rule may have only one authoritative layer. Other layers may only reference it and must not copy an approximate restatement.
 
 ## 1. `SKILL.md`: executable pseudocode
 
-The entrypoint reads like executable control flow:
+`SKILL.md` is the agent's execution entrypoint and should read like runnable control flow:
 
-- list reads, calls, branches, loops, waits, and termination conditions;
-- say exactly when guides and formats must be read;
-- call deterministic helpers instead of recreating parsers in prose;
-- keep only execution-critical instruction and move rationale to a guide;
-- reference complete report templates rather than embedding them;
-- return renderer output verbatim when chat output is fixed.
+- List reads, calls, branches, loops, waits, and termination conditions step by step.
+- State explicitly when the guide and format must be read.
+- Call scripts directly for mechanical steps; do not ask the agent to rewrite parsing logic on the spot.
+- Keep only the short instructions execution requires; push the "why" down into the guide.
+- Do not embed complete report templates; only reference the corresponding `*-format.md`.
+- Do not rewrite script output by hand; when chat output must be fixed, return the renderer's product verbatim.
 
-Keep entrypoints under 250 lines. Bus does not yet have LibTV Desktop's automatic skill-length lint, so this is an architectural constraint checked by the skill migration tests and review rather than a claim that `just lint` enforces it.
+The `SKILL.md` of every canonical workflow skill listed in `scripts/test_skill_migration_contract.py` must stay within 250 lines, enforced by that test in `just maintenance-test`. The typical reason an entrypoint grows too long is not that the flow got more complex, but that guide principles, artifact templates, or pseudo-implementations of scripts flowed back into the entrypoint. The line-count gate only constrains entrypoint complexity; it does not prove the skill's quality — a 240-line `SKILL.md` that writes judgment principles as pseudocode passes just as well.
 
-## 2. `guide.md`: judgment principles
+## 2. `guide.md`: guiding principles
 
-A guide owns rules the agent must understand:
+The guide owns rules that the agent must understand and judge:
 
-- goals, non-goals, responsibility boundaries, and priority;
-- uncertainty, conflict, exceptions, and reasonable deviation;
-- when to escalate to the main agent or developer;
-- why a fail-open behavior is unsafe;
-- which checks are mechanical proofs and which require semantic judgment.
+- Goals, non-goals, responsibility boundaries, and priorities.
+- How to handle uncertainty, conflicts, exceptions, and reasonable deviation.
+- When to escalate to the main agent or the developer.
+- Why certain fail-open behaviors are unacceptable.
+- Which checks are mechanical proofs and which still need semantic judgment.
 
-Do not duplicate the complete `SKILL.md` flow or artifact headings and field order. The entrypoint must require the guide before the relevant judgment point.
+The guide should not copy the complete steps of `SKILL.md`, nor maintain an artifact's headings, field order, or fixed template.
+The execution entrypoint must explicitly require reading the corresponding guide completely before the relevant judgment happens; it cannot assume the agent will discover it on its own.
 
 ## 3. Python scripts: mechanical checks and gates
 
-Low-discretion, drift-prone, or repeated work belongs in Python:
+Work that is low-discretion, prone to drift, or needs repeated execution must be pushed down into Python:
 
-- fence-aware and section-aware parsing;
-- path, task, lane, hash, and state identities;
-- schema and enum validation;
-- fail-closed prerequisites;
-- deterministic trimming, aggregation, and rendering;
-- stable stdout, JSON, and exit-code contracts.
+- Fence-aware / section-aware parsing.
+- Path, task, lane, hash, and state identity computation.
+- Schema and enum validation.
+- Fail-closed prerequisite gates.
+- Deterministic trimming, aggregation, and rendering.
+- Stable stdout, JSON, or exit code contracts.
 
-A mechanical helper must:
+Scripts must:
 
-- reject malformed, missing, duplicate, out-of-order, and unknown values;
-- never guess a missing field;
-- produce the same output for the same input;
-- test normal, boundary, and fail-closed paths;
-- use the same field names and enums as the format source of truth.
+- Return non-zero for malformed, missing, duplicate, out-of-order, and unknown enum values.
+- Not fill in missing fields by guessing.
+- Produce the same output for the same input.
+- Provide automated tests for the normal path, boundary paths, and fail-closed paths.
+- Use the same fields and enums as the format SOT, and not maintain a second implicit schema.
 
-Python can prove structure and state transitions. It cannot prove that a model performed a complete semantic review; reviewer verification, cross-model pressure testing, and developer judgment cover that boundary.
+Python can prove structure and state transitions; it cannot prove that the model really completed the semantic review. The latter relies on reviewer re-verification, cross-model dogfooding, and final human judgment.
 
 ## 4. `*-format.md`: strict artifact formats
 
-Every artifact consumed across agents, rounds, or skills has a separate format source of truth, such as:
+Every artifact that is consumed across agents, rounds, or skills must have an independent format SOT. File names use a concrete domain prefix, for example:
 
 - `review-format.md`
-- `consumer-fallout-format.md`
+- `dead-code-findings-format.md`
+- `gate-round-format.md`
 
-The format fixes:
+The format document must pin down:
 
-- headings and section order;
-- required, optional, and forbidden fields;
-- legal enums and casing;
-- one representation for empty or not-applicable values;
-- normalized paths, ids, hashes, and times;
-- state-dependent required and forbidden content;
-- a complete positive example and necessary malformed examples.
+- The fixed order of the title and sections.
+- Required, optional, and forbidden fields.
+- Legal enums and casing.
+- The single expression for an empty set, no issues, and not applicable.
+- The normalized form of fields such as paths, ids, hashes, and times.
+- Content that must or must not appear in different states.
+- A complete positive example, plus explanations of malformed counterexamples where needed.
 
-Shared guides and formats live under `docs/guides/`. A single-skill format may live under that skill's `references/`. Never duplicate a complete template inside an entrypoint, guide, or script comment.
+Formats shared by several skills live in `docs/guides/`; a format used by only one skill may live in that skill's directory (`references/`). Never copy the complete template again into `SKILL.md`, a guide, or script comments.
 
-## Artifact lifecycle
+## Intermediate artifact lifecycle
+
+The standard artifact flow is:
 
 ```text
-agent writes artifact from *-format.md
-  -> Python parser/gate validates fail-closed
-  -> Python renderer creates a compact completion envelope
-  -> producer returns the envelope verbatim
-  -> consumer advances the SKILL.md state machine
+agent writes the artifact per *-format.md
+  → Python parser / gate validates fail-closed
+  → Python renderer produces a compact completion envelope
+  → producer agent returns the envelope verbatim
+  → consumer agent proceeds per the SKILL.md state machine
 ```
 
-Complete evidence remains in the artifact. Agent messages carry only status, identity, summary, and artifact path. This reduces orchestrator context pressure and prevents fields from disappearing through hand summaries.
+Complete evidence stays in the artifact file; messages between agents carry only status, summary, and artifact path. This both reduces pollution of the main agent's context and avoids fields being lost through the model's hand-written summaries.
 
-If mechanical validation fails, the producer is not complete and the consumer cannot infer a state from prose. Correct the artifact and rerun the gate.
+If an artifact fails mechanical validation:
 
-## Agent communication
+- The producer must not report completion.
+- The consumer must not guess the status from natural language.
+- The producer fixes the artifact and reruns the gate.
 
-Distinguish:
+## Communication between agents
 
-- **Control messages:** short structured state-machine inputs.
-- **Evidence artifacts:** complete durable evidence for acceptance, resume, and audit.
+Communication between agents must distinguish two kinds of information:
 
-A control message contains at least the closed status, task identity, and artifact path. Never substitute phrases such as "mostly done" or "should work" for a format enum. Touched files, gate output, and concerns live in the artifact.
+- **Control messages**: short; say what happened and what decision the main agent now has to make.
+- **Evidence artifacts**: complete and persisted, for later acceptance, resume, and audit.
 
-A worker immediately reports missing context, owner gaps, blockers, or completed work with correctness concerns. The main agent waits only on known-running workers and progresses local orchestration first. Use bounded long waits, not repeated short polling or "are you done" messages.
+A control message contains at least the task identity, the conclusion, and the artifact path. The conclusion must be explicit enough that the main agent can act on it directly; free text such as "basically done" or "should work" must not stand in for it. Detailed touched files, gate output, and concerns are written into the artifact, not pasted into the control message.
 
-## Directory and discovery contract
+Control messages **do not need** a state machine of their own: action envelopes, generation hashes, mailboxes, and completion-file polling are all scaffolding an agent asks for to confirm "which step am I on", not defenses bought by an observed failure. Orchestration is held by the main agent itself; scripts keep only the part it cannot prove on its own.
+
+A subagent must report immediately when it reaches a state that needs the main agent to act, rather than waiting for a hypothetical "final completion":
+
+- Missing context.
+- Owner gap.
+- A blocker it cannot get past.
+- Completed but with correctness concerns.
+
+The main agent waits only on agents known to be still running; when it has local orchestration or acceptance work, it does that first. Waiting should use the longest safe window the host allows and handle any agent's report immediately; no continuous short-interval busy-polling, and no repeatedly asking "are you done?".
+
+## Directories and references
+
+Recommended structure:
 
 ```text
 skills/<skill>/
@@ -117,7 +136,7 @@ skills/<skill>/
     └── <mechanical-task>.py
 
 docs/guides/
-└── <shared-guide-or-format>.md
+└── <artifact>-format.md
 
 docs/templates/
 └── <shared-template>.md
@@ -129,24 +148,26 @@ cli_extensions/
 .claude/skills/<skill> -> ../../skills/<skill>
 ```
 
-`skills/` is the sole editable skill root. `.agents/skills` and `.claude/skills` are discovery links. An entrypoint directly links every guide and format needed for that run; avoid deep guide-to-reference chains. Scripts are invoked by command and do not need to be read unless they are being modified.
+`skills/` is the only editable skill root; `.agents/skills` and `.claude/skills` are discovery links. `SKILL.md` must link directly to the guides and formats this run needs; do not form deep guide → reference → reference chains. Scripts are invoked by command; unless a script is being modified, the agent does not need to read its source first.
 
 ## Change checklist
 
-1. Classify each rule as execution, principle, mechanic, or format.
-2. Change only its authoritative source; other layers add only references or calls.
-3. Change an artifact format before changing its parser or renderer.
+When modifying or adding a workflow skill:
+
+1. Decide whether the new rule belongs to the execution, principle, mechanics, or format layer.
+2. Modify only that rule's authoritative SOT; other layers only add references or calls.
+3. When adding or modifying an artifact, update `*-format.md` first, then the parser / renderer.
 4. Add normal and fail-closed tests for mechanical contracts.
-5. Keep each `SKILL.md` under 250 lines.
-6. Run affected Python tests, registry-link checks, `just lint`, and relevant Rust or maintenance tests.
-7. Pressure-test the workflow with a realistic task; add control surface only for repeat failures or dangerous fail-open behavior.
+5. Confirm `SKILL.md` stays within 250 lines (`just maintenance-test` verifies it).
+6. Run the applicable `just lint`, the affected Python tests / `just maintenance-test`, and the skill symlink checks.
+7. Dogfood with a real task; only solidify repeated failures or high-risk fail-open behavior into a new control surface.
 
 ## Forbidden patterns
 
-- putting principles, full templates, and script pseudocode into one `SKILL.md`;
-- defining one field or enum independently in several documents;
-- claiming a strict format while its parser accepts missing, reordered, or unknown values;
-- parsing one structure and rendering another;
-- hand-summarizing deterministic output;
-- treating artifact existence as completion without validation;
-- adding a state machine, metric, or second source of truth for one low-impact preference.
+- Piling guiding principles, format templates, and script pseudo-implementations all into `SKILL.md`.
+- The same field or enum written separately in several documents.
+- A format claiming to be strict while the parser accepts missing sections, wrong order, or unknown states.
+- The parser producing one structure and the renderer interpreting it by another set of rules.
+- Letting the agent hand-summarize or rewrite output that could be generated deterministically.
+- Declaring completion merely because the artifact file exists, without running the mechanical gate.
+- Adding a new state machine, metric, or second source of truth for a single low-impact preference feedback.
