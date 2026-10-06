@@ -76,7 +76,46 @@ fn sidebar_lists_master_first_without_a_header_above_rooms() {
     assert!(rows[7].starts_with('─'), "{rows:?}");
     assert!(rows[8].starts_with("AGENTS"), "{rows:?}");
     assert!(rows[10].starts_with("claude-orch"), "{rows:?}");
-    assert!(rows[11].starts_with("Claude Code → pr-123"), "{rows:?}");
+    assert_eq!(rows[11], "Claude Code", "{rows:?}");
+    assert_eq!(rows[12], "#pr-123", "{rows:?}");
+}
+
+#[test]
+fn master_agents_show_three_lines_without_an_expand_control() {
+    let (mut ui, master, _, _, orchestrator) = master_fixture();
+    let mut state = ui.snapshot.state.clone();
+    state
+        .set_agent_details_disclosed(orchestrator, true)
+        .unwrap();
+    ui.snapshot = Arc::new(BusSnapshot {
+        state,
+        revision: 1,
+        last_command_id: 0,
+        error: None,
+    });
+    ui.open_room(master);
+    let rows = sidebar_rows(&mut ui);
+    assert!(rows[10].starts_with("claude-orch"), "{rows:?}");
+    assert_eq!(rows[11], "Claude Code", "{rows:?}");
+    assert_eq!(rows[12], "#pr-123", "{rows:?}");
+    // Even disclosed, no branch or cwd lines follow.
+    assert!(rows[13..28].iter().all(|row| row.is_empty()), "{rows:?}");
+    assert!(!rows.iter().any(|row| row.contains("/repo")), "{rows:?}");
+    assert!(!ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::Details(orchestrator)));
+    let hit_row = |action| {
+        ui.view
+            .hits
+            .iter()
+            .filter(|hit| hit.action == action)
+            .map(|hit| hit.rect.y)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(hit_row(render::Action::Reassign(orchestrator)), [12]);
+    assert!(hit_row(render::Action::Agent(orchestrator)).contains(&11));
 }
 
 #[test]
@@ -307,7 +346,7 @@ fn an_orchestrators_detail_line_reassigns_or_unassigns_it() {
     assert!(screen.contains("claude-orch orchestrates"), "{screen}");
     assert!(screen.contains("< pr-123 >"), "{screen}");
 
-    // Its own room stays a choice; the cycle runs pr-123 → pr-456 → none.
+    // Its own room stays a choice; the cycle runs pr-123, pr-456, then none.
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
     assert!(room_screen(&mut ui, 100, 30).contains("< pr-456 >"));
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
@@ -327,7 +366,7 @@ fn an_orchestrators_detail_line_reassigns_or_unassigns_it() {
 }
 
 #[test]
-fn unassigned_master_agents_show_none_and_work_agents_keep_their_detail_action() {
+fn unassigned_master_agents_show_unassigned_and_work_agents_keep_their_detail_action() {
     let mut state = BusState::default();
     let master = state.ensure_master_room();
     let work = state.create_room("work").unwrap();
@@ -345,10 +384,7 @@ fn unassigned_master_agents_show_none_and_work_agents_keep_their_detail_action()
     }));
     ui.open_room(master);
     let rows = sidebar_rows(&mut ui);
-    assert!(
-        rows.iter().any(|row| row.starts_with("Codex → none")),
-        "{rows:?}"
-    );
+    assert!(rows.iter().any(|row| row == "#unassigned"), "{rows:?}");
     assert!(ui
         .view
         .hits

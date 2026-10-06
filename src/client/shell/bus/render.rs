@@ -589,17 +589,12 @@ pub(super) fn room_label(state: &BusState, room: &Room) -> String {
     label
 }
 
-/// The line under an agent's name: its provider, then for a MASTER agent the
-/// room it orchestrates (or `none`). The name row's status column leaves no
-/// room for the target there.
-pub(super) fn agent_detail(state: &BusState, agent: &Agent) -> String {
-    let in_master = state
-        .master_room()
-        .is_some_and(|master| master.id == agent.room_id);
+/// The MASTER line under an agent's provider: the room it orchestrates, or
+/// `#unassigned`.
+pub(super) fn orchestrated_room_label(state: &BusState, agent: &Agent) -> String {
     match agent.orchestrates.and_then(|room| state.room(room)) {
-        Some(room) => format!("{} → {}", provider(agent.provider), room.name),
-        None if in_master => format!("{} → none", provider(agent.provider)),
-        None => provider(agent.provider).into(),
+        Some(room) => format!("#{}", room.name),
+        None => "#unassigned".into(),
     }
 }
 
@@ -639,6 +634,15 @@ impl BusUi {
             .agents()
             .filter(|a| Some(a.room_id) == self.room)
             .map(|agent| {
+                // MASTER agents show name, provider and orchestrated room only.
+                if self
+                    .snapshot
+                    .state
+                    .master_room()
+                    .is_some_and(|master| master.id == agent.room_id)
+                {
+                    return (agent, true, Vec::new(), 4);
+                }
                 let paths = if agent.details_disclosed {
                     wrap(&agent.cwd.to_string_lossy(), sw)
                 } else {
@@ -647,7 +651,7 @@ impl BusUi {
                 let height = 3
                     + usize::from(agent.details_disclosed && agent.branch.is_some())
                     + paths.len();
-                (agent, paths, height)
+                (agent, false, paths, height)
             })
             .collect();
         let master_header_rows = if self.snapshot.state.master_room().is_some() {
@@ -658,7 +662,7 @@ impl BusUi {
         let content_height = 6
             + master_header_rows
             + rooms.len()
-            + agents.iter().map(|(_, _, height)| height).sum::<usize>();
+            + agents.iter().map(|(_, _, _, height)| height).sum::<usize>();
         let notices = if self.force_exit_available {
             2
         } else {
@@ -739,7 +743,7 @@ impl BusUi {
             false,
         );
         y += 2;
-        for (agent, paths, height) in agents {
+        for (agent, in_master, paths, height) in agents {
             if y >= visible_end {
                 break;
             }
@@ -789,24 +793,26 @@ impl BusUi {
                 true,
             );
             y += 1;
-            // A MASTER agent's detail line opens its orchestrated-room picker.
-            let detail_action = if self
-                .snapshot
-                .state
-                .master_room()
-                .is_some_and(|master| master.id == agent.room_id)
-            {
-                Action::Reassign(agent.id)
-            } else {
-                Action::Agent(agent.id)
-            };
             view.row(
                 at(1, y, sw.saturating_sub(2)),
-                agent_detail(&self.snapshot.state, agent),
-                Some(detail_action),
+                provider(agent.provider),
+                Some(Action::Agent(agent.id)),
                 false,
                 true,
             );
+            if in_master {
+                y += 1;
+                // The room line opens the orchestrated-room picker.
+                view.row(
+                    at(1, y, sw),
+                    orchestrated_room_label(&self.snapshot.state, agent),
+                    Some(Action::Reassign(agent.id)),
+                    false,
+                    true,
+                );
+                y += 2;
+                continue;
+            }
             view.row(
                 at(sidebar.width.saturating_sub(3), y, 1),
                 if agent.details_disclosed { "v" } else { ">" },

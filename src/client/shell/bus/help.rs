@@ -43,7 +43,7 @@ Ctrl+N         Add an agent
 F2             Rename selected room or agent
 Double-click   Rename a room or agent name
 × beside name  Delete open room / any agent after confirmation
-Click → room   On a MASTER agent, reassign or unassign the room it
+Click #room    On a MASTER agent, reassign or unassign the room it
                orchestrates; click its name to open its terminal
 Esc / Enter    Cancel / OK in the delete warning
 F6             Return from terminal to room
