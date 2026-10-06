@@ -94,13 +94,13 @@ fn spawn_herdr_with_path(
     config_home: &Path,
     runtime_dir: &Path,
     socket_path: &Path,
-    path_override: Option<&Path>,
+    path_override: &Path,
 ) -> SpawnedHerdr {
     spawn_herdr_with_options(
         config_home,
         runtime_dir,
         socket_path,
-        path_override,
+        Some(path_override),
         "/bin/sh",
     )
 }
@@ -1059,7 +1059,7 @@ fn agent_start_targets_existing_pane_over_socket() {
     fs::write(&fake_pi, "#!/bin/sh\nHERDR_AGENT=pi exec /bin/sleep 20\n").unwrap();
     fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let child = spawn_herdr_with_path(&config_home, &runtime_dir, &socket_path, Some(&bin));
+    let child = spawn_herdr_with_path(&config_home, &runtime_dir, &socket_path, &bin);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     let workspace = send_request(
         &socket_path,
@@ -1364,7 +1364,6 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
         "#!/bin/sh\nprintf 'Working...\\n'\nsleep 1\nprintf '\\033[2J\\033[Hdone\\n'\n",
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -1378,7 +1377,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -1659,7 +1658,6 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
 }
 
 #[cfg(not(target_os = "macos"))]
-#[cfg(not(target_os = "macos"))]
 #[test]
 fn pane_report_agent_updates_effective_state() {
     let _lock = test_lock();
@@ -1672,7 +1670,6 @@ fn pane_report_agent_updates_effective_state() {
     fs::create_dir_all(&bin_dir).unwrap();
     let fake_pi = bin_dir.join("pi");
     fs::write(&fake_pi, "#!/bin/sh\nprintf 'Working...\\n'\nsleep 3\n").unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -1686,7 +1683,7 @@ fn pane_report_agent_updates_effective_state() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -1943,7 +1940,6 @@ fn official_release_waits_for_confirmed_process_exit() {
         ),
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -1957,7 +1953,7 @@ fn official_release_waits_for_confirmed_process_exit() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -2094,7 +2090,6 @@ fn pane_clear_agent_authority_restores_fallback_state() {
     fs::create_dir_all(&bin_dir).unwrap();
     let fake_pi = bin_dir.join("pi");
     fs::write(&fake_pi, "#!/bin/sh\nprintf 'Working...\\n'\nsleep 3\n").unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -2108,7 +2103,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -2219,7 +2214,6 @@ fn events_subscribe_streams_output_and_agent_status_events() {
         "#!/bin/sh\nprintf 'Working...\\n'\nsleep 1\nprintf '\\033[2J\\033[Hdone\\n'\n",
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -2233,7 +2227,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -2347,7 +2341,6 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
         ),
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -2361,7 +2354,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
