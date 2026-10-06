@@ -141,14 +141,7 @@ impl AgentSidebarToken {
     }
 }
 
-impl SpaceSidebarToken {
-    pub(crate) fn parts(&self) -> (&Self, SidebarTokenStyle) {
-        match self {
-            Self::Styled { token, style, .. } => (token, *style),
-            token => (token, SidebarTokenStyle::default()),
-        }
-    }
-}
+impl SpaceSidebarToken {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

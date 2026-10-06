@@ -78,25 +78,6 @@ pub(crate) fn create_bare_repo_with_linked_worktree(name: &str) -> (PathBuf, Pat
     (base, bare, checkout)
 }
 
-pub(super) fn write_fake_tracked_repo(root: &Path) {
-    let head_oid = "1111111111111111111111111111111111111111";
-    let upstream_oid = "2222222222222222222222222222222222222222";
-    std::fs::create_dir_all(root.join(".git/refs/heads")).unwrap();
-    std::fs::create_dir_all(root.join(".git/refs/remotes/origin")).unwrap();
-    std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
-    std::fs::write(root.join(".git/refs/heads/main"), format!("{head_oid}\n")).unwrap();
-    std::fs::write(
-        root.join(".git/refs/remotes/origin/main"),
-        format!("{upstream_oid}\n"),
-    )
-    .unwrap();
-    std::fs::write(
-        root.join(".git/config"),
-        "[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n",
-    )
-    .unwrap();
-}
-
 pub(super) fn run_git(cwd: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
         .arg("-C")

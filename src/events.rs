@@ -7,7 +7,6 @@ use std::time::Instant;
 
 use crate::detect::{Agent, AgentState};
 use crate::layout::PaneId;
-use crate::workspace::{GitStatusCacheEntry, WorkspaceGitStatus};
 
 /// An event from a background task to the main loop.
 #[derive(Debug)]
@@ -92,11 +91,6 @@ pub enum AppEvent {
     TerminalCwdReported {
         pane_id: PaneId,
         cwd: std::path::PathBuf,
-    },
-    /// Background git status refresh completed for workspaces.
-    GitStatusRefreshed {
-        results: Vec<WorkspaceGitStatus>,
-        cache_updates: Vec<(std::path::PathBuf, GitStatusCacheEntry)>,
     },
     /// A configured tab bar status command finished.
     TabBarCommandFinished {

@@ -53,8 +53,6 @@ pub struct WorkspaceSnapshot {
     #[serde(default)]
     pub custom_name: Option<String>,
     pub identity_cwd: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree_space: Option<crate::workspace::WorktreeSpaceMembership>,
     #[serde(default)]
     pub public_pane_numbers: HashMap<u32, usize>,
     #[serde(default)]
@@ -157,7 +155,6 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
             id: None,
             custom_name: snap.custom_name,
             identity_cwd,
-            worktree_space: None,
             public_pane_numbers: HashMap::new(),
             next_public_pane_number: 0,
             public_tab_numbers: Vec::new(),
@@ -287,7 +284,6 @@ fn capture_workspace(
         identity_cwd: ws
             .resolved_identity_cwd_from(terminals, terminal_runtimes)
             .unwrap_or_else(|| ws.identity_cwd.clone()),
-        worktree_space: ws.worktree_space.clone(),
         public_pane_numbers: ws
             .public_pane_numbers
             .iter()
@@ -661,7 +657,6 @@ mod tests {
                 id: Some("wproj".to_string()),
                 custom_name: Some("pi-mono".to_string()),
                 identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
-                worktree_space: None,
                 public_pane_numbers: HashMap::from([(0, 1), (1, 2)]),
                 next_public_pane_number: 3,
                 public_tab_numbers: vec![1],
@@ -868,25 +863,6 @@ mod tests {
         assert_eq!(snapshot.sidebar_width, None);
         assert_eq!(snapshot.sidebar_section_split, None);
         assert!(snapshot.collapsed_space_keys.is_empty());
-    }
-
-    #[test]
-    fn capture_contract_tracks_worktree_space_membership() {
-        let mut state = state_with_workspaces(&["main"]);
-        state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
-            key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: PathBuf::from("/repo/herdr"),
-            checkout_path: PathBuf::from("/repo/herdr/worktree-a"),
-            is_linked_worktree: true,
-        });
-
-        let snapshot = capture_from_state(&state);
-
-        assert_eq!(
-            snapshot.workspaces[0].worktree_space,
-            state.workspaces[0].worktree_space
-        );
     }
 
     #[test]
@@ -1228,7 +1204,6 @@ mod tests {
                 id: Some("test-ws".to_string()),
                 custom_name: Some("fallback test".to_string()),
                 identity_cwd: PathBuf::from("/tmp"),
-                worktree_space: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),

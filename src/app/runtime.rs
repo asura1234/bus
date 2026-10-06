@@ -92,11 +92,10 @@ impl App {
         }
     }
 
-    pub(crate) fn next_headless_loop_deadline_with_git_refresh(
+    pub(crate) fn next_headless_loop_deadline(
         &self,
         now: Instant,
         needs_render: bool,
-        include_git_refresh: bool,
     ) -> Option<Instant> {
         let render_deadline = if needs_render {
             self.last_render_at
@@ -111,9 +110,6 @@ impl App {
             self.toast_deadline,
             self.state.next_pending_agent_notification_deadline(),
             self.state.next_managed_agent_deadline(),
-            include_git_refresh
-                .then(|| self.git_refresh_deadline())
-                .flatten(),
             self.agent_metadata_deadline,
             self.pending_agent_resume_deadline,
             self.session_save_deadline,

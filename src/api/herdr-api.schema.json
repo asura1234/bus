@@ -1028,16 +1028,6 @@
             },
             "workspace_id": {
               "type": "string"
-            },
-            "worktree": {
-              "anyOf": [
-                {
-                  "$ref": "#/schemas/event/$defs/WorkspaceWorktreeInfo"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             }
           },
           "required": [
@@ -1049,33 +1039,6 @@
             "tab_count",
             "active_tab_id",
             "agent_status"
-          ],
-          "type": "object"
-        },
-        "WorkspaceWorktreeInfo": {
-          "properties": {
-            "checkout_path": {
-              "type": "string"
-            },
-            "is_linked_worktree": {
-              "type": "boolean"
-            },
-            "repo_key": {
-              "type": "string"
-            },
-            "repo_name": {
-              "type": "string"
-            },
-            "repo_root": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "repo_key",
-            "repo_name",
-            "repo_root",
-            "checkout_path",
-            "is_linked_worktree"
           ],
           "type": "object"
         }
@@ -3786,9 +3749,6 @@
         },
         "WorkspaceCloseParams": {
           "properties": {
-            "close_group": {
-              "type": "boolean"
-            },
             "workspace_id": {
               "type": "string"
             }
@@ -8417,16 +8377,6 @@
             },
             "workspace_id": {
               "type": "string"
-            },
-            "worktree": {
-              "anyOf": [
-                {
-                  "$ref": "#/schemas/success_response/$defs/WorkspaceWorktreeInfo"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             }
           },
           "required": [
@@ -8438,33 +8388,6 @@
             "tab_count",
             "active_tab_id",
             "agent_status"
-          ],
-          "type": "object"
-        },
-        "WorkspaceWorktreeInfo": {
-          "properties": {
-            "checkout_path": {
-              "type": "string"
-            },
-            "is_linked_worktree": {
-              "type": "boolean"
-            },
-            "repo_key": {
-              "type": "string"
-            },
-            "repo_name": {
-              "type": "string"
-            },
-            "repo_root": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "repo_key",
-            "repo_name",
-            "repo_root",
-            "checkout_path",
-            "is_linked_worktree"
           ],
           "type": "object"
         }

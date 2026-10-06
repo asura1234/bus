@@ -26,10 +26,6 @@ enum RuntimeExitAction {
 impl App {
     pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
         match ev {
-            AppEvent::GitStatusRefreshed {
-                results,
-                cache_updates,
-            } => self.handle_git_status_refreshed(results, cache_updates),
             AppEvent::TabBarCommandFinished {
                 generation,
                 segment_index,
@@ -46,31 +42,6 @@ impl App {
         }
     }
 
-    fn handle_git_status_refreshed(
-        &mut self,
-        results: Vec<crate::workspace::WorkspaceGitStatus>,
-        cache_updates: Vec<(std::path::PathBuf, crate::workspace::GitStatusCacheEntry)>,
-    ) -> bool {
-        self.git_refresh_in_flight = false;
-        for (key, entry) in cache_updates {
-            self.git_status_cache.insert(key, entry);
-        }
-        if self.git_refresh_due_after_in_flight {
-            self.mark_git_status_refresh_due(Instant::now());
-            self.git_refresh_due_after_in_flight = false;
-        } else {
-            self.last_git_remote_status_refresh = Instant::now();
-        }
-        let changed = self
-            .state
-            .apply_workspace_git_statuses(&self.terminal_runtimes, results);
-        if changed {
-            self.render_dirty.request_generic();
-            self.render_notify.notify_one();
-        }
-        changed
-    }
-
     pub(crate) fn handle_internal_event(&mut self, ev: AppEvent) {
         let _ = self.handle_internal_event_with_pane_updates(ev);
     }
@@ -83,15 +54,6 @@ impl App {
             &ev,
             AppEvent::TerminalBell { .. } | AppEvent::ClipboardWrite { .. }
         ) {
-            return Vec::new();
-        }
-
-        if let AppEvent::GitStatusRefreshed {
-            results,
-            cache_updates,
-        } = ev
-        {
-            self.handle_git_status_refreshed(results, cache_updates);
             return Vec::new();
         }
 
@@ -222,7 +184,8 @@ impl App {
         }
         self.sync_full_lifecycle_authority_detection_pauses();
         if terminal_cwd_reported {
-            self.request_git_identity_refresh(Instant::now());
+            self.state
+                .refresh_workspace_auto_labels(&self.terminal_runtimes);
             self.render_dirty.request_generic();
             self.render_notify.notify_one();
         }

@@ -3319,61 +3319,6 @@ fn terminal_attach_rejects_later_observe_and_clears_ownership() {
     });
 }
 
-#[test]
-fn unchanged_git_refresh_does_not_request_headless_render() {
-    let mut server = test_headless_server();
-    server.app.git_refresh_in_flight = true;
-    let mut workspace = crate::workspace::Workspace::test_new("one");
-    let workspace_id = workspace.id.clone();
-    let cwd = workspace.identity_cwd.clone();
-    workspace.cached_auto_label = "cached".into();
-    workspace.cached_git_status_key = cwd.clone();
-    workspace.cached_git_branch = None;
-    server.app.state.workspaces.push(workspace);
-
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::GitStatusRefreshed {
-        results: vec![crate::workspace::WorkspaceGitStatus {
-            workspace_id,
-            resolved_identity_cwd: cwd.clone(),
-            status_cache_key: cwd,
-            demand: crate::workspace::GitStatusRefreshDemand::ALL,
-            auto_label: "cached".into(),
-            branch: None,
-            ahead_behind: None,
-            space: None,
-        }],
-        cache_updates: Vec::new(),
-    });
-
-    assert!(!changed);
-    assert!(!server.app.git_refresh_in_flight);
-}
-
-#[test]
-fn changed_git_refresh_requests_headless_render() {
-    let mut server = test_headless_server();
-    let workspace = crate::workspace::Workspace::test_new("one");
-    let workspace_id = workspace.id.clone();
-    let cwd = workspace.identity_cwd.clone();
-    server.app.state.workspaces.push(workspace);
-
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::GitStatusRefreshed {
-        results: vec![crate::workspace::WorkspaceGitStatus {
-            workspace_id,
-            resolved_identity_cwd: cwd.clone(),
-            status_cache_key: cwd,
-            demand: crate::workspace::GitStatusRefreshDemand::ALL,
-            auto_label: "one".into(),
-            branch: Some("changed".into()),
-            ahead_behind: None,
-            space: None,
-        }],
-        cache_updates: Vec::new(),
-    });
-
-    assert!(changed);
-}
-
 #[tokio::test]
 async fn pane_death_reconciles_each_client_view_and_focus() {
     let mut server = test_headless_server();

@@ -390,15 +390,6 @@ impl App {
             }),
             agent_status: pane_agent_status(agg_state, seen),
             tokens: ws.metadata_tokens.values(),
-            worktree: ws
-                .worktree_space()
-                .map(|space| crate::api::schema::WorkspaceWorktreeInfo {
-                    repo_key: space.key.clone(),
-                    repo_name: space.label.clone(),
-                    repo_root: space.repo_root.display().to_string(),
-                    checkout_path: space.checkout_path.display().to_string(),
-                    is_linked_worktree: space.is_linked_worktree,
-                }),
         }
     }
 }

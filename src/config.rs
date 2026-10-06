@@ -21,10 +21,7 @@ pub use self::{
         ShellModeConfig, ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
         MAX_TOAST_DELAY_SECONDS,
     },
-    sidebar::{
-        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SpaceSidebarToken,
-        SpacesSidebarConfig,
-    },
+    sidebar::{AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SpacesSidebarConfig},
     sound::SoundConfig,
     tab_bar::TabBarRightEntryConfig,
     theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig},
@@ -33,7 +30,7 @@ pub use self::{
 
 pub(crate) use self::keybinds::parse_key_combo;
 #[cfg(test)]
-pub(crate) use self::{io::config_path, theme::THEME_NAMES};
+pub(crate) use self::{io::config_path, sidebar::SpaceSidebarToken, theme::THEME_NAMES};
 pub(crate) use self::{
     tab_bar::{
         parse_tab_bar_datetime_format, tab_bar_right_diagnostics,

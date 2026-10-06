@@ -989,20 +989,10 @@ pub struct ClientShellWorkspace {
     pub number: usize,
     pub label: String,
     pub custom_label: bool,
-    pub branch: Option<String>,
-    pub git_ahead_behind: Option<(usize, usize)>,
     pub tokens: Vec<(String, String)>,
-    pub worktree: Option<ClientShellWorktree>,
     pub focused: bool,
     #[serde(deserialize_with = "deserialize_client_shell_agent_status")]
     pub agent_status: crate::api::schema::AgentStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClientShellWorktree {
-    pub key: String,
-    pub label: String,
-    pub is_linked_worktree: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2604,10 +2594,7 @@ mod tests {
                 number: 1,
                 label: "shell".into(),
                 custom_label: false,
-                branch: Some("main".into()),
-                git_ahead_behind: None,
                 tokens: Vec::new(),
-                worktree: None,
                 focused: true,
                 agent_status: crate::api::schema::AgentStatus::Idle,
             }],

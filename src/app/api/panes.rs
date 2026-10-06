@@ -1030,7 +1030,6 @@ impl App {
             previous_tab_label: self.state.workspaces[source_ws_idx].tabs[source_tab_idx]
                 .custom_name
                 .clone(),
-            previous_worktree_space: self.state.workspaces[source_ws_idx].worktree_space.clone(),
             identity_cwd: self.state.workspaces[source_ws_idx].identity_cwd.clone(),
         };
 
@@ -1438,7 +1437,6 @@ impl App {
                 self.render_dirty.clone(),
             );
             workspace.id = context.previous_workspace_id;
-            workspace.worktree_space = context.previous_worktree_space;
             let insert_idx = context.source_ws_idx.min(self.state.workspaces.len());
             if let Some(active) = self.state.active {
                 if active >= insert_idx {
@@ -2008,15 +2006,6 @@ impl App {
                 "Terminal is shared; pane was not closed",
             );
         }
-        if self.state.close_pane_would_close_workspace(ws_idx, pane_id)
-            && self.state.confirm_implicit_worktree_group_close(ws_idx)
-        {
-            return encode_error(
-                id,
-                "confirmation_required",
-                "Closing this pane would close a worktree group",
-            );
-        }
         // Validate and stop in the same server dispatch, without an asynchronous
         // gap in which the pane can be rebound. Keep state on shutdown failure.
         if let Some(runtime) = self.terminal_runtimes.get(&terminal_id) {
@@ -2046,15 +2035,6 @@ impl App {
         };
         let workspace_id = self.public_workspace_id(ws_idx);
         let layout_update_target = self.layout_update_target_after_pane_removal(ws_idx, pane_id);
-        if self.state.close_pane_would_close_workspace(ws_idx, pane_id)
-            && self.state.confirm_implicit_worktree_group_close(ws_idx)
-        {
-            return Err(encode_error(
-                id,
-                "confirmation_required",
-                "closing this pane would close a worktree group",
-            ));
-        }
         let workspace_snapshot = self.workspace_info(ws_idx);
         let terminal_id = self.state.terminal_id_for_pane(ws_idx, pane_id);
         let should_close_workspace = {
@@ -2312,7 +2292,6 @@ struct PaneMoveRecoveryContext {
     previous_workspace_id: String,
     previous_workspace_label: Option<String>,
     previous_tab_label: Option<String>,
-    previous_worktree_space: Option<crate::workspace::WorktreeSpaceMembership>,
     identity_cwd: std::path::PathBuf,
 }
 
@@ -3152,7 +3131,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    fn app_with_linked_worktree() -> App {
+    fn app_with_one_workspace() -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
@@ -3163,13 +3142,6 @@ mod tests {
         );
         app.state.workspaces = vec![Workspace::test_new("issue")];
         app.state.ensure_test_terminals();
-        app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
-            key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-issue".into(),
-            is_linked_worktree: true,
-        });
         app
     }
 
@@ -3192,8 +3164,8 @@ mod tests {
     }
 
     #[test]
-    fn api_pane_close_closes_linked_worktree_workspace_only() {
-        let mut app = app_with_linked_worktree();
+    fn api_pane_close_of_last_pane_closes_its_workspace() {
+        let mut app = app_with_one_workspace();
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
 
@@ -3211,7 +3183,7 @@ mod tests {
 
     #[test]
     fn api_pane_current_prefers_caller_pane_id() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.active = Some(0);
         app.state.selected = 0;
         let root = app.state.workspaces[0].tabs[0].root_pane;
@@ -3240,7 +3212,7 @@ mod tests {
 
     #[test]
     fn api_pane_current_falls_back_to_focused_pane() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.active = Some(0);
         app.state.selected = 0;
         let root = app.state.workspaces[0].tabs[0].root_pane;
@@ -3262,7 +3234,7 @@ mod tests {
 
     #[test]
     fn api_pane_current_dispatches_through_socket_request() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.active = Some(0);
         app.state.selected = 0;
         let root = app.state.workspaces[0].tabs[0].root_pane;
@@ -3284,7 +3256,7 @@ mod tests {
 
     #[test]
     fn api_pane_current_reports_invalid_caller_pane_id() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
 
         let response = app.handle_pane_current(
             "req".into(),
@@ -3298,7 +3270,7 @@ mod tests {
 
     #[test]
     fn api_pane_current_reports_no_active_pane() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.active = None;
 
         let response = app.handle_pane_current(
@@ -3311,7 +3283,7 @@ mod tests {
 
     #[test]
     fn api_pane_swap_explicit_source_and_target_preserves_focus_and_returns_layout() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let target = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
         app.state.workspaces[0].tabs[0].layout.focus_pane(source);
@@ -3348,7 +3320,7 @@ mod tests {
 
     #[test]
     fn api_pane_swap_direction_no_neighbor_returns_unchanged_layout() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         app.state.workspaces[0].tabs[0].layout.focus_pane(source);
         crate::ui::compute_view_with_runtime_registry(
@@ -3381,7 +3353,7 @@ mod tests {
 
     #[test]
     fn api_pane_swap_explicit_missing_target_returns_not_found_noop() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let source_public = app.public_pane_id(0, source).unwrap();
 
@@ -3407,7 +3379,7 @@ mod tests {
 
     #[test]
     fn api_pane_swap_explicit_missing_source_returns_not_found_noop() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let target = app.state.workspaces[0].tabs[0].root_pane;
         let target_public = app.public_pane_id(0, target).unwrap();
 
@@ -3433,7 +3405,7 @@ mod tests {
 
     #[test]
     fn api_pane_swap_explicit_cross_workspace_preserves_target_id() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.workspaces.push(Workspace::test_new("other"));
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let target = app.state.workspaces[1].tabs[0].root_pane;
@@ -3462,7 +3434,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_to_existing_tab_preserves_internal_pane_and_terminal() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let source_terminal = app.state.workspaces[0].tabs[0]
             .terminal_id(source)
@@ -3513,7 +3485,7 @@ mod tests {
     }
     #[test]
     fn api_pane_move_to_existing_tab_across_workspace_reassigns_public_pane_id() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.workspaces.push(Workspace::test_new("other"));
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let source_terminal = app.state.workspaces[0].tabs[0]
@@ -3578,7 +3550,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_legacy_target_tab_id_survives_source_workspace_removal() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.workspaces.push(Workspace::test_new("other"));
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let source_terminal = app.state.workspaces[0].tabs[0]
@@ -3625,7 +3597,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_to_new_tab_creates_tab_without_spawning_terminal() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
         let source_terminal = app.state.workspaces[0].tabs[0]
@@ -3704,7 +3676,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_only_pane_to_new_tab_uses_app_render_handles() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         seed_terminal_states(&mut app);
         let source_public = app.public_pane_id(0, source).unwrap();
@@ -3738,7 +3710,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_to_new_workspace_closes_empty_source_workspace() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let source_terminal = app.state.workspaces[0].tabs[0]
             .terminal_id(source)
@@ -3839,7 +3811,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_same_tab_returns_same_tab_noop() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         seed_terminal_states(&mut app);
         let source_public = app.public_pane_id(0, source).unwrap();
@@ -3870,7 +3842,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_rejects_target_pane_outside_target_tab() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let target_tab = app.state.workspaces[0].test_add_tab(Some("target"));
         let other_tab = app.state.workspaces[0].test_add_tab(Some("other"));
@@ -3902,7 +3874,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_existing_tab_no_focus_preserves_previous_target_focus() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let target_tab = app.state.workspaces[0].test_add_tab(Some("target"));
         let previously_focused = app.state.workspaces[0].tabs[target_tab].root_pane;
@@ -3946,7 +3918,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_recovery_restores_removed_source_workspace() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let source_terminal = app.state.workspaces[0].tabs[0]
             .terminal_id(source)
@@ -3958,7 +3930,6 @@ mod tests {
             previous_workspace_id: previous_workspace_id.clone(),
             previous_workspace_label: app.state.workspaces[0].custom_name.clone(),
             previous_tab_label: app.state.workspaces[0].tabs[0].custom_name.clone(),
-            previous_worktree_space: app.state.workspaces[0].worktree_space.clone(),
             identity_cwd: app.state.workspaces[0].identity_cwd.clone(),
         };
         let taken = app.state.workspaces[0]
@@ -3984,7 +3955,7 @@ mod tests {
 
     #[test]
     fn api_pane_move_to_zoomed_target_returns_target_layout() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let source = app.state.workspaces[0].tabs[0].root_pane;
         let target_tab = app.state.workspaces[0].test_add_tab(Some("target"));
         let target = app.state.workspaces[0].tabs[target_tab].root_pane;
@@ -4026,7 +3997,7 @@ mod tests {
 
     #[test]
     fn api_pane_zoom_current_toggles_zoom() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.active = Some(0);
         app.state.selected = 0;
         let root = app.state.workspaces[0].tabs[0].root_pane;
@@ -4073,7 +4044,7 @@ mod tests {
 
     #[test]
     fn api_pane_zoom_single_pane_returns_noop() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.active = Some(0);
         app.state.selected = 0;
         let root = app.state.workspaces[0].tabs[0].root_pane;
@@ -4102,7 +4073,7 @@ mod tests {
 
     #[test]
     fn api_pane_zoom_on_and_off_are_idempotent() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.active = Some(0);
         app.state.selected = 0;
         let root = app.state.workspaces[0].tabs[0].root_pane;
@@ -4179,7 +4150,7 @@ mod tests {
 
     #[test]
     fn api_pane_zoom_idempotent_mode_reports_focus_change() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.active = Some(0);
         app.state.selected = 0;
         let root = app.state.workspaces[0].tabs[0].root_pane;
@@ -4237,7 +4208,7 @@ mod tests {
 
     #[test]
     fn api_pane_layout_returns_public_ids_rects_and_splits() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let root = app.state.workspaces[0].tabs[0].root_pane;
         let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
         app.state.workspaces[0].tabs[0].layout.focus_pane(root);
@@ -4272,7 +4243,7 @@ mod tests {
 
     #[test]
     fn api_pane_neighbor_returns_directional_neighbor_public_id() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let root = app.state.workspaces[0].tabs[0].root_pane;
         let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
         app.state.workspaces[0].tabs[0].layout.focus_pane(root);
@@ -4303,7 +4274,7 @@ mod tests {
 
     #[test]
     fn api_pane_edges_reports_physical_layout_edges() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let root = app.state.workspaces[0].tabs[0].root_pane;
         let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
         app.state.workspaces[0].tabs[0].layout.focus_pane(root);
@@ -4334,7 +4305,7 @@ mod tests {
 
     #[test]
     fn api_pane_resize_changes_target_ratio_without_changing_focus() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let root = app.state.workspaces[0].tabs[0].root_pane;
         let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
         app.state.workspaces[0].tabs[0].layout.focus_pane(right);
@@ -4376,7 +4347,7 @@ mod tests {
 
     #[test]
     fn api_pane_focus_direction_focuses_neighbor() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let root = app.state.workspaces[0].tabs[0].root_pane;
         let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
         app.state.workspaces[0].tabs[0].layout.focus_pane(root);
@@ -4410,7 +4381,7 @@ mod tests {
 
     #[test]
     fn api_pane_focus_focuses_direct_target_across_tabs_and_workspaces() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.workspaces.push(Workspace::test_new("other"));
         let target_tab_idx = app.state.workspaces[1].test_add_tab(Some("target"));
         app.state.workspaces[1].switch_tab(target_tab_idx);
@@ -4440,7 +4411,7 @@ mod tests {
 
     #[test]
     fn api_pane_focus_marks_already_focused_done_pane_seen() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.outer_terminal_focus = Some(false);
@@ -4474,7 +4445,7 @@ mod tests {
 
     #[test]
     fn api_pane_focus_rejects_invalid_pane_id() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
 
         let response = app.handle_pane_focus(
             "req".into(),
@@ -4489,7 +4460,7 @@ mod tests {
 
     #[test]
     fn api_pane_focus_direction_no_neighbor_is_noop() {
-        let mut app = app_with_linked_worktree();
+        let mut app = app_with_one_workspace();
         let root = app.state.workspaces[0].tabs[0].root_pane;
         app.state.workspaces[0].tabs[0].layout.focus_pane(root);
         crate::ui::compute_view_with_runtime_registry(

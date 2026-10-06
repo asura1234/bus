@@ -22,8 +22,6 @@ pub struct WorkspaceCreateParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceCloseParams {
     pub workspace_id: String,
-    #[serde(default, skip_serializing_if = "super::is_false")]
-    pub close_group: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -71,15 +69,4 @@ pub struct WorkspaceInfo {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[schemars(schema_with = "super::common::metadata_token_values_schema")]
     pub tokens: HashMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<WorkspaceWorktreeInfo>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct WorkspaceWorktreeInfo {
-    pub repo_key: String,
-    pub repo_name: String,
-    pub repo_root: String,
-    pub checkout_path: String,
-    pub is_linked_worktree: bool,
 }

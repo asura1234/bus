@@ -511,11 +511,7 @@ impl HeadlessServer {
             // 8. Wait for next event.
             let next_deadline = self
                 .app
-                .next_headless_loop_deadline_with_git_refresh(
-                    now,
-                    needs_render,
-                    self.has_app_client(),
-                )
+                .next_headless_loop_deadline(now, needs_render)
                 .map(|deadline| deadline.min(now + CLIENT_ACCEPT_POLL_INTERVAL))
                 .or(Some(now + CLIENT_ACCEPT_POLL_INTERVAL));
             let next_deadline = self
@@ -802,10 +798,6 @@ impl HeadlessServer {
             .values()
             .filter(|client| client.is_active_shell_client() && client.writer.is_some())
             .count()
-    }
-
-    fn has_app_client(&self) -> bool {
-        self.app_client_count() > 0
     }
 
     fn remove_client(&mut self, client_id: u64) -> bool {
@@ -1709,7 +1701,6 @@ impl HeadlessServer {
                     "client connected"
                 );
                 self.app.ensure_default_workspace();
-                let first_app_client = self.app_client_count() == 0;
                 let last_activity = self.allocate_activity_stamp();
                 let observed = crate::kitty_graphics::HostCellSize {
                     width_px: cell_width_px,
@@ -1760,9 +1751,6 @@ impl HeadlessServer {
                 self.send_to_client(client_id, snapshot_message);
                 if surface_active {
                     self.foreground_client_id = Some(client_id);
-                }
-                if first_app_client {
-                    self.app.mark_git_status_refresh_due(Instant::now());
                 }
                 self.sync_foreground_client_state();
                 self.claim_unowned_shell_tab_geometry(client_id, true);
@@ -2904,10 +2892,6 @@ impl HeadlessServer {
                 }
                 changed = true;
             }
-        }
-
-        if self.has_app_client() {
-            self.app.start_git_status_refresh_if_due(now);
         }
 
         if self

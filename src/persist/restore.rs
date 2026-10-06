@@ -257,9 +257,7 @@ fn restore_workspace(
         return None;
     }
 
-    let worktree_space = restored_worktree_space_membership(snap.worktree_space.clone());
-    let (cached_git_space, cached_auto_label, cached_git_status_key) =
-        crate::workspace::discover_workspace_git_identity(&snap.identity_cwd);
+    let cached_auto_label = crate::workspace::workspace_auto_label(&snap.identity_cwd);
 
     Some(Workspace {
         id: workspace_id,
@@ -267,11 +265,6 @@ fn restore_workspace(
         identity_cwd: snap.identity_cwd.clone(),
         cached_identity_cwd: snap.identity_cwd.clone(),
         cached_auto_label,
-        cached_git_status_key,
-        cached_git_branch: crate::workspace::git_branch(&snap.identity_cwd),
-        cached_git_ahead_behind: None,
-        cached_git_space,
-        worktree_space,
         metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
         metadata_token_sequences: HashMap::new(),
         public_pane_numbers,
@@ -283,16 +276,6 @@ fn restore_workspace(
         test_runtimes: HashMap::new(),
     })
     .map(|workspace| (workspace, terminals, terminal_runtimes))
-}
-
-fn restored_worktree_space_membership(
-    space: Option<crate::workspace::WorktreeSpaceMembership>,
-) -> Option<crate::workspace::WorktreeSpaceMembership> {
-    space.filter(|space| {
-        space.checkout_path.exists()
-            && crate::workspace::git_space_metadata(&space.checkout_path)
-                .is_some_and(|current| current.key == space.key)
-    })
 }
 
 fn restore_tab(
@@ -763,21 +746,6 @@ mod tests {
     }
 
     #[test]
-    fn restored_worktree_space_membership_drops_missing_checkout() {
-        let missing =
-            std::env::temp_dir().join(format!("herdr-missing-worktree-{}", std::process::id()));
-        let membership = crate::workspace::WorktreeSpaceMembership {
-            key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: missing.join("repo"),
-            checkout_path: missing.join("checkout"),
-            is_linked_worktree: true,
-        };
-
-        assert_eq!(restored_worktree_space_membership(Some(membership)), None);
-    }
-
-    #[test]
     fn restore_plan_respects_opt_in_and_allowlist() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
@@ -944,7 +912,6 @@ mod tests {
                 id: Some("workspace".into()),
                 custom_name: None,
                 identity_cwd: cwd.clone(),
-                worktree_space: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1024,7 +991,6 @@ mod tests {
                 id: Some("w1".into()),
                 custom_name: None,
                 identity_cwd: cwd.clone(),
-                worktree_space: None,
                 public_pane_numbers: HashMap::from([(10, 1), (20, 3)]),
                 next_public_pane_number: 4,
                 public_tab_numbers: vec![5],
@@ -1133,7 +1099,6 @@ mod tests {
                 id: Some("w1".into()),
                 custom_name: None,
                 identity_cwd: cwd.clone(),
-                worktree_space: None,
                 public_pane_numbers: HashMap::from([(10, 1), (11, 2), (12, 3), (13, 4)]),
                 next_public_pane_number: 5,
                 public_tab_numbers: vec![1, 3, 4, 5],
@@ -1216,7 +1181,6 @@ mod tests {
             id: Some("w1".into()),
             custom_name: None,
             identity_cwd: cwd,
-            worktree_space: None,
             public_pane_numbers: HashMap::new(),
             next_public_pane_number: 0,
             public_tab_numbers: Vec::new(),
@@ -1255,7 +1219,6 @@ mod tests {
                 id: Some("workspace".into()),
                 custom_name: None,
                 identity_cwd: cwd.clone(),
-                worktree_space: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
@@ -1439,7 +1402,6 @@ mod tests {
                 id: Some("workspace".into()),
                 custom_name: None,
                 identity_cwd: cwd,
-                worktree_space: None,
                 public_pane_numbers: HashMap::new(),
                 next_public_pane_number: 0,
                 public_tab_numbers: Vec::new(),
