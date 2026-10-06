@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn private_control_client_refuses_an_endpoint_in_a_shared_directory() {
         let path = std::env::temp_dir().join(format!(
-            "bdp-{:x}",
+            "bdc-{:x}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
