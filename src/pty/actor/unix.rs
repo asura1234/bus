@@ -38,7 +38,6 @@ impl PtyReadResult {
 }
 
 type ReadCallback = Box<dyn FnMut(&[u8]) -> PtyReadResult + Send + 'static>;
-type ReaderExitCallback = Box<dyn FnOnce() + Send + 'static>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PtyResize {
@@ -65,7 +64,6 @@ pub(crate) struct PtyIoActorConfig {
     pub master_fd: OwnedFd,
     pub initially_quiesced: bool,
     pub on_read: ReadCallback,
-    pub on_reader_exit: Option<ReaderExitCallback>,
 }
 
 enum PtyIoDataCommand {
@@ -290,7 +288,6 @@ impl PtyIoActor {
             controls,
             response_order,
             on_read: config.on_read,
-            on_reader_exit: config.on_reader_exit,
             poll_observer,
         };
         std::thread::Builder::new()
@@ -323,7 +320,6 @@ struct PtyIoActorRunner {
     controls: Arc<Mutex<SharedPtyControls>>,
     response_order: Arc<Mutex<()>>,
     on_read: ReadCallback,
-    on_reader_exit: Option<ReaderExitCallback>,
     poll_observer: Option<std_mpsc::Sender<()>>,
 }
 
@@ -437,9 +433,6 @@ impl PtyIoActorRunner {
         }
 
         self.close_input_queue();
-        if let Some(on_reader_exit) = self.on_reader_exit.take() {
-            on_reader_exit();
-        }
         debug!(pane = self.pane_id, "PTY actor exiting");
     }
 
@@ -777,7 +770,6 @@ mod tests {
                     .expect("read callback receiver alive");
                 PtyReadResult::empty()
             }),
-            on_reader_exit: None,
         };
         let handle = if let Some(poll_observer) = poll_observer {
             PtyIoActor::spawn_with_poll_observer(config, poll_observer)
@@ -810,7 +802,6 @@ mod tests {
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
             response_order: Arc::new(Mutex::new(())),
             on_read: Box::new(|_| PtyReadResult::empty()),
-            on_reader_exit: None,
             poll_observer: None,
         };
         (runner, peer)
@@ -1005,52 +996,41 @@ mod tests {
 
     #[test]
     fn actor_rejects_submission_after_io_loop_exits() {
-        let (actor_socket, peer) = UnixStream::pair().expect("socket pair");
-        actor_socket
-            .set_nonblocking(true)
-            .expect("actor socket nonblocking");
-        let owned = unsafe { OwnedFd::from_raw_fd(actor_socket.into_raw_fd()) };
-        let handle_slot = Arc::new(Mutex::new(None::<PtyIoActorHandle>));
-        let (attempt_tx, attempt_rx) = std_mpsc::channel();
-        let config = PtyIoActorConfig {
-            pane_id: 1,
-            master_fd: owned,
-            initially_quiesced: false,
-            on_read: Box::new(|_| PtyReadResult::empty()),
-            on_reader_exit: Some(Box::new({
-                let handle_slot = Arc::clone(&handle_slot);
-                move || {
-                    let handle = handle_slot
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .as_ref()
-                        .expect("actor handle installed")
-                        .clone();
-                    let attempt = handle.queue_user_input_submission(
-                        Bytes::from_static(b"prompt"),
-                        Bytes::from_static(b"\r"),
-                        Duration::ZERO,
-                    );
-                    attempt_tx.send(attempt).expect("attempt receiver alive");
-                }
-            })),
+        let (mut runner, peer) = actor_runner_for_unit_test();
+        let (data_tx, data_rx) = mpsc::channel(ACTOR_COMMAND_BUFFER);
+        let (control_tx, control_rx) = std_mpsc::channel();
+        let (wake, wake_read_fd) = test_wake_pair();
+        runner.data_rx = data_rx;
+        runner.control_rx = control_rx;
+        runner.wake_read_fd = wake_read_fd;
+        let handle = PtyIoActorHandle {
+            data_tx,
+            control_tx,
+            wake,
+            user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
+            controls: Arc::clone(&runner.controls),
+            response_order: Arc::clone(&runner.response_order),
         };
-        let handle = PtyIoActor::spawn(config).expect("actor spawn");
-        *handle_slot
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(handle);
+        let (exit_tx, exit_rx) = std_mpsc::channel();
+        let actor = std::thread::spawn(move || {
+            runner.run();
+            exit_tx.send(()).expect("loop exit receiver alive");
+            runner
+        });
 
         drop(peer);
-        let err = match attempt_rx
+        exit_rx
             .recv_timeout(Duration::from_secs(1))
-            .expect("reader exit callback attempts submission")
-        {
-            Ok(completion) => completion
-                .recv_timeout(Duration::from_secs(1))
-                .expect("actor reports submission")
-                .expect_err("closed actor rejects submission"),
-            Err(err) => err,
-        };
+            .expect("actor io loop exited");
+        // Keep the receiver alive so this checks explicit closure, not the runner's drop.
+        let _runner = actor.join().expect("actor thread joins");
+        let err = handle
+            .queue_user_input_submission(
+                Bytes::from_static(b"prompt"),
+                Bytes::from_static(b"\r"),
+                Duration::ZERO,
+            )
+            .expect_err("closed actor rejects submission");
 
         assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
     }
@@ -1114,7 +1094,6 @@ mod tests {
                     .expect("read callback receiver alive");
                 PtyReadResult::empty()
             }),
-            on_reader_exit: None,
         })
         .expect("actor spawn");
 
@@ -1275,7 +1254,6 @@ mod tests {
                     Bytes::from_static(b"query-dark")
                 }],
             }),
-            on_reader_exit: None,
             poll_observer: None,
         };
         let handle = PtyIoActorHandle {

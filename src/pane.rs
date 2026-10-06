@@ -1819,7 +1819,6 @@ impl PaneRuntime {
                 master: spawned.master,
                 initially_quiesced: false,
                 on_read,
-                on_reader_exit: None,
             })?)
         };
 

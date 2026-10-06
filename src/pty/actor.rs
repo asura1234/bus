@@ -20,7 +20,6 @@ mod windows {
     }
 
     type ReadCallback = Box<dyn FnMut(&[u8]) -> PtyReadResult + Send + 'static>;
-    type ReaderExitCallback = Box<dyn FnOnce() + Send + 'static>;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct PtyResize {
@@ -40,7 +39,6 @@ mod windows {
         pub master: Box<dyn MasterPty + Send>,
         pub initially_quiesced: bool,
         pub on_read: ReadCallback,
-        pub on_reader_exit: Option<ReaderExitCallback>,
     }
 
     enum PtyIoDataCommand {
@@ -193,7 +191,6 @@ mod windows {
                 master,
                 initially_quiesced,
                 mut on_read,
-                on_reader_exit,
             } = config;
 
             let mut reader = master
@@ -246,9 +243,6 @@ mod windows {
                                 break;
                             }
                         }
-                    }
-                    if let Some(on_reader_exit) = on_reader_exit {
-                        on_reader_exit();
                     }
                     debug!(pane_id, "windows pty reader thread exiting");
                 });
