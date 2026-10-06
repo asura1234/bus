@@ -91,49 +91,33 @@ pub fn active_name() -> Option<String> {
         .filter(|name| validate_name(name).is_ok())
 }
 
+/// Reopens this Bus session: a local session by its ID, an explicit
+/// `BUS_DATA_DIR` root by launching Bus again with the same environment.
 pub fn local_attach_command() -> String {
-    match active_name() {
-        Some(name) => format!("herdr session attach {name}"),
-        None => "herdr".to_string(),
+    attach_command_for(std::env::var("BUS_SESSION_ID").ok().as_deref())
+}
+
+fn attach_command_for(session_id: Option<&str>) -> String {
+    match session_id {
+        Some(id) if !id.is_empty() => format!("bus resume {id}"),
+        _ => "bus".to_string(),
     }
 }
 
+/// `bus stop` targets `BUS_DATA_DIR`, else the last opened local session,
+/// which opening this session has just recorded.
 pub fn local_stop_command() -> String {
-    stop_command_for(active_name().as_deref())
+    "bus stop".to_string()
 }
 
-pub fn stop_command_for(name: Option<&str>) -> String {
-    match name {
-        Some(name) => format!("herdr session stop {name}"),
-        None => "herdr server stop".to_string(),
-    }
-}
-
-pub fn restart_after_update_guidance(stop_command: &str, attach_command: Option<&str>) -> String {
-    let restart = match attach_command {
-        Some(command) => format!("Run `{stop_command}`, then run `{command}` again."),
-        None => format!("Run `{stop_command}`, then restart Herdr with the same socket override."),
-    };
+pub fn restart_after_update_guidance(stop_command: &str, attach_command: &str) -> String {
     format!(
-        "Stop the old server to use the new version.\nStopping exits pane processes.\n{restart}"
+        "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `{stop_command}`, then run `{attach_command}` again."
     )
 }
 
 pub fn active_restart_after_update_guidance() -> String {
-    if !explicit_session_requested() {
-        if let Ok(socket_path) = std::env::var(crate::api::SOCKET_PATH_ENV_VAR) {
-            return restart_after_update_guidance(
-                &format!(
-                    "{}={} herdr server stop",
-                    crate::api::SOCKET_PATH_ENV_VAR,
-                    socket_path
-                ),
-                None,
-            );
-        }
-    }
-
-    restart_after_update_guidance(&local_stop_command(), Some(&local_attach_command()))
+    restart_after_update_guidance(&local_stop_command(), &local_attach_command())
 }
 
 pub fn explicit_session_requested() -> bool {
@@ -692,67 +676,20 @@ mod tests {
     }
 
     #[test]
-    fn local_attach_command_uses_default_launch_for_default_session() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::remove_var(SESSION_ENV_VAR);
-
-        assert_eq!(local_attach_command(), "herdr");
-    }
-
-    #[test]
-    fn local_attach_command_uses_session_attach_for_named_session() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::set_var(SESSION_ENV_VAR, "work");
-
-        assert_eq!(local_attach_command(), "herdr session attach work");
-
-        std::env::remove_var(SESSION_ENV_VAR);
-    }
-
-    #[test]
-    fn local_stop_command_uses_server_stop_for_default_session() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::remove_var(SESSION_ENV_VAR);
-
-        assert_eq!(local_stop_command(), "herdr server stop");
-
-        std::env::remove_var(SESSION_ENV_VAR);
-    }
-
-    #[test]
-    fn local_stop_command_uses_session_stop_for_named_session() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::set_var(SESSION_ENV_VAR, "work");
-
-        assert_eq!(local_stop_command(), "herdr session stop work");
-
-        std::env::remove_var(SESSION_ENV_VAR);
+    fn local_attach_command_resumes_the_local_session_or_relaunches_an_explicit_root() {
+        assert_eq!(
+            attach_command_for(Some("0123456789abcdef")),
+            "bus resume 0123456789abcdef"
+        );
+        assert_eq!(attach_command_for(None), "bus");
     }
 
     #[test]
     fn restart_after_update_guidance_names_stop_and_attach_commands() {
         assert_eq!(
-            restart_after_update_guidance(
-                "herdr session stop work",
-                Some("herdr session attach work")
-            ),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `herdr session stop work`, then run `herdr session attach work` again."
+            restart_after_update_guidance("bus stop", "bus resume 0123456789abcdef"),
+            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `bus stop`, then run `bus resume 0123456789abcdef` again."
         );
-    }
-
-    #[test]
-    fn active_restart_after_update_guidance_respects_socket_override() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/custom-herdr.sock");
-        std::env::remove_var(SESSION_ENV_VAR);
-        clear_explicit_session_for_test();
-
-        assert_eq!(
-            active_restart_after_update_guidance(),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `HERDR_SOCKET_PATH=/tmp/custom-herdr.sock herdr server stop`, then restart Herdr with the same socket override."
-        );
-
-        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
     }
 
     #[test]

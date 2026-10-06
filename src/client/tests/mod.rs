@@ -393,31 +393,16 @@ fn client_error_display_server_shutdown_no_reason() {
 }
 
 #[test]
-fn client_error_display_detached_default_session_reattach_hint() {
+fn client_error_display_detached_suggests_the_bus_reattach_command() {
     let _guard = env_lock().lock().unwrap();
-    let _env = EnvVarsRemovedGuard::new(&[crate::session::SESSION_ENV_VAR]);
     let err = ClientError::ServerShutdown {
         reason: Some("detached".into()),
     };
+    // The `bus resume ID` form is covered in session tests without touching
+    // BUS_SESSION_ID, which Bus settings tests read concurrently.
+    let _env = EnvVarsRemovedGuard::new(&["BUS_SESSION_ID"]);
     let msg = err.to_string();
-    assert!(
-        msg.contains("Run `herdr` to reattach"),
-        "should suggest default reattach command: {msg}"
-    );
-}
-
-#[test]
-fn client_error_display_detached_named_session_reattach_hint() {
-    let _guard = env_lock().lock().unwrap();
-    let _session_env = EnvVarGuard::set(crate::session::SESSION_ENV_VAR, "work");
-    let err = ClientError::ServerShutdown {
-        reason: Some("detached".into()),
-    };
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Run `herdr session attach work` to reattach"),
-        "should suggest named session reattach command: {msg}"
-    );
+    assert!(msg.contains("Run `bus` to reattach"), "{msg}");
 }
 
 #[test]
