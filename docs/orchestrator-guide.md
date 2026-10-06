@@ -2,7 +2,8 @@
 
 This guide is for a coding agent (Claude Code, Codex, Cursor) acting as the
 orchestrator of a Bus room. It builds on [How to use the Bus CLI](how-to-bus-cli.md);
-read that first for the commands themselves.
+read that first for the commands themselves. The binding rules are in
+[Orchestrator rules](orchestrator-rules.md).
 
 ## What an orchestrator is
 
@@ -126,12 +127,13 @@ when the state changes, not on every message.
 
 Decide how agents share the repository before sending parallel work:
 
-- **No overlap:** agents can share one branch and worktree.
-- **Heavy overlap:** give each agent its own worktree and branch. Ask an agent
-  to create it with the `worktree-new` skill and remove it later with
-  `worktree-close`, then merge the branches in a planned order.
-- **A few shared files:** keep one worktree and tell each agent involved: "When
-  you need to modify file X, ask me first and wait." Grant one agent at a time.
+- **Default: one shared branch.** Give each agent its file boundaries. For a
+  few shared files, tell each agent involved: "When you need to modify file X,
+  ask me first and wait." Grant one agent at a time.
+- **Only when it is a must:** give an agent its own worktree and branch. Ask an
+  agent to create it with the `worktree-new` skill, merge the branches in a
+  planned order, and have an agent run `worktree-close` as soon as each one is
+  merged.
 
 Write the choice in the workflow's Coordination section.
 
@@ -147,8 +149,10 @@ Write the choice in the workflow's Coordination section.
 - **Move work when a provider runs out.** If an agent hits a usage limit, add an
   agent on another provider (`bus agent add`) and hand the work over.
 - **Watch context health.** `bus state` shows how many times each agent's
-  context has been compacted. After about 20 compactions, ask the agent to write
-  a handover note to a file, then start a fresh agent from that note.
+  context has been compacted. After 5 compactions, ask a worker to write a
+  handover note to a file, then start a fresh worker from that note. This
+  limit is for workers only: the orchestrator never clears itself and is never
+  replaced for compactions, because it carries the context of the whole effort.
 
 ## The review loop
 
@@ -191,7 +195,9 @@ only for an unrelated task that should get a turn and a reply of its own.
 
 Ask before anything outside the room's goal or the workflow's decision rules:
 
-- Publishing, merging, pushing to shared branches, or deleting work.
+- Publishing, merging, pushing to shared branches, or deleting work. Adding
+  and deleting agents in your own room is not on this list: do it as the
+  workflow needs and log it.
 - Changing the goal or dropping a requirement.
 - Reviewers or best-of-N candidates that disagree sharply.
 - A hard gate that no option can meet.

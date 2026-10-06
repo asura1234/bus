@@ -20,6 +20,10 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../docs/orchestrator-guide.md"),
     ),
     (
+        "orchestrator-rules.md",
+        include_str!("../../docs/orchestrator-rules.md"),
+    ),
+    (
         "templates/workflow-template.md",
         include_str!("../../docs/templates/workflow-template.md"),
     ),

@@ -11,6 +11,7 @@ __pycache__/
 /docs/*
 !/docs/how-to-bus-cli.md
 !/docs/orchestrator-guide.md
+!/docs/orchestrator-rules.md
 !/docs/guides/
 !/docs/guides/**
 !/docs/templates/

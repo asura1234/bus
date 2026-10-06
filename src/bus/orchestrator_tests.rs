@@ -37,6 +37,8 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("bus send --room 7 --as orch"));
     assert!(text.contains("/data/docs/workflow-create.md"));
     assert!(text.contains("/data/docs/how-to-bus-cli.md"));
+    assert!(text.contains("Orchestrator rules (binding): /data/docs/orchestrator-rules.md"));
+    assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
     let unassigned = fill(DEFAULT_PROMPT, &values(None, data));
     assert!(unassigned.contains("Your room: none yet"), "{unassigned}");
 }
@@ -51,6 +53,8 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     for (name, _) in DOCS {
         assert!(root.join(name).is_file(), "{name}");
     }
+    let rules = std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap();
+    assert!(rules.starts_with("# Orchestrator rules"), "{rules}");
     let guide = std::fs::read_to_string(root.join("workflow-create.md")).unwrap();
     assert!(guide.starts_with("# workflow-create"), "{guide}");
     assert!(!guide.contains("description:"));
