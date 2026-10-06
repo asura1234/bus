@@ -2,7 +2,6 @@ use ratatui::layout::Rect;
 
 mod onboarding;
 mod panes;
-mod release_notes;
 mod scrollbar;
 mod sidebar;
 mod status;
@@ -19,15 +18,9 @@ use self::panes::resize_popup_pane;
 pub(crate) use self::panes::{
     apply_pane_chrome, pane_inner_rect, pane_is_scrolled_back, render_selection_highlight,
 };
-pub(crate) use self::release_notes::{
-    product_announcement_display_lines, product_announcement_scroll_metrics,
-    release_notes_close_button_rect, release_notes_display_lines, release_notes_scroll_metrics,
-    PRODUCT_ANNOUNCEMENT_MODAL_SIZE, RELEASE_NOTES_MODAL_SIZE,
-};
 pub(crate) use self::scrollbar::{
-    release_notes_scrollbar_rect, render_pane_scrollbar_buffer, render_scrollbar_buffer,
-    scrollbar_offset_from_drag_row, scrollbar_offset_from_row, scrollbar_thumb,
-    scrollbar_thumb_grab_offset,
+    render_pane_scrollbar_buffer, scrollbar_offset_from_drag_row, scrollbar_offset_from_row,
+    scrollbar_thumb, scrollbar_thumb_grab_offset,
 };
 pub(crate) use self::sidebar::{
     agent_panel_entries_from, expanded_sidebar_sections, resolved_token_spans, sidebar_agent_rows,
@@ -41,7 +34,7 @@ pub(crate) use self::tab_surface::{
     tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceLayout, TabSurfaceTarget, TabSurfaceView,
 };
 pub(crate) use self::text::truncate_end;
-pub(crate) use self::widgets::{centered_popup_rect, modal_stack_areas};
+pub(crate) use self::widgets::modal_stack_areas;
 
 use crate::app::AppState;
 use crate::terminal::TerminalRuntimeRegistry;

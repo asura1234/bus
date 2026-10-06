@@ -391,8 +391,6 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::ServerAgentManifests(_) => "server.agent_manifests",
         Method::ServerReloadAgentManifests(_) => "server.reload_agent_manifests",
         Method::NotificationShow(_) => "notification.show",
-        Method::ProductAnnouncementDismiss(_) => "product_announcement.dismiss",
-        Method::ReleaseNotesDismiss(_) => "release_notes.dismiss",
         Method::CommandInvoke(_) => "command.invoke",
         Method::ClientWindowTitleSet(_) => "client.window_title.set",
         Method::ClientWindowTitleClear(_) => "client.window_title.clear",

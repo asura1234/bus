@@ -12,18 +12,6 @@ pub(crate) fn pane_scrollbar_rect(info: &PaneInfo) -> Option<Rect> {
     info.scrollbar_rect
 }
 
-pub(crate) fn release_notes_scrollbar_rect(
-    body: Rect,
-    metrics: crate::pane::ScrollMetrics,
-) -> Option<Rect> {
-    (should_show_scrollbar(metrics) && body.width > 1).then_some(Rect::new(
-        body.x + body.width - 1,
-        body.y,
-        1,
-        body.height,
-    ))
-}
-
 pub(crate) fn should_show_scrollbar(metrics: crate::pane::ScrollMetrics) -> bool {
     metrics.max_offset_from_bottom > 0
 }

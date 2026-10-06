@@ -174,14 +174,7 @@ impl ClientShellState {
                 RawInputEvent::Key(key) => self.handle_key(key, &mut outcome),
                 RawInputEvent::Text(text) => {
                     let text = text.into_string();
-                    if matches!(
-                        self.overlay,
-                        Some(
-                            ClientShellOverlay::Onboarding
-                                | ClientShellOverlay::ProductAnnouncement(_)
-                                | ClientShellOverlay::ReleaseNotes(_)
-                        )
-                    ) {
+                    if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
                         self.reconcile_input_source();
                         continue;
                     }
@@ -207,14 +200,7 @@ impl ClientShellState {
                     }
                 }
                 RawInputEvent::Paste(text) => {
-                    if matches!(
-                        self.overlay,
-                        Some(
-                            ClientShellOverlay::Onboarding
-                                | ClientShellOverlay::ProductAnnouncement(_)
-                                | ClientShellOverlay::ReleaseNotes(_)
-                        )
-                    ) {
+                    if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
                         self.reconcile_input_source();
                         continue;
                     }
@@ -495,14 +481,7 @@ impl ClientShellState {
         {
             return None;
         }
-        if matches!(
-            self.overlay,
-            Some(
-                ClientShellOverlay::Onboarding
-                    | ClientShellOverlay::ProductAnnouncement(_)
-                    | ClientShellOverlay::ReleaseNotes(_)
-            )
-        ) {
+        if matches!(self.overlay, Some(ClientShellOverlay::Onboarding)) {
             if key.kind == KeyEventKind::Press {
                 self.route_overlay_key(key, outcome);
             }

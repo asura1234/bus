@@ -222,6 +222,7 @@ pub(crate) fn hermes_install_layout_available() -> bool {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn installed_integration_statuses() -> Vec<super::IntegrationStatus> {
     integration_specs()
         .into_iter()
@@ -256,6 +257,7 @@ pub(crate) fn integration_recommendations() -> Vec<super::IntegrationRecommendat
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn outdated_installed_integrations() -> Vec<super::IntegrationStatus> {
     installed_integration_statuses()
         .into_iter()
@@ -361,43 +363,6 @@ fn integration_specs() -> [(
             super::GROK_INTEGRATION_VERSION,
         ),
     ]
-}
-
-pub(crate) fn integration_update_instructions(
-    targets: &[crate::api::schema::IntegrationTarget],
-) -> String {
-    let commands: Vec<String> = targets
-        .iter()
-        .map(|target| {
-            format!(
-                "`herdr integration install {}`",
-                integration_target_label(*target)
-            )
-        })
-        .collect();
-
-    match commands.as_slice() {
-        [] => String::new(),
-        [command] => format!("run {command}"),
-        [rest @ .., last] => format!("run {} and {last}", rest.join(", ")),
-    }
-}
-
-pub(crate) fn print_outdated_update_notice() -> bool {
-    let outdated = outdated_installed_integrations();
-    if outdated.is_empty() {
-        return false;
-    }
-
-    let targets = outdated
-        .iter()
-        .map(|integration| integration.target)
-        .collect::<Vec<_>>();
-    eprintln!(
-        "installed herdr integrations need updating; {}.",
-        integration_update_instructions(&targets).replace('`', "")
-    );
-    true
 }
 
 /// Whether the Herdr-owned Grok hook config exactly matches the installed

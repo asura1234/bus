@@ -12,7 +12,7 @@ test:
 
 # Run repository maintenance contract tests
 maintenance-test:
-    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_bus_dev_acceptance scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_sanitize_review_severity scripts.test_skill_migration_contract scripts.test_review_artifact scripts.test_review_artifact_write scripts.test_review_round_common scripts.test_review_prologue_entrypoints scripts.test_review_pr_round scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
+    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_bus_dev_acceptance scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_sanitize_review_severity scripts.test_skill_migration_contract scripts.test_review_artifact scripts.test_review_artifact_write scripts.test_review_round_common scripts.test_review_prologue_entrypoints scripts.test_review_pr_round scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
     {{python}} skills/pr/scripts/test_pr_format_check.py
     {{python}} skills/review-pr/scripts/test_review_round.py
     {{python}} skills/split-pr/scripts/tests/test_split_plan.py

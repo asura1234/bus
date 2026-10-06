@@ -243,13 +243,14 @@ fn server_stop_interrupts_server_event_backlog() {
 #[test]
 fn headless_api_request_drains_all_pending_internal_events_before_reading_state() {
     let mut server = test_headless_server();
-    for i in 0..=crate::app::APP_EVENT_DRAIN_LIMIT {
+    for _ in 0..=crate::app::APP_EVENT_DRAIN_LIMIT {
         server
             .app
             .event_tx
-            .try_send(AppEvent::UpdateReady {
-                version: format!("4.0.{i}"),
-                install_command: "herdr install".into(),
+            .try_send(AppEvent::HookAuthorityCleared {
+                pane_id: crate::layout::PaneId::from_raw(9_999),
+                source: None,
+                seq: None,
             })
             .unwrap();
     }
@@ -272,11 +273,6 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
     let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
     assert_eq!(response["result"]["type"], "ok");
-    let expected_version = format!("4.0.{}", crate::app::APP_EVENT_DRAIN_LIMIT);
-    assert_eq!(
-        server.app.state.update_available.as_deref(),
-        Some(expected_version.as_str())
-    );
     assert!(server.app.event_rx.try_recv().is_err());
 }
 
@@ -752,14 +748,6 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
     server.app.state.mode = crate::app::Mode::Terminal;
-    server.app.state.product_announcement = Some(crate::app::state::ProductAnnouncementState {
-        version: "0.8.2".into(),
-        id: "client-shell".into(),
-        title: "Client shell".into(),
-        body: "announcement".into(),
-        scroll: 0,
-        preview: true,
-    });
     server.server_config_diagnostic_without_keybindings = Some("endpoint config warning".into());
 
     let (writer, control_rx, render_rx) = test_client_writer();
@@ -786,14 +774,6 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     assert_eq!(
         snapshot.config_diagnostic.as_deref(),
         Some("endpoint config warning")
-    );
-    assert_eq!(
-        snapshot.product_announcement.as_ref().map(|announcement| (
-            announcement.version.as_str(),
-            announcement.id.as_str(),
-            announcement.preview,
-        )),
-        Some(("0.8.2", "client-shell", true))
     );
 
     server.render_and_stream();
@@ -5758,87 +5738,6 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     assert_eq!(server.foreground_client_id, Some(2));
     assert_eq!(server.clients.len(), 3);
     assert!(server.app.state.toast.is_none());
-}
-
-#[test]
-fn update_notification_reaches_client_shell_independent_of_delivery() {
-    let mut server = test_headless_server();
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
-        version: "9.9.9".to_string(),
-        install_command: "herdr update".into(),
-    });
-
-    assert!(changed);
-    assert!(matches!(
-        read_server_message(
-            client_control_rx
-                .recv_timeout(Duration::from_millis(100))
-                .expect("semantic update notification")
-        ),
-        ServerMessage::SemanticNotification(protocol::SemanticNotification {
-            kind: protocol::SemanticNotificationKind::UpdateInstalled,
-            ..
-        })
-    ));
-}
-
-#[test]
-fn update_notification_is_semantic_for_system_delivery() {
-    let mut server = test_headless_server();
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            Some(client_tx),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
-
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
-        version: "9.9.9".to_string(),
-        install_command: "herdr update".into(),
-    });
-
-    assert!(changed);
-    match read_server_message(
-        client_control_rx
-            .recv_timeout(Duration::from_millis(100))
-            .expect("semantic update notification"),
-    ) {
-        ServerMessage::SemanticNotification(notification) => {
-            assert_eq!(
-                notification.kind,
-                protocol::SemanticNotificationKind::UpdateInstalled
-            );
-            assert_eq!(notification.title, "Herdr v9.9.9 available");
-            assert_eq!(
-                notification.body.as_deref(),
-                Some("detach, run `herdr update`, then run Herdr again to reconnect")
-            );
-        }
-        other => panic!("expected semantic update notification, got {other:?}"),
-    }
 }
 
 #[test]

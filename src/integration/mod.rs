@@ -16,7 +16,7 @@ pub(crate) use env::integration_env_lock;
 pub(crate) use env::{
     apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
 };
-pub(crate) use registry::{integration_recommendations, print_outdated_update_notice};
+pub(crate) use registry::integration_recommendations;
 pub(crate) use types::{IntegrationRecommendation, IntegrationStatus, IntegrationStatusKind};
 
 const PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";

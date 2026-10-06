@@ -3603,21 +3603,6 @@
         "PingParams": {
           "type": "object"
         },
-        "ProductAnnouncementDismissParams": {
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "version": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "version",
-            "id"
-          ],
-          "type": "object"
-        },
         "ReadFormat": {
           "enum": [
             "text",
@@ -3633,17 +3618,6 @@
             "detection"
           ],
           "type": "string"
-        },
-        "ReleaseNotesDismissParams": {
-          "properties": {
-            "version": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "version"
-          ],
-          "type": "object"
         },
         "ServerLiveHandoffParams": {
           "properties": {
@@ -4535,38 +4509,6 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/NotificationShowParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "product_announcement.dismiss",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/ProductAnnouncementDismissParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "release_notes.dismiss",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/ReleaseNotesDismissParams"
             }
           },
           "required": [

@@ -182,13 +182,3 @@ jobs:
             -StageDir $stage `
             -OutputPath artifacts\herdr-windows-x86_64.zip
           "HERDR_CONPTY_PACKAGE_DIR=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Test packaged installer and repair with Windows PowerShell 5.1
-        shell: pwsh
-        run: |
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-            .\scripts\windows_install_conpty_package_test.ps1 `
-            -ArchivePath artifacts\herdr-windows-x86_64.zip
-          if ($LASTEXITCODE -ne 0) {
-            throw "Windows PowerShell installer test failed with exit code $LASTEXITCODE"
-          }

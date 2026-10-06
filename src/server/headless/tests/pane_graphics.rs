@@ -735,9 +735,10 @@ fn stream_set_has_graphics_only_render_impact() {
     server
         .app
         .event_tx
-        .try_send(AppEvent::UpdateReady {
-            version: "9.9.9".into(),
-            install_command: "herdr update".into(),
+        .try_send(AppEvent::HookAuthorityCleared {
+            pane_id: crate::layout::PaneId::from_raw(9_999),
+            source: None,
+            seq: None,
         })
         .unwrap();
     let (request, _response_rx) = stream_set_message(

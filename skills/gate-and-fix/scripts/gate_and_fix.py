@@ -30,7 +30,6 @@ MAINTENANCE_TESTS = (
     "scripts.test_package_windows_conpty",
     "scripts.test_sanitize_review_severity",
     "scripts.test_skill_migration_contract",
-    "scripts.test_unix_installer",
     "scripts.test_vendor_libghostty_vt",
     "scripts.test_vendor_portable_pty",
 )

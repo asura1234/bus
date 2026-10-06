@@ -917,22 +917,12 @@ pub struct ClientShellSnapshot {
     pub revision: u64,
     /// Endpoint startup/reload config warning, filtered for client-owned keybindings.
     pub config_diagnostic: Option<String>,
-    /// Unseen announcement owned and persisted by this endpoint.
-    pub product_announcement: Option<ClientShellProductAnnouncement>,
-    /// Future-version update advertised by the endpoint.
-    pub update_available: Option<String>,
-    /// Endpoint-specific command shown in update instructions.
-    pub update_install_command: String,
     /// Endpoint's normalized built-in keybindings, used only when a remote client selects server bindings.
     pub server_keybindings_toml: Option<String>,
-    /// Whether the endpoint has a What's New entry, even if its body is unavailable.
-    pub latest_release_notes_available: bool,
     /// Whether endpoint-owned integration assets need an update.
     pub integration_updates_available: bool,
     /// Endpoint-owned base directory used for new linked worktree checkouts.
     pub worktree_directory: String,
-    /// Cached endpoint-owned notes used by the client-rendered overlay.
-    pub release_notes: Option<ClientShellReleaseNotes>,
     pub focused_workspace_id: Option<String>,
     pub focused_tab_id: Option<String>,
     pub focused_pane_id: Option<String>,
@@ -945,22 +935,6 @@ pub struct ClientShellSnapshot {
     pub panes: Vec<ClientShellPane>,
     pub agents: Vec<ClientShellAgent>,
     pub commands: Vec<ClientShellCommand>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClientShellProductAnnouncement {
-    pub version: String,
-    pub id: String,
-    pub title: String,
-    pub body: String,
-    pub preview: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ClientShellReleaseNotes {
-    pub version: String,
-    pub body: String,
-    pub preview: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2618,24 +2592,9 @@ mod tests {
             boot_id: "boot-1".into(),
             revision: 1,
             config_diagnostic: Some("endpoint config warning".into()),
-            product_announcement: Some(ClientShellProductAnnouncement {
-                version: "0.8.2".into(),
-                id: "client-shell".into(),
-                title: "Client shell".into(),
-                body: "### New\n- Client-owned chrome".into(),
-                preview: false,
-            }),
-            update_available: Some("0.8.3".into()),
-            update_install_command: "herdr update".into(),
             server_keybindings_toml: Some("[keys]\nprefix = \"ctrl+a\"\n".into()),
-            latest_release_notes_available: true,
             integration_updates_available: true,
             worktree_directory: "/tmp/herdr-worktrees".into(),
-            release_notes: Some(ClientShellReleaseNotes {
-                version: "0.8.3".into(),
-                body: "### New\n- Update ready".into(),
-                preview: true,
-            }),
             focused_workspace_id: Some("w1".into()),
             focused_tab_id: Some("w1:t1".into()),
             focused_pane_id: Some("w1:p1".into()),

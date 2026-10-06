@@ -11,41 +11,17 @@ use super::{
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum UpdateChannelConfig {
-    #[default]
-    Stable,
-    Preview,
-}
-
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(default)]
 pub struct UpdateConfig {
-    pub channel: UpdateChannelConfig,
-    pub version_check: bool,
     pub manifest_check: bool,
 }
 
 impl Default for UpdateConfig {
     fn default() -> Self {
         Self {
-            channel: default_update_channel(),
-            version_check: true,
             manifest_check: true,
         }
-    }
-}
-
-fn default_update_channel() -> UpdateChannelConfig {
-    default_update_channel_for_build(cfg!(windows), crate::build_info::is_preview())
-}
-
-fn default_update_channel_for_build(is_windows: bool, is_preview: bool) -> UpdateChannelConfig {
-    if is_windows && is_preview {
-        UpdateChannelConfig::Preview
-    } else {
-        UpdateChannelConfig::Stable
     }
 }
 
@@ -1258,36 +1234,6 @@ impl Default for AdvancedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn update_channel_default_follows_windows_build_identity() {
-        assert_eq!(
-            default_update_channel_for_build(true, true),
-            UpdateChannelConfig::Preview
-        );
-        assert_eq!(
-            default_update_channel_for_build(true, false),
-            UpdateChannelConfig::Stable
-        );
-        assert_eq!(
-            default_update_channel_for_build(false, true),
-            UpdateChannelConfig::Stable
-        );
-    }
-
-    #[test]
-    fn missing_update_channel_uses_build_default() {
-        let empty: Config = toml::from_str("").unwrap();
-        let without_update_channel: Config =
-            toml::from_str("[update]\nversion_check = false").unwrap();
-
-        assert_eq!(Config::default().update.channel, default_update_channel());
-        assert_eq!(empty.update.channel, default_update_channel());
-        assert_eq!(
-            without_update_channel.update.channel,
-            default_update_channel()
-        );
-    }
 
     #[test]
     fn terminal_default_shell_defaults_empty_and_parses() {

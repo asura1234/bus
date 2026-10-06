@@ -25,8 +25,6 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
         Method::ServerReloadConfig(_)
             | Method::ServerReloadAgentManifests(_)
             | Method::NotificationShow(_)
-            | Method::ProductAnnouncementDismiss(_)
-            | Method::ReleaseNotesDismiss(_)
             | Method::CommandInvoke(_)
             | Method::WorkspaceCreate(_)
             | Method::WorkspaceFocus(_)

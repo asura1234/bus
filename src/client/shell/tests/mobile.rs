@@ -1,62 +1,6 @@
 use super::*;
 
 #[test]
-fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
-    let mut config = ClientShellConfig::from_config(&Config::default());
-    config.tab_bar_position = crate::config::TabBarPositionConfig::Bottom;
-    config.hide_tab_bar_when_single_tab = false;
-    let mut state = ClientShellState::new(config);
-    let mut endpoint_snapshot = snapshot();
-    endpoint_snapshot.update_available = Some("0.8.3".into());
-    state.set_snapshot(Box::new(endpoint_snapshot));
-    state.set_pane_surface(surface());
-    state.mode = ClientShellMode::Navigate;
-
-    let bottom = state.compose(106, 30).expect("bottom-tab update shell");
-    let row_text = |frame: &FrameData, row: u16| {
-        let width = usize::from(frame.width);
-        let start = usize::from(row) * width;
-        frame.cells[start..start + width]
-            .iter()
-            .map(|cell| cell.symbol.as_str())
-            .collect::<String>()
-    };
-    assert!(row_text(&bottom, 29).contains("update ready"));
-    assert!(!row_text(&bottom, 28).contains("update ready"));
-    assert!(state.hits.tabs.is_empty());
-    assert!(state.hits.new_tab.is_empty());
-    assert!(state.hits.tab_scroll_left.is_empty());
-    assert!(state.hits.tab_scroll_right.is_empty());
-
-    state.config.tab_bar_position = crate::config::TabBarPositionConfig::Top;
-    state.visible_notification = Some(ClientVisibleNotification {
-        endpoint_id: ClientEndpointId::Local,
-        event: SemanticNotification {
-            kind: SemanticNotificationKind::Custom,
-            title: "bottom notification".into(),
-            body: None,
-            sound: None,
-            agent: None,
-            workspace_id: None,
-            tab_id: None,
-            pane_id: None,
-            position: Some(crate::config::ToastHerdrPosition::BottomRight),
-        },
-        deadline: std::time::Instant::now(),
-    });
-    let top = state.compose(106, 30).expect("top-tab update shell");
-    assert!(row_text(&top, 29).contains("update ready"));
-
-    let mobile = state.compose(44, 30).expect("mobile update shell");
-    let mobile_text = mobile
-        .cells
-        .iter()
-        .map(|cell| cell.symbol.as_str())
-        .collect::<String>();
-    assert!(mobile_text.contains("update ready"));
-}
-
-#[test]
 fn mobile_layout_reserves_only_client_header() {
     let config = ClientShellConfig::from_config(&Config::default());
     let state = ClientShellState::new(config);
@@ -396,69 +340,6 @@ fn mobile_switcher_create_and_menu_rows_reuse_client_actions() {
     ))]);
     assert!(state.overlay.is_none());
     assert_eq!(state.mode, ClientShellMode::Terminal);
-}
-
-#[test]
-fn mobile_menu_keeps_inert_notes_open_and_cancel_without_workspace_in_navigate() {
-    let mut source_config = Config::default();
-    source_config.ui.prompt_new_workspace_name = true;
-    let config = ClientShellConfig::from_config(&source_config);
-    let mut projected = snapshot();
-    projected.latest_release_notes_available = true;
-    projected.release_notes = None;
-    let mut state = ClientShellState::new(config);
-    state.set_snapshot(Box::new(projected));
-    state.set_pane_surface(surface());
-    state.mode = ClientShellMode::Navigate;
-    state.compose(44, 20).expect("mobile switcher");
-    let inert_notes = state
-        .hits
-        .mobile_targets
-        .iter()
-        .find_map(|(rect, target)| matches!(target, ClientMobileTarget::Menu(3)).then_some(*rect))
-        .expect("what's new row");
-    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: inert_notes.x,
-        row: inert_notes.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert_eq!(state.mode, ClientShellMode::Navigate);
-    assert!(state.overlay.is_none());
-    assert!(!state.mobile_switcher_suspended);
-
-    let mut empty = snapshot();
-    empty.focused_workspace_id = None;
-    empty.focused_tab_id = None;
-    empty.focused_pane_id = None;
-    empty.workspaces.clear();
-    empty.tabs.clear();
-    empty.panes.clear();
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&source_config));
-    state.set_snapshot(Box::new(empty));
-    state.set_pane_surface(surface());
-    state.mode = ClientShellMode::Navigate;
-    state.compose(44, 20).expect("empty mobile switcher");
-    let new_workspace = state
-        .hits
-        .mobile_targets
-        .iter()
-        .find_map(|(rect, target)| {
-            matches!(target, ClientMobileTarget::NewWorkspace).then_some(*rect)
-        })
-        .expect("new workspace row");
-    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: new_workspace.x,
-        row: new_workspace.y,
-        modifiers: KeyModifiers::empty(),
-    })]);
-    assert!(matches!(state.overlay, Some(ClientShellOverlay::Rename(_))));
-    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
-        KeyCode::Esc,
-        KeyModifiers::empty(),
-    ))]);
-    assert_eq!(state.mode, ClientShellMode::Navigate);
 }
 
 #[test]

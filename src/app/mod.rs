@@ -117,9 +117,7 @@ pub struct App {
     pub(crate) pending_worktree_remove_runtime_exits: HashMap<crate::layout::PaneId, usize>,
     pub(crate) pending_worktree_remove_runtime_restores: HashMap<crate::layout::PaneId, u64>,
     pub(crate) next_api_worktree_operation_id: u64,
-    pub(crate) next_auto_update_check: Option<Instant>,
     pub(crate) next_agent_manifest_update_check: Option<Instant>,
-    pub(crate) update_version_check_enabled: bool,
     pub(crate) update_manifest_check_enabled: bool,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
@@ -388,16 +386,6 @@ impl App {
             "using pane scrollback configuration"
         );
 
-        let latest_release_notes = crate::release_notes::load_latest();
-        let update_available = latest_release_notes
-            .as_ref()
-            .filter(|notes| notes.preview)
-            .map(|notes| notes.version.clone());
-        let latest_release_notes_available = latest_release_notes.is_some();
-        let update_install_command = crate::update::update_install_command().to_string();
-        let startup_product_announcement =
-            crate::product_announcements::load_unseen_for_current_version();
-
         let mode = if active.is_some() {
             state::Mode::Terminal
         } else {
@@ -426,25 +414,10 @@ impl App {
             should_quit: false,
             request_client_config_reload: false,
             worktree_directory,
-            latest_release_notes,
-            product_announcement: startup_product_announcement.map(|announcement| {
-                state::ProductAnnouncementState {
-                    version: announcement.version,
-                    id: announcement.id,
-                    title: announcement.title,
-                    body: announcement.body,
-                    scroll: 0,
-                    preview: announcement.preview,
-                }
-            }),
             view: state::ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),
             },
-            update_available,
-            update_install_command,
-            latest_release_notes_available,
-            update_dismissed: false,
             config_diagnostic,
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
@@ -504,16 +477,10 @@ impl App {
         // Background auto-update is disabled for non-persistent test apps
         // and in debug/test builds so local development never mutates the
         // running binary out from under spawned test processes.
-        let version_check_enabled =
-            background_update_check_enabled(policy.background_updates, config.update.version_check);
         let manifest_check_enabled = background_update_check_enabled(
             policy.background_updates,
             config.update.manifest_check,
         );
-        if version_check_enabled {
-            let update_tx = event_tx.clone();
-            std::thread::spawn(move || crate::update::auto_update(update_tx));
-        }
         if manifest_check_enabled {
             let manifest_update_tx = event_tx.clone();
             std::thread::spawn(move || {
@@ -555,11 +522,8 @@ impl App {
             pending_worktree_remove_runtime_exits: HashMap::new(),
             pending_worktree_remove_runtime_restores: HashMap::new(),
             next_api_worktree_operation_id: 1,
-            next_auto_update_check: version_check_enabled
-                .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
             next_agent_manifest_update_check: manifest_check_enabled
                 .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
-            update_version_check_enabled: config.update.version_check,
             update_manifest_check_enabled: config.update.manifest_check,
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
@@ -679,30 +643,6 @@ impl App {
                 tracing::error!(err = %err, "failed to create default workspace");
                 self.state.mode = Mode::Navigate;
                 false
-            }
-        }
-    }
-
-    fn mark_release_notes_seen(&mut self, preview: bool) {
-        if !preview {
-            if let Err(err) = crate::release_notes::mark_current_version_seen() {
-                self.state.config_diagnostic =
-                    Some(format!("failed to update release notes status: {err}"));
-                self.config_diagnostic_deadline = Some(Instant::now() + Duration::from_secs(5));
-            }
-        }
-    }
-
-    pub(crate) fn dismiss_product_announcement(&mut self) {
-        if let Some(announcement) = self.state.product_announcement.take() {
-            if !announcement.preview {
-                if let Err(err) =
-                    crate::product_announcements::mark_seen(&announcement.version, &announcement.id)
-                {
-                    self.state.config_diagnostic =
-                        Some(format!("failed to update announcement status: {err}"));
-                    self.config_diagnostic_deadline = Some(Instant::now() + Duration::from_secs(5));
-                }
             }
         }
     }
@@ -859,22 +799,8 @@ impl App {
 
         if !invalid_section("update") {
             let now = Instant::now();
-            let previous_version_check_enabled = self.update_version_check_enabled;
             let previous_manifest_check_enabled = self.update_manifest_check_enabled;
-            self.update_version_check_enabled = config.update.version_check;
             self.update_manifest_check_enabled = config.update.manifest_check;
-
-            if !self.update_version_check_enabled {
-                self.next_auto_update_check = None;
-            } else if !previous_version_check_enabled
-                && background_update_check_enabled(
-                    self.policy.background_updates,
-                    self.update_version_check_enabled,
-                )
-                && self.state.update_available.is_none()
-            {
-                self.next_auto_update_check = Some(now);
-            }
 
             if !self.update_manifest_check_enabled {
                 self.next_agent_manifest_update_check = None;
@@ -987,14 +913,6 @@ mod tests {
                 .as_nanos()
         );
         std::env::temp_dir().join(unique).join("config.toml")
-    }
-
-    fn restore_xdg_state_home(original: Option<std::ffi::OsString>) {
-        if let Some(value) = original {
-            std::env::set_var("XDG_STATE_HOME", value);
-        } else {
-            std::env::remove_var("XDG_STATE_HOME");
-        }
     }
 
     #[test]
@@ -1244,33 +1162,26 @@ mod tests {
     #[test]
     fn internal_event_drain_limits_work_per_tick() {
         let mut app = test_app();
-        for i in 0..=APP_EVENT_DRAIN_LIMIT {
+        for _ in 0..=APP_EVENT_DRAIN_LIMIT {
             app.event_tx
-                .try_send(AppEvent::UpdateReady {
-                    version: format!("2.0.{i}"),
-                    install_command: "herdr install".into(),
+                .try_send(AppEvent::ClipboardWrite {
+                    content: Vec::new(),
                 })
                 .unwrap();
         }
 
         assert!(app.drain_internal_events());
 
-        let expected_version = format!("2.0.{}", APP_EVENT_DRAIN_LIMIT - 1);
-        assert_eq!(
-            app.state.update_available.as_deref(),
-            Some(expected_version.as_str())
-        );
         assert!(app.event_rx.try_recv().is_ok());
     }
 
     #[test]
     fn api_request_drains_all_pending_internal_events_before_reading_state() {
         let mut app = test_app();
-        for i in 0..=APP_EVENT_DRAIN_LIMIT {
+        for _ in 0..=APP_EVENT_DRAIN_LIMIT {
             app.event_tx
-                .try_send(AppEvent::UpdateReady {
-                    version: format!("3.0.{i}"),
-                    install_command: "herdr install".into(),
+                .try_send(AppEvent::ClipboardWrite {
+                    content: Vec::new(),
                 })
                 .unwrap();
         }
@@ -1284,11 +1195,6 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
         assert_eq!(response["result"]["type"], "ok");
-        let expected_version = format!("3.0.{APP_EVENT_DRAIN_LIMIT}");
-        assert_eq!(
-            app.state.update_available.as_deref(),
-            Some(expected_version.as_str())
-        );
         assert!(app.event_rx.try_recv().is_err());
     }
 
@@ -1452,207 +1358,18 @@ mod tests {
     }
 
     #[test]
-    fn startup_restores_preview_update_available_from_saved_notes() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("startup-preview-update-available");
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        // Use a bogus far-future version so preview=true regardless of current binary version.
-        crate::release_notes::save_pending("99.99.99", "### Changed\n- One").unwrap();
-
-        let app = test_app();
-
-        assert_eq!(app.state.update_available.as_deref(), Some("99.99.99"));
-        assert!(app.state.latest_release_notes_available);
-        assert_eq!(
-            app.state
-                .latest_release_notes
-                .as_ref()
-                .map(|notes| notes.version.as_str()),
-            Some("99.99.99")
-        );
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn update_ready_refreshes_cached_release_notes() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("update-ready-refreshes-release-notes");
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-        let mut app = test_app();
-        assert!(app.state.latest_release_notes.is_none());
-
-        crate::release_notes::save_pending("99.99.99", "### Changed\n- One").unwrap();
-        app.handle_internal_event(AppEvent::UpdateReady {
-            version: "99.99.99".into(),
-            install_command: "herdr update".into(),
-        });
-
-        assert_eq!(
-            app.state.latest_release_notes.as_ref().map(|notes| (
-                notes.version.as_str(),
-                notes.body.as_str(),
-                notes.preview
-            )),
-            Some(("99.99.99", "### Changed\n- One", true))
-        );
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn release_notes_dismiss_api_marks_current_seen_but_keeps_preview_unseen() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("release-notes-dismiss-persistence");
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        let dismiss = |app: &mut App, version: &str| {
-            let response = app.handle_api_request(crate::api::schema::Request {
-                id: format!("dismiss-{version}"),
-                method: crate::api::schema::Method::ReleaseNotesDismiss(
-                    crate::api::schema::ReleaseNotesDismissParams {
-                        version: version.to_owned(),
-                    },
-                ),
-            });
-            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
-            assert_eq!(response["result"]["type"], "ok");
-        };
-        let show_on_startup = || {
-            let stored: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(crate::release_notes::pending_path()).unwrap(),
-            )
-            .unwrap();
-            stored["show_on_startup"].as_bool()
-        };
-
-        let current = env!("CARGO_PKG_VERSION");
-        crate::release_notes::save_pending(current, "### Changed\n- Current").unwrap();
-        let mut app = test_app();
-        dismiss(&mut app, current);
-        assert_eq!(show_on_startup(), Some(false));
-
-        crate::release_notes::save_pending("99.99.99", "### Changed\n- Preview").unwrap();
-        let mut app = test_app();
-        dismiss(&mut app, "99.99.99");
-        assert_eq!(show_on_startup(), Some(true));
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn startup_does_not_restore_update_available_from_older_saved_notes() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("startup-stale-update-notes");
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        crate::release_notes::save_pending("0.4.9", "### Changed\n- One").unwrap();
-
-        let app = test_app();
-
-        assert_eq!(app.state.update_available, None);
-        assert!(app.state.latest_release_notes_available);
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn startup_keeps_pending_release_notes_available_without_auto_opening() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("startup-pending-release-notes-no-auto-open");
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        crate::release_notes::save_pending(env!("CARGO_PKG_VERSION"), "### Changed\n- One")
-            .unwrap();
-        let config = Config {
-            onboarding: Some(false),
-            ..Default::default()
-        };
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-
-        let app = App::new(
-            &config,
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-
-        assert_eq!(app.state.mode, Mode::Navigate);
-        assert!(app.state.latest_release_notes_available);
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn startup_loads_unseen_product_announcement_for_clients() {
-        let _guard = config_env_lock().lock().unwrap();
-        let path = temp_config_path("startup-product-announcement-auto-open");
-        let state_home = path.parent().unwrap().join("state");
-        let original_xdg_state_home = std::env::var_os("XDG_STATE_HOME");
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-        std::env::set_var("XDG_STATE_HOME", &state_home);
-
-        crate::release_notes::save_pending(env!("CARGO_PKG_VERSION"), "### Changed\n- One")
-            .unwrap();
-        crate::product_announcements::save_manifest_announcement(
-            env!("CARGO_PKG_VERSION"),
-            Some(&crate::product_announcements::ManifestAnnouncement {
-                id: "startup-announcement".into(),
-                title: Some("Startup announcement".into()),
-                body: "### Announcement\n- One".into(),
-            }),
-        )
-        .unwrap();
-
-        let config = Config {
-            onboarding: Some(false),
-            ..Default::default()
-        };
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-
-        let app = App::new(
-            &config,
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-
-        assert_eq!(app.state.mode, Mode::Navigate);
-        assert_eq!(
-            app.state
-                .product_announcement
-                .as_ref()
-                .map(|announcement| announcement.id.as_str()),
-            Some("startup-announcement")
-        );
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        restore_xdg_state_home(original_xdg_state_home);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
     fn reload_config_updates_live_state() {
         let _guard = config_env_lock().lock().unwrap();
         let path = temp_config_path("reload-config-success");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
-            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nnew_workspace = \"prefix+m\"\nprefix = \"ctrl+a\"\n[update]\nversion_check = false\nmanifest_check = false\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"herdr\"\n",
+            "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\nnew_cwd = \"home\"\n[keys]\nnew_workspace = \"prefix+m\"\nprefix = \"ctrl+a\"\n[update]\nmanifest_check = false\n[server]\nheadless_cols = 160\nheadless_rows = 50\n[ui]\nagent_panel_sort = \"priority\"\n[ui.toast]\ndelivery = \"herdr\"\n",
         )
         .unwrap();
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         let mut app = test_app();
-        app.next_auto_update_check = Some(Instant::now());
         app.next_agent_manifest_update_check = Some(Instant::now());
         let report = app.reload_config();
 
@@ -1682,9 +1399,7 @@ mod tests {
             app.state.new_terminal_cwd,
             crate::config::NewTerminalCwdConfig::Home
         );
-        assert!(!app.update_version_check_enabled);
         assert!(!app.update_manifest_check_enabled);
-        assert!(app.next_auto_update_check.is_none());
         assert!(app.next_agent_manifest_update_check.is_none());
         assert!(app.state.config_diagnostic.is_none());
         let toast = app.state.toast.as_ref().unwrap();
@@ -2149,23 +1864,6 @@ mod tests {
                 },
             ),
         };
-        let announcement_dismiss = crate::api::schema::Request {
-            id: "req_11".into(),
-            method: crate::api::schema::Method::ProductAnnouncementDismiss(
-                crate::api::schema::ProductAnnouncementDismissParams {
-                    version: "0.8.2".into(),
-                    id: "client-shell".into(),
-                },
-            ),
-        };
-        let release_notes_dismiss = crate::api::schema::Request {
-            id: "req_12".into(),
-            method: crate::api::schema::Method::ReleaseNotesDismiss(
-                crate::api::schema::ReleaseNotesDismissParams {
-                    version: "0.8.2".into(),
-                },
-            ),
-        };
 
         assert!(!crate::api::request_changes_ui(&read_only));
         assert!(!crate::api::request_changes_ui(&worktree_list));
@@ -2177,8 +1875,6 @@ mod tests {
         assert!(crate::api::request_changes_ui(&pane_resize));
         assert!(crate::api::request_changes_ui(&agent_view));
         assert!(crate::api::request_changes_ui(&command_invoke));
-        assert!(crate::api::request_changes_ui(&announcement_dismiss));
-        assert!(crate::api::request_changes_ui(&release_notes_dismiss));
     }
 
     #[test]
@@ -2963,7 +2659,7 @@ mod tests {
         let mut app = test_app();
         let now = Instant::now();
         app.session_save_deadline = Some(now + Duration::from_secs(2));
-        app.next_auto_update_check = Some(now + Duration::from_secs(6));
+        app.next_agent_manifest_update_check = Some(now + Duration::from_secs(6));
 
         assert_eq!(
             app.next_headless_loop_deadline_with_git_refresh(now, false, true),
@@ -2977,7 +2673,7 @@ mod tests {
         let now = Instant::now();
         app.config_diagnostic_deadline = None;
         app.toast_deadline = None;
-        app.next_auto_update_check = None;
+        app.next_agent_manifest_update_check = None;
         app.session_save_deadline = None;
         app.state.workspaces.clear();
 
@@ -3194,11 +2890,10 @@ mod tests {
             AgentState::Working
         );
 
-        for i in 0..APP_EVENT_CHANNEL_CAPACITY {
+        for _ in 0..APP_EVENT_CHANNEL_CAPACITY {
             app.event_tx
-                .try_send(AppEvent::UpdateReady {
-                    version: format!("9.9.{i}"),
-                    install_command: "herdr update".into(),
+                .try_send(AppEvent::ClipboardWrite {
+                    content: Vec::new(),
                 })
                 .unwrap();
         }

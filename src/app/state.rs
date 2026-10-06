@@ -746,24 +746,6 @@ pub struct CopyFeedback {
     pub message: String,
 }
 
-#[derive(Debug)]
-pub struct ReleaseNotesState {
-    pub version: String,
-    pub body: String,
-    pub scroll: u16,
-    pub preview: bool,
-}
-
-#[derive(Debug)]
-pub struct ProductAnnouncementState {
-    pub version: String,
-    pub id: String,
-    pub title: String,
-    pub body: String,
-    pub scroll: u16,
-    pub preview: bool,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaneFocusTarget {
     pub workspace_id: String,
@@ -795,16 +777,9 @@ pub struct AppState {
     /// their client-local sound config from disk.
     pub request_client_config_reload: bool,
     pub worktree_directory: std::path::PathBuf,
-    /// Latest endpoint-owned release notes, cached outside render paths.
-    pub latest_release_notes: Option<crate::release_notes::ReleaseNotes>,
-    pub product_announcement: Option<ProductAnnouncementState>,
     // Geometry of the most recently computed server pane surface.
     pub view: ViewState,
     // Notifications
-    pub update_available: Option<String>,
-    pub update_install_command: String,
-    pub latest_release_notes_available: bool,
-    pub update_dismissed: bool,
     pub config_diagnostic: Option<String>,
     pub toast: Option<ToastNotification>,
     pub pending_agent_notifications: std::collections::HashMap<PaneId, PendingAgentNotification>,
@@ -1016,16 +991,10 @@ impl AppState {
             should_quit: false,
             request_client_config_reload: false,
             worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
-            latest_release_notes: None,
-            product_announcement: None,
             view: ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),
             },
-            update_available: None,
-            update_install_command: "herdr update".into(),
-            latest_release_notes_available: false,
-            update_dismissed: false,
             config_diagnostic: None,
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),

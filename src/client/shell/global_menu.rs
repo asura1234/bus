@@ -3,24 +3,22 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ClientGlobalMenuAction {
     Binding(crate::input::KeybindAction),
-    WhatsNew,
 }
 
 pub(super) fn global_menu_attention(snapshot: &ClientShellSnapshot) -> bool {
-    snapshot.update_available.is_some() || snapshot.integration_updates_available
+    snapshot.integration_updates_available
 }
 
 pub(super) fn global_menu_item_has_badge(
     snapshot: &ClientShellSnapshot,
     action: ClientGlobalMenuAction,
 ) -> bool {
-    (action == ClientGlobalMenuAction::WhatsNew && snapshot.update_available.is_some())
-        || (action == ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Settings)
-            && snapshot.integration_updates_available)
+    action == ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Settings)
+        && snapshot.integration_updates_available
 }
 
 pub(super) fn global_menu_items(
-    snapshot: &ClientShellSnapshot,
+    _snapshot: &ClientShellSnapshot,
 ) -> Vec<(&'static str, ClientGlobalMenuAction)> {
     let mut items = vec![
         (
@@ -36,16 +34,6 @@ pub(super) fn global_menu_items(
             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::ReloadConfig),
         ),
     ];
-    if snapshot.update_available.is_some() || snapshot.latest_release_notes_available {
-        items.push((
-            if snapshot.update_available.is_some() {
-                "update ready"
-            } else {
-                "what's new"
-            },
-            ClientGlobalMenuAction::WhatsNew,
-        ));
-    }
     items.push((
         "detach",
         ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Detach),
@@ -89,21 +77,11 @@ impl ClientShellState {
         }) else {
             return;
         };
-        if action == ClientGlobalMenuAction::WhatsNew
-            && self
-                .snapshot
-                .as_deref()
-                .and_then(|snapshot| snapshot.release_notes.as_ref())
-                .is_none()
-        {
-            return;
-        }
         self.overlay = None;
         match action {
             ClientGlobalMenuAction::Binding(binding) => {
                 self.record_binding(crate::input::KeybindMatch::Action(binding), outcome)
             }
-            ClientGlobalMenuAction::WhatsNew => self.open_release_notes(),
         }
         outcome.repaint = true;
     }

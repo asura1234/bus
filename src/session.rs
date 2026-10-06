@@ -17,16 +17,6 @@ const MIN_SOCKET_TIMEOUT: Duration = Duration::from_millis(1);
 
 static EXPLICIT_SESSION_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-#[cfg(any(unix, test))]
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct SessionInfo {
-    pub name: String,
-    pub default: bool,
-    pub running: bool,
-    pub socket_path: String,
-    pub session_dir: String,
-}
-
 pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
     let mut cleaned = Vec::with_capacity(args.len());
     if let Some(program) = args.first() {
@@ -183,49 +173,6 @@ pub fn active_api_socket_path() -> PathBuf {
 
 pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
     data_dir_for(name).join("herdr-client.sock")
-}
-
-#[cfg(any(unix, test))]
-pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
-    let mut sessions = vec![session_info(None)];
-    let sessions_dir = crate::config::config_dir().join("sessions");
-    let entries = match std::fs::read_dir(&sessions_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(sessions),
-        Err(err) => return Err(err),
-    };
-
-    let mut names = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
-        };
-        if name != DEFAULT_SESSION_NAME && validate_name(&name).is_ok() {
-            names.push(name);
-        }
-    }
-    names.sort();
-    sessions.extend(names.iter().map(|name| session_info(Some(name))));
-    Ok(sessions)
-}
-
-#[cfg(any(unix, test))]
-pub fn session_info(name: Option<&str>) -> SessionInfo {
-    let default = name.is_none();
-    let display_name = name.unwrap_or(DEFAULT_SESSION_NAME).to_string();
-    let socket_path = api_socket_path_for(name);
-    let session_dir = data_dir_for(name);
-    SessionInfo {
-        name: display_name,
-        default,
-        running: is_running_at(&socket_path),
-        socket_path: socket_path.display().to_string(),
-        session_dir: session_dir.display().to_string(),
-    }
 }
 
 pub(crate) fn stop_active_server() -> Result<(), String> {
@@ -881,30 +828,5 @@ mod tests {
         assert!(validate_name("../prod").is_err());
         assert!(validate_name("").is_err());
         assert!(validate_name("work session").is_err());
-    }
-
-    #[test]
-    fn list_sessions_skips_reserved_default_directory() {
-        let _guard = env_lock().lock().unwrap();
-        let config_home =
-            std::env::temp_dir().join(format!("herdr-session-list-{}", std::process::id()));
-        let sessions_dir = config_home
-            .join(crate::config::app_dir_name())
-            .join("sessions");
-        std::fs::create_dir_all(sessions_dir.join(DEFAULT_SESSION_NAME)).unwrap();
-        std::fs::create_dir_all(sessions_dir.join("work")).unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
-        std::env::remove_var(SESSION_ENV_VAR);
-        clear_explicit_session_for_test();
-
-        let sessions = list_sessions().unwrap();
-        let names: Vec<_> = sessions
-            .iter()
-            .map(|session| session.name.as_str())
-            .collect();
-
-        assert_eq!(names, vec![DEFAULT_SESSION_NAME, "work"]);
-        std::fs::remove_dir_all(&config_home).unwrap();
-        std::env::remove_var("XDG_CONFIG_HOME");
     }
 }

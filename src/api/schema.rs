@@ -57,10 +57,6 @@ pub enum Method {
     ServerReloadAgentManifests(EmptyParams),
     #[serde(rename = "notification.show")]
     NotificationShow(NotificationShowParams),
-    #[serde(rename = "product_announcement.dismiss")]
-    ProductAnnouncementDismiss(ProductAnnouncementDismissParams),
-    #[serde(rename = "release_notes.dismiss")]
-    ReleaseNotesDismiss(ReleaseNotesDismissParams),
     #[serde(rename = "command.invoke")]
     CommandInvoke(CommandInvokeParams),
     #[serde(rename = "client.window_title.set")]

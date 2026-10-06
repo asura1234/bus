@@ -12,21 +12,6 @@ pub(super) fn panel_contrast_fg(palette: &Palette) -> Color {
     }
 }
 
-pub(crate) fn centered_popup_rect(area: Rect, popup_width: u16, popup_height: u16) -> Option<Rect> {
-    let popup_width = popup_width.min(area.width.saturating_sub(4));
-    let popup_height = popup_height.min(area.height.saturating_sub(2));
-    if popup_width < 4 || popup_height < 4 {
-        return None;
-    }
-
-    Some(Rect::new(
-        area.x + area.width.saturating_sub(popup_width) / 2,
-        area.y + area.height.saturating_sub(popup_height) / 2,
-        popup_width,
-        popup_height,
-    ))
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ModalStackAreas {
     pub header: Rect,
@@ -92,11 +77,6 @@ fn action_button_width(hint: Option<&str>, label: &str) -> u16 {
         Some(hint) => format!(" {hint} {label} ").chars().count() as u16,
         None => format!(" {label} ").chars().count() as u16,
     }
-}
-
-pub(crate) fn close_button_rect(area: Rect) -> Rect {
-    let width = action_button_width(Some("esc"), "close");
-    Rect::new(area.x + area.width.saturating_sub(width), area.y, width, 1)
 }
 
 pub(crate) fn continue_button_rect(area: Rect) -> Rect {

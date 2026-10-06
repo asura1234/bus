@@ -92,7 +92,6 @@ impl ClientShellState {
             self.mode,
             None,
             self.endpoint_error.as_deref(),
-            false,
             &self.config.keybinds,
             &self.config.palette,
         );
@@ -273,7 +272,6 @@ impl ClientShellState {
                 self.mode,
                 self.copy_mode.as_ref(),
                 self.endpoint_error.as_deref(),
-                snapshot.update_available.is_some(),
                 &self.config.keybinds,
                 &self.config.palette,
             )
@@ -602,30 +600,12 @@ impl ClientShellState {
                 self.hits.settings_popup = rendered.settings_popup;
                 self.hits.settings_tabs = rendered.settings_tabs;
                 self.hits.settings_choices = rendered.settings_choices;
-                self.hits.product_announcement_scrollbar = rendered.product_announcement_scrollbar;
-                self.hits.product_announcement_scroll_metrics =
-                    rendered.product_announcement_scroll_metrics;
-                self.hits.product_announcement_max_scroll =
-                    rendered.product_announcement_max_scroll;
-                self.hits.release_notes_scrollbar = rendered.release_notes_scrollbar;
-                self.hits.release_notes_scroll_metrics = rendered.release_notes_scroll_metrics;
-                self.hits.release_notes_max_scroll = rendered.release_notes_max_scroll;
                 rendered.cursor
             };
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
         if let Some(ClientShellOverlay::Help(help)) = self.overlay.as_mut() {
             help.scroll = help.scroll.min(self.hits.help_max_scroll);
-        }
-        if let Some(ClientShellOverlay::ProductAnnouncement(announcement)) = self.overlay.as_mut() {
-            announcement.scroll = announcement
-                .scroll
-                .min(u16::try_from(self.hits.product_announcement_max_scroll).unwrap_or(u16::MAX));
-        }
-        if let Some(ClientShellOverlay::ReleaseNotes(notes)) = self.overlay.as_mut() {
-            notes.scroll = notes
-                .scroll
-                .min(u16::try_from(self.hits.release_notes_max_scroll).unwrap_or(u16::MAX));
         }
         if self.endpoint_status(&self.active_endpoint_id) != Some(ClientEndpointStatus::Online) {
             frame.cursor = None;

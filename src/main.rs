@@ -16,7 +16,6 @@ mod api;
 mod app;
 mod build_info;
 mod bus;
-mod checksum;
 mod client;
 mod config;
 mod copy_mode;
@@ -37,11 +36,9 @@ mod pane_graphics_files;
 mod persist;
 mod platform;
 mod popup_size;
-mod product_announcements;
 mod protocol;
 mod pty;
 mod raw_input;
-mod release_notes;
 mod render_prof;
 mod render_signal;
 mod selection;
@@ -54,7 +51,6 @@ mod terminal_modes;
 mod terminal_notify;
 mod terminal_theme;
 mod ui;
-mod update;
 mod workspace;
 mod worktree;
 
@@ -130,31 +126,6 @@ fn main() -> io::Result<()> {
             let loaded_config = config::Config::load();
             exit_if_nested_disabled(&loaded_config.config);
             return client::run_client();
-        }
-        Some("update") => {
-            let options = match update::parse_self_update_args(&args[2..]) {
-                Ok(options) => options,
-                Err(err) if err.starts_with("usage:") => {
-                    eprintln!("{err}");
-                    std::process::exit(0);
-                }
-                Err(err) => {
-                    eprintln!("{err}");
-                    eprintln!("usage: herdr update [--handoff]");
-                    std::process::exit(2);
-                }
-            };
-            match update::self_update(options) {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    if e.starts_with("self-update is disabled") {
-                        eprintln!("{e}");
-                    } else {
-                        eprintln!("update failed: {e}");
-                    }
-                    std::process::exit(1);
-                }
-            }
         }
         Some("--version" | "-V") if args.len() == 2 => {
             platform::begin_cli_output();
