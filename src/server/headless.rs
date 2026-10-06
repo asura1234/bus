@@ -128,10 +128,6 @@ enum LoopEvent {
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Timeout for in-flight API requests during shutdown.
-#[allow(dead_code)]
-const SHUTDOWN_API_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// How often the idle headless loop wakes to poll the local listener for new
 /// client connections.
 ///
