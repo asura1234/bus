@@ -201,7 +201,7 @@ pub struct ClipboardImage {
     pub extension: &'static str,
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum LimitedRead {
     Empty,
@@ -209,7 +209,7 @@ pub(crate) enum LimitedRead {
     Oversized,
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub(crate) fn read_limited_reader(
     mut reader: impl std::io::Read,
     max_bytes: usize,
