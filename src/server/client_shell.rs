@@ -202,7 +202,6 @@ pub(super) fn snapshot(
         revision,
         config_diagnostic: config_diagnostic.map(str::to_owned),
         server_keybindings_toml: app.client_shell_keybindings_profile().map(str::to_owned),
-        integration_updates_available: app.state.integration_updates_available(),
         worktree_directory: app.state.worktree_directory.to_string_lossy().into_owned(),
         focused_workspace_id,
         focused_tab_id,
@@ -518,33 +517,6 @@ fn split_hit_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn snapshot_badges_only_outdated_integrations() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = crate::app::App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        app.state.integration_recommendations =
-            vec![crate::integration::IntegrationRecommendation {
-                target: crate::api::schema::IntegrationTarget::Claude,
-                label: "claude",
-                command: "claude",
-                available: true,
-                path: std::path::PathBuf::from("claude-hook"),
-                state: crate::integration::IntegrationStatusKind::NotInstalled,
-            }];
-
-        assert!(!snapshot(&app, "boot", 1, None, None).integration_updates_available);
-
-        app.state.integration_recommendations[0].state =
-            crate::integration::IntegrationStatusKind::Outdated;
-        assert!(snapshot(&app, "boot", 2, None, None).integration_updates_available);
-    }
 
     #[test]
     fn split_hits_follow_released_border_and_gap_geometry() {

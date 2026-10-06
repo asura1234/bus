@@ -536,8 +536,6 @@ impl ClientShellState {
                 PendingEndpointKind::Generic
                 | PendingEndpointKind::PopupCommand
                 | PendingEndpointKind::ReloadConfig
-                | PendingEndpointKind::IntegrationList
-                | PendingEndpointKind::IntegrationInstall
                 | PendingEndpointKind::SelectionCopy
                 | PendingEndpointKind::PaneScroll { .. }
                 | PendingEndpointKind::WordSelection { .. }

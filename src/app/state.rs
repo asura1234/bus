@@ -832,8 +832,6 @@ pub struct AppState {
     pub host_terminal_appearance: Option<HostAppearance>,
     /// True when the foreground host explicitly reported appearance via Mode 2031.
     pub host_terminal_appearance_explicit: bool,
-    /// Cached integration recommendations.
-    pub integration_recommendations: Vec<crate::integration::IntegrationRecommendation>,
     /// Session-modal terminal popup. This is intentionally outside workspace layouts.
     pub(crate) popup_pane: Option<PopupPaneState>,
     /// Resolved host terminal default colors for theming embedded panes.
@@ -862,15 +860,6 @@ impl AppState {
         _pane_id: crate::layout::PaneId,
     ) -> bool {
         true
-    }
-
-    pub(crate) fn integration_updates_available(&self) -> bool {
-        self.integration_recommendations
-            .iter()
-            .any(|recommendation| {
-                recommendation.state == crate::integration::IntegrationStatusKind::Outdated
-                    && recommendation.needs_install()
-            })
     }
 
     pub fn estimate_pane_size(&self) -> (u16, u16) {
@@ -1038,7 +1027,6 @@ impl AppState {
             },
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
-            integration_recommendations: Vec::new(),
             popup_pane: None,
             host_terminal_theme: TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),

@@ -24,6 +24,7 @@ use crate::render_signal::RenderSignal;
 
 mod agent_detection;
 mod cursor;
+pub(crate) mod env;
 mod input;
 mod kitty_keyboard;
 mod osc;
@@ -154,7 +155,7 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
         cmd.env(key, value);
     }
     cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
-    crate::integration::apply_pane_base_env(cmd);
+    self::env::apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
     match &launch_env.identity {
         PaneLaunchIdentity::Inherit => {}
@@ -163,12 +164,12 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
             tab_id,
             pane_id,
         } => {
-            cmd.env(crate::integration::HERDR_WORKSPACE_ID_ENV_VAR, workspace_id);
-            cmd.env(crate::integration::HERDR_TAB_ID_ENV_VAR, tab_id);
-            cmd.env(crate::integration::HERDR_PANE_ID_ENV_VAR, pane_id);
+            cmd.env(self::env::HERDR_WORKSPACE_ID_ENV_VAR, workspace_id);
+            cmd.env(self::env::HERDR_TAB_ID_ENV_VAR, tab_id);
+            cmd.env(self::env::HERDR_PANE_ID_ENV_VAR, pane_id);
         }
         PaneLaunchIdentity::OmitPane => {
-            cmd.env_remove(crate::integration::HERDR_PANE_ID_ENV_VAR);
+            cmd.env_remove(self::env::HERDR_PANE_ID_ENV_VAR);
         }
     }
     // New panes and cold resumes are independent provider sessions, even when
@@ -3382,7 +3383,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn login_shell_builder_resolves_bare_shell_names_from_path() {
-        let _lock = crate::integration::integration_env_lock();
+        let _lock = self::env::env_lock();
         let base = std::env::temp_dir().join(format!(
             "herdr-login-shell-path-{}-{}",
             std::process::id(),

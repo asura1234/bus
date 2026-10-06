@@ -382,21 +382,6 @@ pub(crate) fn session_restored(workspaces: usize, outcome: &'static str) {
     );
 }
 
-pub(crate) fn integration_action(
-    action: &'static str,
-    target: &'static str,
-    outcome: &'static str,
-) {
-    tracing::info!(
-        event = "integration.action",
-        subsystem = "integration",
-        outcome,
-        action,
-        target,
-        "integration action finished"
-    );
-}
-
 struct RotatingFileMakeWriter {
     state: Arc<Mutex<RotatingFileState>>,
 }

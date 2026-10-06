@@ -5,16 +5,15 @@ pub(super) enum ClientGlobalMenuAction {
     Binding(crate::input::KeybindAction),
 }
 
-pub(super) fn global_menu_attention(snapshot: &ClientShellSnapshot) -> bool {
-    snapshot.integration_updates_available
+pub(super) fn global_menu_attention(_snapshot: &ClientShellSnapshot) -> bool {
+    false
 }
 
 pub(super) fn global_menu_item_has_badge(
-    snapshot: &ClientShellSnapshot,
-    action: ClientGlobalMenuAction,
+    _snapshot: &ClientShellSnapshot,
+    _action: ClientGlobalMenuAction,
 ) -> bool {
-    action == ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Settings)
-        && snapshot.integration_updates_available
+    false
 }
 
 pub(super) fn global_menu_items(

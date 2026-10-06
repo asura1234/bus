@@ -4,7 +4,6 @@ pub mod agents;
 pub mod commands;
 pub mod common;
 pub mod events;
-pub mod integrations;
 pub mod panes;
 pub mod response;
 pub mod server;
@@ -17,7 +16,6 @@ pub use agents::*;
 pub use commands::*;
 pub use common::*;
 pub use events::*;
-pub use integrations::*;
 pub use panes::*;
 pub use response::*;
 pub use server::*;
@@ -232,12 +230,6 @@ pub enum Method {
     EventsWait(EventsWaitParams),
     #[serde(rename = "pane.wait_for_output")]
     PaneWaitForOutput(PaneWaitForOutputParams),
-    #[serde(rename = "integration.list")]
-    IntegrationList(EmptyParams),
-    #[serde(rename = "integration.install")]
-    IntegrationInstall(IntegrationInstallParams),
-    #[serde(rename = "integration.uninstall")]
-    IntegrationUninstall(IntegrationUninstallParams),
     /// Close only an exact owned terminal/session, or acknowledge that it is absent.
     #[serde(rename = "pane.close_if_identity")]
     PaneCloseIfIdentity(PaneCloseIfIdentityParams),

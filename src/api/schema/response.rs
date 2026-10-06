@@ -3,9 +3,6 @@ use serde::{Deserialize, Serialize};
 use super::agents::AgentInfo;
 use super::common::{ClientWindowTitleReason, NotificationShowReason};
 use super::events::EventEnvelope;
-use super::integrations::{
-    IntegrationInstallResult, IntegrationTarget, IntegrationUninstallResult,
-};
 use super::panes::{
     LayoutDescription, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot,
     PaneMoveResult, PaneNeighborResult, PaneProcessInfo, PaneReadResult, PaneResizeResult,
@@ -230,17 +227,6 @@ pub enum ResponseResult {
     ClientWindowTitle {
         changed: bool,
         reason: ClientWindowTitleReason,
-    },
-    IntegrationList {
-        integrations: Vec<super::integrations::IntegrationInfo>,
-    },
-    IntegrationInstall {
-        target: IntegrationTarget,
-        details: IntegrationInstallResult,
-    },
-    IntegrationUninstall {
-        target: IntegrationTarget,
-        details: IntegrationUninstallResult,
     },
     PaneLinkActivated {
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -792,10 +792,6 @@ impl ClientShellState {
                 };
                 return (repaint, Vec::new());
             }
-            kind @ (PendingEndpointKind::IntegrationList
-            | PendingEndpointKind::IntegrationInstall) => {
-                return self.handle_settings_endpoint_result(kind, result);
-            }
             kind => {
                 return (
                     self.handle_worktree_endpoint_result(kind, result),

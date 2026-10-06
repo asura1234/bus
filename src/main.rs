@@ -23,7 +23,6 @@ mod detect;
 mod events;
 mod ghostty;
 mod input;
-mod integration;
 mod ipc;
 mod kitty_graphics;
 mod layout;

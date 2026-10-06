@@ -3,7 +3,6 @@ use std::time::{Duration, Instant};
 mod agent_view;
 mod agents;
 mod env;
-mod integrations;
 mod layouts;
 mod pane_graphics;
 mod panes;
@@ -1029,15 +1028,6 @@ impl App {
                 };
             }
             Method::PaneSendKeys(params) => return self.handle_pane_send_keys(request.id, params),
-            Method::IntegrationList(_) => {
-                return self.handle_integration_list(request.id);
-            }
-            Method::IntegrationInstall(params) => {
-                return self.handle_integration_install(request.id, params);
-            }
-            Method::IntegrationUninstall(params) => {
-                return self.handle_integration_uninstall(request.id, params);
-            }
             _ => {
                 return responses::encode_error(
                     request.id,

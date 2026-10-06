@@ -2235,50 +2235,6 @@
           ],
           "type": "object"
         },
-        "IntegrationInstallParams": {
-          "properties": {
-            "target": {
-              "$ref": "#/schemas/request/$defs/IntegrationTarget"
-            }
-          },
-          "required": [
-            "target"
-          ],
-          "type": "object"
-        },
-        "IntegrationTarget": {
-          "enum": [
-            "pi",
-            "omp",
-            "claude",
-            "codex",
-            "copilot",
-            "devin",
-            "droid",
-            "kimi",
-            "opencode",
-            "kilo",
-            "hermes",
-            "qodercli",
-            "qwen",
-            "cursor",
-            "mastracode",
-            "antigravity_cli",
-            "grok"
-          ],
-          "type": "string"
-        },
-        "IntegrationUninstallParams": {
-          "properties": {
-            "target": {
-              "$ref": "#/schemas/request/$defs/IntegrationTarget"
-            }
-          },
-          "required": [
-            "target"
-          ],
-          "type": "object"
-        },
         "LayoutApplyParams": {
           "properties": {
             "focus": {
@@ -5773,54 +5729,6 @@
           "type": "object"
         },
         {
-          "properties": {
-            "method": {
-              "const": "integration.list",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/EmptyParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "integration.install",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/IntegrationInstallParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
-              "const": "integration.uninstall",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/IntegrationUninstallParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
           "description": "Close only an exact owned terminal/session, or acknowledge that it is absent.",
           "properties": {
             "method": {
@@ -7116,91 +7024,6 @@
             "layout_updated"
           ],
           "type": "string"
-        },
-        "IntegrationInfo": {
-          "properties": {
-            "available": {
-              "type": "boolean"
-            },
-            "command": {
-              "type": "string"
-            },
-            "label": {
-              "type": "string"
-            },
-            "state": {
-              "$ref": "#/schemas/success_response/$defs/IntegrationState"
-            },
-            "target": {
-              "$ref": "#/schemas/success_response/$defs/IntegrationTarget"
-            }
-          },
-          "required": [
-            "target",
-            "label",
-            "command",
-            "available",
-            "state"
-          ],
-          "type": "object"
-        },
-        "IntegrationInstallResult": {
-          "properties": {
-            "messages": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "messages"
-          ],
-          "type": "object"
-        },
-        "IntegrationState": {
-          "enum": [
-            "not_installed",
-            "current",
-            "outdated"
-          ],
-          "type": "string"
-        },
-        "IntegrationTarget": {
-          "enum": [
-            "pi",
-            "omp",
-            "claude",
-            "codex",
-            "copilot",
-            "devin",
-            "droid",
-            "kimi",
-            "opencode",
-            "kilo",
-            "hermes",
-            "qodercli",
-            "qwen",
-            "cursor",
-            "mastracode",
-            "antigravity_cli",
-            "grok"
-          ],
-          "type": "string"
-        },
-        "IntegrationUninstallResult": {
-          "properties": {
-            "messages": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "messages"
-          ],
-          "type": "object"
         },
         "LayoutDescription": {
           "properties": {
@@ -9118,65 +8941,6 @@
                 "type",
                 "changed",
                 "reason"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "integrations": {
-                  "items": {
-                    "$ref": "#/schemas/success_response/$defs/IntegrationInfo"
-                  },
-                  "type": "array"
-                },
-                "type": {
-                  "const": "integration_list",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "integrations"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "details": {
-                  "$ref": "#/schemas/success_response/$defs/IntegrationInstallResult"
-                },
-                "target": {
-                  "$ref": "#/schemas/success_response/$defs/IntegrationTarget"
-                },
-                "type": {
-                  "const": "integration_install",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "target",
-                "details"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "details": {
-                  "$ref": "#/schemas/success_response/$defs/IntegrationUninstallResult"
-                },
-                "target": {
-                  "$ref": "#/schemas/success_response/$defs/IntegrationTarget"
-                },
-                "type": {
-                  "const": "integration_uninstall",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "target",
-                "details"
               ],
               "type": "object"
             },

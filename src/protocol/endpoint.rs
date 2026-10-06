@@ -165,7 +165,6 @@ mod tests {
             revision: 1,
             config_diagnostic: None,
             server_keybindings_toml: None,
-            integration_updates_available: false,
             worktree_directory: String::new(),
             focused_workspace_id: None,
             focused_tab_id: None,

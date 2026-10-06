@@ -426,7 +426,6 @@ impl App {
             theme_runtime,
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
-            integration_recommendations: crate::integration::integration_recommendations(),
             popup_pane: None,
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),

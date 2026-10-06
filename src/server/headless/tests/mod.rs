@@ -623,16 +623,18 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
     let _initial_snapshot = control_rx.recv().expect("initial shell snapshot");
     let boot_id = server.client_shell_boot_id.clone();
 
-    assert!(
-        !server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
-            client_id,
-            boot_id: boot_id.clone(),
-            request: Box::new(api::schema::Request {
-                id: "client-shell:1".into(),
-                method: api::schema::Method::IntegrationList(api::schema::EmptyParams::default(),),
+    let workspace_id = server.app.state.workspaces[0].id.clone();
+    server.handle_server_event(ServerEvent::ClientShellEndpointRequest {
+        client_id,
+        boot_id: boot_id.clone(),
+        request: Box::new(api::schema::Request {
+            id: "client-shell:1".into(),
+            method: api::schema::Method::WorkspaceRename(api::schema::WorkspaceRenameParams {
+                workspace_id: workspace_id.clone(),
+                label: "renamed".into(),
             }),
-        })
-    );
+        }),
+    });
     assert!(server.clients[&client_id].shell_endpoint_command_in_flight);
 
     assert!(
@@ -641,7 +643,10 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
             boot_id: boot_id.clone(),
             request: Box::new(api::schema::Request {
                 id: "client-shell:busy".into(),
-                method: api::schema::Method::IntegrationList(api::schema::EmptyParams::default()),
+                method: api::schema::Method::WorkspaceRename(api::schema::WorkspaceRenameParams {
+                    workspace_id,
+                    label: "busy".into(),
+                }),
             }),
         })
     );
@@ -676,10 +681,6 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
             let response = serde_json::from_slice::<api::schema::SuccessResponse>(&data)
                 .expect("success response");
             assert_eq!(response.id, "client-shell:1");
-            assert!(matches!(
-                response.result,
-                api::schema::ResponseResult::IntegrationList { .. }
-            ));
         }
         other => panic!("expected client shell endpoint response, got {other:?}"),
     }

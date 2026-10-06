@@ -14,7 +14,7 @@ impl ClientShellState {
         }
         self.config.startup_onboarding = false;
         self.open_settings_overlay();
-        self.select_settings_section(ClientSettingsSection::Integrations, outcome);
+        outcome.repaint = true;
     }
 
     pub(super) fn open_navigator_overlay(&mut self) {

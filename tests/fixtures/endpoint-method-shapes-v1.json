@@ -1,8 +1,6 @@
 {
   "client_shell.surface.set": "919df2ba99fe7d5df003a051dbbaf9929998387c53ccb652b6262bd8e4650330",
   "command.invoke": "4a216704f3fc08b2cfe7e3edc24c82747fd1ee34a7788cc4423c95b473b37912",
-  "integration.install": "913055b838166650fee6713332c1cc436efd4f8fae9a2064d8f9b6616a7a66f8",
-  "integration.list": "60c57189adf9c281958062f0e11680bda0ece83307c506fa18bff8b01ebfb4e8",
   "layout.set_split_ratio": "13ef71d865f49c4f512fdfa8de64e1bdc0d4299675f78daf61bd5cdc10174d2f",
   "pane.close": "dcc277a6a4f9b8fc3438d8fa61de2688f4338b0d2d60100798e4103690e0b316",
   "pane.copy_motion": "57e690b444d5dbb408ac3e0d40ff307f77d6e79dccd3c026cd19580e1bd78983",

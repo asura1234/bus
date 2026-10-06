@@ -25,7 +25,6 @@ SKILL_CONTRACT_PREFIXES = ("cli_extensions/", "docs/guides/", "docs/templates/")
 CI_TOOLS = frozenset({"just", "cargo-nextest"})
 MAINTENANCE_TESTS = (
     "scripts.test_bus_dev_acceptance",
-    "scripts.test_hermes_integration_asset",
     "scripts.test_package_windows_conpty",
     "scripts.test_sanitize_review_severity",
     "scripts.test_skill_migration_contract",
@@ -116,17 +115,6 @@ def select_gates(
             Gate(
                 "ui-hot-path-architecture-test",
                 (sys.executable, "-m", "unittest", "scripts.test_ui_hot_path_architecture"),
-                requires_exclusive_execution=True,
-            ),
-            Gate(
-                "integration-assets-test",
-                (
-                    "bun",
-                    "test",
-                    "src/integration/assets/herdr-agent-state.test.ts",
-                    "src/integration/assets/opencode/herdr-agent-state.test.ts",
-                    "src/integration/assets/opencode/herdr-tui-session.test.ts",
-                ),
                 requires_exclusive_execution=True,
             ),
         ]

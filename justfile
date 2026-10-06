@@ -8,11 +8,10 @@ test:
     cargo nextest run --locked --status-level fail --final-status-level fail --failure-output final --success-output never
     just maintenance-test
     just ui-hot-path-architecture-test
-    just integration-assets-test
 
 # Run repository maintenance contract tests
 maintenance-test:
-    {{python}} -m unittest scripts.test_bus_dev_acceptance scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_sanitize_review_severity scripts.test_skill_migration_contract scripts.test_review_artifact scripts.test_review_artifact_write scripts.test_review_round_common scripts.test_review_prologue_entrypoints scripts.test_review_pr_round scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
+    {{python}} -m unittest scripts.test_bus_dev_acceptance scripts.test_package_windows_conpty scripts.test_sanitize_review_severity scripts.test_skill_migration_contract scripts.test_review_artifact scripts.test_review_artifact_write scripts.test_review_round_common scripts.test_review_prologue_entrypoints scripts.test_review_pr_round scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
     {{python}} skills/pr/scripts/test_pr_format_check.py
     {{python}} skills/review-pr/scripts/test_review_round.py
     {{python}} skills/split-pr/scripts/tests/test_split_plan.py
@@ -45,7 +44,6 @@ ci filter='all()': lint
     cargo nextest run --locked -E "{{filter}}" --status-level fail --final-status-level slow --failure-output final --success-output never
     just maintenance-test
     just ui-hot-path-architecture-test
-    just integration-assets-test
 
 # Run Windows target lint from Unix/macOS to catch cfg(windows) compile and clippy failures before CI
 [unix]
@@ -77,11 +75,6 @@ build:
 bench-render-scale:
     cargo test --release --locked --bin herdr render_scale_profile -- --ignored --nocapture --test-threads=1
 
-# Test bundled agent integration assets
-integration-assets-test:
-    bun test src/integration/assets/herdr-agent-state.test.ts
-    bun test src/integration/assets/opencode/herdr-agent-state.test.ts
-    bun test src/integration/assets/opencode/herdr-tui-session.test.ts
 
 # Build the vendored libghostty-vt source dist
 build-libghostty-vt:

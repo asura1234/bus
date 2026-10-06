@@ -26,7 +26,7 @@ pub(crate) struct OverlayRender {
 pub(crate) fn render_client_overlay(
     b: &mut Buffer,
     o: &ClientShellOverlay,
-    s: &ClientShellSnapshot,
+    _s: &ClientShellSnapshot,
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     k: &LiveKeybindConfig,
@@ -53,9 +53,7 @@ pub(crate) fn render_client_overlay(
         ClientShellOverlay::Navigator(v) => {
             render_navigator_overlay(b, v, endpoints, active_endpoint_id, p)
         }
-        ClientShellOverlay::Settings(v) => {
-            settings_overlay::render_settings_overlay(b, v, s.integration_updates_available, p)
-        }
+        ClientShellOverlay::Settings(v) => settings_overlay::render_settings_overlay(b, v, p),
         ClientShellOverlay::WorktreeCreate(v) => {
             worktree_overlays::render_worktree_create_overlay(b, v, p)
         }
