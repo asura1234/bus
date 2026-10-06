@@ -1,8 +1,6 @@
 #[derive(Debug, Clone, Default)]
 pub(crate) struct KittyKeyboardTracker {
     pending: Vec<u8>,
-    stack: Vec<u16>,
-    flags: u16,
     modify_other_keys_level: u8,
 }
 
@@ -32,8 +30,6 @@ impl KittyKeyboardTracker {
                 break;
             }
             if bytes[index + 1] == b'c' {
-                self.stack.clear();
-                self.flags = 0;
                 self.modify_other_keys_level = 0;
             }
             if bytes[index + 1] != b'[' {
@@ -51,7 +47,6 @@ impl KittyKeyboardTracker {
             }
 
             match bytes[end] {
-                b'u' => self.observe_csi_u(&bytes[index + 2..end]),
                 b'm' => self.observe_modify_other_keys(&bytes[index + 2..end]),
                 #[cfg(windows)]
                 b'n' if bytes[index + 2..end]
@@ -104,29 +99,6 @@ impl KittyKeyboardTracker {
             self.pending.extend_from_slice(bytes);
         }
     }
-
-    fn observe_csi_u(&mut self, params: &[u8]) {
-        let Some((&kind, rest)) = params.split_first() else {
-            return;
-        };
-        match kind {
-            b'>' => {
-                let flags = parse_kitty_keyboard_flags(rest);
-                self.stack.push(self.flags);
-                self.flags = flags;
-            }
-            b'=' => {
-                self.flags = parse_kitty_keyboard_flags(rest);
-            }
-            b'<' => {
-                let count = parse_kitty_keyboard_flags(rest).max(1);
-                for _ in 0..count {
-                    self.flags = self.stack.pop().unwrap_or(0);
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 fn parse_kitty_keyboard_flags(bytes: &[u8]) -> u16 {
@@ -149,8 +121,6 @@ mod tests {
         tracker.observe(b"01m\x1b[>5u\x1b[<");
         tracker.observe(b"u");
 
-        assert_eq!(tracker.flags, 1);
-        assert_eq!(tracker.stack, vec![0]);
         assert_eq!(tracker.modify_other_keys_level(), 1);
         #[cfg(windows)]
         {
@@ -163,12 +133,10 @@ mod tests {
     }
 
     #[test]
-    fn ris_clears_kitty_flags_stack_and_modify_other_keys() {
+    fn ris_clears_modify_other_keys() {
         let mut tracker = KittyKeyboardTracker::default();
         tracker.observe(b"\x1b[>1u\x1b[>5u\x1b[>4;2m\x1bc");
 
-        assert_eq!(tracker.flags, 0);
-        assert!(tracker.stack.is_empty());
         assert_eq!(tracker.modify_other_keys_level(), 0);
     }
 
