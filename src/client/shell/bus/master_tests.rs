@@ -81,7 +81,7 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
     ui.open_room(pr);
     let rows = sidebar_rows(&mut ui);
     assert_eq!(rows[0], "", "{rows:?}");
-    assert!(rows[1].starts_with("# MASTER"), "{rows:?}");
+    assert_eq!(rows[1], "# MASTER", "{rows:?}");
     assert_eq!(rows[2], "", "{rows:?}");
     assert!(
         rows[3].starts_with("ROOMS") && rows[3].ends_with('+'),
@@ -101,7 +101,7 @@ fn work_room_sidebar_lists_master_then_rooms_then_its_agents() {
     );
     assert!(!rows.iter().any(|row| row.starts_with("claude-orch")));
 
-    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1, 1]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1]);
     assert_eq!(hit_rows(&ui, render::Action::NewRoom), [3]);
     assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [5, 5]);
     assert_eq!(hit_rows(&ui, render::Action::Room(other)), [6, 6]);
@@ -119,7 +119,7 @@ fn master_sidebar_lists_its_agents_before_rooms() {
     ui.open_room(master);
     let rows = sidebar_rows(&mut ui);
     assert_eq!(rows[0], "", "{rows:?}");
-    assert!(rows[1].starts_with("# MASTER"), "{rows:?}");
+    assert_eq!(rows[1], "# MASTER", "{rows:?}");
     assert_eq!(rows[2], "", "{rows:?}");
     assert!(
         rows[3].starts_with("AGENTS") && rows[3].ends_with('+'),
@@ -139,7 +139,7 @@ fn master_sidebar_lists_its_agents_before_rooms() {
     // The open MASTER room never offers deletion.
     assert!(deletable_rooms(&ui).is_empty());
 
-    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1, 1]);
+    assert_eq!(hit_rows(&ui, render::Action::Room(master)), [1]);
     assert_eq!(hit_rows(&ui, render::Action::NewAgent), [3]);
     assert_eq!(
         hit_rows(&ui, render::Action::Agent(orchestrator)),
@@ -227,7 +227,8 @@ fn room_rows_show_status_and_truncate_long_names() {
     ui.open_room(other);
     let rows = sidebar_rows(&mut ui);
 
-    assert_eq!(rows[1], "# MASTER        Working", "{rows:?}");
+    // MASTER shows just its name, even while its orchestrator works.
+    assert_eq!(rows[1], "# MASTER", "{rows:?}");
     // The name gives way so the status fits.
     assert_eq!(rows[5], "# a-very-long-roo… Idle", "{rows:?}");
     assert_eq!(rows[6], "# pr-456        Blocked ×", "{rows:?}");
@@ -250,11 +251,8 @@ fn room_rows_show_status_and_truncate_long_names() {
         buffer[(blocked.x, blocked.y)].fg,
         ratatui::style::Color::Rgb(128, 44, 52)
     );
-    let working = status_hit(master);
-    assert_eq!(
-        buffer[(working.x, working.y)].fg,
-        ratatui::style::Color::Rgb(102, 255, 102)
-    );
+    assert_eq!(status_hit(master).x, 1, "MASTER has only its name hit");
+    assert!((10..25).all(|x| buffer[(x, 1)].symbol() == " "));
 }
 
 #[test]

@@ -758,9 +758,17 @@ impl BusUi {
             let Some(row) = sidebar_room_row(&self.snapshot.state, room.id, self.room) else {
                 continue;
             };
-            // The status sits left of the delete button, as on agent rows.
-            let right = status(self.snapshot.state.room_status(room.id));
-            let name_width = sw.saturating_sub(right.len() as u16 + 3);
+            // A work room's status sits left of its delete button, as on agent
+            // rows; MASTER shows just its name.
+            let right = match room.kind {
+                RoomKind::Work => status(self.snapshot.state.room_status(room.id)),
+                RoomKind::Master => "",
+            };
+            let name_width = if right.is_empty() {
+                sw.saturating_sub(2)
+            } else {
+                sw.saturating_sub(right.len() as u16 + 3)
+            };
             let rect = at(1, row, name_width);
             if rect.height == 0 {
                 continue;
@@ -781,14 +789,16 @@ impl BusUi {
                     false,
                 );
             }
-            let status_rect = at(
-                sidebar.width.saturating_sub(right.len() as u16 + 4),
-                row,
-                right.len() as u16,
-            );
-            view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
-            if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
-                view.color_last_row_characters(status_rect, colors);
+            if !right.is_empty() {
+                let status_rect = at(
+                    sidebar.width.saturating_sub(right.len() as u16 + 4),
+                    row,
+                    right.len() as u16,
+                );
+                view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
+                if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
+                    view.color_last_row_characters(status_rect, colors);
+                }
             }
             // MASTER is permanent, so it never offers a delete button.
             if Some(room.id) == self.room && room.kind == RoomKind::Work {
