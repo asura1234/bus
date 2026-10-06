@@ -1027,7 +1027,7 @@ impl App {
                 previous_workspace_id,
                 previous_tab_id,
                 pane,
-                Some(layout.clone()),
+                layout.clone(),
                 layout,
             );
         }
@@ -1061,7 +1061,7 @@ impl App {
                         previous_workspace_id,
                         previous_tab_id,
                         pane,
-                        Some(layout.clone()),
+                        layout.clone(),
                         layout,
                     );
                 }
@@ -1094,7 +1094,7 @@ impl App {
                         previous_workspace_id,
                         previous_tab_id,
                         pane,
-                        Some(source_layout),
+                        source_layout,
                         target_layout,
                     );
                 }
@@ -2278,7 +2278,7 @@ fn encode_unchanged_pane_move(
     previous_workspace_id: String,
     previous_tab_id: String,
     pane: PaneInfo,
-    source_layout: Option<PaneLayoutSnapshot>,
+    source_layout: PaneLayoutSnapshot,
     target_layout: PaneLayoutSnapshot,
 ) -> String {
     let focused_pane_id = target_layout.focused_pane_id.clone();
@@ -2292,7 +2292,7 @@ fn encode_unchanged_pane_move(
                 previous_workspace_id,
                 previous_tab_id,
                 pane: Box::new(pane),
-                source_layout: source_layout.map(Box::new),
+                source_layout: Some(Box::new(source_layout)),
                 target_layout: Box::new(target_layout),
                 created_workspace: None,
                 created_tab: None,
