@@ -486,7 +486,7 @@ impl RotatingFileState {
         if self.file.is_none() {
             self.open_current_file()?;
         }
-        if self.max_bytes == 0 || self.current_size.saturating_add(incoming_len) <= self.max_bytes {
+        if self.current_size.saturating_add(incoming_len) <= self.max_bytes {
             return Ok(());
         }
         self.rotate_files()?;
