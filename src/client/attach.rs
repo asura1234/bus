@@ -183,7 +183,7 @@ pub(super) fn direct_attach_pixel_mouse(
         return None;
     };
     Some((
-        crate::protocol::ClientMouseKind::from_crossterm(mouse.kind)?,
+        crate::protocol::ClientMouseKind::from_crossterm(mouse.kind),
         crate::protocol::ClientMousePosition::Pixels { x, y, column, row },
         mouse.modifiers.bits(),
     ))
@@ -218,7 +218,7 @@ fn attach_scroll_action(
                 })
             }
             kind => Some(AttachSemanticAction::Mouse {
-                kind: crate::protocol::ClientMouseKind::from_crossterm(kind)?,
+                kind: crate::protocol::ClientMouseKind::from_crossterm(kind),
                 position: crate::protocol::ClientMousePosition::Cell {
                     column: mouse.column,
                     row: mouse.row,

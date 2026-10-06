@@ -506,7 +506,7 @@ fn windows_client_input_event_from_raw(
         }
         crate::raw_input::RawInputEvent::Mouse(mouse) => {
             Some(crate::protocol::ClientInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::from_crossterm(mouse.kind)?,
+                kind: crate::protocol::ClientMouseKind::from_crossterm(mouse.kind),
                 column: mouse.column,
                 row: mouse.row,
                 modifiers: mouse.modifiers.bits(),

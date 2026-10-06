@@ -1038,7 +1038,7 @@ impl WindowsInputMapper {
         self.mouse_buttons = buttons;
 
         Some(crate::protocol::ClientInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::from_crossterm(kind)?,
+            kind: crate::protocol::ClientMouseKind::from_crossterm(kind),
             column: mouse.x,
             row: mouse.y,
             modifiers: windows_key_modifiers(mouse.control_key_state).bits(),

@@ -277,9 +277,9 @@ impl ClientMouseButton {
 }
 
 impl ClientMouseKind {
-    pub(crate) fn from_crossterm(kind: crossterm::event::MouseEventKind) -> Option<Self> {
+    pub(crate) fn from_crossterm(kind: crossterm::event::MouseEventKind) -> Self {
         use crossterm::event::MouseEventKind;
-        Some(match kind {
+        match kind {
             MouseEventKind::Down(button) => Self::Down(ClientMouseButton::from_crossterm(button)),
             MouseEventKind::Up(button) => Self::Up(ClientMouseButton::from_crossterm(button)),
             MouseEventKind::Drag(button) => Self::Drag(ClientMouseButton::from_crossterm(button)),
@@ -288,7 +288,7 @@ impl ClientMouseKind {
             MouseEventKind::ScrollDown => Self::ScrollDown,
             MouseEventKind::ScrollLeft => Self::ScrollLeft,
             MouseEventKind::ScrollRight => Self::ScrollRight,
-        })
+        }
     }
 
     pub(crate) fn to_crossterm(self) -> crossterm::event::MouseEventKind {
@@ -404,7 +404,7 @@ impl ClientInputEvent {
                 source: ClientKeySource::Synthesized,
             }),
             crossterm::event::Event::Mouse(mouse) => Some(Self::Mouse {
-                kind: ClientMouseKind::from_crossterm(mouse.kind)?,
+                kind: ClientMouseKind::from_crossterm(mouse.kind),
                 column: mouse.column,
                 row: mouse.row,
                 modifiers: mouse.modifiers.bits(),
