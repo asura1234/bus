@@ -7,7 +7,7 @@ pub mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -85,33 +85,6 @@ fn spawn_client_process(
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
-    spawn_client_process_with_args(config_home, runtime_dir, api_socket_path, &["client"])
-}
-
-fn spawn_client_shell_process(
-    config_home: &PathBuf,
-    runtime_dir: &PathBuf,
-    api_socket_path: &PathBuf,
-) -> SpawnedHerdr {
-    spawn_client_process_with_args(config_home, runtime_dir, api_socket_path, &["client"])
-}
-
-fn spawn_client_process_with_args(
-    config_home: &PathBuf,
-    runtime_dir: &PathBuf,
-    api_socket_path: &PathBuf,
-    args: &[&str],
-) -> SpawnedHerdr {
-    spawn_client_process_with_args_and_env(config_home, runtime_dir, api_socket_path, args, &[])
-}
-
-fn spawn_client_process_with_args_and_env(
-    config_home: &PathBuf,
-    runtime_dir: &PathBuf,
-    api_socket_path: &PathBuf,
-    args: &[&str],
-    extra_env: &[(&str, &str)],
-) -> SpawnedHerdr {
     register_runtime_dir(runtime_dir);
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -123,7 +96,7 @@ fn spawn_client_process_with_args_and_env(
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
-    cmd.args(args);
+    cmd.arg("client");
     cmd.env("HERDR_DISABLE_SOUND", "1");
     cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
     cmd.env("XDG_CONFIG_HOME", config_home);
@@ -135,9 +108,6 @@ fn spawn_client_process_with_args_and_env(
     cmd.env_remove("BUS_DATA_DIR");
     cmd.env_remove("BUS_SESSION_ID");
     cmd.env_remove("HERDR_SESSION");
-    for (key, value) in extra_env {
-        cmd.env(key, value);
-    }
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -149,17 +119,23 @@ fn spawn_client_process_with_args_and_env(
     }
 }
 
+fn spawn_client_shell_process(
+    config_home: &PathBuf,
+    runtime_dir: &PathBuf,
+    api_socket_path: &PathBuf,
+) -> SpawnedHerdr {
+    spawn_client_process(config_home, runtime_dir, api_socket_path)
+}
+
 fn spawn_server(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    client_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
     spawn_server_with_config(
         config_home,
         runtime_dir,
         api_socket_path,
-        client_socket_path,
         "onboarding = false\n",
     )
 }
@@ -168,7 +144,6 @@ fn spawn_server_with_config(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    _client_socket_path: &PathBuf,
     config: &str,
 ) -> SpawnedHerdr {
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
@@ -269,7 +244,7 @@ fn client_connects_and_receives_pane_surface() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -427,7 +402,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -592,7 +567,7 @@ fn attach_thin_client(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket: &PathBuf,
-    client_socket: &PathBuf,
+    client_socket: &Path,
 ) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
     attach_thin_client_with_config(
         config_home,
@@ -607,11 +582,10 @@ fn attach_thin_client_with_config(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket: &PathBuf,
-    client_socket: &PathBuf,
+    client_socket: &Path,
     config: &str,
 ) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
-    let spawned_server =
-        spawn_server_with_config(config_home, runtime_dir, api_socket, client_socket, config);
+    let spawned_server = spawn_server_with_config(config_home, runtime_dir, api_socket, config);
     wait_for_socket(api_socket, Duration::from_secs(10));
     wait_for_socket(client_socket, Duration::from_secs(10));
 
@@ -660,7 +634,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let mut server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let mut server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1072,7 +1046,7 @@ fn client_exits_cleanly_when_terminal_and_transport_hang_up() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let mut spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let mut spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1131,7 +1105,7 @@ fn client_exits_cleanly_when_terminal_hangs_up() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1178,7 +1152,7 @@ fn client_receives_pane_surface_after_pane_output() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1269,7 +1243,7 @@ fn pane_spawn_cwd_fallback_in_server() {
     )
     .unwrap();
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1333,7 +1307,7 @@ fn graceful_shutdown_sends_server_shutdown_to_client() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
