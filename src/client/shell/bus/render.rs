@@ -551,14 +551,15 @@ impl BusUi {
     }
 }
 
-/// Rows taken by the MASTER header, its room, and the gap before ROOMS.
-const MASTER_SECTION_ROWS: usize = 4;
+/// Rows taken by the MASTER room entry and the gap before ROOMS.
+const MASTER_SECTION_ROWS: usize = 2;
 
-/// The logical sidebar row of a room: MASTER sits alone above the ROOMS list.
+/// The logical sidebar row of a room: MASTER is the first entry, alone above
+/// the ROOMS list.
 pub(super) fn sidebar_room_row(state: &BusState, room: RoomId) -> Option<usize> {
     let master = state.master_room().map(|master| master.id);
     if master == Some(room) {
-        return Some(3);
+        return Some(1);
     }
     let first = if master.is_some() {
         3 + MASTER_SECTION_ROWS
@@ -661,7 +662,6 @@ impl BusUi {
             }
         };
         let rooms_header = if self.snapshot.state.master_room().is_some() {
-            view.row(at(1, 1, sw), "MASTER", None, false, true);
             1 + MASTER_SECTION_ROWS
         } else {
             1

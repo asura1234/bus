@@ -54,24 +54,29 @@ fn deletable_rooms(ui: &BusUi) -> Vec<RoomId> {
 }
 
 #[test]
-fn sidebar_puts_master_in_its_own_section_above_rooms() {
+fn sidebar_lists_master_first_without_a_header_above_rooms() {
     let (mut ui, master, pr, _, _) = master_fixture();
     // Work rooms stay the landing room; MASTER is not the default.
     assert_eq!(ui.room, Some(pr));
     ui.open_room(master);
     let rows = sidebar_rows(&mut ui);
-    assert!(rows[1].starts_with("MASTER"), "{rows:?}");
-    assert!(rows[3].starts_with("# MASTER"), "{rows:?}");
-    assert!(rows[5].starts_with("ROOMS"), "{rows:?}");
-    assert!(rows[5].ends_with('+'), "{rows:?}");
-    assert!(rows[7].starts_with("# pr-123 ◆"), "{rows:?}");
-    assert_eq!(rows[8], "# pr-456");
+    assert_eq!(rows[0], "", "{rows:?}");
+    assert!(rows[1].starts_with("# MASTER"), "{rows:?}");
+    assert_eq!(rows[2], "", "{rows:?}");
+    assert!(rows[3].starts_with("ROOMS"), "{rows:?}");
+    assert!(rows[3].ends_with('+'), "{rows:?}");
+    assert!(rows[5].starts_with("# pr-123 ◆"), "{rows:?}");
+    assert_eq!(rows[6], "# pr-456");
+    assert!(
+        !rows.iter().any(|row| row.trim() == "MASTER"),
+        "no MASTER section header: {rows:?}"
+    );
     // The open MASTER room never offers deletion.
     assert!(deletable_rooms(&ui).is_empty());
-    assert!(rows[9].starts_with('─'), "{rows:?}");
-    assert!(rows[10].starts_with("AGENTS"), "{rows:?}");
-    assert!(rows[12].starts_with("claude-orch"), "{rows:?}");
-    assert!(rows[13].starts_with("Claude Code → pr-123"), "{rows:?}");
+    assert!(rows[7].starts_with('─'), "{rows:?}");
+    assert!(rows[8].starts_with("AGENTS"), "{rows:?}");
+    assert!(rows[10].starts_with("claude-orch"), "{rows:?}");
+    assert!(rows[11].starts_with("Claude Code → pr-123"), "{rows:?}");
 }
 
 #[test]
@@ -89,9 +94,9 @@ fn work_rooms_keep_their_delete_button_and_row_hit_targets() {
             .find(|hit| hit.action == render::Action::Room(room))
             .map(|hit| hit.rect.y)
     };
-    assert_eq!(room_row(&ui, master), Some(3));
-    assert_eq!(room_row(&ui, pr), Some(7));
-    assert_eq!(room_row(&ui, other), Some(8));
+    assert_eq!(room_row(&ui, master), Some(1));
+    assert_eq!(room_row(&ui, pr), Some(5));
+    assert_eq!(room_row(&ui, other), Some(6));
 }
 
 #[test]
