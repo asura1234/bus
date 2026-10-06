@@ -292,14 +292,9 @@ impl Worker {
                             "Native terminal no longer carries the Bus managed name; left open");
                         return Ok(Some(left_open));
                     }
-                    if expected_session.is_some()
-                        && self.owned_terminal_session_moved(
-                            &left_open,
-                            kind,
-                            &managed_name,
-                            expected_session.as_deref(),
-                        )
-                    {
+                    if expected_session.as_deref().is_some_and(|expected| {
+                        self.owned_terminal_session_moved(&left_open, kind, &managed_name, expected)
+                    }) {
                         // The provider session in this agent's own terminal
                         // moved on, as after an agent clear the server did not
                         // record or a chat resumed by hand. No retry can pass
@@ -334,7 +329,7 @@ impl Worker {
         terminal: &LeftOpenTerminal,
         kind: &str,
         managed_name: &str,
-        expected: Option<&str>,
+        expected: &str,
     ) -> bool {
         let Ok(ResponseResult::AgentInfo { agent: info }) =
             self.transport
@@ -349,8 +344,7 @@ impl Worker {
             && info.name.as_deref() == Some(managed_name)
             && info.agent.as_deref() == Some(kind)
             && info.agent_session.is_some_and(|session| {
-                session.source == format!("herdr:{kind}")
-                    && Some(session.value.as_str()) != expected
+                session.source == format!("herdr:{kind}") && session.value != expected
             })
     }
 
@@ -410,13 +404,12 @@ impl Worker {
                 return Ok(());
             }
         }
-        let prepared = launch::prepare(
+        let mut prepared = launch::prepare(
             &input,
             id,
             &self.data_dir,
             &std::env::current_exe().map_err(|e| e.to_string())?,
         )?;
-        let mut prepared = prepared;
         let spool = self
             .data_dir
             .join("callbacks")
