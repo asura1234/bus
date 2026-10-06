@@ -124,10 +124,13 @@ fn option_line(full: &str) -> Option<OptionLine> {
         return None;
     }
     let number = rest[..digits].parse().ok()?;
-    let label = rest[digits..].strip_prefix(". ")?.trim();
-    if label.is_empty() {
+    let after_dot = rest[digits..].strip_prefix('.')?;
+    // `1.Yes` 不是选项；`1.` 或 `1. ` 是选项正文被折到下一行。
+    let wrapped = after_dot.trim().is_empty();
+    if !wrapped && !after_dot.starts_with([' ', '\t']) {
         return None;
     }
+    let label = after_dot.trim();
     // `label` is a slice of `line`, which is a slice of the screen line.
     let offset = label.as_ptr() as usize - full.as_ptr() as usize;
     Some(OptionLine {
@@ -247,6 +250,18 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
             if option.number as usize != options.len() + 1 {
                 break;
             }
+            // Codex 把放不下的选项正文折到下一行，编号行上只剩 `› 1.`。
+            if option.label.is_empty()
+                && !lines.get(index + 1).is_some_and(|next| {
+                    let text = unboxed(next);
+                    !text.trim().is_empty()
+                        && option_line(next).is_none()
+                        && !is_separator(text)
+                        && indentation(text) > option.column
+                })
+            {
+                break;
+            }
             option.line = index;
             options.push(option);
             end = index + 1;
@@ -269,7 +284,9 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
             break;
         }
         // A wrapped label continues deeper than its number.
-        last.label.push(' ');
+        if !last.label.is_empty() {
+            last.label.push(' ');
+        }
         last.label.push_str(text.trim());
         end = index + 1;
     }

@@ -163,6 +163,64 @@ fn codex_permission_question_trust_and_wrapped_dialogs() {
 }
 
 #[test]
+fn codex_expanded_question_form_is_read_on_the_first_parse() {
+    let screen = concat!(
+        "• Working (12s • esc to interrupt)\n\n",
+        "• Queued follow-up inputs\n\n",
+        "  Which storage?\n\n",
+        "  › 1. Redis\n",
+        "    2. Memory\n",
+        "    3. Other\n\n",
+        "  enter submit   ⌃] skip   ⇧→ main prompt\n",
+    );
+    let dialog = parse(screen).expect("expanded question");
+    assert_eq!(
+        labels(&dialog),
+        [
+            (1, "Redis", true),
+            (2, "Memory", false),
+            (3, "Other", false)
+        ]
+    );
+    assert_eq!(dialog.text.lines().last(), Some("Which storage?"));
+}
+
+#[test]
+fn codex_question_option_wrapped_under_its_number_is_still_the_dialog() {
+    let screen = concat!(
+        "• Queued follow-up inputs\n\n",
+        "  What next?\n\n",
+        "  › 1.\n",
+        "       ship the parser but do not deploy\n",
+        "    2. Other\n\n",
+        "  enter submit   ⌃] skip   ⇧→ main prompt\n",
+    );
+    let dialog = parse(screen).expect("wrapped option");
+    assert_eq!(
+        labels(&dialog),
+        [
+            (1, "ship the parser but do not deploy", true),
+            (2, "Other", false)
+        ]
+    );
+    assert_eq!(dialog.text.lines().last(), Some("What next?"));
+}
+
+#[test]
+fn codex_collapsed_question_banner_has_no_numbered_dialog() {
+    let screen = concat!(
+        "• Working (12s • esc to interrupt)\n\n",
+        "• Queued follow-up inputs\n\n",
+        "  ? 1 question\n",
+        "    ⇧← to answer\n\n",
+        "› Ask Codex to do anything\n",
+    );
+    assert_eq!(parse(screen), None, "{screen}");
+    let shift_left = screen.replace('⇧', "shift+").replace('←', "left");
+    assert_eq!(parse(&shift_left), None, "{shift_left}");
+}
+
+#[test]
 fn boxed_dialogs_parse_inside_their_borders() {
     let boxed = concat!(
         "╭──────────────────────────────╮\n",
