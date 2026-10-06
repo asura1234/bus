@@ -266,6 +266,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if (repo / "temp/gate-tools/python/bin/python").is_file() else sys.executable,
         )
         results = run_gates(gates, cwd=repo)
+        if (
+            _git_output(repo, "rev-parse", "HEAD") != head
+            or _git_output(repo, "status", "--porcelain", "--untracked-files=all")
+        ):
+            raise ValueError(
+                "HEAD or worktree changed while gates ran; discard this round and run on a clean committed tip"
+            )
         artifact_path = _write_artifact(
             Path(args.artifact_root).resolve(),
             round_number=args.round,

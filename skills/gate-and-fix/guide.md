@@ -11,6 +11,8 @@ replace `rebase-origin-main`, `update-docs`, or PR creation.
   `git status --porcelain --untracked-files=all`; any tracked or untracked change makes it exit
   with `2` without producing an artifact. The caller must obtain a clean worktree first; an
   in-repository artifact root must be ignored.
+- After all checks, the runner rechecks the worktree and HEAD before writing the artifact. A
+  concurrent edit or commit invalidates the round (`2`, no artifact), even if every command passed.
 - Never run the release build (`just build`), the live end-to-end check (`just e2e`), or manual UI
   acceptance. They need packaging or spend model usage, and belong to a dedicated skill or CI. State
   the cost plainly: problems that only those layers expose are no longer caught by this local round;

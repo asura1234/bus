@@ -314,6 +314,19 @@ class GateAndFixTest(unittest.TestCase):
             self.assertEqual(validate_round(first.read_text(encoding="utf-8"), expected_base=base), "PASS")
             self.assertEqual(validate_round(second.read_text(encoding="utf-8"), expected_base=base), "PASS")
 
+            def concurrent_edit(*args, **kwargs):
+                source.write_text("concurrent edit\n", encoding="utf-8")
+                return passing
+
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch("gate_and_fix.run_gates", side_effect=concurrent_edit), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = main(["--repo", str(repo), "--base", base, "--round", "3",
+                             "--artifact-root", str(artifact_root)])
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("changed while gates ran", stderr.getvalue())
+            self.assertEqual(len(list(artifact_root.glob("*.md"))), 2)
+
     def test_main_rejects_a_dirty_worktree_without_an_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
