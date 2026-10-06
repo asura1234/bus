@@ -135,7 +135,7 @@ again on resume:
 | Provider | Delivery |
 | --- | --- |
 | Claude Code | `--append-system-prompt-file`, added to Claude Code's default prompt |
-| Codex | `-c developer_instructions=...`, a developer message beside Codex's base instructions |
+| Codex | `-c developer_instructions=...`, a developer message beside Codex's base instructions that points Codex at the prompt file, so the launch command Bus types stays short |
 | Cursor | No launch option exists, so Bus sends the prompt as the agent's first message |
 
 The prompt is kept in the launch's callback folder as `system-prompt.md`. A new

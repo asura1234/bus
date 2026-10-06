@@ -129,10 +129,17 @@ pub(crate) fn prompt_args(
         // with and ignores new ones, so an adopted thread gets a message.
         Provider::Codex if adopted => None,
         // Codex adds developer_instructions as a developer message beside its
-        // base instructions. It has no file variant, so the text goes inline as
-        // a one-line TOML string (JSON string escapes are valid TOML).
+        // base instructions. It has no file variant, and Bus types the launch
+        // command into the pane's shell, where a prompt-sized line can take
+        // minutes to echo before Enter. So the message only points at the file,
+        // as a one-line TOML string (JSON string escapes are valid TOML).
         Provider::Codex => {
-            let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+            let text = format!(
+                "You are a Bus orchestrator. Your system prompt is the file {}. \
+                 Read all of it before you act on any message, and follow it for the \
+                 whole session.",
+                path.display()
+            );
             let value = serde_json::to_string(&text).map_err(|e| e.to_string())?;
             Some(vec!["-c".into(), format!("developer_instructions={value}")])
         }

@@ -77,9 +77,17 @@ fn each_provider_gets_its_own_prompt_delivery() {
     assert_eq!(codex[0], "-c");
     let value = codex[1].strip_prefix("developer_instructions=").unwrap();
     assert!(!value.contains('\n'), "one typed line: {value}");
-    // The value parses as a TOML string back to the exact prompt.
+    // The value parses as a TOML string that points at the prompt file, so the
+    // typed launch command stays short however long the prompt is.
     let parsed: toml::Value = toml::from_str(&format!("v = {value}")).unwrap();
-    assert_eq!(parsed["v"].as_str(), Some("Line \"one\".\nLine two."));
+    let instructions = parsed["v"].as_str().unwrap();
+    assert!(
+        instructions.contains(&*path.to_string_lossy()),
+        "{instructions}"
+    );
+    let long = write_prompt(&spool, &"Orchestrate the room. ".repeat(400)).unwrap();
+    let long = prompt_args(Provider::Codex, &long, false).unwrap().unwrap();
+    assert!(long[1].len() < 400, "{} bytes typed", long[1].len());
     assert_eq!(prompt_args(Provider::Cursor, &path, false).unwrap(), None);
 
     assert_eq!(resume_prompt_args(Provider::Codex, &spool).unwrap(), codex);
