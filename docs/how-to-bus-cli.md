@@ -115,30 +115,32 @@ orchestrator_id=$(bus agent add \
   --room master \
   --name "claude-orch" \
   --provider claude \
+  --pwd "$(pwd)" \
   --orchestrates "$room_id" \
   | jq -r '.result.agent_id')
 ```
 
-A MASTER agent works in its own folder, outside every repository. Without
-`--pwd`, Bus creates `<BUS_DATA_DIR>/orchestrators/NAME/` owner-only (`0700`)
-and writes there:
-
-- the system prompt as both `CLAUDE.md` and `AGENTS.md`, which Claude Code,
-  Codex and Cursor read from their working folder, so no launch flags are needed;
-- the `workflow-create` skill under `.claude/skills/` (Claude Code) and
-  `.agents/skills/` (Codex and Cursor).
-
-The prompt defaults to Bus's built-in orchestrator prompt
+The PWD works as for any agent; Bus writes nothing into it. Every MASTER agent
+launches with an orchestrator system prompt, by default Bus's built-in one
 (`src/bus/prompts/orchestrator.md` in the Bus repository). Replace it with
 `--system-prompt TEXT` or `--system-prompt-file PATH`. Bus fills in
 `{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}` and `{{DOCS}}`, the folder
-`<BUS_DATA_DIR>/docs/` where Bus writes the docs the prompt links to (this guide,
-the orchestrator guide, the workflow template and example workflows). With
-`--pwd PATH`, the folder must exist and Bus refuses to replace a `CLAUDE.md` or
-`AGENTS.md` it did not write there.
+`<BUS_DATA_DIR>/docs/` where Bus writes the docs the prompt links to: this
+guide, the orchestrator guide, `workflow-create.md`, the workflow template and
+example workflows.
 
-The first launch in a new folder shows the provider's "trust this folder"
-prompt. Answer it in the agent's terminal; Bus does not pre-trust folders.
+Bus delivers the prompt with each provider's own launch option and passes it
+again on resume:
+
+| Provider | Delivery |
+| --- | --- |
+| Claude Code | `--append-system-prompt-file`, added to Claude Code's default prompt |
+| Codex | `-c developer_instructions=...`, a developer message beside Codex's base instructions |
+| Cursor | No launch option exists, so Bus sends the prompt as the agent's first message |
+
+The prompt is kept in the launch's callback folder as `system-prompt.md`. A new
+PWD can show the provider's "trust this folder" prompt on first launch; answer
+it in the agent's terminal. Bus does not pre-trust folders.
 
 Reassign or unassign it later:
 
@@ -147,12 +149,11 @@ bus agent orchestrate "$orchestrator_id" --room "$other_room_id"
 bus agent orchestrate "$orchestrator_id" --none
 ```
 
-Reassigning re-fills the room in `CLAUDE.md` and `AGENTS.md`, each only while it
-is still exactly what Bus wrote. An edited file, or a prompt without
-placeholders, is kept as is, and the result's `notice` says so.
+The system prompt is fixed at launch, so Bus sends the orchestrator a message
+naming its new room, or saying it has none.
 
 The generic forms are `agent add --room master ... [--orchestrates ROOM]
-[--system-prompt TEXT | --system-prompt-file PATH] [--pwd PATH]` and
+[--system-prompt TEXT | --system-prompt-file PATH]` and
 `agent orchestrate AGENT (--room ROOM | --none)`. Only agents in MASTER can
 orchestrate. Assigning a second orchestrator to the same room fails until the
 first is unassigned. Deleting a work room leaves its orchestrator in MASTER,

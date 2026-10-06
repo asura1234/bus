@@ -30,16 +30,15 @@ while MASTER is open) or the CLI:
 
 ```sh
 bus agent add --room MASTER --name claude-orch --provider claude \
-  --orchestrates "$room_id"
+  --pwd "$(pwd)" --orchestrates "$room_id"
 ```
 
-You work in your own folder, `<BUS_DATA_DIR>/orchestrators/claude-orch/`, outside
-every repository. Bus writes your instructions there as `CLAUDE.md` and
-`AGENTS.md`, and the `workflow-create` skill under `.claude/skills/` and
-`.agents/skills/`. Keep the room's `workflow.md` in this folder too. The first
-launch shows the provider's "trust this folder" prompt; the human answers it in
-your terminal. Reassigning you to another room updates the room in your
-instructions unless the human edited them.
+Bus launches you with an orchestrator system prompt (editable in the TUI form,
+or `--system-prompt`/`--system-prompt-file`) that names your room and points to
+the Bus docs in `<BUS_DATA_DIR>/docs/`. Bus writes nothing into your PWD. A new
+PWD may show the provider's "trust this folder" prompt on first launch; the
+human answers it in your terminal. If the human reassigns you, Bus sends you a
+message naming your new room.
 
 On your first turn:
 
@@ -56,9 +55,10 @@ bus send --room "$room_id" --as claude-orch --to claude-dev --text "..."
 
 ## The workflow file
 
-Each room has a `workflow.md`, a living plan the orchestrator keeps in its
-folder. Start from [the workflow template](templates/workflow-template.md) and the
-[example workflows](workflows/), with the `workflow-create` skill: goal,
+Each room has a workflow file, a living plan the orchestrator keeps. Follow
+[workflow-create](workflow-create.md) (in the Bus docs folder) and start from
+[the workflow template](templates/workflow-template.md) and the
+[example workflows](workflows/): goal,
 non-goals, a mermaid graph of the steps, participants, gates, coordination
 rules, decision rules, and a log.
 
@@ -80,7 +80,7 @@ The human watches many rooms. Keep the room notes short and current, so one
 look tells them the state:
 
 ```sh
-bus room notes "$room_id" --text "Workflow: ~/bus-data/orchestrators/claude-orch/workflow.md
+bus room notes "$room_id" --text "Workflow: ~/bus-data/workflows/pr-123.md
 Now: review round 2 (claude-review, codex-review)
 Waiting on: human regression test
 Decided: dropped the RN gallery lib, using native list (benchmarks)"
