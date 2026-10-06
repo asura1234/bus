@@ -428,9 +428,27 @@ it is fully in view and no dialog covers the history.
 Agents run with their normal settings, so they stop at numbered choice dialogs:
 permission prompts, folder-trust prompts, and question panels such as Claude
 Code's `❯ 1. Yes / 2. Yes, and don't ask again / 3. No` or Codex's
-`› 1. Yes, proceed (y)`. `bus state` marks such an agent `dialog: true`.
-Observe the dialog, decide, then choose one option with the fingerprint you
-observed:
+`› 1. Yes, proceed (y)`. Bus finds any numbered option list on an agent's screen
+and the selected option, marked by `›`, `>`, `❯` or similar, or drawn
+highlighted. `bus state` marks such an agent `dialog: true`.
+
+Bus tells someone without being asked. Once a dialog has been on screen for
+about a second, Bus sends the room's orchestrator a message in MASTER, delivered
+like any other message: the agent, the room, the question, the numbered options
+with the selected one marked, and the exact `bus agent choose` command with a
+fresh fingerprint. A room without an orchestrator gets the same text as a Bus
+notice in the room itself, for the Human. Each dialog is reported once, a
+blocked screen without a readable dialog is reported with the `agent read`
+command to inspect it, and a short follow-up says when a reported dialog closed
+without an answer through Bus.
+
+`wait` stops early with the error code `agent_waiting_on_dialog` and the last
+status when a recipient that has not replied shows a dialog or a blocked
+screen; `message status` lists such recipients in `waiting_on_dialog`. Answer
+the dialog, then wait again.
+
+To answer, observe the dialog, decide, then choose one option with the
+fingerprint from the notice or from `agent dialog`:
 
 ```sh
 bus agent dialog "$agent_id"
@@ -445,10 +463,10 @@ It works while the agent is still launching, before its session starts.
 `agent choose AGENT --option N --fingerprint FINGERPRINT` sends keys only while
 the agent's launch, terminal, pane, and session (once bound) are unchanged and
 its screen still shows exactly the observed dialog, including which option is
-selected. It moves the selection with arrow keys from the selected option and
-presses Enter, or presses the digit when the dialog's hint advertises number
-keys. A fingerprint is spent before any key is sent, so it answers at most one
-dialog; observe again for a fresh one. The result lists the `keys` sent and an
+selected. It presses Up or Down from the selected option to option N, then
+Enter; it never types digits or letter shortcuts. A fingerprint is spent before
+any key is sent, so it answers at most one dialog; observe again for a fresh
+one. The result lists the `keys` sent and an
 `outcome` from watching the screen for up to two seconds: `closed`, `replaced`
 (another dialog appeared), `selection_moved` (the selection changed but the
 dialog stayed), or `unchanged`. Nothing is sent when no dialog is visible, the

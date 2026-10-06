@@ -140,12 +140,13 @@ A typical PR review loop, run by the orchestrator:
 
 ## Unblock agents
 
-- **Dialogs:** agents stop at permission, trust and question dialogs.
-  `bus state` marks them `dialog: true`. Read the dialog with
-  `bus agent dialog AGENT`, decide, and answer it with
-  `bus agent choose AGENT --option N --fingerprint F`. Check the reported
-  `outcome`. Ask the human before approving anything destructive or
-  outward-facing.
+- **Dialogs:** agents stop at permission, trust and question dialogs. Bus
+  sends you a message for each one: the question, the options with the
+  selected one marked, and the `bus agent choose AGENT --option N --fingerprint F`
+  command to answer it. `bus wait` also stops early with
+  `agent_waiting_on_dialog`. Decide, answer, and check the reported `outcome`;
+  if the fingerprint is stale, run `bus agent dialog AGENT` for a fresh one.
+  Ask the human before approving anything destructive or outward-facing.
 - **Stuck requests:** check `bus message status`, `bus diagnostics` and
   `bus agent read` before `bus request recover`.
 - **Delivery is not completion.** Wait for `complete: true` from `bus wait` or
