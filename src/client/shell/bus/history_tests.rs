@@ -1221,11 +1221,13 @@ fn iterm2_draws_the_picture_at_its_reserved_rows() {
     );
     assert!(graphics.contains(";width=20;height=4;"));
     assert!(!ui.full_repaint, "first draw needs no repaint");
+    ui.graphics_presented(false);
     assert!(ui.thumbnail_graphics().is_empty(), "unchanged frame");
 
     // Switching screens repaints every cell, so the image is drawn again.
     ui.full_repaint = true;
     assert!(!ui.thumbnail_graphics().is_empty());
+    ui.graphics_presented(false);
 
     // A cover hides it: the client repaints to erase the image cells.
     ui.full_repaint = false;
@@ -1251,5 +1253,46 @@ fn without_an_image_protocol_the_name_row_is_still_clickable() {
     assert_eq!(caption.action, Some(render::Action::FileDetail(image)));
     assert!(lines.iter().all(|line| line.thumbnail.is_none()));
     assert!(ui.thumbnail_graphics().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn images_saved_before_a_restart_draw_after_dropped_or_cleared_frames() {
+    // A fresh client (as after `resume`) opens history that already holds an
+    // image; its first frames can be dropped while presentation is frozen.
+    let dir = thumbnail_dir("resume");
+    let image = png(&dir, "earlier.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.graphics = Some(super::thumbnails::Protocol::Kitty);
+    ui.thumbnails
+        .set_protocol(super::thumbnails::Protocol::Kitty);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+    let draws = |graphics: &[u8]| {
+        let text = String::from_utf8_lossy(graphics);
+        (text.contains("a=t,"), text.contains("a=p,"))
+    };
+
+    // The first frame is composed but never written.
+    assert_eq!(draws(&ui.thumbnail_graphics()), (true, true));
+    ui.compute_view(100, 40);
+    assert_eq!(
+        draws(&ui.thumbnail_graphics()),
+        (true, true),
+        "a dropped frame is sent again: upload and placement"
+    );
+
+    // Once the client confirms the write, nothing is resent.
+    ui.graphics_presented(false);
+    ui.compute_view(100, 40);
+    assert!(ui.thumbnail_graphics().is_empty());
+    ui.graphics_presented(false);
+
+    // A screen clear (first frame, resize) wipes placements: draw again.
+    ui.graphics_presented(true);
+    assert!(ui.thumbnails.stale(), "the next tick recomposes");
+    ui.compute_view(100, 40);
+    assert_eq!(draws(&ui.thumbnail_graphics()), (true, true));
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -29,6 +29,13 @@ impl super::ClientShellState {
         }
     }
 
+    /// The client wrote a frame, clearing the screen first when `cleared`.
+    pub(crate) fn bus_frame_presented(&mut self, cleared: bool) {
+        if let Some(bus) = self.bus.as_mut() {
+            bus.graphics_presented(cleared);
+        }
+    }
+
     /// The client repainted every cell without drawing Bus graphics in that
     /// frame, which erases iTerm2 images; draw them again.
     pub(crate) fn bus_graphics_erased(&mut self) {

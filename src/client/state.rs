@@ -189,6 +189,7 @@ impl ClientState {
         } else {
             frame_data
         };
+        let cleared = self.blit_encoder.clears_before(&frame_data);
         let encoded = if self.draw_host_cursor {
             self.blit_encoder
                 .encode_with_suppressed_visible_cursor(&frame_data, self.repaint_pending)
@@ -208,6 +209,9 @@ impl ClientState {
         }
         let _ = write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics);
         let _ = stdout.flush();
+        if let Some(shell) = self.shell.as_mut() {
+            shell.bus_frame_presented(cleared);
+        }
         self.blit_encoder.commit(frame_data, encoded);
         self.repaint_pending = false;
     }

@@ -1025,6 +1025,11 @@ impl BusUi {
     /// A full repaint of this frame erases iTerm2 images, so they are drawn
     /// again after it; moving or removing them asks for that repaint.
     pub fn thumbnail_graphics(&mut self) -> Vec<u8> {
+        // The last thumbnail bytes never reached the terminal (the frame was
+        // dropped), so it may lack images Bus believes it sent.
+        if std::mem::take(&mut self.graphics_unconfirmed) {
+            self.thumbnails.forget_terminal();
+        }
         if self.full_repaint {
             self.thumbnails.invalidate();
         }
@@ -1032,7 +1037,17 @@ impl BusUi {
         if self.thumbnails.take_repaint() {
             self.full_repaint = true;
         }
+        self.graphics_unconfirmed = !graphics.is_empty();
         graphics
+    }
+
+    /// The client wrote the latest frame. `cleared` when it cleared the screen
+    /// first, which removes images placed by earlier frames.
+    pub fn graphics_presented(&mut self, cleared: bool) {
+        self.graphics_unconfirmed = false;
+        if cleared {
+            self.thumbnails.forget_terminal();
+        }
     }
     fn room_view(&mut self, view: &mut View, main: Rect) {
         let Some(room) = self.room.and_then(|id| self.snapshot.state.room(id)) else {

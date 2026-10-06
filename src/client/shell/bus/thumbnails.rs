@@ -58,8 +58,10 @@ pub(super) struct Thumbnails {
     dims: HashMap<PathBuf, Option<(u32, u32)>>,
     /// Image id per decoded size, or None when the file cannot be decoded.
     images: HashMap<(PathBuf, u16, u16), Option<u32>>,
-    /// Decoded thumbnails not yet sent to the terminal.
-    pending_upload: HashMap<u32, Vec<u8>>,
+    /// Decoded thumbnail PNGs per image id, kept so an image can be sent again
+    /// after the terminal lost it without decoding the file again.
+    decoded: HashMap<u32, Vec<u8>>,
+    /// Image ids the terminal holds, as far as delivered frames tell.
     uploaded: HashSet<u32>,
     /// Placements drawn by the last encoded frame: image id, placement id.
     shown: Vec<(u32, u32, Placement)>,
@@ -71,6 +73,9 @@ pub(super) struct Thumbnails {
     stale: bool,
     /// iTerm2: shown images moved or went away; their cells need repainting.
     repaint: bool,
+    /// Kitty placements that may still be on screen after the terminal state
+    /// was forgotten; deleted unless the next frame places them again.
+    forgotten: Vec<(u32, u32)>,
 }
 
 impl Thumbnails {
@@ -78,7 +83,7 @@ impl Thumbnails {
         if protocol != self.protocol {
             self.protocol = protocol;
             self.images.clear();
-            self.pending_upload.clear();
+            self.decoded.clear();
             self.inline_data.clear();
         }
     }
@@ -89,6 +94,24 @@ impl Thumbnails {
         if self.protocol == Protocol::Iterm2 && !self.shown.is_empty() {
             self.stale = true;
         }
+    }
+
+    /// The terminal may not hold what earlier frames sent: a composed frame
+    /// was never written (presentation was frozen), or the screen was cleared.
+    /// Upload and place every visible image again with the next frame, and
+    /// delete placements that may linger.
+    pub fn forget_terminal(&mut self) {
+        if self.uploaded.is_empty() && self.shown.is_empty() {
+            return;
+        }
+        self.uploaded.clear();
+        if self.protocol == Protocol::Iterm2 && !self.shown.is_empty() {
+            // Inline images live in cells; repaint them away before redrawing.
+            self.repaint = true;
+        }
+        self.forgotten
+            .extend(self.shown.drain(..).map(|(id, copy, _)| (id, copy)));
+        self.stale = true;
     }
 
     /// Whether erased images wait to be drawn again.
@@ -109,7 +132,7 @@ impl Thumbnails {
             // Thumbnails are rendered for one cell size; resize them.
             self.cell = cell;
             self.images.clear();
-            self.pending_upload.clear();
+            self.decoded.clear();
             self.inline_data.clear();
         }
     }
@@ -149,7 +172,7 @@ impl Thumbnails {
                     let id = self.next_image_id();
                     let data = thumbnail_png(&placement.path, cell, placement.cols, placement.rows);
                     let id = data.map(|data| {
-                        self.pending_upload.insert(id, data);
+                        self.decoded.insert(id, data);
                         id
                     });
                     self.images.insert(key, id);
@@ -163,13 +186,23 @@ impl Thumbnails {
             next.push((id, *copy, placement.clone()));
         }
         if self.protocol == Protocol::Iterm2 {
+            self.forgotten.clear();
             return self.encode_inline(next);
         }
-        if next == self.shown {
+        self.stale = false;
+        if next == self.shown && self.forgotten.is_empty() {
             return Vec::new();
         }
         let mut out = Vec::new();
         out.extend_from_slice(b"\x1b7");
+        for (id, copy) in std::mem::take(&mut self.forgotten) {
+            if !next
+                .iter()
+                .any(|(next_id, next_copy, _)| (*next_id, *next_copy) == (id, copy))
+            {
+                encode_delete_placement(&mut out, id, copy);
+            }
+        }
         // A moved placement is re-placed under the same ids, which Kitty
         // graphics define as a flicker-free move; only placements that are
         // gone are deleted.
@@ -185,9 +218,11 @@ impl Thumbnails {
             if self.shown.contains(&(*id, *copy, placement.clone())) {
                 continue;
             }
-            if let Some(data) = self.pending_upload.remove(id) {
-                encode_quiet_upload(&mut out, *id, &data);
-                self.uploaded.insert(*id);
+            if !self.uploaded.contains(id) {
+                if let Some(data) = self.decoded.get(id) {
+                    encode_quiet_upload(&mut out, *id, data);
+                    self.uploaded.insert(*id);
+                }
             }
             if !self.uploaded.contains(id) {
                 continue;
@@ -223,11 +258,13 @@ impl Thumbnails {
         }
         out.extend_from_slice(b"\x1b7");
         for (id, _, placement) in &next {
-            if let Some(data) = self.pending_upload.remove(id) {
-                self.inline_data.insert(
-                    *id,
-                    encode_inline_image(&data, placement.cols, placement.rows),
-                );
+            if !self.inline_data.contains_key(id) {
+                if let Some(data) = self.decoded.get(id) {
+                    self.inline_data.insert(
+                        *id,
+                        encode_inline_image(data, placement.cols, placement.rows),
+                    );
+                }
             }
             if let Some(command) = self.inline_data.get(id) {
                 let _ = write!(
@@ -244,7 +281,9 @@ impl Thumbnails {
     }
 
     fn clear(&mut self) -> Vec<u8> {
-        if self.shown.is_empty() {
+        self.stale = false;
+        let forgotten = std::mem::take(&mut self.forgotten);
+        if self.shown.is_empty() && (forgotten.is_empty() || self.protocol == Protocol::Iterm2) {
             return Vec::new();
         }
         if self.protocol == Protocol::Iterm2 {
@@ -254,7 +293,10 @@ impl Thumbnails {
             return Vec::new();
         }
         let mut out = Vec::new();
-        for (id, copy, _) in self.shown.drain(..) {
+        for (id, copy) in forgotten
+            .into_iter()
+            .chain(self.shown.drain(..).map(|(id, copy, _)| (id, copy)))
+        {
             encode_delete_placement(&mut out, id, copy);
         }
         out
@@ -512,6 +554,36 @@ mod tests {
         let hidden = String::from_utf8(thumbnails.encode(&[])).unwrap();
         assert!(hidden.contains("p=1") && hidden.contains("p=2"));
         assert!(!hidden.contains("a=p"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn forgetting_the_terminal_resends_visible_images_and_deletes_the_rest() {
+        let dir = scratch("forget");
+        let path: Arc<Path> = Arc::from(write_png(&dir, "shot.png", (40, 40)).as_path());
+        let mut thumbnails = Thumbnails::default();
+        thumbnails.set_cell(Some(CELL));
+        let at = |y| Placement {
+            path: Arc::clone(&path),
+            x: 3,
+            y,
+            cols: 4,
+            rows: 2,
+        };
+        assert!(!thumbnails.encode(&[at(5)]).is_empty());
+
+        // Still visible: uploaded and placed again under the same ids.
+        thumbnails.forget_terminal();
+        let again = String::from_utf8(thumbnails.encode(&[at(5)])).unwrap();
+        assert!(again.contains("a=t,t=d,f=100,i=1112866816,"), "{again}");
+        assert!(again.contains("\x1b[6;4H\x1b_Ga=p,i=1112866816,p=1,"));
+        assert!(!again.contains("a=d"), "{again}");
+
+        // Gone from view: the lingering placement is deleted.
+        thumbnails.forget_terminal();
+        let gone = String::from_utf8(thumbnails.encode(&[])).unwrap();
+        assert!(gone.contains("a=d,d=i,i=1112866816,p=1"), "{gone}");
+        assert!(thumbnails.encode(&[]).is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

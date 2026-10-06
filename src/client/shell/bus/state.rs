@@ -150,6 +150,8 @@ pub(in crate::client::shell) struct BusUi {
     /// The client presents Kitty graphics and the host terminal draws them.
     /// The host's image protocol, or None when thumbnails are not drawn.
     pub(super) graphics: Option<super::thumbnails::Protocol>,
+    /// Thumbnail bytes were composed but the client has not written them yet.
+    pub(super) graphics_unconfirmed: bool,
     /// Region receiving the current left-button drag, if it started a selection.
     pub(super) drag: Option<super::selection::Region>,
     /// History selection as (anchor, head); editor selections live in `Editor`.
@@ -235,6 +237,7 @@ impl BusUi {
             view_key: None,
             full_repaint: false,
             graphics: None,
+            graphics_unconfirmed: false,
             drag: None,
             history_selection: None,
             recipient_scroll: 0,

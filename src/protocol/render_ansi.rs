@@ -133,6 +133,14 @@ impl BlitEncoder {
         }
     }
 
+    /// Whether encoding `frame` next clears the screen first: the first frame
+    /// and any size change do.
+    pub(crate) fn clears_before(&self, frame: &FrameData) -> bool {
+        self.last_frame
+            .as_ref()
+            .is_none_or(|last| last.width != frame.width || last.height != frame.height)
+    }
+
     /// Forgets the presented frame, so the next one clears the screen and
     /// redraws every cell. A host resize can leave cells the encoder never
     /// drew (Terminal.app keeps text beyond a narrowed edge), even when the
