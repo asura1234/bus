@@ -481,22 +481,6 @@ impl AppState {
         true
     }
 
-    #[cfg(test)]
-    pub fn switch_tab(&mut self, idx: usize) {
-        if let Some(ws_idx) = self.active {
-            let previous_focus = self.current_pane_focus_target();
-            let Some(ws) = self.workspaces.get_mut(ws_idx) else {
-                return;
-            };
-            ws.switch_tab(idx);
-            let workspace_id = ws.id.clone();
-            let tab_id = public_tab_id_for_index(ws, idx).unwrap_or_else(|| workspace_id.clone());
-            crate::logging::tab_focused(&workspace_id, &tab_id);
-            self.mark_session_dirty();
-            self.record_pane_focus_after_navigation(previous_focus);
-        }
-    }
-
     pub(crate) fn mark_active_tab_seen(&mut self) -> bool {
         let Some(ws_idx) = self.active else {
             return false;
@@ -912,46 +896,6 @@ impl AppState {
             self.close_selected_workspace();
         } else {
             self.remove_unattached_terminal_ids(terminal_ids);
-        }
-        false
-    }
-
-    #[cfg(test)]
-    /// Close the active tab. Returns true when the close was deferred to confirmation.
-    pub fn close_tab(&mut self) -> bool {
-        self.mark_session_dirty();
-        let should_close_workspace = self
-            .active
-            .and_then(|i| self.workspaces.get(i))
-            .is_some_and(|ws| ws.tabs.len() <= 1);
-        if should_close_workspace {
-            if let Some(active) = self.active {
-                self.selected = active;
-            }
-            self.close_selected_workspace();
-            return false;
-        }
-        if let Some(ws_idx) = self.active {
-            let terminal_ids = self
-                .workspaces
-                .get(ws_idx)
-                .map(|ws| self.terminal_ids_for_tab(ws_idx, ws.active_tab))
-                .unwrap_or_default();
-            let pane_ids = self
-                .workspaces
-                .get(ws_idx)
-                .map(|ws| self.pane_ids_for_tab(ws_idx, ws.active_tab))
-                .unwrap_or_default();
-            let Some(ws) = self.workspaces.get_mut(ws_idx) else {
-                return false;
-            };
-            let workspace_id = ws.id.clone();
-            let closing_tab_id =
-                public_tab_id_for_index(ws, ws.active_tab).unwrap_or_else(|| workspace_id.clone());
-            ws.close_active_tab();
-            self.forget_closed_pane_focus(pane_ids);
-            self.remove_unattached_terminal_ids(terminal_ids);
-            crate::logging::tab_closed(&workspace_id, &closing_tab_id);
         }
         false
     }
@@ -3464,20 +3408,6 @@ mod tests {
     }
 
     #[test]
-    fn close_tab_removes_unattached_terminal_states() {
-        let mut state = app_with_workspaces(&["test"]);
-        let tab_idx = state.workspaces[0].test_add_tab(Some("logs"));
-        state.ensure_test_terminals();
-        state.workspaces[0].switch_tab(tab_idx);
-        let pane_id = state.workspaces[0].tabs[tab_idx].root_pane;
-        let terminal_id = state.terminal_id_for_pane(0, pane_id).unwrap();
-        state.close_tab();
-
-        assert!(!state.terminals.contains_key(&terminal_id));
-        state.assert_invariants_for_test();
-    }
-
-    #[test]
     fn close_workspace_removes_unattached_terminal_states() {
         let mut state = app_with_workspaces(&["one", "two"]);
         let pane_id = state.workspaces[0].tabs[0].root_pane;
@@ -3485,23 +3415,6 @@ mod tests {
         state.close_selected_workspace();
 
         assert!(!state.terminals.contains_key(&terminal_id));
-        state.assert_invariants_for_test();
-    }
-
-    #[test]
-    fn close_tab_closes_active_workspace_not_selected_workspace() {
-        let mut state = app_with_workspaces(&["selected", "active"]);
-        let active_terminal_id = state
-            .terminal_id_for_pane(1, state.workspaces[1].tabs[0].root_pane)
-            .unwrap();
-        state.active = Some(1);
-        state.selected = 0;
-
-        state.close_tab();
-
-        assert_eq!(state.workspaces.len(), 1);
-        assert_eq!(state.workspaces[0].display_name(), "selected");
-        assert!(!state.terminals.contains_key(&active_terminal_id));
         state.assert_invariants_for_test();
     }
 

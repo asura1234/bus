@@ -160,6 +160,7 @@ impl App {
         terminal_id: &crate::terminal::TerminalId,
         rows: u16,
         cols: u16,
+        allow_empty_theme: bool,
     ) -> bool {
         if self.terminal_runtimes.get(terminal_id).is_some() {
             return false;
@@ -190,7 +191,7 @@ impl App {
             plan,
             rows,
             cols,
-            true,
+            allow_empty_theme,
         );
         if changed {
             self.schedule_session_save();

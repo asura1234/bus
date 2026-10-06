@@ -167,6 +167,8 @@ impl ClientWriter {
 #[derive(Debug)]
 pub(crate) struct ClientControlWriter {
     queue: Arc<ClientWriterQueue>,
+    #[cfg(test)]
+    test_render: Option<std::sync::mpsc::SyncSender<Vec<u8>>>,
 }
 
 #[derive(Debug)]
@@ -177,16 +179,14 @@ pub(crate) struct ClientRenderWriter {
 }
 
 macro_rules! writer_handle {
-    ($type:ty $(, $test_field:ident)?) => {
+    ($type:ty) => {
         impl Clone for $type {
             fn clone(&self) -> Self {
                 self.queue.add_sender();
                 Self {
                     queue: self.queue.clone(),
-                    $(
-                        #[cfg(test)]
-                        $test_field: self.$test_field.clone(),
-                    )?
+                    #[cfg(test)]
+                    test_render: self.test_render.clone(),
                 }
             }
         }
@@ -198,12 +198,16 @@ macro_rules! writer_handle {
     };
 }
 writer_handle!(ClientControlWriter);
-writer_handle!(ClientRenderWriter, test_render);
+writer_handle!(ClientRenderWriter);
 
 impl ClientControlWriter {
     fn queue(queue: Arc<ClientWriterQueue>) -> Self {
         queue.add_sender();
-        Self { queue }
+        Self {
+            queue,
+            #[cfg(test)]
+            test_render: None,
+        }
     }
 
     pub(crate) fn send(&self, data: Vec<u8>) -> Result<(), SendError<Vec<u8>>> {
@@ -239,11 +243,13 @@ struct ClientWriterQueue {
 #[derive(Debug, Default)]
 struct ClientWriterQueueState {
     control: VecDeque<Vec<u8>>,
+    ordered: VecDeque<Vec<u8>>,
     render: Option<Vec<u8>>,
     senders: usize,
     writer_alive: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum ClientWriteItem {
     Control(Vec<u8>),
     Render(Vec<u8>),
@@ -297,6 +303,7 @@ impl ClientWriterQueue {
     fn discard_pending_render(&self) {
         let mut state = self.lock_state();
         state.render = None;
+        state.ordered.clear();
         self.ready.notify_all();
     }
 
@@ -305,6 +312,10 @@ impl ClientWriterQueue {
         loop {
             if let Some(data) = state.control.pop_front() {
                 return Some(ClientWriteItem::Control(data));
+            }
+            if let Some(data) = state.ordered.pop_front() {
+                self.ready.notify_one();
+                return Some(ClientWriteItem::Render(data));
             }
             if let Some(data) = state.render.take() {
                 return Some(ClientWriteItem::Render(data));
@@ -323,6 +334,7 @@ impl ClientWriterQueue {
         let mut state = self.lock_state();
         state.writer_alive = false;
         state.render = None;
+        state.ordered.clear();
         self.ready.notify_all();
     }
 
@@ -482,7 +494,7 @@ pub(crate) fn clamp_terminal_size(cols: u16, rows: u16) -> (u16, u16) {
     (clamped_cols, clamped_rows)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputEventLimit {
     WithinLimits,
     TooManyEvents,
@@ -842,8 +854,7 @@ pub(crate) fn handle_client_handshake(
         server_event_tx,
         should_quit,
         endpoint_control_writer.as_ref(),
-    );
-    Ok(())
+    )
 }
 
 fn send_shutdown_to_unregistered_client(writer: &ClientWriter) {
@@ -904,7 +915,7 @@ fn client_read_loop(
     client_id: u64,
     server_event_tx: &mpsc::Sender<ServerEvent>,
     should_quit: &Arc<AtomicBool>,
-) {
+) -> io::Result<()> {
     client_read_loop_with_endpoint_controls(stream, client_id, server_event_tx, should_quit, None)
 }
 
@@ -914,7 +925,7 @@ fn client_read_loop_with_endpoint_controls(
     server_event_tx: &mpsc::Sender<ServerEvent>,
     should_quit: &Arc<AtomicBool>,
     endpoint_control_writer: Option<&ClientControlWriter>,
-) {
+) -> io::Result<()> {
     while !should_quit.load(Ordering::Acquire) {
         let msg: ClientMessage = match protocol::read_message(&mut stream, MAX_GRAPHICS_FRAME_SIZE)
         {
@@ -1247,6 +1258,7 @@ fn client_read_loop_with_endpoint_controls(
     }
 
     debug!(client_id, "client read thread exiting");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1770,7 +1782,10 @@ mod tests {
             recv_server_event(&mut server_event_rx, "detach event"),
             ServerEvent::ClientDetach { client_id: 7 }
         ));
-        handle.join().expect("read thread join");
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
         assert!(server_event_rx.try_recv().is_err());
     }
 
@@ -1799,7 +1814,10 @@ mod tests {
             recv_server_event(&mut server_event_rx, "detach after future control"),
             ServerEvent::ClientDetach { client_id: 7 }
         ));
-        handle.join().expect("read thread join");
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
     }
 
     #[test]
@@ -1831,7 +1849,10 @@ mod tests {
             recv_server_event(&mut server_event_rx, "unsafe resize disconnect"),
             ServerEvent::ClientDisconnected { client_id: 7 }
         ));
-        handle.join().expect("read thread join");
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
     }
 
     #[test]
@@ -1902,7 +1923,10 @@ mod tests {
 
         drop(client_stream);
         should_quit.store(true, Ordering::Release);
-        handle.join().expect("read thread join");
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
     }
 
     #[test]
@@ -1931,7 +1955,10 @@ mod tests {
 
         drop(client_stream);
         should_quit.store(true, Ordering::Release);
-        handle.join().expect("read thread join");
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
     }
 
     #[test]
@@ -1957,7 +1984,10 @@ mod tests {
 
         drop(client_stream);
         should_quit.store(true, Ordering::Release);
-        handle.join().expect("read thread join");
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
     }
 
     #[test]
@@ -1997,7 +2027,10 @@ mod tests {
             recv_server_event(&mut server_event_rx, "detach event"),
             ServerEvent::ClientDetach { client_id: 7 }
         ));
-        handle.join().expect("read thread join");
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
     }
 
     #[test]
@@ -2071,7 +2104,10 @@ mod tests {
 
         drop(client_stream);
         should_quit.store(true, Ordering::Release);
-        handle.join().expect("read thread join");
+        handle
+            .join()
+            .expect("read thread join")
+            .expect("read thread result");
     }
 
     #[test]
