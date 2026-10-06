@@ -245,15 +245,7 @@ impl App {
         };
         let mut argv = plan.argv;
         argv.extend(extras.args);
-        let Some(resume_command) = shell_command_from_argv(&argv) else {
-            tracing::warn!(
-                pane = pane_id.raw(),
-                terminal = %terminal_id,
-                agent = %plan.agent,
-                "failed to start deferred agent resume with empty argv"
-            );
-            return false;
-        };
+        let resume_command = shell_command_from_argv(&argv);
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, extras.env))
@@ -349,15 +341,11 @@ fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
     )
 }
 
-fn shell_command_from_argv(argv: &[String]) -> Option<String> {
-    let mut parts = argv.iter();
-    let first = shell_quote(parts.next()?);
-    let mut command = first;
-    for part in parts {
-        command.push(' ');
-        command.push_str(&shell_quote(part));
-    }
-    Some(command)
+fn shell_command_from_argv(argv: &[String]) -> String {
+    argv.iter()
+        .map(|part| shell_quote(part))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn shell_quote(value: &str) -> String {
@@ -877,9 +865,8 @@ mod tests {
         ];
 
         assert_eq!(
-            shell_command_from_argv(&argv).as_deref(),
-            Some("claude --resume 'session with '\\'' quote'")
+            shell_command_from_argv(&argv),
+            "claude --resume 'session with '\\'' quote'"
         );
-        assert_eq!(shell_command_from_argv(&[]), None);
     }
 }
