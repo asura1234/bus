@@ -297,10 +297,8 @@ impl TileLayout {
         });
 
         if let Some(split) = best {
-            let path = split.path.clone();
-            let current_ratio = get_ratio_at(&self.root, &path).unwrap_or(0.5);
             let adj = if grows { delta } else { -delta };
-            self.set_ratio_at(&path, current_ratio + adj);
+            self.set_ratio_at(&split.path, split.ratio + adj);
         }
     }
 
@@ -333,7 +331,6 @@ impl TileLayout {
         &self.root
     }
 
-    /// Reconstruct a layout from a saved tree.
     /// Reconstruct a layout from a saved tree.
     pub fn from_saved(root: Node, focus: PaneId) -> Self {
         Self {
@@ -665,26 +662,6 @@ fn set_ratio_at(node: &mut Node, path: &[bool], new_ratio: f32) -> bool {
         }
     } else {
         false
-    }
-}
-
-fn get_ratio_at(node: &Node, path: &[bool]) -> Option<f32> {
-    if let Node::Split {
-        ratio,
-        first,
-        second,
-        ..
-    } = node
-    {
-        if path.is_empty() {
-            Some(*ratio)
-        } else if path[0] {
-            get_ratio_at(second, &path[1..])
-        } else {
-            get_ratio_at(first, &path[1..])
-        }
-    } else {
-        None
     }
 }
 
