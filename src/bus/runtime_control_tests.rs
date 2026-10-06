@@ -2073,3 +2073,67 @@ fn an_adopted_codex_orchestrator_gets_its_prompt_as_the_first_message() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
+    struct SuccessfulLaunches {
+        tabs: usize,
+    }
+    impl Transport for SuccessfulLaunches {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::TabCreate(_) => {
+                    self.tabs += 1;
+                    let mut pane = owned_pane_info(None);
+                    pane.pane_id = format!("w1:p{}", self.tabs);
+                    pane.terminal_id = format!("terminal-{}", self.tabs);
+                    Ok(ResponseResult::TabCreated {
+                        tab: serde_json::from_value(json!({
+                            "tab_id": format!("t{}", self.tabs), "workspace_id": "w1",
+                            "number": self.tabs, "label": "adopted", "focused": false,
+                            "pane_count": 1, "agent_status": "idle"
+                        }))
+                        .unwrap(),
+                        root_pane: pane,
+                    })
+                }
+                Method::AgentStart(params) => Ok(ResponseResult::AgentStarted {
+                    agent: owned_agent_info(&params.pane_id, &params.name, None),
+                    argv: params.args,
+                }),
+                other => panic!("unexpected native method: {other:?}"),
+            }
+        }
+    }
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("temp")
+        .join(format!(
+            "bus-adoption-reservation-{}-{}",
+            std::process::id(),
+            crate::bus::io::now_ns()
+        ));
+    crate::bus::io::private_dir(&dir).unwrap();
+    let mut worker = Worker::open(dir.clone(), Box::new(SuccessfulLaunches { tabs: 0 })).unwrap();
+    worker.dev_enabled = true;
+    let room = worker.state.create_room("adoption").unwrap();
+    let session = "160d1f8b-9023-44b8-9bc7-24333effb185";
+    let params = |name| {
+        json!({
+            "room":room.0.to_string(), "name":name, "provider":"claude",
+            "cwd":dir.to_string_lossy(), "extra_args":format!("--resume {session}")
+        })
+    };
+    let first = call(&mut worker, "adopt-first", "agent.add", params("first"));
+    assert!(first.ok, "{first:?}");
+    assert_eq!(first.result["stage"], "launching");
+
+    // The first launch has succeeded, but its SessionStart hook has not arrived.
+    // A second distinct command must not start another writer to that transcript.
+    let second = call(&mut worker, "adopt-second", "agent.add", params("second"));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        !second.ok && error_message(&second).contains("already belongs"),
+        "a successful pending adoption must reserve its provider session: {second:?}"
+    );
+}

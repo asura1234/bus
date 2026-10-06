@@ -63,7 +63,7 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
 fn each_provider_gets_its_own_prompt_delivery() {
     let spool = temp_root("args");
     private_dir(&spool).unwrap();
-    let path = write_prompt(&spool, "Line \"one\".\nLine two.", false).unwrap();
+    let path = write_prompt(&spool, "Line \"one\".\nLine two.").unwrap();
     assert_eq!(path, spool.join(PROMPT_FILE));
 
     assert_eq!(
@@ -97,7 +97,12 @@ fn each_provider_gets_its_own_prompt_delivery() {
 fn an_adopted_session_renders_the_prompt_fresh_or_gets_it_as_a_message() {
     let spool = temp_root("adopted");
     private_dir(&spool).unwrap();
-    let path = write_prompt(&spool, "Run pr-1.", true).unwrap();
+    let path = write_prompt(&spool, "Run pr-1.").unwrap();
+    std::fs::write(
+        spool.join("adopted-session"),
+        "160d1f8b-9023-44b8-9bc7-24333effb185",
+    )
+    .unwrap();
     let claude = vec![
         "--system-prompt-snapshot".to_owned(),
         "off".into(),

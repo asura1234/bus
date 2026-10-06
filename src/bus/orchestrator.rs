@@ -34,8 +34,6 @@ const DOCS: &[(&str, &str)] = &[
 ];
 /// The prompt file in a launch's callback folder; resumes deliver it again.
 pub(crate) const PROMPT_FILE: &str = "system-prompt.md";
-/// Marks a launch that adopted an existing provider session.
-const ADOPTED_FILE: &str = "adopted-session";
 const UNASSIGNED_ROOM_NAME: &str = "none yet (the human assigns one)";
 const UNASSIGNED_ROOM_ID: &str = "ROOM";
 
@@ -96,14 +94,10 @@ pub(crate) fn write_docs(data_dir: &Path) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// Writes the prompt into a launch's callback folder, marking a launch that
-/// adopted an existing session so its resumes deliver the prompt the same way.
-pub(crate) fn write_prompt(spool: &Path, text: &str, adopted: bool) -> Result<PathBuf, String> {
+/// Writes the prompt into a launch's callback folder.
+pub(crate) fn write_prompt(spool: &Path, text: &str) -> Result<PathBuf, String> {
     let path = spool.join(PROMPT_FILE);
     atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())?;
-    if adopted {
-        atomic_write(&spool.join(ADOPTED_FILE), b"").map_err(|e| e.to_string())?;
-    }
     Ok(path)
 }
 
@@ -152,7 +146,8 @@ pub(crate) fn resume_prompt_args(provider: Provider, spool: &Path) -> Result<Vec
     if !path.is_file() {
         return Ok(Vec::new());
     }
-    let adopted = spool.join(ADOPTED_FILE).is_file();
+    // A launch that adopted a session resumes the same way.
+    let adopted = super::launch::reserved_session(spool).is_some();
     Ok(prompt_args(provider, &path, adopted)?.unwrap_or_default())
 }
 

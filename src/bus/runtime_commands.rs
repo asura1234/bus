@@ -309,10 +309,16 @@ impl Worker {
     ) -> Result<(), String> {
         let orchestrates = orchestrator.as_ref().and_then(|spec| spec.room);
         let cwd = launch::canonical_directory(&input.cwd)?;
-        // One provider session belongs to one Bus agent.
+        // One provider session belongs to one Bus agent: bound by its hook, or
+        // reserved by a launch that adopted it and has not reported yet.
         if let Some(session) = launch::adopted_session(input.provider, &input.extra_args)? {
             if let Some(owner) = self.state.agents().find(|agent| {
-                agent.runtime_identity.session_id.as_deref() == Some(session.as_str())
+                let identity = &agent.runtime_identity;
+                identity.session_id.as_deref() == Some(session.as_str())
+                    || identity.launch_id.as_ref().is_some_and(|launch| {
+                        launch::reserved_session(&self.data_dir.join("callbacks").join(launch))
+                            .is_some_and(|reserved| reserved == session)
+                    })
             }) {
                 return Err(format!(
                     "Session {session} already belongs to Bus agent {}",
@@ -365,7 +371,7 @@ impl Worker {
                 .unwrap_or(orchestrator::DEFAULT_PROMPT);
             let text = orchestrator::fill(template, &values);
             let adopted = prepared.adopted_session.is_some();
-            let path = orchestrator::write_prompt(&spool, &text, adopted)?;
+            let path = orchestrator::write_prompt(&spool, &text)?;
             match orchestrator::prompt_args(input.provider, &path, adopted)? {
                 Some(args) => prepared.args.extend(args),
                 // Queued until the agent is ready, like any room message.

@@ -167,6 +167,18 @@ fn launch_args(
     Ok((args, adopted))
 }
 
+/// Holds a launch's adopted session in its callback folder from launch on, so
+/// no second agent adopts it before the provider's SessionStart binds it.
+const ADOPTED_SESSION_FILE: &str = "adopted-session";
+
+/// The session a launch adopted, from its callback folder.
+pub(crate) fn reserved_session(spool: &Path) -> Option<String> {
+    std::fs::read_to_string(spool.join(ADOPTED_SESSION_FILE))
+        .ok()
+        .map(|session| session.trim().to_owned())
+        .filter(|session| !session.is_empty())
+}
+
 /// The provider argv that resumes `session`; Codex's is a leading subcommand.
 fn resume_args(provider: Provider, session: &str) -> Vec<String> {
     match provider {
@@ -419,6 +431,10 @@ pub(crate) fn prepare(
     };
     let spool = data_dir.join("callbacks").join(&launch_id);
     super::callbacks::initialize(&spool, &manifest).map_err(|e| e.to_string())?;
+    if let Some(session) = &adopted_session {
+        super::io::atomic_write(&spool.join(ADOPTED_SESSION_FILE), session.as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
     if input.provider == Provider::ClaudeCode {
         let settings = spool.join("claude-settings.json");
         install_hooks(&settings, input.provider, binary)?;
