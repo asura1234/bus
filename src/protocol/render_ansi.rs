@@ -290,14 +290,6 @@ fn compute_prof_blit_stats(
             changed_runs: changed_cells,
         };
     };
-    if prev.width != frame.width || prev.height != frame.height {
-        let changed_cells = frame.cells.iter().filter(|cell| !cell.skip).count() as u64;
-        return ProfBlitStats {
-            scanned_cells: frame.cells.len() as u64,
-            changed_cells,
-            changed_runs: changed_cells,
-        };
-    }
 
     let sanitized_hyperlinks = sanitized_frame_hyperlinks(frame);
     let prev_sanitized_hyperlinks = sanitized_frame_hyperlinks(prev);
