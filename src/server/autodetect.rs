@@ -40,7 +40,6 @@ pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HERDR_STARTUP_CWD";
 /// connection is refused, no server is running. Stale sockets (from a crashed
 /// server) are detected because connect returns `ConnectionRefused`
 /// when nobody is listening.
-#[allow(dead_code)] // Public API for external use and testing
 pub fn is_server_listening() -> bool {
     is_server_listening_at(&client_socket_path())
 }
