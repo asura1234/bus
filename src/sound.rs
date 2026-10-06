@@ -84,15 +84,11 @@ fn play_bytes(data: &[u8]) -> Result<(), String> {
     file.write_all(data).map_err(|e| e.to_string())?;
     drop(file);
 
-    let result = run_player(&tmp);
+    let result = play_file(&tmp);
 
     let _ = std::fs::remove_file(&tmp);
 
-    match result {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(playback_error(&output)),
-        Err(e) => Err(e),
-    }
+    result
 }
 
 fn playback_error(output: &Output) -> String {
