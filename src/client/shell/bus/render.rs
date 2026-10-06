@@ -1077,9 +1077,8 @@ impl BusUi {
             .map(|search| (search.query.clone(), search.selected));
         let search_status = search_status.map(|(query, selected)| {
             let total = self
-                .room
-                .map(|room| self.filtered_history(room, &query).len())
-                .unwrap_or(0)
+                .filtered_history(self.room.unwrap(), &query)
+                .len()
                 .max(1);
             (query, selected, total)
         });
@@ -2143,10 +2142,7 @@ impl BusUi {
                     if x.saturating_add(width) > right {
                         break;
                     }
-                    let color = colors
-                        .get(index)
-                        .copied()
-                        .unwrap_or(style.fg.unwrap_or_default());
+                    let color = colors.get(index).copied().unwrap_or(style.fg.unwrap());
                     buffer.set_stringn(
                         x,
                         row.y,
