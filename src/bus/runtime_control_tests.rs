@@ -2320,3 +2320,19 @@ fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
         "a successful pending adoption must reserve its provider session: {second:?}"
     );
 }
+
+#[test]
+fn state_reports_how_the_running_bus_was_built() {
+    let (mut worker, _room, _agent, _dir) = fixture();
+    let state = call(&mut worker, "state-build", "state", json!({}));
+    let expected = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    assert_eq!(state.result["build"]["profile"], expected);
+    assert_eq!(
+        state.result["build"]["binary"],
+        json!(std::env::current_exe().unwrap())
+    );
+}

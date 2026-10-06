@@ -328,6 +328,7 @@ bus state | jq '.result.rooms[] | {id, name, kind, unread_count, orchestrator}'
 bus state | jq '.result.agents[] | {id, name, room_id, orchestrates, compactions}'
 bus state | jq '.result.usage'
 bus state | jq '.result.settings'
+bus state | jq '.result.build'
 ```
 
 - `master_room` is the MASTER room's ID. `visible_room` is the room open in the
@@ -342,6 +343,9 @@ bus state | jq '.result.settings'
   `count` and `last_at_ms` of the provider context compactions Bus observed for
   that agent. `dialog` is `true` while a numbered choice dialog waits for an
   answer; see [Answer an agent's dialog](#answer-an-agents-dialog).
+- `build` tells how the running Bus was built: `profile` is `debug` for a
+  development build (`./run dev`, `cargo build`) or `release` for an optimized
+  build, and `binary` is the running executable's path.
 - `usage` has one entry per provider: `claude`, `codex`, and `cursor`. An
   `observed` entry reports `five_hour` and `weekly` windows with
   `used_percent`, `resets_at`, and `window_minutes`, plus `read_at_ms` and
