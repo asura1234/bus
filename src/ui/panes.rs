@@ -21,7 +21,7 @@ pub(crate) fn pane_is_scrolled_back(rt: &TerminalRuntime) -> bool {
         .is_some_and(|metrics| metrics.offset_from_bottom > 0)
 }
 
-fn pane_border_title(label: &str, pane_width: u16, _focused: bool) -> Option<String> {
+fn pane_border_title(label: &str, pane_width: u16) -> Option<String> {
     let label = label.trim();
     if label.is_empty() || pane_width <= 4 {
         return None;
@@ -604,7 +604,7 @@ fn render_pane_border_titles(
             .pane_state(info.id)
             .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
             .and_then(|terminal| terminal.border_label(app.show_agent_labels_on_pane_borders))
-            .and_then(|label| pane_border_title(&label, info.rect.width, info.is_focused))
+            .and_then(|label| pane_border_title(&label, info.rect.width))
         else {
             continue;
         };
@@ -818,28 +818,17 @@ mod tests {
     #[test]
     fn pane_border_title_trims_and_truncates() {
         assert_eq!(
-            pane_border_title(" claude ", 20, false).as_deref(),
+            pane_border_title(" claude ", 20).as_deref(),
             Some(" claude ")
         );
-        assert_eq!(
-            pane_border_title(" claude ", 20, true).as_deref(),
-            Some(" claude ")
-        );
-        assert_eq!(pane_border_title("", 20, false), None);
-        assert_eq!(
-            pane_border_title("abcdef", 8, false).as_deref(),
-            Some(" abc… ")
-        );
-        assert_eq!(
-            pane_border_title("abcdef", 8, true).as_deref(),
-            Some(" abc… ")
-        );
-        assert_eq!(pane_border_title("abcdef", 4, false), None);
+        assert_eq!(pane_border_title("", 20), None);
+        assert_eq!(pane_border_title("abcdef", 8).as_deref(), Some(" abc… "));
+        assert_eq!(pane_border_title("abcdef", 4), None);
     }
 
     #[test]
     fn pane_border_title_truncates_cjk_by_display_width() {
-        let title = pane_border_title("1 模块组织（已定）", 12, false).unwrap();
+        let title = pane_border_title("1 模块组织（已定）", 12).unwrap();
 
         assert_eq!(title, " 1 模块… ");
         assert!(display_width(title.as_str()) <= 10);

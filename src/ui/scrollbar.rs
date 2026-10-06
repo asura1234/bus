@@ -32,9 +32,6 @@ pub(crate) fn scrollbar_thumb(
 
     let track_height = track.height as usize;
     let total_rows = metrics.max_offset_from_bottom + metrics.viewport_rows;
-    if total_rows == 0 {
-        return None;
-    }
 
     let thumb_len = ((metrics.viewport_rows * track_height) as f32 / total_rows as f32)
         .round()
@@ -44,7 +41,7 @@ pub(crate) fn scrollbar_thumb(
     let scrolled_from_top = metrics
         .max_offset_from_bottom
         .saturating_sub(metrics.offset_from_bottom);
-    let thumb_top = if max_thumb_top == 0 || metrics.max_offset_from_bottom == 0 {
+    let thumb_top = if max_thumb_top == 0 {
         0
     } else {
         ((scrolled_from_top * max_thumb_top) as f32 / metrics.max_offset_from_bottom as f32)
