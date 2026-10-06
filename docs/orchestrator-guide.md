@@ -94,12 +94,13 @@ every state change:
 - an agent waiting at a dialog (permission, trust, question),
 - a decision made, by you or the human.
 
-Use one fixed shape with short lines, so every room reads the same:
+Make anything waiting on the human easy to spot. The notes are free text and Bus
+checks no structure; shape them however reads best for the room. One layout
+that works, with short lines:
 
 1. `Workflow: <path>`, the room's workflow file.
 2. `WAITING ON YOU:` with one item per decision, keypress or approval the
-   human must give. It goes at the top; leave the heading out when nothing
-   waits on the human.
+   human must give, at the top; left out when nothing waits on the human.
 3. `Now:` what is running, and which agent runs it.
 4. `DONE / OPEN:` a checklist of the workflow's steps, `[x]` done, `[ ]` open.
 
