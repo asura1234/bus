@@ -21,6 +21,8 @@ __pycache__/
 !/docs/templates/**
 !/docs/versions/
 !/docs/versions/**
+!/docs/workflows/
+!/docs/workflows/**
 /.local/
 /.superpowers/
 /.bus/
