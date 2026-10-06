@@ -94,7 +94,7 @@ use frame_output::{
 #[cfg(test)]
 use handshake::direct_graphics_profile_values;
 use handshake::do_handshake;
-use notifications::handle_notify;
+use notifications::{forward_terminal_bells, handle_notify};
 #[cfg(test)]
 use notifications::{handle_notify_with_notifiers, sound_from_notify_message};
 
@@ -941,8 +941,9 @@ async fn run_client_loop(
                     ServerMessage::GraphicsFile { .. }
                     | ServerMessage::GraphicsTransmissionRetired { .. } => {}
                     ServerMessage::TerminalBell { count } => {
+                        let bus_shell = state.shell.as_ref().is_some_and(|shell| shell.has_bus());
                         if let Err(err) =
-                            crate::terminal_effects::write_terminal_bells(&mut io::stdout(), count)
+                            forward_terminal_bells(&mut io::stdout(), count, bus_shell)
                         {
                             warn!(err = %err, "failed to emit terminal bell");
                         }

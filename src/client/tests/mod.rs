@@ -506,6 +506,18 @@ fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
 }
 
 #[test]
+fn pane_bells_reach_the_host_terminal_only_without_bus() {
+    let mut plain = Vec::new();
+    forward_terminal_bells(&mut plain, 2, false).unwrap();
+    assert_eq!(plain, b"\x07\x07");
+
+    // Bus rooms' sound settings are the only source of Bus sounds.
+    let mut bus = Vec::new();
+    forward_terminal_bells(&mut bus, 2, true).unwrap();
+    assert!(bus.is_empty());
+}
+
+#[test]
 fn toast_notify_from_server_is_emitted_even_when_attach_config_was_off() {
     let sound_config = crate::config::SoundConfig::default();
     let mut emitted = None;

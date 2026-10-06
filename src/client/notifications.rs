@@ -20,6 +20,19 @@ pub(super) fn handle_notify(
     );
 }
 
+/// Writes a pane's terminal bells to the host terminal, except under Bus, whose
+/// rooms' sound settings are the only source of its sounds.
+pub(super) fn forward_terminal_bells(
+    writer: &mut impl io::Write,
+    count: u16,
+    bus_shell: bool,
+) -> io::Result<()> {
+    if bus_shell {
+        return Ok(());
+    }
+    crate::terminal_effects::write_terminal_bells(writer, count)
+}
+
 pub(super) fn handle_notify_with_notifiers(
     kind: NotifyKind,
     message: &str,
