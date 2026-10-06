@@ -206,7 +206,7 @@ fn selection_stopping_before_markdown_keeps_the_selected_line_end_in_both_direct
         .history
         .cached()
         .iter()
-        .position(|line| is_reply(line))
+        .position(is_reply)
         .expect("first Markdown reply row");
     let prompt_start = selection::Point {
         line: prompt,
@@ -260,8 +260,14 @@ fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
     let snapshot = Arc::clone(&ui.snapshot);
     let room = snapshot.state.room(room).expect("room");
 
-    ui.history
-        .lines(&snapshot.state, room, 80, snapshot.revision, 1_000);
+    ui.history.lines(
+        &snapshot.state,
+        room,
+        80,
+        snapshot.revision,
+        1_000,
+        &mut Default::default(),
+    );
     let first = ui
         .history
         .cached()
@@ -269,8 +275,14 @@ fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
         .filter(|line| is_reply(line))
         .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
         .expect("rendered reply source");
-    ui.history
-        .lines(&snapshot.state, room, 80, snapshot.revision, 61_000);
+    ui.history.lines(
+        &snapshot.state,
+        room,
+        80,
+        snapshot.revision,
+        61_000,
+        &mut Default::default(),
+    );
     let second = ui
         .history
         .cached()
@@ -301,7 +313,14 @@ fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
     let room = snapshot.state.room(room).expect("room");
     let rendered: Vec<_> = ui
         .history
-        .lines(&snapshot.state, room, 12, snapshot.revision, 1_000)
+        .lines(
+            &snapshot.state,
+            room,
+            12,
+            snapshot.revision,
+            1_000,
+            &mut Default::default(),
+        )
         .iter()
         .filter(|line| is_reply(line))
         .collect();
@@ -382,6 +401,7 @@ fn pending_replies_reserve_indented_slots_in_recipient_order() {
         100,
         snapshot.revision,
         2_000,
+        &mut Default::default(),
     );
     assert!(lines[0].text.starts_with("You → cursor1, author, claude1"));
     let slot_headers = lines
@@ -485,6 +505,7 @@ fn late_replies_stay_with_their_prompt_and_never_reorder_recipient_slots() {
             100,
             snapshot.revision,
             6_000,
+            &mut Default::default(),
         )
         .iter()
         .map(|line| line.text.as_str())
@@ -858,4 +879,153 @@ fn history_recipient_colors_survive_wrapping_without_coloring_message_text() {
             .collect();
         assert_eq!(cells, expected, "rendered history colors at {cols} columns");
     }
+}
+
+fn exchange_with_files(ui: &mut BusUi, room: RoomId, agent: AgentId, files: &[std::path::PathBuf]) {
+    saved_exchange(ui, room, agent, "see attached", "ok");
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut json = serde_json::to_value(&snapshot.state).unwrap();
+    for (_, record) in json["requests"].as_object_mut().unwrap() {
+        record["prompt"]["files"] = serde_json::json!(files);
+    }
+    snapshot.state = serde_json::from_value(json).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+}
+
+fn thumbnail_dir(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "bus-history-thumbnails-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
+}
+
+fn png(dir: &std::path::Path, name: &str, size: (u32, u32)) -> std::path::PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(name);
+    image::RgbaImage::new(size.0, size.1).save(&path).unwrap();
+    path
+}
+
+const CELL: crate::kitty_graphics::HostCellSize = crate::kitty_graphics::HostCellSize {
+    width_px: 10,
+    height_px: 20,
+};
+
+#[test]
+fn image_attachments_reserve_thumbnail_rows_above_their_name() {
+    let dir = thumbnail_dir("rows");
+    let image = png(&dir, "shot.png", (200, 80));
+    let notes = dir.join("notes.md");
+    std::fs::write(&notes, "# notes").unwrap();
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[image.clone(), notes]);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+
+    let lines = ui.history.cached();
+    let caption = lines
+        .iter()
+        .position(|line| line.text == "[shot.png]")
+        .expect("image name row");
+    let thumbnail: Vec<_> = lines[..caption]
+        .iter()
+        .filter_map(|line| line.thumbnail.as_ref())
+        .collect();
+    assert_eq!(thumbnail.len(), 4, "80 px tall in 20 px cells");
+    assert!(thumbnail
+        .iter()
+        .enumerate()
+        .all(|(row, slot)| slot.row == row as u16 && (slot.cols, slot.rows) == (20, 4)));
+    assert!(lines[caption - 4..caption]
+        .iter()
+        .all(|line| line.text.is_empty()
+            && line.action == Some(render::Action::FileDetail(image.clone()))));
+    assert!(lines.iter().any(|line| line.text == "[notes.md]"));
+    assert_eq!(
+        lines.iter().filter(|line| line.thumbnail.is_some()).count(),
+        4,
+        "non-image files get no thumbnail"
+    );
+
+    let text = ui.view.history_text;
+    assert_eq!(ui.view.thumbnails.len(), 1);
+    let placement = &ui.view.thumbnails[0];
+    assert_eq!(
+        (placement.x, placement.cols, placement.rows),
+        (text.x, 20, 4)
+    );
+    assert_eq!(placement.y, text.y + (caption - 4 - ui.main_scroll) as u16);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn image_attachments_fall_back_to_their_name_without_kitty_or_the_file() {
+    let dir = thumbnail_dir("fallback");
+    let image = png(&dir, "shot.png", (200, 80));
+    let missing = dir.join("gone.jpg");
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[image, missing]);
+
+    ui.compute_view(100, 40);
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .all(|line| line.thumbnail.is_none()));
+    assert!(ui.view.thumbnails.is_empty());
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .any(|line| line.text == "[shot.png]"));
+
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+    let lines = ui.history.cached();
+    assert!(lines.iter().any(|line| line.text == "[gone.jpg]"));
+    assert_eq!(
+        lines.iter().filter(|line| line.thumbnail.is_some()).count(),
+        4,
+        "only the readable image gets rows"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn thumbnails_show_only_when_wholly_visible_and_uncovered() {
+    let dir = thumbnail_dir("visible");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[image]);
+    saved_history(&mut ui, room, agent, 30);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.history_follow_tail = false;
+    ui.compute_view(100, 40);
+    assert_eq!(ui.view.thumbnails.len(), 1);
+
+    let first = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.thumbnail.is_some())
+        .unwrap();
+    // Scroll so the thumbnail's top row is just above the viewport.
+    ui.main_scroll = first + 1;
+    ui.compute_view(100, 40);
+    assert_eq!(ui.main_scroll, first + 1);
+    assert!(
+        ui.view.thumbnails.is_empty(),
+        "a partly scrolled thumbnail is not drawn"
+    );
+
+    ui.main_scroll = 0;
+    ui.form = Some(forms::Form::Help { scroll: 0 });
+    ui.compute_view(100, 40);
+    assert!(ui.view.thumbnails.is_empty(), "forms cover the history");
+    std::fs::remove_dir_all(dir).unwrap();
 }

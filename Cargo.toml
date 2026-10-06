@@ -26,6 +26,8 @@ clap = { version = "4.5", default-features = false, features = ["std", "help", "
 clap_complete = "4.5"
 crossterm = "0.29"
 ctrlc = { version = "3", features = ["termination"] }
+# Decodes chat attachments into Bus room-history thumbnails.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 interprocess = "2.4.2"
 jsonc-parser = { version = "0.33.1", default-features = false, features = ["cst", "serde_json"] }
 libc = "0.2"

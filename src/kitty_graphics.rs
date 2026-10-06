@@ -758,7 +758,7 @@ fn encode_delete_image(out: &mut Vec<u8>, id: u32) {
     let _ = write!(out, "\x1b_Ga=d,d=I,i={id},q=2;\x1b\\");
 }
 
-fn encode_delete_placement(out: &mut Vec<u8>, host_id: u32, host_placement_id: u32) {
+pub(crate) fn encode_delete_placement(out: &mut Vec<u8>, host_id: u32, host_placement_id: u32) {
     let _ = write!(
         out,
         "\x1b_Ga=d,d=i,i={host_id},p={host_placement_id},q=2;\x1b\\"
@@ -1055,7 +1055,7 @@ fn kitty_format_code(format: KittyImageFormat) -> u32 {
     }
 }
 
-fn encode_kitty_data(out: &mut Vec<u8>, control: &str, data: &[u8]) {
+pub(crate) fn encode_kitty_data(out: &mut Vec<u8>, control: &str, data: &[u8]) {
     let mut chunks = data.chunks(KITTY_CHUNK_BYTES).peekable();
     let Some(first) = chunks.next() else {
         return;

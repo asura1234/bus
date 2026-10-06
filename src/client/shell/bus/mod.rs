@@ -11,10 +11,28 @@ mod selection;
 mod state;
 #[cfg(test)]
 mod tests;
+mod thumbnails;
 pub(super) use render::layout;
 pub(super) use state::*;
 
 impl super::ClientShellState {
+    /// `enabled` is whether this client presents Kitty graphics at all; the
+    /// host terminal must also be one known to draw them.
+    pub(crate) fn set_bus_kitty_graphics(&mut self, enabled: bool) {
+        if let Some(bus) = self.bus.as_mut() {
+            bus.kitty_graphics =
+                enabled && thumbnails::host_supports_kitty_graphics(|key| std::env::var(key).ok());
+        }
+    }
+
+    pub(super) fn compute_bus_view(&mut self, cols: u16, rows: u16) {
+        let cell = self.graphics_cell_size;
+        if let Some(bus) = self.bus.as_mut() {
+            bus.thumbnails.set_cell(bus.kitty_graphics.then_some(cell));
+            bus.compute_view(cols, rows);
+        }
+    }
+
     /// `sound` is the user's `[ui.sound]`, used only for custom sound paths; Bus
     /// rooms decide on their own whether to ring.
     pub(crate) fn start_bus(&mut self, sound: &crate::config::SoundConfig) -> Result<(), String> {

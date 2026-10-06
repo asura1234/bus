@@ -365,6 +365,13 @@ Attached files and images appear as absolute paths: in each `history` prompt's
 pasted into the Bus composer are saved under `attachments/` in the Bus data
 directory, so those paths stay readable after the session ends.
 
+In the room history, image attachments (PNG, JPEG, GIF first frame, WebP) also
+show as thumbnails up to eight rows tall above their file name, when the host
+terminal draws Kitty graphics (kitty, Ghostty, WezTerm; not inside tmux) and
+`terminal.kitty_graphics` is not turned off. Otherwise, or when the file is
+missing or unreadable, only the file name shows. A thumbnail draws only while
+it is fully in view and no dialog covers the history.
+
 ## Build reliable automation
 
 Every command accepts a global `--request-id STRING`. Supply a stable unique ID

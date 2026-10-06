@@ -102,17 +102,16 @@ impl ClientShellState {
     pub(crate) fn compose(&mut self, cols: u16, rows: u16) -> Option<FrameData> {
         self.last_composed_size = Some((cols, rows));
         let bus_ready = self.bus_terminal_ready();
+        self.compute_bus_view(cols, rows);
         if let Some(bus) = self.bus.as_mut() {
-            bus.compute_view(cols, rows);
             if !bus_ready {
                 self.hits = ShellHitMap::default();
                 let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
                 bus.render(&mut buffer);
-                return Some(FrameData::from_ratatui_buffer_with_hyperlinks(
-                    &buffer,
-                    bus.cursor(),
-                    &[],
-                ));
+                let mut frame =
+                    FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, bus.cursor(), &[]);
+                frame.graphics = bus.thumbnail_graphics();
+                return Some(frame);
             }
         }
         if self.snapshot.is_none() || self.pane_surface.is_none() {
@@ -635,6 +634,9 @@ impl ClientShellState {
             self.hits.popup = None;
         }
         self.compose_graphics(&mut frame, layout);
+        if let Some(bus) = self.bus.as_mut() {
+            frame.graphics.extend(bus.thumbnail_graphics());
+        }
         Some(frame)
     }
 }

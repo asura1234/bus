@@ -441,6 +441,7 @@ async fn run_client_loop(
             .start_bus(&state.sound_config)
             .map_err(|error| ClientError::ConnectionFailed(io::Error::other(error)))?;
         shell.set_graphics_cell_size(initial_cell_width_px, initial_cell_height_px);
+        shell.set_bus_kitty_graphics(state.kitty_graphics_enabled);
         shell.set_endpoint_catalog(&endpoint_catalog.ssh);
         shell.set_endpoint_methods_for(
             &endpoint::ClientEndpointId::Local,

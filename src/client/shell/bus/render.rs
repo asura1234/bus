@@ -108,6 +108,8 @@ pub(super) struct View {
     pub history_text: Rect,
     /// Selected cells, painted after the rows they cover.
     selection: Vec<Rect>,
+    /// Image thumbnails wholly inside the history viewport.
+    pub thumbnails: Vec<super::thumbnails::Placement>,
 }
 impl View {
     fn overlay_row(&mut self, rect: Rect, text: String, action: Option<Action>, selected: bool) {
@@ -864,7 +866,23 @@ impl BusUi {
         if self.deletion.is_some() {
             self.delete_view(&mut view, Rect::new(0, 0, cols, rows));
         }
+        // Kitty images draw above text, so hide them under anything that can
+        // cover the history.
+        if view.dialog.width > 0
+            || self.form.is_some()
+            || self.deletion.is_some()
+            || self.terminal.is_some()
+            || self.rename.is_some()
+            || self.visible_error().is_some()
+        {
+            view.thumbnails.clear();
+        }
         self.view = view;
+    }
+
+    /// Kitty commands updating the history thumbnails for the latest view.
+    pub fn thumbnail_graphics(&mut self) -> Vec<u8> {
+        self.thumbnails.encode(&self.view.thumbnails)
     }
     fn room_view(&mut self, view: &mut View, main: Rect) {
         let Some(room) = self.room.and_then(|id| self.snapshot.state.room(id)) else {
@@ -1023,6 +1041,7 @@ impl BusUi {
             width,
             self.snapshot.revision,
             now,
+            &mut self.thumbnails,
         );
         if let Some(anchor) = visible_anchor {
             if let Some(index) = self.history.index_of(anchor) {
@@ -1061,6 +1080,19 @@ impl BusUi {
                 false,
                 matches!(line.tone, super::history::Tone::Muted),
             );
+            if let Some(thumbnail) = line.thumbnail.as_ref().filter(|thumbnail| {
+                // Partly scrolled thumbnails keep their blank rows and name.
+                thumbnail.row == 0
+                    && index + usize::from(thumbnail.rows) <= usize::from(view.history.height)
+            }) {
+                view.thumbnails.push(super::thumbnails::Placement {
+                    path: std::sync::Arc::clone(&thumbnail.path),
+                    x,
+                    y: rect.y,
+                    cols: thumbnail.cols,
+                    rows: thumbnail.rows,
+                });
+            }
             let line_index = self.main_scroll + index;
             if let Some((start, end)) =
                 selection.filter(|(start, end)| (start.line..=end.line).contains(&line_index))

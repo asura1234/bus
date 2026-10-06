@@ -1,5 +1,6 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
 use super::render::{display, provider, wrap, wrap_ranges, Action};
+use super::thumbnails::{Thumbnails, MAX_ROWS};
 use crate::bus::model::*;
 use markdown_ratatui::{DocumentRow, LayoutOptions, MarkdownView, Theme, ViewState};
 use ratatui::buffer::{Buffer, CellWidth};
@@ -31,7 +32,17 @@ pub(super) struct Line {
     pub raw_markdown: Option<(MarkdownSource, Arc<str>)>,
     /// Soft-wrapped continuation of the previous row, rejoined when copied.
     pub continued: bool,
+    /// Row `row` of an image thumbnail drawn over these blank cells.
+    pub thumbnail: Option<ThumbnailRow>,
     anchor: RowAnchor,
+}
+
+#[derive(Clone)]
+pub(super) struct ThumbnailRow {
+    pub path: Arc<std::path::Path>,
+    pub cols: u16,
+    pub rows: u16,
+    pub row: u16,
 }
 
 /// Identifies one rendered Markdown message in the room history.
@@ -54,6 +65,7 @@ enum RowKind {
     PromptHeader,
     PromptBody,
     File,
+    Thumbnail,
     ReplyHeader,
     ReplyBody,
     Quote,
@@ -71,9 +83,13 @@ impl RowAnchor {
     }
 }
 
+/// Inputs to a history layout: content signature, room, width, age-label
+/// minute, and thumbnail cell size.
+type LayoutKey = (u64, RoomId, u16, u64, Option<(u32, u32)>);
+
 #[derive(Default)]
 pub(super) struct History {
-    key: Option<(u64, RoomId, u16, u64)>,
+    key: Option<LayoutKey>,
     source: Option<(u64, RoomId)>,
     signature: u64,
     lines: Vec<Line>,
@@ -113,12 +129,19 @@ impl History {
         width: u16,
         revision: u64,
         now: u64,
+        thumbnails: &mut Thumbnails,
     ) -> &[Line] {
         if self.source != Some((revision, room.id)) {
             self.signature = signature(state, room);
             self.source = Some((revision, room.id));
         }
-        let key = (self.signature, room.id, width, now / 60_000);
+        let key = (
+            self.signature,
+            room.id,
+            width,
+            now / 60_000,
+            thumbnails.layout_key(),
+        );
         if self.key == Some(key) {
             return &self.lines;
         }
@@ -194,6 +217,33 @@ impl History {
                     .cloned(),
             );
             for (index, path) in prompt.files.iter().enumerate() {
+                let file_anchor = RowAnchor {
+                    position: index,
+                    ..RowAnchor::new(prompt.id, None, RowKind::File)
+                };
+                if let Some((cols, rows)) = thumbnails.size(path, width) {
+                    let shared: Arc<std::path::Path> = Arc::from(path.as_path());
+                    lines.extend((0..rows).map(|row| Line {
+                        text: String::new(),
+                        action: Some(Action::FileDetail(path.clone())),
+                        tone: Tone::Muted,
+                        spans: Vec::new(),
+                        styles: Vec::new(),
+                        thumbnail: Some(ThumbnailRow {
+                            path: Arc::clone(&shared),
+                            cols,
+                            rows,
+                            row,
+                        }),
+                        raw_markdown: None,
+                        continued: false,
+                        anchor: RowAnchor {
+                            kind: RowKind::Thumbnail,
+                            position: index * usize::from(MAX_ROWS) + usize::from(row),
+                            ..file_anchor
+                        },
+                    }));
+                }
                 lines.push(Line {
                     text: format!(
                         "[{}]",
@@ -203,12 +253,10 @@ impl History {
                     tone: Tone::Muted,
                     spans: Vec::new(),
                     styles: Vec::new(),
+                    thumbnail: None,
                     raw_markdown: None,
                     continued: false,
-                    anchor: RowAnchor {
-                        position: index,
-                        ..RowAnchor::new(prompt.id, None, RowKind::File)
-                    },
+                    anchor: file_anchor,
                 });
             }
 
@@ -257,6 +305,7 @@ impl History {
                         tone: Tone::Muted,
                         spans: Vec::new(),
                         styles: Vec::new(),
+                        thumbnail: None,
                         raw_markdown: None,
                         continued: false,
                         anchor: RowAnchor::new(prompt.id, Some(*agent_id), RowKind::Quote),
@@ -271,6 +320,7 @@ impl History {
                 tone: Tone::Text,
                 spans: Vec::new(),
                 styles: Vec::new(),
+                thumbnail: None,
                 raw_markdown: None,
                 continued: false,
                 anchor: RowAnchor::new(prompt.id, None, RowKind::Gap),
@@ -467,6 +517,7 @@ fn line_from_buffer(
         tone: Tone::Text,
         spans: Vec::new(),
         styles,
+        thumbnail: None,
         raw_markdown: Some((request, Arc::clone(source))),
         continued,
         anchor,
@@ -489,6 +540,7 @@ fn literal_reply_lines(
             tone: Tone::Text,
             spans: Vec::new(),
             styles: Vec::new(),
+            thumbnail: None,
             raw_markdown: Some((request, Arc::clone(source))),
             continued: index > 0 && rows[index - 1].end == row.start,
             anchor: RowAnchor {
@@ -509,6 +561,7 @@ fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor
         tone: Tone::Text,
         spans: Vec::new(),
         styles: Vec::new(),
+        thumbnail: None,
         raw_markdown: None,
         continued: index > 0 && rows[index - 1].end == row.start,
         anchor: RowAnchor {
@@ -554,6 +607,7 @@ fn wrap_header(
                 tone: Tone::Muted,
                 spans: line_spans,
                 styles: Vec::new(),
+                thumbnail: None,
                 raw_markdown: None,
                 continued: index > 0,
                 anchor: RowAnchor {
@@ -662,7 +716,14 @@ mod tests {
         }
         let mut history = History::default();
         let original = history
-            .lines(&state, state.room(room).unwrap(), 80, 1, 1000)
+            .lines(
+                &state,
+                state.room(room).unwrap(),
+                80,
+                1,
+                1000,
+                &mut Default::default(),
+            )
             .as_ptr();
         for revision in 2..=30 {
             state
@@ -673,14 +734,28 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 history
-                    .lines(&state, state.room(room).unwrap(), 80, revision, 1000)
+                    .lines(
+                        &state,
+                        state.room(room).unwrap(),
+                        80,
+                        revision,
+                        1000,
+                        &mut Default::default()
+                    )
                     .as_ptr(),
                 original
             );
         }
         state.rename_agent(agent, "renamed").unwrap();
         assert!(history
-            .lines(&state, state.room(room).unwrap(), 80, 31, 1000)
+            .lines(
+                &state,
+                state.room(room).unwrap(),
+                80,
+                31,
+                1000,
+                &mut Default::default()
+            )
             .iter()
             .any(|line| line.text.contains("renamed")));
     }

@@ -125,6 +125,9 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) main_scroll: usize,
     pub(super) history_follow_tail: bool,
     pub(super) history: super::history::History,
+    pub(super) thumbnails: super::thumbnails::Thumbnails,
+    /// The client presents Kitty graphics and the host terminal draws them.
+    pub(super) kitty_graphics: bool,
     /// Region receiving the current left-button drag, if it started a selection.
     pub(super) drag: Option<super::selection::Region>,
     /// History selection as (anchor, head); editor selections live in `Editor`.
@@ -203,6 +206,8 @@ impl BusUi {
             main_scroll: 0,
             history_follow_tail: true,
             history: super::history::History::default(),
+            thumbnails: super::thumbnails::Thumbnails::default(),
+            kitty_graphics: false,
             drag: None,
             history_selection: None,
             recipient_scroll: 0,
