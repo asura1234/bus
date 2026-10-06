@@ -471,9 +471,11 @@ directory, so those paths stay readable after the session ends.
 
 In the room history, image attachments (PNG, JPEG, GIF first frame, WebP) show
 as the picture itself, up to eight rows tall, in place of their file name, when
-the host terminal draws images: Kitty graphics in kitty, Ghostty and WezTerm,
-and the inline image protocol in iTerm2 (detected by `TERM_PROGRAM=iTerm.app`
-or `LC_TERMINAL=iTerm2`). Not inside tmux, and not when
+the host terminal draws images: Kitty graphics in kitty, Ghostty, WezTerm and
+iTerm2 3.7 or later, and the inline image protocol in older iTerm2 (iTerm2 is
+detected by `TERM_PROGRAM=iTerm.app` or `LC_TERMINAL=iTerm2` and its version
+variable). Kitty graphics move a picture in place while the history scrolls;
+older iTerm2 redraws it on every scroll step. Not inside tmux, and not when
 `terminal.kitty_graphics` is turned off. Clicking a picture opens the file
 detail. Elsewhere (for example Terminal.app), or when the file is missing or
 unreadable, a clickable `[file name]` row shows instead. A picture draws only
