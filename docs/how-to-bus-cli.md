@@ -115,10 +115,30 @@ orchestrator_id=$(bus agent add \
   --room master \
   --name "claude-orch" \
   --provider claude \
-  --pwd "$(pwd)" \
   --orchestrates "$room_id" \
   | jq -r '.result.agent_id')
 ```
+
+A MASTER agent works in its own folder, outside every repository. Without
+`--pwd`, Bus creates `<BUS_DATA_DIR>/orchestrators/NAME/` owner-only (`0700`)
+and writes there:
+
+- the system prompt as both `CLAUDE.md` and `AGENTS.md`, which Claude Code,
+  Codex and Cursor read from their working folder, so no launch flags are needed;
+- the `workflow-create` skill under `.claude/skills/` (Claude Code) and
+  `.agents/skills/` (Codex and Cursor).
+
+The prompt defaults to Bus's built-in orchestrator prompt
+(`src/bus/prompts/orchestrator.md` in the Bus repository). Replace it with
+`--system-prompt TEXT` or `--system-prompt-file PATH`. Bus fills in
+`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}` and `{{DOCS}}`, the folder
+`<BUS_DATA_DIR>/docs/` where Bus writes the docs the prompt links to (this guide,
+the orchestrator guide, the workflow template and example workflows). With
+`--pwd PATH`, the folder must exist and Bus refuses to replace a `CLAUDE.md` or
+`AGENTS.md` it did not write there.
+
+The first launch in a new folder shows the provider's "trust this folder"
+prompt. Answer it in the agent's terminal; Bus does not pre-trust folders.
 
 Reassign or unassign it later:
 
@@ -127,7 +147,12 @@ bus agent orchestrate "$orchestrator_id" --room "$other_room_id"
 bus agent orchestrate "$orchestrator_id" --none
 ```
 
-The generic forms are `agent add ... --orchestrates ROOM` and
+Reassigning re-fills the room in `CLAUDE.md` and `AGENTS.md`, each only while it
+is still exactly what Bus wrote. An edited file, or a prompt without
+placeholders, is kept as is, and the result's `notice` says so.
+
+The generic forms are `agent add --room master ... [--orchestrates ROOM]
+[--system-prompt TEXT | --system-prompt-file PATH] [--pwd PATH]` and
 `agent orchestrate AGENT (--room ROOM | --none)`. Only agents in MASTER can
 orchestrate. Assigning a second orchestrator to the same room fails until the
 first is unassigned. Deleting a work room leaves its orchestrator in MASTER,
