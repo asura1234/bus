@@ -898,16 +898,6 @@ fn write_framed_bytes(stream: &mut LocalStream, data: &[u8]) -> bool {
 }
 
 /// The client read loop — reads messages from the client and forwards to the server event channel.
-#[cfg(test)]
-fn client_read_loop(
-    stream: LocalStream,
-    client_id: u64,
-    server_event_tx: &mpsc::Sender<ServerEvent>,
-    should_quit: &Arc<AtomicBool>,
-) {
-    client_read_loop_with_endpoint_controls(stream, client_id, server_event_tx, should_quit, None)
-}
-
 fn client_read_loop_with_endpoint_controls(
     mut stream: LocalStream,
     client_id: u64,
@@ -1287,6 +1277,31 @@ mod tests {
         let client = crate::ipc::connect_local_stream(&path).unwrap();
         let server = listener.accept().unwrap();
         (client, server, TestSocketPath(path))
+    }
+
+    fn start_client_read_loop(
+        name: &str,
+    ) -> (
+        LocalStream,
+        mpsc::Receiver<ServerEvent>,
+        Arc<AtomicBool>,
+        std::thread::JoinHandle<()>,
+        TestSocketPath,
+    ) {
+        let (client_stream, server_stream, path) = local_stream_pair(name);
+        let (server_event_tx, server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let read_quit = should_quit.clone();
+        let handle = std::thread::spawn(move || {
+            client_read_loop_with_endpoint_controls(
+                server_stream,
+                7,
+                &server_event_tx,
+                &read_quit,
+                None,
+            )
+        });
+        (client_stream, server_event_rx, should_quit, handle, path)
     }
 
     fn endpoint_hello(surface_cols: u16, surface_rows: u16) -> ClientMessage {
@@ -1743,13 +1758,8 @@ mod tests {
 
     #[test]
     fn client_read_loop_stops_after_detach() {
-        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-detach");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
+        let (mut client_stream, mut server_event_rx, _should_quit, handle, _path) =
+            start_client_read_loop("client-read-detach");
 
         let mut messages = Vec::new();
         protocol::write_message(&mut messages, &ClientMessage::Detach).unwrap();
@@ -1776,14 +1786,8 @@ mod tests {
 
     #[test]
     fn client_read_loop_ignores_unknown_endpoint_control() {
-        let (mut client_stream, server_stream, _path) =
-            local_stream_pair("client-read-future-control");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
+        let (mut client_stream, mut server_event_rx, _should_quit, handle, _path) =
+            start_client_read_loop("client-read-future-control");
 
         protocol::write_message(
             &mut client_stream,
@@ -1804,14 +1808,8 @@ mod tests {
 
     #[test]
     fn client_read_loop_closes_on_unsafe_shell_resize() {
-        let (mut client_stream, server_stream, _path) =
-            local_stream_pair("client-read-unsafe-resize");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
+        let (mut client_stream, mut server_event_rx, _should_quit, handle, _path) =
+            start_client_read_loop("client-read-unsafe-resize");
 
         protocol::write_message(
             &mut client_stream,
@@ -1836,13 +1834,8 @@ mod tests {
 
     #[test]
     fn client_read_loop_rejects_oversized_bracketed_paste_without_disconnect() {
-        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-oversized");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
+        let (mut client_stream, mut server_event_rx, should_quit, handle, _path) =
+            start_client_read_loop("client-read-oversized");
 
         protocol::write_message(
             &mut client_stream,
@@ -1907,14 +1900,8 @@ mod tests {
 
     #[test]
     fn client_read_loop_disconnects_oversized_non_paste_input() {
-        let (mut client_stream, server_stream, _path) =
-            local_stream_pair("client-read-oversized-non-paste");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
+        let (mut client_stream, mut server_event_rx, should_quit, handle, _path) =
+            start_client_read_loop("client-read-oversized-non-paste");
 
         protocol::write_message(
             &mut client_stream,
@@ -1936,14 +1923,8 @@ mod tests {
 
     #[test]
     fn client_read_loop_disconnects_marker_wrapped_invalid_utf8() {
-        let (mut client_stream, server_stream, _path) =
-            local_stream_pair("client-read-invalid-utf8-paste");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
+        let (mut client_stream, mut server_event_rx, should_quit, handle, _path) =
+            start_client_read_loop("client-read-invalid-utf8-paste");
         let mut data = bracketed_paste_with_total_len(MAX_INPUT_PAYLOAD + 1);
         data[b"\x1b[200~".len()] = 0xff;
 
@@ -1962,13 +1943,8 @@ mod tests {
 
     #[test]
     fn client_read_loop_uses_authoritative_shell_resize_surface() {
-        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-resize");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
+        let (mut client_stream, mut server_event_rx, _should_quit, handle, _path) =
+            start_client_read_loop("client-read-resize");
 
         protocol::write_message(
             &mut client_stream,
@@ -2002,13 +1978,8 @@ mod tests {
 
     #[test]
     fn client_read_loop_keeps_single_host_theme_updates_ordered_and_palette_bounded() {
-        let (mut client_stream, server_stream, _path) = local_stream_pair("client-read-host-theme");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let read_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
-        });
+        let (mut client_stream, mut server_event_rx, should_quit, handle, _path) =
+            start_client_read_loop("client-read-host-theme");
 
         let colors = (0..=u8::MAX)
             .map(|index| {
