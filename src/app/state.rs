@@ -831,14 +831,6 @@ impl AppState {
         self.pane_id_aliases.remove(&pane_id.raw());
     }
 
-    pub(crate) fn pane_exposes_host_cursor(
-        &self,
-        _ws_idx: usize,
-        _pane_id: crate::layout::PaneId,
-    ) -> bool {
-        true
-    }
-
     pub fn estimate_pane_size(&self) -> (u16, u16) {
         if let Some(info) = self.view.pane_infos.first() {
             (info.rect.height, info.rect.width)
@@ -1180,28 +1172,6 @@ mod tests {
         state.headless_size = (132, 41);
 
         assert_eq!(state.estimate_pane_size(), (41, 132));
-    }
-
-    #[test]
-    fn agent_terminal_keeps_final_child_cursor_exposed() {
-        let mut state = AppState::test_new();
-        let ws = crate::workspace::Workspace::test_new("test");
-        let pane_id = ws.tabs[0].root_pane;
-        state.terminals.insert(
-            ws.tabs[0].panes[&pane_id].attached_terminal_id.clone(),
-            crate::terminal::TerminalState::new(
-                ws.tabs[0].panes[&pane_id].attached_terminal_id.clone(),
-                std::path::PathBuf::from("/tmp"),
-            ),
-        );
-        state
-            .terminals
-            .get_mut(&ws.tabs[0].panes[&pane_id].attached_terminal_id)
-            .expect("terminal state")
-            .launch_argv = Some(vec!["codex".to_string()]);
-        state.workspaces = vec![ws];
-
-        assert!(state.pane_exposes_host_cursor(0, pane_id));
     }
 
     #[test]

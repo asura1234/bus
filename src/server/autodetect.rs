@@ -166,7 +166,7 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
     };
     Err(io::Error::other(format!(
         "This session needs one final server update before Bus can attach ({requirement}).\n\nserver: v{} endpoint generation {}\nclient: v{} endpoint generation {}\n\n{}",
-        status.version.as_deref().unwrap_or("unknown"),
+        status.version,
         endpoint_generation
             .map(|value| value.to_string())
             .unwrap_or_else(|| "unavailable".to_string()),
@@ -523,8 +523,8 @@ test "$sid" = "$$"
             .unwrap()
             .unwrap();
         let _ = handle.join();
-        assert_eq!(status.version.as_deref(), Some("0.5.5"));
-        assert_eq!(status.protocol, Some(2));
+        assert_eq!(status.version, "0.5.5");
+        assert_eq!(status.protocol, 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 

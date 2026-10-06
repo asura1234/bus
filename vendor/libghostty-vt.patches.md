@@ -71,7 +71,7 @@ modifyOtherKeys mode 2 and Herdr can use it without this patch.
 verification:
 
 ```sh
-cargo nextest run --locked modify_other_keys_query_tracks_mode_two
+cargo nextest run --locked tracks_and_replays_exact_modify_other_keys_level
 cargo nextest run --locked host_report_all_supplies_printable_releases_for_event_type_only_panes
 python3 -m unittest scripts.test_vendor_libghostty_vt scripts.test_ui_hot_path_architecture
 ```
