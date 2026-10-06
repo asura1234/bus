@@ -18,15 +18,20 @@ impl BusUi {
         outcome: &mut ClientShellInput,
     ) -> bool {
         if let RawInputEvent::Key(key) = event {
-            let quit = (matches!(key.code, KeyCode::Char('c' | 'C'))
-                && key.modifiers == KeyModifiers::CONTROL)
-                || (matches!(key.code, KeyCode::Char('q' | 'Q'))
-                    && key.modifiers.contains(KeyModifiers::CONTROL));
-            if quit && key.kind != KeyEventKind::Release {
-                if matches!(key.code, KeyCode::Char('c' | 'C')) && self.clear_composer() {
+            // Ctrl+C never quits Bus. A focused agent terminal receives it
+            // unchanged below so the human can interrupt the agent; the room
+            // composer clears its draft; everywhere else it does nothing.
+            let interrupt = matches!(key.code, KeyCode::Char('c' | 'C'))
+                && key.modifiers == KeyModifiers::CONTROL;
+            if interrupt && !self.terminal_has_focus() {
+                if key.kind != KeyEventKind::Release && self.clear_composer() {
                     outcome.repaint = true;
-                    return true;
                 }
+                return true;
+            }
+            let quit = matches!(key.code, KeyCode::Char('q' | 'Q'))
+                && key.modifiers.contains(KeyModifiers::CONTROL);
+            if quit && key.kind != KeyEventKind::Release {
                 if key.modifiers.contains(KeyModifiers::SHIFT) && self.force_exit_available {
                     outcome.detach = true;
                 } else {
@@ -297,6 +302,13 @@ impl BusUi {
         true
     }
 
+    /// An agent terminal is open with no Bus overlay taking its keys.
+    fn terminal_has_focus(&self) -> bool {
+        self.terminal.is_some()
+            && self.deletion.is_none()
+            && self.form.is_none()
+            && self.rename.is_none()
+    }
     pub fn terminal_ready(&self, pane: Option<&str>) -> bool {
         self.terminal.is_some()
             && self.deletion.is_none()

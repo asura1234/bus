@@ -243,6 +243,11 @@ fn run_client_with_mode(
     }) {
         warn!(%err, "failed to install termination handler; terminal restore relies on TerminalGuard::Drop and the panic hook");
     }
+    // Ctrl+C belongs to the agents, so a SIGINT (for example from a terminal
+    // that still delivers one in raw mode) must not quit the client. This runs
+    // after ctrlc so it replaces only ctrlc's SIGINT hook; SIGTERM and SIGHUP
+    // still take the quit path above.
+    crate::platform::disregard_interrupt_signal();
 
     let result = rt.block_on(async {
         run_client_loop(
@@ -1379,7 +1384,7 @@ async fn run_client_loop(
         }
     }
 
-    // Clean exit (Ctrl+C). Send Detach before closing.
+    // Clean exit (Ctrl+Q). Send Detach before closing.
     let detach = ClientMessage::Detach;
     let _ = write_to_server(&mut write_stream, &detach);
     let _ = io::stdout().flush();

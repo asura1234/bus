@@ -2104,9 +2104,89 @@ fn quit_waits_for_draft_then_shutdown_ack_instead_of_exiting_immediately() {
         .any(|p| matches!(p.command, BusCommand::Shutdown)));
 }
 
+fn shell_with(ui: BusUi) -> crate::client::shell::ClientShellState {
+    let mut shell = crate::client::shell::ClientShellState::new(
+        crate::client::shell::ClientShellConfig::from_config(&crate::config::Config::default()),
+    );
+    shell.bus = Some(ui);
+    shell.snapshot = Some(Box::new(crate::client::shell::tests::snapshot()));
+    shell.pane_surface = Some(crate::client::shell::tests::surface());
+    shell.compose(100, 30);
+    shell
+}
+
+fn forwards_ctrl_c_to(outcome: &crate::client::shell::ClientShellInput, pane: &str) -> bool {
+    outcome.requests.iter().any(|r| {
+        matches!(
+            r,
+            crate::protocol::ClientMessage::ClientShellPaneInput { pane_id, events }
+                if pane_id == pane
+                    && matches!(
+                        &events[..],
+                        [crate::protocol::ClientPaneInputEvent::Key {
+                            code: crate::protocol::ClientKeyCode::Char('c'),
+                            modifiers,
+                            ..
+                        }] if *modifiers == KeyModifiers::CONTROL.bits()
+                    )
+        )
+    })
+}
+
 #[test]
-fn ctrl_c_clears_room_draft_then_quits_from_any_view_without_forwarding_or_losing_saves() {
-    for view in ["room", "form", "terminal"] {
+fn ctrl_c_in_focused_agent_terminal_is_forwarded_and_does_not_quit_bus() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("keep this draft");
+    ui.text_changed(room);
+    ui.open_terminal(agent);
+    ui.receive_event(BusEvent::TerminalFocused {
+        agent,
+        pane_id: "pane_1".into(),
+    });
+    let mut shell = shell_with(ui);
+    for _ in 0..2 {
+        let outcome = shell.handle_input_bytes(b"\x03");
+        assert!(!outcome.detach);
+        assert!(
+            forwards_ctrl_c_to(&outcome, "pane_1"),
+            "Ctrl+C must reach the agent unchanged"
+        );
+        let ui = shell.bus.as_ref().unwrap();
+        assert!(ui.quitting.is_none(), "Ctrl+C must not quit Bus");
+        assert!(ui.terminal.is_some(), "the agent terminal stays open");
+        assert_eq!(ui.locals[&room].text.text, "keep this draft");
+    }
+}
+
+#[test]
+fn ctrl_c_in_room_clears_the_draft_and_never_quits_bus() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().text.insert("clear me");
+    ui.text_changed(room);
+    let mut shell = shell_with(ui);
+    // The first press clears the draft; an empty composer then ignores it.
+    for expected in ["", ""] {
+        let outcome = shell.handle_input_bytes(b"\x03");
+        assert!(!outcome.detach);
+        assert!(!outcome.requests.iter().any(|r| matches!(
+            r,
+            crate::protocol::ClientMessage::ClientShellPaneInput { .. }
+        )));
+        let ui = shell.bus.as_ref().unwrap();
+        assert!(ui.quitting.is_none(), "Ctrl+C must not quit Bus");
+        assert_eq!(ui.locals[&room].text.text, expected);
+    }
+    let ui = shell.bus.as_ref().unwrap();
+    assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text.is_empty())));
+}
+
+#[test]
+fn ctrl_c_in_forms_and_unfocused_terminals_does_nothing() {
+    for view in ["form", "rename", "terminal_not_ready"] {
         let (mut ui, room, agent) = fixture();
         ui.locals
             .get_mut(&room)
@@ -2114,34 +2194,47 @@ fn ctrl_c_clears_room_draft_then_quits_from_any_view_without_forwarding_or_losin
             .text
             .insert("keep this draft");
         ui.text_changed(room);
-        if view == "form" {
-            ui.action(render::Action::NewRoom);
-        } else if view == "terminal" {
+        match view {
+            "form" => ui.action(render::Action::NewRoom),
+            "rename" => key(&mut ui, KeyCode::F(2), KeyModifiers::NONE),
+            _ => ui.open_terminal(agent),
+        }
+        assert!(ui.form.is_some() || ui.rename.is_some() || ui.terminal.is_some());
+        assert!(view != "rename" || ui.rename.is_some());
+        let mut shell = shell_with(ui);
+        let outcome = shell.handle_input_bytes(b"\x03");
+        assert!(!outcome.detach);
+        assert!(!forwards_ctrl_c_to(&outcome, "pane_1"), "{view}");
+        let ui = shell.bus.as_ref().unwrap();
+        assert!(
+            ui.quitting.is_none(),
+            "Ctrl+C must not quit Bus from {view}"
+        );
+        assert_eq!(ui.locals[&room].text.text, "keep this draft");
+    }
+}
+
+#[test]
+fn ctrl_q_still_quits_from_room_and_agent_terminal_after_saving() {
+    for view in ["room", "terminal"] {
+        let (mut ui, room, agent) = fixture();
+        ui.locals
+            .get_mut(&room)
+            .unwrap()
+            .text
+            .insert("keep this draft");
+        ui.text_changed(room);
+        if view == "terminal" {
             ui.open_terminal(agent);
             ui.receive_event(BusEvent::TerminalFocused {
                 agent,
                 pane_id: "pane_1".into(),
             });
         }
-        let mut shell = crate::client::shell::ClientShellState::new(
-            crate::client::shell::ClientShellConfig::from_config(&crate::config::Config::default()),
-        );
-        shell.bus = Some(ui);
-        shell.snapshot = Some(Box::new(crate::client::shell::tests::snapshot()));
-        shell.pane_surface = Some(crate::client::shell::tests::surface());
-        shell.compose(100, 30);
-        // Only the room shows the draft box, so only there Ctrl+C clears it first.
-        let expected = if view == "room" {
-            shell.handle_input_bytes(b"\x03");
-            let ui = shell.bus.as_ref().unwrap();
-            assert!(ui.quitting.is_none(), "a visible draft blocks quitting");
-            ""
-        } else {
-            "keep this draft"
-        };
-        let outcome = shell.handle_input_bytes(b"\x03");
-        let ui = shell.bus.as_mut().unwrap();
-        assert!(ui.quitting.is_some(), "Ctrl+C must quit from {view}");
+        let mut shell = shell_with(ui);
+        let outcome = shell.handle_input_bytes(b"\x11");
+        let ui = shell.bus.as_ref().unwrap();
+        assert!(ui.quitting.is_some(), "Ctrl+Q must quit from {view}");
         assert!(
             !outcome.detach && !ui.exit_ready,
             "wait for save acknowledgements"
@@ -2150,12 +2243,8 @@ fn ctrl_c_clears_room_draft_then_quits_from_any_view_without_forwarding_or_losin
             r,
             crate::protocol::ClientMessage::ClientShellPaneInput { .. }
         )));
-        assert_eq!(ui.locals[&room].text.text, expected);
-        assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text == expected)));
-        assert!(!ui
-            .pending
-            .iter()
-            .any(|p| matches!(p.command, BusCommand::Shutdown)));
+        assert_eq!(ui.locals[&room].text.text, "keep this draft");
+        assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text == "keep this draft")));
     }
 }
 
@@ -2173,11 +2262,12 @@ fn ctrl_c_release_and_modified_copy_chords_do_not_quit_bus() {
         KeyModifiers::SUPER,
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
         KeyModifiers::CONTROL | KeyModifiers::ALT,
+        KeyModifiers::CONTROL,
     ] {
         key(&mut ui, KeyCode::Char('c'), modifiers);
     }
     assert!(ui.quitting.is_none());
-    key(&mut ui, KeyCode::Char('c'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert!(ui.quitting.is_some());
 }
 

@@ -967,7 +967,7 @@ impl BusUi {
             if self.quitting.is_some() {
                 "Saving before exit…"
             } else if self.force_exit_available {
-                "Ctrl+C retries saving"
+                "Ctrl+Q retries saving"
             } else {
                 ""
             },

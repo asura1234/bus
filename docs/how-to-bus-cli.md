@@ -727,7 +727,7 @@ bus stop
 last opened session) and works without `--dev`. It waits until the server is
 gone and prints `{"stopped":true}`, or `{"stopped":false}` when no server was
 running. An attached UI loses its server and exits without saving drafts, so
-run `bus quit` (or press Ctrl+C) first, as the end-to-end check does.
+run `bus quit` (or press Ctrl+Q) first, as the end-to-end check does.
 A destructive command without `--confirm` fails and names the missing flag.
 
 Deletion closes an agent's terminal only while the running server still

@@ -736,7 +736,7 @@ impl BusUi {
         {
             self.quitting = None;
             self.force_exit_available = true;
-            self.error=Some("Unsaved changes or slow storage. Ctrl+C retries saving; Ctrl+Shift+Q exits and may lose unsaved edits.".into());
+            self.error=Some("Unsaved changes or slow storage. Ctrl+Q retries saving; Ctrl+Shift+Q exits and may lose unsaved edits.".into());
             changed = true;
         }
         // Confirmation must reach the worker even while an earlier Submit is
@@ -837,8 +837,8 @@ impl BusUi {
         self.status_animation_last_tick = Some(now);
         true
     }
-    /// Ctrl+C clears a visible room draft before it may quit Bus. A draft that
-    /// is already being sent stays intact, but still keeps Bus open.
+    /// Ctrl+C clears a visible room draft; it never quits Bus. A draft that is
+    /// already being sent stays intact.
     pub(super) fn clear_composer(&mut self) -> bool {
         if self.quitting.is_some()
             || self.force_exit_available

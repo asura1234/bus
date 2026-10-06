@@ -22,7 +22,7 @@ Ctrl+R         Search prompt history
 Ctrl+S         Stash the current prompt; empty composer restores it
 Ctrl+G         Open the prompt in $EDITOR
 Ctrl+V         Attach a clipboard image
-Ctrl+C         Clear the draft; quits only when it is empty
+Ctrl+C         Clear the draft (never quits Bus)
 Mouse drag     Select notes, history or draft text and copy it
 @              Choose agents (Shift+2 on US keyboards)
 + / Ctrl+F     Add files (Shift+= on US keyboards)
@@ -47,6 +47,7 @@ Click #room    On a MASTER agent, reassign or unassign the room it
                orchestrates; click its name to open its terminal
 Esc / Enter    Cancel / OK in the delete warning
 F6             Return from terminal to room
+Ctrl+C         In an agent terminal, interrupt the agent
 
 Forms
 Tab / Shift+Tab  Move fields
@@ -58,5 +59,5 @@ Ctrl+Enter     Confirm form
 Esc            Cancel
 
 Quit
-Ctrl+C / Ctrl+Q Save and quit (retry if saving failed)
+Ctrl+Q         Save and quit (retry if saving failed)
 Ctrl+Shift+Q   Force quit only after an unsaved warning";
