@@ -2770,29 +2770,16 @@ pub(super) fn ghostty_blank_symbol_for_width(wide: crate::ghostty::CellWide) -> 
     }
 }
 
-#[cfg(test)]
-pub(super) fn ghostty_normalize_buffer_symbol(
-    symbol: &str,
-    wide: crate::ghostty::CellWide,
-) -> String {
+fn ghostty_symbol_fits_cell(symbol: &str, wide: crate::ghostty::CellWide) -> bool {
     let expected_width = match wide {
         crate::ghostty::CellWide::Wide => 2,
         crate::ghostty::CellWide::Narrow | crate::ghostty::CellWide::SpacerHead => 1,
         crate::ghostty::CellWide::SpacerTail => 0,
     };
     let actual_width = symbol.width();
-    if actual_width == expected_width {
-        return symbol.to_string();
-    }
-
-    if wide == crate::ghostty::CellWide::Narrow && actual_width == 2 {
-        return symbol.to_string();
-    }
-    if wide == crate::ghostty::CellWide::Wide && is_halfwidth_katakana_voiced_grapheme(symbol) {
-        return symbol.to_string();
-    }
-
-    ghostty_blank_symbol_for_width(wide).to_string()
+    actual_width == expected_width
+        || (wide == crate::ghostty::CellWide::Narrow && actual_width == 2)
+        || (wide == crate::ghostty::CellWide::Wide && is_halfwidth_katakana_voiced_grapheme(symbol))
 }
 
 fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {
@@ -2831,17 +2818,7 @@ fn ghostty_buffer_symbol_into<'a>(
         }
     }
 
-    let expected_width = match wide {
-        crate::ghostty::CellWide::Wide => 2,
-        crate::ghostty::CellWide::Narrow | crate::ghostty::CellWide::SpacerHead => 1,
-        crate::ghostty::CellWide::SpacerTail => 0,
-    };
-    let actual_width = symbol_scratch.width();
-    if actual_width != expected_width
-        && !(wide == crate::ghostty::CellWide::Narrow && actual_width == 2)
-        && !(wide == crate::ghostty::CellWide::Wide
-            && is_halfwidth_katakana_voiced_grapheme(symbol_scratch))
-    {
+    if !ghostty_symbol_fits_cell(symbol_scratch, wide) {
         symbol_scratch.clear();
         symbol_scratch.push_str(ghostty_blank_symbol_for_width(wide));
     }
@@ -4787,6 +4764,14 @@ mod tests {
 
         assert_eq!(exact.as_deref(), Some(&b"\x1b[<35;48;139M"[..]));
         assert_eq!(fallback.as_deref(), Some(&b"\x1b[<35;5;7M"[..]));
+    }
+
+    fn ghostty_normalize_buffer_symbol(symbol: &str, wide: crate::ghostty::CellWide) -> String {
+        if ghostty_symbol_fits_cell(symbol, wide) {
+            symbol.to_string()
+        } else {
+            ghostty_blank_symbol_for_width(wide).to_string()
+        }
     }
 
     #[test]
