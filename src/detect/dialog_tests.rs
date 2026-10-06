@@ -207,6 +207,53 @@ fn transcripts_and_idle_screens_have_no_dialog() {
     }
 }
 
+// Captured live from Claude Code 2.1.291, which no longer numbers this prompt.
+const CLAUDE_TRUST_UNNUMBERED: &str = concat!(
+    "─────────────────────────────────────────────────\n",
+    " Accessing workspace:\n\n",
+    " /Users/dev/work/bus/temp/e2e/workspace\n\n",
+    " Quick safety check: Is this a project you created or one you trust?\n\n",
+    " Claude Code'll be able to read, edit, and execute files here.\n\n",
+    " Security guide\n\n",
+    " ❯ No, exit\n",
+    "   Yes, I trust this folder\n\n",
+    " Enter to confirm · Esc to cancel\n",
+);
+
+#[test]
+fn unnumbered_options_parse_when_a_confirm_hint_follows() {
+    let trust = parse(CLAUDE_TRUST_UNNUMBERED).unwrap();
+    assert_eq!(
+        labels(&trust),
+        [
+            (1, "No, exit", true),
+            (2, "Yes, I trust this folder", false)
+        ]
+    );
+    assert!(trust
+        .text
+        .contains("/Users/dev/work/bus/temp/e2e/workspace"));
+    assert_eq!(
+        trust.hint.as_deref(),
+        Some("Enter to confirm · Esc to cancel")
+    );
+    assert_eq!(trust.keys_for(2), Some(vec!["down", "enter"]));
+
+    let below_transcript = format!("❯ 1. Old\n  2. Older\n\n{CLAUDE_TRUST_UNNUMBERED}");
+    assert_eq!(parse(&below_transcript).unwrap().options.len(), 2);
+
+    for screen in [
+        // A composer: one line, or wrapped input without a confirm hint.
+        "❯ fix the parser\n\nEnter to confirm\n",
+        "› fix the parser\n  and add tests\n\n• Working (3s • esc to interrupt)\n",
+        "❯ fix the parser\n  and add tests\n────────────────\n  ⏵⏵ auto mode on\n",
+        // A list with a live composer below it.
+        "❯ No, exit\n  Yes, I trust this folder\n\nEnter to confirm\n\n❯ \n",
+    ] {
+        assert_eq!(parse(screen), None, "{screen}");
+    }
+}
+
 #[test]
 fn only_the_last_numbered_block_is_live() {
     let screen = format!("Earlier plan:\n❯ 1. Old\n  2. Older\n\nsome output\n\n{CLAUDE_TRUST}");

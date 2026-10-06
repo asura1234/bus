@@ -1,4 +1,4 @@
-//! Numbered choice dialogs on an agent's visible screen, provider-neutral.
+//! Choice dialogs on an agent's visible screen, provider-neutral.
 //!
 //! Permission prompts, trust prompts and question panels from Claude Code,
 //! Codex and similar TUIs all render a contiguous block of `1. ...`, `2. ...`
@@ -172,6 +172,70 @@ fn is_hint(line: &str) -> bool {
 pub(crate) fn parse(screen: &str) -> Option<Dialog> {
     let (texts, styles) = styled_lines(screen);
     let lines: Vec<&str> = texts.iter().map(String::as_str).collect();
+    numbered(&lines, &styles).or_else(|| unnumbered(&lines))
+}
+
+/// A selected option without a number, such as `❯ No, exit`.
+fn marked_label(line: &str) -> Option<(usize, &str)> {
+    let line = unboxed(line);
+    let after = line.trim_start().strip_prefix(MARKERS)?;
+    let label = after.trim_start();
+    if label.is_empty() || option_line(line).is_some() || after.len() == label.len() {
+        return None;
+    }
+    Some((indentation(line) + 1 + indentation(after), label.trim()))
+}
+
+/// Claude Code's folder trust prompt draws its options without numbers:
+/// `❯ No, exit` above `  Yes, I trust this folder`, then an `Enter to ...`
+/// hint. Only the last marked line can be live, its unmarked siblings start in
+/// the same column, and the hint must follow, which a composer never has.
+/// Options are numbered top to bottom.
+fn unnumbered(lines: &[&str]) -> Option<Dialog> {
+    let marked = lines
+        .iter()
+        .rposition(|line| unboxed(line).trim_start().starts_with(MARKERS))?;
+    let (column, _) = marked_label(lines[marked])?;
+    let sibling = |line: &str| {
+        let text = unboxed(line);
+        !text.trim().is_empty()
+            && indentation(text) == column
+            && !is_separator(text)
+            && !is_hint(text)
+    };
+    let mut start = marked;
+    while start > 0 && sibling(lines[start - 1]) {
+        start -= 1;
+    }
+    let mut end = marked + 1;
+    while end < lines.len() && sibling(lines[end]) {
+        end += 1;
+    }
+    let hint = lines[end..]
+        .iter()
+        .map(|line| unboxed(line).trim())
+        .find(|line| !line.is_empty())?;
+    if end - start < 2 || !hint.to_lowercase().starts_with("enter to") {
+        return None;
+    }
+    Some(Dialog {
+        text: title(&lines[..start]),
+        options: (start..end)
+            .map(|index| DialogOption {
+                number: (index - start + 1) as u32,
+                label: match marked_label(lines[index]) {
+                    Some((_, label)) => label.to_owned(),
+                    None => unboxed(lines[index]).trim().to_owned(),
+                },
+                selected: index == marked,
+            })
+            .collect(),
+        hint: Some(hint.to_owned()),
+    })
+}
+
+/// The last block of `1. ...`, `2. ...` options, when it is a live dialog.
+fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     // The last option numbered 1 starts the only block that can be live.
     let start = lines
         .iter()

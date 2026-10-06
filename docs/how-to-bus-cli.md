@@ -430,7 +430,10 @@ permission prompts, folder-trust prompts, and question panels such as Claude
 Code's `❯ 1. Yes / 2. Yes, and don't ask again / 3. No` or Codex's
 `› 1. Yes, proceed (y)`. Bus finds any numbered option list on an agent's screen
 and the selected option, marked by `›`, `>`, `❯` or similar, or drawn
-highlighted. `bus state` marks such an agent `dialog: true`.
+highlighted. An unnumbered list counts too when an `Enter to ...` key hint
+follows it, as in Claude Code's folder trust prompt (`❯ No, exit` above
+`Yes, I trust this folder`); its options are numbered from the top. `bus state`
+marks such an agent `dialog: true`.
 
 Bus tells someone without being asked. Once a dialog has been on screen for
 about a second, Bus sends the room's orchestrator a message in MASTER, delivered
