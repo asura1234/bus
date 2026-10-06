@@ -274,19 +274,6 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
     best.map(|(_, agent, name)| (agent, name))
 }
 
-/// Detect the state of an agent from the live terminal tail snapshot.
-/// If `agent` is `None`, returns `Unknown`.
-#[cfg(test)]
-pub fn detect_state(agent: Option<Agent>, screen_content: &str) -> AgentState {
-    detect_agent(agent, screen_content).state
-}
-
-/// Detect state and whether a visible blocker is present on the current screen.
-#[allow(dead_code)] // shim for existing callers; detect_agent_with_osc is the real path
-pub fn detect_agent(agent: Option<Agent>, screen_content: &str) -> AgentDetection {
-    detect_agent_with_osc(agent, screen_content, "", "")
-}
-
 /// Detect state using screen content plus OSC title/progress strings.
 pub fn detect_agent_with_osc(
     agent: Option<Agent>,
@@ -762,7 +749,7 @@ mod tests {
 
     #[test]
     fn moved_agent_detection_routes_through_production_dispatch() {
-        let detection = detect_agent(Some(Agent::Pi), "Working...");
+        let detection = detect_agent_with_osc(Some(Agent::Pi), "Working...", "", "");
 
         assert_eq!(detection.state, AgentState::Working);
         assert!(detection.visible_working);
@@ -1476,7 +1463,10 @@ mod tests {
 
     #[test]
     fn no_agent_returns_unknown() {
-        assert_eq!(detect_state(None, "anything"), AgentState::Unknown);
+        assert_eq!(
+            detect_agent_with_osc(None, "anything", "", "").state,
+            AgentState::Unknown
+        );
     }
 
     // ---- Process identification (real PTY) ----
