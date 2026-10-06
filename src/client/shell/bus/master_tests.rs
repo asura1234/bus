@@ -555,3 +555,87 @@ fn master_agent_form_validation_errors_are_visible_in_a_24_row_terminal() {
         "validation must explain why Add did not submit in a 24-row terminal: {screen}"
     );
 }
+
+/// Columns where `name` is drawn on the first screen row containing `marker`,
+/// and those cells' colors.
+fn name_colors(ui: &mut BusUi, marker: &str, name: &str) -> Vec<ratatui::style::Color> {
+    ui.compute_view(100, 30);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let sidebar = ui.view.sidebar.width;
+    for y in 0..30 {
+        let cells: Vec<_> = (sidebar..100).map(|x| buffer[(x, y)].symbol()).collect();
+        let row = cells.concat();
+        if !row.contains(marker) {
+            continue;
+        }
+        let start = cells
+            .windows(name.chars().count())
+            .position(|window| window.concat() == name)
+            .expect("name on the marker row") as u16;
+        return (0..name.chars().count() as u16)
+            .map(|offset| buffer[(sidebar + start + offset, y)].fg)
+            .collect();
+    }
+    panic!("no row with {marker:?}");
+}
+
+#[test]
+fn orchestrators_are_green_in_work_room_messages_in_both_palettes() {
+    let green = ratatui::style::Color::Rgb(102, 255, 102);
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    let orchestrator = state
+        .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
+        .unwrap();
+    let worker = state
+        .create_agent(work, "builder", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    // Per-room allocation can give both the same color; force that case.
+    let mut value = serde_json::to_value(&state).unwrap();
+    for agent in [orchestrator, worker] {
+        value["agents"][agent.0.to_string()]["color"] = serde_json::json!([255, 85, 255]);
+        value["agents"][agent.0.to_string()]["accessible_color"] = serde_json::json!([255, 170, 0]);
+    }
+    let mut state: BusState = serde_json::from_value(value).unwrap();
+    let draft = |to| Draft {
+        text: "next step".into(),
+        files: Vec::new(),
+        recipient_ids: AgentRecipients::from([to]),
+    };
+    state
+        .submit_message_from(work, draft(worker), Author::Agent(orchestrator), 5)
+        .unwrap();
+    state
+        .submit_message_from(master, draft(orchestrator), Author::Human, 5)
+        .unwrap();
+    let mut ui = BusUi::new(Arc::new(BusSnapshot {
+        state,
+        revision: 0,
+        last_command_id: 0,
+        error: None,
+    }));
+
+    for (color_blind, worker_color) in [
+        (false, ratatui::style::Color::Rgb(255, 85, 255)),
+        (true, ratatui::style::Color::Rgb(255, 170, 0)),
+    ] {
+        ui.settings.color_blind_mode = color_blind;
+        ui.open_room(work);
+        assert_eq!(name_colors(&mut ui, "orch → builder", "orch"), [green; 4]);
+        assert_eq!(
+            name_colors(&mut ui, "orch → builder", "builder"),
+            [worker_color; 7]
+        );
+        // Workers never get You's green, so the orchestrator stays distinct.
+        assert_ne!(worker_color, green);
+
+        // MASTER keeps identity colors so orchestrators stay apart there.
+        ui.open_room(master);
+        assert_eq!(
+            name_colors(&mut ui, "You → orch", "orch"),
+            [worker_color; 4]
+        );
+    }
+}

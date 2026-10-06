@@ -440,6 +440,24 @@ fn identity_color(agent: &Agent, settings: &crate::bus::settings::BusSettings) -
     Color::Rgb(r, g, b)
 }
 
+/// The color of an agent's name in a message: in a work room, every MASTER
+/// orchestrator is drawn in You's green, which agent allocation (standard and
+/// color blind) keeps clear of, so it never shares a worker's color. MASTER
+/// itself keeps identity colors to tell its orchestrators apart.
+fn message_name_color(
+    state: &BusState,
+    open_room: Option<RoomId>,
+    agent: &Agent,
+    settings: &crate::bus::settings::BusSettings,
+) -> Color {
+    let in_master = |room| state.master_room().is_some_and(|master| master.id == room);
+    if in_master(agent.room_id) && !open_room.is_some_and(in_master) {
+        ACCENT
+    } else {
+        identity_color(agent, settings)
+    }
+}
+
 fn midpoint_color(first: Color, second: Color) -> Color {
     let midpoint = |first: u8, second: u8| (u16::from(first) + u16::from(second)).div_ceil(2) as u8;
     match (first, second) {
@@ -1228,11 +1246,16 @@ impl BusUi {
                 let span_width = unicode_width::UnicodeWidthStr::width(text.as_str()) as u16;
                 let color = match tone {
                     super::history::Tone::You => Some(ACCENT),
-                    super::history::Tone::Agent(id) => self
-                        .snapshot
-                        .state
-                        .agent(*id)
-                        .map(|agent| identity_color(agent, &self.settings)),
+                    super::history::Tone::Agent(id) => {
+                        self.snapshot.state.agent(*id).map(|agent| {
+                            message_name_color(
+                                &self.snapshot.state,
+                                self.room,
+                                agent,
+                                &self.settings,
+                            )
+                        })
+                    }
                     _ => None,
                 };
                 if let Some(color) = color {
@@ -1302,7 +1325,9 @@ impl BusUi {
                 .snapshot
                 .state
                 .agent(chip.agent)
-                .map_or(ACCENT, |agent| identity_color(agent, &self.settings));
+                .map_or(ACCENT, |agent| {
+                    message_name_color(&self.snapshot.state, self.room, agent, &self.settings)
+                });
             view.recipient_chips.push((rect, color));
             let label_rect = Rect::new(rect.x + 2, rect.y + 1, rect.width.saturating_sub(4), 1);
             view.row(label_rect, &chip.label, None, false, false);
