@@ -12,13 +12,14 @@ Part X depends on part Y when X modifies code Y introduces, or relies on it
 (calls a function, implements a trait, uses a type, extends a test fixture Y
 adds). Evidence, strongest first:
 
-1. Textual: in a scratch worktree at the base, cherry-pick X alone. A conflict
-   that disappears once X's declared parents are cherry-picked first proves the
-   dependency. A conflict that remains means a parent is missing: `git blame`
-   on the conflicting lines at the source tip names the commit, and the plan
-   names its part; add that edge, or regroup.
-2. Semantic: X applies alone, so any dependency must show in a build. X's
-   commits alone on the base must fail `cargo check` or a focused test. If X
+1. `probe` replays X with and without its declared ancestors using
+   `git merge-tree`. `missing-dependency` means X does not apply even with its
+   declared parents: add the parent named in `overlaps`, or regroup.
+   `textual-dependency` means X conflicts alone and applies with its parents:
+   the dependency is proven.
+2. `build-check-dependency` means X applies alone, so the dependency, if real,
+   is semantic. Prove it on a scratch branch: X's commits alone on the base
+   must fail to build or test (`cargo check`, focused `cargo test`). If X
    builds and passes alone, drop the dependency: parallel is cheaper to review
    and merge.
 3. A part declared independent can still need another semantically. The per
@@ -63,17 +64,17 @@ correct only for parts with no open parent. A stacked part is published by
 that passes `pr_format_check.py --phase draft`. Once its parents land and it is
 restacked onto the base, it is an ordinary branch and `pr` finalizes it.
 
-## Parallel work
-
-Independent parts never wait for each other. Build, publish, and restack in
-waves of ready parts, one subagent per part, each in its own worktree; a train
-is just a graph whose waves hold one part each. Only the main agent edits
-PLAN, after each wave, so subagents never race on it.
+Independent PRs never wait for each other. The publish phase runs in waves of
+parts whose parents already have PRs, one subagent per part, so parallel parts
+run `pr` concurrently and a train advances one part per wave. The waves are
+plain agent instructions, not a script: `split_plan.py` stays a deterministic
+helper, and only the main agent writes the plan, after each wave, so
+subagents never race on it.
 
 ## Restack
 
 After review fixes on a parent, children must be rebased onto the new parent
 tip; after a parent squash-merges, children must drop the parent's original
-commits with `git rebase --onto <base> <old parent tip>`. The `Onto` column in
-the plan makes both mechanical. Restack never chases the base branch for its own sake;
+commits with `git rebase --onto <base> <old parent tip>`. The recorded `onto`
+makes both mechanical. Restack never chases the base branch for its own sake;
 that is `rebase-origin-main` on the root.
