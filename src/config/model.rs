@@ -68,8 +68,6 @@ pub enum StatusIndicatorStyle {
     Symbols,
 }
 
-impl StatusIndicatorStyle {}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HostCursorModeConfig {
@@ -137,7 +135,7 @@ fn parse_right_click_passthrough_modifier(value: &str) -> Option<Option<KeyModif
         modifiers |= modifier;
     }
 
-    (!modifiers.is_empty()).then_some(Some(modifiers))
+    Some(Some(modifiers))
 }
 
 #[derive(Debug, Clone)]

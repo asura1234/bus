@@ -64,9 +64,7 @@ fn home_dir_from_env(
             return usable_home_path(env("HOME")).ok_or(());
         }
         let combined = format!("{}{}", drive.to_string_lossy(), path);
-        if let Some(path) = usable_home_path(Some(OsString::from(combined))) {
-            return Ok(path);
-        }
+        return Ok(PathBuf::from(combined));
     }
 
     usable_home_path(env("HOME")).ok_or(())
