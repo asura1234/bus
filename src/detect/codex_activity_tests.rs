@@ -56,6 +56,33 @@ fn live_screen_waiting_on_a_background_terminal_stays_working() {
 }
 
 #[test]
+fn codex_background_activity_with_a_collapsed_question_remains_working() {
+    // Reported live on codex-dev while the server still bundled 2026.09.13.3.
+    let screen = concat!(
+        "• Working (26m 19s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close\n\n",
+        "• Queued follow-up inputs\n",
+        "  ? 1 question\n",
+        "    shift+left to answer\n\n",
+        "› Ask Codex to do anything\n",
+    );
+    for screen in [
+        screen.to_owned(),
+        screen.replace("/stop to close", "/stop\n  to close"),
+    ] {
+        let result = explain(&screen, "[ ! ] Action Required | bus");
+        assert_eq!(result.state, AgentState::Working, "{screen}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("activity_with_stale_question"),
+            "{screen}"
+        );
+        assert!(result.visible_working, "{screen}");
+        assert!(!result.visible_blocker, "{screen}");
+        assert!(crate::detect::dialog::parse(&screen).is_none(), "{screen}");
+    }
+}
+
+#[test]
 fn a_live_permission_dialog_still_blocks_beside_the_stale_banner() {
     let screen = concat!(
         "• Working (4s • esc to interrupt)\n",
