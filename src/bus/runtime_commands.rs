@@ -400,8 +400,17 @@ impl Worker {
                 }
             }
         }
+        // cursor-agent --resume fires no sessionStart; its first hook comes with
+        // the first prompt, which Bus types only into a bound session. The
+        // session Bus itself launched with binds it, and every later callback
+        // must still match it.
+        let session_id = prepared
+            .adopted_session
+            .clone()
+            .filter(|_| input.provider == Provider::Cursor);
         let identity = AgentRuntimeIdentity {
             launch_id: Some(prepared.manifest.launch_id),
+            session_id,
             ..Default::default()
         };
         state
@@ -452,7 +461,7 @@ impl Worker {
                 AgentRuntimeIdentity {
                     pane_id: Some(pane.clone()),
                     terminal_id: Some(terminal),
-                    ..identity
+                    ..identity.clone()
                 },
             )
             .map_err(|e| e.to_string())?;
@@ -463,12 +472,37 @@ impl Worker {
             .request(Method::AgentStart(schema::AgentStartParams {
                 name: format!("bus-r{}-a{}", input.room.0, id.0),
                 kind: launch::provider_kind(input.provider).into(),
-                pane_id: pane,
+                pane_id: pane.clone(),
                 args: prepared.args,
                 timeout_ms: None,
             }));
         match started {
-            Ok(ResponseResult::AgentStarted {..}) => { let _ = events.send(BusEvent::AgentAdded(id)); Ok(()) },
+            Ok(ResponseResult::AgentStarted { .. }) => {
+                let _ = events.send(BusEvent::AgentAdded(id));
+                let Some(session) = identity.session_id else {
+                    return Ok(());
+                };
+                // What a SessionStart hook would report, so the native layer's
+                // identity checks for dialogs and delivery accept this pane.
+                let kind = launch::provider_kind(input.provider);
+                match self.transport.request(Method::PaneReportAgentSession(
+                    schema::PaneReportAgentSessionParams {
+                        pane_id: pane,
+                        source: format!("herdr:{kind}"),
+                        agent: kind.into(),
+                        seq: None,
+                        agent_session_id: Some(session),
+                        agent_session_path: None,
+                        session_start_source: Some("resume".into()),
+                    },
+                )) {
+                    Ok(_) => Ok(()),
+                    Err(error) => self.agent_error(
+                        id,
+                        format!("Adopted session not reported to its terminal: {}", error.message),
+                    ),
+                }
+            }
             other => self.agent_error(id,format!("Agent start outcome requires inspection of its owned terminal; no automatic retry or deletion. {other:?}")),
         }
     }

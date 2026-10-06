@@ -179,6 +179,8 @@ bus agent add --room master --name claude-orch --provider claude \
   `--fork-session`, and a session already bound to another Bus agent.
 - The provider's session-start hook binds the session to the new agent, so
   callbacks, delivery and resume after a restart work as for a fresh agent.
+  Cursor runs no session-start hook on `--resume`, so Bus binds an adopted
+  Cursor session from its launch args; later callbacks must still match it.
 - The orchestrator prompt still applies. Claude Code gets
   `--system-prompt-snapshot off` with the prompt file, because a resumed
   conversation otherwise replays the system prompt it started with. A resumed

@@ -2162,6 +2162,102 @@ fn an_adopted_codex_orchestrator_gets_its_prompt_as_the_first_message() {
 }
 
 #[test]
+fn an_adopted_cursor_session_is_bound_at_launch() {
+    // cursor-agent --resume reports no sessionStart: its first hook is the
+    // first prompt's, which Bus would never type without a bound session.
+    struct Launches {
+        tabs: usize,
+        reported: std::sync::Arc<std::sync::Mutex<Vec<schema::PaneReportAgentSessionParams>>>,
+    }
+    impl Transport for Launches {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            match method {
+                Method::TabCreate(_) => {
+                    self.tabs += 1;
+                    let mut pane = owned_pane_info(None);
+                    pane.pane_id = format!("w1:p{}", self.tabs);
+                    pane.terminal_id = format!("terminal-{}", self.tabs);
+                    Ok(ResponseResult::TabCreated {
+                        tab: serde_json::from_value(json!({
+                            "tab_id": format!("t{}", self.tabs), "workspace_id": "w1",
+                            "number": self.tabs, "label": "adopted", "focused": false,
+                            "pane_count": 1, "agent_status": "idle"
+                        }))
+                        .unwrap(),
+                        root_pane: pane,
+                    })
+                }
+                Method::AgentStart(params) => Ok(ResponseResult::AgentStarted {
+                    agent: owned_agent_info(&params.pane_id, &params.name, None),
+                    argv: params.args,
+                }),
+                Method::PaneReportAgentSession(params) => {
+                    self.reported.lock().unwrap().push(params);
+                    Ok(ResponseResult::Ok {})
+                }
+                other => panic!("unexpected native method: {other:?}"),
+            }
+        }
+    }
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("temp")
+        .join(format!(
+            "bus-cursor-adoption-{}-{}",
+            std::process::id(),
+            crate::bus::io::now_ns()
+        ));
+    crate::bus::io::private_dir(&dir).unwrap();
+    let reported = std::sync::Arc::default();
+    let transport = Launches {
+        tabs: 0,
+        reported: std::sync::Arc::clone(&reported),
+    };
+    let mut worker = Worker::open(dir.clone(), Box::new(transport)).unwrap();
+    worker.dev_enabled = true;
+    let room = worker.state.create_room("adoption").unwrap();
+    let session = "4915eda8-714c-4563-8041-632aea0e3325";
+    for (name, provider, args) in [
+        ("adopted", "cursor", format!("--resume {session}")),
+        ("fresh", "cursor", String::new()),
+        (
+            "claude",
+            "claude",
+            "--resume 160d1f8b-9023-44b8-9bc7-24333effb185".into(),
+        ),
+    ] {
+        let added = call(
+            &mut worker,
+            name,
+            "agent.add",
+            json!({"room":room.0.to_string(),"name":name,"provider":provider,
+                "consent_project_hooks":true,"cwd": dir.to_string_lossy(),"extra_args": args}),
+        );
+        assert!(added.ok, "{added:?}");
+    }
+    let agent = |name: &str| worker.state.agents().find(|a| a.name == name).unwrap();
+    assert_eq!(
+        agent("adopted").runtime_identity.session_id.as_deref(),
+        Some(session)
+    );
+    // Providers that report their session at launch still attest it themselves.
+    assert_eq!(agent("fresh").runtime_identity.session_id, None);
+    assert_eq!(agent("claude").runtime_identity.session_id, None);
+    // The native layer learns it too, as from a SessionStart hook, so dialog
+    // observation and delivery accept the pane.
+    let reported = reported.lock().unwrap().clone();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(
+        Some(reported[0].pane_id.as_str()),
+        agent("adopted").runtime_identity.pane_id.as_deref()
+    );
+    assert_eq!(reported[0].source, "herdr:cursor");
+    assert_eq!(reported[0].agent_session_id.as_deref(), Some(session));
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
     struct SuccessfulLaunches {
         tabs: usize,
