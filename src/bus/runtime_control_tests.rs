@@ -405,16 +405,6 @@ fn room_orchestrator_core_worker_visible_read_returns_viewport_and_correlation_f
                         .unwrap(),
                     })
                 }
-                Method::PaneGet(params) => {
-                    assert_eq!(params.pane_id, "w1:p2");
-                    Ok(ResponseResult::PaneInfo {
-                        pane: owned_pane_info(Some(schema::PaneScrollInfo {
-                            offset_from_bottom: 0,
-                            max_offset_from_bottom: 12,
-                            viewport_rows: 24,
-                        })),
-                    })
-                }
                 Method::AgentRead(params) => {
                     assert_eq!(params.target, "w1:p2");
                     assert_eq!(params.source, schema::ReadSource::Visible);
@@ -504,8 +494,8 @@ fn room_orchestrator_core_worker_visible_read_returns_viewport_and_correlation_f
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-fn owned_pane_info(scroll: Option<schema::PaneScrollInfo>) -> schema::PaneInfo {
-    let mut value = json!({
+fn owned_pane_info() -> schema::PaneInfo {
+    serde_json::from_value(json!({
         "pane_id": "w1:p2",
         "terminal_id": "term_internal",
         "workspace_id": "w1",
@@ -513,11 +503,8 @@ fn owned_pane_info(scroll: Option<schema::PaneScrollInfo>) -> schema::PaneInfo {
         "focused": false,
         "agent_status": "working",
         "revision": 3
-    });
-    if let Some(scroll) = scroll {
-        value["scroll"] = serde_json::to_value(scroll).unwrap();
-    }
-    serde_json::from_value(value).unwrap()
+    }))
+    .unwrap()
 }
 
 fn owned_agent_info(pane_id: &str, name: &str, session: Option<&str>) -> schema::AgentInfo {
@@ -2267,7 +2254,7 @@ fn an_adopted_cursor_session_is_bound_at_launch() {
             match method {
                 Method::TabCreate(_) => {
                     self.tabs += 1;
-                    let mut pane = owned_pane_info(None);
+                    let mut pane = owned_pane_info();
                     pane.pane_id = format!("w1:p{}", self.tabs);
                     pane.terminal_id = format!("terminal-{}", self.tabs);
                     Ok(ResponseResult::TabCreated {
@@ -2360,7 +2347,7 @@ fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
             match method {
                 Method::TabCreate(_) => {
                     self.tabs += 1;
-                    let mut pane = owned_pane_info(None);
+                    let mut pane = owned_pane_info();
                     pane.pane_id = format!("w1:p{}", self.tabs);
                     pane.terminal_id = format!("terminal-{}", self.tabs);
                     Ok(ResponseResult::TabCreated {
