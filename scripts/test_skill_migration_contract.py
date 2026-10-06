@@ -113,7 +113,6 @@ class SkillMigrationContractTest(unittest.TestCase):
             "skills/delete-dead-code/references/dead-code-findings-format.md",
             "skills/gate-and-fix/references/gate-round-format.md",
             "skills/pr/references/pr-template.md",
-            "skills/split-pr/references/split-plan-format.md",
             "skills/update-docs/references/docs-audit-format.md",
         }
         actual = {
