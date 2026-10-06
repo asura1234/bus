@@ -1,7 +1,9 @@
 //! Terminal setup and restoration for the rendered client.
 
 use std::io::{self, Write as _};
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+#[cfg(unix)]
+use std::sync::atomic::AtomicU16;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
