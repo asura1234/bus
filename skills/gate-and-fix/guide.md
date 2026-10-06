@@ -31,6 +31,8 @@ replace `rebase-origin-main`, `update-docs`, or PR creation.
   - **Unit**: instrumented Bus binary tests, excluding `server::headless::`, followed by every
     `test_*.py` / `*_test.py` under `scripts/` and `skills/` with pytest under coverage.py.
     This includes all maintenance suites and all skill suites, on every round.
+    The instrumented CLI is built before Python tests; its explicit `BUS_TEST_BINARY` and profile
+    path ensure CLI tests measure this commit rather than an old `target/debug/bus`.
   - **Integration**: all Rust integration targets under `tests/`, then the in-process
     `server::headless::` harness. No real LLM agents are launched.
   - **Coverage**: cargo-llvm-cov exports the fresh unit + integration profiles; coverage.py combines

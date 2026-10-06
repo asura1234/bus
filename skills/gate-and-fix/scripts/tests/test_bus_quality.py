@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,37 @@ import bus_quality as quality  # noqa: E402
 
 
 class BusQualityTest(unittest.TestCase):
+    def test_unit_builds_cli_and_uses_it_instead_of_a_stale_binary(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            with (
+                patch.object(quality, "ROOT", root),
+                patch.object(quality, "OUTPUT", root / "profiles"),
+                patch.object(quality, "head", return_value="fixture"),
+                patch.object(
+                    quality, "python_files", return_value=[root / "scripts/test_one.py"]
+                ),
+                patch.object(quality, "rust_test", return_value=0),
+                patch.object(quality, "run", return_value=0) as run,
+                patch.dict(os.environ, {"BUS_TEST_BINARY": "/stale/bus"}),
+            ):
+                self.assertEqual(quality.unit(), 0)
+                self.assertEqual(
+                    run.call_args_list[0].args[:3], ("cargo", "llvm-cov", "run")
+                )
+                self.assertEqual(run.call_args_list[0].args[-1], "--help")
+                env = run.call_args.kwargs["env"]
+                self.assertNotEqual(env["BUS_TEST_BINARY"], "/stale/bus")
+                self.assertTrue(
+                    env["BUS_TEST_BINARY"].endswith(
+                        "/debug/bus.exe" if os.name == "nt" else "/debug/bus"
+                    )
+                )
+                self.assertEqual(
+                    env.get("BUS_DATA_DIR"), os.environ.get("BUS_DATA_DIR")
+                )
+                self.assertIn("%p", env["LLVM_PROFILE_FILE"])
+
     def test_file_length_cap_has_only_named_exemptions(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

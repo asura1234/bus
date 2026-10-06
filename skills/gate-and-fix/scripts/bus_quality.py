@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -23,9 +24,9 @@ PYTHON_ROOTS = ("scripts", "skills", "cli_extensions")
 RUST_EXCLUDE = r"/(tests|vendor)/|/(tests|test_support)\.rs$|/build\.rs$|/src/ghostty/bindings\.rs$"
 
 
-def run(*argv: str) -> int:
+def run(*argv: str, env: dict | None = None) -> int:
     print("+ " + subprocess.list2cmdline(argv), flush=True)
-    return subprocess.run(argv, cwd=ROOT).returncode
+    return subprocess.run(argv, cwd=ROOT, env=env).returncode
 
 
 def python_files() -> list[Path]:
@@ -158,6 +159,27 @@ def unit() -> int:
     rust = rust_test(
         "--bin", "bus", fresh=True, test_filter="not test(/^server::headless::/)"
     )
+    cli = run(
+        "cargo",
+        "llvm-cov",
+        "run",
+        "--locked",
+        "--no-report",
+        "--bin",
+        "bus",
+        "--",
+        "--help",
+    )
+    target = Path(
+        os.environ.get("CARGO_LLVM_COV_TARGET_DIR", ROOT / "target/llvm-cov-target")
+    )
+    test_env = dict(
+        os.environ,
+        BUS_TEST_BINARY=str(
+            target / "debug" / ("bus.exe" if os.name == "nt" else "bus")
+        ),
+        LLVM_PROFILE_FILE=str(target / f"{ROOT.name}-%p-%11m.profraw"),
+    )
     tests = [str(path.relative_to(ROOT)) for path in python_files() if is_test(path)]
     if not tests:
         raise ValueError("no Python tests found")
@@ -171,8 +193,9 @@ def unit() -> int:
         "pytest",
         "-q",
         *tests,
+        env=test_env,
     )
-    value["unit"] = not (rust or python)
+    value["unit"] = not (rust or cli or python)
     save_state(value)
     return int(not value["unit"])
 
