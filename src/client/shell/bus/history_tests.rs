@@ -1296,3 +1296,36 @@ fn images_saved_before_a_restart_draw_after_dropped_or_cleared_frames() {
     assert_eq!(draws(&ui.thumbnail_graphics()), (true, true));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_notice_on_the_status_line_does_not_hide_history_images() {
+    // Resuming against a running server shows a dev-log notice on the status
+    // line until it is cleared; images above it must still draw.
+    let dir = thumbnail_dir("notice");
+    let image = png(&dir, "earlier.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.graphics = Some(super::thumbnails::Protocol::Kitty);
+    ui.thumbnails
+        .set_protocol(super::thumbnails::Protocol::Kitty);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.error = Some(
+        "Dev logs enabled for this client. An existing server keeps its original log level; \
+         restart it when safe for full server logs. Agents were not restarted."
+            .into(),
+    );
+    ui.compute_view(100, 40);
+
+    assert_eq!(ui.view.thumbnails.len(), 1, "the image stays placed");
+    let placement = ui.view.thumbnails[0].clone();
+    assert!(
+        placement.y + placement.rows <= ui.view.history.y + ui.view.history.height,
+        "the image sits inside the history, clear of the status line"
+    );
+    let graphics = String::from_utf8(ui.thumbnail_graphics()).unwrap();
+    assert!(
+        graphics.contains("a=t,") && graphics.contains("a=p,"),
+        "{graphics}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

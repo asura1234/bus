@@ -1008,13 +1008,14 @@ impl BusUi {
             self.delete_view(&mut view, Rect::new(0, 0, cols, rows));
         }
         // Kitty images draw above text, so hide them under anything that can
-        // cover the history.
+        // cover the history. A notice is not one: the room view shows it on
+        // its own status line under the composer, and the other screens that
+        // show it are covers already.
         if view.dialog.width > 0
             || self.form.is_some()
             || self.deletion.is_some()
             || self.terminal.is_some()
             || self.rename.is_some()
-            || self.visible_error().is_some()
         {
             view.thumbnails.clear();
         }
