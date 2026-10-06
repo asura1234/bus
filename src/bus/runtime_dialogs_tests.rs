@@ -167,6 +167,24 @@ fn notice_names_the_command_and_leaves_the_fingerprint_out() {
     );
 }
 
+#[test]
+fn the_same_blocked_notice_is_not_posted_again_after_a_flicker() {
+    let (mut worker, agent, room, _, screen, dir) = worker(false);
+    screen.lock().unwrap().blocked = true;
+    polls(&mut worker, 3);
+    assert_eq!(notices(&worker, room).len(), 1);
+
+    screen.lock().unwrap().blocked = false;
+    polls(&mut worker, 3);
+    screen.lock().unwrap().blocked = true;
+    polls(&mut worker, 3);
+    let posted = notices(&worker, room);
+    assert_eq!(posted.len(), 1, "{posted:?}");
+    assert!(posted[0].contains(&format!("bus agent read {} --source visible", agent.0)));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn polls(worker: &mut Worker, count: usize) {
     for _ in 0..count {
         worker.poll().unwrap();

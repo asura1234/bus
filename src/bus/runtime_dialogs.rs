@@ -54,8 +54,8 @@ impl Worker {
                         continue;
                     }
                 },
-                // 读不到选项的阻塞自己结束时不再追一条消息。
-                None if agent.dialog_notice.as_deref() == Some(BLOCKED) => None,
+                // 保留已发出的 blocked 标记，屏幕来回闪时不再把同一条通知发第二次。
+                None if agent.dialog_notice.as_deref() == Some(BLOCKED) => continue,
                 None => Some(match agent.dialog_answer {
                     Some(option) => format!("answered: option {option}"),
                     None => "answered".to_owned(),
