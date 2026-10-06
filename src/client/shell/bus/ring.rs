@@ -8,16 +8,22 @@ pub(super) const RING_COOLDOWN: Duration = Duration::from_millis(1500);
 /// Snapshots this soon after start or resume replay what happened while Bus was closed.
 pub(super) const STARTUP_GRACE: Duration = Duration::from_secs(2);
 
-/// Whether a sound-enabled room gained a message the Human did not write: an
-/// agent's final reply, or a prompt authored by an agent (`send --as`). Every
-/// new prompt counts, not only each room's latest, because the Human may send
-/// right after an agent within one snapshot interval.
+/// Whether a sound-enabled room gained a message the Human did not write.
+#[cfg(test)]
 pub(super) fn new_message_should_ring(previous: &BusState, next: &BusState) -> bool {
+    ringing_room(previous, next).is_some()
+}
+
+/// The first sound-enabled room that gained a message the Human did not
+/// write: an agent's final reply, or a prompt authored by an agent (`send
+/// --as`). Every new prompt counts, not only each room's latest, because the
+/// Human may send right after an agent within one snapshot interval.
+pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomId> {
     let rings = |room: RoomId| next.room(room).is_some_and(Room::sound_enabled);
     let new_reply = next
         .rooms()
         .filter(|room| room.sound_enabled())
-        .any(|room| {
+        .find(|room| {
             let before = previous.room(room.id);
             room.latest_replies.iter().any(|(agent, reply)| {
                 before
@@ -25,7 +31,11 @@ pub(super) fn new_message_should_ring(previous: &BusState, next: &BusState) -> b
                     .map(|known| known.request_id)
                     != Some(reply.request_id)
             })
-        });
+        })
+        .map(|room| room.id);
+    if new_reply.is_some() {
+        return new_reply;
+    }
     let known: BTreeSet<PromptId> = previous
         .requests()
         .map(|request| request.prompt.id)
@@ -35,17 +45,16 @@ pub(super) fn new_message_should_ring(previous: &BusState, next: &BusState) -> b
                 .filter_map(|room| room.latest_prompt.as_ref().map(|prompt| prompt.id)),
         )
         .collect();
-    let new_agent_prompt = next
-        .requests()
+    next.requests()
         .map(|request| (request.room_id, &request.prompt))
         .chain(
             next.rooms()
                 .filter_map(|room| room.latest_prompt.as_ref().map(|prompt| (room.id, prompt))),
         )
-        .any(|(room, prompt)| {
-            prompt.author != Author::Human && !known.contains(&prompt.id) && rings(room)
-        });
-    new_reply || new_agent_prompt
+        .find(|(room, prompt)| {
+            prompt.author != Author::Human && !known.contains(&prompt.id) && rings(*room)
+        })
+        .map(|(room, _)| room)
 }
 
 /// Rate-limits dings: silent during the startup grace, then one per burst.

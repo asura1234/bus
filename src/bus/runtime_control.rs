@@ -69,14 +69,14 @@ impl Worker {
             };
         }
         let (fields, mutation): (&[&str], bool) = match request.method.as_str() {
-            "state" | "diagnostics" => (&[], false),
+            "state" | "diagnostics" | "sounds" => (&[], false),
             "room.create" => (&["name"], true),
             "room.rename" => (&["room", "name"], true),
             "room.notes" => (&["room", "text"], true),
             "room.delete" => (&["room", "confirm"], true),
             "room.focus" => (&["room"], true),
             "room.seen" => (&["room"], true),
-            "room.sound" => (&["room", "on"], true),
+            "room.sound" => (&["room", "on", "sound"], true),
             "agent.rename" => (&["agent", "name"], true),
             "agent.details" => (&["agent", "on"], true),
             "settings.color_blind" => (&["on"], true),
@@ -212,7 +212,7 @@ impl Worker {
                 Ok(result)
             }
             "state" => Ok(
-                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"sound":r.sound_enabled(),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json()}),
+                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"sound":r.sound_enabled(),"sound_name":r.sound_name.as_deref().unwrap_or(crate::sound::DEFAULT_SOUND_NAME),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json()}),
             ),
             "diagnostics" => Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"dev":true,"storage_failed":self.storage_failed,"coordinator_error":self.error,"data_dir":self.data_dir,"logs":self.data_dir.join("herdr-config/sessions/bus"),"callback_logs":self.data_dir.join("callbacks"),"agents":self.state.agents().map(|a|json!({"agent_id":a.id,"name":a.name,"status":a.status,"reason":crate::bus::diagnostics::wait_reason(a),"detail":a.actionable_error,"identity":a.runtime_identity,"current_request":a.current_request})).collect::<Vec<_>>()}),
@@ -229,12 +229,37 @@ impl Worker {
             "room.seen" => self.dev_command(BusCommand::MarkRoomSeen(
                 self.dev_room(required(p, "room")?)?,
             )),
-            "room.sound" => self.dev_command(BusCommand::SetRoomSound(
-                self.dev_room(required(p, "room")?)?,
-                p.get("on")
+            "sounds" => Ok(json!({
+                "sounds": std::iter::once(json!({"name": crate::sound::DEFAULT_SOUND_NAME, "path": null}))
+                    .chain(self.system_sounds().into_iter().map(|sound| json!({"name": sound.name, "path": sound.path})))
+                    .collect::<Vec<_>>(),
+            })),
+            "room.sound" => {
+                let room = self.dev_room(required(p, "room")?)?;
+                let on = p
+                    .get("on")
                     .and_then(Value::as_bool)
-                    .ok_or("Sound must be on or off")?,
-            )),
+                    .ok_or("Sound must be on or off")?;
+                // Resolve the name before changing anything, so an unknown
+                // sound leaves the room as it was.
+                let name = match optional_text(p, "sound")? {
+                    None => None,
+                    Some(name) if name.eq_ignore_ascii_case(crate::sound::DEFAULT_SOUND_NAME) => {
+                        Some(None)
+                    }
+                    Some(name) => Some(Some(
+                        crate::sound::find_sound(&self.system_sounds(), name)
+                            .map(|sound| sound.name.clone())
+                            .ok_or_else(|| {
+                                format!("Unknown sound {name:?}; `bus sounds` lists them")
+                            })?,
+                    )),
+                };
+                if let Some(name) = name {
+                    self.dev_command(BusCommand::SetRoomSoundName(room, name))?;
+                }
+                self.dev_command(BusCommand::SetRoomSound(room, on))
+            }
             "agent.details" => self.dev_command(BusCommand::SetDetails(
                 self.dev_agent(required(p, "agent")?, None)?,
                 p.get("on")
@@ -425,6 +450,13 @@ impl Worker {
             }
         }
         Ok(json!({"updated":true}))
+    }
+
+    fn system_sounds(&self) -> Vec<crate::sound::SystemSound> {
+        match &self.sound_dirs {
+            Some(dirs) => crate::sound::list_sounds(dirs),
+            None => crate::sound::system_sounds(),
+        }
     }
 
     fn dev_room(&self, selector: &str) -> Result<RoomId, String> {

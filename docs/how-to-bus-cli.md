@@ -293,7 +293,8 @@ bus state | jq '.result.settings'
   UI, or `null` while a terminal or form is open instead. Deleting the visible
   room moves it to the room the UI falls back to, MASTER.
 - Each room has `id`, `name`, `kind` (`master` or `work`), `notes`,
-  `unread_count`, `sound`, `deletion_pending`, and `orchestrator`: the ID of
+  `unread_count`, `sound`, `sound_name`, `deletion_pending`, and
+  `orchestrator`: the ID of
   the MASTER agent orchestrating it, or `null`.
 - Each agent includes `room_id`, `status`, `dialog`, `details_disclosed`,
   `orchestrates` (the work room it orchestrates, or `null`), and `compactions`:
@@ -331,10 +332,30 @@ bus room sound "$room_id" --on
 bus room sound master --off
 ```
 
-The generic form is `room sound ROOM (--on | --off)`. `state` reports each
-room's `sound`. Bus plays herdr's done sound once, from the client running the
-session, and honors a custom `[ui.sound]` `path` or `done_path`.
-`HERDR_DISABLE_SOUND` silences it.
+Each room also picks which sound it plays: `Default`, Bus's own ding, or one of
+the operating system's sounds. Bus lists them from `/System/Library/Sounds`,
+`/Library/Sounds` and `~/Library/Sounds` on macOS, `%SystemRoot%\Media` on
+Windows, and `/usr/share/sounds` (the freedesktop theme first) on Linux, each by
+its file name without the extension. In Settings, Left and Right on a room, or a
+click on `‹` or `›`, step through the sounds and play the new one as a preview.
+From the CLI:
+
+```sh
+bus sounds
+bus room sound "$room_id" --on --sound Glass
+bus room sound master --on --sound Default
+```
+
+The generic form is `room sound ROOM (--on | --off) [--sound NAME]`; names
+match case-insensitively, and an unknown name changes nothing. Without
+`--sound`, the room keeps its sound. `sounds` lists every choice with its
+`name` and `path` (`null` for `Default`). `state` reports each room's `sound`
+and `sound_name`.
+
+Bus stores the name, not the path, and plays the sound once from the client
+running the session. A sound that is no longer installed or fails to play
+falls back to the default ding, which honors a custom `[ui.sound]` `path` or
+`done_path`. `HERDR_DISABLE_SOUND` silences all of them.
 
 ## Inspect rooms, replies, and terminals
 

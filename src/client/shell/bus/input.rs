@@ -319,6 +319,46 @@ impl BusUi {
             self.queue(BusCommand::SetRoomSound(room, !enabled), Effect::None);
         }
     }
+    /// Moves a room to the next or previous sound (Default first, then the
+    /// system sounds) and plays it as a preview.
+    pub(super) fn cycle_room_sound(&mut self, room: RoomId, forward: bool) {
+        let Some(current) = self.snapshot.state.room(room).map(|r| r.sound_name.clone()) else {
+            return;
+        };
+        let mut choices: Vec<Option<String>> = vec![None];
+        choices.extend(self.system_sounds.iter().flatten().cloned().map(Some));
+        let index = choices
+            .iter()
+            .position(|choice| match (choice, &current) {
+                (Some(choice), Some(current)) => choice.eq_ignore_ascii_case(current),
+                (choice, current) => choice.is_none() && current.is_none(),
+            })
+            .unwrap_or(0);
+        let next = if forward {
+            (index + 1) % choices.len()
+        } else {
+            (index + choices.len() - 1) % choices.len()
+        };
+        let choice = choices.swap_remove(next);
+        if let Some(config) = &self.sound_config {
+            crate::sound::play_named(choice.as_deref(), config);
+        }
+        self.queue(BusCommand::SetRoomSoundName(room, choice), Effect::None);
+    }
+    /// The room's sound as Settings shows it, noting one no longer installed.
+    pub(super) fn room_sound_label(&self, room: &Room) -> String {
+        match &room.sound_name {
+            None => crate::sound::DEFAULT_SOUND_NAME.into(),
+            Some(name)
+                if self.system_sounds.as_ref().is_some_and(|sounds| {
+                    !sounds.iter().any(|sound| sound.eq_ignore_ascii_case(name))
+                }) =>
+            {
+                format!("{name} (missing)")
+            }
+            Some(name) => name.clone(),
+        }
+    }
     /// Keeps the keyboard-focused sound row inside the scrolled Settings list.
     fn reveal_settings_field(&mut self) {
         let Some(line) = self.sound_settings_lines().iter().position(|line| {
@@ -601,6 +641,14 @@ impl BusUi {
             Action::Settings => {
                 self.settings_field = 0;
                 self.settings_scroll = 0;
+                if self.system_sounds.is_none() {
+                    self.system_sounds = Some(
+                        crate::sound::system_sounds()
+                            .into_iter()
+                            .map(|sound| sound.name)
+                            .collect(),
+                    );
+                }
                 self.open_form(Form::Settings);
             }
             Action::ToggleRoomSound(room) => {
@@ -608,6 +656,12 @@ impl BusUi {
                     self.settings_field = index + 1;
                 }
                 self.toggle_room_sound(room);
+            }
+            Action::CycleRoomSound(room, forward) => {
+                if let Some(index) = self.sound_settings_rooms().iter().position(|r| *r == room) {
+                    self.settings_field = index + 1;
+                }
+                self.cycle_room_sound(room, forward);
             }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
             Action::Cancel => {
@@ -1145,6 +1199,15 @@ impl BusUi {
                         }
                     }
                 },
+                KeyCode::Left | KeyCode::Right => {
+                    if let Some(room) = self
+                        .settings_field
+                        .checked_sub(1)
+                        .and_then(|i| rooms.get(i))
+                    {
+                        self.cycle_room_sound(*room, code == KeyCode::Right);
+                    }
+                }
                 _ => {}
             }
             self.reveal_settings_field();

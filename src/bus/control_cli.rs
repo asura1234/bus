@@ -25,7 +25,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   room delete ROOM --confirm
   room focus ROOM
   room seen ROOM
-  room sound ROOM (--on | --off)
+  room sound ROOM (--on | --off) [--sound NAME]
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks] [--orchestrates ROOM]
             [--system-prompt TEXT | --system-prompt-file PATH]
@@ -47,6 +47,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   settings color-blind (--on | --off)
   quit
   diagnostics
+  sounds
 
 Every command accepts --request-id STRING and emits one JSON response.
 ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) for the
@@ -64,6 +65,7 @@ send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
 room seen clears a room's unread count without changing the visible Bus view.
 room sound turns that room's new-message sound on or off; MASTER starts on, work rooms off.
+room sound --sound picks a system sound by name (Default is Bus's own ding); sounds lists them.
 state includes each agent's compactions and per-provider usage (5-hour and weekly used %).
 Claude usage comes from its status line; Codex usage is read after each turn.
 Usage status \"unknown\" means data is missing or stale, never that the allowance is unused.
@@ -213,13 +215,18 @@ fn cli() -> Command {
                 .subcommand(toggle("color-blind")),
         )
         .subcommand(subcommand("diagnostics"))
+        .subcommand(subcommand("sounds"))
         .subcommand(
             subcommand("room")
                 .subcommand_required(true)
                 .subcommand(subcommand("create").arg(value_arg("name").required(true)))
                 .subcommand(subcommand("focus").arg(value_arg("room").required(true)))
                 .subcommand(subcommand("seen").arg(value_arg("room").required(true)))
-                .subcommand(toggle("sound").arg(value_arg("room").required(true)))
+                .subcommand(
+                    toggle("sound")
+                        .arg(value_arg("room").required(true))
+                        .arg(value_arg("sound").long("sound")),
+                )
                 .subcommand(
                     subcommand("rename")
                         .arg(value_arg("room").required(true))
@@ -395,13 +402,18 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             _ => return Err("unknown settings command".into()),
         },
         "diagnostics" => ("diagnostics", json!({})),
+        "sounds" => ("sounds", json!({})),
         "room" => match args.subcommand() {
             Some(("focus", args)) => ("room.focus", json!({"room": required(args, "room")?})),
             Some(("seen", args)) => ("room.seen", json!({"room": required(args, "room")?})),
-            Some(("sound", args)) => (
-                "room.sound",
-                json!({"room": required(args, "room")?, "on": on_off(args, "room sound")?}),
-            ),
+            Some(("sound", args)) => {
+                let mut params =
+                    json!({"room": required(args, "room")?, "on": on_off(args, "room sound")?});
+                if args.contains_id("sound") {
+                    params["sound"] = required(args, "sound")?.into();
+                }
+                ("room.sound", params)
+            }
             Some(("create", args)) => ("room.create", json!({"name": required(args, "name")?})),
             Some(("rename", args)) => (
                 "room.rename",
@@ -643,10 +655,14 @@ mod tests {
             &["room", "sound", "7", "--on", "--off"][..],
             &["room", "sound", "--on"][..],
             &["room", "sound", "7", "8", "--on"][..],
+            &["room", "sound", "7", "--sound", "Glass"][..],
+            &["room", "sound", "7", "--on", "--sound"][..],
+            &["room", "sound", "7", "--on", "--sound", " "][..],
         ] {
             assert!(command(args).is_err(), "{args:?}");
         }
-        assert!(HELP.contains("room sound ROOM (--on | --off)"));
+        assert!(HELP.contains("room sound ROOM (--on | --off) [--sound NAME]"));
+        assert!(HELP.contains("\n  sounds\n"));
     }
 
     #[test]
@@ -823,6 +839,12 @@ mod tests {
                 "room.sound",
                 json!({"room": "7", "on": true}),
             ),
+            (
+                &["room", "sound", "7", "--on", "--sound", "Windows Notify"],
+                "room.sound",
+                json!({"room": "7", "on": true, "sound": "Windows Notify"}),
+            ),
+            (&["sounds"], "sounds", json!({})),
             (&["quit"], "bus.quit", json!({})),
             (
                 &["settings", "color-blind", "--on"],

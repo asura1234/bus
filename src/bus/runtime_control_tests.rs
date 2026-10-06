@@ -1587,6 +1587,86 @@ fn dev_room_sound_toggles_each_room_and_state_reports_it() {
 }
 
 #[test]
+fn dev_sounds_lists_system_sounds_and_room_sound_picks_one_by_name() {
+    let (mut worker, room, _agent, dir) = fixture();
+    let sounds = dir.join("sounds");
+    std::fs::create_dir_all(&sounds).unwrap();
+    for name in ["Glass.aiff", "Windows Notify.wav", "notes.txt"] {
+        std::fs::write(sounds.join(name), b"").unwrap();
+    }
+    worker.sound_dirs = Some(vec![sounds.clone()]);
+
+    let listed = call(&mut worker, "sounds", "sounds", json!({}));
+    assert!(listed.ok, "{listed:?}");
+    assert_eq!(
+        listed.result["sounds"],
+        json!([
+            {"name": "Default", "path": null},
+            {"name": "Glass", "path": sounds.join("Glass.aiff")},
+            {"name": "Windows Notify", "path": sounds.join("Windows Notify.wav")},
+        ])
+    );
+    let state = call(&mut worker, "sound-name-state-1", "state", json!({}));
+    assert_eq!(state.result["rooms"][1]["sound_name"], "Default");
+
+    let pick = call(
+        &mut worker,
+        "sound-pick",
+        "room.sound",
+        json!({"room":"test","on":true,"sound":"glass"}),
+    );
+    assert!(pick.ok, "{pick:?}");
+    let saved = worker.store.load().unwrap().unwrap();
+    let saved = saved.room(room).unwrap();
+    assert_eq!(
+        saved.sound_name.as_deref(),
+        Some("Glass"),
+        "stored by its listed name"
+    );
+    assert!(saved.sound_enabled());
+    let state = call(&mut worker, "sound-name-state-2", "state", json!({}));
+    assert_eq!(state.result["rooms"][1]["sound_name"], "Glass");
+
+    // An unknown name changes nothing, not even the on/off choice.
+    let unknown = call(
+        &mut worker,
+        "sound-unknown",
+        "room.sound",
+        json!({"room":"test","on":false,"sound":"Sosumi"}),
+    );
+    assert!(!unknown.ok);
+    assert!(worker.state.room(room).unwrap().sound_enabled());
+    assert_eq!(
+        worker.state.room(room).unwrap().sound_name.as_deref(),
+        Some("Glass")
+    );
+
+    // Without --sound the choice stays; Default restores Bus's own ding.
+    let off = call(
+        &mut worker,
+        "sound-keep",
+        "room.sound",
+        json!({"room":"test","on":false}),
+    );
+    assert!(off.ok, "{off:?}");
+    assert_eq!(
+        worker.state.room(room).unwrap().sound_name.as_deref(),
+        Some("Glass")
+    );
+    let reset = call(
+        &mut worker,
+        "sound-default",
+        "room.sound",
+        json!({"room":"test","on":true,"sound":"default"}),
+    );
+    assert!(reset.ok, "{reset:?}");
+    assert_eq!(worker.state.room(room).unwrap().sound_name, None);
+
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn dev_visible_read_works_while_launching_but_keeps_terminal_identity_checks() {
     struct LaunchingInspect {
         pane: &'static str,

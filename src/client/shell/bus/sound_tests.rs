@@ -85,6 +85,90 @@ fn settings_keyboard_and_mouse_toggle_room_sound() {
     assert!(!ui.settings.color_blind_mode);
 }
 
+fn queued_sound_names(ui: &BusUi) -> Vec<(RoomId, Option<String>)> {
+    ui.pending
+        .iter()
+        .filter_map(|p| match &p.command {
+            BusCommand::SetRoomSoundName(room, name) => Some((*room, name.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn with_sound_name(ui: &mut BusUi, room: RoomId, name: &str) {
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .set_room_sound_name(room, Some(name.into()))
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+}
+
+#[test]
+fn settings_rows_cycle_through_default_and_the_system_sounds() {
+    let (mut ui, master, rooms) = sound_fixture(1);
+    ui.system_sounds = Some(vec!["Basso".into(), "Glass".into()]);
+    ui.action(render::Action::Settings);
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[x] # MASTER") && row.ends_with("‹ Default ›")),
+        "{rows:#?}"
+    );
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
+    assert_eq!(
+        queued_sound_names(&ui),
+        [
+            (master, Some("Basso".into())),
+            (master, Some("Glass".into()))
+        ],
+        "Right moves on from Default; Left wraps from Default to the last sound"
+    );
+    assert!(
+        queued_sound(&ui).is_empty(),
+        "choosing a sound keeps the checkbox"
+    );
+
+    // A saved choice continues from its place in the list, ignoring case.
+    with_sound_name(&mut ui, rooms[0], "glass");
+    ui.action(render::Action::CycleRoomSound(rooms[0], true));
+    assert_eq!(ui.settings_field, 2);
+    assert_eq!(queued_sound_names(&ui).last(), Some(&(rooms[0], None)));
+
+    // A sound no longer installed is labelled, and plays the default ding.
+    with_sound_name(&mut ui, rooms[0], "Sosumi");
+    let rows = settings_rows(&mut ui, 40);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[ ] # room-0") && row.ends_with("‹ Sosumi (missing) ›")),
+        "{rows:#?}"
+    );
+    let choice = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::CycleRoomSound(rooms[0], false))
+        .expect("previous-sound arrow")
+        .rect;
+    assert_eq!(
+        pointer(
+            &mut ui,
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            choice.x,
+            choice.y
+        ),
+        None
+    );
+    assert_eq!(
+        queued_sound_names(&ui).last(),
+        Some(&(rooms[0], Some("Glass".into()))),
+        "clicking ‹ steps back from Default"
+    );
+}
+
 #[test]
 fn settings_sound_list_scrolls_to_keep_the_focused_room_visible() {
     let (mut ui, _, rooms) = sound_fixture(30);
@@ -112,7 +196,7 @@ fn settings_sound_list_scrolls_to_keep_the_focused_room_visible() {
 
 mod ring_decisions {
     use super::super::super::ring::{
-        new_message_should_ring, Ringer, RING_COOLDOWN, STARTUP_GRACE,
+        new_message_should_ring, ringing_room, Ringer, RING_COOLDOWN, STARTUP_GRACE,
     };
     use super::*;
     use std::time::{Duration, Instant};
@@ -156,6 +240,22 @@ mod ring_decisions {
         assert!(!new_message_should_ring(&replied, &replied));
         let again = with_reply(&replied, master, orchestrator, 41);
         assert!(new_message_should_ring(&replied, &again));
+    }
+
+    #[test]
+    fn the_ringing_room_is_the_one_that_gained_the_message() {
+        let (mut state, _, work, _, worker) = rooms_with_agents();
+        state.set_room_sound(work, true).unwrap();
+        assert_eq!(
+            ringing_room(&state, &with_reply(&state, work, worker, 40)),
+            Some(work)
+        );
+        let mut muted = state.clone();
+        muted.set_room_sound(work, false).unwrap();
+        assert_eq!(
+            ringing_room(&muted, &with_reply(&muted, work, worker, 40)),
+            None
+        );
     }
 
     #[test]

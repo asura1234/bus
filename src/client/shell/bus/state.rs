@@ -152,6 +152,8 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) settings_scroll: usize,
     /// Set only by the coordinator-owning client; `None` never plays a sound.
     pub(super) sound_config: Option<crate::config::SoundConfig>,
+    /// System sound names, read from the OS when Settings first opens.
+    pub(super) system_sounds: Option<Vec<String>>,
     pub(super) ringer: super::ring::Ringer,
 }
 
@@ -227,6 +229,7 @@ impl BusUi {
             settings_field: 0,
             settings_scroll: 0,
             sound_config: None,
+            system_sounds: None,
             ringer: super::ring::Ringer::new(std::time::Instant::now()),
         }
     }
@@ -447,10 +450,15 @@ impl BusUi {
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
         if let Some(config) = &self.sound_config {
-            if super::ring::new_message_should_ring(&previous.state, &self.snapshot.state)
-                && self.ringer.allow(std::time::Instant::now())
+            if let Some(room) = super::ring::ringing_room(&previous.state, &self.snapshot.state)
+                .filter(|_| self.ringer.allow(std::time::Instant::now()))
             {
-                crate::sound::play(crate::sound::Sound::Done, config);
+                let name = self
+                    .snapshot
+                    .state
+                    .room(room)
+                    .and_then(|room| room.sound_name.as_deref());
+                crate::sound::play_named(name, config);
             }
         }
         self.reconcile_deleted_targets(&previous.state);

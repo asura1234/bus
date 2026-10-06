@@ -27,6 +27,7 @@ impl Worker {
             }
             BusCommand::MarkRoomSeen(id) => state.mark_room_seen(id),
             BusCommand::SetRoomSound(id, on) => state.set_room_sound(id, on),
+            BusCommand::SetRoomSoundName(id, name) => state.set_room_sound_name(id, name),
             BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),
             BusCommand::SetDraftText(id, text) => state.set_draft_text(id, &text),
             BusCommand::SetRecipients(id, recipients) => state.set_draft_recipients(id, recipients),

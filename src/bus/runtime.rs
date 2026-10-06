@@ -30,6 +30,8 @@ pub(crate) enum BusCommand {
     CreateRoom(String),
     RenameRoom(RoomId, String),
     SetRoomSound(RoomId, bool),
+    /// A system sound name, or None for Bus's own ding.
+    SetRoomSoundName(RoomId, Option<String>),
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),
     DeleteAgent(AgentId),
@@ -199,6 +201,8 @@ struct Worker {
     usage: super::usage::Usage,
     /// The UI's settings file; set only for a real launch so tests never touch it.
     settings_path: Option<PathBuf>,
+    /// Folders listed for system sounds; None reads the operating system's.
+    sound_dirs: Option<Vec<PathBuf>>,
 }
 
 impl Worker {
@@ -238,6 +242,7 @@ impl Worker {
             dev_receipt_bytes: 0,
             usage: super::usage::Usage::default(),
             settings_path: None,
+            sound_dirs: None,
         })
     }
 

@@ -50,6 +50,8 @@ pub(super) enum Action {
     Settings,
     ToggleColorBlindMode,
     ToggleRoomSound(RoomId),
+    /// Picks the next (true) or previous system sound for a room.
+    CycleRoomSound(RoomId, bool),
     Cancel,
     Add,
 }
@@ -1564,15 +1566,38 @@ impl BusUi {
                             let Some(room) = self.snapshot.state.room(*room) else {
                                 continue;
                             };
+                            let selected = self.settings_field == *field;
+                            // The room's sound sits right of its checkbox:
+                            // ‹ previous · name · next ›.
+                            let name = display(&self.room_sound_label(room));
+                            let name_width = (unicode_width::UnicodeWidthStr::width(name.as_str())
+                                as u16)
+                                .min(width.saturating_sub(16));
+                            let choice_width = name_width + 4;
+                            let choice_x = x + width.saturating_sub(choice_width);
                             view.row(
-                                rect,
+                                Rect::new(x, rect.y, width.saturating_sub(choice_width + 1), 1),
                                 format!(
                                     "[{}] # {}",
                                     if room.sound_enabled() { "x" } else { " " },
                                     room.name
                                 ),
                                 Some(Action::ToggleRoomSound(room.id)),
-                                self.settings_field == *field,
+                                selected,
+                                false,
+                            );
+                            view.row(
+                                Rect::new(choice_x, rect.y, 2, 1),
+                                "‹",
+                                Some(Action::CycleRoomSound(room.id, false)),
+                                selected,
+                                true,
+                            );
+                            view.row(
+                                Rect::new(choice_x + 2, rect.y, name_width + 2, 1),
+                                format!("{name} ›"),
+                                Some(Action::CycleRoomSound(room.id, true)),
+                                selected,
                                 false,
                             );
                         }
@@ -1588,7 +1613,7 @@ impl BusUi {
                 }
                 view.row(
                     Rect::new(x, footer, width, 1),
-                    "Close (Esc) · ↑↓ move · Enter toggles",
+                    "Close (Esc) · ↑↓ move · Enter toggles · ←→ sound",
                     Some(Action::Cancel),
                     false,
                     true,

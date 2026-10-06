@@ -241,6 +241,9 @@ pub(crate) struct Room {
     /// kind: MASTER rings, work rooms stay silent. Read it with `sound_enabled`.
     #[serde(default)]
     pub(crate) sound: Option<bool>,
+    /// The system sound this room rings with, by name; None is Bus's own ding.
+    #[serde(default)]
+    pub(crate) sound_name: Option<String>,
     /// Read-only: the retired Room Brief, folded into `notes` on load and never saved.
     #[serde(default, rename = "brief", skip_serializing)]
     legacy_brief: Option<serde_json::Value>,
@@ -645,6 +648,7 @@ impl BusState {
                 deletion_pending: false,
                 kind: RoomKind::Work,
                 sound: None,
+                sound_name: None,
                 legacy_brief: None,
             },
         );
@@ -691,6 +695,7 @@ impl BusState {
                         deletion_pending: false,
                         kind: RoomKind::Master,
                         sound: None,
+                        sound_name: None,
                         legacy_brief: None,
                     },
                 );
@@ -773,6 +778,19 @@ impl BusState {
             .get_mut(&id)
             .ok_or(ModelError::UnknownRoom(id))?
             .sound = Some(on);
+        Ok(())
+    }
+
+    /// `name` is a system sound name, or None for Bus's own ding.
+    pub(crate) fn set_room_sound_name(
+        &mut self,
+        id: RoomId,
+        name: Option<String>,
+    ) -> Result<(), ModelError> {
+        self.rooms
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownRoom(id))?
+            .sound_name = name;
         Ok(())
     }
 
@@ -1822,6 +1840,35 @@ mod tests {
         let loaded: BusState = serde_json::from_value(document).unwrap();
         assert!(loaded.room(master).unwrap().sound_enabled());
         assert!(!loaded.room(work).unwrap().sound_enabled());
+    }
+
+    #[test]
+    fn room_sound_names_persist_and_old_sessions_load_with_the_default() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        state
+            .set_room_sound_name(work, Some("Glass".into()))
+            .unwrap();
+        assert_eq!(
+            state.set_room_sound_name(RoomId(999), None),
+            Err(ModelError::UnknownRoom(RoomId(999)))
+        );
+        let mut document = serde_json::to_value(&state).unwrap();
+        let loaded: BusState = serde_json::from_value(document.clone()).unwrap();
+        assert_eq!(
+            loaded.room(work).unwrap().sound_name.as_deref(),
+            Some("Glass")
+        );
+        assert_eq!(loaded.room(master).unwrap().sound_name, None);
+
+        // Sessions saved before sound names existed play Bus's own ding.
+        document["rooms"][work.0.to_string()]
+            .as_object_mut()
+            .unwrap()
+            .remove("sound_name");
+        let loaded: BusState = serde_json::from_value(document).unwrap();
+        assert_eq!(loaded.room(work).unwrap().sound_name, None);
     }
 
     #[test]
