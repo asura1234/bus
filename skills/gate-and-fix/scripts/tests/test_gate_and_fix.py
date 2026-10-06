@@ -1,6 +1,7 @@
 import base64
 import contextlib
 import io
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from gate_and_fix import (  # noqa: E402
     Gate,
     GateResult,
-    load_skill_test_files,
     main,
     render_round,
     run_gates,
@@ -24,153 +24,82 @@ from gate_and_fix import (  # noqa: E402
 )
 
 
-_SKILL_TEST_FILES = {
-    "skills/gate-and-fix": ("skills/gate-and-fix/scripts/tests/test_gate_and_fix.py",),
-    "skills/pr": ("skills/pr/scripts/test_pr_format_check.py",),
-}
 _CI_TOOLS = frozenset({"just", "cargo-nextest"})
 
 
 class GateAndFixTest(unittest.TestCase):
-    def test_select_gates_uses_ci_and_changed_skill_tests(self) -> None:
-        gates = select_gates(
-            ["skills/pr/SKILL.md"],
-            base="baseline-sha",
-            skill_test_files=_SKILL_TEST_FILES,
-            available_tools=_CI_TOOLS,
-        )
-
-        self.assertEqual([gate.name for gate in gates], ["ci", "skill-tests", "diff-check"])
-        by_name = {gate.name: gate for gate in gates}
-        self.assertEqual(by_name["ci"].argv, ("just", "ci"))
-        self.assertEqual(
-            by_name["skill-tests"].argv,
-            (sys.executable, "-m", "pytest", "-q", "skills/pr/scripts/test_pr_format_check.py"),
-        )
-        self.assertEqual(by_name["diff-check"].argv, ("git", "diff", "--check", "baseline-sha...HEAD"))
-
-    def test_select_gates_has_an_executable_fallback_without_just_or_nextest(self) -> None:
-        gates = select_gates(
+    def test_every_diff_always_runs_four_checks_and_diff(self) -> None:
+        for changed in (
             ["src/main.rs"],
-            base="baseline-sha",
-            skill_test_files=_SKILL_TEST_FILES,
-            available_tools=frozenset(),
-        )
-
-        self.assertEqual(
-            [gate.name for gate in gates],
-            [
-                "format",
-                "clippy",
-                "test",
-                "maintenance-test",
-                "ui-hot-path-architecture-test",
-                "diff-check",
-            ],
-        )
-        self.assertEqual(gates[0].argv, ("cargo", "fmt", "--check"))
-        self.assertEqual(gates[2].argv, ("cargo", "test", "--locked"))
-
-    def test_select_gates_skips_skill_tests_outside_skill_inputs(self) -> None:
-        names = [
-            gate.name
-            for gate in select_gates(
-                ["src/main.rs"],
-                base="baseline-sha",
-                skill_test_files=_SKILL_TEST_FILES,
-                available_tools=_CI_TOOLS,
-            )
-        ]
-
-        self.assertEqual(names, ["ci", "diff-check"])
-
-    def test_select_gates_runs_every_skill_test_for_shared_contract_inputs(self) -> None:
-        for changed_file in (
-            "cli_extensions/review_artifact_types.py",
-            "docs/guides/review-format.md",
-            "docs/templates/plan-template.md",
+            ["skills/pr/SKILL.md"],
+            ["docs/guides/review-format.md"],
         ):
-            with self.subTest(changed_file=changed_file):
-                gates = select_gates(
-                    [changed_file],
-                    base="baseline-sha",
-                    skill_test_files=_SKILL_TEST_FILES,
-                    available_tools=_CI_TOOLS,
-                )
-                skill_tests = next(gate for gate in gates if gate.name == "skill-tests")
-                self.assertEqual(
-                    skill_tests.argv[4:],
-                    (
-                        "skills/gate-and-fix/scripts/tests/test_gate_and_fix.py",
-                        "skills/pr/scripts/test_pr_format_check.py",
-                    ),
-                )
+            for tools in (_CI_TOOLS, frozenset()):
+                with self.subTest(changed=changed, tools=tools):
+                    gates = select_gates(
+                        changed, base="baseline-sha", available_tools=tools
+                    )
+                    self.assertEqual(
+                        [g.name for g in gates],
+                        ["lint", "unit", "integration", "coverage", "diff-check"],
+                    )
+                    self.assertTrue(
+                        all(g.requires_exclusive_execution for g in gates[:4])
+                    )
+                    self.assertEqual(
+                        gates[-1].argv,
+                        ("git", "diff", "--check", "baseline-sha...HEAD"),
+                    )
 
-    def test_select_gates_skips_skill_tests_for_a_skill_without_tests(self) -> None:
-        names = [
-            gate.name
-            for gate in select_gates(
-                ["skills/rebase-origin-main/SKILL.md"],
-                base="baseline-sha",
-                skill_test_files=_SKILL_TEST_FILES,
-                available_tools=_CI_TOOLS,
+    def test_fallback_and_just_use_the_same_check_implementation(self) -> None:
+        repo = Path(__file__).resolve().parents[4]
+        text = (repo / "justfile").read_text(encoding="utf-8")
+        direct = select_gates(["src/main.rs"], base="base", available_tools=frozenset())
+        wrapped = select_gates(["src/main.rs"], base="base", available_tools=_CI_TOOLS)
+        for fallback, wrapper in zip(direct[:4], wrapped[:4]):
+            recipe = text.split("\n" + wrapper.argv[-1] + ":\n", 1)[1].split("\n\n", 1)[
+                0
+            ]
+            command = tuple(
+                shlex.split(recipe.strip().replace("{{python}}", sys.executable))
             )
-        ]
+            self.assertEqual(fallback.argv, command)
+            self.assertEqual(
+                wrapper.argv[:4], ("just", "--set", "python", sys.executable)
+            )
 
-        self.assertNotIn("skill-tests", names)
+    def test_tool_preflight_requires_both_ci_tools(self) -> None:
+        for available in (
+            frozenset(),
+            frozenset({"just"}),
+            frozenset({"cargo-nextest"}),
+            _CI_TOOLS,
+        ):
+            with self.subTest(available=sorted(available)):
+                with patch(
+                    "gate_and_fix.shutil.which",
+                    side_effect=lambda name: (
+                        f"/tools/{name}" if name in available else None
+                    ),
+                ):
+                    gates = select_gates(["src/main.rs"], base="base")
+                self.assertEqual(
+                    gates[0].argv[0],
+                    "just" if available == _CI_TOOLS else sys.executable,
+                )
+                self.assertEqual(len(gates), 5)
 
     def test_select_gates_rejects_non_repository_paths(self) -> None:
         with self.assertRaisesRegex(ValueError, "repository-relative"):
-            select_gates(["../outside.py"], base="baseline-sha", skill_test_files=_SKILL_TEST_FILES)
+            select_gates(["../outside.py"], base="base")
 
     def test_select_gates_never_runs_build_or_live_e2e(self) -> None:
-        # The release build and the live end-to-end check (`just e2e`) need packaging or spend
-        # model usage; they belong to dedicated skills or CI.
         for tools in (_CI_TOOLS, frozenset()):
-            with self.subTest(tools=sorted(tools)):
-                argvs = [
-                    gate.argv
-                    for gate in select_gates(
-                        ["src/main.rs", "skills/pr/SKILL.md"],
-                        base="baseline-sha",
-                        skill_test_files=_SKILL_TEST_FILES,
-                        available_tools=tools,
-                    )
-                ]
-                for argv in argvs:
-                    self.assertNotIn("build", argv)
-                    self.assertNotIn("e2e", argv)
-
-    def test_skill_test_files_are_discovered_from_the_repository(self) -> None:
-        owned = load_skill_test_files(Path(__file__).resolve().parents[4])
-
-        self.assertEqual(
-            owned["skills/gate-and-fix"],
-            ("skills/gate-and-fix/scripts/tests/test_gate_and_fix.py",),
-        )
-        # A skill without pytest files is not selected.
-        self.assertNotIn("skills/rebase-origin-main", owned)
-
-    def test_skill_test_files_discovers_both_pytest_name_patterns(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            repo = Path(directory)
-            skill = repo / "skills" / "example" / "scripts"
-            skill.mkdir(parents=True)
-            (skill / "test_leading.py").write_text("", encoding="utf-8")
-            (skill / "trailing_test.py").write_text("", encoding="utf-8")
-            (skill / "helper.py").write_text("", encoding="utf-8")
-            (repo / "skills" / "untested").mkdir()
-
-            owned = load_skill_test_files(repo)
-
-        self.assertEqual(
-            owned["skills/example"],
-            (
-                "skills/example/scripts/test_leading.py",
-                "skills/example/scripts/trailing_test.py",
-            ),
-        )
-        self.assertNotIn("skills/untested", owned)
+            for gate in select_gates(
+                ["src/main.rs"], base="base", available_tools=tools
+            ):
+                self.assertNotIn("build", gate.argv)
+                self.assertNotIn("e2e", gate.argv)
 
     def test_run_gates_starts_independent_gates_before_either_can_finish(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

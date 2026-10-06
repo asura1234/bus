@@ -1,13 +1,22 @@
 # bus task runner
 set windows-shell := ["cmd.exe", "/d", "/s", "/c"]
 
-python := if os() == "windows" { "python" } else { "python3" }
+python := if os() == "windows" { "python" } else if path_exists("temp/gate-tools/python/bin/python") == "true" { "temp/gate-tools/python/bin/python" } else { "python3" }
 
 # Run tests
-test:
-    cargo nextest run --locked --status-level fail --final-status-level fail --failure-output final --success-output never
-    just maintenance-test
-    just ui-hot-path-architecture-test
+test: unit-test integration-test
+
+# Collect fresh Rust and Python unit coverage, including every maintenance and skill test
+unit-test:
+    {{python}} skills/gate-and-fix/scripts/bus_quality.py unit
+
+# Rust integration targets and the in-process headless server harness; no real agents
+integration-test:
+    {{python}} skills/gate-and-fix/scripts/bus_quality.py integration
+
+# Fail below the checked-in Rust/Python floors; requires this round's unit/integration profiles
+coverage:
+    {{python}} skills/gate-and-fix/scripts/bus_quality.py coverage
 
 # Run repository maintenance contract tests
 maintenance-test:
@@ -28,22 +37,12 @@ test-one filter:
 ui-hot-path-architecture-test:
     {{python}} -m unittest scripts.test_ui_hot_path_architecture
 
-# Run fast local lint checks
-[unix]
+# Run local Rust/Python lint checks
 lint:
-    cargo fmt --check
-    cargo clippy --all-targets --locked -- -D warnings
-
-[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
-[windows]
-lint:
-    & .\scripts\windows_check.ps1 -Mode lint
+    {{python}} skills/gate-and-fix/scripts/bus_quality.py lint
 
 # Run PR CI checks
-ci filter='all()': lint
-    cargo nextest run --locked -E "{{filter}}" --status-level fail --final-status-level slow --failure-output final --success-output never
-    just maintenance-test
-    just ui-hot-path-architecture-test
+ci: lint unit-test integration-test coverage
 
 # Run Windows target lint from Unix/macOS to catch cfg(windows) compile and clippy failures before CI
 [unix]

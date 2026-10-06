@@ -16,27 +16,49 @@ replace `rebase-origin-main`, `update-docs`, or PR creation.
   the cost plainly: problems that only those layers expose are no longer caught by this local round;
   when they did not run, report that truthfully, and never stretch this round's PASS into a claim
   that those layers passed.
-- The Bus gate set is derived by the runner from the committed diff; an agent cannot guess or
-  shrink it. Every round always selects one of:
-  - `just ci`, when both `just` and `cargo-nextest` are available on the host;
-  - otherwise its direct expansion: `cargo fmt --check`,
-    `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, the
-    `scripts.test_*` maintenance unittest set and `scripts.test_ui_hot_path_architecture`;
-  - followed by `git diff --check <base>...HEAD`.
-  The artifact records the exact commands that ran, never claiming that an unavailable wrapper ran.
-- Then, by changed path, append `skill-tests` (`python3 -m pytest -q <files>`):
-  - `skills/<name>/**` → the pytest files owned by that skill
-  - `cli_extensions/**`, `docs/guides/**` or `docs/templates/**` → every skill-owned pytest file
-- `just ci` does not discover skill-local pytest files, so this lane is how a skill change gets its
-  own tests run. Shared contract inputs select every skill test because skill tests read
-  `cli_extensions/**`, `docs/guides/**` and `docs/templates/**` as contracts, and those paths have
-  no finer, provable owner.
-- Selection follows the complete PR diff and never shrinks because only some owner failed in the
-  previous round. A local PASS does not claim the whole tree is green; the full matrix is owned by
-  GitHub CI.
-- Format and lint run over the whole Cargo workspace: neither `cargo fmt --check` nor
-  `cargo clippy` takes a changed-file scope, so the skill does not rebuild a file-to-language
-  classification.
+- Every round runs all four checks plus `git diff --check <base>...HEAD`, regardless of which
+  files changed. No changed-file filter can remove a category or a skill test.
+  - **Lint**: Cargo fmt, all-target Clippy with warnings denied, Ruff `E9,F` over all first-party
+    Python, and the static hot-path architecture contract. That contract reads source text; it is
+    not a UI test. Rust formatting and Python syntax/pyflakes violations fail the gate. Python
+    style-only rules and LibTV's TypeScript-specific complexity limits are not imported. All
+    first-party Rust/Python files (including tests) have a 3,000 physical-line cap. Existing
+    oversized handwritten files are individually exempted in
+    [lint-policy.toml](references/lint-policy.toml), each marked for splitting during the
+    restructure; generated Ghostty bindings are separately named. New/non-exempt files fail.
+  - **Unit**: instrumented Bus binary tests, excluding `server::headless::`, followed by every
+    `test_*.py` / `*_test.py` under `scripts/` and `skills/` with pytest under coverage.py.
+    This includes all maintenance suites and all skill suites, on every round.
+  - **Integration**: all Rust integration targets under `tests/`, then the in-process
+    `server::headless::` harness. No real LLM agents are launched.
+  - **Coverage**: cargo-llvm-cov exports the fresh unit + integration profiles; coverage.py combines
+    the Python unit/subprocess profiles. Both production line percentages must meet their fixed
+    floors in [coverage-policy.json](references/coverage-policy.json). Below-floor, missing/empty
+    reports, unsuccessful preceding tests, or a different HEAD all fail. Unit starts a new profile
+    set, so an old report cannot make a new round pass.
+- When both `just` and `cargo-nextest` exist, the runner invokes `just lint`, `just unit-test`,
+  `just integration-test`, and `just coverage` separately so each check has its own complete log.
+  Otherwise it directly invokes the identical `bus_quality.py` implementations. Rust collection
+  uses nextest when available and `cargo llvm-cov test` otherwise. `just ci` runs the same four
+  recipes; it accepts no filter that could shrink the mandatory set. The artifact records the exact
+  wrapper argv and its logs record every underlying command.
+- Coverage reports live in ignored `temp/gate-and-fix/coverage/`; instrumented Cargo output stays
+  in `target/llvm-cov-target/`. Tests run only once per round; coverage consumes their profiles.
+  The gate retains the parent `BUS_DATA_DIR`, `BUS_SESSION_ID`, and `HERDR_SESSION`; tests that
+  model isolated config roots clear and restore those variables within their fixture boundaries.
+- Rust coverage includes host-compiled first-party `src/` executable lines. Vendor/dependencies,
+  build.rs, generated `src/ghostty/bindings.rs`, `tests/` and inline `#[cfg(test)] mod` bodies are
+  excluded. Host-inactive platform code is outside LLVM's inventory. Python includes every
+  production file under `scripts/`, `skills/`, and `cli_extensions/`, even files never imported;
+  test files and the five individually justified live/manual drivers in the policy are excluded.
+  Separate language floors keep an improvement in one language from hiding a drop in the other.
+- The starting measurement on this branch was **81.73% Rust / 72.83% Python**; the fixed floors
+  are **81% / 72%**. They leave less than one percentage point of initial headroom. The rule is
+  aggregate production line coverage per language, not per-file or branch coverage. Review any
+  future reduction to these floors as a policy change; never lower them to clear a failure.
+- The reference rule is LibTV App's strict lint failures and explicit coverage inventory, plus
+  LibTV Desktop's fail-closed native LLVM reports and individually justified exclusions. Bus uses
+  a measured aggregate line baseline, rather than their TypeScript per-file 100% rule.
 - The runner's `0` means only a PASS artifact, `1` means only a FAIL artifact, and `2` means a
   runner error with no consumable artifact. Read the single artifact path it prints only on
   `0`/`1`; stop immediately on any other exit code.
@@ -50,15 +72,31 @@ replace `rebase-origin-main`, `update-docs`, or PR creation.
 - Every gate argv is owned solely by the runner's `select_gates()`; it launches each entry directly,
   never through a shell.
 
+## Developer tools
+
+No Cargo.toml dependency is added. Python 3.11+ is required. Install developer tools once:
+
+```sh
+cargo install cargo-llvm-cov --locked
+rustup component add llvm-tools-preview
+python3 -m venv --system-site-packages temp/gate-tools/python
+temp/gate-tools/python/bin/python -m pip install -r skills/gate-and-fix/scripts/requirements.txt
+# Optional wrappers/faster Rust execution: install just and cargo-nextest.
+```
+
+On Windows, use `python` in place of `python3` and invoke the runner with the venv's
+`Scripts/python.exe` (or pass that interpreter with `just --set python <path> ci`).
+The runner and just use the local venv if present; otherwise they use the current/default Python,
+which must have the requirements installed. Missing mandatory tools fail with setup guidance.
+`just coverage` consumes the immediately preceding `just unit-test` and `just integration-test`;
+use `just ci` for the full sequence. Do not run two rounds in the same checkout concurrently.
+
 ## Parallelism and remediation
 
-- The runner starts non-conflicting gates concurrently, capped at `MAX_PARALLEL_GATES`; gates that
-  declare the same writable resource are scheduled mutually exclusively, and a gate that declares
-  exclusive execution waits for in-flight gates to exit before starting, and no other gate starts
-  while it runs. `ci` and every gate of its direct expansion declare exclusive execution, so they
-  run one at a time in selection order; `skill-tests` and
-  `diff-check` declare neither resources nor exclusivity and run within the concurrency cap. This
-  changes neither test selection nor pass criteria.
+- The four checks declare exclusive execution and run in lint → unit → integration → coverage
+  order because they share Cargo output and coverage profiles. The independent diff check can run
+  within the concurrency cap. All check results are collected even if an earlier check fails;
+  coverage fails closed when a prerequisite failed.
 - A FAIL round must first collect every gate result and group them by writable owner (not by the
   lint/test category). **How to fix after that is orchestrated by main**: fix sequentially itself,
   dispatch subagents by owner, or mix the two, depending on the size of the failure surface,

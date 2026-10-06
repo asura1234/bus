@@ -20,7 +20,6 @@ import select
 import sys
 import termios
 import tty
-from typing import Iterable
 
 IDLE_TIMEOUT_S = 0.020
 EXIT_BYTE = b"\x07"  # Ctrl+G

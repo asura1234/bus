@@ -1,6 +1,6 @@
 ---
 name: gate-and-fix
-description: Use on a feature branch that is getting ready to commit, when lint, tests, and diff gates must run in parallel and failures must be remediated from complete failure evidence (the main agent decides whether to fix them itself or dispatch subagents), committing and pushing round by round until the branch converges.
+description: Use on a feature branch that is getting ready to commit, when lint, unit, integration, coverage, and diff gates must pass and failures must be remediated from complete failure evidence (the main agent decides whether to fix them itself or dispatch subagents), committing and pushing round by round until the branch converges.
 ---
 
 # Gate and Fix
@@ -81,7 +81,7 @@ LOOP:
     STOP with the artifact and blocker; do not retry an identical tree.
 
   Invoke `commit-and-push` once. It owns the only Git mutation of this round. Increment round and
-  repeat the entire applicable gate set on the clean committed tree. Never run the live
+  repeat all four mandatory checks plus the diff gate on the clean committed tree. Never run the live
   end-to-end check or only a selected subset in a later round.
 
 RETURN the final PASS artifact, its base/head, and all round commits.

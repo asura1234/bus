@@ -17,20 +17,14 @@ from typing import Sequence
 from gate_artifact import GateResult, _parse_round, render_round, validate_round
 
 
-SKILLS_PREFIX = "skills/"
-# `just ci` does not discover skill-local pytest files, and several skill tests read
-# `cli_extensions/**`, `docs/guides/**`, and `docs/templates/**` as contracts, so a change there
-# selects every skill-owned test.
-SKILL_CONTRACT_PREFIXES = ("cli_extensions/", "docs/guides/", "docs/templates/")
 CI_TOOLS = frozenset({"just", "cargo-nextest"})
-MAINTENANCE_TESTS = (
-    "scripts.test_bus_dev_acceptance",
-    "scripts.test_package_windows_conpty",
-    "scripts.test_sanitize_review_severity",
-    "scripts.test_skill_migration_contract",
-    "scripts.test_vendor_libghostty_vt",
-    "scripts.test_vendor_portable_pty",
-)
+QUALITY_SCRIPT = "skills/gate-and-fix/scripts/bus_quality.py"
+QUALITY_RECIPES = {
+    "lint": "lint",
+    "unit": "unit-test",
+    "integration": "integration-test",
+    "coverage": "coverage",
+}
 MAX_PARALLEL_GATES = 4
 
 
@@ -47,88 +41,36 @@ def _validate_paths(changed_files: Sequence[str]) -> tuple[str, ...]:
     if not changed:
         raise ValueError("no changes against the base; cannot build gates")
     if any(
-        not path or Path(path).is_absolute() or any(part in {"", ".", ".."} for part in path.split("/"))
+        not path
+        or Path(path).is_absolute()
+        or any(part in {"", ".", ".."} for part in path.split("/"))
         for path in changed
     ):
         raise ValueError("changed files must be normalized repository-relative paths")
     return changed
 
 
-def load_skill_test_files(repo: Path) -> dict[str, tuple[str, ...]]:
-    """Pytest files owned by each `skills/<name>/`; a skill without test files is not selected."""
-    skills_root = repo / "skills"
-    owned: dict[str, tuple[str, ...]] = {}
-    for entry in sorted(path for path in skills_root.iterdir() if path.is_dir()):
-        # pytest's default `python_files` collects both `test_*.py` and `*_test.py`; recognizing
-        # only one would silently skip a skill whose tests use the other name.
-        files = tuple(
-            sorted(
-                {
-                    found.relative_to(repo).as_posix()
-                    for pattern in ("test_*.py", "*_test.py")
-                    for found in entry.rglob(pattern)
-                }
-            )
-        )
-        if files:
-            owned[f"{SKILLS_PREFIX}{entry.name}"] = files
-    return owned
-
-
 def select_gates(
     changed_files: Sequence[str],
     *,
     base: str,
-    skill_test_files: dict[str, tuple[str, ...]],
     available_tools: frozenset[str] | None = None,
+    python: str = sys.executable,
 ) -> list[Gate]:
-    """Derive the complete Bus gate set from the immutable committed delta.
-
-    Bus has one Rust workspace; `just ci` is the repository's complete Unix pre-PR gate. When
-    `just` or `cargo-nextest` is unavailable, the recipe is expanded into the corresponding direct
-    Cargo and Python gates. The skill-test index is loaded by the caller from the resolved
-    `--repo`, never inferred from `__file__`: invoked from another checkout, that would filter B's
-    diff with A's index.
-    """
-    changed = _validate_paths(changed_files)
+    """Every committed diff gets all four checks; wrappers never change their scope."""
+    _validate_paths(changed_files)
     tools = available_tools
     if tools is None:
         tools = frozenset(name for name in CI_TOOLS if shutil.which(name))
-
-    gates: list[Gate]
-    if CI_TOOLS.issubset(tools):
-        gates = [Gate("ci", ("just", "ci"), requires_exclusive_execution=True)]
-    else:
-        gates = [
-            Gate("format", ("cargo", "fmt", "--check"), requires_exclusive_execution=True),
-            Gate(
-                "clippy",
-                ("cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"),
-                requires_exclusive_execution=True,
-            ),
-            Gate("test", ("cargo", "test", "--locked"), requires_exclusive_execution=True),
-            Gate(
-                "maintenance-test",
-                (sys.executable, "-m", "unittest", *MAINTENANCE_TESTS),
-                requires_exclusive_execution=True,
-            ),
-            Gate(
-                "ui-hot-path-architecture-test",
-                (sys.executable, "-m", "unittest", "scripts.test_ui_hot_path_architecture"),
-                requires_exclusive_execution=True,
-            ),
-        ]
-    selected_tests: set[str] = set()
-    for path in changed:
-        parts = path.split("/")
-        if len(parts) > 2 and parts[0] == "skills":
-            selected_tests.update(skill_test_files.get(f"{SKILLS_PREFIX}{parts[1]}", ()))
-        elif path.startswith(SKILL_CONTRACT_PREFIXES):
-            selected_tests.update(test for tests in skill_test_files.values() for test in tests)
-    if selected_tests:
-        gates.append(
-            Gate("skill-tests", (sys.executable, "-m", "pytest", "-q", *sorted(selected_tests)))
+    gates = []
+    for lane, recipe in QUALITY_RECIPES.items():
+        argv = (
+            ("just", "--set", "python", python, recipe)
+            if CI_TOOLS.issubset(tools)
+            else (python, QUALITY_SCRIPT, lane)
         )
+        # Unit creates fresh profiles; integration extends them; coverage consumes them.
+        gates.append(Gate(lane, argv, requires_exclusive_execution=True))
     gates.append(Gate("diff-check", ("git", "diff", "--check", f"{base}...HEAD")))
     return gates
 
@@ -320,7 +262,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         gates = select_gates(
             changed_files,
             base=base,
-            skill_test_files=load_skill_test_files(repo),
+            python=str(repo / "temp/gate-tools/python/bin/python")
+            if (repo / "temp/gate-tools/python/bin/python").is_file() else sys.executable,
         )
         results = run_gates(gates, cwd=repo)
         artifact_path = _write_artifact(

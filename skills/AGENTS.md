@@ -17,7 +17,7 @@ Judgment principles and formats shared across skills live in `docs/guides/`, sha
 - The Bus fork intentionally has no root `AGENTS.md` or root `CLAUDE.md`.
 - The Bus integration base is `origin/master`. Never infer a base from a remote's symbolic HEAD.
 - Use lowercase Conventional Commit subjects accepted by `scripts/conventional_commits.py`.
-- Use `just test-one <filter>` for focused Rust iteration and `just ci` for the full pre-PR gate. `gate-and-fix` preflights `just` and `cargo-nextest`; when either is unavailable, its Bus adapter expands `just ci` into the corresponding direct Cargo and Python gates and records every exact command in the round artifact.
+- Use `just test-one <filter>` for focused Rust iteration and `just ci` for the full pre-PR gate: lint, unit tests, integration tests, and fixed-floor Rust/Python coverage. `gate-and-fix` always runs those four checks plus the diff check; without `just` or `cargo-nextest`, it uses the identical direct adapter. See [gate-and-fix/guide.md](gate-and-fix/guide.md) for developer tool setup and coverage exclusions.
 - Keep skill entrypoints under 250 lines and fail closed around destructive or publishing operations.
 - Only `skills/pr/scripts/pr_goal_context.py` produces review Goal/Non-goals locks.
 
@@ -38,7 +38,7 @@ Each skill's full trigger conditions and usage are defined by the frontmatter `d
 | Skill | Role |
 |-------|------|
 | `delete-dead-code` | Dead-code and duplication tracks clean up PR-touched modules or explicit directories; delete or converge safely after mechanical scope/artifact validation |
-| `gate-and-fix` | Run the applicable Bus lint, test, and diff gates in parallel, fix from complete failure evidence, and commit and push round by round |
+| `gate-and-fix` | Run Bus lint, unit, integration, coverage, and diff gates; fix from complete failure evidence and commit and push round by round |
 | `commit-and-push` | Split commits by "each commit does one thing" and push |
 | `rebase-origin-main` | Rebase onto the latest `origin/master`, triage conflicts by tier, then force-with-lease push |
 | `worktree-new` / `worktree-close` | Create and clean up isolated worktrees |
