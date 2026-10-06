@@ -98,7 +98,7 @@ impl ClientRenderState {
                         bytes: encoded.bytes.clone(),
                     }),
                     frame,
-                    encoded: Some(encoded),
+                    encoded,
                 })
             }
         }
@@ -191,11 +191,7 @@ impl ClientRenderState {
                     seq,
                     repaint_pending,
                 },
-                PreparedRender::TerminalAnsi {
-                    frame,
-                    encoded: Some(encoded),
-                    ..
-                },
+                PreparedRender::TerminalAnsi { frame, encoded, .. },
             ) => {
                 blit_encoder.commit(frame, encoded);
                 *seq += 1;
@@ -227,7 +223,7 @@ pub(crate) enum PreparedRender {
     TerminalAnsi {
         message: ServerMessage,
         frame: FrameData,
-        encoded: Option<EncodedBlit>,
+        encoded: EncodedBlit,
     },
 }
 
