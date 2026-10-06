@@ -25,6 +25,10 @@ impl super::ClientShellState {
         }
     }
 
+    pub(crate) fn has_bus(&self) -> bool {
+        self.bus.is_some()
+    }
+
     /// Whether the Bus view switched screens since the last call, so the
     /// client should repaint every cell instead of only the changed ones.
     pub(crate) fn take_bus_full_repaint(&mut self) -> bool {

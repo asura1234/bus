@@ -90,7 +90,13 @@ impl BlitEncoder {
         let full = repaint
             || prev.is_none()
             || prev.is_some_and(|p| p.width != frame.width || p.height != frame.height);
-        let clear_before_full_redraw = previous_frame.is_none();
+        // Clear before the first frame and after a size change: a full redraw
+        // only writes the new frame's cells, and some terminals (Terminal.app)
+        // keep text pushed past the right edge by a narrower window and show it
+        // again later. A same-size forced repaint overwrites every visible cell
+        // without the flash of a clear.
+        let clear_before_full_redraw =
+            previous_frame.is_none_or(|p| p.width != frame.width || p.height != frame.height);
         let prof_stats =
             crate::render_prof::enabled().then(|| compute_prof_blit_stats(frame, prev, full));
         let prof_started = crate::render_prof::timer();
@@ -1718,19 +1724,29 @@ mod tests {
     }
 
     #[test]
-    fn encoder_size_change_repaints_without_clearing() {
-        let prev = make_frame(2, 2, vec![make_cell("A", 0, 0, 0); 4]);
-        let curr = make_frame(3, 2, vec![make_cell("B", 0, 0, 0); 6]);
+    fn encoder_size_change_clears_cells_outside_the_new_frame() {
+        let prev = make_frame(3, 2, vec![make_cell("A", 0, 0, 0); 6]);
+        let curr = make_frame(2, 2, vec![make_cell("B", 0, 0, 0); 4]);
         let mut encoder = BlitEncoder::new();
+        let mut terminal = crate::ghostty::Terminal::new(3, 2, 0).unwrap();
         let initial = encoder.encode(&prev, false);
+        terminal.write(&initial.bytes);
         encoder.commit(prev, initial);
 
+        // The host grid is still three columns wide; the frame is two.
         let encoded = encoder.encode(&curr, false);
         assert!(encoded.full);
+        terminal.write(&encoded.bytes);
         let output = String::from_utf8(encoded.bytes).unwrap();
-
-        assert!(!output.contains("\x1b[2J"));
-        assert!(output.bytes().filter(|byte| *byte == b'B').count() >= 6);
+        assert!(output.contains("\x1b[2J"));
+        assert!(output.bytes().filter(|byte| *byte == b'B').count() >= 4);
+        for row in 0..2 {
+            let (_, graphemes) = terminal.screen_cell(2, row).unwrap();
+            assert!(
+                graphemes.iter().all(|code| *code == u32::from(' ')),
+                "row {row} keeps a cell from the wider frame: {graphemes:?}"
+            );
+        }
     }
 
     #[test]

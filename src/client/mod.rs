@@ -1152,6 +1152,16 @@ async fn run_client_loop(
                 } else if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
                 }
+                // The Bus view draws locally, so show it at the new size now
+                // instead of keeping the old width until the next event.
+                let frame = state
+                    .shell
+                    .as_mut()
+                    .filter(|shell| shell.has_bus())
+                    .and_then(|shell| shell.compose(new_cols, new_rows));
+                if let Some(frame) = frame {
+                    state.present_frame(frame);
+                }
             }
             ClientLoopEvent::EndpointSupervisor(event) => match event {
                 endpoint::EndpointSupervisorEvent::Status {
