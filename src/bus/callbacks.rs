@@ -312,11 +312,6 @@ pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String>
     }
 }
 
-#[cfg(test)]
-fn validate_provider_event(provider: Provider, value: &Value) -> Result<(), String> {
-    parse(provider, value).map(|_| ())
-}
-
 pub(crate) fn initialize(dir: &Path, manifest: &Manifest) -> io::Result<()> {
     super::io::private_dir(dir)?;
     super::io::atomic_write(&dir.join("manifest.json"), &serde_json::to_vec(manifest)?)
@@ -483,12 +478,12 @@ mod tests {
 
     #[test]
     fn codex_requires_real_turn_binding_and_rejects_notify() {
-        assert!(validate_provider_event(
+        assert!(parse(
             Provider::Codex,
             &json!({"hook_event_name":"UserPromptSubmit","session_id":"s","prompt":"same","transcript_path":"/tmp/interactive.jsonl"})
         )
         .is_err());
-        assert!(validate_provider_event(
+        assert!(parse(
             Provider::Codex,
             &json!({"type":"agent-turn-complete","turn-id":"old","input-messages":["same"]})
         )
@@ -532,12 +527,12 @@ mod tests {
 
     #[test]
     fn claude_requires_prompt_id_and_cursor_generation() {
-        assert!(validate_provider_event(
+        assert!(parse(
             Provider::ClaudeCode,
             &json!({"hook_event_name":"UserPromptSubmit","session_id":"s","prompt":"p"})
         )
         .is_err());
-        assert!(validate_provider_event(
+        assert!(parse(
             Provider::Cursor,
             &json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"s","prompt":"p"})
         )
