@@ -13,14 +13,14 @@ from split_plan_model import Part, Plan, PlanError, _require, closure, shared_co
 # --- git -------------------------------------------------------------------
 
 
-def git(repo: Path, *args: str, check: bool = True, env: dict[str, str] | None = None) -> str:
+def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True,
         text=True,
         env={**os.environ, **env} if env else None,
     )
-    if check and result.returncode != 0:
+    if result.returncode != 0:
         raise PlanError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
