@@ -79,13 +79,6 @@ use crate::server::client_transport::ClientWriter;
 #[cfg(test)]
 use std::fs;
 
-fn sound_notify_message(sound: crate::sound::Sound) -> &'static str {
-    match sound {
-        crate::sound::Sound::Done => "agent done",
-        crate::sound::Sound::Request => "agent attention",
-    }
-}
-
 fn notification_show_result(
     id: String,
     shown: bool,
@@ -317,7 +310,7 @@ impl HeadlessServer {
     /// - Drains API requests (from the JSON socket)
     /// - Accepts new client connections
     /// - Reads client messages and routes input
-    /// - Handles scheduled tasks (session save, metadata expiry, etc.)
+    /// - Handles scheduled tasks (session save, agent resumes, etc.)
     /// - Renders virtually and streams frames to clients
     pub async fn run(&mut self) -> io::Result<()> {
         crate::logging::startup("server");
@@ -365,12 +358,6 @@ impl HeadlessServer {
             if self.should_quit.load(Ordering::Acquire) {
                 continue;
             }
-            if self.app.expire_due_metadata(Instant::now()) {
-                needs_render = true;
-                needs_full_render = true;
-                crate::render_prof::event("full_render_cause.metadata_expiry");
-            }
-
             // 3. Drain API requests.
             if self.drain_api_requests_with_shutdown_check() {
                 needs_render = true;
@@ -894,15 +881,12 @@ impl HeadlessServer {
             .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
             .and_then(|workspace| workspace.focused_pane_id())
             .is_some_and(|pane_id| sources.contains(&pane_id));
-        let changes = self.app.sync_terminal_titles(sources);
+        self.app.sync_terminal_titles(sources);
         let outer_title_synced = focused_source && self.app.window_title_uses_terminal_title();
         if outer_title_synced {
             self.sync_window_title();
         }
-        (
-            self.app.terminal_title_sidebar_changed(&changes),
-            outer_title_synced,
-        )
+        (false, outer_title_synced)
     }
 
     /// Renders `ui.window_title` against current session state. `None` means
@@ -1758,8 +1742,6 @@ impl HeadlessServer {
             }
         };
 
-        let metadata_expired = self.app.expire_due_metadata(Instant::now());
-
         if let api::schema::Method::NotificationShow(params) = &msg.request.method {
             let response =
                 self.handle_notification_show_api(msg.request.id.clone(), params.clone());
@@ -1784,7 +1766,7 @@ impl HeadlessServer {
             _ => {}
         }
 
-        let mut changed = metadata_expired | api::request_changes_ui(&msg.request);
+        let mut changed = api::request_changes_ui(&msg.request);
         let skip_default_workspace = skip_default_workspace_for_request
             || matches!(&msg.request.method, api::schema::Method::ServerStop(_));
         changed |= self.drain_all_internal_events_with_forwarding();
@@ -2033,28 +2015,6 @@ impl HeadlessServer {
                     }
                 }
             }
-
-            // Forward sound notification when server-side sound policy allows it.
-            // Clients still decide locally whether they can execute the side effect.
-            if self.app.state.toast_config.delay_seconds == 0 && self.app.state.sound.allows(agent)
-            {
-                if let Some(sound) =
-                    crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                        suppress_active_tab_notifications,
-                        *prev_state,
-                        new_state,
-                        prev_agent_label.as_deref(),
-                        agent_label.as_deref(),
-                    )
-                {
-                    debug!(sound = ?sound, "forwarding sound notification from API request");
-                    self.send_notify_to_foreground_client(
-                        protocol::NotifyKind::Sound,
-                        sound_notify_message(sound),
-                        None,
-                    );
-                }
-            }
         }
 
         if !skip_default_workspace && latest_shell_client(&self.clients).is_some() {
@@ -2118,15 +2078,6 @@ impl HeadlessServer {
             .is_some_and(|deadline| now >= deadline)
         {
             self.app.start_background_session_save();
-        }
-
-        if let Some(deadline) = self
-            .app
-            .agent_metadata_deadline
-            .filter(|deadline| now >= *deadline)
-        {
-            self.app.expire_metadata_at(deadline, now);
-            changed = true;
         }
 
         if geometry_dirty {

@@ -82,7 +82,6 @@ pub struct App {
     pub(crate) toast_deadline: Option<Instant>,
     pub(crate) last_api_notification_at: Option<Instant>,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
-    pub(crate) agent_metadata_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
@@ -353,7 +352,6 @@ impl App {
             outer_terminal_focus: None,
             headless_size: config.headless_size(),
             agent_panel_sort,
-            agent_view_override: None,
             next_agent_state_change_seq: 0,
             confirm_close: config.ui.confirm_close,
             pane_borders: config.ui.pane_borders,
@@ -404,7 +402,6 @@ impl App {
             event_tx,
             event_rx,
             loaded_host_cursor: config.ui.host_cursor,
-            agent_metadata_deadline: None,
             pending_agent_resume_deadline: None,
             session_save_deadline: None,
             session_save_thread: None,
@@ -1199,12 +1196,6 @@ mod tests {
                 amount: Some(0.05),
             }),
         };
-        let agent_view = crate::api::schema::Request {
-            id: "req_9".into(),
-            method: crate::api::schema::Method::AgentViewClear(
-                crate::api::schema::AgentViewClearParams::default(),
-            ),
-        };
 
         assert!(!crate::api::request_changes_ui(&read_only));
         assert!(crate::api::request_changes_ui(&mutating));
@@ -1212,7 +1203,6 @@ mod tests {
         assert!(crate::api::request_changes_ui(&pane_swap));
         assert!(crate::api::request_changes_ui(&pane_focus_direction));
         assert!(crate::api::request_changes_ui(&pane_resize));
-        assert!(crate::api::request_changes_ui(&agent_view));
     }
 
     #[test]

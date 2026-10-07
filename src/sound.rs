@@ -1,4 +1,4 @@
-//! Sound notifications for agent state changes.
+//! Notification sounds and Bus room dings.
 //!
 //! Embeds mp3 files in the binary and plays them via system audio tools.
 //! Uses afplay (macOS), Windows MediaPlayer, or decoder-capable Linux audio
@@ -30,9 +30,9 @@ static SOUND_REQUEST: &[u8] = include_bytes!("../assets/sounds/request.mp3");
 /// Which notification sound to play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sound {
-    /// Agent finished work (transitioned to Idle).
+    /// Something finished.
     Done,
-    /// Agent needs input (transitioned to Blocked).
+    /// Something needs attention.
     Request,
 }
 
