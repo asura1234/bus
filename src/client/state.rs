@@ -14,9 +14,7 @@ pub(super) struct ClientState {
     pub(super) host_palette_query_pending: Arc<AtomicBool>,
     /// One-based index of the latest reply consumed from the active host palette query.
     pub(super) host_palette_query_progress: Arc<AtomicU16>,
-    pub(super) direct_mouse_capture_preference: bool,
     pub(super) shell_mouse_capture_preference: bool,
-    pub(super) direct_keyboard_protocol: crate::terminal_modes::DirectHostKeyboardState,
     pub(super) pane_keyboard_report_all: bool,
     pub(super) keyboard_report_all_active: bool,
     pub(super) reported_size: (u16, u16),
@@ -25,9 +23,6 @@ pub(super) struct ClientState {
     pub(super) kitty_graphics_enabled: bool,
     pub(super) pixel_geometry_enabled: bool,
     pub(super) pixel_geometry_exact: bool,
-    pub(super) attach_escape: Option<AttachEscapeState>,
-    #[cfg(unix)]
-    pub(super) mouse_scroll_lines: usize,
     pub(super) redraw_on_focus_gained: bool,
     pub(super) repaint_pending: bool,
     /// During a source-off-first handoff the currently blitted frame remains authoritative until
@@ -36,19 +31,6 @@ pub(super) struct ClientState {
     pub(super) draw_host_cursor: bool,
     pub(super) detached_process_children: Vec<std::process::Child>,
     pub(super) shell: Option<shell::ClientShellState>,
-}
-
-impl Drop for ClientState {
-    fn drop(&mut self) {
-        if self.attach_escape.is_some() {
-            let _ = crate::terminal_modes::set_direct_host_keyboard_protocol(
-                &mut io::stdout(),
-                &mut self.direct_keyboard_protocol,
-                0,
-                0,
-            );
-        }
-    }
 }
 
 impl ClientState {
@@ -86,23 +68,6 @@ impl ClientState {
                 .retain(|current| !matches!(current, ClientHostThemeUpdate::Appearance(_))),
         }
         self.host_theme_updates.push(update.clone());
-    }
-
-    /// Replay the retained physical-host baseline only after an endpoint owns the committed
-    /// presentation. The endpoint transport preserves this order ahead of the resync control.
-    pub(super) fn replay_host_theme(
-        &self,
-        endpoints: &mut endpoint::EndpointRegistry,
-        endpoint_id: &endpoint::ClientEndpointId,
-    ) {
-        for update in &self.host_theme_updates {
-            let _ = endpoints.send_to(
-                endpoint_id,
-                &crate::protocol::ClientMessage::ClientShellHostTheme {
-                    update: update.clone(),
-                },
-            );
-        }
     }
 
     pub(super) fn unfreeze_presentation(&mut self) {

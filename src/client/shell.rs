@@ -7,7 +7,6 @@ mod config;
 mod endpoint_agent_state;
 mod endpoint_notices;
 mod endpoints;
-pub(super) use endpoints::*;
 mod graphics;
 mod input;
 mod mouse;
@@ -26,7 +25,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-use super::endpoint::{ClientEndpointId, ClientEndpointStatus};
 use crate::app::state::Palette;
 use crate::config::Config;
 use crate::protocol::{

@@ -11,16 +11,7 @@ impl ClientShellState {
                 .bg(self.config.palette.panel_bg),
         );
         self.hits = ShellHitMap::default();
-        let message = self.endpoint_error.clone().unwrap_or_else(|| {
-            let status = self
-                .endpoint_status(&self.active_endpoint_id)
-                .unwrap_or(ClientEndpointStatus::Connecting);
-            let (_, label, _) = endpoint_status_presentation(status, &self.config.palette);
-            format!(
-                "{}: {label}. Select a connected machine.",
-                self.active_endpoint_label()
-            )
-        });
+        let message = "Connecting to Bus.".to_owned();
         let message_area = Rect::new(layout.pane_surface.x, 0, layout.pane_surface.width, 1);
         render::put_text(
             &mut buffer,
@@ -161,17 +152,7 @@ impl ClientShellState {
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
         let has_config_diagnostic = self.config_diagnostic.is_some();
-        let active_lifecycle = self
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)
-            .filter(|endpoint| endpoint.status != ClientEndpointStatus::Online)
-            .map(|endpoint| (endpoint.label.clone(), endpoint.status));
-        if has_config_diagnostic
-            || active_lifecycle.is_some()
-            || self.visible_endpoint_notice.is_some()
-            || self.endpoint_error.is_some()
-        {
+        if has_config_diagnostic {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
             if let Some(diagnostic) = self.config_diagnostic.as_deref() {
@@ -182,43 +163,6 @@ impl ClientShellState {
                     diagnostic,
                     &self.config.palette,
                 );
-            }
-            let lifecycle_offset = active_lifecycle.as_ref().map_or(0, |(label, status)| {
-                let _ = endpoint_notices::render_lifecycle_banner(
-                    &mut composed,
-                    Rect::new(0, 0, cols, rows),
-                    label,
-                    *status,
-                    u16::from(has_config_diagnostic),
-                    &self.config.palette,
-                );
-                1
-            });
-            let mut notice_rect = Rect::default();
-            if let Some(notice) = self.visible_endpoint_notice.as_ref() {
-                notice_rect = endpoint_notices::render_notice(
-                    &mut composed,
-                    Rect::new(0, 0, cols, rows),
-                    notice,
-                    u16::from(has_config_diagnostic) + lifecycle_offset,
-                    &self.config.palette,
-                );
-            }
-            self.hits.notification_toast = notice_rect;
-            if let Some(error) = self.endpoint_error.as_deref() {
-                let area = layout.pane_surface;
-                if !area.is_empty() {
-                    render::put_text(
-                        &mut composed,
-                        area.x,
-                        area.bottom() - 1,
-                        area.width,
-                        error,
-                        Style::default()
-                            .fg(self.config.palette.red)
-                            .bg(self.config.palette.panel_bg),
-                    );
-                }
             }
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
@@ -243,11 +187,6 @@ impl ClientShellState {
                 &self.config.palette,
             );
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
-        }
-        if self.endpoint_status(&self.active_endpoint_id) != Some(ClientEndpointStatus::Online) {
-            frame.cursor = None;
-            self.hits.panes.clear();
-            self.hits.pane_splits.clear();
         }
         self.compose_graphics(&mut frame, layout);
         if let Some(bus) = self.bus.as_mut() {

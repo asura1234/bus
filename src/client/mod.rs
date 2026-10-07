@@ -1,7 +1,7 @@
 //! Thin client mode — connects to the server's client socket.
 //!
 //! The client:
-//! - Connects to `herdr-client.sock`, sends TerminalHello with terminal size and protocol version
+//! - Connects to `herdr-client.sock`, sends the shell hello with this build's version
 //! - Sets up the real terminal (raw mode, mouse capture, keyboard enhancements)
 //! - Receives Frame messages and blits them to the terminal (diff against last frame)
 //! - Reads stdin events (keystrokes, mouse, paste) and sends them as ClientMessage::Input
@@ -12,7 +12,6 @@
 //! - Forwards OSC 52 clipboard writes from server to its own stdout
 //! - Displays sound/toast notifications forwarded from server
 
-mod attach;
 mod clipboard_forwarding;
 mod config_reload;
 pub(crate) mod endpoint;
@@ -66,8 +65,7 @@ use terminal_geometry::{reported_cell_size_from_events, store_reported_cell_size
 #[cfg(unix)]
 use terminal_setup::finish_terminal_input;
 use terminal_setup::{
-    effective_mouse_capture, effective_sgr_pixel_mouse, set_mouse_capture,
-    setup_direct_attach_terminal, setup_terminal, should_draw_host_cursor,
+    effective_sgr_pixel_mouse, set_mouse_capture, setup_terminal, should_draw_host_cursor,
 };
 #[cfg(windows)]
 use terminal_setup::{
@@ -79,11 +77,6 @@ use terminal_setup::{
     write_host_color_scheme_report_mode, write_terminal_restore_postlude,
 };
 
-#[cfg(unix)]
-use attach::direct_attach_pixel_mouse;
-use attach::AttachEscapeState;
-#[cfg(unix)]
-use attach::{write_attach_semantic_action, AttachInputAction};
 pub use errors::ClientError;
 #[cfg(test)]
 use frame_output::{clear_received_kitty_graphics, kitty_graphics_image_ids};
@@ -122,29 +115,27 @@ struct ClientInputLifecycle {
 }
 
 fn run_client_with_mode(
-    attach_request: Option<(String, bool)>,
-    attach_escape: Option<AttachEscapeState>,
+    _attach_request: Option<(String, bool)>,
+    _attach_escape: Option<()>,
     log_message: &'static str,
 ) -> io::Result<()> {
     init_logging();
 
     let loaded_config = crate::config::Config::load();
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
-    let client_rendered_shell = attach_request.is_none();
     let socket_path = client_socket_path();
     let startup_config_diagnostic =
         crate::config::config_diagnostic_summary(&loaded_config.diagnostics);
-    let shell_config = client_rendered_shell.then(|| {
+    let shell_config = Some(
         shell::ClientShellConfig::from_config(&loaded_config.config)
-            .with_startup_config_diagnostic(startup_config_diagnostic)
-    });
+            .with_startup_config_diagnostic(startup_config_diagnostic),
+    );
     let mouse_capture = loaded_config.config.ui.mouse_capture;
     let mouse_scroll_lines = loaded_config.config.ui.mouse_scroll_lines();
     let redraw_on_focus_gained = loaded_config.config.ui.redraw_on_focus_gained;
     let host_cursor = loaded_config.config.ui.host_cursor;
-    let kitty_graphics_enabled =
-        loaded_config.config.kitty_graphics_enabled() && client_rendered_shell;
-    let pixel_geometry_enabled = kitty_graphics_enabled || attach_escape.is_some();
+    let kitty_graphics_enabled = loaded_config.config.kitty_graphics_enabled();
+    let pixel_geometry_enabled = kitty_graphics_enabled;
     let loop_config = ClientLoopConfig {
         sound_config: loaded_config.config.ui.sound,
         mouse_scroll_lines,
@@ -176,44 +167,27 @@ fn run_client_with_mode(
     let shell_surface_size = loop_config
         .shell_config
         .as_ref()
-        .map(|shell| shell.initial_surface_size(cols, rows));
-    // Healthy Local attaches directly; only an actual failure enters background recovery.
+        .expect("client shell")
+        .initial_surface_size(cols, rows);
+    // Healthy Local connects directly; only an actual failure enters background recovery.
     let initial: io::Result<Option<(LocalStream, handshake::HandshakeResult)>> = initial_stream
         .map(|mut stream| {
             let handshake = do_handshake(
                 &mut stream,
-                cols,
-                rows,
                 cell_width_px,
                 cell_height_px,
                 exact_cell_size,
                 shell_surface_size,
                 false,
                 loop_config.mouse_capture_active,
-                true,
             )
             .map_err(|error| io::Error::other(error.to_string()))?;
-            if let Some((terminal_id, takeover)) = attach_request {
-                write_to_server(
-                    &mut stream,
-                    &ClientMessage::AttachTerminal {
-                        terminal_id,
-                        takeover,
-                    },
-                )?;
-            }
             Ok((stream, handshake))
         })
         .transpose();
     let initial = initial?;
 
-    let direct_attach = attach_escape.is_some();
-    let terminal_guard = if direct_attach {
-        setup_direct_attach_terminal(mouse_capture)
-    } else {
-        setup_terminal(mouse_capture)
-    }
-    .map_err(|err| {
+    let terminal_guard = setup_terminal(mouse_capture).map_err(|err| {
         eprintln!("herdr: failed to set up terminal: {err}");
         err
     })?;
@@ -260,7 +234,6 @@ fn run_client_with_mode(
             should_quit,
             input_lifecycle.clone(),
             loop_config,
-            attach_escape,
         )
         .await
     });
@@ -324,13 +297,9 @@ async fn run_client_loop(
     should_quit: Arc<AtomicBool>,
     input_lifecycle: ClientInputLifecycle,
     config: ClientLoopConfig,
-    attach_escape: Option<AttachEscapeState>,
 ) -> Result<(), ClientError> {
-    #[cfg(windows)]
     let _ = config.mouse_scroll_lines;
-    let draw_host_cursor = attach_escape.is_none() && should_draw_host_cursor(config.host_cursor);
-    let local_unavailable = initial.is_none();
-
+    let draw_host_cursor = should_draw_host_cursor(config.host_cursor);
     let mut state = ClientState {
         blit_encoder: render_ansi::BlitEncoder::new(),
         mouse_capture_active: config.mouse_capture_active,
@@ -339,9 +308,7 @@ async fn run_client_loop(
         host_theme_updates: Vec::new(),
         host_palette_query_pending: input_lifecycle.host_palette_query_pending,
         host_palette_query_progress: input_lifecycle.host_palette_query_progress,
-        direct_mouse_capture_preference: attach_escape.is_some() && config.mouse_capture_active,
         shell_mouse_capture_preference: config.mouse_capture_active,
-        direct_keyboard_protocol: crate::terminal_modes::DirectHostKeyboardState::default(),
         pane_keyboard_report_all: false,
         keyboard_report_all_active: false,
         reported_size: (cols, rows),
@@ -350,9 +317,6 @@ async fn run_client_loop(
         kitty_graphics_enabled: config.kitty_graphics_enabled,
         pixel_geometry_enabled: config.pixel_geometry_enabled,
         pixel_geometry_exact: initial_pixel_geometry_exact,
-        attach_escape,
-        #[cfg(unix)]
-        mouse_scroll_lines: config.mouse_scroll_lines,
         redraw_on_focus_gained: config.redraw_on_focus_gained,
         repaint_pending: false,
         presentation_frozen: false,
@@ -366,18 +330,6 @@ async fn run_client_loop(
             .map_err(|error| ClientError::ConnectionFailed(io::Error::other(error)))?;
         shell.set_graphics_cell_size(initial_cell_width_px, initial_cell_height_px);
         shell.set_bus_kitty_graphics(state.kitty_graphics_enabled);
-        shell.set_endpoint_methods_for(
-            &endpoint::ClientEndpointId::Local,
-            initial
-                .as_ref()
-                .and_then(|(_, handshake)| handshake.endpoint_methods.clone()),
-        );
-        if local_unavailable {
-            shell.set_endpoint_status(
-                &endpoint::ClientEndpointId::Local,
-                endpoint::ClientEndpointStatus::Connecting,
-            );
-        }
     }
     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
     // Cell size reported by the host terminal, packed as width<<32 | height.
@@ -396,12 +348,10 @@ async fn run_client_loop(
     let mut endpoint_commands = endpoint_commands::EndpointCommands::default();
 
     // Spawn the stdin reader thread.
-    let will_query_host_terminal_theme =
-        state.attach_escape.is_none() && should_query_host_terminal_theme();
+    let will_query_host_terminal_theme = should_query_host_terminal_theme();
     // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
     // host terminal directly instead of falling back to an assumed cell size.
-    let will_query_host_cell_size = state.attach_escape.is_none()
-        && host_cell_size_query_required(state.kitty_graphics_enabled);
+    let will_query_host_cell_size = host_cell_size_query_required(state.kitty_graphics_enabled);
     let stdin_quit = input_lifecycle.reader_should_quit;
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
     let stdin_sgr_pixels_active = host_sgr_pixels_active.clone();
@@ -456,44 +406,19 @@ async fn run_client_loop(
         );
     });
 
-    let mut write_stream = if let Some((stream, handshake)) = initial {
-        let max_frame_size = if state.kitty_graphics_enabled {
-            MAX_GRAPHICS_FRAME_SIZE
-        } else {
-            crate::protocol::MAX_FRAME_SIZE
-        };
-        let transport = start_endpoint_transport(
-            stream,
-            (),
-            &event_tx,
-            endpoint::ClientEndpointId::Local,
-            1,
-            max_frame_size,
-        )?;
-        let negotiation = endpoint::EndpointNegotiation::new(
-            handshake.endpoint_methods.unwrap_or_default(),
-            handshake.endpoint_capabilities.unwrap_or_default(),
-        );
-        let mut registry = endpoint::EndpointRegistry::new(transport, 1, negotiation);
-        if state.shell.is_some() {
-            registry.send(&ClientMessage::ClientShellFocus { focused: true });
-        }
-        registry
+    let (stream, _handshake) = initial.expect("connected client");
+    let max_frame_size = if state.kitty_graphics_enabled {
+        MAX_GRAPHICS_FRAME_SIZE
     } else {
-        endpoint::EndpointRegistry::empty()
+        crate::protocol::MAX_FRAME_SIZE
     };
-    if local_unavailable {
-        if let Some(frame) = state
-            .shell
-            .as_mut()
-            .and_then(|shell| shell.compose(cols, rows))
-        {
-            state.present_frame(frame);
-        }
+    let transport = start_endpoint_transport(stream, (), &event_tx, max_frame_size)?;
+    let mut write_stream = endpoint::ServerConnection::new(transport);
+    if state.shell.is_some() {
+        write_stream
+            .send(&ClientMessage::ClientShellFocus { focused: true })
+            .map_err(ClientError::ConnectionLost)?;
     }
-    let mut next_surface_serial = 1_u64;
-    let mut pending_activation: Option<endpoint::PendingEndpointActivation> = None;
-    let mut scheduled_activation = None;
     // Main event loop.
     let mut client_timer = timer::ClientLoopTimer::new();
     #[cfg(windows)]
@@ -506,11 +431,8 @@ async fn run_client_loop(
                 shell.timer_delay(std::time::Instant::now())
             });
         let timer_deadline = client_timer.deadline(std::time::Instant::now(), timer_delay);
-        let immediate_event = scheduled_activation.take();
         #[cfg(windows)]
-        let event = if let Some(event) = immediate_event {
-            event
-        } else {
+        let event = {
             tokio::select! {
                 _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
                 ev = stdin_rx.recv(), if stdin_open => match ev {
@@ -524,9 +446,7 @@ async fn run_client_loop(
             }
         };
         #[cfg(unix)]
-        let event = if let Some(event) = immediate_event {
-            event
-        } else {
+        let event = {
             tokio::select! {
                 biased;
                 _ = tokio::time::sleep_until(timer_deadline.into()) => ClientLoopEvent::Timer,
@@ -560,82 +480,10 @@ async fn run_client_loop(
                         outcome,
                         frame,
                         &mut write_stream,
-                        &mut pending_activation,
                         &mut endpoint_commands,
                     )? {
                         return Ok(());
                     }
-                    continue;
-                }
-                let data = if let Some(attach_escape) = &mut state.attach_escape {
-                    match attach_escape.filter_input(
-                        data,
-                        state.reported_size.1,
-                        state.mouse_scroll_lines,
-                    ) {
-                        AttachInputAction::Forward(data) => data,
-                        AttachInputAction::ForwardPair(first, second) => {
-                            for data in [first, second] {
-                                if let Err(e) = write_to_server(
-                                    &mut write_stream,
-                                    &ClientMessage::Input { data },
-                                ) {
-                                    return Err(ClientError::ConnectionLost(e));
-                                }
-                            }
-                            continue;
-                        }
-                        AttachInputAction::Semantic(action) => {
-                            if let Err(e) = write_attach_semantic_action(&mut write_stream, action)
-                            {
-                                return Err(ClientError::ConnectionLost(e));
-                            }
-                            continue;
-                        }
-                        AttachInputAction::ForwardThenSemantic(prefix, action) => {
-                            if let Err(e) = write_to_server(
-                                &mut write_stream,
-                                &ClientMessage::Input { data: prefix },
-                            ) {
-                                return Err(ClientError::ConnectionLost(e));
-                            }
-                            if let Err(e) = write_attach_semantic_action(&mut write_stream, action)
-                            {
-                                return Err(ClientError::ConnectionLost(e));
-                            }
-                            continue;
-                        }
-                        AttachInputAction::Detach => {
-                            let _ = write_to_server(&mut write_stream, &ClientMessage::Detach);
-                            return Ok(());
-                        }
-                        AttachInputAction::None => continue,
-                    }
-                } else {
-                    let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
-                    if crate::raw_input::events_require_host_surface_redraw(
-                        &events,
-                        state.redraw_on_focus_gained,
-                    ) {
-                        state.request_repaint();
-                    }
-                    if crate::raw_input::events_require_host_terminal_appearance_query(&events) {
-                        query_host_terminal_appearance();
-                    }
-                    if crate::raw_input::events_require_host_terminal_theme_query(&events) {
-                        query_host_terminal_theme(
-                            &state.host_palette_query_pending,
-                            &state.host_palette_query_progress,
-                        );
-                    }
-                    if let Some((width_px, height_px)) = reported_cell_size_from_events(&events) {
-                        store_reported_cell_size(&reported_cell_size, width_px, height_px);
-                    }
-                    data
-                };
-                let msg = ClientMessage::Input { data };
-                if let Err(e) = write_to_server(&mut write_stream, &msg) {
-                    return Err(ClientError::ConnectionLost(e));
                 }
             }
             #[cfg(unix)]
@@ -655,40 +503,9 @@ async fn run_client_loop(
                         outcome,
                         frame,
                         &mut write_stream,
-                        &mut pending_activation,
                         &mut endpoint_commands,
                     )? {
                         return Ok(());
-                    }
-                    continue;
-                }
-                if let Some(attach_escape) = state.attach_escape.as_mut() {
-                    if let Some(prefix) = attach_escape.take_pending_prefix() {
-                        if let Err(err) = write_to_server(
-                            &mut write_stream,
-                            &ClientMessage::Input { data: prefix },
-                        ) {
-                            return Err(ClientError::ConnectionLost(err));
-                        }
-                    }
-                    if let Some((kind, position, modifiers)) =
-                        direct_attach_pixel_mouse(&data, geometry)
-                    {
-                        let message = ClientMessage::AttachMouse {
-                            kind,
-                            position,
-                            geometry: Some(crate::protocol::ClientMouseGeometry {
-                                cols: geometry.cols,
-                                rows: geometry.rows,
-                                width_px: geometry.width_px,
-                                height_px: geometry.height_px,
-                            }),
-                            modifiers,
-                            lines: state.mouse_scroll_lines.max(1).min(u16::MAX as usize) as u16,
-                        };
-                        if let Err(err) = write_to_server(&mut write_stream, &message) {
-                            return Err(ClientError::ConnectionLost(err));
-                        }
                     }
                 }
             }
@@ -709,14 +526,11 @@ async fn run_client_loop(
                         outcome,
                         frame,
                         &mut write_stream,
-                        &mut pending_activation,
                         &mut endpoint_commands,
                     )? {
                         return Ok(());
                     }
-                    continue;
                 }
-                // Direct terminal attach is Unix-only; every Windows client uses ClientShell.
             }
             ClientLoopEvent::TerminalUnavailable(err) => {
                 info!(err = %err, "client terminal unavailable; detaching");
@@ -765,17 +579,7 @@ async fn run_client_loop(
                         pixel_mouse: pixel_geometry_exact,
                     }
                 };
-                if let Some(activation) = pending_activation.as_mut() {
-                    if let Err(error) = activation.update_resize(msg, &mut write_stream) {
-                        rollback_endpoint_activation(
-                            &mut state,
-                            &mut write_stream,
-                            &mut pending_activation,
-                            error,
-                            false,
-                        );
-                    }
-                } else if let Err(e) = write_to_server(&mut write_stream, &msg) {
+                if let Err(e) = write_to_server(&mut write_stream, &msg) {
                     return Err(ClientError::ConnectionLost(e));
                 }
                 // The Bus view draws locally, so show it at the new size now
@@ -789,63 +593,7 @@ async fn run_client_loop(
                     state.present_frame(frame);
                 }
             }
-            ClientLoopEvent::ActivateEndpoint { endpoint_id, force } => {
-                begin_endpoint_activation(
-                    &mut state,
-                    &mut write_stream,
-                    &mut endpoint_commands,
-                    &mut pending_activation,
-                    &mut next_surface_serial,
-                    endpoint_id,
-                    force,
-                    now,
-                )?;
-            }
-            ClientLoopEvent::ServerMessage {
-                endpoint_id,
-                generation,
-                message,
-            } => {
-                if !write_stream.accepts(&endpoint_id, generation) {
-                    continue;
-                }
-                let endpoint_active = write_stream.active_id() == &endpoint_id
-                    && write_stream
-                        .connection(&endpoint_id)
-                        .is_some_and(|connection| connection.surface_active);
-                let activation_message = pending_activation
-                    .as_ref()
-                    .is_some_and(|pending| pending.accepts_endpoint(&endpoint_id, generation));
-                let command_response = match message.as_ref() {
-                    ServerMessage::ClientShellEndpointResponseChunk {
-                        boot_id,
-                        request_id,
-                        ..
-                    } => endpoint_commands.accepts_response(
-                        &endpoint_id,
-                        generation,
-                        boot_id,
-                        request_id,
-                    ),
-                    _ => false,
-                };
-                if !endpoint::accepts_endpoint_message(
-                    endpoint_active,
-                    activation_message,
-                    command_response,
-                    message.as_ref(),
-                ) {
-                    continue;
-                }
-                // Target presentation effects may arrive as soon as surface.set(true) is
-                // acknowledged. They cannot be applied while the source frame is frozen; the
-                // target receives one explicit replay after the coherent commit instead.
-                if state.presentation_frozen
-                    && activation_message
-                    && endpoint::is_presentation_effect(message.as_ref())
-                {
-                    continue;
-                }
+            ClientLoopEvent::ServerMessage { message } => {
                 match *message {
                     ServerMessage::ClientShellSnapshot(_) => {
                         let message = "server sent an unnegotiated binary endpoint snapshot";
@@ -854,26 +602,6 @@ async fn run_client_loop(
                         )));
                     }
                     ServerMessage::PaneSurface(surface) => {
-                        if activation_message {
-                            let progress = pending_activation.as_mut().map(|pending| {
-                                pending.receive_surface(&endpoint_id, generation, surface)
-                            });
-                            if matches!(progress, Some(endpoint::SurfaceActivationProgress::Ready))
-                            {
-                                if let Some(event) = complete_endpoint_activation(
-                                    &mut state,
-                                    &mut write_stream,
-                                    &mut pending_activation,
-                                    &mut endpoint_commands,
-                                )? {
-                                    scheduled_activation = Some(event);
-                                }
-                            }
-                            continue;
-                        }
-                        if !endpoint_active {
-                            continue;
-                        }
                         let composed = if let Some(shell) = &mut state.shell {
                             shell.set_pane_surface(surface);
                             shell.compose(state.reported_size.0, state.reported_size.1)
@@ -982,94 +710,25 @@ async fn run_client_loop(
                         final_chunk,
                         data,
                     } => {
-                        if pending_activation.as_ref().is_some_and(|pending| {
-                            pending.accepts_response(
-                                &endpoint_id,
-                                generation,
-                                &boot_id,
-                                &request_id,
-                            )
-                        }) {
-                            if !final_chunk {
-                                rollback_endpoint_activation(
-                                    &mut state,
-                                    &mut write_stream,
-                                    &mut pending_activation,
-                                    "endpoint returned a chunked activation acknowledgement".into(),
-                                    false,
-                                );
-                                continue;
-                            }
-                            let progress = pending_activation.as_mut().map(|pending| {
-                                pending.receive_response_for_boot(
-                                    &endpoint_id,
-                                    generation,
-                                    &boot_id,
-                                    &request_id,
-                                    &data,
-                                    &mut write_stream,
-                                )
-                            });
-                            match progress {
-                                Some(endpoint::SurfaceActivationProgress::Ready) => {
-                                    if let Some(event) = complete_endpoint_activation(
-                                        &mut state,
-                                        &mut write_stream,
-                                        &mut pending_activation,
-                                        &mut endpoint_commands,
-                                    )? {
-                                        scheduled_activation = Some(event);
-                                    }
-                                }
-                                Some(endpoint::SurfaceActivationProgress::Rejected {
-                                    message,
-                                    source_release_rejected,
-                                }) => {
-                                    rollback_endpoint_activation(
-                                        &mut state,
-                                        &mut write_stream,
-                                        &mut pending_activation,
-                                        message,
-                                        source_release_rejected,
-                                    );
-                                }
-                                _ => {}
-                            }
-                            continue;
-                        }
                         if request_id.starts_with("client-shell-surface:") {
                             continue;
                         }
-                        let completed = endpoint_commands
-                            .receive_chunk(
-                                &endpoint_id,
-                                generation,
-                                &boot_id,
-                                &request_id,
-                                final_chunk,
-                                data,
-                            )
-                            .map_err(ClientError::ConnectionLost)?;
-                        let Some(completed) = completed else {
+                        let Some(completed) = endpoint_commands.receive_chunk(
+                            &boot_id,
+                            &request_id,
+                            final_chunk,
+                            data,
+                        ) else {
                             continue;
                         };
                         let (repaint, actions) = state.shell.as_mut().map_or_else(
                             || (false, Vec::new()),
                             |shell| {
-                                if completed.generation == generation
-                                    && shell.endpoint_is_active(&completed.endpoint_id)
-                                {
-                                    shell.handle_endpoint_result(
-                                        &completed.boot_id,
-                                        &completed.request_id,
-                                        completed.result,
-                                    )
-                                } else {
-                                    (
-                                        shell.cancel_endpoint_request(&completed.request_id),
-                                        Vec::new(),
-                                    )
-                                }
+                                shell.handle_endpoint_result(
+                                    &completed.boot_id,
+                                    &completed.request_id,
+                                    completed.result,
+                                )
                             },
                         );
                         let (replay_mouse, dispatch_repaint) = dispatch_client_shell_actions(
@@ -1106,7 +765,6 @@ async fn run_client_loop(
                                 outcome,
                                 frame,
                                 &mut write_stream,
-                                &mut pending_activation,
                                 &mut endpoint_commands,
                             )? {
                                 return Ok(());
@@ -1134,21 +792,15 @@ async fn run_client_loop(
                             title.as_deref(),
                         );
                     }
-                    ServerMessage::ReloadSoundConfig => apply_reload(
-                        &mut state,
-                        &mut write_stream,
-                        &mut pending_activation,
-                        &host_mouse_capture_active,
-                        &host_sgr_pixels_active,
-                    )?,
+                    ServerMessage::ReloadSoundConfig => {
+                        apply_reload(&mut state, &mut write_stream)?
+                    }
                     ServerMessage::MouseCapture {
                         enabled,
                         sgr_pixels,
                     } => {
                         state.endpoint_mouse_capture_requested = enabled;
                         state.endpoint_sgr_pixels_requested = sgr_pixels;
-                        let enabled =
-                            effective_mouse_capture(enabled, state.direct_mouse_capture_preference);
                         let next_sgr_pixels = effective_sgr_pixel_mouse(
                             enabled,
                             sgr_pixels,
@@ -1172,20 +824,6 @@ async fn run_client_loop(
                         host_mouse_capture_active.store(enabled, Ordering::Release);
                         host_sgr_pixels_active.store(next_sgr_pixels, Ordering::Release);
                     }
-                    ServerMessage::DirectTerminalKeyboardProtocol {
-                        flags,
-                        modify_other_keys_level,
-                    } => {
-                        if state.attach_escape.is_some() {
-                            crate::terminal_modes::set_direct_host_keyboard_protocol(
-                                &mut io::stdout(),
-                                &mut state.direct_keyboard_protocol,
-                                flags,
-                                modify_other_keys_level,
-                            )
-                            .map_err(ClientError::ConnectionFailed)?;
-                        }
-                    }
                     ServerMessage::ClientShellKeyboardReportAll { enabled } => {
                         if state.shell.is_some() {
                             state.pane_keyboard_report_all = enabled;
@@ -1193,27 +831,6 @@ async fn run_client_loop(
                         }
                     }
                     ServerMessage::EndpointControl { kind, data } => {
-                        if kind == crate::protocol::endpoint::PRESENTATION_EFFECTS_READY_KIND {
-                            let progress = pending_activation.as_mut().map(|activation| {
-                                activation.receive_presentation_effects_ready(
-                                    &endpoint_id,
-                                    generation,
-                                    &data,
-                                )
-                            });
-                            if matches!(progress, Some(endpoint::SurfaceActivationProgress::Ready))
-                            {
-                                if let Some(event) = complete_endpoint_activation(
-                                    &mut state,
-                                    &mut write_stream,
-                                    &mut pending_activation,
-                                    &mut endpoint_commands,
-                                )? {
-                                    scheduled_activation = Some(event);
-                                }
-                            }
-                            continue;
-                        }
                         let snapshot = match endpoint::decode_endpoint_control(&kind, &data) {
                             Ok(endpoint::EndpointControlMessage::Ignored) => {
                                 debug!(%kind, "ignoring unknown endpoint control message");
@@ -1226,130 +843,36 @@ async fn run_client_loop(
                                 )));
                             }
                         };
-                        let projection_pending = activation_message;
-                        let activation_progress = activation_message
-                            .then(|| {
-                                pending_activation.as_mut().map(|pending| {
-                                    pending.receive_snapshot(&endpoint_id, generation, &snapshot)
-                                })
-                            })
-                            .flatten();
-                        install_client_shell_snapshot(
-                            &mut state,
-                            &endpoint_id,
-                            snapshot,
-                            projection_pending,
-                            &mut write_stream,
-                        )?;
-                        if matches!(
-                            activation_progress,
-                            Some(endpoint::SurfaceActivationProgress::Ready)
-                        ) {
-                            if let Some(event) = complete_endpoint_activation(
-                                &mut state,
-                                &mut write_stream,
-                                &mut pending_activation,
-                                &mut endpoint_commands,
-                            )? {
-                                scheduled_activation = Some(event);
-                            }
-                        }
-                        let selected_endpoint = endpoint::ClientEndpointId::Local;
-                        let activation_ready = state.shell.as_ref().is_some_and(|shell| {
-                            shell.endpoint_has_snapshot(&selected_endpoint)
-                                && (!write_stream
-                                    .connection(write_stream.active_id())
-                                    .is_some_and(|connection| connection.surface_active)
-                                    || shell.endpoint_boot_id(write_stream.active_id()).is_some())
-                        });
-                        let needs_surface = write_stream
-                            .connection(&selected_endpoint)
-                            .is_some_and(|connection| !connection.surface_active);
-                        if activation_ready && needs_surface && pending_activation.is_none() {
-                            scheduled_activation = Some(ClientLoopEvent::ActivateEndpoint {
-                                endpoint_id: selected_endpoint,
-                                force: false,
-                            });
-                        }
+                        install_client_shell_snapshot(&mut state, snapshot, &mut write_stream)?;
                     }
                     ServerMessage::Welcome { .. } => {
                         debug!("received unexpected Welcome in main loop");
                     }
                 }
             }
-            ClientLoopEvent::ServerDisconnected {
-                endpoint_id,
-                generation,
-            } => {
-                if !write_stream.accepts(&endpoint_id, generation) {
-                    continue;
-                }
-                write_stream.fail(
-                    &endpoint_id,
-                    io::Error::new(io::ErrorKind::UnexpectedEof, "connection was lost"),
-                );
+            ClientLoopEvent::ServerDisconnected => {
+                write_stream.fail(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "connection was lost",
+                ));
             }
             ClientLoopEvent::Timer => {
                 client_timer.fired();
                 state
                     .detached_process_children
                     .retain_mut(|child| child.try_wait().ok().flatten().is_none());
-                for failure in write_stream.take_failures() {
-                    if write_stream.connection(&failure.endpoint_id).is_some()
-                        && !write_stream.accepts(&failure.endpoint_id, failure.generation)
-                    {
-                        continue;
-                    }
-                    warn!(
-                        endpoint = %failure.endpoint_id.storage_key(),
-                        error = %failure.message,
-                        "endpoint transport failed"
-                    );
-                    return Err(ClientError::ConnectionLost(io::Error::new(
-                        failure.kind,
-                        failure.message,
-                    )));
-                }
-                // A revoked transport changes the safe rollback destination. Handle those
-                // failures before applying a timeout to the remaining activation phase.
-                if pending_activation
-                    .as_ref()
-                    .is_some_and(|activation| activation.expired(now))
-                {
-                    let endpoint_id = pending_activation
-                        .as_ref()
-                        .map(|activation| activation.target().clone())
-                        .expect("checked pending activation");
-                    let label = state
-                        .shell
-                        .as_ref()
-                        .map(|shell| shell.endpoint_label(&endpoint_id).to_owned())
-                        .unwrap_or_else(|| "Endpoint".into());
-                    rollback_endpoint_activation(
-                        &mut state,
-                        &mut write_stream,
-                        &mut pending_activation,
-                        format!("{label} did not produce a coherent surface in time"),
-                        false,
-                    );
+                if let Some(error) = write_stream.take_failure() {
+                    warn!(error = %error, "server connection failed");
+                    return Err(ClientError::ConnectionLost(error));
                 }
                 if state.shell.is_some() {
-                    let expired_endpoints = endpoint_commands
-                        .expire(now)
-                        .into_iter()
-                        .filter(|expired| {
-                            write_stream.accepts(&expired.endpoint_id, expired.generation)
-                        })
-                        .collect::<Vec<_>>();
+                    let expired = endpoint_commands.expire(now);
                     let (outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
                         outcome.repaint |= shell.tick_bus();
                         outcome.detach |= shell.bus_exit_ready();
-                        for expired in expired_endpoints {
-                            if !shell.endpoint_is_active(&expired.endpoint_id) {
-                                continue;
-                            }
+                        if let Some(expired) = expired {
                             let (repaint, actions) = shell.handle_endpoint_result(
                                 &expired.boot_id,
                                 &expired.request_id,
@@ -1370,7 +893,6 @@ async fn run_client_loop(
                         outcome,
                         frame,
                         &mut write_stream,
-                        &mut pending_activation,
                         &mut endpoint_commands,
                     )? {
                         return Ok(());

@@ -301,12 +301,8 @@ fn reported_cell_size_is_taken_from_host_cell_size_events() {
 }
 
 #[test]
-fn color_scheme_reports_are_enabled_only_for_full_clients() {
-    assert_eq!(
-        should_enable_host_color_scheme_reports(true),
-        !cfg!(windows)
-    );
-    assert!(!should_enable_host_color_scheme_reports(false));
+fn color_scheme_reports_follow_the_host_theme_query() {
+    assert_eq!(should_enable_host_color_scheme_reports(), !cfg!(windows));
 }
 
 #[test]
@@ -317,10 +313,7 @@ fn terminal_restore_postlude_restores_visible_default_cursor() {
 }
 
 #[test]
-fn direct_attach_mouse_capture_combines_local_preference_with_child_demand() {
-    assert!(effective_mouse_capture(false, true));
-    assert!(effective_mouse_capture(true, false));
-    assert!(!effective_mouse_capture(false, false));
+fn sgr_pixel_mouse_requires_exact_geometry() {
     assert!(effective_sgr_pixel_mouse(true, true, true));
     assert!(!effective_sgr_pixel_mouse(true, true, false));
 }

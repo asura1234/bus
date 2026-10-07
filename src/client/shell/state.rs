@@ -133,7 +133,6 @@ pub(super) enum ClientChromeDrag {
 #[derive(Debug)]
 pub(crate) enum ClientShellAction {
     Endpoint {
-        endpoint_id: ClientEndpointId,
         boot_id: String,
         request: Box<crate::api::schema::Request>,
     },
@@ -183,7 +182,6 @@ pub(super) struct PendingEndpointRequest {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum ClientEndpointNoticeKind {
-    Unsupported,
     Rejected,
     Timeout,
     Unavailable,
@@ -267,8 +265,7 @@ pub(crate) struct ClientShellState {
     pub(super) chrome_drag: Option<ClientChromeDrag>,
     pub(super) last_composed_size: Option<(u16, u16)>,
     pub(super) hits: ShellHitMap,
-    pub(super) endpoints: Vec<ClientShellEndpoint>,
-    pub(super) active_endpoint_id: ClientEndpointId,
+    pub(super) agent_presentation: super::endpoint_agent_state::EndpointAgentPresentation,
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) url_click_consumes_until_up: bool,
@@ -317,8 +314,7 @@ impl ClientShellState {
             chrome_drag: None,
             last_composed_size: None,
             hits: ShellHitMap::default(),
-            endpoints: vec![local_endpoint()],
-            active_endpoint_id: ClientEndpointId::Local,
+            agent_presentation: super::endpoint_agent_state::EndpointAgentPresentation::default(),
             previous_pane_id: None,
             pane_mouse_gesture: None,
             url_click_consumes_until_up: false,
@@ -400,11 +396,7 @@ impl ClientShellState {
     }
 
     pub(super) fn apply_active_snapshot(&mut self, snapshot: Box<ClientShellSnapshot>) {
-        let graphics_scope = format!(
-            "{}:{}",
-            self.active_endpoint_id.storage_key(),
-            snapshot.boot_id
-        );
+        let graphics_scope = snapshot.boot_id.clone();
         let endpoint_boot_changed =
             self.snapshot.is_some() && self.graphics.scope() != graphics_scope;
         if !endpoint_boot_changed

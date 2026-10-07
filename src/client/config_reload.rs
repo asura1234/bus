@@ -6,10 +6,7 @@ pub(super) fn init_logging() {
 
 pub(super) fn apply_reload(
     state: &mut ClientState,
-    endpoints: &mut endpoint::EndpointRegistry,
-    pending_activation: &mut Option<endpoint::PendingEndpointActivation>,
-    host_mouse_capture_active: &std::sync::atomic::AtomicBool,
-    host_sgr_pixels_active: &std::sync::atomic::AtomicBool,
+    connection: &mut endpoint::ServerConnection,
 ) -> Result<(), ClientError> {
     let previous_mouse_capture = state.shell_mouse_capture_preference;
     let mut mouse_capture = previous_mouse_capture;
@@ -20,34 +17,14 @@ pub(super) fn apply_reload(
         &mut mouse_capture,
     );
     state.shell_mouse_capture_preference = mouse_capture;
-    state.direct_mouse_capture_preference = state.attach_escape.is_some() && mouse_capture;
     if state.shell.is_some() && previous_mouse_capture != mouse_capture {
         write_to_server(
-            endpoints,
+            connection,
             &ClientMessage::ClientShellMouseCapture {
                 enabled: mouse_capture,
             },
         )
         .map_err(ClientError::ConnectionLost)?;
-    }
-    if state.attach_escape.is_some() {
-        let enabled = effective_mouse_capture(
-            state.endpoint_mouse_capture_requested,
-            state.direct_mouse_capture_preference,
-        );
-        let sgr_pixels = effective_sgr_pixel_mouse(
-            enabled,
-            state.endpoint_sgr_pixels_requested,
-            state.pixel_geometry_exact,
-        );
-        if enabled != state.mouse_capture_active
-            || sgr_pixels != host_sgr_pixels_active.load(Ordering::Acquire)
-        {
-            set_mouse_capture(enabled, sgr_pixels).map_err(ClientError::ConnectionFailed)?;
-        }
-        state.mouse_capture_active = enabled;
-        host_mouse_capture_active.store(enabled, Ordering::Release);
-        host_sgr_pixels_active.store(sgr_pixels, Ordering::Release);
     }
     let (frame, resize) = if let Some(shell) = state.shell.as_mut() {
         let previous_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
@@ -72,13 +49,7 @@ pub(super) fn apply_reload(
         (None, None)
     };
     if let Some(resize) = resize {
-        if let Some(activation) = pending_activation.as_mut() {
-            if let Err(error) = activation.update_resize(resize, endpoints) {
-                rollback_endpoint_activation(state, endpoints, pending_activation, error, false);
-            }
-        } else {
-            write_to_server(endpoints, &resize).map_err(ClientError::ConnectionLost)?;
-        }
+        write_to_server(connection, &resize).map_err(ClientError::ConnectionLost)?;
     }
     if let Some(frame) = frame {
         state.present_frame(frame);

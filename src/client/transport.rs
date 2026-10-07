@@ -4,8 +4,6 @@ pub(super) fn start_endpoint_transport(
     stream: LocalStream,
     lifetime: impl Send + 'static,
     event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
-    endpoint_id: endpoint::ClientEndpointId,
-    generation: u64,
     max_frame_size: usize,
 ) -> Result<endpoint::NativeEndpointTransport, ClientError> {
     let reader = stream.try_clone().map_err(ClientError::ConnectionFailed)?;
@@ -16,14 +14,7 @@ pub(super) fn start_endpoint_transport(
     std::thread::Builder::new()
         .name("endpoint-reader".into())
         .spawn(move || {
-            server_reader_thread(
-                reader,
-                event_tx,
-                &stopped,
-                max_frame_size,
-                endpoint_id,
-                generation,
-            );
+            server_reader_thread(reader, event_tx, &stopped, max_frame_size);
         })
         .map_err(ClientError::ConnectionFailed)?;
     Ok(transport)
@@ -35,14 +26,9 @@ pub(super) fn server_reader_thread(
     event_tx: tokio::sync::mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     max_frame_size: usize,
-    endpoint_id: endpoint::ClientEndpointId,
-    generation: u64,
 ) {
     if stream.set_nonblocking(true).is_err() {
-        let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected {
-            endpoint_id,
-            generation,
-        });
+        let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected);
         return;
     }
 
@@ -59,8 +45,6 @@ pub(super) fn server_reader_thread(
             Ok(msg) => {
                 if event_tx
                     .blocking_send(ClientLoopEvent::ServerMessage {
-                        endpoint_id: endpoint_id.clone(),
-                        generation,
                         message: Box::new(msg),
                     })
                     .is_err()
@@ -69,10 +53,7 @@ pub(super) fn server_reader_thread(
                 }
             }
             Err(protocol::FramingError::UnexpectedEof) => {
-                let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected {
-                    endpoint_id: endpoint_id.clone(),
-                    generation,
-                });
+                let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected);
                 break;
             }
             Err(protocol::FramingError::Io(err)) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -80,10 +61,7 @@ pub(super) fn server_reader_thread(
             }
             Err(err) => {
                 warn!(err = %err, "server read error");
-                let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected {
-                    endpoint_id: endpoint_id.clone(),
-                    generation,
-                });
+                let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected);
                 break;
             }
         }
@@ -129,12 +107,9 @@ impl ClientMessageSink for LocalStream {
     }
 }
 
-impl ClientMessageSink for endpoint::EndpointRegistry {
+impl ClientMessageSink for endpoint::ServerConnection {
     fn send_client_message(&mut self, message: &ClientMessage) -> io::Result<()> {
-        // The lifecycle loop consumes failures for every endpoint, including Local. A send
-        // failure must not bypass that transition or tear down unrelated connections.
-        self.send(message);
-        Ok(())
+        self.send(message)
     }
 }
 
