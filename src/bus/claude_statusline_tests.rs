@@ -4,7 +4,11 @@ use crate::bus::{callbacks, model::AgentId};
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("bus-statusline-{}", bus_io::now_ns()));
+        let path = std::env::temp_dir().join(format!(
+            "bus-statusline-{}-{}",
+            std::process::id(),
+            bus_io::now_ns()
+        ));
         callbacks::initialize(
             &path,
             &Manifest {
