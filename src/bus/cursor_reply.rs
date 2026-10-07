@@ -4,19 +4,6 @@ use std::io::{Read, Seek, SeekFrom};
 
 const MAX_TRANSCRIPT_TAIL: u64 = 2 * 1024 * 1024;
 const PENDING: &str = "Awaiting Cursor's completed transcript to identify its final reply. The callback and request were kept; no prompt will be retried.";
-/// 工具调用前的说明在转录里以这个标记结尾，回复钩子却把它删掉。
-/// 留着的话累积文本对不上钩子，回复永远匹配不到。
-const REDACTION_MARKER: &str = "[REDACTED]";
-
-/// 转录正文里钩子实际会带上的部分。
-fn hook_visible(text: &str) -> &str {
-    match text.strip_suffix(REDACTION_MARKER) {
-        Some(rest) if rest.is_empty() || rest.ends_with("\n\n") => {
-            rest.strip_suffix("\n\n").unwrap_or(rest)
-        }
-        _ => text,
-    }
-}
 
 pub(crate) fn final_text(value: &Value) -> Result<String, String> {
     let text = super::field(value, "text")?;
@@ -81,19 +68,25 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
                     .iter()
                     .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
                     .filter_map(|part| part.get("text").and_then(Value::as_str))
-                    .map(hook_visible)
                     .collect::<String>();
-                // An assistant message containing a tool call is commentary.
-                let final_text = (!text.trim().is_empty()
-                    && !content
-                        .iter()
-                        .any(|part| part.get("type").and_then(Value::as_str) == Some("tool_use")))
-                .then_some(text.clone());
-                for (accumulated, last) in &mut candidates {
-                    accumulated.push_str(&text);
-                    *last = final_text.clone();
+                // 带工具调用的是说明，不是终稿。说明末尾可能多出钩子删掉的内容。
+                let commentary = content
+                    .iter()
+                    .any(|part| part.get("type").and_then(Value::as_str) == Some("tool_use"));
+                let final_text = (!text.trim().is_empty() && !commentary).then_some(text.clone());
+                let mut next = Vec::new();
+                for (accumulated, _) in &candidates {
+                    let piece = if commentary {
+                        commentary_kept(accumulated, &text, hook_text)
+                    } else {
+                        text.as_str()
+                    };
+                    let accumulated = format!("{accumulated}{piece}");
+                    if hook_text.starts_with(&accumulated) {
+                        next.push((accumulated, final_text.clone()));
+                    }
                 }
-                candidates.retain(|(accumulated, _)| hook_text.starts_with(accumulated.as_str()));
+                candidates = next;
                 direct_last = final_text;
             }
             _ => {}
@@ -123,6 +116,26 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
         &mut ambiguous,
     );
     (!ambiguous).then_some(matched).flatten()
+}
+
+/// 说明文字里钩子没带上的后缀（例如转录多写的标记）不参与对齐。
+/// 终稿不走这里，避免把答案截短后误配上。
+fn commentary_kept<'a>(accumulated: &str, text: &'a str, hook_text: &str) -> &'a str {
+    if !hook_text.starts_with(accumulated) {
+        return text;
+    }
+    let rest = &hook_text[accumulated.len()..];
+    if rest.starts_with(text) {
+        return text;
+    }
+    let bytes = text
+        .char_indices()
+        .zip(rest.chars())
+        .take_while(|((_, transcript), hook)| transcript == hook)
+        .last()
+        .map(|((index, ch), _)| index + ch.len_utf8())
+        .unwrap_or(0);
+    &text[..bytes]
 }
 
 fn observe_candidates(
@@ -173,31 +186,40 @@ mod tests {
         }
     }
 
-    /// 消息 1422：后续问题接在同一段对话里，说明文字被标成 [REDACTED]，
-    /// 而且这份 jsonl 没有 turn_ended。钩子文本不含标记。
+    /// 消息 1422：后续问题的说明块比钩子多一段后缀，且 jsonl 没有 turn_ended。
     #[test]
-    fn cursor_final_reply_matches_redacted_commentary_without_turn_ended() {
-        let transcript = concat!(
-            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"research\"}]}}\n",
-            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I'll check.\"},{\"type\":\"tool_use\",\"name\":\"Shell\"}]}}\n",
-            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"First answer.\"}]}}\n",
-            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"also search the web\"}]}}\n",
-            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I'll search the docs.\\n\\n[REDACTED]\"},{\"type\":\"tool_use\",\"name\":\"CallDynamicTool\"}]}}\n",
-            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Grep\"}]}}\n",
-            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Second answer.\"}]}}\n",
+    fn cursor_final_reply_ignores_commentary_suffix_the_hook_omits() {
+        for omitted in ["\\n\\n[REDACTED]", "\\n\\n<dropped>"] {
+            let transcript = format!(
+                "{{\"role\":\"user\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"research\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"I'll check.\"}},{{\"type\":\"tool_use\",\"name\":\"Shell\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"First answer.\"}}]}}}}\n\
+                 {{\"role\":\"user\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"also search the web\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"I'll search the docs.{omitted}\"}},{{\"type\":\"tool_use\",\"name\":\"CallDynamicTool\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Grep\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"Second answer.\"}}]}}}}\n"
+            );
+            assert_eq!(
+                matching_completed_message(&transcript, "I'll search the docs.Second answer.")
+                    .as_deref(),
+                Some("Second answer."),
+                "{omitted}"
+            );
+            assert_eq!(
+                matching_completed_message(&transcript, "I'll check.First answer.").as_deref(),
+                Some("First answer."),
+                "{omitted}"
+            );
+        }
+        // 终稿里的同样字样属于答案，钩子带上了就必须原样匹配。
+        let kept = concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"see [REDACTED]\"}]}}\n",
         );
         assert_eq!(
-            matching_completed_message(transcript, "I'll search the docs.Second answer.")
-                .as_deref(),
-            Some("Second answer.")
+            matching_completed_message(kept, "see [REDACTED]").as_deref(),
+            Some("see [REDACTED]")
         );
-        assert_eq!(
-            matching_completed_message(transcript, "I'll check.First answer.").as_deref(),
-            Some("First answer.")
-        );
-        assert_eq!(hook_visible("x\n\n[REDACTED]"), "x");
-        assert_eq!(hook_visible("[REDACTED]"), "");
-        assert_eq!(hook_visible("see [REDACTED]"), "see [REDACTED]");
     }
 
     #[test]
