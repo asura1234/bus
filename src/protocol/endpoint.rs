@@ -1,12 +1,7 @@
-//! Stable endpoint compatibility contract for client-owned shells.
+//! Endpoint handshake for client-owned shells.
 //!
-//! The endpoint generation is intentionally independent from the private
-//! binary protocol used by same-install client and direct-terminal
-//! paths. Generation 1 is the compatibility floor for Local, SSH, and Cloud
-//! shell endpoints and must remain available indefinitely unless retired for a
-//! security reason. New JSON fields must be optional or have serde defaults;
-//! new enum values need an `Unknown` fallback. Unknown named controls are
-//! optional and ignored unless negotiated as part of the core.
+//! Client and server are always the same build, so every field is required and
+//! nothing here carries a fallback for older or newer peers.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,17 +19,12 @@ pub const SURFACE_INTEREST_CAPABILITY: &str = "surface_interest";
 pub const PRESENTATION_EFFECTS_FENCE_CAPABILITY: &str = "presentation_effects_fence";
 pub const PRESENTATION_EFFECTS_SYNC_KIND: &str = "endpoint.presentation.sync.v1";
 pub const PRESENTATION_EFFECTS_READY_KIND: &str = "endpoint.presentation.ready.v1";
-pub const HEALTH_CHECK_CAPABILITY: &str = "health_check";
-pub const HEALTH_PING_KIND: &str = "endpoint.health.ping.v1";
-pub const HEALTH_PONG_KIND: &str = "endpoint.health.pong.v1";
-
-fn default_true() -> bool {
-    true
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointClientHello {
     pub generation: u32,
+    /// The client's build version; the server rejects any build but its own.
+    pub client_version: String,
     pub cell_width_px: u32,
     pub cell_height_px: u32,
     pub surface_size: ClientSurfaceSize,
@@ -42,15 +32,10 @@ pub struct EndpointClientHello {
     pub direct_graphics: bool,
     pub endpoint_keybindings: bool,
     pub mouse_capture: bool,
-    #[serde(default = "default_true")]
     pub surface_active: bool,
-    #[serde(default)]
     pub snapshot_codecs: Vec<String>,
-    #[serde(default)]
     pub surface_codecs: Vec<String>,
-    #[serde(default)]
     pub input_codecs: Vec<String>,
-    #[serde(default)]
     pub blob_codecs: Vec<String>,
 }
 
@@ -68,11 +53,8 @@ pub struct EndpointServerWelcome {
     pub surface_codec: String,
     pub input_codec: String,
     pub blob_codec: String,
-    #[serde(default)]
     pub methods: Vec<String>,
-    #[serde(default)]
     pub capabilities: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<EndpointHandshakeError>,
 }
 
@@ -113,7 +95,6 @@ impl EndpointServerWelcome {
             capabilities: vec![
                 SURFACE_INTEREST_CAPABILITY.into(),
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
-                HEALTH_CHECK_CAPABILITY.into(),
             ],
             error: None,
         }
@@ -144,6 +125,7 @@ mod tests {
     fn hello() -> EndpointClientHello {
         EndpointClientHello {
             generation: ENDPOINT_PROTOCOL_GENERATION,
+            client_version: "0.9.0".into(),
             cell_width_px: 8,
             cell_height_px: 16,
             surface_size: ClientSurfaceSize { cols: 80, rows: 24 },
@@ -176,47 +158,47 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hello_ignores_future_named_fields() {
-        let mut value = serde_json::to_value(hello()).unwrap();
-        value["future_feature"] = serde_json::json!({"enabled": true});
-        let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded, hello());
+    fn fixture(name: &str) -> serde_json::Value {
+        let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// Decodes a fixture and re-encodes it: equality proves the fixture holds exactly
+    /// the current fields, with no retired or defaulted ones.
+    fn assert_fixture_matches<T>(name: &str) -> T
+    where
+        T: serde::de::DeserializeOwned + Serialize,
+    {
+        let value = fixture(name);
+        let decoded: T = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), value, "{name}");
+        decoded
     }
 
     #[test]
-    fn frozen_generation_one_handshake_decodes() {
-        let hello: EndpointClientHello = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/endpoint-hello-v1.json"
-        )))
-        .unwrap();
-        assert!(hello.supports_required_codecs());
+    fn handshake_fixtures_match_the_current_shape() {
+        let hello: EndpointClientHello = assert_fixture_matches("endpoint-hello-v1.json");
+        assert_eq!(hello, self::hello());
 
-        let welcome: EndpointServerWelcome = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/endpoint-welcome-v1.json"
-        )))
-        .unwrap();
+        let welcome: EndpointServerWelcome = assert_fixture_matches("endpoint-welcome-v1.json");
         assert_eq!(welcome.generation, ENDPOINT_PROTOCOL_GENERATION);
         assert_eq!(welcome.snapshot_codec, SNAPSHOT_CODEC_V1);
         assert_eq!(welcome.surface_codec, SURFACE_CODEC_V1);
         assert_eq!(welcome.input_codec, INPUT_CODEC_V1);
         assert_eq!(welcome.blob_codec, BLOB_CODEC_V1);
-        assert!(welcome.capabilities.is_empty());
+        assert_eq!(
+            welcome.capabilities,
+            EndpointServerWelcome::compatible(Vec::new()).capabilities
+        );
     }
 
     #[test]
-    fn frozen_generation_one_snapshot_decodes() {
-        let snapshot: ClientShellSnapshot = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/endpoint-snapshot-v1.json"
-        )))
-        .unwrap();
+    fn snapshot_fixture_matches_the_current_shape() {
+        let snapshot: ClientShellSnapshot = assert_fixture_matches("endpoint-snapshot-v1.json");
         assert_eq!(snapshot.boot_id, "boot-v1");
         assert_eq!(
             snapshot.workspaces[0].agent_status,
-            crate::api::schema::AgentStatus::Unknown
+            crate::api::schema::AgentStatus::Working
         );
     }
 
@@ -233,28 +215,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_json_tolerates_future_fields() {
-        let mut snapshot = match snapshot_message(&snapshot()).unwrap() {
-            ServerMessage::EndpointControl { data, .. } => {
-                serde_json::from_str::<serde_json::Value>(&data).unwrap()
-            }
-            _ => unreachable!(),
-        };
-        snapshot["future_projection"] = serde_json::json!({"enabled": true});
-
-        let decoded: ClientShellSnapshot = serde_json::from_value(snapshot).unwrap();
-        assert_eq!(decoded.boot_id, "boot");
-    }
-
-    #[test]
-    fn legacy_hello_defaults_to_an_active_surface() {
-        let mut value = serde_json::to_value(hello()).unwrap();
-        value.as_object_mut().unwrap().remove("surface_active");
-        let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
-        assert!(decoded.surface_active);
-    }
-
-    #[test]
     fn compatible_server_advertises_endpoint_lifecycle_capabilities() {
         let welcome = EndpointServerWelcome::compatible(Vec::new());
         assert_eq!(
@@ -262,7 +222,6 @@ mod tests {
             vec![
                 SURFACE_INTEREST_CAPABILITY.to_string(),
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.to_string(),
-                HEALTH_CHECK_CAPABILITY.to_string(),
             ]
         );
     }
@@ -285,14 +244,5 @@ mod tests {
         let mut value = hello();
         value.blob_codecs.clear();
         assert!(!value.supports_required_codecs());
-    }
-
-    #[test]
-    fn welcome_ignores_future_named_fields() {
-        let welcome = EndpointServerWelcome::compatible(vec!["pane.close".into()]);
-        let mut value = serde_json::to_value(&welcome).unwrap();
-        value["future_service"] = serde_json::json!("v2");
-        let decoded: EndpointServerWelcome = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded, welcome);
     }
 }

@@ -216,7 +216,6 @@ pub(crate) fn collect_scene(
                     );
                 }
             }
-            SurfaceGraphicsSource::PaneLayer { .. } => {}
         }
     }
     let host_placements = collect_visible_placements(
@@ -312,14 +311,7 @@ pub(crate) fn collect_scene(
             placement.x,
         )
     });
-    (
-        SurfaceGraphicsScene {
-            assets,
-            placements,
-            retained_assets: Vec::new(),
-        },
-        next,
-    )
+    (SurfaceGraphicsScene { assets, placements }, next)
 }
 
 fn image_signature_from_asset(key: &SurfaceGraphicsAssetKey) -> ImageSignature {
@@ -484,7 +476,6 @@ mod tests {
                 scrollback_offset: 0,
             }],
             assets: vec![asset],
-            retained_assets: Vec::new(),
         }
     }
 

@@ -464,8 +464,8 @@ impl ClientInputEvent {
 
 /// Messages sent from the client to the server over the client protocol socket.
 ///
-/// Variant order is frozen for endpoint generation 1. Add compatible endpoint
-/// behavior through `EndpointControl` or advertised API methods, not new enum variants.
+/// Client and server are always the same build, so variants may be added, removed
+/// or reordered freely.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// Direct terminal handshake: announces protocol version and terminal dimensions.
@@ -511,44 +511,6 @@ pub enum ClientMessage {
     /// Graceful disconnect request.
     Detach,
 
-    /// Switch this connection into direct terminal attach mode.
-    AttachTerminal {
-        /// Terminal id to attach to.
-        terminal_id: String,
-        /// Replace an existing writable attach owner for this terminal.
-        takeover: bool,
-    },
-
-    /// Scroll input handled by a direct terminal attach client.
-    AttachScroll {
-        /// Original input source for routing.
-        source: AttachScrollSource,
-        /// Scroll direction.
-        direction: AttachScrollDirection,
-        /// Number of terminal rows to move when using host scrollback.
-        lines: u16,
-        /// Mouse column relative to the attached terminal, when available.
-        column: Option<u16>,
-        /// Mouse row relative to the attached terminal, when available.
-        row: Option<u16>,
-        /// Crossterm-compatible modifier bits for forwarded mouse wheel events.
-        modifiers: u8,
-    },
-
-    /// Switch this connection into read-only terminal observe mode.
-    ObserveTerminal {
-        /// Pane, terminal, or agent target to observe.
-        target: String,
-    },
-
-    /// Switch this connection into writable terminal control mode.
-    ControlTerminal {
-        /// Pane, terminal, or agent target to control.
-        target: String,
-        /// Replace an existing writable controller for this terminal.
-        takeover: bool,
-    },
-
     /// Result of the one armed Herdr-owned direct Kitty transmission.
     GraphicsTransmissionResult {
         transfer_id: u64,
@@ -591,15 +553,6 @@ pub enum ClientMessage {
     /// Invoke one endpoint operation through this client shell's selected connection.
     ClientShellEndpointRequest { boot_id: String, request: String },
 
-    /// Deliver one structured mouse event to a directly attached terminal.
-    AttachMouse {
-        kind: ClientMouseKind,
-        position: ClientMousePosition,
-        geometry: Option<ClientMouseGeometry>,
-        modifiers: u8,
-        lines: u16,
-    },
-
     /// Publish one host terminal color or appearance update observed by a client-owned shell.
     ClientShellHostTheme { update: ClientHostThemeUpdate },
 
@@ -609,10 +562,8 @@ pub enum ClientMessage {
     /// Update this client's shell mouse-capture preference after config reload.
     ClientShellMouseCapture { enabled: bool },
 
-    /// Extensible named control message for the stable client-owned endpoint protocol.
-    ///
-    /// This variant is append-only. Its bincode tag and two-string payload are part
-    /// of endpoint generation 1 and must not change.
+    /// Named JSON control message for the client-owned shell (handshake, snapshots,
+    /// presentation sync).
     EndpointControl { kind: String, data: String },
 }
 
@@ -667,23 +618,7 @@ pub enum ClientHostThemeUpdate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientClipboardImageTarget {
-    DirectTerminal,
     Pane(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AttachScrollDirection {
-    Up,
-    Down,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AttachScrollSource {
-    Wheel,
-    PageKey {
-        /// Original key bytes to forward when the child application owns page keys.
-        input: Vec<u8>,
-    },
 }
 
 // ---------------------------------------------------------------------------
@@ -740,7 +675,6 @@ pub struct CursorState {
     /// Whether the cursor is visible.
     pub visible: bool,
     /// Cursor shape as a DECSCUSR parameter.
-    #[serde(default)]
     pub shape: CursorShapeParam,
 }
 
@@ -882,26 +816,7 @@ impl FrameData {
     }
 }
 
-fn deserialize_client_shell_agent_status<'de, D>(
-    deserializer: D,
-) -> Result<crate::api::schema::AgentStatus, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    if !deserializer.is_human_readable() {
-        return crate::api::schema::AgentStatus::deserialize(deserializer);
-    }
-    let value = String::deserialize(deserializer)?;
-    Ok(match value.as_str() {
-        "idle" => crate::api::schema::AgentStatus::Idle,
-        "working" => crate::api::schema::AgentStatus::Working,
-        "blocked" => crate::api::schema::AgentStatus::Blocked,
-        "done" => crate::api::schema::AgentStatus::Done,
-        _ => crate::api::schema::AgentStatus::Unknown,
-    })
-}
-
-/// Initial resource projection used by the stable client-owned shell.
+/// Initial resource projection used by the client-owned shell.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClientShellSnapshot {
     /// Changes whenever the endpoint process restarts.
@@ -931,7 +846,6 @@ pub struct ClientShellWorkspace {
     pub custom_label: bool,
     pub tokens: Vec<(String, String)>,
     pub focused: bool,
-    #[serde(deserialize_with = "deserialize_client_shell_agent_status")]
     pub agent_status: crate::api::schema::AgentStatus,
 }
 
@@ -944,7 +858,6 @@ pub struct ClientShellTab {
     pub custom_label: bool,
     pub zoomed: bool,
     pub focused: bool,
-    #[serde(deserialize_with = "deserialize_client_shell_agent_status")]
     pub agent_status: crate::api::schema::AgentStatus,
 }
 
@@ -971,7 +884,6 @@ pub struct ClientShellAgent {
     pub title: Option<String>,
     pub terminal_title: Option<String>,
     pub terminal_title_stripped: Option<String>,
-    #[serde(deserialize_with = "deserialize_client_shell_agent_status")]
     pub agent_status: crate::api::schema::AgentStatus,
     pub state_change_seq: u64,
     pub state_labels: Vec<(String, String)>,
@@ -1050,8 +962,6 @@ pub enum SurfaceGraphicsSource {
         target: SurfaceGraphicsTarget,
         image_id: u32,
     },
-    /// Retired pane image layer; kept so `shell.surface.v1` frames keep their layout.
-    PaneLayer { pane_id: String, layer_id: String },
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -1103,9 +1013,6 @@ pub struct SurfaceGraphicsPlacement {
 pub struct SurfaceGraphicsScene {
     pub assets: Vec<SurfaceGraphicsAsset>,
     pub placements: Vec<SurfaceGraphicsPlacement>,
-    /// Always empty since the pane image API was removed; kept for the
-    /// `shell.surface.v1` wire layout.
-    pub retained_assets: Vec<SurfaceGraphicsAssetKey>,
 }
 
 /// One server-rendered active-tab surface without sidebar, tab bar, or overlays.
@@ -1203,8 +1110,8 @@ pub struct SemanticNotification {
 
 /// Messages sent from the server to the client over the client protocol socket.
 ///
-/// Variant order is frozen for endpoint generation 1. Add compatible endpoint
-/// behavior through `EndpointControl`, and ignore unrecognized named controls.
+/// Client and server are always the same build, so variants may be added, removed
+/// or reordered freely.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerMessage {
     /// Handshake response: server acknowledges (or rejects) the client.
@@ -1300,13 +1207,6 @@ pub enum ServerMessage {
     /// Immediate endpoint error that the client-rendered shell must show regardless of notification policy.
     ClientShellError { message: String },
 
-    /// Exact Kitty keyboard flags requested by a directly attached terminal.
-    /// Zero restores the host terminal's previous keyboard mode.
-    DirectTerminalKeyboardProtocol {
-        flags: u16,
-        modify_other_keys_level: u8,
-    },
-
     /// Whether the focused pane or popup needs the shell host to report every key.
     ClientShellKeyboardReportAll { enabled: bool },
 
@@ -1321,10 +1221,8 @@ pub enum ServerMessage {
     /// Incremental terminal-cell update for a previously committed pane surface.
     PaneSurfacePatch(PaneSurfacePatch),
 
-    /// Extensible named control message for the stable client-owned endpoint protocol.
-    ///
-    /// This variant is append-only. Its bincode tag and two-string payload are part
-    /// of endpoint generation 1 and must not change.
+    /// Named JSON control message for the client-owned shell (handshake, snapshots,
+    /// presentation sync).
     EndpointControl { kind: String, data: String },
 }
 
@@ -1563,30 +1461,13 @@ pub enum VersionCheck {
     Incompatible(String),
 }
 
-/// Checks whether a client's protocol version is compatible with this server.
-///
-/// Current rules:
-/// - Version 0 (pre-persistence client) is always rejected.
-/// - Matching major versions are accepted.
-/// - A client with a newer version than the server is rejected.
-/// - A client with an older version than the server is rejected
-///   (backward compatibility is not yet supported).
+/// Checks a client's protocol version: client and server must be the same build.
 pub fn check_client_version(client_version: u32) -> VersionCheck {
-    if client_version == 0 {
-        return VersionCheck::Incompatible(
-            "pre-persistence client (version 0) is not supported".to_owned(),
-        );
-    }
-
     if client_version == PROTOCOL_VERSION {
         VersionCheck::Compatible
-    } else if client_version < PROTOCOL_VERSION {
-        VersionCheck::Incompatible(format!(
-            "client version {client_version} is older than server version {PROTOCOL_VERSION}; please upgrade your herdr client"
-        ))
     } else {
         VersionCheck::Incompatible(format!(
-            "client version {client_version} is newer than server version {PROTOCOL_VERSION}; please upgrade the herdr server"
+            "client protocol {client_version} does not match server protocol {PROTOCOL_VERSION}; client and server must be the same Bus build"
         ))
     }
 }
@@ -1599,17 +1480,6 @@ pub fn check_client_version(client_version: u32) -> VersionCheck {
 mod tests {
     use super::*;
     use ratatui::style::{Color, Modifier};
-    use sha2::{Digest, Sha256};
-
-    fn encoded_sha256(value: &impl Serialize) -> String {
-        let encoded = bincode::serde::encode_to_vec(value, bincode::config::standard()).unwrap();
-        format!("{:x}", Sha256::digest(encoded))
-    }
-
-    // These digests freeze representative generation-1 bincode payloads. A mismatch
-    // requires a new named codec; do not update a v1 digest to bless a wire change.
-    // They do not detect appended enum variants, so every type reachable from a v1
-    // payload is also append-closed.
 
     // ---- Round-trip: ClientMessage ----
 
@@ -1657,17 +1527,6 @@ mod tests {
         let (decoded, _): (ClientMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(msg, decoded);
-        assert_eq!(
-            bincode::serde::encode_to_vec(
-                ClientMessage::EndpointControl {
-                    kind: String::new(),
-                    data: String::new(),
-                },
-                bincode::config::standard(),
-            )
-            .unwrap(),
-            [19, 0, 0]
-        );
     }
 
     #[test]
@@ -1682,10 +1541,6 @@ mod tests {
         let (decoded, _): (ClientMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(msg, decoded);
-        assert_eq!(
-            encoded_sha256(&msg),
-            "676d6376202750e72c45ff511e256b6154d3d20c0ee088d3792fa3a69d9704b9"
-        );
     }
 
     #[test]
@@ -1697,158 +1552,6 @@ mod tests {
         let (decoded, _): (ClientMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(msg, decoded);
-    }
-
-    #[test]
-    fn client_message_wire_tags_reflect_current_order() {
-        fn tag(msg: &ClientMessage) -> u8 {
-            *bincode::serde::encode_to_vec(msg, bincode::config::standard())
-                .unwrap()
-                .first()
-                .expect("encoded client message should include enum tag")
-        }
-
-        assert_eq!(
-            tag(&ClientMessage::TerminalHello {
-                version: PROTOCOL_VERSION,
-                cols: 80,
-                rows: 24,
-                cell_width_px: 8,
-                cell_height_px: 16,
-                pixel_mouse: false,
-            }),
-            0
-        );
-        assert_eq!(
-            tag(&ClientMessage::ClientShellHello {
-                version: PROTOCOL_VERSION,
-                cell_width_px: 8,
-                cell_height_px: 16,
-                surface_size: ClientSurfaceSize { cols: 80, rows: 29 },
-                pixel_mouse: false,
-                direct_graphics: false,
-                endpoint_keybindings: false,
-                mouse_capture: false,
-            }),
-            11
-        );
-        assert_eq!(tag(&ClientMessage::Input { data: Vec::new() }), 1);
-        assert_eq!(
-            tag(&ClientMessage::ClipboardImage {
-                target: ClientClipboardImageTarget::DirectTerminal,
-                extension: "png".to_owned(),
-                data: Vec::new(),
-            }),
-            2
-        );
-        assert_eq!(
-            tag(&ClientMessage::Resize {
-                cols: 80,
-                rows: 24,
-                cell_width_px: 8,
-                cell_height_px: 16,
-                pixel_mouse: false,
-            }),
-            3
-        );
-        assert_eq!(tag(&ClientMessage::Detach), 4);
-        assert_eq!(
-            tag(&ClientMessage::AttachTerminal {
-                terminal_id: "term".to_owned(),
-                takeover: false,
-            }),
-            5
-        );
-        assert_eq!(
-            tag(&ClientMessage::AttachScroll {
-                source: AttachScrollSource::Wheel,
-                direction: AttachScrollDirection::Up,
-                lines: 1,
-                column: None,
-                row: None,
-                modifiers: 0,
-            }),
-            6
-        );
-        assert_eq!(
-            tag(&ClientMessage::ObserveTerminal {
-                target: "w1:p1".to_owned(),
-            }),
-            7
-        );
-        assert_eq!(
-            tag(&ClientMessage::ControlTerminal {
-                target: "w1:p1".to_owned(),
-                takeover: false,
-            }),
-            8
-        );
-        assert_eq!(
-            tag(&ClientMessage::GraphicsTransmissionResult {
-                transfer_id: 1,
-                image_id: 2,
-                success: true,
-            }),
-            9
-        );
-        assert_eq!(
-            tag(&ClientMessage::GraphicsTransmissionStarted {
-                transfer_id: 1,
-                image_id: 2,
-            }),
-            10
-        );
-        assert_eq!(
-            tag(&ClientMessage::ClientShellResize {
-                cell_width_px: 8,
-                cell_height_px: 16,
-                surface_size: ClientSurfaceSize { cols: 80, rows: 29 },
-                pixel_mouse: false,
-            }),
-            12
-        );
-        assert_eq!(
-            tag(&ClientMessage::ClientShellPaneInput {
-                pane_id: "pane".into(),
-                events: Vec::new(),
-            }),
-            13
-        );
-        assert_eq!(
-            tag(&ClientMessage::ClientShellEndpointRequest {
-                boot_id: "boot".into(),
-                request: "{}".into(),
-            }),
-            14
-        );
-        assert_eq!(
-            tag(&ClientMessage::AttachMouse {
-                kind: ClientMouseKind::Down(ClientMouseButton::Left),
-                position: ClientMousePosition::Cell { column: 10, row: 5 },
-                geometry: None,
-                modifiers: 0,
-                lines: 1,
-            }),
-            15
-        );
-        assert_eq!(
-            tag(&ClientMessage::ClientShellHostTheme {
-                update: ClientHostThemeUpdate::Appearance(ClientHostAppearance::Dark),
-            }),
-            16
-        );
-        assert_eq!(tag(&ClientMessage::ClientShellFocus { focused: true }), 17);
-        assert_eq!(
-            tag(&ClientMessage::ClientShellMouseCapture { enabled: true }),
-            18
-        );
-        assert_eq!(
-            tag(&ClientMessage::EndpointControl {
-                kind: String::new(),
-                data: String::new(),
-            }),
-            19
-        );
     }
 
     #[test]
@@ -1894,10 +1597,6 @@ mod tests {
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard())
                 .expect("decode targeted semantic input");
         assert_eq!(decoded, message);
-        assert_eq!(
-            encoded_sha256(&message),
-            "f558384bb53dfd2baf1fa72e1709d88be6891da79e51f88513905afc085065e6"
-        );
         let ClientMessage::ClientShellPaneInput { events, .. } = decoded else {
             panic!("expected targeted semantic input");
         };
@@ -2038,10 +1737,6 @@ mod tests {
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard())
                 .expect("decode endpoint request");
         assert_eq!(decoded, request);
-        assert_eq!(
-            encoded_sha256(&request),
-            "9c1ad1fea42444d06dfe82f1ccc44ba5069a13eaa8f6bed92f8ed673235331be"
-        );
 
         let response = ServerMessage::ClientShellEndpointResponseChunk {
             boot_id: "boot-a".into(),
@@ -2055,10 +1750,6 @@ mod tests {
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard())
                 .expect("decode endpoint response");
         assert_eq!(decoded, response);
-        assert_eq!(
-            encoded_sha256(&response),
-            "bc14dbb5263d3097fe6d3e70a4b6d71aa9c2fa4ae3206d692a7182512bffdd1d"
-        );
     }
 
     #[test]
@@ -2072,10 +1763,6 @@ mod tests {
         let (decoded, _): (ClientMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(msg, decoded);
-        assert_eq!(
-            encoded_sha256(&msg),
-            "1c02110be0671faf318b3f4d8f507748d5a0a98cd474832669c5290d97ef19ab"
-        );
     }
 
     #[test]
@@ -2113,57 +1800,6 @@ mod tests {
     #[test]
     fn client_detach_roundtrip() {
         let msg = ClientMessage::Detach;
-        let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
-        let (decoded, _): (ClientMessage, _) =
-            bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
-        assert_eq!(msg, decoded);
-    }
-
-    #[test]
-    fn client_attach_terminal_roundtrip() {
-        let msg = ClientMessage::AttachTerminal {
-            terminal_id: "term_123".to_owned(),
-            takeover: true,
-        };
-        let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
-        let (decoded, _): (ClientMessage, _) =
-            bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
-        assert_eq!(msg, decoded);
-    }
-
-    #[test]
-    fn client_observe_terminal_roundtrip() {
-        let msg = ClientMessage::ObserveTerminal {
-            target: "w1:p1".to_owned(),
-        };
-        let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
-        let (decoded, _): (ClientMessage, _) =
-            bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
-        assert_eq!(msg, decoded);
-    }
-
-    #[test]
-    fn client_control_terminal_roundtrip() {
-        let msg = ClientMessage::ControlTerminal {
-            target: "w1:p1".to_owned(),
-            takeover: true,
-        };
-        let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
-        let (decoded, _): (ClientMessage, _) =
-            bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
-        assert_eq!(msg, decoded);
-    }
-
-    #[test]
-    fn client_attach_scroll_roundtrip() {
-        let msg = ClientMessage::AttachScroll {
-            source: AttachScrollSource::Wheel,
-            direction: AttachScrollDirection::Up,
-            lines: 3,
-            column: Some(12),
-            row: Some(7),
-            modifiers: 4,
-        };
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ClientMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
@@ -2276,10 +1912,6 @@ mod tests {
         let (decoded, _): (ServerMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(msg, decoded);
-        assert_eq!(
-            encoded_sha256(&msg),
-            "67a1d5a4bcc19a5f0aa9811b0e8f55c7445db97606adcebf967bea217ee95cc5"
-        );
         match decoded {
             ServerMessage::PaneSurface(surface) => {
                 assert_eq!(surface.frame.cells[2].hyperlink, Some(0));
@@ -2323,14 +1955,10 @@ mod tests {
         let (decoded, _): (ServerMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(decoded, msg);
-        assert_eq!(
-            encoded_sha256(&msg),
-            "0814b99a1dc6eaf7918424aa416c066509cbfb73b72344a809c27cde78cb6dbd"
-        );
     }
 
     #[test]
-    fn client_shell_graphics_payload_codec_is_frozen() {
+    fn client_shell_graphics_payload_roundtrip() {
         let key = SurfaceGraphicsAssetKey {
             source: SurfaceGraphicsSource::Terminal {
                 target: SurfaceGraphicsTarget::Pane {
@@ -2379,104 +2007,12 @@ mod tests {
                     z: -1,
                     scrollback_offset: 0,
                 }],
-                retained_assets: Vec::new(),
             },
         });
-
-        assert_eq!(
-            encoded_sha256(&message),
-            "efa9a530ef3d6f16a25aa8806daead3fcba9dd6dca6222ec5c8ae17d5c01cf29"
-        );
-    }
-
-    #[test]
-    fn server_endpoint_control_tag_is_frozen() {
-        let message = ServerMessage::EndpointControl {
-            kind: "endpoint.welcome.v1".into(),
-            data: r#"{"generation":1}"#.into(),
-        };
         let encoded = bincode::serde::encode_to_vec(&message, bincode::config::standard()).unwrap();
-        assert_eq!(encoded.first(), Some(&20));
-        assert_eq!(
-            bincode::serde::encode_to_vec(
-                ServerMessage::EndpointControl {
-                    kind: String::new(),
-                    data: String::new(),
-                },
-                bincode::config::standard(),
-            )
-            .unwrap(),
-            [20, 0, 0]
-        );
         let (decoded, _): (ServerMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
-        assert_eq!(decoded, message);
-    }
-
-    #[test]
-    fn client_shell_server_message_tags_are_frozen() {
-        fn tag(message: &ServerMessage) -> u8 {
-            *bincode::serde::encode_to_vec(message, bincode::config::standard())
-                .unwrap()
-                .first()
-                .expect("encoded server message should include enum tag")
-        }
-
-        let empty_frame = || PaneSurfaceFrame {
-            boot_id: "boot".into(),
-            projection_revision: 1,
-            surface_revision: 1,
-            frame: FrameData {
-                cells: Vec::new(),
-                width: 0,
-                height: 0,
-                cursor: None,
-                hyperlinks: Vec::new(),
-                graphics: Vec::new(),
-            },
-            panes: Vec::new(),
-            splits: Vec::new(),
-            graphics: SurfaceGraphicsScene::default(),
-        };
-        assert_eq!(tag(&ServerMessage::PaneSurface(empty_frame())), 13);
-        assert_eq!(
-            tag(&ServerMessage::ClientShellError {
-                message: String::new(),
-            }),
-            15
-        );
-        assert_eq!(
-            tag(&ServerMessage::ClientShellKeyboardReportAll { enabled: false }),
-            17
-        );
-        assert_eq!(
-            tag(&ServerMessage::ClientShellEndpointResponseChunk {
-                boot_id: String::new(),
-                request_id: String::new(),
-                final_chunk: true,
-                data: Vec::new(),
-            }),
-            18
-        );
-        assert_eq!(
-            tag(&ServerMessage::PaneSurfacePatch(PaneSurfacePatch {
-                boot_id: String::new(),
-                projection_revision: 0,
-                base_surface_revision: 0,
-                surface_revision: 0,
-                rows: Vec::new(),
-                panes: Vec::new(),
-                cursor: None,
-            })),
-            19
-        );
-        assert_eq!(
-            tag(&ServerMessage::EndpointControl {
-                kind: String::new(),
-                data: String::new(),
-            }),
-            20
-        );
+        assert_eq!(message, decoded);
     }
 
     #[test]
@@ -2609,10 +2145,6 @@ mod tests {
         let (decoded, _): (ServerMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
         assert_eq!(msg, decoded);
-        assert_eq!(
-            encoded_sha256(&msg),
-            "28a420f92e0e05e6760a8c140baf307c360c6d1b1aa68027481b324f87e22c44"
-        );
     }
 
     #[test]
@@ -2654,18 +2186,6 @@ mod tests {
     #[test]
     fn client_shell_keyboard_report_all_roundtrip() {
         let msg = ServerMessage::ClientShellKeyboardReportAll { enabled: true };
-        let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
-        let (decoded, _): (ServerMessage, _) =
-            bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
-        assert_eq!(msg, decoded);
-    }
-
-    #[test]
-    fn direct_terminal_keyboard_mode_roundtrip() {
-        let msg = ServerMessage::DirectTerminalKeyboardProtocol {
-            flags: 15,
-            modify_other_keys_level: 1,
-        };
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ServerMessage, _) =
             bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
@@ -2804,7 +2324,7 @@ mod tests {
                     data: vec![(i % 256) as u8; (i as usize % 50) + 1],
                 },
                 2 => ClientMessage::ClipboardImage {
-                    target: ClientClipboardImageTarget::DirectTerminal,
+                    target: ClientClipboardImageTarget::Pane("w1:p1".into()),
                     extension: "png".to_owned(),
                     data: vec![0x89, b'P', b'N', b'G', (i % 256) as u8],
                 },
@@ -2923,36 +2443,12 @@ mod tests {
     }
 
     #[test]
-    fn version_older_client_rejected() {
-        let result = check_client_version(PROTOCOL_VERSION - 1);
-        assert!(matches!(result, VersionCheck::Incompatible(_)));
-        if let VersionCheck::Incompatible(msg) = result {
-            assert!(msg.contains("older"), "error should mention older version");
-        }
-    }
-
-    #[test]
-    fn version_newer_client_rejected() {
-        let result = check_client_version(PROTOCOL_VERSION + 1);
-        assert!(matches!(result, VersionCheck::Incompatible(_)));
-        if let VersionCheck::Incompatible(msg) = result {
-            assert!(msg.contains("newer"), "error should mention newer version");
-        }
-    }
-
-    // ---- Pre-persistence client rejection ----
-
-    #[test]
-    fn prepersistence_version_zero_rejected() {
-        let result = check_client_version(0);
-        match result {
-            VersionCheck::Incompatible(msg) => {
-                assert!(
-                    msg.contains("pre-persistence"),
-                    "error should mention pre-persistence: {msg}"
-                );
-            }
-            _ => panic!("version 0 should be rejected as incompatible"),
+    fn version_mismatch_rejected_as_a_different_build() {
+        for version in [0, PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+            let VersionCheck::Incompatible(msg) = check_client_version(version) else {
+                panic!("version {version} should be rejected");
+            };
+            assert!(msg.contains("same Bus build"), "{msg}");
         }
     }
 
@@ -3215,7 +2711,7 @@ mod tests {
                 data: b"hello world".to_vec(),
             },
             ClientMessage::ClipboardImage {
-                target: ClientClipboardImageTarget::DirectTerminal,
+                target: ClientClipboardImageTarget::Pane("w1:p1".into()),
                 extension: "png".to_owned(),
                 data: vec![0x89, b'P', b'N', b'G'],
             },

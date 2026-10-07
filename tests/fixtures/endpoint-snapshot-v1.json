@@ -2,36 +2,13 @@
   "boot_id": "boot-v1",
   "revision": 7,
   "config_diagnostic": "endpoint warning",
-  "product_announcement": {
-    "version": "1.0.0",
-    "id": "announcement-v1",
-    "title": "Announcement",
-    "body": "Body",
-    "preview": false
-  },
-  "update_available": "1.0.1",
-  "update_install_command": "herdr update",
-  "server_keybindings_toml": "[keys]",
-  "latest_release_notes_available": true,
-  "integration_updates_available": true,
-  "worktree_directory": "/worktrees",
-  "release_notes": {
-    "version": "1.0.1",
-    "body": "Notes",
-    "preview": true
-  },
   "focused_workspace_id": "w1",
   "focused_tab_id": "w1:t1",
   "focused_pane_id": "w1:p1",
-  "tab_bar_right": [
-    {
-      "text": "host",
-      "accent": true
-    }
-  ],
-  "tab_bar_right_separator": " | ",
   "agent_view_label": "focus",
-  "agent_order": ["w1:p1"],
+  "agent_order": [
+    "w1:p1"
+  ],
   "workspaces": [
     {
       "workspace_id": "w1",
@@ -40,16 +17,14 @@
       "number": 1,
       "label": "repo",
       "custom_label": false,
-      "branch": "main",
-      "git_ahead_behind": [1, 2],
-      "tokens": [["model", "opus"]],
-      "worktree": {
-        "key": "repo/main",
-        "label": "main",
-        "is_linked_worktree": true
-      },
+      "tokens": [
+        [
+          "model",
+          "opus"
+        ]
+      ],
       "focused": true,
-      "agent_status": "future_status_from_new_server"
+      "agent_status": "working"
     }
   ],
   "tabs": [
@@ -89,18 +64,19 @@
       "terminal_title_stripped": "Claude Review",
       "agent_status": "blocked",
       "state_change_seq": 9,
-      "state_labels": [["blocked", "waiting"]],
-      "tokens": [["task", "review"]],
+      "state_labels": [
+        [
+          "blocked",
+          "waiting"
+        ]
+      ],
+      "tokens": [
+        [
+          "task",
+          "review"
+        ]
+      ],
       "focused": true
-    }
-  ],
-  "commands": [
-    {
-      "command_id": "command-v1",
-      "binding_label": "prefix+x",
-      "binding_labels": ["prefix+x"],
-      "action": "Shell",
-      "description": "Command"
     }
   ]
 }
