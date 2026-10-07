@@ -194,8 +194,8 @@ FOR step in result.steps (already in dependency order):
     as in Publish.
 Rerun H restack PLAN; it must report `current`.
 A part whose parents have all landed is an ordinary branch on the base: when
---publish is given and base_ref is origin/master, invoke `pr` for it to converge
-gates and finalize the body; on any other base `pr` would rebase it onto master,
+--publish is given and base_ref is origin/master, invoke `pr` for it to refresh
+its master-based body; on any other base `pr` would rebase it onto master,
 so leave it on its retargeted base.
 ```
 
@@ -208,7 +208,7 @@ Report:
   PR number and URL when published, and whether it waits for parents;
 - content left on the source branch and why;
 - `H coverage` result from BUILD; it is not rerun after publishing, so a tip
-  moved by `pr` (rebase, gate fixes) or by restack is verified by that step's
+  moved by `pr` (rebase) or by restack is verified by that step's
   own checks, not by coverage;
 - every force-push and retarget performed in restack mode.
 

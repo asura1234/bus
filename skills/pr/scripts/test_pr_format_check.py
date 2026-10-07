@@ -63,15 +63,15 @@ def valid_draft_body() -> str:
         valid_body()
         .replace(
             "- [x] `shell/packages/example/AGENTS.md` — verified current",
-            "- [ ] `update-docs`：待代码门禁完成后执行",
+            "- [ ] Documentation audit：未提供",
         )
         .replace(
             "- [x] `./run test cli`：通过\n- [x] `./run lint check`：通过",
-            "- [ ] `gate-and-fix`：待执行",
+            "- [ ] Readiness verification：未提供",
         )
         .replace(
             "## 其他说明\n\n无",
-            "## 其他说明\n\nDraft 已在 rebase 后创建；readiness convergence 待完成",
+            "## 其他说明\n\n门禁与文档审计由 orchestrator 安排，本次未提供",
         )
     )
 
@@ -113,17 +113,24 @@ class PrFormatCheckTest(unittest.TestCase):
         final_problems = check_body(body, self.sections, self.placeholders)
         self.assertTrue(any("unchecked boxes" in problem for problem in final_problems))
 
-        checked_docs = body.replace(
-            "- [ ] `update-docs`：待代码门禁完成后执行",
-            "- [x] `update-docs`：通过",
+        rendered_docs = body.replace(
+            "- [ ] Documentation audit：未提供",
+            "- [x] `skills/AGENTS.md` — verified current",
+        )
+        self.assertEqual(
+            check_body(rendered_docs, self.sections, self.placeholders, phase="draft"), []
+        )
+        hand_written_docs = body.replace(
+            "- [ ] Documentation audit：未提供",
+            "文档稍后补",
         )
         draft_problems = check_body(
-            checked_docs, self.sections, self.placeholders, phase="draft"
+            hand_written_docs, self.sections, self.placeholders, phase="draft"
         )
         self.assertTrue(any("draft phase" in problem for problem in draft_problems))
 
         no_pending_test = body.replace(
-            "- [ ] `gate-and-fix`：待执行",
+            "- [ ] Readiness verification：未提供",
             "- [x] `./run test cli`：通过",
         )
         draft_problems = check_body(
@@ -132,8 +139,8 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertTrue(any("needs at least one pending item" in problem for problem in draft_problems))
 
         malformed_pending_test = body.replace(
-            "- [ ] `gate-and-fix`：待执行",
-            "- [ ]`gate-and-fix`：待执行",
+            "- [ ] Readiness verification：未提供",
+            "- [ ]Readiness verification：未提供",
         )
         draft_problems = check_body(
             malformed_pending_test, self.sections, self.placeholders, phase="draft"
@@ -150,6 +157,30 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertTrue(
             any("section `摘要` contains unchecked" in problem for problem in draft_problems)
         )
+
+    def test_docs_sync_section_is_optional_caller_input(self) -> None:
+        without_docs = valid_body().replace(
+            "## 文档同步\n\n- [x] `shell/packages/example/AGENTS.md` — verified current\n\n", ""
+        )
+        self.assertNotIn("## 文档同步", without_docs)
+        self.assertEqual(check_body(without_docs, self.sections, self.placeholders), [])
+        draft_without_docs = valid_draft_body().replace(
+            "## 文档同步\n\n- [ ] Documentation audit：未提供\n\n", ""
+        )
+        self.assertNotIn("## 文档同步", draft_without_docs)
+        self.assertEqual(
+            check_body(draft_without_docs, self.sections, self.placeholders, phase="draft"), []
+        )
+
+        misplaced_docs = without_docs.replace(
+            "## 其他说明", "## 其他说明\n\n无\n\n## 文档同步\n\n- [x] `skills/AGENTS.md` — verified current\n\n## 备注", 1
+        )
+        problems = check_body(misplaced_docs, self.sections, self.placeholders)
+        self.assertTrue(any("H2 sections" in problem for problem in problems))
+
+        missing_required = without_docs.replace("## 截图 / GIF\n\n无 UI 变更\n\n", "")
+        problems = check_body(missing_required, self.sections, self.placeholders)
+        self.assertTrue(any("H2 sections" in problem for problem in problems))
 
     def test_title_rejects_unknown_type_and_bad_shape(self) -> None:
         self.assertTrue(check_title("infra: 说明", self.title_types))

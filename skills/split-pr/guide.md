@@ -82,7 +82,7 @@ part, or any part of a split from another base, is published by `split-pr`
 itself as a Draft PR whose base is its parent branch (or the base branch), with
 a body that passes `pr_format_check.py --phase draft`. Once its parents land and
 it is restacked onto an `origin/master` base, it is an ordinary branch and `pr`
-finalizes it.
+refreshes its body.
 
 Independent PRs never wait for each other. The publish phase runs in waves of
 parts whose parents already have PRs, one subagent per part, so parallel parts

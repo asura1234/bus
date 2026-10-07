@@ -8,9 +8,10 @@ The template is the sole format source of truth: the title type enum comes from 
 Rules (all fail-closed):
 - The title has the shape `[类型] 简短描述`, the type belongs to the template enum, and the
   description is non-empty with no leading/trailing whitespace.
-- Body H2 sections match the template exactly (same set, same order), and every section is non-empty.
+- Body H2 sections match the template (same order), and every section is non-empty. `文档同步` is the
+  only optional section: it is present only when the caller supplies an `update-docs` audit.
 - The `draft` phase lets `文档同步` and `自测 / Agent 测` keep `- [ ]` pending items; other sections
-  still forbid unchecked items, and `文档同步` may contain only pending items.
+  still forbid unchecked items, and every `文档同步` entry is a `- [ ] ` or `- [x] ` checkbox line.
 - In the `final` phase, `自测 / Agent 测` has at least one checkbox and all are `- [x]`; the whole body
   forbids unchecked items; every `文档同步` entry must be the renderer-output shape `- [x] `.
 - The whole body (outside code fences) allows no HTML comments or leftover template placeholders.
@@ -33,6 +34,8 @@ SUMMARY_SECTION = "摘要"
 GOAL_SECTION = "目标"
 NON_GOAL_SECTION = "非目标"
 PHASES = ("draft", "final")
+# Sections the body may omit: the docs audit is optional caller input, never produced by `pr` itself.
+OPTIONAL_SECTIONS = frozenset({DOCS_SYNC_SECTION})
 SIZE_PATTERN = re.compile(r"^- \*\*大小\*\*：`(XS|S|M|L|XL)`", re.MULTILINE)
 # Placeholders are derived from the template body, not hard-coded: a hard-coded list covers only the
 # few thought of at the time, placeholders added to the template later slip through silently, and the
@@ -84,11 +87,7 @@ def _derive_body_placeholders(description_text: str) -> list[str]:
 def parse_template(template_text: str) -> tuple[list[str], list[str], list[str]]:
     """Extract (title type enum, required body H2 section list, body placeholder list) from the template."""
     type_line = next(
-        (
-            line
-            for line in template_text.splitlines()
-            if line.startswith("**类型**：")
-        ),
+        (line for line in template_text.splitlines() if line.startswith("**类型**：")),
         None,
     )
     if type_line is None:
@@ -156,10 +155,15 @@ def check_body(
 
     sections = split_h2_sections(body)
     section_titles = [title for title, _content in sections]
-    if section_titles != list(required_sections):
+    expected_sections = [
+        title
+        for title in required_sections
+        if title in section_titles or title not in OPTIONAL_SECTIONS
+    ]
+    if section_titles != expected_sections:
         problems.append(
             "body: H2 sections must exactly match the template order: "
-            + " → ".join(required_sections)
+            + " → ".join(expected_sections)
             + f"; found: {' → '.join(section_titles) if section_titles else '(none)'}"
         )
         return problems
@@ -172,7 +176,9 @@ def check_body(
     for title, content in sections:
         content_lines = _lines_outside_fences(content)
         checked = [line for line in content_lines if line.lstrip().startswith("- [x] ")]
-        unchecked = [line for line in content_lines if line.lstrip().startswith("- [ ] ")]
+        unchecked = [
+            line for line in content_lines if line.lstrip().startswith("- [ ] ")
+        ]
         if title == SELF_TEST_SECTION:
             if phase == "final" and not checked:
                 problems.append(
@@ -182,15 +188,17 @@ def check_body(
                 problems.append(
                     f"body: section `{SELF_TEST_SECTION}` needs at least one pending item"
                 )
-        if unchecked and (phase == "final" or title not in {SELF_TEST_SECTION, DOCS_SYNC_SECTION}):
+        if unchecked and (
+            phase == "final" or title not in {SELF_TEST_SECTION, DOCS_SYNC_SECTION}
+        ):
             problems.append(
                 f"body: section `{title}` contains unchecked boxes; "
                 "remove items that were not performed"
             )
         if title == DOCS_SYNC_SECTION:
+            allowed_prefixes = ("- [ ] ", "- [x] ") if phase == "draft" else ("- [x] ",)
             for line in content_lines:
-                expected_prefix = "- [ ] " if phase == "draft" else "- [x] "
-                if line.strip() and not line.startswith(expected_prefix):
+                if line.strip() and not line.startswith(allowed_prefixes):
                     if phase == "final":
                         problems.append(
                             f"body: section `{DOCS_SYNC_SECTION}` must contain only renderer "
@@ -199,10 +207,13 @@ def check_body(
                     else:
                         problems.append(
                             f"body: section `{DOCS_SYNC_SECTION}` must contain only "
-                            f"`- [ ] ` lines in draft phase; found: {line.strip()!r}"
+                            f"`- [ ] ` or renderer `- [x] ` lines in draft phase; found: {line.strip()!r}"
                         )
                     break
-        if title == SUMMARY_SECTION and SIZE_PATTERN.search("\n".join(content_lines)) is None:
+        if (
+            title == SUMMARY_SECTION
+            and SIZE_PATTERN.search("\n".join(content_lines)) is None
+        ):
             problems.append(
                 "body: section `摘要` must contain `- **大小**：` with one of "
                 "`XS|S|M|L|XL`"
@@ -216,16 +227,23 @@ def check_goal_contract(body: str, goal_context: str, locked_goal: str) -> list[
         expected_goal, expected_non_goal = parse_context(goal_context)
         body_sections = dict(split_h2_sections(body))
         body_goal, body_non_goal = parse_context(
-            "## 目标\n" + body_sections[GOAL_SECTION] + "## 非目标\n" + body_sections[NON_GOAL_SECTION]
+            "## 目标\n"
+            + body_sections[GOAL_SECTION]
+            + "## 非目标\n"
+            + body_sections[NON_GOAL_SECTION]
         )
     except (KeyError, ValueError) as error:
         return [f"body: invalid goal context: {error}"]
     if body_goal != expected_goal:
         problems.append("body: section `目标` must exactly equal the prepared context")
     if body_non_goal != expected_non_goal:
-        problems.append("body: section `非目标` must exactly equal the prepared context")
+        problems.append(
+            "body: section `非目标` must exactly equal the prepared context"
+        )
     if locked_goal != f"{expected_goal}\n":
-        problems.append("locked goal: file must exactly equal the prepared `目标` plus one newline")
+        problems.append(
+            "locked goal: file must exactly equal the prepared `目标` plus one newline"
+        )
     return problems
 
 

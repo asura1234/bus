@@ -42,7 +42,7 @@ Each skill's full trigger conditions and usage are defined by the frontmatter `d
 | `commit-and-push` | Split commits by "each commit does one thing" and push |
 | `rebase-origin-main` | Rebase onto the latest `origin/master`, triage conflicts by tier, then force-with-lease push |
 | `worktree-new` / `worktree-close` | Create and clean up isolated worktrees |
-| `pr` | PR entrypoint for the current feature branch: land changes → rebase → publish a Draft → converge gates via `gate-and-fix` and sync docs → refresh the final body |
+| `pr` | PR entrypoint for the current feature branch: land changes → rebase if needed → publish or refresh the Draft PR and its body; gates, docs, and dead-code cleanup are sequenced by the orchestrator and reach the body only as optional inputs |
 | `merge-pr` | Watch an open PR's CI and review comments until mergeable; attribute red checks, then squash / admin merge |
 | `split-pr` | Split a multi-purpose PR into single-purpose branches, publish them as a parallel / stacked / mixed PR graph by dependencies proven by git and builds, and report each part's size; restack when a parent changes or lands |
 | `best-of-n` | Converge conflicting technical proposals from N agents into a ranked verdict |
