@@ -62,6 +62,16 @@ impl Form {
     }
 }
 
+/// The providers the Add agent form offers, in order. A MASTER agent is an
+/// orchestrator, and Codex cannot be one (`orchestrator::check_new_orchestrator`).
+pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
+    if orchestrator {
+        &[Provider::ClaudeCode, Provider::Cursor]
+    } else {
+        &[Provider::Codex, Provider::ClaudeCode, Provider::Cursor]
+    }
+}
+
 /// The MASTER agent form's room choice; `None` only while no work room is free,
 /// and then the form refuses to add the agent.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

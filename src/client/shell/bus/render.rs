@@ -2028,13 +2028,15 @@ impl BusUi {
         if let Form::Agent {
             provider_cursor,
             field: 1,
+            orchestrates,
             ..
         } = form
         {
             // Below the Agent field's value row.
             let top = 6 + agent_form_gap(main, form);
-            for (index, kind) in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor]
-                .into_iter()
+            for (index, kind) in super::forms::provider_choices(orchestrates.is_some())
+                .iter()
+                .copied()
                 .enumerate()
             {
                 view.row(

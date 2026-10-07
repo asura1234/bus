@@ -108,22 +108,17 @@ pub(crate) fn write_prompt(spool: &Path, text: &str) -> Result<PathBuf, String> 
     Ok(path)
 }
 
-/// Why a new Codex orchestrator may not resume an earlier session.
-pub(crate) const CODEX_RESUME_REFUSED: &str = "A Codex orchestrator cannot resume an earlier session: Codex keeps the instructions a session started with, so Bus could not give it the orchestrator system prompt. Start a new Codex session instead (remove resume from Args).";
+/// Why Codex cannot be added as an orchestrator.
+pub(crate) const CODEX_ORCHESTRATOR_REFUSED: &str = "Codex cannot be an orchestrator yet: an orchestrator dispatches work with bus send --async in the background and must be woken when it finishes, but Codex does not start a new turn when a background command exits (openai/codex issues 32188, 50079). Use Claude Code or Cursor as the orchestrator; Codex works fine as a worker.";
 
-/// Checks a new orchestrator's additional launch args. A resumed Codex thread
-/// keeps the developer_instructions it started with and ignores Bus's, so a
-/// Codex orchestrator must start a fresh session. Workers may still resume,
-/// and Bus's own resume of an orchestrator it launched never comes here.
-pub(crate) fn check_new_orchestrator_args(
-    provider: Provider,
-    extra_args: &str,
-) -> Result<(), String> {
-    let resumes = extra_args
-        .split_whitespace()
-        .any(|arg| arg.trim_matches(['"', '\'']) == "resume");
-    if provider == Provider::Codex && resumes {
-        return Err(CODEX_RESUME_REFUSED.into());
+/// Checks the provider of a new orchestrator. An orchestrator waits on its
+/// workers through background `bus send --async` commands and relies on the
+/// provider starting a new turn when one exits; Codex does not, so it would
+/// never wake. Only new adds come here: Codex orchestrators already in a saved
+/// session keep loading and resuming, and Codex workers are unaffected.
+pub(crate) fn check_new_orchestrator(provider: Provider) -> Result<(), String> {
+    if provider == Provider::Codex {
+        return Err(CODEX_ORCHESTRATOR_REFUSED.into());
     }
     Ok(())
 }
@@ -154,8 +149,8 @@ pub(crate) fn prompt_args(
         }
         // A resumed Codex thread keeps the developer_instructions it started
         // with and ignores new ones, so an adopted thread gets a message. New
-        // Codex orchestrators may no longer adopt a session
-        // (`check_new_orchestrator_args`); this remains for ones that did.
+        // Codex orchestrators are refused (`check_new_orchestrator`); this
+        // remains for ones saved sessions already hold.
         Provider::Codex if adopted => None,
         // Codex adds developer_instructions as a developer message beside its
         // base instructions. It has no file variant, and Bus types the launch

@@ -628,7 +628,7 @@ impl BusUi {
                 self.open_form(Form::Agent {
                     name: Editor::default(),
                     provider: None,
-                    provider_cursor: Provider::Codex,
+                    provider_cursor: forms::provider_choices(master)[0],
                     cwd: Editor::new("~/".into()),
                     args: Box::new(Editor::default()),
                     field: 0,
@@ -1364,23 +1364,21 @@ impl BusUi {
                 provider,
                 provider_cursor,
                 field,
+                orchestrates,
                 ..
             }) = &mut self.form
             {
+                let choices = forms::provider_choices(orchestrates.is_some());
+                let index = choices
+                    .iter()
+                    .position(|choice| choice == provider_cursor)
+                    .unwrap_or(0);
                 match code {
                     KeyCode::Left | KeyCode::Up => {
-                        *provider_cursor = match provider_cursor {
-                            Provider::Codex => Provider::Cursor,
-                            Provider::ClaudeCode => Provider::Codex,
-                            Provider::Cursor => Provider::ClaudeCode,
-                        };
+                        *provider_cursor = choices[(index + choices.len() - 1) % choices.len()];
                     }
                     KeyCode::Right | KeyCode::Down => {
-                        *provider_cursor = match provider_cursor {
-                            Provider::Codex => Provider::ClaudeCode,
-                            Provider::ClaudeCode => Provider::Cursor,
-                            Provider::Cursor => Provider::Codex,
-                        };
+                        *provider_cursor = choices[(index + 1) % choices.len()];
                     }
                     KeyCode::Char(' ') | KeyCode::Enter => {
                         *provider = Some(*provider_cursor);
@@ -1569,13 +1567,10 @@ impl BusUi {
                     );
                     return;
                 }
-                // Shown in the form at once; the coordinator refuses it too.
-                if let (Some(_), Some(provider)) =
-                    (orchestrates.and_then(|choice| choice.0), provider)
-                {
-                    if let Err(error) =
-                        crate::bus::orchestrator::check_new_orchestrator_args(provider, &args.text)
-                    {
+                // The MASTER form never offers Codex; this keeps the form and
+                // the coordinator, which refuses it too, in step.
+                if let (Some(_), Some(provider)) = (orchestrates, provider) {
+                    if let Err(error) = crate::bus::orchestrator::check_new_orchestrator(provider) {
                         self.error = Some(error);
                         return;
                     }

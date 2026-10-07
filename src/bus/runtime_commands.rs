@@ -382,7 +382,7 @@ impl Worker {
         let orchestrates = orchestrator.as_ref().map(|spec| spec.room);
         // Before anything else, so the CLI and the form get the same answer.
         if orchestrator.is_some() {
-            orchestrator::check_new_orchestrator_args(input.provider, &input.extra_args)?;
+            orchestrator::check_new_orchestrator(input.provider)?;
         }
         let cwd = launch::canonical_directory(&input.cwd)?;
         // One provider session belongs to one Bus agent: bound by its hook, or

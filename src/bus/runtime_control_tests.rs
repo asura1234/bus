@@ -1270,44 +1270,46 @@ fn dev_master_room_is_selectable_listed_and_fixed() {
 }
 
 #[test]
-fn a_codex_orchestrator_may_not_resume_a_session_but_a_codex_worker_may() {
+fn codex_is_refused_as_an_orchestrator_but_not_as_a_worker() {
     let (mut worker, _room, _agent, dir) = fixture();
+    worker.state.create_room("second").unwrap();
     // Allowed adds get as far as opening a tab, which tests refuse.
     worker.transport = Box::new(NoTabs);
     let cwd = dir.to_string_lossy().to_string();
     let agents_before = worker.state.agents().count();
-    for (id, args) in [
-        ("r1", "resume"),
-        ("r2", "resume --last"),
-        (
-            "r3",
-            "--no-alt-screen resume 0198c1d2-0000-7000-8000-000000000000",
-        ),
-    ] {
+    for (id, args) in [("plain", ""), ("resume", "resume --last")] {
         let rejected = call(
             &mut worker,
             id,
             "agent.add",
-            json!({"room":"master","name":"codex-orch","provider":"codex","cwd":cwd,"orchestrates":"test","extra_args":args}),
+            json!({"room":"master","name":"codex-orch","provider":"codex","cwd":cwd,"orchestrates":"test","extra_args":args,"consent_project_hooks":true}),
         );
         assert!(!rejected.ok, "{id}: {rejected:?}");
         assert_eq!(
             error_message(&rejected),
-            crate::bus::orchestrator::CODEX_RESUME_REFUSED,
+            crate::bus::orchestrator::CODEX_ORCHESTRATOR_REFUSED,
             "{id}"
         );
     }
     assert_eq!(worker.state.agents().count(), agents_before);
-    // Only Codex: a Claude orchestrator's own resume form is not this check's
-    // business, and neither is a Codex worker resuming in a work room.
+    // Claude Code and Cursor orchestrators, and Codex workers (resuming too),
+    // reach the launch.
     for (id, params) in [
         (
             "claude-orch",
-            json!({"room":"master","name":"claude-orch","provider":"claude","cwd":cwd,"orchestrates":"test","extra_args":"--model resume","consent_project_hooks":true}),
+            json!({"room":"master","name":"claude-orch","provider":"claude","cwd":cwd,"orchestrates":"test","consent_project_hooks":true}),
+        ),
+        (
+            "cursor-orch",
+            json!({"room":"master","name":"cursor-orch","provider":"cursor","cwd":cwd,"orchestrates":"second","consent_project_hooks":true}),
         ),
         (
             "codex-worker",
-            json!({"room":"test","name":"codex-worker","provider":"codex","cwd":cwd,"extra_args":"resume 01a10f9e-71ac-79e2-81b2-56f26341e7e4","consent_project_hooks":true}),
+            json!({"room":"test","name":"codex-worker","provider":"codex","cwd":cwd,"consent_project_hooks":true}),
+        ),
+        (
+            "codex-resume",
+            json!({"room":"test","name":"codex-resume","provider":"codex","cwd":cwd,"extra_args":"resume 01a10f9e-71ac-79e2-81b2-56f26341e7e4","consent_project_hooks":true}),
         ),
     ] {
         let response = call(&mut worker, id, "agent.add", params);
@@ -1361,12 +1363,12 @@ fn orchestrators_are_bound_at_add_one_per_room_and_never_reassigned() {
     for (id, params, expected) in [
         (
             "second",
-            json!({"room":"master","name":"codex-orch","provider":"codex","cwd":cwd,"orchestrates":"test"}),
+            json!({"room":"master","name":"cursor-orch","provider":"cursor","cwd":cwd,"orchestrates":"test"}),
             "at most one orchestrator",
         ),
         (
             "roomless",
-            json!({"room":"master","name":"codex-orch","provider":"codex","cwd":cwd}),
+            json!({"room":"master","name":"cursor-orch","provider":"cursor","cwd":cwd}),
             "orchestrates exactly one work room",
         ),
     ] {
@@ -1392,7 +1394,7 @@ fn dev_agent_add_rejects_an_orchestrator_outside_master_before_launching() {
         "add-orch",
         "agent.add",
         json!({
-            "room":"test","name":"orch","provider":"codex",
+            "room":"test","name":"orch","provider":"cursor",
             "cwd": dir.to_string_lossy(), "orchestrates":"test"
         }),
     );
@@ -2657,6 +2659,29 @@ fn notices_older_versions_saved_as_bus_are_dropped_and_reports_to_the_human_kept
     let notices = &loaded.room(master).unwrap().notices;
     assert_eq!(notices.len(), 1, "Bus is not an agent and authors nothing");
     assert_eq!(notices[0].text, "first report");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn message_status_reports_whether_each_recipient_turn_ended() {
+    let (mut worker, _room, _codex, dir) = fixture();
+    let sent = call(
+        &mut worker,
+        "async-send",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"go"}),
+    );
+    assert!(sent.ok, "{sent:?}");
+    let message = sent.result["message_id"].to_string();
+    let status = call(
+        &mut worker,
+        "async-status",
+        "message.status",
+        json!({ "message": message }),
+    );
+    // Still queued: `send --async` keeps following until this turns true.
+    assert_eq!(status.result["requests"][0]["turn_ended"], false, "{status:?}");
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

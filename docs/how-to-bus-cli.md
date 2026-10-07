@@ -129,6 +129,15 @@ orchestrator_id=$(bus agent add \
   | jq -r '.result.agent_id')
 ```
 
+Orchestrators run on Claude Code or Cursor. Codex cannot be an orchestrator
+yet: an orchestrator dispatches work with `bus send --async` in the background
+and must be woken when it finishes, but Codex does not start a new turn when a
+background command exits (openai/codex issues 32188, 50079). The MASTER Add
+agent form offers only Claude Code and Cursor, and `agent add --room master
+--provider codex` fails with that explanation. Codex works fine as a worker in
+a work room, and Codex orchestrators already in a saved session keep loading
+and resuming.
+
 The PWD works as for any agent; Bus writes nothing into it. Every MASTER agent
 launches with an orchestrator system prompt, by default Bus's built-in one
 (`src/bus/prompts/orchestrator.md` in the Bus repository). Replace it with
@@ -144,7 +153,7 @@ again on resume:
 | Provider | Delivery |
 | --- | --- |
 | Claude Code | `--append-system-prompt-file`, added to Claude Code's default prompt |
-| Codex | `-c developer_instructions=...`, a developer message beside Codex's base instructions that points Codex at the prompt file, so the launch command Bus types stays short |
+| Codex (saved sessions only) | `-c developer_instructions=...`, a developer message beside Codex's base instructions that points Codex at the prompt file, so the launch command Bus types stays short |
 | Cursor | No launch option exists, so Bus sends the prompt as the agent's first message |
 
 The prompt is kept in the launch's callback folder as `system-prompt.md`. A new
@@ -168,16 +177,11 @@ session's ID (a UUID) in the launch args, in the provider's resume form:
 | Provider | Launch args | Where to find the ID |
 | --- | --- | --- |
 | Claude Code | `--resume SESSION_ID` | `/status` in the session |
-| Codex | `resume SESSION_ID` (first); workers only, see below | `/status` in the session |
+| Codex | `resume SESSION_ID` (first); workers only | `/status` in the session |
 | Cursor | `--resume SESSION_ID` | `cursor-agent ls` |
 
-A Codex orchestrator cannot resume an earlier session: Codex keeps the
-instructions a session started with, so Bus could not give it the orchestrator
-system prompt. Adding a MASTER agent with provider Codex whose Args contain
-`resume` (`resume`, `resume --last`, `resume SESSION_ID`) fails, with an error in
-the Add agent form or from `agent add`; start a new Codex session instead.
-Codex workers in work rooms may still adopt a session, and Bus's own resume of a
-Codex orchestrator it launched, after a restart, is unaffected.
+Codex cannot be an orchestrator (see above), so only a Codex worker in a work
+room can adopt a session.
 
 ```sh
 bus agent add --room master --name claude-orch --provider claude \

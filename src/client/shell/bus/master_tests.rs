@@ -304,15 +304,15 @@ fn adding_an_agent_in_master_asks_which_unorchestrated_room_it_orchestrates() {
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
 
     if let Some(forms::Form::Agent { name, cwd, .. }) = &mut ui.form {
-        name.insert("codex-orch");
+        name.insert("cursor-orch");
         *cwd = editor::Editor::new("/repo".into());
     }
-    ui.action(render::Action::Provider(Provider::Codex));
+    ui.action(render::Action::Provider(Provider::Cursor));
     ui.action(render::Action::Add);
     assert!(ui.pending.iter().any(|p| matches!(
         &p.command,
         BusCommand::AddOrchestrator(input, spec)
-            if input.room == master && input.name == "codex-orch" && spec.room == other
+            if input.room == master && input.name == "cursor-orch" && spec.room == other
     )));
 }
 
@@ -692,63 +692,81 @@ fn an_agent_waiting_on_a_dialog_reads_blocked_on_its_row_and_its_room() {
 }
 
 #[test]
-fn a_codex_orchestrator_with_resume_in_args_is_refused_in_the_form() {
+fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
     let (mut ui, master, _, other, _) = master_fixture();
-    for resume in [
-        "resume",
-        "resume --last",
-        "resume 0198c1d2-0000-7000-8000-000000000000",
+    // The offered providers are the form's clickable provider rows.
+    let choices = |ui: &mut BusUi| {
+        room_screen(ui, 120, 40);
+        ui.view
+            .hits
+            .iter()
+            .filter_map(|hit| match hit.action {
+                render::Action::Provider(kind) => Some(kind),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    typed(&mut ui, "orch");
+    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(choices(&mut ui), [Provider::ClaudeCode, Provider::Cursor]);
+    // Arrow keys cycle only through the offered providers.
+    for code in [
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Up,
+        KeyCode::Up,
+        KeyCode::Up,
     ] {
-        ui.form = None;
-        ui.open_room(master);
-        ui.action(render::Action::NewAgent);
-        typed(&mut ui, "codex-orch");
-        ui.action(render::Action::Orchestrates);
-        ui.action(render::Action::Provider(Provider::Codex));
-        if let Some(forms::Form::Agent { cwd, args, .. }) = &mut ui.form {
-            *cwd = editor::Editor::new("/repo".into());
-            **args = editor::Editor::new(resume.into());
-        }
-        key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
-        assert!(
-            !ui.pending.iter().any(|p| matches!(
-                p.command,
-                BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(..)
-            )),
-            "{resume}"
-        );
-        assert_eq!(
-            ui.error.as_deref(),
-            Some(crate::bus::orchestrator::CODEX_RESUME_REFUSED),
-            "{resume}"
-        );
-        assert!(
-            matches!(ui.form, Some(forms::Form::Agent { .. })),
-            "the form stays open"
-        );
-        let screen = room_screen(&mut ui, 120, 40);
-        assert!(
-            screen.contains("cannot resume an earlier session"),
-            "{screen}"
-        );
+        key(&mut ui, code, KeyModifiers::NONE);
+        let Some(forms::Form::Agent {
+            provider_cursor, ..
+        }) = &ui.form
+        else {
+            panic!("agent form closed")
+        };
+        assert_ne!(*provider_cursor, Provider::Codex);
     }
+    // Codex forced in anyway is refused with the explanation, and nothing is sent.
+    ui.action(render::Action::Provider(Provider::Codex));
+    if let Some(forms::Form::Agent { cwd, .. }) = &mut ui.form {
+        *cwd = editor::Editor::new("/repo".into());
+    }
+    key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
+    assert!(!ui.pending.iter().any(|p| matches!(
+        p.command,
+        BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(..)
+    )));
+    assert_eq!(
+        ui.error.as_deref(),
+        Some(crate::bus::orchestrator::CODEX_ORCHESTRATOR_REFUSED)
+    );
+    assert!(
+        matches!(ui.form, Some(forms::Form::Agent { .. })),
+        "the form stays open"
+    );
 
-    // A Codex worker in a work room may still resume a session.
+    // A work room's form still offers Codex, and a Codex worker may resume.
     ui.form = None;
     ui.error = None;
     ui.open_room(other);
     ui.action(render::Action::NewAgent);
     typed(&mut ui, "codex-worker");
+    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+    assert_eq!(
+        choices(&mut ui),
+        [Provider::Codex, Provider::ClaudeCode, Provider::Cursor]
+    );
     ui.action(render::Action::Provider(Provider::Codex));
     if let Some(forms::Form::Agent { cwd, args, .. }) = &mut ui.form {
         *cwd = editor::Editor::new("/repo".into());
-        **args = editor::Editor::new("resume --last".into());
+        **args = editor::Editor::new("resume 01a10f9e-71ac-79e2-81b2-56f26341e7e4".into());
     }
     key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
     assert!(ui.error.is_none(), "{:?}", ui.error);
     assert!(ui.pending.iter().any(|p| matches!(
         &p.command,
-        BusCommand::AddAgent(input)
-            if input.provider == Provider::Codex && input.extra_args == "resume --last"
+        BusCommand::AddAgent(input) if input.provider == Provider::Codex
     )));
 }
