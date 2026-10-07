@@ -538,12 +538,14 @@ enter to confirm or esc to cancel` are left out. The answer line is `bus agent
 dialog AGENT`, then `bus agent choose AGENT --option N` for choices, or
 `bus agent answer AGENT --text "..."` / `bus agent answer AGENT --skip` for
 free-text questions; the fingerprint is
-not in the message, because `agent dialog` fetches a fresh one. A room without
-an orchestrator gets the same text as a Bus notice in the room itself, for the
-Human. Each dialog is reported once, a blocked screen without a readable
-dialog is reported with the `agent read` command to inspect it, and when that
-dialog closes Bus adds one line, `answered: option N` when Bus recorded the
-choice, otherwise `answered`.
+not in the message, because `agent dialog` fetches a fresh one. Each dialog is
+reported once, a blocked screen without a readable dialog is reported with the
+`agent read` command to inspect it, and when that dialog closes Bus sends one
+line, `answered: option N` when Bus recorded the choice, otherwise `answered`.
+These messages reach only the orchestrator: they never appear in MASTER's or
+any room's history, `room history`, unread counts or rings, and the
+orchestrator's reply to them is hidden too. A room without an orchestrator gets
+no notice; the Human sees the dialog in the agent's terminal.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last
 status when a recipient that has not replied shows a dialog or a blocked

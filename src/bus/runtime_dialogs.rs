@@ -1,4 +1,4 @@
-//! Tells a room's orchestrator, or the Human, when an agent waits on a dialog.
+//! Tells a room's orchestrator when an agent waits on a dialog.
 use super::*;
 use serde_json::Value;
 
@@ -170,8 +170,10 @@ fn wants_line(name: &str, text: &str) -> String {
     lines.last().copied().unwrap_or_default().to_owned()
 }
 
-/// Delivers the notice to the room's orchestrator in MASTER, like any message,
-/// or posts it in the agent's own room for the Human when none orchestrates it.
+/// Delivers the notice to the room's orchestrator in MASTER, like any message.
+/// Dialog notices are noise for the Human, who watches the agent's terminal:
+/// the request is delivery-only (`Request::delivery_only`), and a room without
+/// an orchestrator gets no notice at all.
 fn post_dialog_notice(state: &mut BusState, id: AgentId, text: String) -> Result<(), String> {
     let room = state.agent(id).ok_or("Unknown agent")?.room_id;
     let now = crate::bus::io::now_ms();
@@ -192,7 +194,7 @@ fn post_dialog_notice(state: &mut BusState, id: AgentId, text: String) -> Result
                 now,
             )
             .map(|_| ()),
-        None => state.post_notice(room, text, now).map(|_| ()),
+        None => Ok(()),
     }
     .map_err(|error| error.to_string())
 }

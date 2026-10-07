@@ -1115,7 +1115,7 @@ impl BusUi {
             .snapshot
             .state
             .requests()
-            .filter(|request| request.room_id == room)
+            .filter(|request| request.room_id == room && !request.delivery_only())
         {
             if entries.last() != Some(&request.prompt.text) {
                 entries.push(request.prompt.text.clone());

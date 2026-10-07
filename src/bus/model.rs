@@ -369,6 +369,14 @@ pub(crate) struct Request {
 }
 
 impl Request {
+    /// A Bus-authored request is a dialog notice for a room's orchestrator. It is
+    /// delivered to that agent like any message but is noise for the Human, who
+    /// watches the agent's terminal instead: it never shows in room history,
+    /// previews, unread counts or rings.
+    pub(crate) fn delivery_only(&self) -> bool {
+        self.prompt.author == Author::Bus
+    }
+
     pub(crate) fn matches_callback_payload(&self, payload: &str) -> bool {
         match &self.submitted_payload {
             Some(typed) => payload_matches(payload, typed),
@@ -1378,11 +1386,14 @@ impl BusState {
             .rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?;
-        // An agent's message is news for the Human, like a reply; their own is not.
-        if prompt.author != Author::Human && self.visible_room != Some(room) {
-            room_state.unread_count = room_state.unread_count.saturating_add(1);
+        // Bus dialog notices are delivery-only (see `Request::delivery_only`).
+        if prompt.author != Author::Bus {
+            // An agent's message is news for the Human, like a reply; their own is not.
+            if prompt.author != Author::Human && self.visible_room != Some(room) {
+                room_state.unread_count = room_state.unread_count.saturating_add(1);
+            }
+            room_state.latest_prompt = Some(prompt);
         }
-        room_state.latest_prompt = Some(prompt);
         room_state.draft.text.clear();
         room_state.draft.files.clear();
         Ok(request_ids)
@@ -2262,6 +2273,7 @@ impl BusState {
             return Ok(false);
         }
         let room_id = request.room_id;
+        let delivery_only = request.delivery_only();
         let turn_key = provider_turn_key(
             request.expected_launch_id.as_deref().unwrap_or_default(),
             pending.provider_session_id.as_deref(),
@@ -2277,9 +2289,12 @@ impl BusState {
             .rooms
             .get_mut(&room_id)
             .ok_or(ModelError::UnknownRoom(room_id))?;
-        room.latest_replies.insert(agent_id, reply);
-        if self.visible_room != Some(room_id) {
-            room.unread_count = room.unread_count.saturating_add(1);
+        // The reply to a delivery-only dialog notice is as hidden as the notice.
+        if !delivery_only {
+            room.latest_replies.insert(agent_id, reply);
+            if self.visible_room != Some(room_id) {
+                room.unread_count = room.unread_count.saturating_add(1);
+            }
         }
         for member in members {
             if let Some(member) = self.requests.get_mut(&member).filter(|m| !m.settled()) {

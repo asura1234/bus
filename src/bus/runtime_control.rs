@@ -471,7 +471,7 @@ impl Worker {
                 let messages = self
                     .state
                     .requests()
-                    .filter(|r| r.room_id == room)
+                    .filter(|r| r.room_id == room && !r.delivery_only())
                     .map(|r| (r.prompt.id, &r.prompt))
                     .collect::<BTreeMap<_, _>>();
                 Ok(

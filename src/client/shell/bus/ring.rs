@@ -45,7 +45,9 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
                 .filter_map(|room| room.latest_prompt.as_ref().map(|prompt| prompt.id)),
         )
         .collect();
+    // Dialog notices to orchestrators are delivery-only and never ring.
     next.requests()
+        .filter(|request| !request.delivery_only())
         .map(|request| (request.room_id, &request.prompt))
         .chain(
             next.rooms()

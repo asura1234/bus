@@ -215,16 +215,17 @@ fn free_text_notice_retains_the_question_and_names_answer_without_a_fingerprint(
 
 #[test]
 fn the_same_blocked_notice_is_not_posted_again_after_a_flicker() {
-    let (mut worker, agent, room, _, screen, dir) = worker(false);
+    let (mut worker, agent, _, orchestrator, screen, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
     screen.lock().unwrap().blocked = true;
     polls(&mut worker, 3);
-    assert_eq!(notices(&worker, room).len(), 1);
+    assert_eq!(messages_to(&worker, orchestrator).len(), 1);
 
     screen.lock().unwrap().blocked = false;
     polls(&mut worker, 3);
     screen.lock().unwrap().blocked = true;
     polls(&mut worker, 3);
-    let posted = notices(&worker, room);
+    let posted = messages_to(&worker, orchestrator);
     assert_eq!(posted.len(), 1, "{posted:?}");
     assert!(posted[0].contains(&format!("bus agent read {} --source visible", agent.0)));
     drop(worker);
@@ -265,12 +266,14 @@ fn orchestrator_is_told_once_per_dialog_and_when_it_closes_on_its_own() {
         .all(|request| request.room_id != master || request.agent_id == orchestrator));
     assert!(worker.state.agent(agent).unwrap().dialog);
     assert!(notices(&worker, room).is_empty());
+    assert_no_dialog_history(&worker, master);
 
     screen.lock().unwrap().dialog = false;
     polls(&mut worker, 3);
     let sent = messages_to(&worker, orchestrator);
     assert_eq!(sent.len(), 2, "{sent:?}");
     assert_eq!(sent[1], "answered");
+    assert_no_dialog_history(&worker, master);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -304,25 +307,27 @@ fn master_receives_a_text_question_and_a_generic_answer_notice() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Dialog notices reach the orchestrator but never the Human's view of MASTER:
+/// no history entry, latest prompt, unread count or `room.history` message.
+fn assert_no_dialog_history(worker: &Worker, master: RoomId) {
+    let room = worker.state.room(master).unwrap();
+    assert!(room.latest_prompt.is_none(), "{:?}", room.latest_prompt);
+    assert_eq!(room.unread_count, 0);
+    assert!(room.notices.is_empty());
+    assert!(worker
+        .state
+        .requests()
+        .filter(|request| request.room_id == master)
+        .all(crate::bus::model::Request::delivery_only));
+}
+
 #[test]
-fn without_an_orchestrator_the_human_gets_the_notice_and_a_one_line_answer() {
+fn without_an_orchestrator_no_dialog_notice_is_posted_anywhere() {
     let (mut worker, agent, room, _, screen, dir) = worker(false);
+    let master = worker.state.master_room().unwrap().id;
     screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
-    let posted = notices(&worker, room);
-    assert_eq!(posted.len(), 1, "{posted:?}");
-    assert!(posted[0].contains("Do you want to proceed?"));
-    assert!(posted[0].contains(&format!(
-        "Answer: bus agent dialog {id}, then bus agent choose {id} --option N",
-        id = agent.0
-    )));
-    assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
-    assert_eq!(
-        worker.state.requests().count(),
-        0,
-        "a notice is delivered to no agent"
-    );
-
+    assert!(worker.state.agent(agent).unwrap().dialog);
     let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
         .as_str()
         .unwrap()
@@ -330,16 +335,14 @@ fn without_an_orchestrator_the_human_gets_the_notice_and_a_one_line_answer() {
     let chosen = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
     assert_eq!(chosen["outcome"], "closed");
     polls(&mut worker, 3);
-    let posted = notices(&worker, room);
-    assert_eq!(posted.len(), 2, "{posted:?}");
-    assert_eq!(posted[1], "answered: option 1");
-
-    // A blocked screen without a readable dialog still gets reported.
     screen.lock().unwrap().blocked = true;
     polls(&mut worker, 2);
-    let posted = notices(&worker, room);
-    assert_eq!(posted.len(), 3, "{posted:?}");
-    assert!(posted[2].contains(&format!("bus agent read {} --source visible", agent.0)));
+    for room in [room, master] {
+        let shown = worker.state.room(room).unwrap();
+        assert!(shown.notices.is_empty(), "{:?}", shown.notices);
+        assert_eq!(shown.unread_count, 0);
+    }
+    assert_eq!(worker.state.requests().count(), 0);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

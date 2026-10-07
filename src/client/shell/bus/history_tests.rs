@@ -1329,3 +1329,28 @@ fn a_notice_on_the_status_line_does_not_hide_history_images() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dialog_notices_to_an_agent_never_show_in_room_history() {
+    let (mut ui, room, agent) = fixture();
+    ui.open_room(room);
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "Codex wants to run: rm -rf build".into(),
+                files: Vec::new(),
+                recipient_ids: [agent].into(),
+            },
+            Author::Bus,
+            1000,
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(!screen.contains("wants to run"), "{screen}");
+    assert!(!screen.contains("Bus"), "{screen}");
+}

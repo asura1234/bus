@@ -146,7 +146,11 @@ impl History {
             return &self.lines;
         }
         let mut exchanges = BTreeMap::new();
-        for request in state.requests().filter(|r| r.room_id == room.id) {
+        // Dialog notices to orchestrators are delivery-only, never history.
+        for request in state
+            .requests()
+            .filter(|r| r.room_id == room.id && !r.delivery_only())
+        {
             let prompt = &request.prompt;
             exchanges
                 .entry((prompt.submitted_at_ms, prompt.id.0))
@@ -668,7 +672,10 @@ fn participant_tone(participant: &Author) -> Tone {
 
 fn signature(state: &BusState, room: &Room) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for request in state.requests().filter(|r| r.room_id == room.id) {
+    for request in state
+        .requests()
+        .filter(|r| r.room_id == room.id && !r.delivery_only())
+    {
         request.id.0.hash(&mut hash);
         request.prompt.id.0.hash(&mut hash);
         request.prompt.submitted_at_ms.hash(&mut hash);
