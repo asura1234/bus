@@ -705,7 +705,7 @@ plugin = []
 accentt = "#ffffff"
 
 [advanced]
-scrollback_lines = 42
+scrollback_limit_bytes = 42
 
 [ui]
 mouse_capture = false
@@ -714,7 +714,7 @@ mouse_captur = true
 "foo.?.bar" = false
 
 [ui.toast]
-enabled = true
+delivery = "herdr"
 delivry = "system"
 
 [ui.sidebar.agents.rows_by_agent]
@@ -744,18 +744,32 @@ claude = [["terminal_title"]]
     }
 
     #[test]
-    fn load_live_config_accepts_legacy_agent_panel_scope_without_warning() {
+    fn load_live_config_warns_about_retired_herdr_keys() {
         let loaded = load_live_config_from_str(
             r#"
 [ui]
 agent_panel_scope = "current"
+status_indicators = "symbols"
 agent_panel_sort = "priority"
+
+[advanced]
+scrollback_lines = 100
+
+[experimental]
+kitty_graphics = false
 "#,
         )
         .unwrap();
 
-        assert!(loaded.diagnostics.is_empty());
-        assert!(loaded.invalid_sections.is_empty());
+        assert_eq!(
+            loaded.diagnostics,
+            vec![
+                "unknown config key ui.agent_panel_scope; ignoring key",
+                "unknown config key ui.status_indicators; ignoring key",
+                "unknown config key advanced.scrollback_lines; ignoring key",
+                "unknown config key experimental.kitty_graphics; ignoring key",
+            ]
+        );
         assert_eq!(
             loaded.config.ui.agent_panel_sort,
             super::super::AgentPanelSortConfig::Priority
@@ -780,11 +794,11 @@ mouse_captur = true
     }
 
     #[test]
-    fn startup_config_accepts_legacy_agent_panel_scope_without_warning() {
+    fn startup_config_warns_about_retired_agent_panel_scope() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let _bus = crate::config::test_without_bus_env(&_guard);
         let path = std::env::temp_dir().join(format!(
-            "herdr-config-legacy-agent-panel-scope-{}.toml",
+            "herdr-config-retired-agent-panel-scope-{}.toml",
             std::process::id()
         ));
         std::fs::write(&path, "[ui]\nagent_panel_scope = \"all\"\n").unwrap();
@@ -795,7 +809,10 @@ mouse_captur = true
         std::env::remove_var(CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_file(path);
 
-        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+        assert_eq!(
+            loaded.diagnostics,
+            vec!["unknown config key ui.agent_panel_scope; ignoring key"]
+        );
     }
 
     #[test]

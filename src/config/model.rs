@@ -48,24 +48,8 @@ pub enum ToastClipboardPosition {
 #[serde(rename_all = "lowercase")]
 pub enum AgentPanelSortConfig {
     #[default]
-    #[serde(alias = "workspaces")]
     Spaces,
     Priority,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum LegacyAgentPanelScopeConfig {
-    Current,
-    All,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum StatusIndicatorStyle {
-    #[default]
-    Dots,
-    Symbols,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -268,7 +252,8 @@ pub enum TabBarPositionConfig {
     Bottom,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PaneBordersConfig {
     #[default]
     Auto,
@@ -283,42 +268,6 @@ impl PaneBordersConfig {
 
     pub fn shows_borders(self, multi_pane: bool) -> bool {
         self.draws_borders() && (multi_pane || matches!(self, Self::Always))
-    }
-}
-
-impl<'de> Deserialize<'de> for PaneBordersConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct PaneBordersVisitor;
-
-        impl<'de> de::Visitor<'de> for PaneBordersVisitor {
-            type Value = PaneBordersConfig;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("\"auto\", \"always\", \"off\", or a legacy boolean")
-            }
-
-            fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
-                Ok(if value {
-                    PaneBordersConfig::Auto
-                } else {
-                    PaneBordersConfig::Off
-                })
-            }
-
-            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
-                match value {
-                    "auto" => Ok(PaneBordersConfig::Auto),
-                    "always" => Ok(PaneBordersConfig::Always),
-                    "off" => Ok(PaneBordersConfig::Off),
-                    other => Err(E::invalid_value(de::Unexpected::Str(other), &self)),
-                }
-            }
-        }
-
-        deserializer.deserialize_any(PaneBordersVisitor)
     }
 }
 
@@ -357,8 +306,7 @@ pub struct UiConfig {
     /// Draw borders around split panes. auto draws them only for split panes,
     /// always also frames a lone pane (only while pane_outer_borders is
     /// enabled, since every edge of a lone pane is an outer edge), off
-    /// disables them. Legacy booleans map true to auto and false to off.
-    /// Default: auto.
+    /// disables them. Default: auto.
     pub pane_borders: PaneBordersConfig,
     /// Draw borders along the outside edge of the pane area. Default: true.
     pub pane_outer_borders: bool,
@@ -377,11 +325,6 @@ pub struct UiConfig {
     pub window_title: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
-    /// Retired setting that Herdr wrote before the workspace filter was removed.
-    #[serde(rename = "agent_panel_scope")]
-    _legacy_agent_panel_scope: Option<LegacyAgentPanelScopeConfig>,
-    /// Agent status indicator style. Saved values are "dots" or "symbols". Default: "dots".
-    pub status_indicators: StatusIndicatorStyle,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -433,15 +376,12 @@ pub struct ServerConfig {
 #[serde(default)]
 pub struct AdvancedConfig {
     /// Maximum scrollback buffer size in bytes retained per pane terminal. Default: 10000000.
-    #[serde(alias = "scrollback_lines")]
     pub scrollback_limit_bytes: usize,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ExperimentalConfig {
-    /// Deprecated compatibility key for `terminal.kitty_graphics`.
-    pub kitty_graphics: Option<bool>,
     /// Persist pane screen history to session-history.json. Default: false.
     pub pane_history: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
@@ -507,8 +447,6 @@ impl Default for UiConfig {
             tab_bar_position: TabBarPositionConfig::Top,
             window_title: super::window_title::default_window_title(),
             agent_panel_sort: AgentPanelSortConfig::Spaces,
-            _legacy_agent_panel_scope: None,
-            status_indicators: StatusIndicatorStyle::Dots,
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -556,18 +494,13 @@ impl<'de> Deserialize<'de> for ToastConfig {
         #[derive(Deserialize, Default)]
         #[serde(default)]
         struct RawToastConfig {
-            delivery: Option<ToastDelivery>,
-            enabled: Option<bool>,
+            delivery: ToastDelivery,
             delay_seconds: Option<u64>,
             clipboard: ClipboardToastConfig,
         }
 
         let raw = RawToastConfig::deserialize(deserializer)?;
-        let legacy_delivery = match raw.enabled {
-            Some(true) => ToastDelivery::Herdr,
-            Some(false) | None => ToastDelivery::Off,
-        };
-        let delivery = raw.delivery.unwrap_or(legacy_delivery);
+        let delivery = raw.delivery;
         let default = Self::default();
         let delay_seconds = raw.delay_seconds.unwrap_or(default.delay_seconds);
         if delay_seconds > MAX_TOAST_DELAY_SECONDS {
@@ -664,7 +597,7 @@ resume_agents_on_restore = false
     }
 
     #[test]
-    fn agent_panel_sort_config_parses_alias_and_defaults() {
+    fn agent_panel_sort_config_parses_and_defaults() {
         assert_eq!(
             Config::default().ui.agent_panel_sort,
             AgentPanelSortConfig::Spaces
@@ -677,45 +610,13 @@ agent_panel_sort = "priority"
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.agent_panel_sort, AgentPanelSortConfig::Priority);
 
-        let toml = r#"
-[ui]
-agent_panel_sort = "workspaces"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.agent_panel_sort, AgentPanelSortConfig::Spaces);
-
-        let toml = r#"
-[ui]
-agent_panel_scope = "current"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.agent_panel_sort, AgentPanelSortConfig::Spaces);
+        let retired = toml::from_str::<Config>("[ui]\nagent_panel_sort = \"workspaces\"");
+        assert!(retired.is_err(), "the herdr-era alias is gone");
     }
 
     #[test]
-    fn status_indicator_style_defaults_to_dots_and_parses_symbols() {
-        assert_eq!(
-            Config::default().ui.status_indicators,
-            StatusIndicatorStyle::Dots
-        );
-
-        let config: Config = toml::from_str(
-            r#"
-[ui]
-status_indicators = "symbols"
-"#,
-        )
-        .unwrap();
-        assert_eq!(config.ui.status_indicators, StatusIndicatorStyle::Symbols);
-    }
-
-    #[test]
-    fn pane_borders_legacy_booleans_map_to_modes() {
-        let enabled: Config = toml::from_str("[ui]\npane_borders = true").unwrap();
-        assert_eq!(enabled.ui.pane_borders, PaneBordersConfig::Auto);
-
-        let disabled: Config = toml::from_str("[ui]\npane_borders = false").unwrap();
-        assert_eq!(disabled.ui.pane_borders, PaneBordersConfig::Off);
+    fn pane_borders_parse_modes_and_reject_booleans() {
+        assert!(toml::from_str::<Config>("[ui]\npane_borders = true").is_err());
 
         let auto: Config = toml::from_str("[ui]\npane_borders = \"auto\"").unwrap();
         assert_eq!(auto.ui.pane_borders, PaneBordersConfig::Auto);
@@ -723,15 +624,7 @@ status_indicators = "symbols"
         let off: Config = toml::from_str("[ui]\npane_borders = \"off\"").unwrap();
         assert_eq!(off.ui.pane_borders, PaneBordersConfig::Off);
 
-        let unknown = toml::from_str::<Config>("[ui]\npane_borders = \"framed\"")
-            .unwrap_err()
-            .to_string();
-        assert!(unknown.contains("\"auto\", \"always\", \"off\", or a legacy boolean"));
-
-        let wrong_type = toml::from_str::<Config>("[ui]\npane_borders = 3")
-            .unwrap_err()
-            .to_string();
-        assert!(wrong_type.contains("\"auto\", \"always\", \"off\", or a legacy boolean"));
+        assert!(toml::from_str::<Config>("[ui]\npane_borders = \"framed\"").is_err());
     }
 
     #[test]
@@ -1102,37 +995,6 @@ delivery = "system"
     }
 
     #[test]
-    fn toast_config_legacy_enabled_true_maps_to_herdr() {
-        let toml = r#"
-[ui.toast]
-enabled = true
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.toast.delivery, ToastDelivery::Herdr);
-    }
-
-    #[test]
-    fn toast_config_legacy_enabled_false_maps_to_off() {
-        let toml = r#"
-[ui.toast]
-enabled = false
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.toast.delivery, ToastDelivery::Off);
-    }
-
-    #[test]
-    fn toast_config_delivery_wins_over_legacy_enabled() {
-        let toml = r#"
-[ui.toast]
-enabled = true
-delivery = "terminal"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.toast.delivery, ToastDelivery::Terminal);
-    }
-
-    #[test]
     fn toast_config_rejects_unbounded_delay() {
         let toml = format!(
             r#"
@@ -1223,40 +1085,13 @@ kitty_graphics = false
     }
 
     #[test]
-    fn legacy_experimental_kitty_graphics_setting_remains_compatible() {
-        let disabled: Config = toml::from_str(
-            r#"
-[experimental]
-kitty_graphics = false
-"#,
-        )
-        .unwrap();
-        assert!(!disabled.kitty_graphics_enabled());
-
-        let stable_setting_wins: Config = toml::from_str(
-            r#"
-[terminal]
-kitty_graphics = false
-
-[experimental]
-kitty_graphics = true
-"#,
-        )
-        .unwrap();
-        assert!(!stable_setting_wins.kitty_graphics_enabled());
-    }
-
-    #[test]
     fn experimental_config_parses() {
         let toml = r#"
 [experimental]
-kitty_graphics = true
 pane_history = true
 switch_ascii_input_source_in_prefix = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.experimental.kitty_graphics, Some(true));
-        assert!(config.kitty_graphics_enabled());
         assert!(config.experimental.pane_history);
         assert!(config.experimental.switch_ascii_input_source_in_prefix);
     }
@@ -1266,16 +1101,6 @@ switch_ascii_input_source_in_prefix = true
         let toml = r#"
 [advanced]
 scrollback_limit_bytes = 12345
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.advanced.scrollback_limit_bytes, 12345);
-    }
-
-    #[test]
-    fn advanced_legacy_scrollback_lines_alias_parses() {
-        let toml = r#"
-[advanced]
-scrollback_lines = 12345
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.advanced.scrollback_limit_bytes, 12345);

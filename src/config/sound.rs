@@ -53,7 +53,6 @@ pub struct AgentSoundOverrides {
 pub enum AgentSoundSetting {
     #[default]
     Default,
-    On,
     Off,
 }
 
@@ -207,7 +206,7 @@ request_path = "/tmp/request.mp3"
 
 [ui.sound.agents]
 droid = "off"
-claude = "on"
+claude = "default"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.ui.sound.enabled);
@@ -221,8 +220,9 @@ claude = "on"
             Some(PathBuf::from("/tmp/request.mp3"))
         );
         assert_eq!(config.ui.sound.agents.droid, AgentSoundSetting::Off);
-        assert_eq!(config.ui.sound.agents.claude, AgentSoundSetting::On);
+        assert_eq!(config.ui.sound.agents.claude, AgentSoundSetting::Default);
         assert_eq!(config.ui.sound.agents.pi, AgentSoundSetting::Default);
+        assert!(toml::from_str::<Config>("[ui.sound.agents]\nclaude = \"on\"").is_err());
     }
 
     #[test]

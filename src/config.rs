@@ -87,10 +87,7 @@ impl Drop for TestBusEnvGuard<'_> {
 
 impl Config {
     pub fn kitty_graphics_enabled(&self) -> bool {
-        self.terminal
-            .kitty_graphics
-            .or(self.experimental.kitty_graphics)
-            .unwrap_or(true)
+        self.terminal.kitty_graphics.unwrap_or(true)
     }
 
     pub fn collect_diagnostics(&self) -> Vec<String> {
