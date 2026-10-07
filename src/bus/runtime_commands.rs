@@ -110,41 +110,6 @@ impl Worker {
             BusCommand::AddOrchestrator(input, spec) => {
                 return self.add_agent(input, Some(spec), events)
             }
-            BusCommand::SetOrchestrates(agent, room) => {
-                let previous = state.agent(agent).and_then(|a| a.orchestrates);
-                state
-                    .set_agent_orchestrates(agent, room)
-                    .map_err(|e| e.to_string())?;
-                // The system prompt is fixed at launch, so tell the orchestrator.
-                if previous != room {
-                    let name = state
-                        .agent(agent)
-                        .map(|a| a.name.clone())
-                        .unwrap_or_default();
-                    let target = room.and_then(|room| state.room(room));
-                    let text = orchestrator::reassigned_message(
-                        &name,
-                        target.map(|room| (room.name.as_str(), room.id)),
-                    );
-                    let master = state
-                        .agent(agent)
-                        .map(|a| a.room_id)
-                        .ok_or("Unknown agent")?;
-                    state
-                        .submit_message_from(
-                            master,
-                            Draft {
-                                text,
-                                files: Vec::new(),
-                                recipient_ids: [agent].into_iter().collect(),
-                            },
-                            Author::Human,
-                            crate::bus::io::now_ms(),
-                        )
-                        .map_err(|e| e.to_string())?;
-                }
-                Ok(())
-            }
             BusCommand::FocusTerminal(id) => {
                 let agent = state.agent(id).ok_or("Unknown agent")?;
                 let target = agent
@@ -189,12 +154,9 @@ impl Worker {
         let mut state = self.state.clone();
         state.prepare_delete_room(id).map_err(|e| e.to_string())?;
         self.save(state)?;
-        let agents: Vec<_> = self
-            .state
-            .agents()
-            .filter(|agent| agent.room_id == id)
-            .map(|agent| agent.id)
-            .collect();
+        // The room's orchestrator in MASTER goes with it: it exists only for
+        // this room, so its terminal is stopped like a member's.
+        let agents = self.state.agents_deleted_with_room(id);
         let mut left_open = Vec::new();
         for agent in &agents {
             left_open.extend(self.stop_agent_terminal(*agent)?);
@@ -417,7 +379,7 @@ impl Worker {
         orchestrator: Option<OrchestratorSpec>,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
-        let orchestrates = orchestrator.as_ref().and_then(|spec| spec.room);
+        let orchestrates = orchestrator.as_ref().map(|spec| spec.room);
         let cwd = launch::canonical_directory(&input.cwd)?;
         // One provider session belongs to one Bus agent: bound by its hook, or
         // reserved by a launch that adopted it and has not reported yet.
@@ -436,14 +398,23 @@ impl Worker {
                 ));
             }
         }
+        // Every MASTER agent is an orchestrator bound to one work room.
+        if orchestrates.is_none()
+            && self
+                .state
+                .room(input.room)
+                .is_some_and(|room| room.kind == RoomKind::Master)
+        {
+            return Err(MASTER_AGENT_NEEDS_ROOM.into());
+        }
         let mut state = self.state.clone();
         let id = state
             .create_agent(input.room, &input.name, input.provider, cwd.clone(), None)
             .map_err(|e| e.to_string())?;
         // Validate the assignment before any consent prompt or launch side effect.
-        if orchestrator.is_some() {
+        if let Some(room) = orchestrates {
             state
-                .set_agent_orchestrates(id, orchestrates)
+                .bind_orchestrator(id, room)
                 .map_err(|e| e.to_string())?;
         }
         if !input.consent_project_hooks {

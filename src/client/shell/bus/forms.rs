@@ -25,11 +25,6 @@ pub(super) enum Form {
         prompt: Option<Box<PromptField>>,
     },
     Files(Editor),
-    /// Reassigns or unassigns the room a MASTER agent orchestrates.
-    Orchestrate {
-        agent: AgentId,
-        choice: Orchestrates,
-    },
     Consent {
         input: AddAgent,
         orchestrator: Option<OrchestratorSpec>,
@@ -67,7 +62,8 @@ impl Form {
     }
 }
 
-/// The MASTER agent form's choice; `None` adds an unassigned orchestrator.
+/// The MASTER agent form's room choice; `None` only while no work room is free,
+/// and then the form refuses to add the agent.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct Orchestrates(pub Option<RoomId>);
 

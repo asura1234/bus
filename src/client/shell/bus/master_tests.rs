@@ -15,9 +15,7 @@ fn master_fixture() -> (BusUi, RoomId, RoomId, RoomId, AgentId) {
             None,
         )
         .unwrap();
-    state
-        .set_agent_orchestrates(orchestrator, Some(pr))
-        .unwrap();
+    state.bind_orchestrator(orchestrator, pr).unwrap();
     let ui = BusUi::new(Arc::new(BusSnapshot {
         state,
         revision: 0,
@@ -145,9 +143,9 @@ fn master_sidebar_lists_its_agents_before_rooms() {
         hit_rows(&ui, render::Action::Agent(orchestrator)),
         [5, 5, 6]
     );
-    assert_eq!(hit_rows(&ui, render::Action::Reassign(orchestrator)), [7]);
     assert_eq!(hit_rows(&ui, render::Action::NewRoom), [10]);
-    assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [12, 12]);
+    // The orchestrator's #pr-123 line opens its room; it never reassigns.
+    assert_eq!(hit_rows(&ui, render::Action::Room(pr)), [12, 12, 7]);
     assert_eq!(hit_rows(&ui, render::Action::Room(other)), [13, 13]);
     assert_eq!(
         render::sidebar_room_row(&ui.snapshot.state, other, Some(master)),
@@ -164,7 +162,7 @@ fn master_sidebar_lists_its_agents_before_rooms() {
 
 #[test]
 fn master_agents_show_three_lines_without_an_expand_control() {
-    let (mut ui, master, _, _, orchestrator) = master_fixture();
+    let (mut ui, master, pr, _, orchestrator) = master_fixture();
     let mut state = ui.snapshot.state.clone();
     state
         .set_agent_details_disclosed(orchestrator, true)
@@ -197,7 +195,7 @@ fn master_agents_show_three_lines_without_an_expand_control() {
             .map(|hit| hit.rect.y)
             .collect::<Vec<_>>()
     };
-    assert_eq!(hit_row(render::Action::Reassign(orchestrator)), [7]);
+    assert!(hit_row(render::Action::Room(pr)).contains(&7));
     assert!(hit_row(render::Action::Agent(orchestrator)).contains(&6));
 }
 
@@ -298,13 +296,11 @@ fn adding_an_agent_in_master_asks_which_unorchestrated_room_it_orchestrates() {
     ui.action(render::Action::NewAgent);
     let screen = room_screen(&mut ui, 100, 30);
     assert!(screen.contains("Orchestrates room"), "{screen}");
-    assert!(screen.contains("< none >"), "{screen}");
-
-    // pr-123 already has an orchestrator, so the only choices are none and pr-456.
+    // pr-123 already has an orchestrator, so pr-456 is the only choice: there
+    // is no "none", because an orchestrator exists only for its room.
+    assert!(screen.contains("< pr-456 >"), "{screen}");
     ui.action(render::Action::Orchestrates);
     assert!(room_screen(&mut ui, 100, 30).contains("< pr-456 >"));
-    ui.action(render::Action::Orchestrates);
-    assert!(room_screen(&mut ui, 100, 30).contains("< none >"));
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
 
     if let Some(forms::Form::Agent { name, cwd, .. }) = &mut ui.form {
@@ -316,7 +312,40 @@ fn adding_an_agent_in_master_asks_which_unorchestrated_room_it_orchestrates() {
     assert!(ui.pending.iter().any(|p| matches!(
         &p.command,
         BusCommand::AddOrchestrator(input, spec)
-            if input.room == master && input.name == "codex-orch" && spec.room == Some(other)
+            if input.room == master && input.name == "codex-orch" && spec.room == other
+    )));
+}
+
+#[test]
+fn a_master_agent_cannot_be_added_without_a_free_work_room() {
+    let (mut ui, master, _, other, _) = master_fixture();
+    let mut state = ui.snapshot.state.clone();
+    let taken = state
+        .create_agent(master, "codex-orch", Provider::Codex, "/repo".into(), None)
+        .unwrap();
+    state.bind_orchestrator(taken, other).unwrap();
+    ui.snapshot = Arc::new(BusSnapshot {
+        state,
+        revision: 1,
+        last_command_id: 0,
+        error: None,
+    });
+    ui.open_room(master);
+    ui.action(render::Action::NewAgent);
+    assert!(room_screen(&mut ui, 100, 30).contains("< no work room without an orchestrator >"));
+    if let Some(forms::Form::Agent { name, cwd, .. }) = &mut ui.form {
+        name.insert("spare");
+        *cwd = editor::Editor::new("/repo".into());
+    }
+    ui.action(render::Action::Provider(Provider::Codex));
+    ui.action(render::Action::Add);
+    assert!(ui
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("Orchestrates room is required")));
+    assert!(!ui.pending.iter().any(|p| matches!(
+        p.command,
+        BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(_)
     )));
 }
 
@@ -360,11 +389,14 @@ fn the_master_agent_form_prefills_the_prompt_and_refills_it_until_edited() {
         &ui.form,
         Some(forms::Form::Agent { cwd, .. }) if cwd.text == "~/"
     ));
-    assert_eq!(prompt_text(&ui), expected_prompt("", None));
+    // The form starts on the only work room without an orchestrator.
+    assert_eq!(
+        prompt_text(&ui),
+        expected_prompt("", Some(("pr-456", other)))
+    );
     assert!(room_screen(&mut ui, 100, 40).contains("System prompt"));
 
     typed(&mut ui, "orch");
-    assert_eq!(prompt_text(&ui), expected_prompt("orch", None));
     ui.action(render::Action::Orchestrates);
     assert_eq!(
         prompt_text(&ui),
@@ -407,7 +439,7 @@ fn enter_adds_a_prompt_line_and_ctrl_enter_adds_the_orchestrator_with_it() {
             if input.cwd == "/repo"
                 && input.extra_args == "--model sonnet"
                 && input.provider == Provider::ClaudeCode
-                && spec.room == Some(other)
+                && spec.room == other
                 && spec.system_prompt.as_deref() == Some(text.as_str())
     )));
 }
@@ -416,7 +448,7 @@ fn enter_adds_a_prompt_line_and_ctrl_enter_adds_the_orchestrator_with_it() {
 fn hook_consent_keeps_the_orchestrator_prompt() {
     let (mut ui, master, _, other, _) = master_fixture();
     let spec = crate::bus::orchestrator::OrchestratorSpec {
-        room: Some(other),
+        room: other,
         system_prompt: Some("Run pr-456.".into()),
     };
     ui.receive_event(BusEvent::SetupRequired {
@@ -457,49 +489,29 @@ fn work_room_agent_forms_have_no_orchestrates_choice() {
     assert!(!room_screen(&mut ui, 100, 30).contains("Orchestrates room"));
 }
 
-fn queued_orchestrates(ui: &BusUi) -> Vec<(AgentId, Option<RoomId>)> {
-    ui.pending
-        .iter()
-        .filter_map(|p| match p.command {
-            BusCommand::SetOrchestrates(agent, room) => Some((agent, room)),
-            _ => None,
-        })
-        .collect()
-}
-
 #[test]
-fn an_orchestrators_detail_line_reassigns_or_unassigns_it() {
-    let (mut ui, master, pr, other, orchestrator) = master_fixture();
+fn an_orchestrators_room_line_opens_its_room_and_never_reassigns() {
+    let (mut ui, master, pr, _, orchestrator) = master_fixture();
     ui.open_room(master);
     sidebar_rows(&mut ui);
-    // The detail line is the button; the name still opens the terminal.
+    // The detail line opens the orchestrated room; the name still opens the terminal.
     assert!(ui
         .view
         .hits
         .iter()
-        .any(|hit| hit.action == render::Action::Reassign(orchestrator)));
-    ui.action(render::Action::Reassign(orchestrator));
-    let screen = room_screen(&mut ui, 100, 30);
-    assert!(screen.contains("claude-orch orchestrates"), "{screen}");
-    assert!(screen.contains("< pr-123 >"), "{screen}");
-
-    // Its own room stays a choice; the cycle runs pr-123, pr-456, then none.
-    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
-    assert!(room_screen(&mut ui, 100, 30).contains("< pr-456 >"));
-    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+        .any(|hit| hit.action == render::Action::Room(pr) && hit.rect.y == 7));
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::Agent(orchestrator)));
+    ui.action(render::Action::Room(pr));
+    assert_eq!(ui.room, Some(pr));
     assert!(ui.form.is_none());
-    assert_eq!(queued_orchestrates(&ui), [(orchestrator, Some(other))]);
-
-    ui.action(render::Action::Reassign(orchestrator));
-    key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    assert_eq!(queued_orchestrates(&ui).last(), Some(&(orchestrator, None)));
-
-    ui.action(render::Action::Reassign(orchestrator));
-    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
-    assert!(ui.form.is_none());
-    assert_eq!(queued_orchestrates(&ui).len(), 2);
-    let _ = pr;
+    assert_eq!(
+        ui.snapshot.state.agent(orchestrator).unwrap().orchestrates,
+        Some(pr)
+    );
 }
 
 #[test]
@@ -521,12 +533,13 @@ fn unassigned_master_agents_show_unassigned_and_work_agents_keep_their_detail_ac
     }));
     ui.open_room(master);
     let rows = sidebar_rows(&mut ui);
+    // Only saved state can hold one: Bus never creates an unassigned orchestrator.
     assert!(rows.iter().any(|row| row == "#unassigned"), "{rows:?}");
     assert!(ui
         .view
         .hits
         .iter()
-        .any(|hit| hit.action == render::Action::Reassign(idle)));
+        .any(|hit| hit.action == render::Action::Agent(idle)));
 
     ui.open_room(work);
     let rows = sidebar_rows(&mut ui);
@@ -535,11 +548,11 @@ fn unassigned_master_agents_show_unassigned_and_work_agents_keep_their_detail_ac
             .any(|row| row.starts_with("Codex") && !row.contains('→')),
         "{rows:?}"
     );
-    assert!(!ui
+    assert!(ui
         .view
         .hits
         .iter()
-        .any(|hit| hit.action == render::Action::Reassign(builder)));
+        .any(|hit| hit.action == render::Action::Details(builder)));
 }
 
 #[test]

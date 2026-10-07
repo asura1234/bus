@@ -109,13 +109,15 @@ The `--confirm` flag is deliberately required for setup approval and deletion.
 
 ## Use the MASTER room
 
-Every session has exactly one MASTER room. It holds orchestrator agents: one
-per work room at most, each assigned to the room it orchestrates. The human
+Every session has exactly one MASTER room. It holds orchestrator agents: each
+is bound to exactly one work room for its whole life, and a work room has at
+most one orchestrator. The human
 chats with all orchestrators in MASTER. MASTER cannot be renamed or deleted, and
 no work room can take its name. Old sessions gain MASTER when they are opened.
 
-Any ROOM selector accepts `master`, in any case, for the MASTER room. Add an
-orchestrator and assign it a work room in one step:
+Any ROOM selector accepts `master`, in any case, for the MASTER room. Create the
+work room first, then add its orchestrator with `--orchestrates`, which is
+required in MASTER:
 
 ```sh
 orchestrator_id=$(bus agent add \
@@ -149,15 +151,10 @@ The prompt is kept in the launch's callback folder as `system-prompt.md`. A new
 PWD can show the provider's "trust this folder" prompt on first launch; answer
 it in the agent's terminal. Bus does not pre-trust folders.
 
-Reassign or unassign it later:
-
-```sh
-bus agent orchestrate "$orchestrator_id" --room "$other_room_id"
-bus agent orchestrate "$orchestrator_id" --none
-```
-
-The system prompt is fixed at launch, so Bus sends the orchestrator a message
-naming its new room, or saying it has none.
+There is no reassignment: the system prompt names the room at launch, so an
+orchestrator keeps it for life. Deleting the work room also deletes its
+orchestrator (its terminal is closed and it leaves MASTER); to orchestrate
+another room, add a new orchestrator.
 
 Additional launch args (`--args`, or the form's Args field) work for MASTER
 agents exactly as in any room and combine with the Bus-owned prompt arguments.
@@ -194,12 +191,10 @@ bus agent add --room master --name claude-orch --provider claude \
   Codex thread keeps its original developer instructions, so Bus sends the
   prompt as its first message, as for Cursor.
 
-The generic forms are `agent add --room master ... [--orchestrates ROOM]
-[--system-prompt TEXT | --system-prompt-file PATH]` and
-`agent orchestrate AGENT (--room ROOM | --none)`. Only agents in MASTER can
-orchestrate. Assigning a second orchestrator to the same room fails until the
-first is unassigned. Deleting a work room leaves its orchestrator in MASTER,
-unassigned.
+The generic form is `agent add --room master ... --orchestrates ROOM
+[--system-prompt TEXT | --system-prompt-file PATH]`. Only agents in MASTER can
+orchestrate, and every MASTER agent must. Adding a second orchestrator for a
+room that already has one fails.
 
 ### Report to the human in MASTER
 
@@ -387,7 +382,7 @@ bus state | jq '.result.build'
   `orchestrator`: the ID of
   the MASTER agent orchestrating it, or `null`.
 - Each agent includes `room_id`, `status`, `dialog`, `details_disclosed`,
-  `orchestrates` (the work room it orchestrates, or `null`), and `compactions`:
+  `orchestrates` (a MASTER agent's work room, `null` for work-room agents), and `compactions`:
   `count` and `last_at_ms` of the provider context compactions Bus observed for
   that agent. `dialog` is `true` while a numbered choice dialog waits for an
   answer; see [Answer an agent's dialog](#answer-an-agents-dialog).

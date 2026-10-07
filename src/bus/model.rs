@@ -308,7 +308,10 @@ pub(crate) struct Agent {
     pub(crate) session_binding_invalidated: bool,
     #[serde(default)]
     pub(crate) deletion_pending: bool,
-    /// Set only on MASTER agents: the work room this agent orchestrates.
+    /// Set only on MASTER agents: the work room this agent orchestrates, bound
+    /// at creation for the agent's whole life (its system prompt names it).
+    /// `None` only for a saved orchestrator whose room failed the load checks
+    /// in `ensure_master_room`; Bus never creates one.
     #[serde(default)]
     pub(crate) orchestrates: Option<RoomId>,
     #[serde(default)]
@@ -593,6 +596,7 @@ pub(crate) enum ModelError {
     OrchestratorOutsideMaster(AgentId),
     NotOrchestratable(RoomId),
     RoomAlreadyOrchestrated { room: RoomId, agent: AgentId },
+    OrchestratorAlreadyBound(AgentId),
 }
 
 impl std::fmt::Display for ModelError {
@@ -622,8 +626,13 @@ impl std::fmt::Display for ModelError {
             ),
             Self::RoomAlreadyOrchestrated { room, agent } => write!(
                 formatter,
-                "Room {} is already orchestrated by agent {}; unassign it first",
+                "Room {} already has orchestrator agent {}; a work room has at most one orchestrator",
                 room.0, agent.0
+            ),
+            Self::OrchestratorAlreadyBound(agent) => write!(
+                formatter,
+                "Agent {} already orchestrates a room; an orchestrator keeps its room for life",
+                agent.0
             ),
             Self::EmptyPrompt => write!(formatter, "The message has no text or files"),
             Self::NoRecipients => write!(formatter, "Choose at least one recipient"),
@@ -852,11 +861,13 @@ impl BusState {
             .find(|agent| agent.orchestrates == Some(room))
     }
 
-    /// Assigns (or with `None` unassigns) the work room a MASTER agent orchestrates.
-    pub(crate) fn set_agent_orchestrates(
+    /// Binds a new MASTER agent to the work room it orchestrates. The room is
+    /// fixed in the agent's system prompt at launch, so it is bound once, at
+    /// creation, and never moves.
+    pub(crate) fn bind_orchestrator(
         &mut self,
         id: AgentId,
-        room: Option<RoomId>,
+        room: RoomId,
     ) -> Result<(), ModelError> {
         let agent = self.agents.get(&id).ok_or(ModelError::UnknownAgent(id))?;
         if self
@@ -866,26 +877,37 @@ impl BusState {
         {
             return Err(ModelError::OrchestratorOutsideMaster(id));
         }
-        if let Some(room) = room {
-            if self
-                .rooms
-                .get(&room)
-                .is_none_or(|target| target.kind != RoomKind::Work || target.deletion_pending)
-            {
-                return Err(ModelError::NotOrchestratable(room));
-            }
-            if let Some(other) = self.orchestrator_of(room).filter(|other| other.id != id) {
-                return Err(ModelError::RoomAlreadyOrchestrated {
-                    room,
-                    agent: other.id,
-                });
-            }
+        if agent.orchestrates.is_some() {
+            return Err(ModelError::OrchestratorAlreadyBound(id));
+        }
+        if self
+            .rooms
+            .get(&room)
+            .is_none_or(|target| target.kind != RoomKind::Work || target.deletion_pending)
+        {
+            return Err(ModelError::NotOrchestratable(room));
+        }
+        if let Some(other) = self.orchestrator_of(room) {
+            return Err(ModelError::RoomAlreadyOrchestrated {
+                room,
+                agent: other.id,
+            });
         }
         self.agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?
-            .orchestrates = room;
+            .orchestrates = Some(room);
         Ok(())
+    }
+
+    /// The agents a room's deletion removes: its members and its orchestrator,
+    /// which exists only for that room.
+    pub(crate) fn agents_deleted_with_room(&self, id: RoomId) -> Vec<AgentId> {
+        self.agents
+            .values()
+            .filter(|agent| agent.room_id == id || agent.orchestrates == Some(id))
+            .map(|agent| agent.id)
+            .collect()
     }
 
     pub(crate) fn set_room_sound(&mut self, id: RoomId, on: bool) -> Result<(), ModelError> {
@@ -1015,13 +1037,7 @@ impl BusState {
             return Err(ModelError::MasterRoomFixed);
         }
         room.deletion_pending = true;
-        let agents: Vec<_> = self
-            .agents
-            .values()
-            .filter(|agent| agent.room_id == id)
-            .map(|agent| agent.id)
-            .collect();
-        for agent in agents {
+        for agent in self.agents_deleted_with_room(id) {
             self.prepare_delete_agent(agent)?;
         }
         Ok(())
@@ -1046,22 +1062,10 @@ impl BusState {
             Some(room) if room.kind == RoomKind::Master => return Err(ModelError::MasterRoomFixed),
             Some(_) => {}
         }
-        let agents: Vec<_> = self
-            .agents
-            .values()
-            .filter(|agent| agent.room_id == id)
-            .map(|agent| agent.id)
-            .collect();
-        for agent in agents {
+        for agent in self.agents_deleted_with_room(id) {
             self.delete_agent(agent)?;
         }
         self.rooms.remove(&id);
-        // The orchestrator stays in MASTER, unassigned.
-        for agent in self.agents.values_mut() {
-            if agent.orchestrates == Some(id) {
-                agent.orchestrates = None;
-            }
-        }
         self.requests.retain(|_, request| request.room_id != id);
         // Match the UI, which falls back to the first room (MASTER) at once,
         // so `state` never shows a gap between the delete and the next view.
@@ -2523,7 +2527,7 @@ mod tests {
     }
 
     #[test]
-    fn each_work_room_has_at_most_one_master_orchestrator() {
+    fn each_work_room_has_at_most_one_orchestrator_bound_for_life() {
         let mut state = BusState::new();
         let master = state.ensure_master_room();
         let pr = state.create_room("pr-123").unwrap();
@@ -2531,9 +2535,9 @@ mod tests {
         let first = master_agent(&mut state, "claude-orch");
         let second = master_agent(&mut state, "codex-orch");
 
-        state.set_agent_orchestrates(first, Some(pr)).unwrap();
+        state.bind_orchestrator(first, pr).unwrap();
         assert_eq!(state.orchestrator_of(pr).map(|agent| agent.id), Some(first));
-        let taken = state.set_agent_orchestrates(second, Some(pr));
+        let taken = state.bind_orchestrator(second, pr);
         assert_eq!(
             taken,
             Err(ModelError::RoomAlreadyOrchestrated {
@@ -2544,26 +2548,28 @@ mod tests {
         assert!(taken
             .unwrap_err()
             .to_string()
-            .contains("already orchestrated by agent"));
-        // Reassigning the same agent, moving it, and unassigning all succeed.
-        state.set_agent_orchestrates(first, Some(pr)).unwrap();
-        state.set_agent_orchestrates(first, Some(other)).unwrap();
-        state.set_agent_orchestrates(second, Some(pr)).unwrap();
-        state.set_agent_orchestrates(second, None).unwrap();
-        assert!(state.orchestrator_of(pr).is_none());
+            .contains("at most one orchestrator"));
+        // A bound orchestrator never moves, not even to its own room again.
+        for room in [other, pr] {
+            assert_eq!(
+                state.bind_orchestrator(first, room),
+                Err(ModelError::OrchestratorAlreadyBound(first))
+            );
+        }
+        assert_eq!(state.agent(first).unwrap().orchestrates, Some(pr));
 
         assert_eq!(
-            state.set_agent_orchestrates(first, Some(master)),
+            state.bind_orchestrator(second, master),
             Err(ModelError::NotOrchestratable(master))
         );
         assert_eq!(
-            state.set_agent_orchestrates(first, Some(RoomId(999))),
+            state.bind_orchestrator(second, RoomId(999)),
             Err(ModelError::NotOrchestratable(RoomId(999)))
         );
-        state.prepare_delete_room(pr).unwrap();
+        state.prepare_delete_room(other).unwrap();
         assert_eq!(
-            state.set_agent_orchestrates(second, Some(pr)),
-            Err(ModelError::NotOrchestratable(pr))
+            state.bind_orchestrator(second, other),
+            Err(ModelError::NotOrchestratable(other))
         );
     }
 
@@ -2576,29 +2582,35 @@ mod tests {
             .create_agent(pr, "builder", Provider::Codex, "/repo".into(), None)
             .unwrap();
         assert_eq!(
-            state.set_agent_orchestrates(worker, Some(pr)),
+            state.bind_orchestrator(worker, pr),
             Err(ModelError::OrchestratorOutsideMaster(worker))
         );
         assert_eq!(state.agent(worker).unwrap().orchestrates, None);
     }
 
     #[test]
-    fn deleting_an_orchestrated_room_leaves_its_orchestrator_unassigned_in_master() {
+    fn deleting_a_room_deletes_its_orchestrator_too() {
         let mut state = BusState::new();
-        let master = state.ensure_master_room();
+        state.ensure_master_room();
         let pr = state.create_room("pr-123").unwrap();
+        let other = state.create_room("pr-456").unwrap();
         let orchestrator = master_agent(&mut state, "claude-orch");
-        state
-            .set_agent_orchestrates(orchestrator, Some(pr))
+        state.bind_orchestrator(orchestrator, pr).unwrap();
+        let bystander = master_agent(&mut state, "codex-orch");
+        state.bind_orchestrator(bystander, other).unwrap();
+        let worker = state
+            .create_agent(pr, "builder", Provider::Codex, "/repo".into(), None)
             .unwrap();
+        assert_eq!(state.agents_deleted_with_room(pr), [orchestrator, worker]);
 
         state.prepare_delete_room(pr).unwrap();
+        assert!(state.agent(orchestrator).unwrap().deletion_pending);
+        assert!(!state.agent(bystander).unwrap().deletion_pending);
         state.delete_room(pr).unwrap();
 
-        let agent = state.agent(orchestrator).expect("orchestrator survives");
-        assert_eq!(agent.room_id, master);
-        assert_eq!(agent.orchestrates, None);
-        assert!(!agent.deletion_pending);
+        assert!(state.agent(orchestrator).is_none());
+        assert!(state.agent(worker).is_none());
+        assert_eq!(state.agent(bystander).unwrap().orchestrates, Some(other));
     }
 
     #[test]

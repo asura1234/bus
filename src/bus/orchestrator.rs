@@ -38,13 +38,16 @@ const DOCS: &[(&str, &str)] = &[
 ];
 /// The prompt file in a launch's callback folder; resumes deliver it again.
 pub(crate) const PROMPT_FILE: &str = "system-prompt.md";
-const UNASSIGNED_ROOM_NAME: &str = "none yet (the human assigns one)";
+// Only the add-agent form's preview shows these: a launch always names a room.
+const UNASSIGNED_ROOM_NAME: &str = "none yet (choose a work room)";
 const UNASSIGNED_ROOM_ID: &str = "ROOM";
 
 /// What a MASTER agent is created with, beyond the plain agent input.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OrchestratorSpec {
-    pub room: Option<RoomId>,
+    /// The work room it orchestrates for its whole life; required, because
+    /// the system prompt names it at launch and is never re-sent.
+    pub room: RoomId,
     /// The system prompt text; `None` uses [`DEFAULT_PROMPT`]. `{{...}}`
     /// placeholders in it are filled in.
     pub system_prompt: Option<String>,
@@ -167,17 +170,6 @@ pub(crate) fn prompt_message(text: &str) -> String {
     format!(
         "Bus: this is your system prompt; Bus could not set it at launch for this provider or session. Follow it for the rest of this session, then reply briefly that you are ready.\n\n{text}"
     )
-}
-
-/// Tells an orchestrator its new room: its system prompt is fixed at launch.
-pub(crate) fn reassigned_message(agent: &str, room: Option<(&str, RoomId)>) -> String {
-    match room {
-        Some((name, id)) => format!(
-            "Bus: you now orchestrate room {name} (id {id}). This replaces the room in your system prompt. Send to it with `bus send --room {id} --as {agent} ...`; start with `bus state` and `bus history --room {id}`.",
-            id = id.0
-        ),
-        None => "Bus: you no longer orchestrate a room. Wait for the human to assign one.".into(),
-    }
 }
 
 #[cfg(test)]

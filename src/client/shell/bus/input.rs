@@ -531,43 +531,39 @@ impl BusUi {
         self.recipient_menu = false;
         self.text_changed(room);
     }
-    /// Steps an orchestrated-room choice through no room and each work room
-    /// that no other agent orchestrates.
-    fn cycle_orchestrates(&mut self, forward: bool) {
+    /// The work rooms a new orchestrator can take: each work room has at most one.
+    fn orchestratable_rooms(&self) -> Vec<RoomId> {
         let state = &self.snapshot.state;
-        let editing = match &self.form {
-            Some(Form::Orchestrate { agent, .. }) => Some(*agent),
-            _ => None,
-        };
-        let mut choices = vec![None];
-        choices.extend(
-            state
-                .rooms()
-                .filter(|room| {
-                    room.kind == RoomKind::Work
-                        && !room.deletion_pending
-                        && state
-                            .orchestrator_of(room.id)
-                            .is_none_or(|other| Some(other.id) == editing)
-                })
-                .map(|room| Some(room.id)),
-        );
-        let choice = match &mut self.form {
-            Some(Form::Agent {
-                orchestrates: Some(choice),
-                ..
+        state
+            .rooms()
+            .filter(|room| {
+                room.kind == RoomKind::Work
+                    && !room.deletion_pending
+                    && state.orchestrator_of(room.id).is_none()
             })
-            | Some(Form::Orchestrate { choice, .. }) => Some(choice),
-            _ => None,
-        };
-        if let Some(choice) = choice {
-            let index = choices.iter().position(|c| *c == choice.0).unwrap_or(0);
-            let next = if forward {
-                (index + 1) % choices.len()
-            } else {
-                (index + choices.len() - 1) % choices.len()
+            .map(|room| room.id)
+            .collect()
+    }
+    /// Steps the new orchestrator's room through the work rooms without one.
+    /// There is no "no room" choice: an orchestrator exists only for its room.
+    fn cycle_orchestrates(&mut self, forward: bool) {
+        let choices = self.orchestratable_rooms();
+        if let Some(Form::Agent {
+            orchestrates: Some(choice),
+            ..
+        }) = &mut self.form
+        {
+            choice.0 = match choice.0.and_then(|c| choices.iter().position(|r| *r == c)) {
+                _ if choices.is_empty() => None,
+                None => Some(choices[0]),
+                Some(index) => Some(
+                    choices[if forward {
+                        (index + 1) % choices.len()
+                    } else {
+                        (index + choices.len() - 1) % choices.len()
+                    }],
+                ),
             };
-            choice.0 = choices[next];
         }
         self.refill_orchestrator_prompt();
     }
@@ -636,7 +632,9 @@ impl BusUi {
                     cwd: Editor::new("~/".into()),
                     args: Box::new(Editor::default()),
                     field: 0,
-                    orchestrates: master.then(Orchestrates::default),
+                    // Starts on the first work room without an orchestrator.
+                    orchestrates: master
+                        .then(|| Orchestrates(self.orchestratable_rooms().first().copied())),
                     prompt: master.then(|| {
                         Box::new(PromptField {
                             editor: Editor::default(),
@@ -651,14 +649,6 @@ impl BusUi {
                     *field = ORCHESTRATES_FIELD;
                 }
                 self.cycle_orchestrates(true);
-            }
-            Action::Reassign(agent) => {
-                if let Some(current) = self.snapshot.state.agent(agent).map(|a| a.orchestrates) {
-                    self.open_form(Form::Orchestrate {
-                        agent,
-                        choice: Orchestrates(current),
-                    });
-                }
             }
             Action::Notes => {
                 if self.room_has_notes() {
@@ -1418,17 +1408,6 @@ impl BusUi {
             ));
             return;
         }
-        if matches!(self.form, Some(Form::Orchestrate { .. })) {
-            match code {
-                KeyCode::Left | KeyCode::Up => self.cycle_orchestrates(false),
-                KeyCode::Right | KeyCode::Down | KeyCode::Char(' ') => {
-                    self.cycle_orchestrates(true)
-                }
-                KeyCode::Enter => self.add(),
-                _ => {}
-            }
-            return;
-        }
         // The system prompt is multi-line: Enter adds a line, Ctrl+Enter adds the agent.
         if code == KeyCode::Enter
             && !modifiers.contains(KeyModifiers::CONTROL)
@@ -1550,10 +1529,6 @@ impl BusUi {
         };
         match form {
             Form::Help { .. } | Form::Settings => {}
-            Form::Orchestrate { agent, choice } => {
-                self.queue(BusCommand::SetOrchestrates(agent, choice.0), Effect::None);
-                self.form = None;
-            }
             Form::Room(editor) => {
                 self.queue(BusCommand::CreateRoom(editor.text), Effect::None);
             }
@@ -1587,6 +1562,13 @@ impl BusUi {
                     });
                     return;
                 }
+                if orchestrates.is_some_and(|choice| choice.0.is_none()) {
+                    self.error = Some(
+                        "Orchestrates room is required: create a work room without an orchestrator first."
+                            .into(),
+                    );
+                    return;
+                }
                 let system_prompt = prompt.map(|prompt| prompt.editor.text);
                 if system_prompt
                     .as_ref()
@@ -1605,11 +1587,11 @@ impl BusUi {
                         extra_args: args.text,
                         consent_project_hooks: false,
                     };
-                    let command = match orchestrates {
-                        Some(choice) => BusCommand::AddOrchestrator(
+                    let command = match orchestrates.and_then(|choice| choice.0) {
+                        Some(room) => BusCommand::AddOrchestrator(
                             input,
                             OrchestratorSpec {
-                                room: choice.0,
+                                room,
                                 system_prompt,
                             },
                         ),

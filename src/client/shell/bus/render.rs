@@ -45,7 +45,6 @@ pub(super) enum Action {
     Field(usize),
     Provider(Provider),
     Orchestrates,
-    Reassign(AgentId),
     Suggestion(usize),
     Settings,
     ToggleColorBlindMode,
@@ -701,7 +700,7 @@ pub(super) fn room_label(room: &Room, width: usize) -> String {
 }
 
 /// The MASTER line under an agent's provider: the room it orchestrates, or
-/// `#unassigned`.
+/// `#unassigned` for a saved orchestrator whose room failed the load checks.
 pub(super) fn orchestrated_room_label(state: &BusState, agent: &Agent) -> String {
     match agent.orchestrates.and_then(|room| state.room(room)) {
         Some(room) => format!("#{}", room.name),
@@ -946,11 +945,12 @@ impl BusUi {
             );
             if in_master {
                 y += 1;
-                // The room line opens the orchestrated-room picker.
+                // An orchestrator keeps its room for life, so the room line
+                // opens that room instead of offering to reassign it.
                 view.row(
                     at(1, y, sw),
                     orchestrated_room_label(&self.snapshot.state, agent),
-                    Some(Action::Reassign(agent.id)),
+                    agent.orchestrates.map(Action::Room),
                     false,
                     true,
                 );
@@ -1622,13 +1622,13 @@ impl BusUi {
                     .state
                     .room(id)
                     .map_or("room", |room| room.name.as_str());
-                let count = self
-                    .snapshot
-                    .state
-                    .agents()
-                    .filter(|agent| agent.room_id == id)
-                    .count();
-                (format!("Delete room \"{name}\"?"), format!("This will close its {count} agents and permanently delete this room’s session data."))
+                let state = &self.snapshot.state;
+                let count = state.agents().filter(|agent| agent.room_id == id).count();
+                // The orchestrator lives in MASTER but exists only for this room.
+                let orchestrator = state.orchestrator_of(id).map_or(String::new(), |agent| {
+                    format!(" and its orchestrator \"{}\" in MASTER", agent.name)
+                });
+                (format!("Delete room \"{name}\"?"), format!("This will close its {count} agents{orchestrator} and permanently delete this room’s session data."))
             }
             DeleteTarget::Agent(id) => {
                 let name = self
@@ -1856,49 +1856,6 @@ impl BusUi {
                 );
                 return;
             }
-            Form::Orchestrate { agent, choice } => {
-                let name = self
-                    .snapshot
-                    .state
-                    .agent(*agent)
-                    .map_or("agent", |agent| agent.name.as_str());
-                view.row(
-                    Rect::new(x, 1, width, 1),
-                    format!("{name} orchestrates"),
-                    None,
-                    false,
-                    false,
-                );
-                let target = choice
-                    .0
-                    .and_then(|room| self.snapshot.state.room(room))
-                    .map_or("none", |room| room.name.as_str());
-                view.row(
-                    Rect::new(x, 3, width, 1),
-                    format!("< {target} >"),
-                    Some(Action::Orchestrates),
-                    true,
-                    false,
-                );
-                view.row(
-                    Rect::new(x, 5, 14.min(width), 1),
-                    "Cancel (Esc)",
-                    Some(Action::Cancel),
-                    false,
-                    true,
-                );
-                view.row(
-                    Rect::new(x + 16, 5, 24.min(width.saturating_sub(16)), 1),
-                    "Save (Enter)",
-                    Some(Action::Add),
-                    false,
-                    false,
-                );
-                if let Some(error) = self.visible_error() {
-                    view.lines(Rect::new(x, 7, width, 3), error, None, false);
-                }
-                return;
-            }
             Form::Room(editor) => {
                 view.row(Rect::new(x, y, width, 1), "Room name", None, false, true);
                 view.editor(Rect::new(x, y + 1, width, 1), editor, None, true);
@@ -1977,7 +1934,9 @@ impl BusUi {
                     let target = choice
                         .0
                         .and_then(|room| self.snapshot.state.room(room))
-                        .map_or("none", |room| room.name.as_str());
+                        .map_or("no work room without an orchestrator", |room| {
+                            room.name.as_str()
+                        });
                     view.row(
                         Rect::new(x, y, width, 1),
                         format!("< {target} >"),

@@ -59,7 +59,6 @@ pub(crate) enum BusCommand {
     AddAgent(AddAgent),
     /// Adds a MASTER agent, launched with its orchestrator system prompt.
     AddOrchestrator(AddAgent, super::orchestrator::OrchestratorSpec),
-    SetOrchestrates(AgentId, Option<RoomId>),
     FocusTerminal(AgentId),
     CompleteHookSetup(AgentId),
     Suggestions {
@@ -131,6 +130,8 @@ pub(crate) struct BusHandle {
 }
 
 pub(crate) const DEFAULT_SESSION: &str = "bus";
+/// Why a MASTER agent needs a room: its system prompt names that room at launch.
+pub(crate) const MASTER_AGENT_NEEDS_ROOM: &str = "A MASTER agent orchestrates exactly one work room for its whole life: add it with --orchestrates ROOM (create the work room first)";
 
 /// How long Bus holds delivery after an agent begins a turn of its own,
 /// unless that turn's Stop arrives first.

@@ -110,7 +110,6 @@ impl Worker {
                 ],
                 true,
             ),
-            "agent.orchestrate" => (&["agent", "room"], true),
             "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
             "agent.read" => (&["agent", "source", "lines"], false),
             "agent.dialog.observe" => (&["agent"], false),
@@ -372,26 +371,20 @@ impl Worker {
                     extra_args: optional_text(p, "extra_args")?.unwrap_or_default().into(),
                     consent_project_hooks: optional_bool(p, "consent_project_hooks")?,
                 };
-                // Every MASTER agent is an orchestrator; outside MASTER,
-                // --orchestrates still reaches the model's MASTER-only check.
-                self.dev_command(if master || orchestrates.is_some() {
-                    let spec = OrchestratorSpec {
-                        room: orchestrates.map(|r| self.dev_room(r)).transpose()?,
-                        system_prompt: system_prompt.map(Into::into),
-                    };
-                    BusCommand::AddOrchestrator(input, spec)
-                } else {
-                    BusCommand::AddAgent(input)
+                // Every MASTER agent is an orchestrator of exactly one work
+                // room; outside MASTER, --orchestrates still reaches the
+                // model's MASTER-only check.
+                self.dev_command(match orchestrates {
+                    Some(room) => BusCommand::AddOrchestrator(
+                        input,
+                        OrchestratorSpec {
+                            room: self.dev_room(room)?,
+                            system_prompt: system_prompt.map(Into::into),
+                        },
+                    ),
+                    None if master => return Err(MASTER_AGENT_NEEDS_ROOM.into()),
+                    None => BusCommand::AddAgent(input),
                 })
-            }
-            "agent.orchestrate" => {
-                let agent = self.dev_agent(required(p, "agent")?, None)?;
-                let room = match p.get("room") {
-                    Some(Value::Null) => None,
-                    Some(Value::String(room)) => Some(self.dev_room(room)?),
-                    _ => return Err("Room must be a room selector or null".into()),
-                };
-                self.dev_command(BusCommand::SetOrchestrates(agent, room))
             }
             "agent.read" => self.dev_read(
                 self.dev_agent(required(p, "agent")?, None)?,

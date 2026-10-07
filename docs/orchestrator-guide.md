@@ -19,7 +19,7 @@ room do the work. The orchestrator runs it.
 - **It stays available.** The human can ask it a question or change direction at
   any time, and it passes that steering to the agents doing the work.
 - **It lives in MASTER.** Orchestrators are agents in the MASTER room, each
-  assigned to one room. The human chats with all orchestrators in MASTER and
+  bound to one room for its whole life. The human chats with all orchestrators in MASTER and
   can still step into any room, act as its orchestrator directly, or read any
   agent's terminal.
 
@@ -28,8 +28,8 @@ given, this guide, and the room's workflow file.
 
 ## Getting started
 
-The human adds you to MASTER and assigns your room, from the TUI (add an agent
-while MASTER is open) or the CLI:
+The human adds you to MASTER together with your room, from the TUI (add an
+agent while MASTER is open) or the CLI:
 
 ```sh
 bus agent add --room MASTER --name claude-orch --provider claude \
@@ -40,8 +40,8 @@ Bus launches you with an orchestrator system prompt (editable in the TUI form,
 or `--system-prompt`/`--system-prompt-file`) that names your room and points to
 the Bus docs in `<BUS_DATA_DIR>/docs/`. Bus writes nothing into your PWD. A new
 PWD may show the provider's "trust this folder" prompt on first launch; the
-human answers it in your terminal. If the human reassigns you, Bus sends you a
-message naming your new room.
+human answers it in your terminal. Your room is fixed for your whole life:
+there is no reassignment, and deleting the room deletes you with it.
 
 On your first turn:
 

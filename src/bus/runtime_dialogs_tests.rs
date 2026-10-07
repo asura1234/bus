@@ -128,9 +128,7 @@ fn worker(
         let orchestrator = state
             .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
             .unwrap();
-        state
-            .set_agent_orchestrates(orchestrator, Some(room))
-            .unwrap();
+        state.bind_orchestrator(orchestrator, room).unwrap();
         orchestrator
     });
     worker.save(state).unwrap();

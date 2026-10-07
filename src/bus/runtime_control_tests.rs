@@ -1270,8 +1270,8 @@ fn dev_master_room_is_selectable_listed_and_fixed() {
 }
 
 #[test]
-fn dev_agent_orchestrate_assigns_rejects_a_second_orchestrator_and_unassigns() {
-    let (mut worker, room, agent, dir) = fixture();
+fn orchestrators_are_bound_at_add_one_per_room_and_never_reassigned() {
+    let (mut worker, room, _agent, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
     let first = worker
         .state
@@ -1283,19 +1283,7 @@ fn dev_agent_orchestrate_assigns_rejects_a_second_orchestrator_and_unassigns() {
             None,
         )
         .unwrap();
-    let second = worker
-        .state
-        .create_agent(master, "codex-orch", Provider::Codex, dir.clone(), None)
-        .unwrap();
-
-    let assigned = call(
-        &mut worker,
-        "orch-1",
-        "agent.orchestrate",
-        json!({"agent":"claude-orch","room":"test"}),
-    );
-    assert!(assigned.ok, "{assigned:?}");
-    assert_eq!(worker.state.agent(first).unwrap().orchestrates, Some(room));
+    worker.state.bind_orchestrator(first, room).unwrap();
     let state = call(&mut worker, "state-orch", "state", json!({}));
     assert_eq!(state.result["rooms"][1]["orchestrator"], json!(first));
     let listed = state.result["agents"]
@@ -1307,39 +1295,38 @@ fn dev_agent_orchestrate_assigns_rejects_a_second_orchestrator_and_unassigns() {
         .clone();
     assert_eq!(listed["orchestrates"], json!(room));
 
-    let taken = call(
+    // Reassignment is gone: the room is fixed in the system prompt at launch.
+    let reassign = call(
         &mut worker,
-        "orch-2",
-        "agent.orchestrate",
-        json!({"agent":"codex-orch","room":"test"}),
-    );
-    assert!(!taken.ok);
-    assert!(
-        error_message(&taken).contains("already orchestrated by agent"),
-        "{taken:?}"
-    );
-    assert_eq!(worker.state.agent(second).unwrap().orchestrates, None);
-
-    let outside = call(
-        &mut worker,
-        "orch-3",
-        "agent.orchestrate",
-        json!({"agent":"codex1","room":"test"}),
-    );
-    assert!(
-        error_message(&outside).contains("not in the MASTER room"),
-        "{outside:?}"
-    );
-    assert_eq!(worker.state.agent(agent).unwrap().orchestrates, None);
-
-    let cleared = call(
-        &mut worker,
-        "orch-4",
+        "orch-move",
         "agent.orchestrate",
         json!({"agent":"claude-orch","room":null}),
     );
-    assert!(cleared.ok, "{cleared:?}");
-    assert_eq!(worker.state.agent(first).unwrap().orchestrates, None);
+    assert_eq!(reassign.error.unwrap().code, "unknown_method");
+    assert_eq!(worker.state.agent(first).unwrap().orchestrates, Some(room));
+
+    let agents_before = worker.state.agents().count();
+    let cwd = dir.to_string_lossy().to_string();
+    for (id, params, expected) in [
+        (
+            "second",
+            json!({"room":"master","name":"codex-orch","provider":"codex","cwd":cwd,"orchestrates":"test"}),
+            "at most one orchestrator",
+        ),
+        (
+            "roomless",
+            json!({"room":"master","name":"codex-orch","provider":"codex","cwd":cwd}),
+            "orchestrates exactly one work room",
+        ),
+    ] {
+        let rejected = call(&mut worker, id, "agent.add", params);
+        assert!(!rejected.ok, "{id}: {rejected:?}");
+        assert!(
+            error_message(&rejected).contains(expected),
+            "{id}: {rejected:?}"
+        );
+    }
+    assert_eq!(worker.state.agents().count(), agents_before);
 
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -1575,18 +1562,12 @@ fn dev_send_as_allows_only_the_rooms_own_master_orchestrator_from_outside() {
             None,
         )
         .unwrap();
-    worker
-        .state
-        .set_agent_orchestrates(orchestrator, Some(room))
-        .unwrap();
+    worker.state.bind_orchestrator(orchestrator, room).unwrap();
     let elsewhere = worker
         .state
         .create_agent(master, "codex-orch", Provider::Codex, dir.clone(), None)
         .unwrap();
-    worker
-        .state
-        .set_agent_orchestrates(elsewhere, Some(other))
-        .unwrap();
+    worker.state.bind_orchestrator(elsewhere, other).unwrap();
     worker
         .state
         .create_agent(master, "idle-orch", Provider::Codex, dir.clone(), None)
@@ -1875,31 +1856,35 @@ fn opening_a_session_with_a_legacy_work_room_named_master_keeps_the_name_unique(
 }
 
 #[test]
-fn deleting_an_orchestrated_room_frees_the_orchestrator_for_another_room() {
-    let (mut worker, room, _codex, dir) = fixture();
+fn deleting_a_room_deletes_its_orchestrator_from_master() {
+    let (mut worker, room, codex, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
     let next = worker.state.create_room("next").unwrap();
     let orchestrator = worker
         .state
         .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
-    worker
+    worker.state.bind_orchestrator(orchestrator, room).unwrap();
+    let other = worker
         .state
-        .set_agent_orchestrates(orchestrator, Some(room))
+        .create_agent(master, "next-orch", Provider::Codex, dir.clone(), None)
         .unwrap();
-    worker.state.delete_room(room).unwrap();
-    assert_eq!(worker.state.agent(orchestrator).unwrap().orchestrates, None);
-    assert_eq!(worker.state.agent(orchestrator).unwrap().room_id, master);
-    let assigned = call(
+    worker.state.bind_orchestrator(other, next).unwrap();
+
+    let deleted = call(
         &mut worker,
-        "orch-after-delete",
-        "agent.orchestrate",
-        json!({"agent":"orch","room":"next"}),
+        "delete-orchestrated",
+        "room.delete",
+        json!({"room":"test","confirm":true}),
     );
-    assert!(assigned.ok, "{assigned:?}");
+    assert!(deleted.ok, "{deleted:?}");
+    assert!(worker.state.room(room).is_none());
+    assert!(worker.state.agent(codex).is_none());
+    assert!(worker.state.agent(orchestrator).is_none());
+    // Another room's orchestrator is untouched.
     assert_eq!(
         worker.state.orchestrator_of(next).map(|a| a.id),
-        Some(orchestrator)
+        Some(other)
     );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -1964,10 +1949,7 @@ fn dev_send_as_an_ambiguous_room_agent_name_never_falls_back_to_the_orchestrator
         .state
         .create_agent(master, "dev", Provider::ClaudeCode, dir.clone(), None)
         .unwrap();
-    worker
-        .state
-        .set_agent_orchestrates(orchestrator, Some(room))
-        .unwrap();
+    worker.state.bind_orchestrator(orchestrator, room).unwrap();
     let sent = call(
         &mut worker,
         "as-ambiguous",
@@ -2100,35 +2082,6 @@ fn dev_master_agent_add_launches_with_its_prompt_and_leaves_the_pwd_alone() {
         "Claude takes a launch option"
     );
 
-    let other = worker.state.create_room("other").unwrap();
-    let moved = call(
-        &mut worker,
-        "orch-other",
-        "agent.orchestrate",
-        json!({"agent":"orch","room":"other"}),
-    );
-    assert!(moved.ok, "{moved:?}");
-    let cleared = call(
-        &mut worker,
-        "orch-none",
-        "agent.orchestrate",
-        json!({"agent":"orch","room":null}),
-    );
-    assert!(cleared.ok, "{cleared:?}");
-    let told = messages_to(&worker, orch);
-    assert_eq!(told.len(), 2, "{told:?}");
-    assert!(
-        told[0].contains(&format!("room other (id {})", other.0)),
-        "{told:?}"
-    );
-    assert!(told[1].contains("no longer orchestrate"), "{told:?}");
-    assert!(
-        prompt
-            == std::fs::read_to_string(launch_spool(&worker, orch).join("system-prompt.md"))
-                .unwrap(),
-        "the launch prompt is fixed"
-    );
-
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -2143,7 +2096,8 @@ fn dev_master_agent_add_sends_cursor_its_custom_prompt_as_the_first_message() {
         "agent.add",
         json!({
             "room":"master","name":"orch","provider":"cursor","consent_project_hooks":true,
-            "cwd": dir.to_string_lossy(), "system_prompt":"You are {{AGENT_NAME}}."
+            "cwd": dir.to_string_lossy(), "orchestrates":"test",
+            "system_prompt":"You are {{AGENT_NAME}}."
         }),
     );
     assert!(
@@ -2235,7 +2189,7 @@ fn an_adopted_codex_orchestrator_gets_its_prompt_as_the_first_message() {
         "agent.add",
         json!({
             "room":"master","name":"orch","provider":"codex","consent_project_hooks":true,
-            "cwd": dir.to_string_lossy(),
+            "cwd": dir.to_string_lossy(), "orchestrates":"test",
             "extra_args": "resume 01a10f9e-71ac-79e2-81b2-56f26341e7e4"
         }),
     );
@@ -2576,10 +2530,7 @@ fn dev_send_to_human_posts_an_orchestrator_report_in_master_history() {
             None,
         )
         .unwrap();
-    worker
-        .state
-        .set_agent_orchestrates(orchestrator, Some(room))
-        .unwrap();
+    worker.state.bind_orchestrator(orchestrator, room).unwrap();
     assert_ne!(worker.state.visible_room(), Some(master));
 
     let sent = call(

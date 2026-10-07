@@ -29,7 +29,6 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent add --room ROOM --name NAME --provider claude|codex|cursor --pwd PATH
             [--args STRING] [--consent-hooks] [--orchestrates ROOM]
             [--system-prompt TEXT | --system-prompt-file PATH]
-  agent orchestrate AGENT (--room ROOM | --none)
   agent read AGENT --source visible
   agent read AGENT [--source recent] --lines N
   agent dialog AGENT
@@ -55,8 +54,9 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
 
 Every command accepts --request-id STRING and emits one JSON response.
 ROOM and AGENT accept a name or numeric ID; ROOM also accepts master (any case) for the
-MASTER room. Only MASTER agents orchestrate, each at most one work room: use
-agent add --room master --orchestrates ROOM, or agent orchestrate to reassign or unassign.
+MASTER room. Every MASTER agent orchestrates exactly one work room for its whole life:
+agent add --room master --orchestrates ROOM is required, a work room has at most one
+orchestrator, and deleting the room also deletes its orchestrator.
 A MASTER agent launches with an orchestrator system prompt, the built-in one unless
 --system-prompt or --system-prompt-file replaces it; {{ROOM_NAME}} {{ROOM_ID}} {{AGENT_NAME}}
 {{DOCS}} are filled in. Reassigning sends the orchestrator a message naming its new room.
@@ -304,12 +304,6 @@ fn cli() -> Command {
                         .arg(value_arg("system-prompt-file").long("system-prompt-file")),
                 )
                 .subcommand(
-                    subcommand("orchestrate")
-                        .arg(value_arg("agent").required(true))
-                        .arg(value_arg("room").long("room").conflicts_with("none"))
-                        .arg(flag("none")),
-                )
-                .subcommand(
                     subcommand("read")
                         .arg(value_arg("agent").required(true))
                         .arg(
@@ -520,21 +514,6 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
                 }
                 ("agent.add", params)
             }
-            Some(("orchestrate", args)) => {
-                let room = match (args.get_one::<String>("room"), args.get_flag("none")) {
-                    (Some(room), false) => json!(room),
-                    (None, true) => Value::Null,
-                    _ => {
-                        return Err(
-                            "agent orchestrate needs exactly one of --room ROOM or --none".into(),
-                        )
-                    }
-                };
-                (
-                    "agent.orchestrate",
-                    json!({"agent": required(args, "agent")?, "room": room}),
-                )
-            }
             Some(("read", args)) => {
                 let mut params = json!({"agent": required(args, "agent")?});
                 let source = args.get_one::<String>("source").map(String::as_str);
@@ -733,21 +712,10 @@ mod tests {
     }
 
     #[test]
-    fn agent_orchestrate_requires_exactly_one_target() {
-        for args in [
-            &["agent", "orchestrate", "claude-orch"][..],
-            &[
-                "agent",
-                "orchestrate",
-                "claude-orch",
-                "--room",
-                "pr-123",
-                "--none",
-            ][..],
-        ] {
-            assert!(command(args).is_err(), "{args:?}");
-        }
-        assert!(HELP.contains("agent orchestrate AGENT (--room ROOM | --none)"));
+    fn orchestrators_have_no_reassign_command() {
+        assert!(command(&["agent", "orchestrate", "claude-orch", "--none"]).is_err());
+        assert!(!HELP.contains("agent orchestrate AGENT"));
+        assert!(HELP.contains("exactly one work room for its whole life"));
         assert!(HELP.contains("[--orchestrates ROOM]"));
         assert!(HELP.contains("[--system-prompt TEXT | --system-prompt-file PATH]"));
     }
@@ -886,16 +854,6 @@ mod tests {
                     "cwd": "/repo", "extra_args": "", "consent_project_hooks": false,
                     "system_prompt": "Run {{ROOM_NAME}}."
                 }),
-            ),
-            (
-                &["agent", "orchestrate", "claude-orch", "--room", "pr-123"],
-                "agent.orchestrate",
-                json!({"agent": "claude-orch", "room": "pr-123"}),
-            ),
-            (
-                &["agent", "orchestrate", "claude-orch", "--none"],
-                "agent.orchestrate",
-                json!({"agent": "claude-orch", "room": null}),
             ),
             (
                 &["room", "sound", "master", "--off"],

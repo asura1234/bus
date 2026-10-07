@@ -142,10 +142,6 @@ fn an_adopted_session_renders_the_prompt_fresh_or_gets_it_as_a_message() {
 }
 
 #[test]
-fn messages_name_the_new_room_or_its_absence() {
-    let moved = reassigned_message("orch", Some(("pr-2", RoomId(2))));
-    assert!(moved.contains("room pr-2 (id 2)"), "{moved}");
-    assert!(moved.contains("bus send --room 2 --as orch"), "{moved}");
-    assert!(reassigned_message("orch", None).contains("no longer orchestrate"));
+fn prompt_message_carries_the_prompt_text() {
     assert!(prompt_message("Be brief.").ends_with("\n\nBe brief."));
 }

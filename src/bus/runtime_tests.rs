@@ -1997,9 +1997,7 @@ fn master_session_saved_before_sound_and_compactions_keeps_its_orchestrators() {
     let orchestrator = state
         .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
         .unwrap();
-    state
-        .set_agent_orchestrates(orchestrator, Some(work))
-        .unwrap();
+    state.bind_orchestrator(orchestrator, work).unwrap();
     let mut value = serde_json::to_value(&state).unwrap();
     for room in value["rooms"].as_object_mut().unwrap().values_mut() {
         room.as_object_mut().unwrap().remove("sound");

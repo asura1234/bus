@@ -354,9 +354,7 @@ mod tests {
                 None,
             )
             .expect("agent");
-        state
-            .set_agent_orchestrates(agent, Some(work))
-            .expect("assign");
+        state.bind_orchestrator(agent, work).expect("assign");
         state.record_compaction(agent, 50).expect("compaction");
         store.save(&state).expect("save");
 
