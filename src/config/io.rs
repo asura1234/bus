@@ -135,9 +135,8 @@ impl Config {
 
         match deserialize_with_ignored::<Config, _>(toml::Deserializer::new(&content)) {
             Ok((config, ignored_keys)) => {
-                let (unknown_sections, mut diagnostics) =
-                    unknown_top_level_sections_from_str(&content);
-                diagnostics.extend(unknown_config_key_diagnostics(
+                let (unknown_sections, mut unknown) = unknown_top_level_sections_from_str(&content);
+                unknown.extend(unknown_config_key_diagnostics(
                     ignored_keys
                         .into_iter()
                         .filter(|path| {
@@ -146,10 +145,20 @@ impl Config {
                         .collect(),
                     None,
                 ));
-                diagnostics.extend(config.collect_diagnostics());
+                if !unknown.is_empty() {
+                    warn!(unknown = ?unknown, "config has unknown keys, using defaults");
+                    return LoadedConfig {
+                        config: Self::default(),
+                        diagnostics: unknown
+                            .into_iter()
+                            .map(|diagnostic| format!("{diagnostic}; using defaults"))
+                            .collect(),
+                        invalid_sections: Vec::new(),
+                    };
+                }
                 LoadedConfig {
+                    diagnostics: config.collect_diagnostics(),
                     config,
-                    diagnostics,
                     invalid_sections: Vec::new(),
                 }
             }
@@ -217,11 +226,6 @@ pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
         } else {
             " invalid; keeping current config"
         }
-    } else if diagnostics
-        .iter()
-        .all(|diagnostic| diagnostic.starts_with("unknown config key "))
-    {
-        " has unknown keys"
     } else {
         ""
     };
@@ -261,8 +265,9 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     })?;
 
     let mut config = Config::default();
-    let mut diagnostics = unknown_top_level_section_diagnostics(table);
-    diagnostics.extend(unknown_top_level_config_key_diagnostics(table));
+    let mut unknown = unknown_top_level_section_diagnostics(table);
+    unknown.extend(unknown_top_level_config_key_diagnostics(table));
+    let mut diagnostics = Vec::new();
     let mut invalid_sections = Vec::new();
 
     if let Some(value) = table.get("onboarding") {
@@ -278,6 +283,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         table,
         "theme",
         "theme config",
+        &mut unknown,
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.theme = section,
@@ -286,6 +292,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         table,
         "terminal",
         "terminal config",
+        &mut unknown,
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.terminal = section,
@@ -294,6 +301,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         table,
         "session",
         "session config",
+        &mut unknown,
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.session = section,
@@ -302,6 +310,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         table,
         "server",
         "server config",
+        &mut unknown,
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.server = section,
@@ -310,6 +319,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         table,
         "ui",
         "ui config",
+        &mut unknown,
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.ui = section,
@@ -318,6 +328,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         table,
         "advanced",
         "advanced config",
+        &mut unknown,
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.advanced = section,
@@ -326,10 +337,20 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         table,
         "experimental",
         "experimental config",
+        &mut unknown,
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.experimental = section,
     );
+
+    // An unknown key is a config error: the whole reload is rejected and the running config stays.
+    if !unknown.is_empty() {
+        return Err(unknown
+            .into_iter()
+            .map(|diagnostic| format!("{diagnostic}; keeping current config"))
+            .chain(diagnostics)
+            .collect());
+    }
 
     diagnostics.extend(config.theme.diagnostics());
 
@@ -386,10 +407,10 @@ fn unknown_top_level_section_diagnostic(key: &str, value: &toml::Value) -> Optio
 
     if key == "toast" {
         Some(format!(
-            "unknown config section {header}; did you mean [ui.toast]? ignoring section"
+            "unknown config section {header} (did you mean [ui.toast]?)"
         ))
     } else {
-        Some(format!("unknown config section {header}; ignoring section"))
+        Some(format!("unknown config section {header}"))
     }
 }
 
@@ -471,12 +492,7 @@ fn unknown_config_key_diagnostics(
     paths.dedup();
     paths
         .into_iter()
-        .map(|path| {
-            format!(
-                "unknown config key {}; ignoring key",
-                format_config_key_path(&path)
-            )
-        })
+        .map(|path| format!("unknown config key {}", format_config_key_path(&path)))
         .collect()
 }
 
@@ -498,6 +514,7 @@ fn load_live_section<T>(
     table: &toml::map::Map<String, toml::Value>,
     section: &'static str,
     label: &str,
+    unknown: &mut Vec<String>,
     diagnostics: &mut Vec<String>,
     invalid_sections: &mut Vec<String>,
     apply: impl FnOnce(T),
@@ -510,7 +527,7 @@ fn load_live_section<T>(
 
     match deserialize_with_ignored(value.clone()) {
         Ok((section_config, ignored_keys)) => {
-            diagnostics.extend(unknown_config_key_diagnostics(ignored_keys, Some(section)));
+            unknown.extend(unknown_config_key_diagnostics(ignored_keys, Some(section)));
             apply(section_config);
         }
         Err(err) => {
@@ -544,16 +561,21 @@ mod tests {
     }
 
     #[test]
-    fn config_diagnostic_summary_reports_unknown_keys_compactly() {
+    fn config_diagnostic_summary_reports_unknown_keys_as_invalid() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
-        let diagnostics = vec![
-            "unknown config key ui.mouse_captur; ignoring key".to_string(),
-            "unknown config key keys.new_tabb; ignoring key".to_string(),
+        let startup = vec![
+            "unknown config key ui.mouse_captur; using defaults".to_string(),
+            "unknown config key keys.new_tabb; using defaults".to_string(),
         ];
-
         assert_eq!(
-            config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml has unknown keys; herdr config check")
+            config_diagnostic_summary(&startup).as_deref(),
+            Some("config.toml invalid; using defaults; herdr config check")
+        );
+
+        let reload = vec!["unknown config key ui.mouse_captur; keeping current config".to_string()];
+        assert_eq!(
+            config_diagnostic_summary(&reload).as_deref(),
+            Some("config.toml invalid; keeping current config; herdr config check")
         );
     }
 
@@ -562,7 +584,7 @@ mod tests {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let diagnostics = vec![
             "invalid ui config: invalid type: string; keeping current ui settings".to_string(),
-            "unknown config key keys.new_tabb; ignoring key".to_string(),
+            "theme.name = \"catppucin\" is not a known theme".to_string(),
         ];
 
         assert_eq!(
@@ -672,8 +694,8 @@ name = "catppucin"
     }
 
     #[test]
-    fn load_live_config_warns_about_unknown_top_level_sections() {
-        let loaded = load_live_config_from_str(
+    fn load_live_config_rejects_unknown_top_level_sections() {
+        let rejected = load_live_config_from_str(
             r#"
 [toast]
 delivery = "system"
@@ -682,22 +704,19 @@ delivery = "system"
 delivery = "herdr"
 "#,
         )
-        .unwrap();
+        .unwrap_err();
 
         assert_eq!(
-            loaded.diagnostics,
-            vec!["unknown config section [toast]; did you mean [ui.toast]? ignoring section"]
-        );
-        assert!(loaded.invalid_sections.is_empty());
-        assert_eq!(
-            loaded.config.ui.toast.delivery,
-            super::super::ToastDelivery::Herdr
+            rejected,
+            vec![
+                "unknown config section [toast] (did you mean [ui.toast]?); keeping current config"
+            ]
         );
     }
 
     #[test]
-    fn load_live_config_warns_about_unknown_keys_and_applies_known_siblings() {
-        let loaded = load_live_config_from_str(
+    fn load_live_config_rejects_every_unknown_key() {
+        let rejected = load_live_config_from_str(
             r##"
 plugin = []
 
@@ -716,41 +735,35 @@ mouse_captur = true
 [ui.toast]
 delivery = "herdr"
 delivry = "system"
-
-[ui.sidebar.agents.rows_by_agent]
-claude = [["terminal_title"]]
 "##,
         )
-        .unwrap();
+        .unwrap_err();
 
         assert_eq!(
-            loaded.diagnostics,
+            rejected,
             vec![
-                "unknown config key plugin; ignoring key",
-                "unknown config key theme.custom.accentt; ignoring key",
-                "unknown config key ui.\"foo.?.bar\"; ignoring key",
-                "unknown config key ui.\"foo.bar\"; ignoring key",
-                "unknown config key ui.mouse_captur; ignoring key",
-                "unknown config key ui.toast.delivry; ignoring key",
+                "unknown config key plugin; keeping current config",
+                "unknown config key theme.custom.accentt; keeping current config",
+                "unknown config key ui.\"foo.?.bar\"; keeping current config",
+                "unknown config key ui.\"foo.bar\"; keeping current config",
+                "unknown config key ui.mouse_captur; keeping current config",
+                "unknown config key ui.toast.delivry; keeping current config",
             ]
-        );
-        assert!(loaded.invalid_sections.is_empty());
-        assert_eq!(loaded.config.advanced.scrollback_limit_bytes, 42);
-        assert!(!loaded.config.ui.mouse_capture);
-        assert_eq!(
-            loaded.config.ui.toast.delivery,
-            super::super::ToastDelivery::Herdr
         );
     }
 
     #[test]
-    fn load_live_config_warns_about_retired_herdr_keys() {
-        let loaded = load_live_config_from_str(
+    fn load_live_config_rejects_retired_keys() {
+        let rejected = load_live_config_from_str(
             r#"
 [ui]
 agent_panel_scope = "current"
 status_indicators = "symbols"
 agent_panel_sort = "priority"
+sidebar_width = 30
+
+[ui.sidebar.agents]
+rows = [["agent"]]
 
 [advanced]
 scrollback_lines = 100
@@ -759,20 +772,18 @@ scrollback_lines = 100
 kitty_graphics = false
 "#,
         )
-        .unwrap();
+        .unwrap_err();
 
         assert_eq!(
-            loaded.diagnostics,
+            rejected,
             vec![
-                "unknown config key ui.agent_panel_scope; ignoring key",
-                "unknown config key ui.status_indicators; ignoring key",
-                "unknown config key advanced.scrollback_lines; ignoring key",
-                "unknown config key experimental.kitty_graphics; ignoring key",
+                "unknown config key ui.agent_panel_scope; keeping current config",
+                "unknown config key ui.sidebar; keeping current config",
+                "unknown config key ui.sidebar_width; keeping current config",
+                "unknown config key ui.status_indicators; keeping current config",
+                "unknown config key advanced.scrollback_lines; keeping current config",
+                "unknown config key experimental.kitty_graphics; keeping current config",
             ]
-        );
-        assert_eq!(
-            loaded.config.ui.agent_panel_sort,
-            super::super::AgentPanelSortConfig::Priority
         );
     }
 
@@ -794,14 +805,18 @@ mouse_captur = true
     }
 
     #[test]
-    fn startup_config_warns_about_retired_agent_panel_scope() {
+    fn startup_config_falls_back_to_defaults_on_a_retired_key() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let _bus = crate::config::test_without_bus_env(&_guard);
         let path = std::env::temp_dir().join(format!(
             "herdr-config-retired-agent-panel-scope-{}.toml",
             std::process::id()
         ));
-        std::fs::write(&path, "[ui]\nagent_panel_scope = \"all\"\n").unwrap();
+        std::fs::write(
+            &path,
+            "[ui]\nagent_panel_scope = \"all\"\nagent_panel_sort = \"priority\"\n",
+        )
+        .unwrap();
         std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
 
         let loaded = Config::load();
@@ -811,12 +826,16 @@ mouse_captur = true
 
         assert_eq!(
             loaded.diagnostics,
-            vec!["unknown config key ui.agent_panel_scope; ignoring key"]
+            vec!["unknown config key ui.agent_panel_scope; using defaults"]
+        );
+        assert_eq!(
+            loaded.config.ui.agent_panel_sort,
+            Config::default().ui.agent_panel_sort
         );
     }
 
     #[test]
-    fn startup_config_load_warns_about_unknown_top_level_sections() {
+    fn startup_config_falls_back_to_defaults_on_an_unknown_section() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let _bus = crate::config::test_without_bus_env(&_guard);
         let path = std::env::temp_dir().join(format!(
@@ -840,11 +859,11 @@ delivery = "system"
 
         assert_eq!(
             loaded.diagnostics,
-            vec!["unknown config section [[plugin]]; ignoring section"]
+            vec!["unknown config section [[plugin]]; using defaults"]
         );
         assert_eq!(
             loaded.config.ui.toast.delivery,
-            super::super::ToastDelivery::System
+            Config::default().ui.toast.delivery
         );
 
         std::env::remove_var(CONFIG_PATH_ENV_VAR);

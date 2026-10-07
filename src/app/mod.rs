@@ -354,8 +354,6 @@ impl App {
             headless_size: config.headless_size(),
             agent_panel_sort,
             agent_view_override: None,
-            sidebar_agents: config.ui.sidebar.agents.clone(),
-            sidebar_spaces: config.ui.sidebar.spaces.clone(),
             next_agent_state_change_seq: 0,
             confirm_close: config.ui.confirm_close,
             pane_borders: config.ui.pane_borders,
@@ -505,34 +503,23 @@ impl App {
             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
 
         if !invalid_section("ui") {
-            // Validate sidebar bounds before they reach any `u16::clamp` call.
-            // On `min > max`, treat the entire `[ui]` section as invalid: keep
-            // the previous settings and skip the section so the re-clamp below
-            // — and every subsequent render/drag — can never panic.
-            if let Some(diagnostic) = config.invalid_sidebar_bounds_diagnostic() {
-                diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
-            } else {
-                diagnostics.extend(config.ui.sound.diagnostics());
-                diagnostics.extend(crate::config::window_title_diagnostics(
-                    &config.ui.window_title,
-                ));
+            diagnostics.extend(config.ui.sound.diagnostics());
+            diagnostics.extend(crate::config::window_title_diagnostics(
+                &config.ui.window_title,
+            ));
 
-                self.loaded_host_cursor = config.ui.host_cursor;
-                self.state.confirm_close = config.ui.confirm_close;
-                self.state.pane_borders = config.ui.pane_borders;
-                self.state.pane_outer_borders = config.ui.pane_outer_borders;
-                self.state.pane_scrollbars = config.ui.pane_scrollbars;
-                self.state.pane_gaps = config.ui.pane_gaps;
-                self.state.show_agent_labels_on_pane_borders =
-                    config.ui.show_agent_labels_on_pane_borders;
-                self.configure_window_title(&config.ui.window_title);
-                self.state.agent_panel_sort =
-                    agent_panel_sort_from_config(config.ui.agent_panel_sort);
-                self.state.sidebar_agents = config.ui.sidebar.agents.clone();
-                self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
-                self.state.sound = config.ui.sound.clone();
-                self.state.toast_config = config.ui.toast.clone();
-            }
+            self.loaded_host_cursor = config.ui.host_cursor;
+            self.state.confirm_close = config.ui.confirm_close;
+            self.state.pane_borders = config.ui.pane_borders;
+            self.state.pane_outer_borders = config.ui.pane_outer_borders;
+            self.state.pane_scrollbars = config.ui.pane_scrollbars;
+            self.state.pane_gaps = config.ui.pane_gaps;
+            self.state.show_agent_labels_on_pane_borders =
+                config.ui.show_agent_labels_on_pane_borders;
+            self.configure_window_title(&config.ui.window_title);
+            self.state.agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
+            self.state.sound = config.ui.sound.clone();
+            self.state.toast_config = config.ui.toast.clone();
         }
 
         let graphics_config_valid = !invalid_section("terminal")
@@ -1098,113 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn reload_config_updates_sidebar_token_rows() {
-        let _guard = config_env_lock().lock().unwrap();
-        let _bus = crate::config::test_without_bus_env(&_guard);
-        let path = temp_config_path("reload-config-sidebar-tokens");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-        let mut app = test_app();
-
-        std::fs::write(
-            &path,
-            "[ui.sidebar.agents]\nrows = [[\"state_icon\", \"$summary\"]]\nrow_gap = 1\n\n[ui.sidebar.agents.rows_by_agent]\nclaude = [[\"terminal_title_stripped\"]]\n\n[ui.sidebar.spaces]\nrows = [[\"workspace\", \"$jj_status\"]]\nrow_gap = 3\n",
-        )
-        .unwrap();
-        let report = app.reload_config();
-
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
-        assert_eq!(
-            app.state.sidebar_agents.rows,
-            vec![vec![
-                crate::config::AgentSidebarToken::StateIcon,
-                crate::config::AgentSidebarToken::Custom("summary".into()),
-            ]]
-        );
-        assert_eq!(
-            app.state.sidebar_agents.rows_by_agent["claude"],
-            vec![vec![
-                crate::config::AgentSidebarToken::TerminalTitleStripped,
-            ]]
-        );
-        assert_eq!(app.state.sidebar_agents.row_gap, 1);
-        assert_eq!(
-            app.state.sidebar_spaces.rows,
-            vec![vec![
-                crate::config::SpaceSidebarToken::Workspace,
-                crate::config::SpaceSidebarToken::Custom("jj_status".into()),
-            ]]
-        );
-        assert_eq!(app.state.sidebar_spaces.row_gap, 3);
-
-        let conditional = "[ui.sidebar.agents]\nrows = [[{ token = '$load', rules = [{ gt = 80, bold = true }] }]]\n";
-        std::fs::write(&path, conditional).unwrap();
-        assert_eq!(
-            app.reload_config().status,
-            crate::config::ConfigReloadStatus::Applied
-        );
-        let previous = app.state.sidebar_agents.clone();
-        std::fs::write(&path, conditional.replace("gt = 80", "gt = 'invalid'")).unwrap();
-        assert_eq!(
-            app.reload_config().status,
-            crate::config::ConfigReloadStatus::Partial
-        );
-        assert_eq!(app.state.sidebar_agents, previous);
-
-        let previous_agents = app.state.sidebar_agents.clone();
-        std::fs::write(
-            &path,
-            "[ui.sidebar.agents]\nrows = [[\"agent\"]]\n\n[ui.sidebar.agents.rows_by_agent]\nclaude-code = [[\"terminal_title\"]]\n",
-        )
-        .unwrap();
-        let report = app.reload_config();
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
-        assert_eq!(app.state.sidebar_agents, previous_agents);
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn reload_config_invalid_sidebar_bounds_keeps_previous_ui_and_returns_partial() {
-        let _guard = config_env_lock().lock().unwrap();
-        let _bus = crate::config::test_without_bus_env(&_guard);
-        let path = temp_config_path("reload-config-invalid-sidebar-bounds");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
-
-        let mut app = test_app();
-        let original_pane_borders = app.state.pane_borders;
-        // Pair the bad bounds with another `[ui]` field change to confirm the
-        // entire section is treated as invalid (not just the bounds).
-        std::fs::write(
-            &path,
-            "[ui]\nsidebar_min_width = 50\nsidebar_max_width = 30\npane_borders = \"always\"\n",
-        )
-        .unwrap();
-
-        let report = app.reload_config();
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
-        assert!(report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.contains("sidebar_min_width")
-                && diagnostic.contains("sidebar_max_width")
-                && diagnostic.contains("greater")
-        }));
-        assert_eq!(
-            app.state.pane_borders, original_pane_borders,
-            "[ui] is treated as invalid on bad bounds; pane_borders must not apply"
-        );
-        assert_eq!(
-            app.state.config_diagnostic.as_deref(),
-            Some("config.toml; herdr config check")
-        );
-
-        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn reload_config_applies_known_sibling_and_summarizes_unknown_key() {
+    fn reload_config_rejects_an_unknown_key_and_keeps_the_current_config() {
         let _guard = config_env_lock().lock().unwrap();
         let _bus = crate::config::test_without_bus_env(&_guard);
         let path = temp_config_path("reload-config-unknown-key");
@@ -1212,7 +1093,7 @@ mod tests {
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         let mut app = test_app();
-        let target_pane_borders = crate::config::PaneBordersConfig::Always;
+        let original_pane_borders = app.state.pane_borders;
         std::fs::write(
             &path,
             "[ui]\npane_borders = \"always\"\nmouse_captur = false\n",
@@ -1221,15 +1102,15 @@ mod tests {
 
         let report = app.reload_config();
 
-        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Failed);
         assert_eq!(
             report.diagnostics,
-            vec!["unknown config key ui.mouse_captur; ignoring key"]
+            vec!["unknown config key ui.mouse_captur; keeping current config"]
         );
-        assert_eq!(app.state.pane_borders, target_pane_borders);
+        assert_eq!(app.state.pane_borders, original_pane_borders);
         assert_eq!(
             app.state.config_diagnostic.as_deref(),
-            Some("config.toml has unknown keys; herdr config check")
+            Some("config.toml invalid; keeping current config; herdr config check")
         );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);

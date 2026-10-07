@@ -4,8 +4,8 @@ use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
-    SidebarConfig, SoundConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
-    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    SoundConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES,
+    DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
@@ -59,14 +59,6 @@ pub enum HostCursorModeConfig {
     Auto,
     Native,
     Drawn,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SidebarCollapsedModeConfig {
-    #[default]
-    Compact,
-    Hidden,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -211,19 +203,6 @@ pub struct ConfigReloadReport {
     pub diagnostics: Vec<String>,
 }
 
-/// Validate `[ui]` sidebar bound configuration.
-///
-/// Returns `Some((min, max))` when `min <= max`, `None` otherwise. The two
-/// values are funneled through this helper before they reach any
-/// `u16::clamp(min, max)` call site (`u16::clamp` panics when `min > max`).
-pub fn validated_sidebar_bounds(min: u16, max: u16) -> Option<(u16, u16)> {
-    if min <= max {
-        Some((min, max))
-    } else {
-        None
-    }
-}
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -274,15 +253,6 @@ impl PaneBordersConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
-    pub sidebar_width: u16,
-    /// Minimum sidebar width (columns) when expanded. Default: 18.
-    pub sidebar_min_width: u16,
-    /// Maximum sidebar width (columns) when expanded. Default: 36.
-    pub sidebar_max_width: u16,
-    /// Start with the sidebar collapsed. Default: false.
-    pub sidebar_start_collapsed: bool,
-    /// Collapsed sidebar presentation. Default: compact.
-    pub sidebar_collapsed_mode: SidebarCollapsedModeConfig,
     /// Terminal width at or below which Herdr uses the mobile single-column layout. Default: 64.
     pub mobile_width_threshold: u16,
     /// Capture mouse input for Herdr's mouse UI. Default: true.
@@ -325,8 +295,6 @@ pub struct UiConfig {
     pub window_title: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
-    /// Expanded sidebar row composition.
-    pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
     /// Accepts hex (#89b4fa), named colors (cyan, blue), or RGB (rgb(137,180,250)).
     pub accent: String,
@@ -423,11 +391,6 @@ pub struct ExperimentalConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
-            sidebar_width: 26,
-            sidebar_min_width: 18,
-            sidebar_max_width: 36,
-            sidebar_start_collapsed: false,
-            sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
             mouse_capture: true,
             copy_on_select: true,
@@ -447,7 +410,6 @@ impl Default for UiConfig {
             tab_bar_position: TabBarPositionConfig::Top,
             window_title: super::window_title::default_window_title(),
             agent_panel_sort: AgentPanelSortConfig::Spaces,
-            sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
             sound: SoundConfig::default(),
@@ -753,10 +715,8 @@ cjk_ime_agents = ["claude", "codex"]
     }
 
     #[test]
-    fn sidebar_bounds_default_and_parse() {
+    fn mobile_width_threshold_default_and_parse() {
         let default_config = Config::default();
-        assert_eq!(default_config.ui.sidebar_min_width, 18);
-        assert_eq!(default_config.ui.sidebar_max_width, 36);
         assert_eq!(
             default_config.ui.mobile_width_threshold,
             DEFAULT_MOBILE_WIDTH_THRESHOLD
@@ -764,55 +724,10 @@ cjk_ime_agents = ["claude", "codex"]
 
         let toml = r#"
 [ui]
-sidebar_min_width = 12
-sidebar_max_width = 80
 mobile_width_threshold = 96
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.sidebar_min_width, 12);
-        assert_eq!(config.ui.sidebar_max_width, 80);
         assert_eq!(config.ui.mobile_width_threshold, 96);
-    }
-
-    #[test]
-    fn sidebar_start_collapsed_defaults_off_and_parses_on() {
-        let default_config = Config::default();
-        assert!(!default_config.ui.sidebar_start_collapsed);
-
-        let toml = r#"
-[ui]
-sidebar_start_collapsed = true
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.ui.sidebar_start_collapsed);
-    }
-
-    #[test]
-    fn sidebar_collapsed_mode_defaults_compact_and_parses_hidden() {
-        let default_config = Config::default();
-        assert_eq!(
-            default_config.ui.sidebar_collapsed_mode,
-            SidebarCollapsedModeConfig::Compact
-        );
-
-        let toml = r#"
-[ui]
-sidebar_collapsed_mode = "hidden"
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(
-            config.ui.sidebar_collapsed_mode,
-            SidebarCollapsedModeConfig::Hidden
-        );
-    }
-
-    #[test]
-    fn validated_sidebar_bounds_rejects_inverted() {
-        assert_eq!(validated_sidebar_bounds(18, 36), Some((18, 36)));
-        assert_eq!(validated_sidebar_bounds(20, 20), Some((20, 20)));
-        assert_eq!(validated_sidebar_bounds(0, u16::MAX), Some((0, u16::MAX)));
-        assert_eq!(validated_sidebar_bounds(50, 30), None);
-        assert_eq!(validated_sidebar_bounds(u16::MAX, 0), None);
     }
 
     #[test]

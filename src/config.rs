@@ -1,7 +1,6 @@
 mod io;
 mod key_combo;
 mod model;
-mod sidebar;
 mod sound;
 mod theme;
 mod window_title;
@@ -9,12 +8,10 @@ mod window_title;
 pub use self::{
     io::{config_diagnostic_summary, config_dir, load_live_config, state_dir},
     model::{
-        validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
-        ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, PaneBordersConfig,
-        ShellModeConfig, ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
-        MAX_TOAST_DELAY_SECONDS,
+        AgentPanelSortConfig, Config, ConfigReloadReport, ConfigReloadStatus, HostCursorModeConfig,
+        NewTerminalCwdConfig, PaneBordersConfig, ShellModeConfig, ToastClipboardPosition,
+        ToastConfig, ToastDelivery, ToastHerdrPosition, MAX_TOAST_DELAY_SECONDS,
     },
-    sidebar::{AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SpacesSidebarConfig},
     sound::SoundConfig,
     theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig},
     window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
@@ -22,7 +19,7 @@ pub use self::{
 
 pub(crate) use self::key_combo::parse_key_combo;
 #[cfg(test)]
-pub(crate) use self::{io::config_path, sidebar::SpaceSidebarToken, theme::THEME_NAMES};
+pub(crate) use self::{io::config_path, theme::THEME_NAMES};
 pub(crate) use self::{
     theme::canonical_theme_name,
     window_title::{sanitize_window_title_text, window_title_diagnostics},
@@ -96,7 +93,6 @@ impl Config {
             .into_iter()
             .chain(self.ui.sound.diagnostics())
             .chain(window_title_diagnostics(&self.ui.window_title))
-            .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
             .collect()
     }
@@ -116,17 +112,6 @@ impl Config {
                 self.server.headless_cols, self.server.headless_rows
             )
         })
-    }
-
-    pub(crate) fn invalid_sidebar_bounds_diagnostic(&self) -> Option<String> {
-        validated_sidebar_bounds(self.ui.sidebar_min_width, self.ui.sidebar_max_width)
-            .is_none()
-            .then(|| {
-                format!(
-                    "ui.sidebar_min_width ({}) is greater than sidebar_max_width ({})",
-                    self.ui.sidebar_min_width, self.ui.sidebar_max_width
-                )
-            })
     }
 }
 
