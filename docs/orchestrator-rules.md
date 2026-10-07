@@ -9,6 +9,13 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   `bus send --room master --as YOUR_NAME --to human --text "..."`. Terminal-only
   output does not count. *Why:* the human reads MASTER, not your terminal; only
   your final reply to a human message reaches MASTER by itself.
+- **Dispatch every task with `bus send --async` in the background.** Run
+  `bus send --room ROOM --as YOUR_NAME --to AGENT --async --text "..."` as a
+  background tool call (Claude Code: Bash with `run_in_background`; Cursor: a
+  background shell with timeout 0). When it exits, your CLI wakes you; read the
+  reply in the room with `bus history --room ROOM`. Never sit idle waiting
+  for a worker. *Why:* `--async` has no time limit and returns only after every
+  recipient worked and went idle, so you stay free for the human meanwhile.
 - **Delegate everything; write no code.** Send every task to an agent in your
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the human.

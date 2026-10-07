@@ -2681,7 +2681,10 @@ fn message_status_reports_whether_each_recipient_turn_ended() {
         json!({ "message": message }),
     );
     // Still queued: `send --async` keeps following until this turns true.
-    assert_eq!(status.result["requests"][0]["turn_ended"], false, "{status:?}");
+    assert_eq!(
+        status.result["requests"][0]["turn_ended"], false,
+        "{status:?}"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -287,6 +287,12 @@ pub(crate) struct Agent {
     pub(crate) details_disclosed: bool,
     pub(crate) status: RuntimeStatus,
     pub(crate) status_revision: u64,
+    /// The status revision at which the agent was last seen Working or
+    /// Blocked. `send --async` compares it with a request's submission
+    /// revision to tell that the agent worked on the message and then went
+    /// idle, without relying on reply capture.
+    #[serde(default)]
+    pub(crate) busy_revision: u64,
     /// A numbered choice dialog is visible; answer it with `agent choose`.
     #[serde(default)]
     pub(crate) dialog: bool,
@@ -980,6 +986,7 @@ impl BusState {
                 details_disclosed: false,
                 status: RuntimeStatus::Launching,
                 status_revision: 0,
+                busy_revision: 0,
                 dialog: false,
                 dialog_notice: None,
                 dialog_answered: false,
@@ -1655,6 +1662,9 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent))?;
         agent_state.status = status;
         agent_state.status_revision = revision;
+        if matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked) {
+            agent_state.busy_revision = revision;
+        }
         if status == RuntimeStatus::Idle {
             self.complete_pending_final(agent, now_ms)?;
             let settled_idle = self.unbound_request(agent).is_some_and(|request| {
@@ -1667,6 +1677,29 @@ impl BusState {
             }
         }
         Ok(())
+    }
+
+    /// Whether `request`'s agent took the message and finished its turn: the
+    /// agent was seen Working or Blocked after Bus submitted the message and
+    /// has been seen Idle since. A captured reply also counts. Status
+    /// transitions decide it, not reply capture, which can miss a reply.
+    pub(crate) fn turn_ended(&self, request: &Request) -> bool {
+        if request.phase == RequestPhase::Completed {
+            return true;
+        }
+        // Submitting counts too: an uncertain submit stays Submitting until a
+        // hook binds it, while the agent may already be working on it.
+        if !matches!(
+            request.phase,
+            RequestPhase::Submitting | RequestPhase::Active
+        ) {
+            return false;
+        }
+        self.agents.get(&request.agent_id).is_some_and(|agent| {
+            agent.busy_revision > request.submission_status_revision
+                && agent.status == RuntimeStatus::Idle
+                && agent.status_revision > agent.busy_revision
+        })
     }
 
     /// The agent's current request when Bus typed it but never saw it start:
@@ -3408,6 +3441,43 @@ mod tests {
                 .files,
             prompt.files
         );
+    }
+
+    #[test]
+    fn turn_ended_needs_work_after_submission_then_idle_and_ignores_reply_capture() {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        state
+            .observe_status(agent, RuntimeStatus::Working, 1)
+            .unwrap();
+        state.observe_status(agent, RuntimeStatus::Idle, 2).unwrap();
+        let first = submit_text(&mut state, room, agent, "first");
+        let second = submit_text(&mut state, room, agent, "second");
+        let ended = |state: &BusState, id| state.turn_ended(state.request(id).unwrap());
+        assert!(!ended(&state, first), "queued");
+
+        start_request(&mut state, first, "launch-codex", 5);
+        // Work seen before the submission does not count, nor idle without work.
+        state.observe_status(agent, RuntimeStatus::Idle, 3).unwrap();
+        assert!(!ended(&state, first));
+        state
+            .observe_status(agent, RuntimeStatus::Working, 4)
+            .unwrap();
+        assert!(!ended(&state, first));
+        // A blocked agent is not idle.
+        state
+            .observe_status(agent, RuntimeStatus::Blocked, 5)
+            .unwrap();
+        assert!(!ended(&state, first));
+        state.observe_status(agent, RuntimeStatus::Idle, 6).unwrap();
+        // No reply was captured, yet the turn ended.
+        assert_eq!(state.request(first).unwrap().phase, RequestPhase::Active);
+        assert!(ended(&state, first));
+        assert!(!ended(&state, second), "the next message is still queued");
+
+        state.requests.get_mut(&first).unwrap().phase = RequestPhase::Completed;
+        assert!(ended(&state, first), "a captured reply counts too");
+        state.requests.get_mut(&first).unwrap().phase = RequestPhase::Abandoned;
+        assert!(!ended(&state, first));
     }
 
     #[test]

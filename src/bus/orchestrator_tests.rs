@@ -41,6 +41,10 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
     // Reports the human should see must reach MASTER chat, not only the terminal.
     assert!(text.contains("bus send --room master --as orch --to human --text"));
+    // Tasks go out with --async in the background, never a blocking wait.
+    assert!(text.contains("bus send --room 7 --as orch --to AGENT --async --text"));
+    assert!(text.contains("run_in_background"));
+    assert!(!text.contains("bus wait"));
     let unassigned = fill(DEFAULT_PROMPT, &values(None, data));
     assert!(unassigned.contains("Your room: none yet"), "{unassigned}");
 }
@@ -58,6 +62,7 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     let rules = std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap();
     assert!(rules.starts_with("# Orchestrator rules"), "{rules}");
     assert!(rules.contains("bus send --room master --as YOUR_NAME --to human --text"));
+    assert!(rules.contains("bus send --room ROOM --as YOUR_NAME --to AGENT --async"));
     let guide = std::fs::read_to_string(root.join("workflow-create.md")).unwrap();
     assert!(guide.starts_with("# workflow-create"), "{guide}");
     assert!(!guide.contains("description:"));

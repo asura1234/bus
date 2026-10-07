@@ -40,7 +40,7 @@ pub const HELP: &str = "Developer commands (require an already running Bus --dev
   agent details AGENT (--on | --off)
   agent setup-confirm AGENT --confirm
   agent delete AGENT --confirm
-  send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue]
+  send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue] [--async]
   message status MESSAGE_ID
   request recover REQUEST_ID --confirm
   wait --message MESSAGE_ID [--timeout SECONDS]
@@ -85,6 +85,11 @@ state includes each agent's compactions and per-provider usage (5-hour and weekl
 Claude usage comes from its status line; Codex usage is read after each turn.
 Usage status \"unknown\" means data is missing or stale, never that the allowance is unused.
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
+send --async prints the send receipt, then blocks with no time limit until every recipient
+has worked on the message and gone idle again (a blocked recipient keeps it waiting), and
+prints the final message status. It exits non-zero only if the send fails or Bus abandons
+a recipient's request. Orchestrators run it as a background tool call and read the reply
+with history when it exits.
 message status, wait and history keep raw Markdown and list attached files as absolute paths.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.
 agent read also works while an agent is launching (e.g. to see a provider trust prompt);
@@ -120,16 +125,46 @@ fn next_request_id() -> String {
 fn run_with(
     args: &[String],
     output: &mut impl Write,
-    send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
+    mut send: impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
+) -> io::Result<()> {
+    run_with_pause(args, output, &mut send, thread::sleep)
+}
+
+fn write_response(output: &mut impl Write, response: &Response) -> io::Result<()> {
+    serde_json::to_writer(&mut *output, response).map_err(io::Error::other)?;
+    output.write_all(b"\n")?;
+    output.flush()
+}
+
+/// `pause` stands in for sleeping between `send --async` status reads, so
+/// tests can follow a message without real delays.
+fn run_with_pause(
+    args: &[String],
+    output: &mut impl Write,
+    send: &mut impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
+    mut pause: impl FnMut(Duration),
 ) -> io::Result<()> {
     let request_id = next_request_id();
     let response = match parse(args, &request_id) {
-        Ok(command) => execute(command, send),
+        Ok(command) => {
+            let follow = command.follow;
+            let sent = execute(command, &mut *send);
+            if follow && sent.ok {
+                // The send receipt comes first, so a caller that stops
+                // reading early still knows the message id to look up.
+                write_response(output, &sent)?;
+                let mut followed =
+                    follow_message(&sent.id, &sent.result["message_id"], send, &mut pause);
+                // Both lines answer the caller's one request id.
+                followed.id.clone_from(&sent.id);
+                followed
+            } else {
+                sent
+            }
+        }
         Err(message) => Response::failure(&request_id, "invalid_arguments", message),
     };
-    serde_json::to_writer(&mut *output, &response).map_err(io::Error::other)?;
-    output.write_all(b"\n")?;
-    output.flush()?;
+    write_response(output, &response)?;
     if response.ok {
         Ok(())
     } else {
@@ -140,6 +175,65 @@ fn run_with(
                 .unwrap_or_else(|| "Developer command failed".into()),
         ))
     }
+}
+
+/// `send --async`: reads the message's status until every recipient has worked
+/// on it and gone idle again (`turn_ended`), with no deadline. Orchestrators
+/// run it as a background tool call and are woken when it exits, so a long
+/// task must never time out. A blocked recipient is not idle, so it keeps
+/// waiting. It fails only when a request is abandoned or the message is gone.
+fn follow_message(
+    id: &str,
+    message: &Value,
+    send: &mut impl FnMut(&Request, Option<Duration>) -> Result<Response, String>,
+    pause: &mut impl FnMut(Duration),
+) -> Response {
+    // The send receipt carries the id as a number; message.status takes the
+    // same selector text the CLI's `message status` passes.
+    let message = match message {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    loop {
+        let request = Request {
+            id: next_request_id(),
+            method: "message.status".into(),
+            params: json!({ "message": message }),
+        };
+        match send(&request, None) {
+            // The server can be briefly unreachable, e.g. while it saves;
+            // keep following rather than report a failed delivery.
+            Err(_) => pause(Duration::from_secs(1)),
+            Ok(response) if !response.ok => return response,
+            Ok(response) => match async_outcome(&response.result) {
+                Some(Ok(())) => return response,
+                Some(Err(message)) => {
+                    let mut failure = Response::failure(id, "message_abandoned", message);
+                    failure.result = response.result;
+                    return failure;
+                }
+                None => pause(Duration::from_millis(200)),
+            },
+        }
+    }
+}
+
+/// `Some(Ok)` once every recipient's turn ended, `Some(Err)` when Bus
+/// abandoned a recipient's request, `None` while any recipient still works,
+/// is blocked, or has not started.
+fn async_outcome(status: &Value) -> Option<Result<(), String>> {
+    let requests = status["requests"].as_array()?;
+    if let Some(abandoned) = requests.iter().find(|r| r["stage"] == "abandoned") {
+        return Some(Err(format!(
+            "Bus abandoned message {} for agent {}; inspect message status and the agent's terminal",
+            status["message_id"],
+            abandoned["agent_name"].as_str().unwrap_or("unknown"),
+        )));
+    }
+    requests
+        .iter()
+        .all(|r| r["turn_ended"] == true)
+        .then_some(Ok(()))
 }
 
 fn timeout_response(id: &str, last_status: Value) -> Response {
@@ -217,6 +311,9 @@ struct ParsedCommand {
     params: Value,
     request_id: String,
     wait_timeout: Option<Duration>,
+    /// `send --async`: after sending, follow the message until every
+    /// recipient's turn ended.
+    follow: bool,
 }
 
 fn value_arg(name: &'static str) -> Arg {
@@ -362,7 +459,8 @@ fn cli() -> Command {
                 .arg(option("text"))
                 .arg(value_arg("file").long("file").action(ArgAction::Append))
                 .arg(value_arg("as").long("as"))
-                .arg(flag("queue")),
+                .arg(flag("queue"))
+                .arg(flag("async")),
         )
         .subcommand(
             subcommand("message")
@@ -434,6 +532,7 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         .subcommand()
         .ok_or_else(|| "a developer command is required".to_owned())?;
     let mut wait_timeout = None;
+    let mut follow = false;
     let (method, params) = match name {
         "state" => ("state", json!({})),
         "quit" => ("bus.quit", json!({})),
@@ -585,6 +684,14 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
             if args.get_flag("queue") {
                 params["queue"] = json!(true);
             }
+            follow = args.get_flag("async");
+            if follow
+                && recipients
+                    .iter()
+                    .any(|r| r.eq_ignore_ascii_case(super::model::HUMAN_RECIPIENT))
+            {
+                return Err("--async waits for agents; a message to the human has none".into());
+            }
             ("message.send", params)
         }
         "message" => match args.subcommand() {
@@ -620,6 +727,7 @@ fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, String> {
         params,
         request_id,
         wait_timeout,
+        follow,
     })
 }
 
@@ -1254,6 +1362,160 @@ mod tests {
             "exactly one JSON response: {output:?}"
         );
         (outcome, serde_json::from_str(&output).unwrap())
+    }
+
+    /// One recipient's status in a `message.status` result.
+    fn recipient(agent: u64, stage: &str, turn_ended: bool) -> Value {
+        json!({"request_id": 40 + agent, "agent_id": agent, "agent_name": format!("a{agent}"),
+            "stage": stage, "turn_ended": turn_ended})
+    }
+
+    fn status(requests: Vec<Value>) -> Value {
+        json!({"message_id": 19, "complete": false, "requests": requests})
+    }
+
+    /// Runs `send --async` against scripted statuses; returns the outcome,
+    /// every printed JSON line, the status reads' timeouts, and the pauses.
+    fn run_async(
+        extra: &[&str],
+        statuses: impl IntoIterator<Item = Value>,
+    ) -> (
+        io::Result<()>,
+        Vec<Value>,
+        Vec<Option<Duration>>,
+        Vec<Duration>,
+    ) {
+        let mut statuses = statuses.into_iter();
+        let mut timeouts = Vec::new();
+        let mut pauses = Vec::new();
+        let mut output = Vec::new();
+        let mut args = vec![
+            "send", "--room", "7", "--to", "a1", "--text", "go", "--async",
+        ];
+        args.extend_from_slice(extra);
+        let outcome = run_with_pause(
+            &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+            &mut output,
+            &mut |request: &Request, timeout: Option<Duration>| {
+                if request.method == "message.send" {
+                    return Ok(Response::success(
+                        &request.id,
+                        json!({"message_id": 19, "request_ids": [41], "stage": "queued"}),
+                    ));
+                }
+                assert_eq!(request.method, "message.status");
+                assert_eq!(request.params, json!({"message": "19"}));
+                timeouts.push(timeout);
+                Ok(Response::success(
+                    &request.id,
+                    statuses.next().expect("polled past the last status"),
+                ))
+            },
+            |pause| pauses.push(pause),
+        );
+        let lines = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        (outcome, lines, timeouts, pauses)
+    }
+
+    #[test]
+    fn send_async_prints_the_message_id_then_returns_once_the_turn_ended() {
+        let (outcome, lines, timeouts, pauses) = run_async(
+            &[],
+            [
+                status(vec![recipient(1, "queued", false)]),
+                status(vec![recipient(1, "delivered", false)]),
+                status(vec![recipient(1, "delivered", true)]),
+            ],
+        );
+        assert!(outcome.is_ok());
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0]["result"]["message_id"], 19);
+        assert_eq!(lines[1]["ok"], true);
+        assert_eq!(lines[1]["result"]["requests"][0]["turn_ended"], true);
+        assert_eq!(lines[0]["id"], lines[1]["id"]);
+        assert!(timeouts.iter().all(Option::is_none), "no per-read deadline");
+        assert_eq!(pauses, [Duration::from_millis(200); 2]);
+    }
+
+    #[test]
+    fn send_async_has_no_time_limit_and_keeps_waiting_while_blocked() {
+        // About 33 minutes of polling, far past wait's 600-second cap.
+        let polls = 10_000;
+        let statuses = (0..polls)
+            .map(|_| status(vec![recipient(1, "delivered", false)]))
+            .chain([status(vec![recipient(1, "delivered", true)])]);
+        let (outcome, lines, _, pauses) = run_async(&[], statuses);
+        assert!(outcome.is_ok());
+        assert_eq!(lines.len(), 2);
+        assert_eq!(pauses.len(), polls);
+        assert!(pauses.iter().sum::<Duration>() > Duration::from_secs(600));
+    }
+
+    #[test]
+    fn send_async_waits_for_every_recipient() {
+        let (outcome, lines, _, pauses) = run_async(
+            &[],
+            [
+                status(vec![
+                    recipient(1, "delivered", true),
+                    recipient(2, "queued", false),
+                ]),
+                status(vec![
+                    recipient(1, "delivered", true),
+                    recipient(2, "delivered", false),
+                ]),
+                status(vec![
+                    recipient(1, "replied", true),
+                    recipient(2, "delivered", true),
+                ]),
+            ],
+        );
+        assert!(outcome.is_ok());
+        assert_eq!(pauses.len(), 2);
+        assert_eq!(lines[1]["result"]["requests"][1]["turn_ended"], true);
+    }
+
+    #[test]
+    fn send_async_fails_when_a_request_is_abandoned() {
+        let (outcome, lines, _, _) = run_async(
+            &[],
+            [
+                status(vec![
+                    recipient(1, "delivered", false),
+                    recipient(2, "delivered", false),
+                ]),
+                status(vec![
+                    recipient(1, "delivered", true),
+                    recipient(2, "abandoned", false),
+                ]),
+            ],
+        );
+        let error = outcome.unwrap_err().to_string();
+        assert!(
+            error.contains("abandoned message 19 for agent a2"),
+            "{error}"
+        );
+        assert_eq!(lines[1]["ok"], false);
+        assert_eq!(lines[1]["error"]["code"], "message_abandoned");
+        assert_eq!(lines[1]["result"]["requests"][1]["stage"], "abandoned");
+    }
+
+    #[test]
+    fn send_async_rejects_a_message_to_the_human() {
+        let parsed = command(&[
+            "send", "--room", "master", "--to", "human", "--text", "x", "--async",
+        ]);
+        assert!(parsed.unwrap_err().contains("--async waits for agents"));
+        assert!(
+            command(&["send", "--room", "7", "--to", "a1", "--text", "x", "--async"])
+                .unwrap()
+                .follow
+        );
+        assert!(HELP.contains("[--queue] [--async]"));
     }
 
     #[test]
