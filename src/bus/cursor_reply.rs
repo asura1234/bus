@@ -5,12 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 const MAX_TRANSCRIPT_TAIL: u64 = 2 * 1024 * 1024;
 const PENDING: &str = "Awaiting Cursor's completed transcript to identify its final reply. The callback and request were kept; no prompt will be retried.";
 
-pub(crate) fn final_text(value: &Value) -> Result<String, String> {
-    let text = super::field(value, "text")?;
-    let Some(path) = value.get("transcript_path").and_then(Value::as_str) else {
-        // Older hook payloads expose only a response body.
-        return Ok(text);
-    };
+fn read_transcript(path: &str) -> Result<String, String> {
     let mut file = std::fs::File::open(path).map_err(|_| PENDING.to_owned())?;
     let metadata = file.metadata().map_err(|_| PENDING.to_owned())?;
     if !metadata.is_file() {
@@ -26,25 +21,90 @@ pub(crate) fn final_text(value: &Value) -> Result<String, String> {
     let start = if offset == 0 {
         0
     } else {
-        // A bounded tail can start inside a JSON record or UTF-8 character.
         bytes
             .iter()
             .position(|byte| *byte == b'\n')
             .map(|index| index + 1)
             .ok_or_else(|| PENDING.to_owned())?
     };
-    let transcript = std::str::from_utf8(&bytes[start..]).map_err(|_| PENDING.to_owned())?;
-    matching_completed_message(transcript, &text).ok_or_else(|| PENDING.to_owned())
+    std::str::from_utf8(&bytes[start..])
+        .map(|text| text.to_owned())
+        .map_err(|_| PENDING.to_owned())
 }
 
+/// Reply for a Cursor stop that already arrived as completed.
+/// The transcript match wins. When it fails and the agent is idle, the hook's
+/// own text is the reply: the turn is over, and waiting for a perfect
+/// transcript match leaves the request delivered forever.
+pub(crate) fn settle_text(value: &Value, idle: bool) -> Result<String, String> {
+    let text = super::field(value, "text")?;
+    let Some(path) = value.get("transcript_path").and_then(Value::as_str) else {
+        return Ok(text);
+    };
+    let transcript = read_transcript(path)?;
+    match classify(&transcript, &text) {
+        ReplyMatch::Found(reply) => Ok(reply),
+        // 转录还是钩子的前缀，说明写盘还没赶上，先留着再读。
+        ReplyMatch::Waiting => Err(PENDING.into()),
+        // 已经对不上，且代理空闲：用钩子正文结算，避免请求一直停在 delivered。
+        ReplyMatch::Diverged if idle && !text.trim().is_empty() => Ok(text),
+        ReplyMatch::Diverged => Err(PENDING.into()),
+    }
+}
+
+enum ReplyMatch {
+    Found(String),
+    Waiting,
+    Diverged,
+}
+
+/// Cursor's own wake after a background shell, not a Bus message.
+/// The prompt is the short task notice itself, not a human request that
+/// happens to quote one.
+pub(crate) fn is_background_task_notice(prompt: &str) -> bool {
+    let text = notice_body(prompt);
+    if text.len() > 500 {
+        return false;
+    }
+    text.starts_with("Briefly inform the user about the task result")
+        || (text.starts_with("Finished ") && !text.contains('\n'))
+}
+
+fn notice_body(prompt: &str) -> &str {
+    let mut text = prompt.trim();
+    if let Some(rest) = text
+        .find("</timestamp>")
+        .map(|index| &text[index + "</timestamp>".len()..])
+    {
+        text = rest.trim();
+    }
+    if let Some(inner) = text
+        .strip_prefix("<user_query>")
+        .and_then(|rest| rest.strip_suffix("</user_query>"))
+    {
+        text = inner.trim();
+    }
+    text
+}
+
+#[cfg(test)]
 fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<String> {
+    match classify(transcript, hook_text) {
+        ReplyMatch::Found(text) => Some(text),
+        ReplyMatch::Waiting | ReplyMatch::Diverged => None,
+    }
+}
+
+fn classify(transcript: &str, hook_text: &str) -> ReplyMatch {
     let mut candidates: Vec<(String, Option<String>)> = Vec::new();
     let mut has_user = false;
     let mut direct_last = None;
     let mut matched = None;
     let mut ambiguous = false;
     for line in transcript.lines().filter(|line| !line.trim().is_empty()) {
-        let value: Value = serde_json::from_str(line).ok()?;
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            return ReplyMatch::Waiting;
+        };
         match value.get("role").and_then(Value::as_str) {
             Some("user") => {
                 // Cursor can both inject user-shaped metadata within a generation
@@ -63,7 +123,13 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
                 direct_last = None;
             }
             Some("assistant") if has_user => {
-                let content = value.get("message")?.get("content")?.as_array()?;
+                let Some(content) = value
+                    .get("message")
+                    .and_then(|message| message.get("content"))
+                    .and_then(Value::as_array)
+                else {
+                    return ReplyMatch::Waiting;
+                };
                 let text = content
                     .iter()
                     .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
@@ -108,6 +174,9 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
     }
     // stop 已报完成才会来这里。这份 jsonl 经常不写 turn_ended，回复停在
     // 最后一条 assistant 上；不在结尾结算的话请求会一直停在 delivered。
+    let waiting = candidates
+        .iter()
+        .any(|(accumulated, _)| hook_text.starts_with(accumulated) && accumulated != hook_text);
     observe_candidates(
         &candidates,
         direct_last.as_deref(),
@@ -115,7 +184,17 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
         &mut matched,
         &mut ambiguous,
     );
-    (!ambiguous).then_some(matched).flatten()
+    if ambiguous {
+        return ReplyMatch::Waiting;
+    }
+    if let Some(text) = matched {
+        return ReplyMatch::Found(text);
+    }
+    if waiting {
+        ReplyMatch::Waiting
+    } else {
+        ReplyMatch::Diverged
+    }
 }
 
 /// 说明文字里钩子没带上的后缀（例如转录多写的标记）不参与对齐。
@@ -331,5 +410,61 @@ mod tests {
             "Question first.final answer"
         )
         .is_none());
+    }
+
+    fn hook_value(text: &str, transcript: &str) -> Value {
+        let path = std::env::temp_dir().join(format!(
+            "bus-cursor-settle-{}-{}.jsonl",
+            std::process::id(),
+            text.len() + transcript.len()
+        ));
+        std::fs::write(&path, transcript).unwrap();
+        serde_json::json!({"text": text, "transcript_path": path})
+    }
+
+    #[test]
+    fn idle_completed_stop_uses_the_hook_text_when_the_transcript_does_not_match() {
+        // 消息 1422 的钩子形状：说明和终稿粘在一起，转录对不上。
+        let hook = "I'll search.The published docs still have no launch-time system prompt.";
+        let value = hook_value(
+            hook,
+            concat!(
+                "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"addendum\"}]}}\n",
+                "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"unrelated\"}]}}\n",
+            ),
+        );
+        assert!(settle_text(&value, false).is_err());
+        assert_eq!(settle_text(&value, true).as_deref(), Ok(hook));
+    }
+
+    #[test]
+    fn a_matching_transcript_still_beats_the_raw_hook_text() {
+        let value = hook_value(
+            "I'll search.The published docs still have no launch-time system prompt.",
+            concat!(
+                "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"addendum\"}]}}\n",
+                "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I'll search.\\n\\n[REDACTED]\"},{\"type\":\"tool_use\",\"name\":\"WebSearch\"}]}}\n",
+                "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"The published docs still have no launch-time system prompt.\"}]}}\n",
+            ),
+        );
+        assert_eq!(
+            settle_text(&value, true).as_deref(),
+            Ok("The published docs still have no launch-time system prompt.")
+        );
+    }
+
+    #[test]
+    fn background_task_notices_are_not_room_prompts() {
+        let wake = "<timestamp>Wednesday, Oct 7, 2026, 8:30 PM (UTC+8)</timestamp>  <user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed). If there's no follow-ups needed, don't explicitly say that.</user_query>";
+        assert!(is_background_task_notice(wake));
+        assert!(is_background_task_notice(
+            "Finished Resume session after changing the ancestor rule"
+        ));
+        assert!(!is_background_task_notice(
+            "Bug fix task. The notice was: Briefly inform the user about the task result. Then fix the matcher."
+        ));
+        assert!(!is_background_task_notice(
+            "Finished the design.\n\nHere is the rest of the work."
+        ));
     }
 }

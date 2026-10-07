@@ -1876,6 +1876,19 @@ impl BusState {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongSession);
             }
         }
+        // Cursor 后台任务结束会自己开一轮，提示语是任务通知而不是房间消息。
+        // 记成无关回合，后续的 stop 不再当成回复，也不再报 WrongTurn。
+        if callback
+            .prompt_payload
+            .as_deref()
+            .is_some_and(super::callbacks::cursor_reply::is_background_task_notice)
+        {
+            self.unrelated_provider_turns.extend(turn_key);
+            return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
+        }
+        if self.is_unrelated_turn(&callback) {
+            return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
+        }
         // Input Bus typed into this turn binds where the provider reports it:
         // in the running turn, or in a turn of its own that then carries the
         // group's reply. It is never an unrelated turn or an agent error.
