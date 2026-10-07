@@ -75,8 +75,6 @@ pub use bootstrap::run_server;
 use crate::protocol::MAX_GRAPHICS_FRAME_SIZE;
 
 #[cfg(test)]
-use crate::protocol::RenderEncoding;
-#[cfg(test)]
 use crate::server::client_transport::ClientWriter;
 #[cfg(test)]
 use std::fs;
@@ -1146,7 +1144,6 @@ impl HeadlessServer {
                     (surface_cols, surface_rows),
                     observed,
                     last_activity,
-                    protocol::RenderEncoding::SemanticFrame,
                     writer,
                 );
                 connection.pixel_mouse = pixel_mouse && observed.is_known();

@@ -261,7 +261,6 @@ fn window_title_test_server() -> (HeadlessServer, std::sync::mpsc::Receiver<Vec<
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );
@@ -317,7 +316,6 @@ fn window_title_waits_for_a_foreground_client_to_exist() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );
@@ -351,7 +349,6 @@ fn an_attaching_client_gets_the_title_even_when_it_has_not_changed() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             2,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );
@@ -502,7 +499,6 @@ fn a_newly_promoted_client_gets_the_window_title_again() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             2,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );
@@ -1756,7 +1752,6 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             unread_test_writer(),
         ),
     );
@@ -1884,7 +1879,6 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             unread_test_writer(),
         ),
     );
@@ -1948,7 +1942,6 @@ async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             unread_test_writer(),
         ),
     );
@@ -2003,7 +1996,6 @@ async fn client_shell_mouse_motion_delivers_without_render_when_foreground() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             unread_test_writer(),
         ),
     );
@@ -2041,7 +2033,6 @@ async fn client_shell_mouse_motion_promotes_and_requests_render() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             unread_test_writer(),
         ),
     );
@@ -2098,7 +2089,6 @@ fn client_shell_host_theme_follows_foreground_client() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             unread_test_writer(),
         ),
     );
@@ -2108,7 +2098,6 @@ fn client_shell_host_theme_follows_foreground_client() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             2,
-            RenderEncoding::SemanticFrame,
             unread_test_writer(),
         ),
     );
@@ -2977,7 +2966,6 @@ fn client_shell_streams_focused_pane_report_all_demand() {
                 (80, 24),
                 crate::kitty_graphics::HostCellSize::default(),
                 1,
-                RenderEncoding::SemanticFrame,
                 client_tx,
             ),
         );
@@ -3014,7 +3002,6 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
                 (80, 24),
                 crate::kitty_graphics::HostCellSize::default(),
                 client_id,
-                RenderEncoding::SemanticFrame,
                 unread_test_writer(),
             ),
         );
@@ -3082,7 +3069,6 @@ fn client_shell_mouse_capture_combines_local_preference_with_endpoint_demand() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             writer,
         ),
     );
@@ -3133,7 +3119,6 @@ fn client_shell_focus_promotes_and_reaches_reporting_pane() {
                 (80, 24),
                 crate::kitty_graphics::HostCellSize::default(),
                 1,
-                RenderEncoding::SemanticFrame,
                 unread_test_writer(),
             ),
         );
@@ -3143,7 +3128,6 @@ fn client_shell_focus_promotes_and_reaches_reporting_pane() {
                 (100, 30),
                 crate::kitty_graphics::HostCellSize::default(),
                 2,
-                RenderEncoding::SemanticFrame,
                 unread_test_writer(),
             ),
         );
@@ -3219,7 +3203,6 @@ fn client_config_reload_request_refreshes_attached_clients() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );
@@ -3250,7 +3233,6 @@ fn terminal_bell_targets_foreground_client_only() {
             (120, 40),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             background_tx,
         ),
     );
@@ -3260,7 +3242,6 @@ fn terminal_bell_targets_foreground_client_only() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             2,
-            RenderEncoding::SemanticFrame,
             foreground_tx,
         ),
     );
@@ -3312,7 +3293,6 @@ fn clipboard_write_targets_foreground_client_only() {
             (120, 40),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             background_tx,
         ),
     );
@@ -3322,7 +3302,6 @@ fn clipboard_write_targets_foreground_client_only() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             2,
-            RenderEncoding::SemanticFrame,
             foreground_tx,
         ),
     );
@@ -3375,7 +3354,6 @@ fn clipboard_write_failed_foreground_send_removes_client_without_visual_change()
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             foreground_tx,
         ),
     );
@@ -3404,7 +3382,6 @@ fn semantic_notifications_broadcast_to_all_client_shells() {
                 (80, 24),
                 crate::kitty_graphics::HostCellSize::default(),
                 client_id,
-                RenderEncoding::SemanticFrame,
                 writer,
             ),
         );
@@ -3444,7 +3421,6 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             shell_tx,
         ),
     );
@@ -3494,7 +3470,6 @@ fn client_local_notifications_target_foreground_client_only() {
             (120, 40),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             background_tx,
         ),
     );
@@ -3504,7 +3479,6 @@ fn client_local_notifications_target_foreground_client_only() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             2,
-            RenderEncoding::SemanticFrame,
             foreground_tx,
         ),
     );
@@ -3553,7 +3527,6 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
             (120, 40),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             sender_writer,
         ),
     );
@@ -3563,7 +3536,6 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             2,
-            RenderEncoding::SemanticFrame,
             foreground_writer,
         ),
     );
@@ -3596,7 +3568,6 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
             (100, 30),
             crate::kitty_graphics::HostCellSize::default(),
             3,
-            RenderEncoding::SemanticFrame,
             shell_writer,
         ),
     );
@@ -3640,7 +3611,6 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );
@@ -3701,7 +3671,6 @@ fn notification_show_api_preserves_colon_in_forwarded_title() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );
@@ -3820,7 +3789,6 @@ fn notification_show_api_includes_sound_in_semantic_event() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );
@@ -3899,7 +3867,6 @@ fn startup_idle_does_not_forward_completion() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );
@@ -3994,7 +3961,6 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            RenderEncoding::SemanticFrame,
             client_tx,
         ),
     );

@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use crate::protocol::{
     ClientKeyCode, ClientKeyKind, ClientMouseButton, ClientMouseKind, ClientPaneInputEvent,
-    RenderEncoding,
 };
 use crate::server::client_transport::ClientWriter;
 use crate::server::render_stream::ClientRenderState;
@@ -191,7 +190,6 @@ impl ClientConnection {
         terminal_size: (u16, u16),
         cell_size: crate::kitty_graphics::HostCellSize,
         last_activity: u64,
-        render_encoding: RenderEncoding,
         writer: ClientWriter,
     ) -> Self {
         Self::new_with_mode(
@@ -199,7 +197,6 @@ impl ClientConnection {
             terminal_size,
             cell_size,
             last_activity,
-            render_encoding,
             writer,
         )
     }
@@ -209,7 +206,6 @@ impl ClientConnection {
         terminal_size: (u16, u16),
         cell_size: crate::kitty_graphics::HostCellSize,
         last_activity: u64,
-        render_encoding: RenderEncoding,
         writer: ClientWriter,
     ) -> Self {
         Self {
@@ -217,7 +213,7 @@ impl ClientConnection {
             terminal_size,
             cell_size,
             last_activity,
-            render_state: ClientRenderState::new(render_encoding),
+            render_state: ClientRenderState::default(),
             shell_graphics_delivery: crate::kitty_graphics::surface::DeliveryCache::default(),
             direct_graphics: false,
             pixel_mouse: false,
@@ -491,7 +487,6 @@ mod tests {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            crate::protocol::RenderEncoding::SemanticFrame,
             unread_test_writer(),
         )
     }

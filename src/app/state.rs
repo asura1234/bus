@@ -748,8 +748,6 @@ pub(crate) struct PaneFocusTarget {
 pub struct AppState {
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
-    /// Terminal ids whose size is currently owned by a direct attach client.
-    pub direct_attach_resize_locks: std::collections::HashSet<crate::terminal::TerminalId>,
     pub(crate) pane_id_aliases: std::collections::HashMap<u32, PaneId>,
     pub(crate) public_pane_id_aliases: std::collections::HashMap<String, PaneId>,
     pub workspaces: Vec<Workspace>,
@@ -919,7 +917,6 @@ impl AppState {
     pub fn test_new() -> Self {
         Self {
             terminals: std::collections::HashMap::new(),
-            direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),
             public_pane_id_aliases: std::collections::HashMap::new(),
             workspaces: Vec::new(),

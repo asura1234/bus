@@ -7,9 +7,6 @@ pub(super) struct ClientState {
     pub(super) mouse_capture_active: bool,
     pub(super) endpoint_mouse_capture_requested: bool,
     pub(super) endpoint_sgr_pixels_requested: bool,
-    /// Latest physical host theme observations, retained so an endpoint selected after the
-    /// observation receives the same client-owned baseline.
-    pub(super) host_theme_updates: Vec<crate::protocol::ClientHostThemeUpdate>,
     /// Remains set until the reader consumes the final reply from a 256-color host query.
     pub(super) host_palette_query_pending: Arc<AtomicBool>,
     /// One-based index of the latest reply consumed from the active host palette query.
@@ -25,9 +22,6 @@ pub(super) struct ClientState {
     pub(super) pixel_geometry_exact: bool,
     pub(super) redraw_on_focus_gained: bool,
     pub(super) repaint_pending: bool,
-    /// During a source-off-first handoff the currently blitted frame remains authoritative until
-    /// an acknowledged target snapshot/surface pair commits.
-    pub(super) presentation_frozen: bool,
     pub(super) draw_host_cursor: bool,
     pub(super) detached_process_children: Vec<std::process::Child>,
     pub(super) shell: Option<shell::ClientShellState>,
@@ -38,56 +32,8 @@ impl ClientState {
         self.repaint_pending = true;
     }
 
-    pub(super) fn freeze_presentation(&mut self) {
-        self.presentation_frozen = true;
-    }
-
-    pub(super) fn record_host_theme_update(
-        &mut self,
-        update: &crate::protocol::ClientHostThemeUpdate,
-    ) {
-        use crate::protocol::ClientHostThemeUpdate;
-
-        match update {
-            ClientHostThemeUpdate::DefaultColor { kind, .. } => {
-                self.host_theme_updates.retain(|current| {
-                    !matches!(
-                        current,
-                        ClientHostThemeUpdate::DefaultColor {
-                            kind: current_kind,
-                            ..
-                        } if current_kind == kind
-                    )
-                });
-            }
-            ClientHostThemeUpdate::PaletteColors(_) => self
-                .host_theme_updates
-                .retain(|current| !matches!(current, ClientHostThemeUpdate::PaletteColors(_))),
-            ClientHostThemeUpdate::Appearance(_) => self
-                .host_theme_updates
-                .retain(|current| !matches!(current, ClientHostThemeUpdate::Appearance(_))),
-        }
-        self.host_theme_updates.push(update.clone());
-    }
-
-    pub(super) fn unfreeze_presentation(&mut self) {
-        self.presentation_frozen = false;
-        // A resize or metadata event may have happened while frozen. Force a full frame rather
-        // than attempting to patch the old source frame.
-        self.request_repaint();
-    }
-
-    /// Present a composed error/chrome frame while retaining the handoff input freeze. The pane
-    /// cells are still the last coherent surface; only client chrome (including the error) moves.
-    pub(super) fn present_frozen_chrome(&mut self, frame_data: FrameData) {
-        let frozen = self.presentation_frozen;
-        self.presentation_frozen = false;
-        self.present_frame(frame_data);
-        self.presentation_frozen = frozen;
-    }
-
     pub(super) fn present_graphics(&mut self, graphics: &[u8]) {
-        if self.presentation_frozen || graphics.is_empty() || !self.kitty_graphics_enabled {
+        if graphics.is_empty() || !self.kitty_graphics_enabled {
             return;
         }
         let mut stdout = io::stdout();
@@ -99,7 +45,7 @@ impl ClientState {
         &mut self,
         patch: shell::ClientComposedSurfacePatch,
     ) -> io::Result<bool> {
-        if self.presentation_frozen || self.repaint_pending {
+        if self.repaint_pending {
             crate::render_prof::event("client_surface_patch.fallback.repaint");
             return Ok(false);
         }
@@ -139,9 +85,6 @@ impl ClientState {
     }
 
     pub(super) fn present_frame(&mut self, frame_data: FrameData) {
-        if self.presentation_frozen {
-            return;
-        }
         if self
             .shell
             .as_mut()

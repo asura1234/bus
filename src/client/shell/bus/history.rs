@@ -650,7 +650,6 @@ fn wrap_header(
 fn participant_label(state: &BusState, participant: &Author) -> String {
     match participant {
         Author::Human => "You".into(),
-        Author::Orchestrator => "Orchestrator".into(),
         Author::Bus => "Bus".into(),
         Author::Agent(id) => state
             .agent(*id)
@@ -663,7 +662,7 @@ fn participant_tone(participant: &Author) -> Tone {
     match participant {
         Author::Agent(id) => Tone::Agent(*id),
         Author::Human => Tone::You,
-        Author::Orchestrator | Author::Bus => Tone::Muted,
+        Author::Bus => Tone::Muted,
     }
 }
 

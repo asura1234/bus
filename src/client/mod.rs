@@ -114,11 +114,7 @@ struct ClientInputLifecycle {
     host_palette_query_progress: Arc<AtomicU16>,
 }
 
-fn run_client_with_mode(
-    _attach_request: Option<(String, bool)>,
-    _attach_escape: Option<()>,
-    log_message: &'static str,
-) -> io::Result<()> {
+fn run_client_with_mode(log_message: &'static str) -> io::Result<()> {
     init_logging();
 
     let loaded_config = crate::config::Config::load();
@@ -305,7 +301,6 @@ async fn run_client_loop(
         mouse_capture_active: config.mouse_capture_active,
         endpoint_mouse_capture_requested: false,
         endpoint_sgr_pixels_requested: false,
-        host_theme_updates: Vec::new(),
         host_palette_query_pending: input_lifecycle.host_palette_query_pending,
         host_palette_query_progress: input_lifecycle.host_palette_query_progress,
         shell_mouse_capture_preference: config.mouse_capture_active,
@@ -319,7 +314,6 @@ async fn run_client_loop(
         pixel_geometry_exact: initial_pixel_geometry_exact,
         redraw_on_focus_gained: config.redraw_on_focus_gained,
         repaint_pending: false,
-        presentation_frozen: false,
         draw_host_cursor,
         detached_process_children: Vec::new(),
         shell: config.shell_config.map(shell::ClientShellState::new),
@@ -594,6 +588,9 @@ async fn run_client_loop(
                 }
             }
             ClientLoopEvent::ServerMessage { message } => {
+                if !write_stream.is_connected() {
+                    continue;
+                }
                 match *message {
                     ServerMessage::ClientShellSnapshot(_) => {
                         let message = "server sent an unnegotiated binary endpoint snapshot";

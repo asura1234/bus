@@ -1213,14 +1213,18 @@ fn pane_spawn_cwd_fallback_in_server() {
     let missing_cwd = missing_cwd.to_str().expect("test cwd should be UTF-8");
     fs::create_dir_all(&data_dir).unwrap();
     let session = serde_json::json!({
-        "version": 2,
+        "version": 3,
         "workspaces": [{
             "custom_name": "missing-cwd",
-            "layout": { "Pane": 0 },
-            "panes": { "0": { "cwd": missing_cwd } },
-            "zoomed": false,
-            "focused": 0,
-            "root_pane": 0
+            "identity_cwd": missing_cwd,
+            "tabs": [{
+                "layout": { "Pane": 0 },
+                "panes": { "0": { "cwd": missing_cwd } },
+                "zoomed": false,
+                "focused": 0,
+                "root_pane": 0
+            }],
+            "active_tab": 0
         }],
         "active": 0,
         "selected": 0
@@ -1356,7 +1360,7 @@ fn client_receives_notify_on_agent_state_change() {
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::write(
         config_home.join(app_dir_name()).join("config.toml"),
-        "onboarding = false\n[ui.toast]\nenabled = true\n[ui.sound]\nenabled = true\n",
+        "onboarding = false\n[ui.toast]\ndelivery = \"herdr\"\n[ui.sound]\nenabled = true\n",
     )
     .unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();

@@ -216,7 +216,7 @@ pub(super) fn resize_tab_panes(
 
     if tab.zoomed {
         let focused_id = tab.layout.focused();
-        if let Some((terminal_id, rt)) =
+        if let Some((_, rt)) =
             runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, focused_id)
         {
             let borders = if app.pane_borders.shows_borders(multi_pane) && app.pane_outer_borders {
@@ -226,14 +226,12 @@ pub(super) fn resize_tab_panes(
             };
             let pane_inner = pane_inner_rect(area, borders);
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
-            if !app.direct_attach_resize_locks.contains(terminal_id) {
-                rt.resize(
-                    inner_rect.height,
-                    inner_rect.width,
-                    cell_size.width_px,
-                    cell_size.height_px,
-                );
-            }
+            rt.resize(
+                inner_rect.height,
+                inner_rect.width,
+                cell_size.width_px,
+                cell_size.height_px,
+            );
         }
         return;
     }
@@ -246,18 +244,16 @@ pub(super) fn resize_tab_panes(
     ) {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
 
-        if let Some((terminal_id, rt)) =
+        if let Some((_, rt)) =
             runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, info.id)
         {
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
-            if !app.direct_attach_resize_locks.contains(terminal_id) {
-                rt.resize(
-                    inner_rect.height,
-                    inner_rect.width,
-                    cell_size.width_px,
-                    cell_size.height_px,
-                );
-            }
+            rt.resize(
+                inner_rect.height,
+                inner_rect.width,
+                cell_size.width_px,
+                cell_size.height_px,
+            );
         }
     }
 }
@@ -295,11 +291,7 @@ pub(super) fn compute_pane_infos_for_tab(
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, focused_id) {
             (inner_rect, scrollbar_rect) =
                 stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
-            if resize_panes
-                && tab.terminal_id(focused_id).is_some_and(|terminal_id| {
-                    !app.direct_attach_resize_locks.contains(terminal_id)
-                })
-            {
+            if resize_panes {
                 rt.resize(
                     inner_rect.height,
                     inner_rect.width,
@@ -333,11 +325,7 @@ pub(super) fn compute_pane_infos_for_tab(
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
             (inner_rect, scrollbar_rect) =
                 stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
-            if resize_panes
-                && tab.terminal_id(info.id).is_some_and(|terminal_id| {
-                    !app.direct_attach_resize_locks.contains(terminal_id)
-                })
-            {
+            if resize_panes {
                 rt.resize(
                     inner_rect.height,
                     inner_rect.width,

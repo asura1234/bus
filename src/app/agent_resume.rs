@@ -155,52 +155,6 @@ impl App {
         pane_infos
     }
 
-    pub(crate) fn start_pending_agent_resume_for_terminal(
-        &mut self,
-        terminal_id: &crate::terminal::TerminalId,
-        rows: u16,
-        cols: u16,
-    ) -> bool {
-        if self.terminal_runtimes.get(terminal_id).is_some() {
-            return false;
-        }
-        let Some((pane_id, cwd, plan)) = self.state.workspaces.iter().find_map(|ws| {
-            ws.tabs.iter().find_map(|tab| {
-                tab.layout.pane_ids().into_iter().find_map(|pane_id| {
-                    let pane = tab.panes.get(&pane_id)?;
-                    if &pane.attached_terminal_id != terminal_id {
-                        return None;
-                    }
-                    let terminal = self.state.terminals.get(terminal_id)?;
-                    Some((
-                        pane_id,
-                        terminal.cwd.clone(),
-                        terminal.pending_agent_resume_plan.clone()?,
-                    ))
-                })
-            })
-        }) else {
-            return false;
-        };
-
-        let changed = self.start_pending_agent_resume(
-            pane_id,
-            terminal_id.clone(),
-            cwd,
-            plan,
-            rows,
-            cols,
-            true,
-        );
-        if changed {
-            self.schedule_session_save();
-        }
-        if !self.has_pending_agent_resumes() {
-            self.pending_agent_resume_deadline = None;
-        }
-        changed
-    }
-
     fn start_pending_agent_resume(
         &mut self,
         pane_id: crate::layout::PaneId,

@@ -84,10 +84,7 @@ fn set_handshake_recv_timeout(
 }
 
 #[derive(Debug)]
-pub(super) struct HandshakeResult {
-    pub(super) endpoint_methods: Option<Vec<String>>,
-    pub(super) endpoint_capabilities: Option<Vec<String>>,
-}
+pub(super) struct HandshakeResult;
 
 /// Performs the client→server handshake.
 ///
@@ -194,8 +191,5 @@ pub(super) fn do_handshake(
         server_version = %welcome.server_version,
         "endpoint handshake succeeded"
     );
-    Ok(HandshakeResult {
-        endpoint_methods: Some(welcome.methods),
-        endpoint_capabilities: Some(welcome.capabilities),
-    })
+    Ok(HandshakeResult)
 }
