@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 import re
-import unittest
 from pathlib import Path
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-HOT_PATH_SOURCES = (
-    PROJECT_ROOT / "src" / "ui.rs",
-    *sorted((PROJECT_ROOT / "src" / "ui").rglob("*.rs")),
-    PROJECT_ROOT / "src" / "server" / "render_stream.rs",
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Stage integration updates these globs as their owners move/split Rust files.
+SOURCES = {
+    "hot_path": ("src/ui.rs", "src/ui/**/*.rs", "src/server/render_stream.rs"),
+    "app_server": ("src/app/**/*.rs", "src/server/**/*.rs"),
+}
+TEST_MODULE = re.compile(
+    r"(?m)^[ \t]*#\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*"
+    r"(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{"
 )
-APP_SERVER_SOURCES = (
-    *sorted((PROJECT_ROOT / "src" / "app").rglob("*.rs")),
-    *sorted((PROJECT_ROOT / "src" / "server").rglob("*.rs")),
-)
-TEST_MODULE = re.compile(r"(?m)^#\[cfg\(test\)\]\s*\nmod\s+\w+\s*\{")
+CHAR_LITERAL = re.compile(r"'(?:\\(?:u\{[0-9a-fA-F_]+\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'")
 INPUT_STATE_CALL = re.compile(r"(?:\.|::)input_state\b")
 KEYBOARD_STATE_ANSI_CALL = re.compile(
     r"(?:\.|::)(?:keyboard_state_ansi|kitty_keyboard_state_ansi)\b"
@@ -96,15 +95,10 @@ def mask_comments_and_literals(source: str) -> str:
             index = end
             continue
 
-        if source[index] == "'":
-            end = index + 2
-            if index + 1 < len(source) and source[index + 1] == "\\":
-                end += 1
-            if end < len(source) and source[end] == "'":
-                end += 1
-                blank_non_newlines(chars, index, end)
-                index = end
-                continue
+        if source[index] == "'" and (literal := CHAR_LITERAL.match(source, index)):
+            blank_non_newlines(chars, index, literal.end())
+            index = literal.end()
+            continue
 
         index += 1
 
@@ -135,79 +129,36 @@ def production_code(source: str) -> str:
     return code
 
 
-def find_violations(paths, rules) -> list[str]:
+def source_paths(group: str, root: Path = PROJECT_ROOT) -> tuple[Path, ...]:
+    paths = {
+        path
+        for pattern in SOURCES[group]
+        for path in root.glob(pattern)
+        if path.is_file()
+        and path.suffix == ".rs"
+        and "tests" not in path.relative_to(root / "src").parts
+        and path.name != "tests.rs"
+        and not path.stem.endswith("_tests")
+    }
+    if not paths:
+        raise ValueError(f"No {group} Rust sources discovered from {SOURCES[group]}")
+    return tuple(sorted(paths))
+
+
+def find_violations(paths, rules, root: Path = PROJECT_ROOT) -> list[str]:
     violations: list[str] = []
     for path in paths:
         code = production_code(path.read_text(encoding="utf-8"))
         for pattern, description in rules:
             for match in pattern.finditer(code):
                 line = code.count("\n", 0, match.start()) + 1
-                relative_path = path.relative_to(PROJECT_ROOT)
+                relative_path = path.relative_to(root)
                 violations.append(f"{relative_path}:{line}: {description}")
     return violations
 
 
-class UiHotPathArchitectureTests(unittest.TestCase):
-    def test_render_hot_paths_avoid_known_expensive_runtime_queries(self) -> None:
-        violations = find_violations(HOT_PATH_SOURCES, FORBIDDEN_CALLS)
-
-        self.assertEqual(
-            violations,
-            [],
-            "Render/layout code must not perform pane-scaled expensive reads:\n"
-            + "\n".join(violations),
-        )
-
-    def test_app_and_server_avoid_aggregate_terminal_state(self) -> None:
-        self.assertTrue(APP_SERVER_SOURCES, "No app/server Rust sources were discovered")
-        violations = find_violations(APP_SERVER_SOURCES, AGGREGATE_STATE_CALLS)
-
-        self.assertEqual(
-            violations,
-            [],
-            "App/server code must use narrow terminal-state accessors:\n"
-            + "\n".join(violations),
-        )
-
-    def test_scanner_ignores_non_production_references(self) -> None:
-        source = '''
-// runtime.input_state()
-const EXAMPLE: &str = "runtime.input_state()";
-#[cfg(test)]
-mod tests {
-    fn aggregate_state_test() { runtime.input_state(); }
-}
-fn production_after_tests() {}
-'''
-        code = production_code(source)
-        self.assertNotRegex(code, FORBIDDEN_CALLS[0][0])
-        self.assertIn("fn production_after_tests()", code)
-        self.assertEqual(code.count("\n"), source.count("\n"))
-
-    def test_scanner_checks_production_after_test_modules(self) -> None:
-        source = '''
-#[cfg(test)]
-mod tests {
-    const BRACES: &str = "}}";
-}
-fn render() { TerminalRuntime::input_state; }
-'''
-        self.assertRegex(production_code(source), FORBIDDEN_CALLS[0][0])
-
-    def test_scanner_catches_each_aggregate_state_call(self) -> None:
-        cases = (
-            ("fn render() { runtime.input_state(); }", INPUT_STATE_CALL),
-            ("fn render() { runtime.keyboard_state_ansi(); }", KEYBOARD_STATE_ANSI_CALL),
-            ("fn render() { runtime.kitty_keyboard_state_ansi(); }", KEYBOARD_STATE_ANSI_CALL),
-        )
-        for source, pattern in cases:
-            with self.subTest(source=source):
-                self.assertRegex(production_code(source), pattern)
-
-    def test_scanner_catches_imported_process_query(self) -> None:
-        source = "fn render() { foreground_job(pid); }"
-        self.assertRegex(production_code(source), FORBIDDEN_CALLS[3][0])
-
-
-if __name__ == "__main__":
-    unittest.main()
+def check(root: Path = PROJECT_ROOT) -> list[str]:
+    return [
+        *find_violations(source_paths("hot_path", root), FORBIDDEN_CALLS, root),
+        *find_violations(source_paths("app_server", root), AGGREGATE_STATE_CALLS, root),
+    ]
