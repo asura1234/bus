@@ -360,7 +360,12 @@ impl Worker {
                         );
                         continue;
                     };
-                    let text = match callbacks::cursor_reply::final_text(&response.value) {
+                    // 转录对不上时，停止钩子已完成且代理空闲，就用钩子正文结算。
+                    let idle = self
+                        .state
+                        .agent(id)
+                        .is_some_and(|agent| agent.status == RuntimeStatus::Idle);
+                    let text = match callbacks::cursor_reply::settle_text(&response.value, idle) {
                         Ok(text) => text,
                         Err(message) => {
                             tracing::debug!(

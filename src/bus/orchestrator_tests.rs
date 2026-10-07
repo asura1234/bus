@@ -39,8 +39,11 @@ fn fill_replaces_every_placeholder() {
     assert!(text.contains("/data/docs/how-to-bus-cli.md"));
     assert!(text.contains("Orchestrator rules (binding): /data/docs/orchestrator-rules.md"));
     assert!(text.contains("The rules in /data/docs/orchestrator-rules.md are binding"));
-    // Reports the human should see must reach MASTER chat, not only the terminal.
-    assert!(text.contains("bus send --room master --as orch --to human --text"));
+    // Reports reach MASTER as the turn's final message; Bus posts it there.
+    assert!(text.contains("Bus shows it in MASTER"), "{text}");
+    assert!(!text.contains("--to human"), "{text}");
+    assert!(text.contains("Parallelism is king"), "{text}");
+    assert!(text.contains("Compartmentalize, within reason"), "{text}");
     // Tasks go out with --async in the background, never a blocking wait.
     assert!(text.contains("bus send --room 7 --as orch --to AGENT --async --text"));
     assert!(text.contains("run_in_background"));
@@ -61,7 +64,10 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     }
     let rules = std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap();
     assert!(rules.starts_with("# Orchestrator rules"), "{rules}");
-    assert!(rules.contains("bus send --room master --as YOUR_NAME --to human --text"));
+    assert!(rules.contains("End each turn with your report; Bus shows it in MASTER."));
+    assert!(!rules.contains("--to human"), "{rules}");
+    assert!(rules.contains("**Parallelism is king.**"));
+    assert!(rules.contains("**Compartmentalize, within reason.**"));
     assert!(rules.contains("bus send --room ROOM --as YOUR_NAME --to AGENT --async"));
     let guide = std::fs::read_to_string(root.join("workflow-create.md")).unwrap();
     assert!(guide.starts_with("# workflow-create"), "{guide}");
