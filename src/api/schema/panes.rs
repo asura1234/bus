@@ -12,7 +12,7 @@ pub struct PaneCloseIfIdentityParams {
 }
 
 use super::agents::AgentSessionInfo;
-use super::common::{AgentStatus, PaneAgentState, ReadFormat, ReadSource, SplitDirection};
+use super::common::{AgentStatus, ReadFormat, ReadSource, SplitDirection};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default,
@@ -81,39 +81,6 @@ pub struct PaneSwapParams {
     pub target_pane_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneMoveParams {
-    pub pane_id: String,
-    pub destination: PaneMoveDestination,
-    #[serde(default)]
-    pub focus: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum PaneMoveDestination {
-    Tab {
-        tab_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        target_pane_id: Option<String>,
-        split: SplitDirection,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        ratio: Option<f32>,
-    },
-    NewTab {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        workspace_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        label: Option<String>,
-    },
-    NewWorkspace {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        label: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        tab_label: Option<String>,
-    },
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct PaneZoomParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -137,33 +104,6 @@ pub enum PaneZoomMode {
 pub struct PaneLayoutParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct PaneProcessInfoParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pane_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct LayoutExportParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pane_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct LayoutApplyParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tab_label: Option<String>,
-    #[serde(default)]
-    pub focus: bool,
-    pub root: LayoutNode,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -212,19 +152,6 @@ pub struct LayoutPane {
     pub command: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneNeighborParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pane_id: Option<String>,
-    pub direction: PaneDirection,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct PaneEdgesParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pane_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -368,22 +295,6 @@ pub struct PaneReadParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneReportAgentParams {
-    pub pane_id: String,
-    pub source: String,
-    pub agent: String,
-    pub state: PaneAgentState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seq: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_session_path: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneReportAgentSessionParams {
     pub pane_id: String,
     pub source: String,
@@ -396,54 +307,6 @@ pub struct PaneReportAgentSessionParams {
     pub agent_session_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_start_source: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneReportMetadataParams {
-    pub pane_id: String,
-    pub source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub applies_to_source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_agent: Option<String>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub state_labels: HashMap<String, String>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    #[schemars(schema_with = "super::common::metadata_token_patch_schema")]
-    pub tokens: HashMap<String, Option<String>>,
-    #[serde(default)]
-    pub clear_title: bool,
-    #[serde(default)]
-    pub clear_display_agent: bool,
-    #[serde(default)]
-    pub clear_state_labels: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seq: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 86_400_000))]
-    pub ttl_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneClearAgentAuthorityParams {
-    pub pane_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seq: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneReleaseAgentParams {
-    pub pane_id: String,
-    pub source: String,
-    pub agent: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

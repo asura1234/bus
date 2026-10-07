@@ -206,21 +206,6 @@ fn request_round_trips_for_server_reload_config() {
 }
 
 #[test]
-fn request_round_trips_for_agent_explain() {
-    let request = Request {
-        id: "req_agent_explain".into(),
-        method: Method::AgentExplain(AgentTarget {
-            target: "agent-1".into(),
-        }),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "agent.explain");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
-}
-
-#[test]
 fn notification_show_request_parses() {
     let json = r#"{"id":"req_1","method":"notification.show","params":{"title":"build failed","body":"api workspace","position":"top-left","sound":"request"}}"#;
     let request: Request = serde_json::from_str(json).unwrap();
@@ -269,49 +254,6 @@ fn client_window_title_requests_round_trip() {
     assert_eq!(json["method"], "client.window_title.clear");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, clear);
-}
-
-#[test]
-fn agent_view_requests_round_trip() {
-    let set_json = serde_json::json!({
-        "id": "view-set",
-        "method": "agent.view.set",
-        "params": {
-            "source": "example.views",
-            "label": "current + attention",
-            "filter": {
-                "op": "any",
-                "filters": [
-                    {
-                        "op": "eq",
-                        "field": "workspace_id",
-                        "value": {"context": "current_workspace_id"}
-                    },
-                    {
-                        "op": "in",
-                        "field": "status",
-                        "values": ["blocked", "done"]
-                    }
-                ]
-            },
-            "sort": [
-                {"field": "attention", "order": "desc"},
-                {"field": "state_change_seq", "order": "desc"}
-            ]
-        }
-    });
-    let request: Request = serde_json::from_value(set_json.clone()).unwrap();
-    assert!(matches!(request.method, Method::AgentViewSet(_)));
-    assert_eq!(serde_json::to_value(request).unwrap(), set_json);
-
-    let clear_json = serde_json::json!({
-        "id": "view-clear",
-        "method": "agent.view.clear",
-        "params": {"source": "example.views"}
-    });
-    let request: Request = serde_json::from_value(clear_json.clone()).unwrap();
-    assert!(matches!(request.method, Method::AgentViewClear(_)));
-    assert_eq!(serde_json::to_value(request).unwrap(), clear_json);
 }
 
 #[test]
@@ -414,22 +356,6 @@ fn pane_current_request_round_trips() {
 }
 
 #[test]
-fn pane_process_info_request_round_trips() {
-    let request = Request {
-        id: "req_process_info".into(),
-        method: Method::PaneProcessInfo(PaneProcessInfoParams {
-            pane_id: Some("w1-1".into()),
-        }),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "pane.process_info");
-    assert_eq!(json["params"]["pane_id"], "w1-1");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
-}
-
-#[test]
 fn event_envelope_round_trips() {
     let events = [
         EventEnvelope {
@@ -446,23 +372,6 @@ fn event_envelope_round_trips() {
                 workspace_id: "w_1".into(),
                 insert_index: 2,
                 workspaces: vec![],
-            },
-        },
-        EventEnvelope {
-            event: EventKind::WorkspaceReordered,
-            data: EventData::WorkspaceReordered {
-                workspace_ids: vec!["w_1".into(), "w_2".into()],
-                before_workspace_id: Some("w_3".into()),
-                workspaces: vec![],
-            },
-        },
-        EventEnvelope {
-            event: EventKind::TabMoved,
-            data: EventData::TabMoved {
-                tab_id: "w_1:1".into(),
-                workspace_id: "w_1".into(),
-                insert_index: 1,
-                tabs: vec![],
             },
         },
         EventEnvelope {
@@ -765,70 +674,7 @@ fn session_snapshot_request_and_response_round_trip() {
 }
 
 #[test]
-fn layout_export_apply_round_trip() {
-    let root = LayoutNode::Split {
-        direction: SplitDirection::Right,
-        ratio: 0.6,
-        first: Box::new(LayoutNode::Pane {
-            pane: LayoutPane {
-                label: Some("editor".into()),
-                cwd: Some("/repo".into()),
-                ..Default::default()
-            },
-        }),
-        second: Box::new(LayoutNode::Pane {
-            pane: LayoutPane {
-                label: Some("tests".into()),
-                command: Some(vec!["sh".into(), "-c".into(), "just test".into()]),
-                env: HashMap::from([("HERDR_ROLE".into(), "tests".into())]),
-                ..Default::default()
-            },
-        }),
-    };
-
-    let export = Request {
-        id: "layout_export".into(),
-        method: Method::LayoutExport(LayoutExportParams {
-            tab_id: Some("w1:1".into()),
-            pane_id: None,
-        }),
-    };
-    let json = serde_json::to_string(&export).unwrap();
-    assert!(json.contains("\"method\":\"layout.export\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, export);
-
-    let apply = Request {
-        id: "layout_apply".into(),
-        method: Method::LayoutApply(LayoutApplyParams {
-            workspace_id: Some("w1".into()),
-            tab_id: None,
-            tab_label: Some("dev".into()),
-            focus: true,
-            root: root.clone(),
-        }),
-    };
-    let json = serde_json::to_string(&apply).unwrap();
-    assert!(json.contains("\"method\":\"layout.apply\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, apply);
-
-    let response = SuccessResponse {
-        id: "layout_export".into(),
-        result: ResponseResult::LayoutExport {
-            layout: LayoutDescription {
-                workspace_id: "w1".into(),
-                tab_id: "w1:1".into(),
-                zoomed: false,
-                focused_pane_id: "w1-1".into(),
-                root,
-            },
-        },
-    };
-    let json = serde_json::to_string(&response).unwrap();
-    let restored: SuccessResponse = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, response);
-
+fn layout_split_ratio_response_round_trips() {
     let response = SuccessResponse {
         id: "layout_ratio".into(),
         result: ResponseResult::LayoutSplitRatioSet {
@@ -866,30 +712,6 @@ fn authority_mutation_requests_round_trip() {
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, workspace_move);
 
-    let workspace_move_block = Request {
-        id: "move_ws_block".into(),
-        method: Method::WorkspaceMoveBlock(WorkspaceMoveBlockParams {
-            workspace_ids: vec!["w1".into(), "w2".into()],
-            before_workspace_id: Some("w3".into()),
-        }),
-    };
-    let json = serde_json::to_value(&workspace_move_block).unwrap();
-    assert_eq!(json["method"], "workspace.move_block");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, workspace_move_block);
-
-    let tab_move = Request {
-        id: "move_tab".into(),
-        method: Method::TabMove(TabMoveParams {
-            tab_id: "w1:1".into(),
-            insert_index: 1,
-        }),
-    };
-    let json = serde_json::to_value(&tab_move).unwrap();
-    assert_eq!(json["method"], "tab.move");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, tab_move);
-
     let pane_focus = Request {
         id: "focus_pane".into(),
         method: Method::PaneFocus(PaneTarget {
@@ -920,16 +742,12 @@ fn authority_mutation_requests_round_trip() {
         method: Method::EventsSubscribe(EventsSubscribeParams {
             subscriptions: vec![
                 Subscription::WorkspaceMoved {},
-                Subscription::WorkspaceReordered {},
-                Subscription::TabMoved {},
                 Subscription::LayoutUpdated {},
             ],
         }),
     };
     let json = serde_json::to_string(&subscription).unwrap();
     assert!(json.contains("\"type\":\"workspace.moved\""));
-    assert!(json.contains("\"type\":\"workspace.reordered\""));
-    assert!(json.contains("\"type\":\"tab.moved\""));
     assert!(json.contains("\"type\":\"layout.updated\""));
     let restored: Request = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, subscription);

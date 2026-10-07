@@ -65,10 +65,6 @@ pub enum Method {
     WorkspaceRename(WorkspaceRenameParams),
     #[serde(rename = "workspace.move")]
     WorkspaceMove(WorkspaceMoveParams),
-    #[serde(rename = "workspace.move_block")]
-    WorkspaceMoveBlock(WorkspaceMoveBlockParams),
-    #[serde(rename = "workspace.report_metadata")]
-    WorkspaceReportMetadata(WorkspaceReportMetadataParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
     #[serde(rename = "tab.create")]
@@ -81,8 +77,6 @@ pub enum Method {
     TabFocus(TabTarget),
     #[serde(rename = "tab.rename")]
     TabRename(TabRenameParams),
-    #[serde(rename = "tab.move")]
-    TabMove(TabMoveParams),
     #[serde(rename = "tab.close")]
     TabClose(TabTarget),
     #[serde(rename = "agent.list")]
@@ -97,16 +91,10 @@ pub enum Method {
     AgentDialogChoose(AgentDialogChooseParams),
     #[serde(rename = "agent.dialog.answer")]
     AgentDialogAnswer(AgentDialogAnswerParams),
-    #[serde(rename = "agent.explain")]
-    AgentExplain(AgentTarget),
     #[serde(rename = "agent.send_keys")]
     AgentSendKeys(AgentSendKeysParams),
     #[serde(rename = "agent.rename")]
     AgentRename(AgentRenameParams),
-    #[serde(rename = "agent.view.set")]
-    AgentViewSet(AgentViewSetParams),
-    #[serde(rename = "agent.view.clear")]
-    AgentViewClear(AgentViewClearParams),
     #[serde(rename = "agent.focus")]
     AgentFocus(AgentTarget),
     #[serde(rename = "agent.start")]
@@ -123,24 +111,12 @@ pub enum Method {
     PaneSplit(PaneSplitParams),
     #[serde(rename = "pane.swap")]
     PaneSwap(PaneSwapParams),
-    #[serde(rename = "pane.move")]
-    PaneMove(PaneMoveParams),
     #[serde(rename = "pane.zoom")]
     PaneZoom(PaneZoomParams),
     #[serde(rename = "pane.layout")]
     PaneLayout(PaneLayoutParams),
-    #[serde(rename = "pane.process_info")]
-    PaneProcessInfo(PaneProcessInfoParams),
-    #[serde(rename = "layout.export")]
-    LayoutExport(LayoutExportParams),
-    #[serde(rename = "layout.apply")]
-    LayoutApply(LayoutApplyParams),
     #[serde(rename = "layout.set_split_ratio")]
     LayoutSetSplitRatio(LayoutSetSplitRatioParams),
-    #[serde(rename = "pane.neighbor")]
-    PaneNeighbor(PaneNeighborParams),
-    #[serde(rename = "pane.edges")]
-    PaneEdges(PaneEdgesParams),
     #[serde(rename = "pane.focus_direction")]
     PaneFocusDirection(PaneFocusDirectionParams),
     #[serde(rename = "pane.resize")]
@@ -175,16 +151,8 @@ pub enum Method {
     PaneSendInput(PaneSendInputParams),
     #[serde(rename = "pane.read")]
     PaneRead(PaneReadParams),
-    #[serde(rename = "pane.report_agent")]
-    PaneReportAgent(PaneReportAgentParams),
     #[serde(rename = "pane.report_agent_session")]
     PaneReportAgentSession(PaneReportAgentSessionParams),
-    #[serde(rename = "pane.report_metadata")]
-    PaneReportMetadata(PaneReportMetadataParams),
-    #[serde(rename = "pane.clear_agent_authority")]
-    PaneClearAgentAuthority(PaneClearAgentAuthorityParams),
-    #[serde(rename = "pane.release_agent")]
-    PaneReleaseAgent(PaneReleaseAgentParams),
     #[serde(rename = "pane.close")]
     PaneClose(PaneTarget),
     #[serde(rename = "events.subscribe")]

@@ -19,14 +19,10 @@ pub enum Subscription {
     WorkspaceCreated {},
     #[serde(rename = "workspace.updated")]
     WorkspaceUpdated {},
-    #[serde(rename = "workspace.metadata_updated")]
-    WorkspaceMetadataUpdated {},
     #[serde(rename = "workspace.renamed")]
     WorkspaceRenamed {},
     #[serde(rename = "workspace.moved")]
     WorkspaceMoved {},
-    #[serde(rename = "workspace.reordered")]
-    WorkspaceReordered {},
     #[serde(rename = "workspace.closed")]
     WorkspaceClosed {},
     #[serde(rename = "workspace.focused")]
@@ -39,8 +35,6 @@ pub enum Subscription {
     TabFocused {},
     #[serde(rename = "tab.renamed")]
     TabRenamed {},
-    #[serde(rename = "tab.moved")]
-    TabMoved {},
     #[serde(rename = "pane.created")]
     PaneCreated {},
     #[serde(rename = "pane.closed")]
@@ -49,8 +43,6 @@ pub enum Subscription {
     PaneUpdated {},
     #[serde(rename = "pane.focused")]
     PaneFocused {},
-    #[serde(rename = "pane.moved")]
-    PaneMoved {},
     #[serde(rename = "pane.exited")]
     PaneExited {},
     #[serde(rename = "pane.agent_detected")]
@@ -187,22 +179,18 @@ pub enum EventMatch {
 pub enum EventKind {
     WorkspaceCreated,
     WorkspaceUpdated,
-    WorkspaceMetadataUpdated,
     WorkspaceClosed,
     WorkspaceRenamed,
     WorkspaceMoved,
-    WorkspaceReordered,
     WorkspaceFocused,
     TabCreated,
     TabClosed,
     TabRenamed,
-    TabMoved,
     TabFocused,
     PaneCreated,
     PaneClosed,
     PaneUpdated,
     PaneFocused,
-    PaneMoved,
     PaneOutputChanged,
     PaneExited,
     PaneAgentDetected,
@@ -278,9 +266,6 @@ pub enum EventData {
     WorkspaceUpdated {
         workspace: WorkspaceInfo,
     },
-    WorkspaceMetadataUpdated {
-        workspace: WorkspaceInfo,
-    },
     WorkspaceClosed {
         workspace_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -293,12 +278,6 @@ pub enum EventData {
     WorkspaceMoved {
         workspace_id: String,
         insert_index: usize,
-        workspaces: Vec<WorkspaceInfo>,
-    },
-    WorkspaceReordered {
-        workspace_ids: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        before_workspace_id: Option<String>,
         workspaces: Vec<WorkspaceInfo>,
     },
     WorkspaceFocused {
@@ -315,12 +294,6 @@ pub enum EventData {
         tab_id: String,
         workspace_id: String,
         label: String,
-    },
-    TabMoved {
-        tab_id: String,
-        workspace_id: String,
-        insert_index: usize,
-        tabs: Vec<TabInfo>,
     },
     TabFocused {
         tab_id: String,
@@ -339,20 +312,6 @@ pub enum EventData {
     PaneFocused {
         pane_id: String,
         workspace_id: String,
-    },
-    PaneMoved {
-        previous_pane_id: String,
-        previous_workspace_id: String,
-        previous_tab_id: String,
-        pane: Box<PaneInfo>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        created_workspace: Option<WorkspaceInfo>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        created_tab: Option<TabInfo>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        closed_workspace_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        closed_tab_id: Option<String>,
     },
     PaneOutputChanged {
         pane_id: String,

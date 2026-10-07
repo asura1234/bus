@@ -431,13 +431,6 @@ fn wait_for_resolved_agent(
                     should_probe = true;
                 }
                 EventData::PaneUpdated { pane } if pane.pane_id == pane_id => should_probe = true,
-                EventData::PaneMoved {
-                    previous_pane_id, ..
-                } if previous_pane_id == pane_id => {
-                    return agent_wait_not_running(request_id)
-                        .map(AgentWaitOutcome::Response)
-                        .map(Some);
-                }
                 EventData::PaneClosed {
                     pane_id: event_pane,
                     ..
