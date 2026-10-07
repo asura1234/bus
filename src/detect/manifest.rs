@@ -8,8 +8,6 @@ use serde::Deserialize;
 
 use super::{agent_label, parse_agent_label, Agent, AgentDetection, AgentState};
 
-pub const DEFAULT_KNOWN_AGENT_IDLE_FALLBACK: &str = "default_known_agent_idle_fallback";
-
 /// Input to the detection engine, carrying the screen snapshot plus any
 /// OSC-derived strings captured from the terminal title / progress sequences.
 /// Pass empty strings for `osc_title` and `osc_progress` when the data is not
@@ -21,75 +19,10 @@ pub struct DetectionInput<'a> {
     pub osc_progress: &'a str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetectionExplain {
-    pub agent: Option<String>,
-    pub state: AgentState,
-    pub source: Option<ManifestSource>,
-    pub matched_rule: Option<MatchedRule>,
-    pub screen_detection_skipped: bool,
-    pub visible_idle: bool,
-    pub visible_blocker: bool,
-    pub visible_working: bool,
-    pub skip_state_update: bool,
-    pub skipped_update_reason: Option<String>,
-    pub fallback_reason: Option<String>,
-    pub evaluated_rules: Vec<EvaluatedRule>,
-    pub warning: Option<String>,
-    pub manifest_version: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ManifestSource {
-    Bundled,
-    Override(PathBuf),
-}
-
-impl ManifestSource {
-    pub fn label(&self) -> String {
-        match self {
-            Self::Bundled => "bundled".to_string(),
-            Self::Override(path) => path.display().to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MatchedRule {
-    pub id: String,
-    pub priority: i32,
-    pub region: String,
-    pub state: AgentState,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvaluatedRule {
-    pub id: String,
-    pub priority: i32,
-    pub region: String,
-    pub evidence: RuleEvidence,
-    pub state: AgentState,
-    pub matched: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuleEvidence {
-    pub contains: Vec<String>,
-    pub regex: Vec<String>,
-    pub line_regex: Vec<String>,
-    pub all_count: usize,
-    pub any_count: usize,
-    pub not_count: usize,
-    pub region_bytes: usize,
-    pub region_preview: String,
-}
-
 #[derive(Debug, Clone)]
 struct LoadedManifest {
     manifest: AgentManifest,
     compiled_rules: Vec<CompiledRule>,
-    source: ManifestSource,
-    warning: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,7 +34,8 @@ struct ManifestCache {
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentManifest {
     id: String,
-    version: Option<String>,
+    #[serde(rename = "version")]
+    _version: Option<String>,
     min_engine_version: Option<u32>,
     #[serde(rename = "updated_at")]
     _updated_at: Option<String>,
@@ -257,156 +191,62 @@ fn build_manifest_cache() -> ManifestCache {
 
 pub fn detect_with_osc(agent: Agent, input: DetectionInput<'_>) -> AgentDetection {
     let Some(loaded) = load_manifest(agent) else {
-        return fallback_explain(agent, None).into_detection();
+        return idle_fallback();
     };
-    evaluate_loaded_manifest(agent, input, loaded).into_detection()
+    evaluate_loaded_manifest(input, &loaded)
 }
 
-#[cfg(test)]
-pub fn explain(agent: Agent, screen_content: &str) -> DetectionExplain {
-    explain_with_input(
-        agent,
-        DetectionInput {
-            screen: screen_content,
-            osc_title: "",
-            osc_progress: "",
-        },
-    )
-}
-
-pub fn explain_with_input(agent: Agent, input: DetectionInput<'_>) -> DetectionExplain {
-    let Some(loaded) = load_manifest(agent) else {
-        return fallback_explain(agent, None);
+fn evaluate_loaded_manifest(input: DetectionInput<'_>, loaded: &LoadedManifest) -> AgentDetection {
+    let Some(rule) = matched_manifest_rule(input, loaded) else {
+        return idle_fallback();
     };
-    evaluate_loaded_manifest(agent, input, loaded)
-}
-
-pub fn should_skip_state_update(agent: Agent, screen_content: &str) -> bool {
-    let Some(loaded) = load_manifest(agent) else {
-        return false;
-    };
-    evaluate_loaded_manifest(
-        agent,
-        DetectionInput {
-            screen: screen_content,
-            osc_title: "",
-            osc_progress: "",
-        },
-        loaded,
-    )
-    .skip_state_update
-}
-
-impl DetectionExplain {
-    fn into_detection(self) -> AgentDetection {
-        AgentDetection {
-            state: self.state,
-            skip_state_update: self.skip_state_update,
-            visible_idle: self.visible_idle,
-            visible_blocker: self.visible_blocker,
-            visible_working: self.visible_working,
-        }
-    }
-}
-
-fn evaluate_loaded_manifest(
-    agent: Agent,
-    input: DetectionInput<'_>,
-    loaded: LoadedManifest,
-) -> DetectionExplain {
-    let mut matched: Option<(&ManifestRule, String)> = None;
-    let mut evaluated_rules = Vec::new();
-
-    for (rule, compiled_rule) in loaded.manifest.rules.iter().zip(&loaded.compiled_rules) {
-        let region_text = region(input, &rule.region);
-        let matched_rule = compiled_rule_matches(compiled_rule, region_text);
-        evaluated_rules.push(EvaluatedRule {
-            id: rule.id.clone(),
-            priority: rule.priority,
-            region: rule.region.clone(),
-            evidence: rule_evidence(rule, region_text),
-            state: rule
-                .state
-                .map(AgentState::from)
-                .unwrap_or(AgentState::Unknown),
-            matched: matched_rule,
-        });
-
-        if !matched_rule {
-            continue;
-        }
-
-        match matched {
-            Some((previous, _)) if previous.priority >= rule.priority => {}
-            _ => matched = Some((rule, rule.region.clone())),
-        }
-    }
-
-    let Some((rule, region_name)) = matched else {
-        return fallback_explain(agent, Some((loaded, evaluated_rules)));
-    };
-
     let state = rule
         .state
         .map(AgentState::from)
         .unwrap_or(AgentState::Unknown);
-    let skipped_update_reason = rule
-        .skip_state_update
-        .then(|| format!("matched_rule:{}", rule.id));
-
-    DetectionExplain {
-        agent: Some(agent_label(agent).to_string()),
+    AgentDetection {
         state,
-        source: Some(loaded.source),
-        matched_rule: Some(MatchedRule {
-            id: rule.id.clone(),
-            priority: rule.priority,
-            region: region_name,
-            state,
-        }),
-        screen_detection_skipped: false,
+        skip_state_update: rule.skip_state_update,
         visible_idle: rule.visible_idle && state == AgentState::Idle,
         visible_blocker: rule.visible_blocker && state == AgentState::Blocked,
         visible_working: rule.visible_working && state == AgentState::Working,
-        skip_state_update: rule.skip_state_update,
-        skipped_update_reason,
-        fallback_reason: None,
-        evaluated_rules,
-        warning: loaded.warning,
-        manifest_version: loaded.manifest.version.clone(),
     }
 }
 
-fn fallback_explain(
-    agent: Agent,
-    context: Option<(LoadedManifest, Vec<EvaluatedRule>)>,
-) -> DetectionExplain {
-    let (source, evaluated_rules, warning, manifest_version) = context
-        .map(|(loaded, evaluated)| {
-            (
-                Some(loaded.source),
-                evaluated,
-                loaded.warning,
-                loaded.manifest.version,
-            )
-        })
-        .unwrap_or((None, Vec::new(), None, None));
+pub fn should_skip_state_update(agent: Agent, screen_content: &str) -> bool {
+    detect_with_osc(
+        agent,
+        DetectionInput {
+            screen: screen_content,
+            osc_title: "",
+            osc_progress: "",
+        },
+    )
+    .skip_state_update
+}
 
-    DetectionExplain {
-        agent: Some(agent_label(agent).to_string()),
+fn matched_manifest_rule<'a>(
+    input: DetectionInput<'_>,
+    loaded: &'a LoadedManifest,
+) -> Option<&'a ManifestRule> {
+    let mut matched: Option<&ManifestRule> = None;
+    for (rule, compiled_rule) in loaded.manifest.rules.iter().zip(&loaded.compiled_rules) {
+        if compiled_rule_matches(compiled_rule, region(input, &rule.region))
+            && matched.is_none_or(|previous| previous.priority < rule.priority)
+        {
+            matched = Some(rule);
+        }
+    }
+    matched
+}
+
+fn idle_fallback() -> AgentDetection {
+    AgentDetection {
         state: AgentState::Idle,
-        source,
-        matched_rule: None,
-        screen_detection_skipped: false,
+        skip_state_update: false,
         visible_idle: false,
         visible_blocker: false,
         visible_working: false,
-        skip_state_update: false,
-        skipped_update_reason: None,
-        fallback_reason: Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK.to_string()),
-        evaluated_rules,
-        warning,
-        manifest_version,
     }
 }
 
@@ -426,12 +266,12 @@ fn load_manifest(agent: Agent) -> Option<LoadedManifest> {
 fn load_manifest_uncached(agent: Agent) -> Option<LoadedManifest> {
     let bundled = bundled_manifest(agent)?;
     let Some(path) = override_path(agent).filter(|path| path.exists()) else {
-        return Some(bundled_loaded_manifest(agent, bundled, None));
+        return Some(bundled_loaded_manifest(agent, bundled));
     };
 
     let warning = match read_override_manifest(&path) {
         Ok(manifest) if manifest_matches_agent(&manifest, agent) => {
-            match loaded_manifest(manifest, ManifestSource::Override(path.clone()), None) {
+            match loaded_manifest(manifest) {
                 Ok(loaded) => return Some(loaded),
                 Err(err) => format!(
                     "ignored override {} because it could not be compiled: {err}",
@@ -450,29 +290,20 @@ fn load_manifest_uncached(agent: Agent) -> Option<LoadedManifest> {
             path.display()
         ),
     };
-    Some(bundled_loaded_manifest(agent, bundled, Some(warning)))
+    tracing::warn!("{warning}");
+    Some(bundled_loaded_manifest(agent, bundled))
 }
 
-fn loaded_manifest(
-    manifest: AgentManifest,
-    source: ManifestSource,
-    warning: Option<String>,
-) -> Result<LoadedManifest, String> {
+fn loaded_manifest(manifest: AgentManifest) -> Result<LoadedManifest, String> {
     let compiled_rules = compile_manifest(&manifest)?;
     Ok(LoadedManifest {
         manifest,
         compiled_rules,
-        source,
-        warning,
     })
 }
 
-fn bundled_loaded_manifest(
-    agent: Agent,
-    manifest: AgentManifest,
-    warning: Option<String>,
-) -> LoadedManifest {
-    loaded_manifest(manifest, ManifestSource::Bundled, warning).unwrap_or_else(|err| {
+fn bundled_loaded_manifest(agent: Agent, manifest: AgentManifest) -> LoadedManifest {
+    loaded_manifest(manifest).unwrap_or_else(|err| {
         panic!(
             "bundled {} manifest could not be compiled: {err}",
             agent_label(agent)
@@ -503,57 +334,6 @@ pub fn agent_state_label(state: AgentState) -> &'static str {
         AgentState::Blocked => "blocked",
         AgentState::Unknown => "unknown",
     }
-}
-
-pub fn explain_to_json_value(explain: &DetectionExplain) -> serde_json::Value {
-    let matched_rule = explain.matched_rule.as_ref().map(|rule| {
-        serde_json::json!({
-            "id": rule.id,
-            "priority": rule.priority,
-            "region": rule.region,
-            "state": agent_state_label(rule.state),
-        })
-    });
-    let evaluated_rules: Vec<_> = explain
-        .evaluated_rules
-        .iter()
-        .map(|rule| {
-            serde_json::json!({
-                "id": rule.id,
-                "priority": rule.priority,
-                "region": rule.region,
-                "state": agent_state_label(rule.state),
-                "matched": rule.matched,
-                "evidence": {
-                    "contains": &rule.evidence.contains,
-                    "regex": &rule.evidence.regex,
-                    "line_regex": &rule.evidence.line_regex,
-                    "all_count": rule.evidence.all_count,
-                    "any_count": rule.evidence.any_count,
-                    "not_count": rule.evidence.not_count,
-                    "region_bytes": rule.evidence.region_bytes,
-                    "region_preview": &rule.evidence.region_preview,
-                },
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "agent": explain.agent,
-        "state": agent_state_label(explain.state),
-        "manifest_source": explain.source.as_ref().map(|source| source.label()),
-        "manifest_version": &explain.manifest_version,
-        "matched_rule": matched_rule,
-        "visible_idle": explain.visible_idle,
-        "visible_blocker": explain.visible_blocker,
-        "visible_working": explain.visible_working,
-        "screen_detection_skipped": explain.screen_detection_skipped,
-        "skip_state_update": explain.skip_state_update,
-        "skipped_update_reason": explain.skipped_update_reason,
-        "fallback_reason": explain.fallback_reason,
-        "warning": explain.warning,
-        "evaluated_rules": evaluated_rules,
-    })
 }
 
 pub(crate) fn parse_manifest(content: &str) -> Result<AgentManifest, String> {
@@ -846,28 +626,6 @@ fn compile_gate(gate: &ManifestGate) -> Result<CompiledGate, String> {
 fn compiled_rule_matches(rule: &CompiledRule, text: &str) -> bool {
     let lower_text = text.to_lowercase();
     compiled_gate_matches(&rule.gate, text, &lower_text)
-}
-
-fn rule_evidence(rule: &ManifestRule, region_text: &str) -> RuleEvidence {
-    RuleEvidence {
-        contains: rule.contains.clone(),
-        regex: rule.regex.clone(),
-        line_regex: rule.line_regex.clone(),
-        all_count: rule.all.len(),
-        any_count: rule.any.len(),
-        not_count: rule.not_gate.len(),
-        region_bytes: region_text.len(),
-        region_preview: bounded_preview(region_text),
-    }
-}
-
-fn bounded_preview(text: &str) -> String {
-    const MAX_CHARS: usize = 240;
-    let mut preview: String = text.chars().take(MAX_CHARS).collect();
-    if text.chars().count() > MAX_CHARS {
-        preview.push_str("...");
-    }
-    preview
 }
 
 fn compiled_gate_matches(gate: &CompiledGate, text: &str, lower_text: &str) -> bool {

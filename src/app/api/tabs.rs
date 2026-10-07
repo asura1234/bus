@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::api::schema::{
     EventData, EventEnvelope, EventKind, ResponseResult, TabCreateParams, TabListParams,
-    TabMoveParams, TabRenameParams, TabTarget,
+    TabRenameParams, TabTarget,
 };
 use crate::app::{App, Mode};
 
@@ -170,48 +170,6 @@ impl App {
         let tab = self.tab_info(ws_idx, tab_idx).unwrap();
 
         encode_success(id, ResponseResult::TabInfo { tab })
-    }
-
-    pub(super) fn handle_tab_move(&mut self, id: String, params: TabMoveParams) -> String {
-        let Some((ws_idx, tab_idx)) = self.parse_tab_id(&params.tab_id) else {
-            return tab_not_found(id, &params.tab_id);
-        };
-        let Some(ws) = self.state.workspaces.get(ws_idx) else {
-            return tab_not_found(id, &params.tab_id);
-        };
-        if params.insert_index > ws.tabs.len() {
-            return encode_error(
-                id,
-                "tab_move_failed",
-                format!("insert_index {} is out of bounds", params.insert_index),
-            );
-        }
-
-        let tab_id = self
-            .public_tab_id(ws_idx, tab_idx)
-            .unwrap_or_else(|| crate::workspace::public_tab_id_for_number(&ws.id, tab_idx + 1));
-        let workspace_id = self.public_workspace_id(ws_idx);
-        let insert_index = params.insert_index;
-        let moved = self
-            .state
-            .workspaces
-            .get_mut(ws_idx)
-            .is_some_and(|ws| ws.move_tab(tab_idx, insert_index));
-        let tabs = self.tab_list_info(ws_idx);
-        if moved {
-            self.schedule_session_save();
-            self.emit_event(EventEnvelope {
-                event: EventKind::TabMoved,
-                data: EventData::TabMoved {
-                    tab_id,
-                    workspace_id,
-                    insert_index,
-                    tabs: tabs.clone(),
-                },
-            });
-        }
-
-        encode_success(id, ResponseResult::TabList { tabs })
     }
 
     pub(super) fn handle_tab_close(&mut self, id: String, target: TabTarget) -> String {
@@ -435,56 +393,6 @@ mod tests {
         assert_eq!(workspace.tabs.len(), 1);
         assert_eq!(workspace.active_tab, 0);
         assert!(workspace.tabs[0].custom_name.is_none());
-    }
-
-    #[test]
-    fn api_tab_move_reorders_tabs_in_target_workspace() {
-        let event_hub = crate::api::EventHub::default();
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            event_hub.clone(),
-        );
-        let mut workspace = Workspace::test_new("tabs");
-        workspace.test_add_tab(Some("two"));
-        workspace.test_add_tab(Some("three"));
-        app.state.workspaces = vec![workspace];
-        app.state.active = Some(0);
-        app.state.selected = 0;
-        let moved_root = app.state.workspaces[0].tabs[0].root_pane;
-        let moved_id = app.public_tab_id(0, 0).unwrap();
-
-        let response = app.handle_tab_move(
-            "req".into(),
-            TabMoveParams {
-                tab_id: moved_id.clone(),
-                insert_index: 3,
-            },
-        );
-
-        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-        let ResponseResult::TabList { tabs } = success.result else {
-            panic!("expected tab list");
-        };
-        assert_eq!(app.state.workspaces[0].tabs[2].root_pane, moved_root);
-        assert_eq!(tabs[2].tab_id, app.public_tab_id(0, 2).unwrap());
-        let events = event_hub.events_after(0);
-        assert!(events.iter().any(|(_, event)| {
-            matches!(
-                &event.data,
-                EventData::TabMoved {
-                    tab_id,
-                    workspace_id,
-                    insert_index: 3,
-                    tabs,
-                } if tab_id == &moved_id
-                    && workspace_id == &app.public_workspace_id(0)
-                    && tabs[2].tab_id == moved_id
-            )
-        }));
     }
 
     #[tokio::test]
