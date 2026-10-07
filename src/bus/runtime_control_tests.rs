@@ -168,6 +168,17 @@ fn dev_room_notes_replace_and_clear_the_room_notes() {
         json!({"room":"nope","text":"x"}),
     );
     assert!(!unknown.ok);
+    let master = call(
+        &mut worker,
+        "notes-5",
+        "room.notes",
+        json!({"room":"MASTER","text":"x"}),
+    );
+    assert!(!master.ok, "{master:?}");
+    assert_eq!(
+        master.error.unwrap().message,
+        "The MASTER room has no notes"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -1209,16 +1220,16 @@ fn dev_master_room_is_selectable_listed_and_fixed() {
     assert_eq!(state.result["rooms"][1]["kind"], "work");
     assert_eq!(state.result["rooms"][1]["id"], json!(room));
 
-    for (id, selector) in [("focus-a", "master"), ("focus-b", "MASTER")] {
-        let notes = call(
+    for (id, selector, on) in [("focus-a", "master", false), ("focus-b", "MASTER", true)] {
+        let sound = call(
             &mut worker,
             id,
-            "room.notes",
-            json!({"room": selector, "text": "orchestrators"}),
+            "room.sound",
+            json!({"room": selector, "on": on}),
         );
-        assert!(notes.ok, "{notes:?}");
+        assert!(sound.ok, "{sound:?}");
+        assert_eq!(worker.state.room(master).unwrap().sound, Some(on));
     }
-    assert_eq!(worker.state.room(master).unwrap().notes, "orchestrators");
 
     let rename = call(
         &mut worker,

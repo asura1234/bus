@@ -332,6 +332,14 @@ impl BusUi {
             });
         }
     }
+    /// MASTER has no notes: they are a work room's status board, and MASTER is
+    /// where the human talks to orchestrators.
+    fn room_has_notes(&self) -> bool {
+        self.room
+            .and_then(|id| self.snapshot.state.room(id))
+            .is_some_and(|room| room.kind != RoomKind::Master)
+    }
+
     /// Starting to edit the notes brings their caret back into view.
     fn reveal_notes_caret(&mut self) {
         if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
@@ -648,11 +656,13 @@ impl BusUi {
                 }
             }
             Action::Notes => {
-                if !self.notes_focus {
-                    self.reveal_notes_caret();
+                if self.room_has_notes() {
+                    if !self.notes_focus {
+                        self.reveal_notes_caret();
+                    }
+                    self.notes_focus = true;
+                    self.recipient_menu = false;
                 }
-                self.notes_focus = true;
-                self.recipient_menu = false;
             }
             Action::Composer => {
                 self.notes_focus = false;
@@ -885,10 +895,12 @@ impl BusUi {
                 }
             }
             (KeyCode::F(3), _) => {
-                if !self.notes_focus {
-                    self.reveal_notes_caret();
+                if self.room_has_notes() {
+                    if !self.notes_focus {
+                        self.reveal_notes_caret();
+                    }
+                    self.notes_focus = !self.notes_focus;
                 }
-                self.notes_focus = !self.notes_focus;
             }
             (KeyCode::Char('e' | 'E'), modifiers)
                 if modifiers.contains(KeyModifiers::CONTROL)

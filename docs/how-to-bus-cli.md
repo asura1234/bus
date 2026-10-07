@@ -694,7 +694,8 @@ rendered.
 
 Replace a room's notes, the free-text box under the room name in the UI. The
 text replaces the whole field; pass `--text ""` to clear it. `state` returns each
-room's current notes:
+room's current notes. Only work rooms have notes: MASTER shows no notes box, and
+`room notes` on MASTER fails with "The MASTER room has no notes":
 
 ```sh
 bus room notes "$room_id" --text "Goal: ship notes

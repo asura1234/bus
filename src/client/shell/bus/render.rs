@@ -1166,17 +1166,24 @@ impl BusUi {
         }
         // The notes box grows with its text up to a quarter of the window,
         // keeps one row for the F3 prompt, and scrolls beyond that. History
-        // takes the rows below it.
+        // takes the rows below it. MASTER has no notes (the human talks to
+        // orchestrators there; status boards live in work rooms), so its
+        // history starts right under the room name.
+        let has_notes = room.kind != RoomKind::Master;
         let note_lines = wrap(&local.notes.text, width).len().max(1);
-        let note_height = (note_lines.min(usize::from((main.height / 4).max(1))) as u16)
-            .min(composer_y.saturating_sub(5));
+        let note_height = if has_notes {
+            (note_lines.min(usize::from((main.height / 4).max(1))) as u16)
+                .min(composer_y.saturating_sub(5))
+        } else {
+            0
+        };
         if note_height > 0 {
             view.notes_box =
                 Rect::new(main.x + 1, 2, main.width.saturating_sub(2), note_height + 2);
         }
         // The expanded draft may hide the top section. Never paint a history
         // separator over its editor or reserve rows from full-screen editing.
-        let history_y = 5 + note_height.max(1);
+        let history_y = if has_notes { 5 + note_height.max(1) } else { 3 };
         if history_y - 1 < view.composer_box.y {
             view.history_divider =
                 Rect::new(main.x + 1, history_y - 1, main.width.saturating_sub(2), 1);

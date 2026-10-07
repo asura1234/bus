@@ -572,6 +572,7 @@ pub(crate) enum ModelError {
     DeletionPending,
     AgentNotIdle,
     MasterRoomFixed,
+    MasterRoomHasNoNotes,
     ReservedRoomName,
     OrchestratorOutsideMaster(AgentId),
     NotOrchestratable(RoomId),
@@ -584,6 +585,7 @@ impl std::fmt::Display for ModelError {
             Self::MasterRoomFixed => {
                 write!(formatter, "The MASTER room cannot be renamed or deleted")
             }
+            Self::MasterRoomHasNoNotes => write!(formatter, "The MASTER room has no notes"),
             Self::ReservedRoomName => write!(
                 formatter,
                 "The name {MASTER_ROOM_NAME} is reserved for the master room"
@@ -1174,10 +1176,13 @@ impl BusState {
     }
 
     pub(crate) fn set_room_notes(&mut self, id: RoomId, notes: &str) -> Result<(), ModelError> {
-        self.rooms
-            .get_mut(&id)
-            .ok_or(ModelError::UnknownRoom(id))?
-            .notes = notes.to_owned();
+        let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
+        // Notes are a work room's status board; MASTER is where the human talks to
+        // orchestrators and has no board of its own.
+        if room.kind == RoomKind::Master {
+            return Err(ModelError::MasterRoomHasNoNotes);
+        }
+        room.notes = notes.to_owned();
         Ok(())
     }
 
@@ -2425,6 +2430,20 @@ mod tests {
             .remove("sound_name");
         let loaded: BusState = serde_json::from_value(document).unwrap();
         assert_eq!(loaded.room(work).unwrap().sound_name, None);
+    }
+
+    #[test]
+    fn master_room_has_no_notes_and_work_rooms_keep_theirs() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        assert_eq!(
+            state.set_room_notes(master, "status"),
+            Err(ModelError::MasterRoomHasNoNotes)
+        );
+        assert_eq!(state.room(master).unwrap().notes, "");
+        state.set_room_notes(work, "status").unwrap();
+        assert_eq!(state.room(work).unwrap().notes, "status");
     }
 
     #[test]

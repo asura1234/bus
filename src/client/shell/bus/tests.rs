@@ -3250,3 +3250,26 @@ fn a_screen_switch_repaints_stale_cells_in_the_right_margin() {
         margin(&terminal)
     );
 }
+
+#[test]
+fn master_room_shows_no_notes_and_f3_never_focuses_them() {
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    let mut ui = BusUi::new(Arc::new(BusSnapshot {
+        state,
+        revision: 0,
+        last_command_id: 0,
+        error: None,
+    }));
+    ui.open_room(master);
+    assert!(!room_screen(&mut ui, 100, 30).contains("Add notes"));
+    assert_eq!(ui.view.notes_box.height, 0);
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    assert!(!ui.notes_focus, "MASTER has no notes to edit");
+
+    ui.open_room(work);
+    assert!(room_screen(&mut ui, 100, 30).contains("Add notes"));
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    assert!(ui.notes_focus, "work rooms keep their notes");
+}
