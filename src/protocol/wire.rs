@@ -1071,8 +1071,6 @@ pub struct TerminalFrame {
 /// Notification kind forwarded from server to client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NotifyKind {
-    /// Play a sound (bell/agent-done, etc.).
-    Sound,
     /// Display a toast message through the outer terminal.
     Toast,
     /// Display a toast message through the host OS notification service.
@@ -1140,7 +1138,7 @@ pub enum ServerMessage {
         reason: Option<String>,
     },
 
-    /// A notification event (sound/toast) to be rendered locally by the client.
+    /// A toast notification to be rendered locally by the client.
     Notify {
         /// What kind of notification.
         kind: NotifyKind,
@@ -2073,11 +2071,7 @@ mod tests {
 
     #[test]
     fn server_notify_roundtrip() {
-        for kind in [
-            NotifyKind::Sound,
-            NotifyKind::Toast,
-            NotifyKind::SystemToast,
-        ] {
+        for kind in [NotifyKind::Toast, NotifyKind::SystemToast] {
             let msg = ServerMessage::Notify {
                 kind,
                 message: "agent done".to_owned(),

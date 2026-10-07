@@ -23,7 +23,6 @@ impl SoundConfig {
     pub fn path_for(&self, sound: crate::sound::Sound) -> Option<PathBuf> {
         let path = match sound {
             crate::sound::Sound::Done => self.done_path.as_ref().or(self.path.as_ref()),
-            crate::sound::Sound::Request => self.request_path.as_ref().or(self.path.as_ref()),
         }?;
 
         Some(resolve_config_relative_path(path))
@@ -126,10 +125,6 @@ done_path = "sounds/done.mp3"
         assert_eq!(
             config.ui.sound.path_for(crate::sound::Sound::Done),
             Some(config_root.join("sounds/done.mp3"))
-        );
-        assert_eq!(
-            config.ui.sound.path_for(crate::sound::Sound::Request),
-            Some(config_root.join("sounds/all.mp3"))
         );
     }
 

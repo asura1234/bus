@@ -1555,3 +1555,159 @@ fn client_receives_notify_on_agent_state_change() {
 
     cleanup_spawned_herdr(spawned, base);
 }
+
+#[test]
+fn client_receives_notify_when_detected_agent_becomes_blocked() {
+    // pane.report_agent 已删除，阻塞通知只能靠屏幕检测。amp 把
+    // “waiting for approval” 判成 blocked，空屏是 idle，这样才能走出
+    // idle→blocked 并发出 needs-attention 通知。
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let bin_dir = base.join("bin");
+    let go_file = base.join("amp-go");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let fake_amp = bin_dir.join("amp");
+    fs::write(
+        &fake_amp,
+        format!(
+            "#!/bin/sh\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'waiting for approval\\n'\nsleep 30\n",
+            go = go_file.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&fake_amp).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_amp, perms).unwrap();
+    }
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
+
+    fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
+    fs::write(
+        config_home.join(app_dir_name()).join("config.toml"),
+        "onboarding = false\n[ui.toast]\ndelivery = \"herdr\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(&runtime_dir).unwrap();
+    register_runtime_dir(&runtime_dir);
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
+    cmd.arg("server");
+    cmd.env("XDG_CONFIG_HOME", &config_home);
+    cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
+    cmd.env("HERDR_SOCKET_PATH", &api_socket);
+    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("SHELL", "/bin/sh");
+    cmd.env("PATH", &path_override);
+    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
+
+    let child = pair.slave.spawn_command(cmd).unwrap();
+    register_spawned_herdr_pid(child.process_id());
+    drop(pair.slave);
+
+    let spawned = SpawnedHerdr {
+        _master: Some(pair.master),
+        child,
+    };
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    let mut stream = UnixStream::connect(&client_socket).expect("should connect");
+    let (version, error) = client_shell_handshake(&mut stream, CURRENT_PROTOCOL, 54, 23)
+        .expect("handshake should succeed");
+    assert_eq!(version, CURRENT_PROTOCOL);
+    assert!(error.is_none(), "{error:?}");
+    wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(5))
+        .expect("client shell bootstrap");
+
+    let created = send_json_request(
+        &api_socket,
+        r#"{"id":"1","method":"workspace.create","params":{}}"#,
+    );
+    let ws_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap_or("w_1")
+        .to_string();
+    let pane_id = first_pane_id_in_workspace(&api_socket, &ws_id);
+
+    let started = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "3",
+            "method": "pane.send_input",
+            "params": { "pane_id": &pane_id, "text": "amp", "keys": ["Enter"] },
+        })
+        .to_string(),
+    );
+    assert_eq!(started["result"]["type"], "ok", "{started}");
+    let pane_get =
+        format!(r#"{{"id":"pane","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#);
+    assert!(
+        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+            let pane = send_json_request(&api_socket, &pane_get);
+            pane["result"]["pane"]["agent"] == "amp"
+                && pane["result"]["pane"]["agent_status"] == "idle"
+        }),
+        "fake amp should be detected as idle before the blocker appears"
+    );
+
+    support::drain_messages(&mut stream);
+    fs::write(&go_file, "go").unwrap();
+
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let mut found_blocked_notify = false;
+    let mut saw_blocked = false;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && !(found_blocked_notify && saw_blocked) {
+        match read_server_message(&mut stream) {
+            Ok((variant, payload)) => {
+                if variant == SERVER_MESSAGE_SEMANTIC_NOTIFICATION
+                    && payload
+                        .windows(b"needs attention".len())
+                        .any(|window| window == b"needs attention")
+                {
+                    found_blocked_notify = true;
+                }
+            }
+            Err(error) if error.contains("timed out") => {}
+            Err(error) => {
+                eprintln!("read error while looking for blocked notification: {error}");
+                break;
+            }
+        }
+        if !saw_blocked {
+            saw_blocked = send_json_request(&api_socket, &pane_get)["result"]["pane"]
+                ["agent_status"]
+                == "blocked";
+        }
+    }
+
+    assert!(saw_blocked, "fake amp should be detected as blocked");
+    assert!(
+        found_blocked_notify,
+        "client should receive a needs-attention notification when a detected agent becomes blocked"
+    );
+
+    cleanup_spawned_herdr(spawned, base);
+}

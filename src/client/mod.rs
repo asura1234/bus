@@ -87,9 +87,9 @@ use frame_output::{
 #[cfg(test)]
 use handshake::direct_graphics_profile_values;
 use handshake::do_handshake;
-use notifications::{forward_terminal_bells, handle_notify};
 #[cfg(test)]
-use notifications::{handle_notify_with_notifiers, sound_from_notify_message};
+use notifications::handle_notify_with_notifiers;
+use notifications::{forward_terminal_bells, handle_notify};
 
 use std::io::{self, Write as _};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
@@ -693,7 +693,7 @@ async fn run_client_loop(
                         body,
                     } => {
                         if state.shell.is_none() {
-                            handle_notify(kind, &message, body.as_deref(), &state.sound_config);
+                            handle_notify(kind, &message, body.as_deref());
                         }
                     }
                     ServerMessage::SemanticNotification(_) => {}

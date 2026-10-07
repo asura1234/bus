@@ -401,27 +401,6 @@ fn client_error_display_connection_lost() {
 }
 
 #[test]
-fn sound_from_notify_message_maps_done() {
-    assert_eq!(
-        sound_from_notify_message("agent done"),
-        Some(crate::sound::Sound::Done)
-    );
-}
-
-#[test]
-fn sound_from_notify_message_maps_attention() {
-    assert_eq!(
-        sound_from_notify_message("agent attention"),
-        Some(crate::sound::Sound::Request)
-    );
-}
-
-#[test]
-fn sound_from_notify_message_rejects_unknown_payloads() {
-    assert_eq!(sound_from_notify_message("toast"), None);
-}
-
-#[test]
 fn reload_local_client_config_refreshes_local_client_presentation_state() {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
     // BUS_DATA_DIR outranks HERDR_CONFIG_PATH, and agents run inside Bus inherit it.
@@ -507,14 +486,12 @@ fn pane_bells_reach_the_host_terminal_only_without_bus() {
 
 #[test]
 fn toast_notify_from_server_is_emitted_even_when_attach_config_was_off() {
-    let sound_config = crate::config::SoundConfig::default();
     let mut emitted = None;
 
     handle_notify_with_notifiers(
         NotifyKind::Toast,
         "pi finished",
         Some("workspace 1"),
-        &sound_config,
         |title, body| {
             emitted = Some((title.to_string(), body.map(str::to_string)));
             Ok(true)
@@ -530,14 +507,12 @@ fn toast_notify_from_server_is_emitted_even_when_attach_config_was_off() {
 
 #[test]
 fn system_toast_notify_from_server_uses_system_notifier() {
-    let sound_config = crate::config::SoundConfig::default();
     let mut emitted = None;
 
     handle_notify_with_notifiers(
         NotifyKind::SystemToast,
         "pi finished",
         Some("workspace 1"),
-        &sound_config,
         |_, _| Ok(false),
         |title, body| {
             emitted = Some((title.to_string(), body.map(str::to_string)));
@@ -553,14 +528,12 @@ fn system_toast_notify_from_server_uses_system_notifier() {
 
 #[test]
 fn system_toast_notify_preserves_colon_in_title() {
-    let sound_config = crate::config::SoundConfig::default();
     let mut emitted = None;
 
     handle_notify_with_notifiers(
         NotifyKind::SystemToast,
         "build: failed",
         Some("api workspace"),
-        &sound_config,
         |_, _| Ok(false),
         |title, body| {
             emitted = Some((title.to_string(), body.map(str::to_string)));
