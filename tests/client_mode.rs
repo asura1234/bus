@@ -1346,9 +1346,8 @@ fn graceful_shutdown_sends_server_shutdown_to_client() {
 
 #[test]
 fn client_receives_notify_on_agent_state_change() {
-    // Notification events (sound/toast) are forwarded as
-    // ServerMessage::Notify to connected clients when an agent state change
-    // is triggered via the API (pane.report_agent).
+    // Agent toasts are forwarded to connected clients as semantic
+    // notifications when a detected agent's screen state changes.
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1356,11 +1355,37 @@ fn client_receives_notify_on_agent_state_change() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    // Enable toast and sound in config so the server produces notifications.
+    // A fake `pi` starts idle, shows Pi's working marker once the go file
+    // appears, then clears the screen when the stop file appears and stays
+    // alive so screen detection reports idle again.
+    let bin_dir = base.join("bin");
+    let go_file = base.join("pi-go");
+    let stop_file = base.join("pi-stop");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let fake_pi = bin_dir.join("pi");
+    fs::write(
+        &fake_pi,
+        format!(
+            "#!/bin/sh\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'Working...\\n'\nwhile [ ! -f '{stop}' ]; do sleep 0.05; done\nprintf '\\033[2J\\033[Hdone\\n'\nsleep 30\n",
+            go = go_file.display(),
+            stop = stop_file.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_pi, perms).unwrap();
+    }
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
+
+    // Enable toasts in config so the server produces notifications.
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::write(
         config_home.join(app_dir_name()).join("config.toml"),
-        "onboarding = false\n[ui.toast]\ndelivery = \"herdr\"\n[ui.sound]\nenabled = true\n",
+        "onboarding = false\n[ui.toast]\ndelivery = \"herdr\"\n",
     )
     .unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
@@ -1384,6 +1409,7 @@ fn client_receives_notify_on_agent_state_change() {
     cmd.env("HERDR_SOCKET_PATH", &api_socket);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
+    cmd.env("PATH", &path_override);
     cmd.env_remove("HERDR_ENV");
     cmd.env_remove("BUS_DATA_DIR");
     cmd.env_remove("BUS_SESSION_ID");
@@ -1439,46 +1465,29 @@ fn client_receives_notify_on_agent_state_change() {
         .unwrap_or("p_1_1")
         .to_string();
 
-    // Report agent as Blocked via the API — this should trigger a
-    // ServerMessage::Notify with kind=Sound (Request sound).
-    let mut report_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let report_request = format!(
-        r#"{{"id":"3","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"blocked","source":"test"}}}}"#
+    // Start the fake agent. The first idle after detection never notifies.
+    let started = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "3",
+            "method": "pane.send_input",
+            "params": { "pane_id": &pane_id, "text": "pi", "keys": ["Enter"] },
+        })
+        .to_string(),
     );
-    writeln!(report_stream, "{}", report_request).unwrap();
-    let mut report_reader = BufReader::new(report_stream);
-    let mut report_response = String::new();
-    report_reader.read_line(&mut report_response).unwrap();
-
-    // Read messages from the client stream and look for the semantic notification.
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut found_notify = false;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        match read_server_message(&mut stream) {
-            Ok((variant, _payload)) => {
-                if variant == SERVER_MESSAGE_SEMANTIC_NOTIFICATION {
-                    found_notify = true;
-                    break;
-                }
-                // Snapshot and pane-surface messages may arrive first.
-            }
-            Err(_) => {
-                break;
-            }
-        }
-    }
-
+    assert_eq!(started["result"]["type"], "ok", "{started}");
+    let pane_get =
+        format!(r#"{{"id":"pane","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#);
     assert!(
-        found_notify,
-        "client should receive a semantic notification after pane.report_agent"
+        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+            let pane = send_json_request(&api_socket, &pane_get);
+            pane["result"]["pane"]["agent"] == "pi"
+                && pane["result"]["pane"]["agent_status"] == "idle"
+        }),
+        "fake pi should be detected as idle"
     );
 
-    // Now report Idle from Working — this should trigger a Done sound
-    // if the pane is in a background workspace.
-    // First, create a second workspace to make the first one "background".
+    // Create and focus a second workspace so the agent's pane is in the background.
     let mut ws2_stream = UnixStream::connect(&api_socket).expect("connect to API");
     let ws2_request = r#"{"id":"4","method":"workspace.create","params":{}}"#;
     writeln!(ws2_stream, "{}", ws2_request).unwrap();
@@ -1486,7 +1495,6 @@ fn client_receives_notify_on_agent_state_change() {
     let mut ws2_response = String::new();
     ws2_reader.read_line(&mut ws2_response).unwrap();
 
-    // Focus the new workspace (making the first one background).
     let ws2_id = ws2_response
         .split('"')
         .find(|s| s.starts_with("w_"))
@@ -1508,32 +1516,15 @@ fn client_receives_notify_on_agent_state_change() {
         "server should stay responsive after workspace focus"
     );
 
-    // Report agent as Working first, then Idle — this transition in a
-    // background workspace should trigger a Done sound notification.
-    let mut work_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let work_request = format!(
-        r#"{{"id":"6","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"working","source":"test"}}}}"#
-    );
-    writeln!(work_stream, "{}", work_request).unwrap();
-    let mut work_reader = BufReader::new(work_stream);
-    let mut work_response = String::new();
-    work_reader.read_line(&mut work_response).unwrap();
-
+    // Working→Idle in a background workspace is a Done toast.
+    fs::write(&go_file, "go").unwrap();
     assert!(
-        wait_until(Duration::from_secs(2), Duration::from_millis(25), || {
-            ping_socket(&api_socket).contains("pong")
+        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+            send_json_request(&api_socket, &pane_get)["result"]["pane"]["agent_status"] == "working"
         }),
-        "server should stay responsive after working state report"
+        "fake pi should be detected as working"
     );
-
-    let mut idle_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let idle_request = format!(
-        r#"{{"id":"7","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"idle","source":"test"}}}}"#
-    );
-    writeln!(idle_stream, "{}", idle_request).unwrap();
-    let mut idle_reader = BufReader::new(idle_stream);
-    let mut idle_response = String::new();
-    idle_reader.read_line(&mut idle_response).unwrap();
+    fs::write(&stop_file, "stop").unwrap();
 
     // Read messages and look for the done semantic notification.
     stream

@@ -301,24 +301,6 @@ fn pane_read_recent_contains(
     false
 }
 
-fn pane_report_agent(socket_path: &Path, pane_id: &str, agent: &str, state: &str, source: &str) {
-    let response = send_json_request(
-        socket_path,
-        "pane_report_agent",
-        "pane.report_agent",
-        json!({
-            "pane_id": pane_id,
-            "agent": agent,
-            "state": state,
-            "source": source,
-        }),
-    );
-    assert!(
-        response.get("error").is_none(),
-        "pane.report_agent should succeed: {response}"
-    );
-}
-
 fn pane_agent_status(socket_path: &Path, pane_id: &str) -> Option<String> {
     let response = send_json_request(
         socket_path,
@@ -554,7 +536,7 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     let bin_dir = base.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let fake_pi = bin_dir.join("pi");
-    fs::write(&fake_pi, "#!/bin/sh\nprintf 'Working...\\n'\nsleep 8\n").unwrap();
+    fs::write(&fake_pi, "#!/bin/sh\nprintf 'Working...\\n'\nsleep 30\n").unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -587,7 +569,7 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     // Ensure detected agent surface is populated by running fake `pi`.
     pane_send_text(&api_socket, &pane_id, "pi");
     pane_send_input(&api_socket, &pane_id, "");
-    let detected_before_hook = {
+    let detected_before_detach = {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut detected = false;
         while Instant::now() < deadline {
@@ -606,14 +588,14 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
         detected
     };
     assert!(
-        detected_before_hook,
-        "expected fake pi process to be detected before hook status assertions"
+        detected_before_detach,
+        "expected fake pi process to be detected before detach"
     );
 
-    // Use agent status surfaces directly instead of a generic sleep command.
-    pane_report_agent(&api_socket, &pane_id, "pi", "working", "cross-area-test");
+    // The fake process prints Pi's working marker, so screen detection drives the status;
+    // confirming it takes a few seconds.
     assert!(
-        wait_for_agent_status(&api_socket, &pane_id, "working", Duration::from_secs(3)),
+        wait_for_agent_status(&api_socket, &pane_id, "working", Duration::from_secs(10)),
         "pane agent status should become working before detach"
     );
 
@@ -631,16 +613,17 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     client_shell_handshake(&mut client_b, CURRENT_PROTOCOL, 80, 24).expect("shell handshake");
     assert!(wait_for_frame(&mut client_b, Duration::from_secs(5)));
 
-    // Transition to blocked and verify API + client surfaces both observe it.
-    // The fake process remains visibly working, so blocked is the deterministic
-    // higher-priority semantic transition for this cross-area projection test.
-    pane_report_agent(&api_socket, &pane_id, "pi", "blocked", "cross-area-test");
-    assert!(
-        wait_for_agent_status(&api_socket, &pane_id, "blocked", Duration::from_secs(3)),
-        "pane agent status should transition to blocked"
+    let pane = send_json_request(
+        &api_socket,
+        "pane_get",
+        "pane.get",
+        json!({ "pane_id": &pane_id }),
     );
-
-    // The API status above is the stable cross-area contract for this transition.
+    assert_eq!(pane["result"]["pane"]["agent"], "pi", "{pane}");
+    assert!(
+        wait_for_agent_status(&api_socket, &pane_id, "working", Duration::from_secs(3)),
+        "agent status should remain working after reattach"
+    );
 
     cleanup_spawned_herdr(server, base);
 }

@@ -133,9 +133,6 @@ async fn headless_api_reads_latest_title_without_spinner_event_flooding() {
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
     server.app.state.mode = crate::app::Mode::Terminal;
-    server.app.state.sidebar_agents.rows = vec![vec![
-        crate::config::AgentSidebarToken::TerminalTitleStripped,
-    ]];
     let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
     let terminal_id = server.app.state.workspaces[0].tabs[0].panes[&pane_id]
         .attached_terminal_id
@@ -221,10 +218,9 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
         server
             .app
             .event_tx
-            .try_send(AppEvent::HookAuthorityCleared {
+            .try_send(AppEvent::TerminalCwdReported {
                 pane_id: crate::layout::PaneId::from_raw(9_999),
-                source: None,
-                seq: None,
+                cwd: "relative".into(),
             })
             .unwrap();
     }
@@ -2821,95 +2817,6 @@ fn client_page_keys_forward_when_modified_or_owned_by_application() {
     });
 }
 
-#[test]
-fn headless_scheduled_tasks_expire_agent_metadata() {
-    let mut server = test_headless_server();
-    let workspace = crate::workspace::Workspace::test_new("metadata");
-    let pane_id = workspace.tabs[0].root_pane;
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-
-    assert!(
-        server.handle_internal_event_with_forwarding(AppEvent::HookStateReported {
-            pane_id,
-            source: "custom:pi".into(),
-            agent_label: "pi".into(),
-            state: crate::detect::AgentState::Working,
-            message: None,
-            seq: None,
-            session_ref: None,
-        })
-    );
-    assert!(
-        server.handle_internal_event_with_forwarding(AppEvent::HookMetadataReported {
-            pane_id,
-            source: "user:pi-display".into(),
-            agent_label: Some("pi".into()),
-            applies_to_source: Some("custom:pi".into()),
-            title: Some("short lived".into()),
-            display_agent: None,
-            state_labels: HashMap::new(),
-            clear_title: false,
-            clear_display_agent: false,
-            clear_state_labels: false,
-            seq: None,
-            // Expiry is advanced with the captured deadline below; keep the
-            // pre-expiry assertion independent of wall-clock scheduling.
-            ttl: Some(Duration::from_secs(60)),
-        })
-    );
-
-    let deadline = server
-        .app
-        .agent_metadata_deadline
-        .expect("metadata deadline");
-    let terminal_id = server.app.state.workspaces[0]
-        .pane_state(pane_id)
-        .expect("pane")
-        .attached_terminal_id
-        .clone();
-    assert_eq!(
-        server
-            .app
-            .state
-            .terminals
-            .get(&terminal_id)
-            .expect("terminal")
-            .effective_title()
-            .as_deref(),
-        Some("short lived")
-    );
-
-    assert!(server.handle_scheduled_tasks_headless(deadline + Duration::from_millis(1), false));
-
-    assert_eq!(server.app.agent_metadata_deadline, None);
-    assert_eq!(
-        server
-            .app
-            .state
-            .terminals
-            .get(&terminal_id)
-            .expect("terminal")
-            .effective_title(),
-        None
-    );
-    assert!(server
-        .app
-        .event_hub
-        .events_after(0)
-        .iter()
-        .any(|(_, event)| {
-            event.event == crate::api::schema::EventKind::PaneAgentStatusChanged
-                && matches!(
-                    &event.data,
-                    crate::api::schema::EventData::PaneAgentStatusChanged {
-                        title,
-                        ..
-                    } if title.is_none()
-                )
-        }));
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_client() {
@@ -3892,110 +3799,6 @@ fn startup_idle_does_not_forward_completion() {
             .recv_timeout(Duration::from_millis(50))
             .is_err(),
         "startup readiness should not forward a completion notification"
-    );
-}
-
-#[test]
-fn stale_api_agent_report_does_not_forward_done_sound() {
-    let mut server = test_headless_server();
-    let background = crate::workspace::Workspace::test_new("background");
-    let pane_id = background.tabs[0].root_pane;
-    let public_pane_id = format!("{}:p1", background.id);
-    let foreground = crate::workspace::Workspace::test_new("foreground");
-    server.app.state.workspaces = vec![background, foreground];
-    server.app.state.ensure_test_terminals();
-    let terminal_id = server.app.state.workspaces[0]
-        .pane_state(pane_id)
-        .unwrap()
-        .attached_terminal_id
-        .clone();
-    server
-        .app
-        .state
-        .terminals
-        .get_mut(&terminal_id)
-        .unwrap()
-        .set_detected_state(
-            Some(crate::detect::Agent::Pi),
-            crate::detect::AgentState::Idle,
-        );
-    server
-        .app
-        .state
-        .terminals
-        .get_mut(&terminal_id)
-        .unwrap()
-        .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:pi".into(),
-            agent: "pi".into(),
-            session_ref: crate::agent_resume::AgentSessionRef::path(
-                std::env::current_dir()
-                    .unwrap()
-                    .join("headless-pi-session.jsonl")
-                    .display()
-                    .to_string(),
-            )
-            .unwrap(),
-        });
-    server
-        .app
-        .state
-        .terminals
-        .get_mut(&terminal_id)
-        .unwrap()
-        .set_hook_authority(
-            "herdr:pi".into(),
-            "pi".into(),
-            crate::detect::AgentState::Working,
-            None,
-            Some(20),
-        );
-    server.app.state.active = Some(1);
-    server.app.state.selected = 1;
-    server.app.state.mode = crate::app::Mode::Terminal;
-
-    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            client_tx,
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.sync_foreground_client_state();
-
-    let (respond_to, response_rx) = std::sync::mpsc::channel();
-    let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-        request: api::schema::Request {
-            id: "stale".into(),
-            method: api::schema::Method::PaneReportAgent(api::schema::PaneReportAgentParams {
-                pane_id: public_pane_id,
-                source: "herdr:pi".into(),
-                agent: "pi".into(),
-                state: api::schema::PaneAgentState::Idle,
-                message: None,
-                seq: Some(19),
-                agent_session_id: None,
-                agent_session_path: None,
-            }),
-        },
-        respond_to,
-    });
-
-    assert!(changed);
-    assert!(response_rx.recv_timeout(Duration::from_millis(100)).is_ok());
-    assert_eq!(
-        server.app.state.terminals.get(&terminal_id).unwrap().state,
-        crate::detect::AgentState::Working
-    );
-    assert!(
-        client_control_rx
-            .recv_timeout(Duration::from_millis(50))
-            .is_err(),
-        "stale idle report must not forward a done sound"
     );
 }
 
