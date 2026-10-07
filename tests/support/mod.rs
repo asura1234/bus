@@ -3,6 +3,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,15 +14,14 @@ static INIT: Once = Once::new();
 static CLEANUP_GUARD: OnceLock<CleanupGuard> = OnceLock::new();
 const WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 const RUNTIME_OWNER_MARKER: &str = ".herdr-test-owner-pid";
-pub const CURRENT_PROTOCOL: u32 = 22;
 pub const CURRENT_ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
 pub const SERVER_MESSAGE_SERVER_SHUTDOWN: u32 = 3;
-pub const SERVER_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
+pub const SERVER_MESSAGE_ENDPOINT_CONTROL: u32 = 19;
 pub const SERVER_MESSAGE_PANE_SURFACE: u32 = 13;
 pub const SERVER_MESSAGE_SEMANTIC_NOTIFICATION: u32 = 14;
-pub const SERVER_MESSAGE_PANE_SURFACE_PATCH: u32 = 19;
-const CLIENT_MESSAGE_CLIENT_SHELL_FOCUS: u32 = 17;
-const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 19;
+pub const SERVER_MESSAGE_PANE_SURFACE_PATCH: u32 = 18;
+const CLIENT_MESSAGE_CLIENT_SHELL_FOCUS: u32 = 12;
+const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 14;
 
 pub fn register_spawned_herdr_pid(pid: Option<u32>) {
     let Some(pid) = pid else {
@@ -102,16 +102,6 @@ fn encode_varint_u32(v: u32) -> Vec<u8> {
     }
 }
 
-fn encode_varint_u16(v: u16) -> Vec<u8> {
-    if v < 251 {
-        vec![v as u8]
-    } else {
-        let mut buf = vec![251u8];
-        buf.extend_from_slice(&v.to_le_bytes());
-        buf
-    }
-}
-
 fn frame_message(payload: &[u8]) -> Vec<u8> {
     let len = payload.len() as u32;
     let mut framed = len.to_le_bytes().to_vec();
@@ -179,46 +169,6 @@ fn decode_string(payload: &[u8], offset: &mut usize) -> Result<String, String> {
     Ok(value)
 }
 
-fn decode_welcome(payload: &[u8]) -> Result<(u32, Option<String>), String> {
-    let mut offset = 0;
-    let (variant, consumed) = decode_varint_u32(payload, offset)?;
-    offset += consumed;
-    if variant != 0 {
-        return Err(format!(
-            "expected Welcome (variant 0), got variant {variant}"
-        ));
-    }
-
-    let (version, consumed) = decode_varint_u32(payload, offset)?;
-    offset += consumed;
-
-    let (_encoding, consumed) = decode_varint_u32(payload, offset)?;
-    offset += consumed;
-
-    if offset >= payload.len() {
-        return Err("payload too short for Option tag".into());
-    }
-    let option_tag = payload[offset];
-    offset += 1;
-
-    let error = if option_tag == 1 {
-        let (str_len, consumed) = decode_varint_u32(payload, offset)?;
-        offset += consumed;
-        let str_len = str_len as usize;
-        if offset + str_len > payload.len() {
-            return Err("payload too short for string content".into());
-        }
-        Some(
-            String::from_utf8(payload[offset..offset + str_len].to_vec())
-                .map_err(|e| e.to_string())?,
-        )
-    } else {
-        None
-    };
-
-    Ok((version, error))
-}
-
 fn read_handshake_response(
     stream: &mut UnixStream,
     hello_payload: &[u8],
@@ -242,27 +192,6 @@ fn read_handshake_response(
     Ok(payload)
 }
 
-pub fn client_handshake(
-    stream: &mut UnixStream,
-    version: u32,
-    cols: u16,
-    rows: u16,
-) -> Result<(u32, Option<String>), String> {
-    let hello_payload = encode_varint_enum(
-        0,
-        &[
-            &encode_varint_u32(version),
-            &encode_varint_u16(cols),
-            &encode_varint_u16(rows),
-            &encode_varint_u32(8),  // cell_width_px
-            &encode_varint_u32(16), // cell_height_px
-            &[0],                   // pixel_mouse = false
-        ],
-    );
-    let response = read_handshake_response(stream, &hello_payload)?;
-    decode_welcome(&response)
-}
-
 pub fn client_shell_handshake(
     stream: &mut UnixStream,
     endpoint_generation: u32,
@@ -271,6 +200,7 @@ pub fn client_shell_handshake(
 ) -> Result<(u32, Option<String>), String> {
     let data = serde_json::json!({
         "generation": endpoint_generation,
+        "client_version": current_build_version(),
         "cell_width_px": 8,
         "cell_height_px": 16,
         "surface_size": {"cols": surface_cols, "rows": surface_rows},
@@ -278,6 +208,7 @@ pub fn client_shell_handshake(
         "direct_graphics": false,
         "endpoint_keybindings": false,
         "mouse_capture": false,
+        "surface_active": true,
         "snapshot_codecs": ["shell.snapshot.v1"],
         "surface_codecs": ["shell.surface.v1"],
         "input_codecs": ["shell.input.semantic.v1"],
@@ -313,6 +244,23 @@ pub fn client_shell_handshake(
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
     Ok((generation, error))
+}
+
+fn current_build_version() -> &'static str {
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION.get_or_init(|| {
+        let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+            .arg("--version")
+            .output()
+            .expect("read the integration-test binary's build version");
+        assert!(output.status.success(), "bus --version failed: {output:?}");
+        let version = String::from_utf8(output.stdout).expect("bus --version should emit UTF-8");
+        version
+            .trim()
+            .strip_prefix("bus ")
+            .expect("bus --version should include the binary name")
+            .to_owned()
+    })
 }
 
 pub fn read_server_message(stream: &mut UnixStream) -> Result<(u32, Vec<u8>), String> {
