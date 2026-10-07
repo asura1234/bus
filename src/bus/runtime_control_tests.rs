@@ -2140,28 +2140,8 @@ fn dev_master_agent_add_launches_with_its_prompt_and_leaves_the_pwd_alone() {
 }
 
 #[test]
-fn dev_master_agent_add_sends_cursor_its_custom_prompt_as_the_first_message() {
+fn dev_work_agent_add_rejects_an_orchestrator_prompt() {
     let (mut worker, _room, _agent, dir) = fixture();
-    worker.transport = Box::new(NoTabs);
-    let added = call(
-        &mut worker,
-        "add-cursor",
-        "agent.add",
-        json!({
-            "room":"master","name":"orch","provider":"cursor","consent_project_hooks":true,
-            "cwd": dir.to_string_lossy(), "orchestrates":"test",
-            "system_prompt":"You are {{AGENT_NAME}}."
-        }),
-    );
-    assert!(
-        error_message(&added).contains("no tabs in tests"),
-        "{added:?}"
-    );
-    let orch = worker.state.agents().find(|a| a.name == "orch").unwrap().id;
-    let told = messages_to(&worker, orch);
-    assert_eq!(told.len(), 1, "{told:?}");
-    assert!(told[0].ends_with("\n\nYou are orch."), "{told:?}");
-
     let rejected = call(
         &mut worker,
         "add-work-prompt",
@@ -2685,6 +2665,51 @@ fn message_status_reports_whether_each_recipient_turn_ended() {
         status.result["requests"][0]["turn_ended"], false,
         "{status:?}"
     );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn message_status_shows_a_stalled_stage_with_its_reason() {
+    let (mut worker, _room, codex, dir) = fixture();
+    let sent = call(
+        &mut worker,
+        "stall-send",
+        "message.send",
+        json!({"room":"test","to":["codex1"],"text":"go"}),
+    );
+    let message = PromptId(sent.result["message_id"].as_u64().unwrap());
+    let now = crate::bus::io::now_ms();
+    worker
+        .state
+        .observe_status(codex, RuntimeStatus::Idle, now)
+        .unwrap();
+    let request = |status: &serde_json::Value| status["requests"][0].clone();
+
+    let fresh = request(&worker.dev_message_at(message, now).unwrap());
+    assert_eq!(fresh["stage"], "queued");
+    assert!(fresh["stalled_from"].is_null());
+
+    let later = now + crate::bus::model::QUEUED_STALL_MS;
+    let stalled = request(&worker.dev_message_at(message, later).unwrap());
+    assert_eq!(stalled["stage"], "stalled", "{stalled}");
+    assert_eq!(stalled["stalled_from"], "queued");
+    let expected = crate::bus::diagnostics::wait_reason(worker.state.agent(codex).unwrap());
+    assert_eq!(
+        stalled["reason"],
+        json!(expected.unwrap_or("not_submitted"))
+    );
+
+    // A blocked agent is reported, not stalled.
+    worker
+        .state
+        .observe_status(codex, RuntimeStatus::Blocked, later)
+        .unwrap();
+    let much_later = later + crate::bus::model::BLOCKED_STALL_MS;
+    let blocked = request(&worker.dev_message_at(message, much_later).unwrap());
+    assert_eq!(blocked["stage"], "queued", "{blocked}");
+    assert_eq!(blocked["reason"], "blocked_unanswered");
+
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

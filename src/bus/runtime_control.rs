@@ -741,6 +741,11 @@ impl Worker {
     }
 
     pub(super) fn dev_message(&self, message: PromptId) -> Result<Value, String> {
+        self.dev_message_at(message, crate::bus::io::now_ms())
+    }
+
+    /// `message status` as of `now_ms`, which stall detection measures against.
+    pub(super) fn dev_message_at(&self, message: PromptId, now_ms: u64) -> Result<Value, String> {
         let mut requests = self
             .state
             .requests()
@@ -759,8 +764,16 @@ impl Worker {
         Ok(
             json!({"message_id":message,"files":requests[0].prompt.files,"complete":requests.iter().all(|r|matches!(r.phase,RequestPhase::Completed|RequestPhase::Abandoned)),"waiting_on_dialog":requests.iter().filter(|r| self.waiting_on_dialog(r)).map(|r| r.agent_id).collect::<Vec<_>>(),"requests":requests.iter().map(|r| {
             let agent = self.state.agent(r.agent_id);
-            let stage = match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.group.is_some()=>"joined",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" };
-            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"reason":if r.phase==RequestPhase::Queued {agent.and_then(crate::bus::diagnostics::wait_reason)}else{None},"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"group":r.group,"queue":r.queue_only,"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
+            let phase_stage = match r.phase { RequestPhase::Queued=>"queued",RequestPhase::Submitting=>"submitting",RequestPhase::Active if r.group.is_some()=>"joined",RequestPhase::Active if r.trusted_start_bound=>"delivered",RequestPhase::Active=>"awaiting_start",RequestPhase::Completed=>"replied",RequestPhase::Abandoned=>"abandoned" };
+            // A stalled request reports why instead of its phase; `stalled_from`
+            // keeps the phase it stalled in.
+            let stall = self.state.stall_reason(r, now_ms);
+            let stage = if stall.is_some() { "stalled" } else { phase_stage };
+            // The native server's last refusal explains a queued wait best.
+            let reason = stall
+                .or_else(|| self.state.blocked_unanswered(r, now_ms).then(|| "blocked_unanswered".into()))
+                .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::bus::diagnostics::wait_reason(a).map(Into::into)))).flatten());
+            json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"group":r.group,"queue":r.queue_only,"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
         }).collect::<Vec<_>>()}),
         )
     }
