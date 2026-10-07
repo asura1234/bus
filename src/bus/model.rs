@@ -288,7 +288,8 @@ pub(crate) struct Agent {
     pub(crate) status: RuntimeStatus,
     pub(crate) status_revision: u64,
     /// The status revision at which the agent was last seen Working or
-    /// Blocked. `send --async` compares it with a request's submission
+    /// Blocked, or a provider turn event on its Bus request arrived (see
+    /// `accept_callback`). `send --async` compares it with a request's submission
     /// revision to tell that the agent worked on the message and then went
     /// idle, without relying on reply capture.
     #[serde(default)]
@@ -1680,8 +1681,8 @@ impl BusState {
     }
 
     /// Whether `request`'s agent took the message and finished its turn: the
-    /// agent was seen Working or Blocked after Bus submitted the message and
-    /// has been seen Idle since. A captured reply also counts. Status
+    /// agent was seen Working or Blocked, or its provider reported the turn,
+    /// after Bus submitted the message, and has been seen Idle since. A captured reply also counts. Status
     /// transitions decide it, not reply capture, which can miss a reply.
     pub(crate) fn turn_ended(&self, request: &Request) -> bool {
         if request.phase == RequestPhase::Completed {
@@ -1742,6 +1743,35 @@ impl BusState {
     }
 
     pub(crate) fn accept_callback(&mut self, callback: ProviderCallback) -> CallbackDisposition {
+        let agent = callback.agent_id;
+        let disposition = self.accept_callback_unrecorded(callback);
+        // A provider turn event on a Bus request proves the agent was busy
+        // with it, even when the turn started and ended between two status
+        // polls that only ever saw Idle. Recording the edge here lets
+        // `turn_ended` (and so `send --async`) finish on the next Idle poll.
+        if matches!(
+            disposition,
+            CallbackDisposition::AcceptedBinding
+                | CallbackDisposition::AcceptedContinuation
+                | CallbackDisposition::AcceptedSteering
+                | CallbackDisposition::AcceptedProgress
+                | CallbackDisposition::AcceptedPendingSettlement
+        ) {
+            self.record_busy_edge(agent);
+        }
+        disposition
+    }
+
+    /// Marks `agent` busy at a fresh status revision, as a Working poll would.
+    fn record_busy_edge(&mut self, agent: AgentId) {
+        let revision = self.next_status_revision;
+        self.next_status_revision = self.next_status_revision.saturating_add(1);
+        if let Some(agent) = self.agents.get_mut(&agent) {
+            agent.busy_revision = revision;
+        }
+    }
+
+    fn accept_callback_unrecorded(&mut self, callback: ProviderCallback) -> CallbackDisposition {
         if !self
             .consumed_callback_ids
             .insert(callback.callback_id.clone())
@@ -2976,7 +3006,8 @@ mod tests {
         state.submit_draft(room, 10).expect("submit")[0]
     }
 
-    fn start_request(state: &mut BusState, request: RequestId, launch_id: &str, boundary: u64) {
+    /// Types `request` and records the submission, with no provider turn start yet.
+    fn submit_request(state: &mut BusState, request: RequestId, launch_id: &str, boundary: u64) {
         state
             .begin_submission(request, launch_id, boundary)
             .expect("begin submission");
@@ -2989,6 +3020,10 @@ mod tests {
                 },
             )
             .expect("record submission");
+    }
+
+    fn start_request(state: &mut BusState, request: RequestId, launch_id: &str, boundary: u64) {
+        submit_request(state, request, launch_id, boundary);
         let request_state = state.request(request).expect("request");
         let agent_id = request_state.agent_id;
         let prompt_payload = request_state.prompt.rendered_payload();
@@ -3455,7 +3490,8 @@ mod tests {
         let ended = |state: &BusState, id| state.turn_ended(state.request(id).unwrap());
         assert!(!ended(&state, first), "queued");
 
-        start_request(&mut state, first, "launch-codex", 5);
+        // Typed, but no turn start reported: only status polls tell work here.
+        submit_request(&mut state, first, "launch-codex", 5);
         // Work seen before the submission does not count, nor idle without work.
         state.observe_status(agent, RuntimeStatus::Idle, 3).unwrap();
         assert!(!ended(&state, first));
@@ -3478,6 +3514,41 @@ mod tests {
         assert!(ended(&state, first), "a captured reply counts too");
         state.requests.get_mut(&first).unwrap().phase = RequestPhase::Abandoned;
         assert!(!ended(&state, first));
+    }
+
+    #[test]
+    fn a_turn_between_two_idle_polls_still_ends_through_its_provider_start() {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+        let request = submit_text(&mut state, room, agent, "quick task");
+        submit_request(&mut state, request, "launch-codex", 5);
+        // The whole turn runs between two polls: every poll sees Idle, and
+        // the reply is never captured. Only the provider's turn start says
+        // the agent took the message.
+        state.observe_status(agent, RuntimeStatus::Idle, 2).unwrap();
+        assert_eq!(
+            state.accept_callback(ProviderCallback {
+                callback_id: "fast-start".into(),
+                sequence: 12,
+                occurred_at_ms: 12,
+                agent_id: agent,
+                launch_id: "launch-codex".into(),
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: Some("turn-1".into()),
+                provider_prompt_id: None,
+                prompt_payload: Some("quick task".into()),
+                kind: CallbackEventKind::PromptStarted,
+            }),
+            CallbackDisposition::AcceptedBinding
+        );
+        let ended = |state: &BusState| state.turn_ended(state.request(request).unwrap());
+        // Idle seen before the start event does not end the turn.
+        assert!(!ended(&state));
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 13)
+            .unwrap();
+        assert_eq!(state.request(request).unwrap().phase, RequestPhase::Active);
+        assert!(ended(&state));
     }
 
     #[test]
