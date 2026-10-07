@@ -8,16 +8,6 @@ __pycache__/
 *~
 .DS_Store
 
-/docs/*
-!/docs/how-to-bus-cli.md
-!/docs/orchestrator-guide.md
-!/docs/orchestrator-rules.md
-!/docs/guides/
-!/docs/guides/**
-!/docs/templates/
-!/docs/templates/**
-!/docs/workflows/
-!/docs/workflows/**
 /.local/
 /.superpowers/
 /.bus/
