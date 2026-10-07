@@ -1569,6 +1569,17 @@ impl BusUi {
                     );
                     return;
                 }
+                // Shown in the form at once; the coordinator refuses it too.
+                if let (Some(_), Some(provider)) =
+                    (orchestrates.and_then(|choice| choice.0), provider)
+                {
+                    if let Err(error) =
+                        crate::bus::orchestrator::check_new_orchestrator_args(provider, &args.text)
+                    {
+                        self.error = Some(error);
+                        return;
+                    }
+                }
                 let system_prompt = prompt.map(|prompt| prompt.editor.text);
                 if system_prompt
                     .as_ref()

@@ -690,3 +690,65 @@ fn an_agent_waiting_on_a_dialog_reads_blocked_on_its_row_and_its_room() {
         .iter()
         .any(|row| row.starts_with("codex-dev") && row.contains("Idle")));
 }
+
+#[test]
+fn a_codex_orchestrator_with_resume_in_args_is_refused_in_the_form() {
+    let (mut ui, master, _, other, _) = master_fixture();
+    for resume in [
+        "resume",
+        "resume --last",
+        "resume 0198c1d2-0000-7000-8000-000000000000",
+    ] {
+        ui.form = None;
+        ui.open_room(master);
+        ui.action(render::Action::NewAgent);
+        typed(&mut ui, "codex-orch");
+        ui.action(render::Action::Orchestrates);
+        ui.action(render::Action::Provider(Provider::Codex));
+        if let Some(forms::Form::Agent { cwd, args, .. }) = &mut ui.form {
+            *cwd = editor::Editor::new("/repo".into());
+            **args = editor::Editor::new(resume.into());
+        }
+        key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
+        assert!(
+            !ui.pending.iter().any(|p| matches!(
+                p.command,
+                BusCommand::AddOrchestrator(..) | BusCommand::AddAgent(..)
+            )),
+            "{resume}"
+        );
+        assert_eq!(
+            ui.error.as_deref(),
+            Some(crate::bus::orchestrator::CODEX_RESUME_REFUSED),
+            "{resume}"
+        );
+        assert!(
+            matches!(ui.form, Some(forms::Form::Agent { .. })),
+            "the form stays open"
+        );
+        let screen = room_screen(&mut ui, 120, 40);
+        assert!(
+            screen.contains("cannot resume an earlier session"),
+            "{screen}"
+        );
+    }
+
+    // A Codex worker in a work room may still resume a session.
+    ui.form = None;
+    ui.error = None;
+    ui.open_room(other);
+    ui.action(render::Action::NewAgent);
+    typed(&mut ui, "codex-worker");
+    ui.action(render::Action::Provider(Provider::Codex));
+    if let Some(forms::Form::Agent { cwd, args, .. }) = &mut ui.form {
+        *cwd = editor::Editor::new("/repo".into());
+        **args = editor::Editor::new("resume --last".into());
+    }
+    key(&mut ui, KeyCode::Enter, KeyModifiers::CONTROL);
+    assert!(ui.error.is_none(), "{:?}", ui.error);
+    assert!(ui.pending.iter().any(|p| matches!(
+        &p.command,
+        BusCommand::AddAgent(input)
+            if input.provider == Provider::Codex && input.extra_args == "resume --last"
+    )));
+}

@@ -380,6 +380,10 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let orchestrates = orchestrator.as_ref().map(|spec| spec.room);
+        // Before anything else, so the CLI and the form get the same answer.
+        if orchestrator.is_some() {
+            orchestrator::check_new_orchestrator_args(input.provider, &input.extra_args)?;
+        }
         let cwd = launch::canonical_directory(&input.cwd)?;
         // One provider session belongs to one Bus agent: bound by its hook, or
         // reserved by a launch that adopted it and has not reported yet.

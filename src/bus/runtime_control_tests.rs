@@ -1270,6 +1270,57 @@ fn dev_master_room_is_selectable_listed_and_fixed() {
 }
 
 #[test]
+fn a_codex_orchestrator_may_not_resume_a_session_but_a_codex_worker_may() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    // Allowed adds get as far as opening a tab, which tests refuse.
+    worker.transport = Box::new(NoTabs);
+    let cwd = dir.to_string_lossy().to_string();
+    let agents_before = worker.state.agents().count();
+    for (id, args) in [
+        ("r1", "resume"),
+        ("r2", "resume --last"),
+        (
+            "r3",
+            "--no-alt-screen resume 0198c1d2-0000-7000-8000-000000000000",
+        ),
+    ] {
+        let rejected = call(
+            &mut worker,
+            id,
+            "agent.add",
+            json!({"room":"master","name":"codex-orch","provider":"codex","cwd":cwd,"orchestrates":"test","extra_args":args}),
+        );
+        assert!(!rejected.ok, "{id}: {rejected:?}");
+        assert_eq!(
+            error_message(&rejected),
+            crate::bus::orchestrator::CODEX_RESUME_REFUSED,
+            "{id}"
+        );
+    }
+    assert_eq!(worker.state.agents().count(), agents_before);
+    // Only Codex: a Claude orchestrator's own resume form is not this check's
+    // business, and neither is a Codex worker resuming in a work room.
+    for (id, params) in [
+        (
+            "claude-orch",
+            json!({"room":"master","name":"claude-orch","provider":"claude","cwd":cwd,"orchestrates":"test","extra_args":"--model resume","consent_project_hooks":true}),
+        ),
+        (
+            "codex-worker",
+            json!({"room":"test","name":"codex-worker","provider":"codex","cwd":cwd,"extra_args":"resume 01a10f9e-71ac-79e2-81b2-56f26341e7e4","consent_project_hooks":true}),
+        ),
+    ] {
+        let response = call(&mut worker, id, "agent.add", params);
+        assert!(
+            error_message(&response).contains("no tabs in tests"),
+            "{id} reached the launch: {response:?}"
+        );
+    }
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn orchestrators_are_bound_at_add_one_per_room_and_never_reassigned() {
     let (mut worker, room, _agent, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
@@ -2174,33 +2225,6 @@ fn dev_agent_add_adopts_an_existing_session_once_and_prompts_it_the_reviewed_way
     );
     assert!(!worker.state.agents().any(|a| a.name == "twin"));
     let _ = room;
-
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn an_adopted_codex_orchestrator_gets_its_prompt_as_the_first_message() {
-    let (mut worker, _room, _agent, dir) = fixture();
-    worker.transport = Box::new(NoTabs);
-    let added = call(
-        &mut worker,
-        "adopt-codex",
-        "agent.add",
-        json!({
-            "room":"master","name":"orch","provider":"codex","consent_project_hooks":true,
-            "cwd": dir.to_string_lossy(), "orchestrates":"test",
-            "extra_args": "resume 01a10f9e-71ac-79e2-81b2-56f26341e7e4"
-        }),
-    );
-    assert!(
-        error_message(&added).contains("no tabs in tests"),
-        "{added:?}"
-    );
-    let orch = worker.state.agents().find(|a| a.name == "orch").unwrap().id;
-    let told = messages_to(&worker, orch);
-    assert_eq!(told.len(), 1, "{told:?}");
-    assert!(told[0].contains("# Bus orchestrator"), "{told:?}");
 
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();

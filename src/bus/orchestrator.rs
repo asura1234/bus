@@ -108,6 +108,26 @@ pub(crate) fn write_prompt(spool: &Path, text: &str) -> Result<PathBuf, String> 
     Ok(path)
 }
 
+/// Why a new Codex orchestrator may not resume an earlier session.
+pub(crate) const CODEX_RESUME_REFUSED: &str = "A Codex orchestrator cannot resume an earlier session: Codex keeps the instructions a session started with, so Bus could not give it the orchestrator system prompt. Start a new Codex session instead (remove resume from Args).";
+
+/// Checks a new orchestrator's additional launch args. A resumed Codex thread
+/// keeps the developer_instructions it started with and ignores Bus's, so a
+/// Codex orchestrator must start a fresh session. Workers may still resume,
+/// and Bus's own resume of an orchestrator it launched never comes here.
+pub(crate) fn check_new_orchestrator_args(
+    provider: Provider,
+    extra_args: &str,
+) -> Result<(), String> {
+    let resumes = extra_args
+        .split_whitespace()
+        .any(|arg| arg.trim_matches(['"', '\'']) == "resume");
+    if provider == Provider::Codex && resumes {
+        return Err(CODEX_RESUME_REFUSED.into());
+    }
+    Ok(())
+}
+
 /// The Bus-owned launch arguments that deliver the prompt, or `None` when the
 /// provider cannot take it at launch: Bus then sends it as the first message.
 /// `adopted` means the launch resumes a session that started outside Bus.
@@ -133,7 +153,9 @@ pub(crate) fn prompt_args(
             Some(args)
         }
         // A resumed Codex thread keeps the developer_instructions it started
-        // with and ignores new ones, so an adopted thread gets a message.
+        // with and ignores new ones, so an adopted thread gets a message. New
+        // Codex orchestrators may no longer adopt a session
+        // (`check_new_orchestrator_args`); this remains for ones that did.
         Provider::Codex if adopted => None,
         // Codex adds developer_instructions as a developer message beside its
         // base instructions. It has no file variant, and Bus types the launch

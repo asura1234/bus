@@ -168,8 +168,16 @@ session's ID (a UUID) in the launch args, in the provider's resume form:
 | Provider | Launch args | Where to find the ID |
 | --- | --- | --- |
 | Claude Code | `--resume SESSION_ID` | `/status` in the session |
-| Codex | `resume SESSION_ID` (first) | `/status` in the session |
+| Codex | `resume SESSION_ID` (first); workers only, see below | `/status` in the session |
 | Cursor | `--resume SESSION_ID` | `cursor-agent ls` |
+
+A Codex orchestrator cannot resume an earlier session: Codex keeps the
+instructions a session started with, so Bus could not give it the orchestrator
+system prompt. Adding a MASTER agent with provider Codex whose Args contain
+`resume` (`resume`, `resume --last`, `resume SESSION_ID`) fails, with an error in
+the Add agent form or from `agent add`; start a new Codex session instead.
+Codex workers in work rooms may still adopt a session, and Bus's own resume of a
+Codex orchestrator it launched, after a restart, is unaffected.
 
 ```sh
 bus agent add --room master --name claude-orch --provider claude \
@@ -187,9 +195,8 @@ bus agent add --room master --name claude-orch --provider claude \
   Cursor session from its launch args; later callbacks must still match it.
 - The orchestrator prompt still applies. Claude Code gets
   `--system-prompt-snapshot off` with the prompt file, because a resumed
-  conversation otherwise replays the system prompt it started with. A resumed
-  Codex thread keeps its original developer instructions, so Bus sends the
-  prompt as its first message, as for Cursor.
+  conversation otherwise replays the system prompt it started with. Cursor
+  takes the prompt as its first message.
 
 The generic form is `agent add --room master ... --orchestrates ROOM
 [--system-prompt TEXT | --system-prompt-file PATH]`. Only agents in MASTER can
