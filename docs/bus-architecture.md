@@ -16,7 +16,8 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
 - `skills/`: agent workflow skills; `.agents/skills` and `.claude/skills` link here
   - `AGENTS.md` (with its `CLAUDE.md` link), `skill-architecture.md`: the shared skill contract
   - one folder per skill: `SKILL.md`, `guide.md`, `references/` and the skill's own `scripts/` (quality lanes, review lanes, PR signals,
-    ledgers and plan checks stay with the skill that runs them)
+    ledgers and plan checks stay with the skill that runs them); the 800-line limit applies here too, for example
+    `address-review-comments/scripts/tests/test_review_lane_{cli,github,rounds}.py`
 - `cli_extensions/`: shared Python for the review skills (artifact parser and renderer, round and lane ownership)
 - `docs/`: repo-development docs
   - `bus-architecture.md`: this document
@@ -25,8 +26,8 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
 - `tests/`: black-box integration tests against the built `bus` binary
   - `support/`: `process.rs` (pid and dir hygiene), `spawn.rs` (one `spawn_server`/`spawn_client`), `wire.rs`, `json.rs`
   - `api/`: `main.rs`, `server.rs`, `workspaces_tabs.rs`, `panes.rs`, `agents.rs`, `events.rs`
-  - `server/`: `main.rs`, `lifecycle.rs`, `reattach.rs`, `multi_client.rs`
-  - `client/`: `main.rs`, `startup.rs`, `lifecycle.rs`, `window_title.rs`, `output.rs`, `persistence.rs`
+  - `server/`: `main.rs`, `lifecycle.rs`, `reattach.rs`, `headless_size.rs`, `multi_client.rs`
+  - `client/`: `main.rs`, `startup.rs`, `lifecycle.rs`, `window_title.rs`, `output.rs`, `persistence.rs`, `shared_view.rs`
   - `cli/`: `main.rs`, `callbacks.rs` (`--bus-callback` spooling), `paths.rs` (`--paths` and data-dir isolation)
   - `fixtures/`: key corpora, endpoint golden JSON, session files
 - `tools/`: repo-level tooling that belongs to no single skill, one Python package and one test root
@@ -47,7 +48,9 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
 ## 2. `src/` layout
 
 Nine components, listed in reading order. The dependency rule is graph 3a, not this order; `main.rs` is the composition root above all
-of them. Every handwritten file, tests included, stays under the 3,000-line gate, and files are split by ownership, not by helper.
+of them. Every handwritten file, tests included, has at most 800 lines, with no exemptions (generated bindings are not handwritten).
+Files are split by ownership, not by helper, and each module keeps its tests in a sibling `tests/` folder with one file per area, so
+production code and tests are counted separately.
 
 - `main.rs`: argv dispatch to `cli`, the hidden `server` and `client` entries, and the `--bus-callback` hook entry
 - `utils/`: shared basics; a leaf that imports no other component
@@ -55,7 +58,7 @@ of them. Every handwritten file, tests included, stays under the 3,000-line gate
     file and socket under `BUS_DATA_DIR`, including `bus.sock`)
   - `logging.rs` (takes its filter from `cli`), `log_events.rs`, `home_path.rs`, `url.rs` (safe web URL check)
   - `config/`: `mod.rs`, `load.rs` (TOML, live reload; an unknown key fails with a diagnostic), `session.rs`, `server.rs`,
-    `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `sound.rs` (ding paths), `ui/{theme,window_title,keys}.rs`
+    `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `sound.rs` (ding paths), `ui/{theme,window_title,keys}.rs`, `tests/`
   - `theme/`: `color.rs` (`RgbColor`, `TerminalTheme`, `HostAppearance`), `palette.rs`, `builtin.rs`, `resolve.rs`
   - `text/`: `selection.rs` (`Selection`, `ScrollMetrics`), `hit_test.rs` (URL, word, quoted path), `copy_motion.rs`, `width.rs`
   - `render/`: `signal.rs` (redraw requests), `prof.rs`, `widgets.rs` (highlight, popups, scrollbar math)
@@ -65,6 +68,7 @@ of them. Every handwritten file, tests included, stays under the 3,000-line gate
   - `process/{linux,macos}.rs`, `desktop/{linux,macos}.rs`: process introspection; clipboard, open URL, notifications
   - `unix.rs`, `daemon.rs`, `signals.rs`, `ipc.rs`: unix helpers, setsid and nofile, signals, local sockets
   - `fs.rs`: private dirs, locks and atomic replace primitives; each caller keeps its own write policy
+  - `tests/{process_linux,desktop_linux,process_macos,desktop_macos}.rs`
   - `sound/`: `mod.rs` (`play`, `play_named`), `player.rs` (OS players), `catalog.rs` (system sounds)
   - `windows/`: Windows backend
     - `mod.rs` (small helpers, re-exports), `fs.rs` (atomic replace, ACL'd dirs, long paths), `shell.rs` (cmd and PowerShell)
@@ -81,19 +85,22 @@ of them. Every handwritten file, tests included, stays under the 3,000-line gate
     - `tests/{codec,framing,input,frame,version}.rs`
   - `api/`: JSON-RPC
     - `schema/`: `mod.rs` (`Request`, `Method`), `methods.rs`, `common.rs`, `responses.rs`, `events.rs`, `workspaces.rs`, `tabs.rs`,
-      `panes.rs`, `layout.rs`, `copy.rs`, `agents.rs`, `agent_view.rs`, `session.rs`, `server.rs`, `bus-api.schema.json`, `tests.rs`
+      `panes.rs`, `layout.rs`, `copy.rs`, `agents.rs`, `agent_view.rs`, `session.rs`, `server.rs`, `bus-api.schema.json`, `tests/{requests,responses,golden}.rs`
     - `client.rs` (`ApiClient`), `status.rs` (ping)
   - `keys/`: `key.rs`, `protocol.rs` (`KeyboardProtocol`, modifyOtherKeys), `decode.rs`, `encode.rs` (including ConPTY key encoding),
     `mouse.rs`,
-    `host/{event,framer,sequence,mouse,replies}.rs` (host byte stream to `RawInputEvent`), `tests/`
-  - `ansi.rs`: frame diff to ANSI (`BlitEncoder`)
+    `host/{event,framer,sequence,mouse,replies}.rs` (host byte stream to `RawInputEvent`),
+    `tests/{decode,encode,host_framer,host_events,host_mouse,host_replies}.rs`
+  - `ansi/`: frame diff to ANSI: `mod.rs` (`BlitEncoder` state), `diff.rs` (full redraw and cell diff), `cursor.rs` (cursor, IME anchor,
+    synchronized output), `tests/{diff,cursor,sync}.rs`
   - `kitty/`: `apc.rs`, `placement.rs` (kitty graphics encoding and placement math)
 - `agents/`: knowledge of agent CLIs
   - `catalog.rs` (`AgentKind`, labels, executables), `identify.rs` (interprets platform process facts: chains, env hint, Windows
     foreground choice), `detect.rs` (`AgentState`, `AgentDetection`)
-  - `dialog.rs` (choice and question panels), `title.rs` (spinners)
-  - `manifest/`: `mod.rs`, `schema.rs`, `compile.rs`, `regions.rs`, `loader.rs`, `bundled/*.toml`, `tests/`
-  - `resume/`: `catalog.rs` (resume argv per agent), `session_ref.rs`
+  - `dialog.rs` (choice and question panels), `title.rs` (spinners), `tests/{catalog,identify,dialog}.rs`
+  - `manifest/`: `mod.rs`, `schema.rs`, `compile.rs`, `regions.rs`, `loader.rs`, `bundled/*.toml`,
+    `tests/{engine,validation,regions,claude,codex,others}.rs`
+  - `resume/`: `catalog.rs` (resume argv per agent), `session_ref.rs`, `tests/`
   - `providers/`: agent harnesses Bus launches and observes, one folder each
     - `mod.rs` (`ProviderKind`, match dispatch into each harness), `launch.rs` (room-free `LaunchSpec` to `PreparedLaunch`),
       `spool.rs` (`--bus-callback` records, parsed into neutral provider events), `hook_json.rs` (shared hook-file merge and consent),
@@ -111,18 +118,21 @@ of them. Every handwritten file, tests included, stays under the 3,000-line gate
   - `vt/`: safe wrapper over libghostty-vt
     - `mod.rs` (errors, re-exports), `ffi.rs` (generated bindings), `consts.rs`, `types.rs` (cells, colors, cursor, scrollbar)
     - `callbacks.rs` (C trampolines, clipboard, PNG decode), `terminal.rs` (lifecycle, write, modes, reads, scrolling)
-    - `render.rs` (render state, row and cell iterators), `input.rs` (key, mouse, focus encoders), `kitty.rs` (images, placements)
+    - `render.rs` (render state, row and cell iterators), `input.rs` (key, mouse, focus encoders), `kitty.rs` (image types and getters),
+      `kitty_placement.rs` (virtual placement geometry, placeholder tables)
     - `tests/{terminal,render,input,kitty}.rs`
-  - `pty/`: `spawn.rs`, `fd.rs` (wake pipe, poll, resize), `actor/{mod,unix,windows}.rs` (per-terminal I/O thread)
+  - `pty/`: `spawn.rs`, `fd.rs` (wake pipe, poll, resize), `actor/{mod,unix,windows}.rs` (per-terminal I/O thread),
+    `actor/submission.rs` (paced text, delay and Enter), `tests/{unix_actor,submission}.rs`
   - `emulator/`: PTY bytes into the VT, frames and text out
     - `mod.rs` (core, locking, modes, scroll state), `write.rs` (PTY input, ordered replies, history seeding)
     - `color_replies.rs` (OSC color queries from the host theme), `encode.rs` (keys and mouse)
     - `render.rs` (ratatui render, dirty-row cell patches), `read.rs` (visible, recent and detection text and ANSI)
     - `text_motion.rs` (retained text, search, word and paragraph motion), `windows.rs`, `conpty_recent_cache.rs`
-    - `controls/`: `osc/{default_colors,agent,cwd,scrollback_compat,debug,collector}.rs`, `xtgettcap.rs`, `kitty_keyboard.rs`
+    - `controls/`: `osc/{default_colors,agent,cwd,scrollback_compat,debug,collector}.rs`, `osc/tests/`, `xtgettcap.rs`, `kitty_keyboard.rs`
       (kitty flags and the modifyOtherKeys 0/1/2 tracker),
       `cursor.rs`, `input.rs`
-    - `tests/{render,color_replies,text_motion,read,write,encode,ansi}.rs` (`ansi.rs`: protocol ANSI tests that need a real VT)
+    - `tests/{render,color_replies,text_motion,search,read,recent,write,encode,ansi}.rs` (`ansi.rs`: protocol ANSI tests that need
+      a real VT)
   - `runtime/`: `TerminalRuntime`, the only handle to a live terminal
     - `mod.rs` (struct, I/O wiring, drop), `spawn.rs` (shell resolution, launch env, PTY spawn), `io.rs` (input, resize, scroll)
     - `read.rs` (snapshots, render, cwd), `detection_task.rs` (agent probe loop), `detection_policy.rs` (debounce, publish rules)
@@ -131,20 +141,22 @@ of them. Every handwritten file, tests included, stays under the 3,000-line gate
   - `state/`: `TerminalState`, the arbiter of effective agent state
     - `mod.rs` (struct, labels, title, queries, recompute), `detection.rs` (screen and process input)
     - `sessions.rs` (session refs, replacement), `managed_agent.rs` (phases of agents started through `agent.start`)
-    - `tests/{detection,sessions,managed_agent}.rs`
+    - `tests/{detection,process_exit,sessions,session_replacement,managed_agent}.rs`
 - `messaging/`: rooms and the message round trip
   - `mod.rs`, `identity.rs` (managed agent names, `bus:<agent>` source ids), `attachments.rs`, `diagnostics.rs`
   - `model/`: the round-trip rules, no I/O
     - `mod.rs`, `types.rs` (ids, `Author`, `Room` and its MASTER kind, `RoomAgent`, `Prompt`, `Reply`), `state.rs` (`BusState`)
     - `rooms.rs`, `agents.rs` (participants, `orchestrates` link), `requests.rs` (queue, coalesce, steer, settle)
-    - `callbacks.rs` (match neutral provider events to requests), `status.rs` (room rollup), `tests.rs`
+    - `callbacks.rs` (match neutral provider events to requests), `status.rs` (room rollup),
+      `tests/{rooms,agents,requests,callbacks}.rs`
   - `coordinator/`: the single-writer worker that runs the round trip
     - `mod.rs` (`BusHandle`, `BusCommand`, `BusEvent`, `BusSnapshot`), `worker.rs`, `poll.rs` (agent status), `delivery.rs`
     - `commands.rs`, `agents.rs` (`AddAgent` to `LaunchSpec`, delete, guarded terminal close), `callbacks.rs` (consume the hook spool)
     - `resume.rs` (rebind after restart; validate a resumed agent's room, store and spool from terminal facts), `usage.rs` (newest
       quota per login, throttling, state output), `settings.rs`, `dialogs.rs`
     - `control/`: handlers for control commands, `rooms.rs`, `agents.rs`, `messages.rs`, `dialogs.rs`, `inspect.rs`
-    - `tests/`: `delivery.rs`, `poll.rs`, `persistence.rs`, `steering.rs`, `resume.rs`, `focus.rs`, `settings.rs`, `dialogs.rs`, `control/`
+    - `tests/`: `delivery.rs`, `queue.rs`, `poll.rs`, `binding.rs`, `persistence.rs`, `recovery.rs`, `steering.rs`, `resume.rs`,
+      `focus.rs`, `settings.rs`, `dialogs.rs`, `control/{rooms,agents,messages,dialogs,inspect}.rs`
   - `native.rs`: `NativeServerClient`, the coordinator's API client to the server
   - `storage/`: `state_store.rs` (`JsonStore`), `sessions.rs` (local session registry), `tests/`
   - `control/`: `server.rs` (control socket, started only with `--dev`; `send --as` must name an agent in the room or its
@@ -156,45 +168,47 @@ of them. Every handwritten file, tests included, stays under the 3,000-line gate
 - `server/`: the `bus server` daemon
   - `mod.rs` (`Server`, the main loop), `app.rs` (`App`, `AppState`, `AppSettings`), `startup.rs`, `shutdown.rs`, `config_reload.rs`
   - `workspaces/`: workspaces, tabs and the split layout
-    - `mod.rs` (`Workspace`), `tab.rs`, `pane.rs` (`PaneState`), `layout/{tree,geometry,nav}.rs`,
+    - `mod.rs` (`Workspace`), `tab.rs`, `pane.rs` (`PaneState`), `layout/{tree,geometry,nav,tests}.rs`,
     `agent_view.rs` (agent-panel entries and the agent-view filter)
-    - `ids.rs` (public `w`/`t`/`p` ids, target resolution), `navigation.rs` (focus, switch, move, zoom), `close.rs`, `attention.rs`,
-      `git_label.rs`, `cwd.rs`, `tests/`
+    - `ids.rs` (public `w`/`t`/`p` ids, target resolution), `navigation.rs` (focus, switch, move, zoom), `moves.rs` (move panes
+      across tabs), `close.rs`, `attention.rs`, `git_label.rs`, `cwd.rs`, `test_support.rs`, `tests/`
   - `terminals/`: live terminals and the agents in them
     - `events.rs` (apply `TerminalEvent`s, emit pane updates), `agents.rs` (start, rename, focus, info), `resume.rs` (extract terminal
       facts, ask `messaging` to validate, then the provider for launch extras), `respawn.rs` (shell after an agent exits), `titles.rs`, `theme_sync.rs`
     - `scrollback_read.rs`: paged scrollback read of full-screen agent TUIs
-    - `tests/`
+    - `tests/{events,agents,resume,respawn,scrollback_read}.rs`
   - `persistence/`: `schema.rs`, `capture.rs`, `store.rs`, `restore.rs` (snapshot to model plus a launch plan the main loop runs),
-    `autosave.rs`, `tests/`
+    `autosave.rs`, `tests/{schema,store,restore}.rs`
   - `api/`: handlers for every API method
-    - `socket.rs` (API socket accept, one thread per connection), `streams/{event_hub,subscriptions,wait}.rs`
+    - `socket/{accept,connection}.rs` (API socket, one thread per connection), `streams/{event_hub,subscriptions,wait,prompt_wait}.rs`
     - only the methods the client, the coordinator and the control CLI call
     - `mod.rs` (dispatch), `server_methods.rs` (stop, reload, window title, read deferral), `events.rs` (outbound API events)
     - `errors.rs`, `env.rs`, `input_encoding.rs`, `terminal_read.rs`, `session.rs`, `workspaces.rs`, `tabs.rs`, `layouts.rs`
-    - `agents/`: `basic.rs`, `prompt.rs` (deferred prompts, admission), `dialog.rs`, `read.rs`, `tests/`
+    - `tests/{dispatch,events,streams}.rs`
+    - `agents/`: `basic.rs`, `prompt.rs` (deferred prompts, admission), `dialog.rs`, `read.rs`, `tests/{basic,prompt,dialog}.rs`
     - `panes/`: `mod.rs` (list, get, focus, rename, close), `layout.rs` (split, resize, swap, zoom, events),
       `copy.rs` (scroll, selection, copy motion and search, links), `io.rs` (read, input routing), `session.rs` (Bus agent session
       reports)
-    - `panes/tests/{layout,copy,io,session,close}.rs`
+    - `panes/tests/{layout,navigation,copy,io,session,close}.rs`
   - `clients/`: connected TUI clients
     - `accept.rs`, `handshake.rs`, `read_loop.rs`, `writer.rs` (control and render lanes), `events.rs` (`ServerEvent` and its handling)
     - `connection.rs` (per-client record), `foreground.rs`, `input.rs`, `requests.rs` (client request allow-list and dispatch)
-    - `focus.rs`, `geometry.rs`, `surface_lease.rs`, `clipboard_images.rs`, `tests/`
+    - `focus.rs`, `geometry.rs`, `surface_lease.rs`, `clipboard_images.rs`,
+      `tests/{handshake,read_loop,writer}.rs`
   - `rendering/`: what each client sees
-    - `surface/{layout,draw,chrome,selection,scrollbar}.rs` (draw a tab of panes), `snapshot.rs` (shell snapshot for a client)
+    - `surface/{layout,draw,chrome,selection,scrollbar}.rs` and `surface/tests/` (draw a tab of panes), `snapshot.rs` (shell snapshot for a client)
     - `full.rs`, `incremental.rs` (dirty-row patches), `stream.rs`, `images.rs` (kitty scene, delivery cache), `host_modes.rs`,
       `window_title.rs`, `tests/`
   - `notifications/`: `policy.rs` (state change to toast), `delivery.rs` (pending, drain, send to clients), `show.rs`, `tests/`
-  - `tests/`: `support.rs`, `lifecycle.rs`, `window_title.rs`, `client_shell.rs`, `incremental.rs`, `views.rs`, `input.rs`,
-    `notifications.rs`, `surface_lease.rs`, `render_scale.rs` (ignored benchmark; the one test-only import of `client`)
+  - `tests/`: `support.rs`, `lifecycle.rs`, `startup.rs`, `config_reload.rs`, `theme.rs`, `window_title.rs`, `client_shell.rs`,
+    `client_shell_input.rs`, `incremental.rs`, `views.rs`, `input.rs`, `notifications.rs`, `surface_lease.rs`, `render_scale.rs` (ignored benchmark; the one test-only import of `client`)
 - `client/`: the TUI client process
   - `mod.rs`, `run.rs`, `event_loop.rs`, `server_messages.rs`, `state.rs`, `events.rs`, `timer.rs`, `errors.rs`
   - `config_reload.rs`, `effects.rs` (clipboard, URLs, editor), `clipboard.rs` (native or OSC 52), `notifications.rs`
   - `host_terminal/`: the user's real terminal
     - `setup.rs`, `geometry.rs`, `frame_output.rs`, `effects.rs` (bells, title), `modes.rs`, `notify.rs`, `color_probe.rs`
     - `kitty.rs`: host image upload cache and emitter
-    - `input/`: `mod.rs` (stdin reader thread), `windows/`
+    - `input/`: `mod.rs` (stdin reader thread), `tests/`, `windows/`
       - `reader.rs` (console handle, reader loop, motion coalescing), `records.rs`, `mapper.rs` (records to key, text, mouse)
       - `win32_input_mode.rs`, `keymap.rs` (VK and modifier tables), `pump.rs` (VT chunks through the host framer)
       - `tests/{support,mapper,pump,win32_input_mode,keymap,handoff}.rs`
@@ -209,11 +223,12 @@ of them. Every handwritten file, tests included, stays under the 3,000-line gate
     - `history/`: `mod.rs`, `exchange.rs`, `markdown.rs`
     - `render/`: `view.rs`, `text.rs`, `sidebar.rs`, `layout.rs`, `room.rs`, `dialogs.rs`, `paint.rs`, `thumbnails.rs`
     - `tests/`: `mod.rs` (fixtures, input drivers, screen capture), `deletion.rs`, `sidebar.rs`, `toasts.rs`, `composer.rs`,
-      `forms.rs`, `layout.rs`, `native_shell.rs`, `attachments.rs`, `selection.rs`, `history.rs`, `keys.rs`, `master.rs`,
+      `forms.rs`, `layout.rs`, `native_shell.rs`, `attachments.rs`, `selection.rs`, `history_markdown.rs`, `history_slots.rs`,
+      `history_scroll.rs`, `keys.rs`, `master.rs`,
       `sound.rs`, `focus.rs`
 - `cli/`: the `bus` command
   - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
-  - `control.rs` (control commands used by orchestrators and humans), `help.rs`, `tests/`
+  - `control.rs` (control commands used by orchestrators and humans), `help.rs`, `tests/{parse,execute}.rs`
 
 ## 3. Dependency graphs
 
