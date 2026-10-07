@@ -684,42 +684,6 @@ impl HeadlessServer {
         self.apply_shell_tab_geometry(client_id, start_pending_agent_resumes)
     }
 
-    pub(super) fn shell_geometry_controller_for_terminal(
-        &self,
-        terminal_id: &str,
-    ) -> Option<(u64, crate::ui::TabSurfaceTarget)> {
-        let target = self.app.state.workspaces.iter().enumerate().find_map(
-            |(workspace_index, workspace)| {
-                workspace
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .find_map(|(tab_index, tab)| {
-                        tab.panes
-                            .values()
-                            .any(|pane| pane.attached_terminal_id.as_str() == terminal_id)
-                            .then_some(crate::ui::TabSurfaceTarget {
-                                workspace_index,
-                                tab_index,
-                            })
-                    })
-            },
-        )?;
-        let tab_id = self.tab_id_for_target(target)?;
-        self.tab_geometry_controllers
-            .get(&tab_id)
-            .copied()
-            .map(|client_id| (client_id, target))
-    }
-
-    pub(super) fn restore_shell_tab_geometry(
-        &mut self,
-        client_id: u64,
-        target: crate::ui::TabSurfaceTarget,
-    ) -> bool {
-        self.apply_shell_tab_geometry_to_target(client_id, target, true)
-    }
-
     /// Applies a public socket request, including its session-wide focus projection.
     pub(super) fn handle_api_request_with_shutdown_check(
         &mut self,

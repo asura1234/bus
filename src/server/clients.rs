@@ -11,9 +11,6 @@ use crate::server::render_stream::ClientRenderState;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ClientConnectionMode {
     ClientShell,
-    TerminalPending,
-    TerminalAttach { terminal_id: String },
-    TerminalObserve { terminal_id: String },
 }
 
 pub(crate) type RenderTarget = (
@@ -130,7 +127,7 @@ impl ClientShellLocation {
 
 /// A connected client tracked by the server.
 pub(crate) struct ClientConnection {
-    /// Whether this connection owns the Herdr shell or one direct terminal stream.
+    /// The client-owned shell connection mode.
     pub(crate) mode: ClientConnectionMode,
     /// The client's terminal size after clamping.
     pub(crate) terminal_size: (u16, u16),
@@ -166,8 +163,6 @@ pub(crate) struct ClientConnection {
     pub(crate) host_mouse_capture_active: Option<bool>,
     /// Last SGR pixel provenance mode sent to this client.
     pub(crate) host_sgr_pixels_active: Option<bool>,
-    /// Last keyboard protocol state sent to a directly attached terminal client.
-    pub(crate) host_keyboard_protocol_active: Option<(u16, u8)>,
     /// Presses forwarded by this shell that need release on abrupt teardown.
     shell_held_inputs: HashMap<ClientShellPressId, ClientShellHeldInput>,
     /// Temporary files staged from this client's local clipboard image pastes.
@@ -236,7 +231,6 @@ impl ClientConnection {
             shell_mouse_capture: false,
             host_mouse_capture_active: None,
             host_sgr_pixels_active: None,
-            host_keyboard_protocol_active: None,
             shell_held_inputs: HashMap::new(),
             staged_clipboard_files: Vec::new(),
             shell_location: None,
@@ -467,38 +461,12 @@ pub(crate) fn latest_shell_client(clients: &HashMap<u64, ClientConnection>) -> O
         .map(|(&client_id, _)| client_id)
 }
 
-pub(crate) fn terminal_stream_client_ids(
-    clients: &HashMap<u64, ClientConnection>,
-    terminal_id: &str,
-) -> Vec<u64> {
-    clients
-        .iter()
-        .filter_map(|(&client_id, client)| match &client.mode {
-            ClientConnectionMode::TerminalAttach {
-                terminal_id: attached,
-            }
-            | ClientConnectionMode::TerminalObserve {
-                terminal_id: attached,
-            } if attached == terminal_id => Some(client_id),
-            _ => None,
-        })
-        .collect()
-}
-
 pub(crate) fn render_targets(
     clients: &HashMap<u64, ClientConnection>,
     foreground_client_id: Option<u64>,
 ) -> Vec<RenderTarget> {
     let mut targets: Vec<RenderTarget> = clients
         .iter()
-        .filter(|(_, client)| {
-            client.is_shell_client()
-                || matches!(
-                    client.mode,
-                    ClientConnectionMode::TerminalAttach { .. }
-                        | ClientConnectionMode::TerminalObserve { .. }
-                )
-        })
         .map(|(&client_id, client)| {
             (
                 client_id,

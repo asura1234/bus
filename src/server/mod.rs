@@ -3,7 +3,6 @@ pub mod autodetect;
 #[cfg(unix)]
 pub(crate) mod client_accept;
 pub(crate) mod client_commands;
-mod client_endpoint_control;
 pub(crate) mod client_shell;
 pub(crate) mod client_shell_graphics;
 pub(crate) mod client_transport;
@@ -16,4 +15,3 @@ pub(crate) mod pane_input;
 mod render_scale_benchmark;
 pub(crate) mod render_stream;
 pub mod socket_paths;
-pub(crate) mod terminal_attach;

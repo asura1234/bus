@@ -33,7 +33,6 @@ use tracing::error;
 use tracing::{debug, info, warn};
 
 use base64::Engine;
-use bytes::Bytes;
 
 use crate::api;
 use crate::app;
@@ -43,9 +42,7 @@ use crate::ipc::{
     bind_local_listener, remove_socket_file_if_owned, socket_file_identity, LocalListener,
     SocketFileIdentity,
 };
-use crate::protocol::{
-    self, AttachScrollDirection, AttachScrollSource, FrameData, ServerMessage, MAX_FRAME_SIZE,
-};
+use crate::protocol::{self, FrameData, ServerMessage, MAX_FRAME_SIZE};
 #[cfg(unix)]
 use crate::server::client_accept::accept_pending_client_connections;
 use crate::server::client_shell::{
@@ -53,20 +50,16 @@ use crate::server::client_shell::{
 };
 use crate::server::client_transport::ServerEvent;
 use crate::server::clients::{
-    latest_shell_client, render_targets, terminal_stream_client_ids, ClientConnection,
-    ClientConnectionMode, ClientShellInputTarget, DeferredRender,
+    latest_shell_client, render_targets, ClientConnection, ClientConnectionMode,
+    ClientShellInputTarget, DeferredRender,
 };
 use crate::server::notifications::{
     should_forward_toast_to_clients, toast_message_from_state_change, toast_notify_kind,
 };
-use crate::server::pane_input::{
-    apply_client_pane_input_events, apply_terminal_attach_input, apply_terminal_attach_scroll,
-    terminal_attach_mouse_position,
-};
+use crate::server::pane_input::apply_client_pane_input_events;
 use crate::server::socket_paths::{
     client_socket_path, prepare_socket_path, restrict_socket_permissions,
 };
-use crate::server::terminal_attach::paste_payload_for_runtime;
 
 mod bootstrap;
 mod client_views;
@@ -184,8 +177,6 @@ pub struct HeadlessServer {
     api_window_title: Option<String>,
     /// Full server config warning shown to clients that use server keybindings.
     server_config_diagnostic: Option<String>,
-    /// Writable direct attach owner per terminal id string.
-    terminal_attach_owners: HashMap<String, u64>,
     /// Deferred application-history reads currently driving alternate-screen viewports.
     pending_alt_screen_reads: Vec<crate::server::alt_screen_read::PendingAltScreenRead>,
     /// Reads waiting for an alternate-screen traversal of the same terminal to finish.
@@ -309,7 +300,6 @@ impl HeadlessServer {
             sent_window_title: None,
             api_window_title: None,
             server_config_diagnostic,
-            terminal_attach_owners: HashMap::new(),
             pending_alt_screen_reads: Vec::new(),
             deferred_alt_screen_reads: Vec::new(),
             next_activity_stamp: 1,
@@ -529,10 +519,9 @@ impl HeadlessServer {
                     LoopEvent::Internal(ev) => {
                         self.handle_internal_event_with_forwarding(ev);
                     }
-                    LoopEvent::ServerEvent(
-                        ServerEvent::ClientConnected { writer, .. }
-                        | ServerEvent::ClientShellConnected { writer, .. },
-                    ) => {
+                    LoopEvent::ServerEvent(ServerEvent::ClientShellConnected {
+                        writer, ..
+                    }) => {
                         if let Ok(message) =
                             Self::frame_server_message(&ServerMessage::ServerShutdown {
                                 reason: Some("server is shutting down".to_owned()),
@@ -600,51 +589,7 @@ impl HeadlessServer {
         let Some(client_id) = self.foreground_client_id else {
             return;
         };
-        let Some(client) = self.clients.get(&client_id) else {
-            return;
-        };
-        if matches!(client.mode, ClientConnectionMode::ClientShell) {
-            self.resize_shell_tab_if_controller(client_id, start_pending_agent_resumes);
-            return;
-        }
-        let cell_size = client.cell_size;
-        let (cols, rows) = self.effective_size;
-        let area = Rect::new(0, 0, cols, rows);
-        if self.app.state.kitty_graphics_enabled && cell_size.is_known() {
-            crate::ui::compute_view_with_cell_size(
-                &mut self.app.state,
-                &self.app.terminal_runtimes,
-                area,
-                cell_size,
-            );
-        } else {
-            crate::ui::compute_view_with_runtime_registry(
-                &mut self.app.state,
-                &self.app.terminal_runtimes,
-                area,
-            );
-        }
-
-        // Shared runtime size changes affect pane wrapping and foreground-driven
-        // rendering semantics. Force one fresh frame to every remaining client
-        // even if the next rendered buffer compares equal to its cached frame.
-        for client in self.clients.values_mut() {
-            client.request_repaint();
-        }
-        if !start_pending_agent_resumes {
-            self.app.pending_agent_resume_deadline = None;
-            return;
-        }
-        let now = Instant::now();
-        self.app.sync_pending_agent_resume_deadline(now);
-        if self
-            .app
-            .start_pending_agent_resumes(self.app.pending_agent_resume_due(now))
-        {
-            for client in self.clients.values_mut() {
-                client.request_repaint();
-            }
-        }
+        self.resize_shell_tab_if_controller(client_id, start_pending_agent_resumes);
     }
 
     fn sync_runtime_view_geometry(&mut self) {
@@ -780,15 +725,6 @@ impl HeadlessServer {
             let held_inputs = removed.drain_shell_held_inputs();
             self.release_client_shell_inputs(client_id, held_inputs);
             crate::server::clipboard_image::remove_files(removed.staged_clipboard_files);
-            if let ClientConnectionMode::TerminalAttach { terminal_id } = removed.mode {
-                self.terminal_attach_owners.remove(&terminal_id);
-                if let Some(terminal_id) = self.terminal_id_by_string(&terminal_id) {
-                    self.app
-                        .state
-                        .direct_attach_resize_locks
-                        .remove(&terminal_id);
-                }
-            }
         }
         if should_release_focus {
             if let Some(target) = disconnected_focus.as_ref() {
@@ -831,18 +767,8 @@ impl HeadlessServer {
     }
 
     fn remove_client_and_resize_if_needed(&mut self, client_id: u64) {
-        let restore_shell_controller = self.clients.get(&client_id).and_then(|client| {
-            let ClientConnectionMode::TerminalAttach { terminal_id } = &client.mode else {
-                return None;
-            };
-            self.shell_geometry_controller_for_terminal(terminal_id)
-        });
         self.remove_client(client_id);
-        if let Some((controller_id, target)) = restore_shell_controller {
-            self.restore_shell_tab_geometry(controller_id, target);
-        } else {
-            self.resize_tabs_for_only_shell_client(true);
-        }
+        self.resize_tabs_for_only_shell_client(true);
     }
 
     /// Accepts pending client connections from the non-blocking listener.
@@ -878,9 +804,7 @@ impl HeadlessServer {
     async fn reject_late_client_connections(&mut self) {
         self.server_event_rx.close();
         while let Some(event) = self.server_event_rx.recv().await {
-            if let ServerEvent::ClientConnected { writer, .. }
-            | ServerEvent::ClientShellConnected { writer, .. } = event
-            {
+            if let ServerEvent::ClientShellConnected { writer, .. } = event {
                 if let Ok(message) = Self::frame_server_message(&ServerMessage::ServerShutdown {
                     reason: Some("server is shutting down".to_owned()),
                 }) {
@@ -890,44 +814,12 @@ impl HeadlessServer {
         }
     }
 
-    fn terminal_id_by_string(&self, terminal_id: &str) -> Option<crate::terminal::TerminalId> {
-        self.app
-            .state
-            .terminals
-            .keys()
-            .find(|id| id.to_string() == terminal_id)
-            .cloned()
-    }
-
-    fn runtime_for_terminal_id_string(
-        &self,
-        terminal_id: &str,
-    ) -> Option<&crate::terminal::TerminalRuntime> {
-        let terminal_id = self.terminal_id_by_string(terminal_id)?;
-        self.app.terminal_runtimes.get(&terminal_id)
-    }
-
-    fn resolve_terminal_target_id_string(&self, target: &str) -> Option<String> {
-        if self.terminal_id_by_string(target).is_some() {
-            return Some(target.to_owned());
-        }
-        self.app
-            .resolve_terminal_target(target)
-            .ok()
-            .map(|resolved| resolved.terminal_id)
-    }
-
     fn client_clipboard_image_target_is_valid(
         &self,
         client_id: u64,
         target: &protocol::ClientClipboardImageTarget,
     ) -> bool {
         match target {
-            protocol::ClientClipboardImageTarget::DirectTerminal => {
-                self.clients.get(&client_id).is_some_and(|client| {
-                    matches!(client.mode, ClientConnectionMode::TerminalAttach { .. })
-                })
-            }
             protocol::ClientClipboardImageTarget::Pane(pane_id) => {
                 self.clients
                     .get(&client_id)
@@ -955,22 +847,6 @@ impl HeadlessServer {
         path: String,
     ) -> bool {
         match target {
-            protocol::ClientClipboardImageTarget::DirectTerminal => {
-                let Some(ClientConnection {
-                    mode: ClientConnectionMode::TerminalAttach { terminal_id },
-                    ..
-                }) = self.clients.get(&client_id)
-                else {
-                    return false;
-                };
-                if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
-                    let payload = paste_payload_for_runtime(runtime, &path);
-                    if let Err(err) = runtime.try_send_bytes(Bytes::from(payload)) {
-                        warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach clipboard image paste failed");
-                    }
-                }
-                true
-            }
             protocol::ClientClipboardImageTarget::Pane(pane_id) => {
                 if !self
                     .clients
@@ -1004,153 +880,6 @@ impl HeadlessServer {
                 true
             }
         }
-    }
-
-    fn resolve_terminal_session_target(
-        &mut self,
-        client_id: u64,
-        target: &str,
-        action: &str,
-    ) -> Option<String> {
-        if !self.client_is_pending_terminal_mode(client_id) {
-            self.send_to_client(
-                client_id,
-                ServerMessage::ServerShutdown {
-                    reason: Some(
-                        format!(
-                            "terminal session {action} failed: connection is not pending terminal session"
-                        ),
-                    ),
-                },
-            );
-            self.remove_client_and_resize_if_needed(client_id);
-            return None;
-        }
-
-        let Some(terminal_id) = self.resolve_terminal_target_id_string(target) else {
-            self.send_to_client(
-                client_id,
-                ServerMessage::ServerShutdown {
-                    reason: Some(format!(
-                        "terminal session {action} failed: terminal target {target} not found"
-                    )),
-                },
-            );
-            self.remove_client_and_resize_if_needed(client_id);
-            return None;
-        };
-
-        Some(terminal_id)
-    }
-
-    fn observe_terminal_client(&mut self, client_id: u64, target: String) -> bool {
-        let Some(terminal_id) = self.resolve_terminal_session_target(client_id, &target, "observe")
-        else {
-            return false;
-        };
-
-        let stamp = self.allocate_activity_stamp();
-        let Some(client) = self.clients.get_mut(&client_id) else {
-            return false;
-        };
-        let (cols, rows) = client.terminal_size;
-        client.mode = ClientConnectionMode::TerminalObserve {
-            terminal_id: terminal_id.clone(),
-        };
-        client.render_state.reset_baseline();
-        client.last_activity = stamp;
-        let was_foreground = self.foreground_client_id == Some(client_id);
-        if was_foreground {
-            self.promote_latest_remaining_client();
-        }
-
-        info!(client_id, cols, rows, terminal_id = %terminal_id, "terminal observe client connected");
-        true
-    }
-
-    fn control_terminal_client(&mut self, client_id: u64, target: String, takeover: bool) -> bool {
-        let Some(terminal_id) = self.resolve_terminal_session_target(client_id, &target, "control")
-        else {
-            return false;
-        };
-
-        self.attach_terminal_client(client_id, terminal_id, takeover)
-    }
-
-    fn handle_terminal_attach_scroll(
-        &mut self,
-        client_id: u64,
-        source: AttachScrollSource,
-        direction: AttachScrollDirection,
-        lines: u16,
-        column: Option<u16>,
-        row: Option<u16>,
-        modifiers: u8,
-    ) -> bool {
-        let Some(ClientConnection {
-            mode: ClientConnectionMode::TerminalAttach { terminal_id },
-            ..
-        }) = self.clients.get(&client_id)
-        else {
-            return false;
-        };
-        let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) else {
-            return false;
-        };
-
-        if let Err(err) =
-            apply_terminal_attach_scroll(runtime, source, direction, lines, column, row, modifiers)
-        {
-            warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach scroll failed");
-        }
-        true
-    }
-
-    fn handle_terminal_attach_mouse(
-        &mut self,
-        client_id: u64,
-        kind: protocol::ClientMouseKind,
-        position: protocol::ClientMousePosition,
-        geometry: Option<protocol::ClientMouseGeometry>,
-        modifiers: u8,
-        lines: u16,
-    ) -> bool {
-        let Some(client) = self.clients.get(&client_id) else {
-            return false;
-        };
-        let ClientConnectionMode::TerminalAttach { terminal_id } = &client.mode else {
-            return false;
-        };
-        let terminal_id = terminal_id.clone();
-        let terminal_size = client.terminal_size;
-        let cell_size = client.cell_size;
-        let pixel_mouse = client.pixel_mouse;
-        let host_sgr_pixels_active = client.host_sgr_pixels_active == Some(true);
-        let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) else {
-            return false;
-        };
-        let Some(position) = terminal_attach_mouse_position(
-            runtime,
-            terminal_size,
-            cell_size,
-            pixel_mouse,
-            host_sgr_pixels_active,
-            position,
-            geometry,
-        ) else {
-            return false;
-        };
-        let event = protocol::ClientPaneInputEvent::Mouse {
-            kind,
-            position,
-            geometry: None,
-            modifiers,
-            lines: lines.max(1),
-        };
-        if let Err(err) = apply_client_pane_input_events(runtime, &[event]) {
-            warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach mouse input failed");
-        }
-        true
     }
 
     /// Pulls only titles reported dirty by the PTY parser. A focused pane title
@@ -1380,182 +1109,9 @@ impl HeadlessServer {
         }
     }
 
-    fn shutdown_terminal_stream_clients(&mut self, terminal_id: &str, reason: String) {
-        let client_ids = terminal_stream_client_ids(&self.clients, terminal_id);
-
-        for client_id in client_ids {
-            self.send_to_client(
-                client_id,
-                ServerMessage::ServerShutdown {
-                    reason: Some(reason.clone()),
-                },
-            );
-            self.remove_client_and_resize_if_needed(client_id);
-        }
-    }
-
-    fn send_terminal_stream_detach_shutdown(&mut self, client_id: u64) {
-        if matches!(
-            self.clients.get(&client_id).map(|client| &client.mode),
-            Some(
-                ClientConnectionMode::TerminalAttach { .. }
-                    | ClientConnectionMode::TerminalObserve { .. }
-            )
-        ) {
-            self.send_to_client(
-                client_id,
-                ServerMessage::ServerShutdown {
-                    reason: Some("detached".to_owned()),
-                },
-            );
-        }
-    }
-
-    fn attach_terminal_client(
-        &mut self,
-        client_id: u64,
-        terminal_id: String,
-        takeover: bool,
-    ) -> bool {
-        if !self.client_is_pending_terminal_mode(client_id) {
-            self.send_to_client(
-                client_id,
-                ServerMessage::ServerShutdown {
-                    reason: Some(
-                        "terminal attach failed: connection is not pending terminal attach"
-                            .to_owned(),
-                    ),
-                },
-            );
-            self.remove_client_and_resize_if_needed(client_id);
-            return false;
-        }
-
-        let Some(real_terminal_id) = self.terminal_id_by_string(&terminal_id) else {
-            self.send_to_client(
-                client_id,
-                ServerMessage::ServerShutdown {
-                    reason: Some(format!(
-                        "terminal attach failed: terminal {terminal_id} not found"
-                    )),
-                },
-            );
-            self.remove_client_and_resize_if_needed(client_id);
-            return false;
-        };
-
-        if self
-            .pending_alt_screen_reads
-            .iter()
-            .any(|pending| pending.terminal_id == real_terminal_id)
-        {
-            self.send_to_client(
-                client_id,
-                ServerMessage::ServerShutdown {
-                    reason: Some(format!(
-                        "terminal attach failed: terminal {terminal_id} has a read in progress; retry"
-                    )),
-                },
-            );
-            self.remove_client_and_resize_if_needed(client_id);
-            return false;
-        }
-
-        if let Some(existing_owner) = self.terminal_attach_owners.get(&terminal_id).copied() {
-            if existing_owner != client_id && !takeover {
-                self.send_to_client(
-                    client_id,
-                    ServerMessage::ServerShutdown {
-                        reason: Some(format!(
-                            "terminal attach failed: terminal {terminal_id} already has an attached client; retry with --takeover"
-                        )),
-                    },
-                );
-                self.remove_client_and_resize_if_needed(client_id);
-                return false;
-            }
-            if existing_owner != client_id {
-                self.send_to_client(
-                    existing_owner,
-                    ServerMessage::ServerShutdown {
-                        reason: Some("terminal attach taken over".to_owned()),
-                    },
-                );
-                self.remove_client_and_resize_if_needed(existing_owner);
-            }
-        }
-
-        let stamp = self.allocate_activity_stamp();
-        let Some(client) = self.clients.get_mut(&client_id) else {
-            return false;
-        };
-        let (cols, rows) = client.terminal_size;
-        let cell_size = client.cell_size;
-        client.mode = ClientConnectionMode::TerminalAttach {
-            terminal_id: terminal_id.clone(),
-        };
-        client.render_state.reset_baseline();
-        client.last_activity = stamp;
-        let was_foreground = self.foreground_client_id == Some(client_id);
-        if was_foreground {
-            self.promote_latest_remaining_client();
-        }
-
-        info!(client_id, cols, rows, terminal_id = %terminal_id, "terminal attach client connected");
-        self.terminal_attach_owners
-            .insert(terminal_id.clone(), client_id);
-        self.app
-            .state
-            .direct_attach_resize_locks
-            .insert(real_terminal_id.clone());
-        self.app
-            .start_pending_agent_resume_for_terminal(&real_terminal_id, rows, cols);
-        if let Some(runtime) = self.app.terminal_runtimes.get(&real_terminal_id) {
-            runtime.resize(rows, cols, cell_size.width_px, cell_size.height_px);
-        }
-        true
-    }
-
-    fn client_is_pending_terminal_mode(&self, client_id: u64) -> bool {
-        self.clients
-            .get(&client_id)
-            .is_some_and(|client| matches!(client.mode, ClientConnectionMode::TerminalPending))
-    }
-
     /// Handles a server event. Returns true if the event requires a re-render.
     fn handle_server_event(&mut self, ev: ServerEvent) -> bool {
         match ev {
-            ServerEvent::ClientConnected {
-                client_id,
-                cols,
-                rows,
-                cell_width_px,
-                cell_height_px,
-                pixel_mouse,
-                writer,
-            } => {
-                info!(
-                    client_id,
-                    cols, rows, cell_width_px, cell_height_px, "direct terminal client connected"
-                );
-                let last_activity = self.allocate_activity_stamp();
-                let observed = crate::kitty_graphics::HostCellSize {
-                    width_px: cell_width_px,
-                    height_px: cell_height_px,
-                };
-                let pixel_mouse = pixel_mouse && observed.is_known();
-                let mut connection = ClientConnection::new_with_mode(
-                    ClientConnectionMode::TerminalPending,
-                    (cols, rows),
-                    observed,
-                    last_activity,
-                    protocol::RenderEncoding::TerminalAnsi,
-                    writer,
-                );
-                connection.pixel_mouse = pixel_mouse;
-                self.clients.insert(client_id, connection);
-                false
-            }
             ServerEvent::ClientShellConnected {
                 client_id,
                 surface_cols,
@@ -1628,74 +1184,14 @@ impl HeadlessServer {
                 self.claim_unowned_shell_tab_geometry(client_id, true);
                 true
             }
-            ServerEvent::ClientAttachTerminal {
-                client_id,
-                terminal_id,
-                takeover,
-            } => self.attach_terminal_client(client_id, terminal_id, takeover),
-            ServerEvent::ClientObserveTerminal { client_id, target } => {
-                self.observe_terminal_client(client_id, target)
-            }
-            ServerEvent::ClientControlTerminal {
-                client_id,
-                target,
-                takeover,
-            } => self.control_terminal_client(client_id, target, takeover),
-            ServerEvent::ClientAttachScroll {
-                client_id,
-                source,
-                direction,
-                lines,
-                column,
-                row,
-                modifiers,
-            } => self.handle_terminal_attach_scroll(
-                client_id, source, direction, lines, column, row, modifiers,
-            ),
-            ServerEvent::ClientAttachMouse {
-                client_id,
-                kind,
-                position,
-                geometry,
-                modifiers,
-                lines,
-            } => self.handle_terminal_attach_mouse(
-                client_id, kind, position, geometry, modifiers, lines,
-            ),
-            ServerEvent::ClientInput { client_id, data } => {
-                let Some(ClientConnection {
-                    mode: ClientConnectionMode::TerminalAttach { terminal_id },
-                    ..
-                }) = self.clients.get(&client_id)
-                else {
-                    return false;
-                };
-                if let Some(runtime) = self.runtime_for_terminal_id_string(terminal_id) {
-                    if let Err(err) = apply_terminal_attach_input(runtime, data) {
-                        warn!(client_id, terminal_id = %terminal_id, err = %err);
-                    }
-                }
-                true
-            }
             ServerEvent::ClientPasteRejected {
                 client_id,
                 size,
                 max,
             } => {
                 let detail = format!("Input message is {size} bytes; Herdr's limit is {max} bytes");
-                let message = if matches!(
-                    self.clients.get(&client_id).map(|client| &client.mode),
-                    Some(ClientConnectionMode::ClientShell)
-                ) {
-                    ServerMessage::ClientShellError {
-                        message: format!("Paste rejected: {detail}"),
-                    }
-                } else {
-                    ServerMessage::Notify {
-                        kind: protocol::NotifyKind::Toast,
-                        message: "Paste rejected".to_owned(),
-                        body: Some(detail),
-                    }
+                let message = ServerMessage::ClientShellError {
+                    message: format!("Paste rejected: {detail}"),
                 };
                 self.send_to_client(client_id, message);
                 false
@@ -1739,65 +1235,6 @@ impl HeadlessServer {
                         true
                     }
                 }
-            }
-            ServerEvent::ClientResize {
-                client_id,
-                cols,
-                rows,
-                cell_width_px,
-                cell_height_px,
-                pixel_mouse,
-            } => {
-                info!(
-                    client_id,
-                    cols, rows, cell_width_px, cell_height_px, pixel_mouse, "client resize"
-                );
-                let observed = crate::kitty_graphics::HostCellSize {
-                    width_px: cell_width_px,
-                    height_px: cell_height_px,
-                };
-                let pixel_mouse = pixel_mouse && observed.is_known();
-                let direct_terminal_id = if let Some(ClientConnection {
-                    mode: ClientConnectionMode::TerminalAttach { terminal_id },
-                    terminal_size,
-                    cell_size,
-                    pixel_mouse: client_pixel_mouse,
-                    render_state,
-                    ..
-                }) = self.clients.get_mut(&client_id)
-                {
-                    *terminal_size = (cols, rows);
-                    *cell_size = observed;
-                    *client_pixel_mouse = pixel_mouse;
-                    render_state.request_repaint();
-                    Some((terminal_id.clone(), *cell_size))
-                } else {
-                    None
-                };
-                if let Some((terminal_id, cell_size)) = direct_terminal_id {
-                    if let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) {
-                        runtime.resize(rows, cols, cell_size.width_px, cell_size.height_px);
-                    }
-                    return true;
-                }
-                if let Some(ClientConnection {
-                    mode:
-                        ClientConnectionMode::TerminalObserve { .. }
-                        | ClientConnectionMode::TerminalPending,
-                    terminal_size,
-                    cell_size,
-                    pixel_mouse: client_pixel_mouse,
-                    render_state,
-                    ..
-                }) = self.clients.get_mut(&client_id)
-                {
-                    *terminal_size = (cols, rows);
-                    *cell_size = observed;
-                    *client_pixel_mouse = pixel_mouse;
-                    render_state.request_repaint();
-                    return true;
-                }
-                false
             }
             ServerEvent::ClientShellResize {
                 client_id,
@@ -2071,7 +1508,6 @@ impl HeadlessServer {
             }
             ServerEvent::ClientDetach { client_id } => {
                 info!(client_id, "client detached");
-                self.send_terminal_stream_detach_shutdown(client_id);
                 self.remove_client_and_resize_if_needed(client_id);
                 true
             }
@@ -2167,9 +1603,6 @@ impl HeadlessServer {
         let lines = lines.unwrap_or(80) as usize;
         if lines == 0
             || self
-                .terminal_attach_owners
-                .contains_key(target.terminal_id.as_str())
-            || self
                 .pending_alt_screen_reads
                 .iter()
                 .any(|pending| pending.terminal_id.as_str() == target.terminal_id)
@@ -2214,10 +1647,7 @@ impl HeadlessServer {
                 .terminals
                 .get(&read.terminal_id)
                 .is_some_and(|terminal| terminal.state == crate::detect::AgentState::Idle);
-            let attached = self
-                .terminal_attach_owners
-                .contains_key(read.terminal_id.as_str());
-            let outcome = if remains_idle && !attached {
+            let outcome = if remains_idle {
                 read.poll(runtime, now)
             } else {
                 read.abort(runtime, now)

@@ -1,6 +1,6 @@
 //! Blocking client socket transport for the headless server.
 //!
-//! This module owns the thin-client handshake, read loop, and writer loop.
+//! This module owns the client-shell handshake, read loop, and writer loop.
 //! It converts socket I/O into [`ServerEvent`] values consumed by
 //! `HeadlessServer`.
 
@@ -22,18 +22,9 @@ use crate::protocol::endpoint::{
     ENDPOINT_WELCOME_KIND,
 };
 use crate::protocol::{
-    self, AttachScrollDirection, AttachScrollSource, ClientMessage, ClientPaneInputEvent,
-    RenderEncoding, ServerMessage, MAX_CLIPBOARD_IMAGE_PAYLOAD, MAX_FRAME_SIZE,
-    MAX_GRAPHICS_FRAME_SIZE, PROTOCOL_VERSION,
+    self, ClientMessage, ClientPaneInputEvent, ServerMessage, MAX_CLIPBOARD_IMAGE_PAYLOAD,
+    MAX_FRAME_SIZE, MAX_GRAPHICS_FRAME_SIZE,
 };
-
-/// Minimum accepted attached client size.
-///
-/// Narrow observers must be allowed to drive narrow renders, otherwise the
-/// server wraps pane content against a wider width and the client sees the
-/// right edge clipped.
-const MIN_CLIENT_COLS: u16 = 1;
-const MIN_CLIENT_ROWS: u16 = 1;
 
 /// How long to wait for a client handshake before closing the connection.
 /// Set to 4 seconds (rather than 5) to guarantee the connection is closed
@@ -41,7 +32,7 @@ const MIN_CLIENT_ROWS: u16 = 1;
 /// and cleanup overhead.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(4);
 
-/// Maximum input payload size (bytes) for a single `ClientMessage::Input`.
+/// Maximum text and paste payload size (bytes) in one pane-input message.
 const MAX_INPUT_PAYLOAD: usize = 1024 * 1024; // 1 MB
 const MAX_CLIENT_SHELL_DIMENSION: u16 = 4096;
 const MAX_CLIENT_SHELL_CELLS: u32 = 1_000_000;
@@ -336,16 +327,6 @@ impl ClientWriterQueue {
 /// Internal event sent from client transport threads to the main event loop.
 #[derive(Debug)]
 pub(crate) enum ServerEvent {
-    /// A new client completed the handshake.
-    ClientConnected {
-        client_id: u64,
-        cols: u16,
-        rows: u16,
-        cell_width_px: u32,
-        cell_height_px: u32,
-        pixel_mouse: bool,
-        writer: ClientWriter,
-    },
     /// A client-owned shell completed its dedicated handshake.
     ClientShellConnected {
         client_id: u64,
@@ -360,8 +341,6 @@ pub(crate) enum ServerEvent {
         surface_active: bool,
         writer: ClientWriter,
     },
-    /// A client sent an input message.
-    ClientInput { client_id: u64, data: Vec<u8> },
     /// A fully decoded interactive paste exceeded the text-input limit.
     ClientPasteRejected {
         client_id: u64,
@@ -374,48 +353,6 @@ pub(crate) enum ServerEvent {
         target: crate::protocol::ClientClipboardImageTarget,
         extension: String,
         data: Vec<u8>,
-    },
-    /// A client requested direct attach to one terminal.
-    ClientAttachTerminal {
-        client_id: u64,
-        terminal_id: String,
-        takeover: bool,
-    },
-    /// A client requested read-only observation of one terminal.
-    ClientObserveTerminal { client_id: u64, target: String },
-    /// A client requested writable control of one terminal.
-    ClientControlTerminal {
-        client_id: u64,
-        target: String,
-        takeover: bool,
-    },
-    /// A direct terminal attach client requested scrollback movement.
-    ClientAttachScroll {
-        client_id: u64,
-        source: AttachScrollSource,
-        direction: AttachScrollDirection,
-        lines: u16,
-        column: Option<u16>,
-        row: Option<u16>,
-        modifiers: u8,
-    },
-    /// A direct terminal attach client delivered one structured mouse event.
-    ClientAttachMouse {
-        client_id: u64,
-        kind: crate::protocol::ClientMouseKind,
-        position: crate::protocol::ClientMousePosition,
-        geometry: Option<crate::protocol::ClientMouseGeometry>,
-        modifiers: u8,
-        lines: u16,
-    },
-    /// A client sent a resize message.
-    ClientResize {
-        client_id: u64,
-        cols: u16,
-        rows: u16,
-        cell_width_px: u32,
-        cell_height_px: u32,
-        pixel_mouse: bool,
     },
     /// A client-owned shell recomputed its pane viewport.
     ClientShellResize {
@@ -473,13 +410,6 @@ pub(crate) enum ServerEvent {
     ClientWriterDrained { client_id: u64 },
     /// Ctrl+C or external shutdown signal received.
     QuitSignal,
-}
-
-/// Clamp client-reported terminal dimensions to a minimum viable size.
-pub(crate) fn clamp_terminal_size(cols: u16, rows: u16) -> (u16, u16) {
-    let clamped_cols = cols.max(MIN_CLIENT_COLS);
-    let clamped_rows = rows.max(MIN_CLIENT_ROWS);
-    (clamped_cols, clamped_rows)
 }
 
 #[derive(Debug, PartialEq)]
@@ -586,8 +516,8 @@ fn set_client_recv_timeout(
 
 /// Handles the client handshake on a blocking thread.
 ///
-/// Reads the `TerminalHello` or `ClientShellHello` message, validates the version,
-/// sends `Welcome`, and then enters a read loop forwarding messages to the server event channel.
+/// Requires an endpoint hello from the same build, sends its welcome, and
+/// enters a read loop forwarding messages to the server event channel.
 pub(crate) fn handle_client_handshake(
     mut stream: LocalStream,
     client_id: u64,
@@ -598,10 +528,7 @@ pub(crate) fn handle_client_handshake(
         return Ok(());
     }
 
-    // Reset to blocking mode — the accept loop sets nonblocking but
-    // the handshake thread needs blocking I/O for read_message/write_message.
     stream.set_nonblocking(false)?;
-
     set_client_recv_timeout(
         &stream,
         Some(HANDSHAKE_TIMEOUT),
@@ -609,7 +536,6 @@ pub(crate) fn handle_client_handshake(
         client_id,
     )?;
 
-    // Read the handshake message.
     let hello: ClientMessage = match protocol::read_message(&mut stream, MAX_FRAME_SIZE) {
         Ok(msg) => msg,
         Err(protocol::FramingError::UnexpectedEof) => {
@@ -625,146 +551,79 @@ pub(crate) fn handle_client_handshake(
             return Ok(());
         }
     };
-
-    let (
-        client_cols,
-        client_rows,
-        cell_width_px,
-        cell_height_px,
-        terminal_pixel_mouse,
-        shell_options,
-    ) = match hello {
-        ClientMessage::TerminalHello {
-            version,
-            cols,
-            rows,
-            cell_width_px,
-            cell_height_px,
-            pixel_mouse,
-        } => {
-            if let protocol::VersionCheck::Incompatible(reason) =
-                protocol::check_client_version(version)
-            {
-                let welcome = ServerMessage::Welcome {
-                    version: PROTOCOL_VERSION,
-                    encoding: RenderEncoding::TerminalAnsi,
-                    error: Some(reason),
-                };
-                let _ = protocol::write_message(&mut stream, &welcome);
-                return Ok(());
-            }
-            let (cols, rows) = clamp_terminal_size(cols, rows);
-            (cols, rows, cell_width_px, cell_height_px, pixel_mouse, None)
-        }
-        ClientMessage::EndpointControl { kind, data } if kind == ENDPOINT_HELLO_KIND => {
-            let hello: EndpointClientHello = match serde_json::from_str(&data) {
-                Ok(hello) => hello,
-                Err(error) => {
-                    write_endpoint_rejection(
-                        &mut stream,
-                        "invalid_hello",
-                        format!("invalid endpoint hello: {error}"),
-                    );
-                    return Ok(());
-                }
-            };
-            let incompatibility = if hello.generation != ENDPOINT_PROTOCOL_GENERATION {
-                Some((
-                    "unsupported_generation",
-                    format!(
-                        "endpoint generation {} is unsupported; this server supports generation {ENDPOINT_PROTOCOL_GENERATION}",
-                        hello.generation
-                    ),
-                ))
-            } else if !hello.supports_required_codecs() {
-                Some((
-                    "no_common_core",
-                    "client and server have no compatible endpoint core codecs".to_owned(),
-                ))
-            } else {
-                client_shell_geometry_error(
-                    hello.surface_size,
-                    hello.cell_width_px,
-                    hello.cell_height_px,
-                )
-                .map(|reason| ("invalid_surface", reason.to_owned()))
-            };
-            if let Some((code, reason)) = incompatibility {
-                write_endpoint_rejection(&mut stream, code, reason);
-                return Ok(());
-            }
-            (
-                hello.surface_size.cols,
-                hello.surface_size.rows,
-                hello.cell_width_px,
-                hello.cell_height_px,
-                false,
-                Some((
-                    hello.pixel_mouse,
-                    hello.direct_graphics,
-                    hello.endpoint_keybindings,
-                    hello.mouse_capture,
-                    hello.surface_active,
-                )),
-            )
-        }
-        ClientMessage::ClientShellHello { .. } => {
-            let welcome = ServerMessage::Welcome {
-                version: PROTOCOL_VERSION,
-                encoding: RenderEncoding::SemanticFrame,
-                error: Some(
-                    "this client predates the stable endpoint protocol; upgrade the Herdr client"
-                        .to_owned(),
-                ),
-            };
-            let _ = protocol::write_message(&mut stream, &welcome);
-            return Ok(());
-        }
-        _ => {
-            debug!(client_id, "first message was not a handshake, closing");
-            let welcome = ServerMessage::Welcome {
-                version: PROTOCOL_VERSION,
-                encoding: RenderEncoding::SemanticFrame,
-                error: Some(
-                    "expected TerminalHello or ClientShellHello as first message".to_owned(),
-                ),
-            };
-            let _ = protocol::write_message(&mut stream, &welcome);
+    let ClientMessage::EndpointControl { kind, data } = hello else {
+        write_endpoint_rejection(
+            &mut stream,
+            "invalid_hello",
+            "expected endpoint hello as first message",
+        );
+        return Ok(());
+    };
+    if kind != ENDPOINT_HELLO_KIND {
+        write_endpoint_rejection(
+            &mut stream,
+            "invalid_hello",
+            "expected endpoint hello as first message",
+        );
+        return Ok(());
+    }
+    let hello: EndpointClientHello = match serde_json::from_str(&data) {
+        Ok(hello) => hello,
+        Err(error) => {
+            write_endpoint_rejection(
+                &mut stream,
+                "invalid_hello",
+                format!("invalid endpoint hello: {error}"),
+            );
             return Ok(());
         }
     };
-
+    let server_version = crate::build_info::version();
+    if hello.client_version != server_version {
+        write_endpoint_rejection(
+            &mut stream,
+            "build_mismatch",
+            format!("client build {:?} does not match server build {server_version:?}; restart both from the same Bus build", hello.client_version),
+        );
+        return Ok(());
+    }
+    let incompatibility = if hello.generation != ENDPOINT_PROTOCOL_GENERATION {
+        Some(("unsupported_generation", format!("endpoint generation {} is unsupported; this server supports generation {ENDPOINT_PROTOCOL_GENERATION}", hello.generation)))
+    } else if !hello.supports_required_codecs() {
+        Some((
+            "no_common_core",
+            "client and server have no compatible endpoint core codecs".to_owned(),
+        ))
+    } else {
+        client_shell_geometry_error(
+            hello.surface_size,
+            hello.cell_width_px,
+            hello.cell_height_px,
+        )
+        .map(|reason| ("invalid_surface", reason.to_owned()))
+    };
+    if let Some((code, reason)) = incompatibility {
+        write_endpoint_rejection(&mut stream, code, reason);
+        return Ok(());
+    }
     if should_quit.load(Ordering::Acquire) {
         return Ok(());
     }
 
-    // Send the negotiated welcome. Endpoint compatibility is independent from
-    // the same-install protocol used by direct terminal clients.
-    let render_encoding = if shell_options.is_some() {
-        RenderEncoding::SemanticFrame
-    } else {
-        RenderEncoding::TerminalAnsi
-    };
-    let welcome = if shell_options.is_some() {
-        let welcome = EndpointServerWelcome::compatible(
-            crate::server::client_commands::supported_client_shell_method_names()
-                .iter()
-                .map(|method| (*method).to_owned())
-                .collect(),
-        );
-        ServerMessage::EndpointControl {
+    let welcome = EndpointServerWelcome::compatible(
+        crate::server::client_commands::supported_client_shell_method_names()
+            .iter()
+            .map(|method| (*method).to_owned())
+            .collect(),
+    );
+    protocol::write_message(
+        &mut stream,
+        &ServerMessage::EndpointControl {
             kind: ENDPOINT_WELCOME_KIND.into(),
             data: serde_json::to_string(&welcome).map_err(io::Error::other)?,
-        }
-    } else {
-        ServerMessage::Welcome {
-            version: PROTOCOL_VERSION,
-            encoding: render_encoding,
-            error: None,
-        }
-    };
-    protocol::write_message(&mut stream, &welcome).map_err(|e| io::Error::other(e.to_string()))?;
-
+        },
+    )
+    .map_err(|e| io::Error::other(e.to_string()))?;
     set_client_recv_timeout(
         &stream,
         None,
@@ -772,77 +631,40 @@ pub(crate) fn handle_client_handshake(
         client_id,
     )?;
 
-    // Create separate channels for reliable control messages and droppable renders.
     let writer_queue = ClientWriterQueue::new();
     let writer = ClientWriter {
         control: ClientControlWriter::queue(writer_queue.clone()),
         render: ClientRenderWriter::queue(writer_queue.clone()),
     };
-
-    // Spawn a writer thread that forwards messages from the channels to the stream.
     let write_stream = stream.try_clone()?;
     let writer_event_tx = server_event_tx.clone();
     std::thread::spawn(move || {
         client_writer_loop(write_stream, client_id, writer_queue, writer_event_tx);
     });
-
     if should_quit.load(Ordering::Acquire) {
         send_shutdown_to_unregistered_client(&writer);
         return Ok(());
     }
-
-    // Notify the main loop about the new client.
-    let endpoint_control_writer = shell_options.as_ref().map(|_| writer.control.clone());
-    let connected = if let Some((
-        pixel_mouse,
-        direct_graphics,
-        endpoint_keybindings,
-        mouse_capture,
-        surface_active,
-    )) = shell_options
-    {
-        ServerEvent::ClientShellConnected {
-            client_id,
-            surface_cols: client_cols,
-            surface_rows: client_rows,
-            cell_width_px,
-            cell_height_px,
-            pixel_mouse,
-            direct_graphics,
-            endpoint_keybindings,
-            mouse_capture,
-            surface_active,
-            writer,
-        }
-    } else {
-        ServerEvent::ClientConnected {
-            client_id,
-            cols: client_cols,
-            rows: client_rows,
-            cell_width_px,
-            cell_height_px,
-            pixel_mouse: terminal_pixel_mouse,
-            writer,
-        }
+    let connected = ServerEvent::ClientShellConnected {
+        client_id,
+        surface_cols: hello.surface_size.cols,
+        surface_rows: hello.surface_size.rows,
+        cell_width_px: hello.cell_width_px,
+        cell_height_px: hello.cell_height_px,
+        pixel_mouse: hello.pixel_mouse,
+        direct_graphics: hello.direct_graphics,
+        endpoint_keybindings: hello.endpoint_keybindings,
+        mouse_capture: hello.mouse_capture,
+        surface_active: hello.surface_active,
+        writer,
     };
     if let Err(err) = server_event_tx.blocking_send(connected) {
-        match err.0 {
-            ServerEvent::ClientConnected { writer, .. }
-            | ServerEvent::ClientShellConnected { writer, .. } => {
-                send_shutdown_to_unregistered_client(&writer);
-            }
-            _ => {}
+        if let ServerEvent::ClientShellConnected { writer, .. } = err.0 {
+            send_shutdown_to_unregistered_client(&writer);
         }
+        return Ok(());
     }
-
-    // Enter read loop — read client messages and forward to main loop.
-    client_read_loop_with_endpoint_controls(
-        stream,
-        client_id,
-        server_event_tx,
-        should_quit,
-        endpoint_control_writer.as_ref(),
-    );
+    client_read_loop(stream, client_id, server_event_tx, should_quit);
     Ok(())
 }
 
@@ -898,12 +720,11 @@ fn write_framed_bytes(stream: &mut LocalStream, data: &[u8]) -> bool {
 }
 
 /// The client read loop — reads messages from the client and forwards to the server event channel.
-fn client_read_loop_with_endpoint_controls(
+fn client_read_loop(
     mut stream: LocalStream,
     client_id: u64,
     server_event_tx: &mpsc::Sender<ServerEvent>,
     should_quit: &Arc<AtomicBool>,
-    endpoint_control_writer: Option<&ClientControlWriter>,
 ) {
     while !should_quit.load(Ordering::Acquire) {
         let msg: ClientMessage = match protocol::read_message(&mut stream, MAX_GRAPHICS_FRAME_SIZE)
@@ -933,48 +754,20 @@ fn client_read_loop_with_endpoint_controls(
         };
 
         let event = match msg {
-            ClientMessage::Input { data } => {
-                // Validate input size.
-                if data.len() > MAX_INPUT_PAYLOAD {
-                    if crate::raw_input::is_complete_text_bracketed_paste(&data) {
-                        warn!(
-                            client_id,
-                            size = data.len(),
-                            max = MAX_INPUT_PAYLOAD,
-                            "oversized bracketed paste from client, rejecting"
-                        );
-                        ServerEvent::ClientPasteRejected {
-                            client_id,
-                            size: data.len(),
-                            max: MAX_INPUT_PAYLOAD,
-                        }
-                    } else {
-                        warn!(
-                            client_id,
-                            size = data.len(),
-                            "oversized input from client, closing"
-                        );
-                        let _ = server_event_tx
-                            .blocking_send(ServerEvent::ClientDisconnected { client_id });
-                        break;
-                    }
-                } else {
-                    ServerEvent::ClientInput { client_id, data }
-                }
-            }
-            ClientMessage::ObserveTerminal { target } => {
-                ServerEvent::ClientObserveTerminal { client_id, target }
-            }
-            ClientMessage::ControlTerminal { target, takeover } => {
-                ServerEvent::ClientControlTerminal {
+            ClientMessage::TerminalHello { .. }
+            | ClientMessage::Input { .. }
+            | ClientMessage::Resize { .. }
+            | ClientMessage::ClientShellHello { .. }
+            | ClientMessage::GraphicsTransmissionResult { .. }
+            | ClientMessage::GraphicsTransmissionStarted { .. } => {
+                warn!(
                     client_id,
-                    target,
-                    takeover,
-                }
+                    "unexpected non-shell message from client, closing"
+                );
+                let _ =
+                    server_event_tx.blocking_send(ServerEvent::ClientDisconnected { client_id });
+                break;
             }
-            // Direct pane image transfers were removed; older clients may still acknowledge one.
-            ClientMessage::GraphicsTransmissionResult { .. }
-            | ClientMessage::GraphicsTransmissionStarted { .. } => continue,
             ClientMessage::ClipboardImage {
                 target,
                 extension,
@@ -996,23 +789,6 @@ fn client_read_loop_with_endpoint_controls(
                         extension,
                         data,
                     }
-                }
-            }
-            ClientMessage::Resize {
-                cols,
-                rows,
-                cell_width_px,
-                cell_height_px,
-                pixel_mouse,
-            } => {
-                let (clamped_cols, clamped_rows) = clamp_terminal_size(cols, rows);
-                ServerEvent::ClientResize {
-                    client_id,
-                    cols: clamped_cols,
-                    rows: clamped_rows,
-                    cell_width_px,
-                    cell_height_px,
-                    pixel_mouse,
                 }
             }
             ClientMessage::ClientShellResize {
@@ -1166,68 +942,13 @@ fn client_read_loop_with_endpoint_controls(
                     token: data,
                 }
             }
-            ClientMessage::EndpointControl { kind, data } => {
-                let Some(response) = crate::server::client_endpoint_control::response(&kind, data)
-                else {
-                    debug!(client_id, %kind, "ignoring unknown endpoint control message");
-                    continue;
-                };
-                let Some(writer) = endpoint_control_writer else {
-                    continue;
-                };
-                let mut framed = Vec::new();
-                if protocol::write_message(&mut framed, &response).is_err()
-                    || writer.send(framed).is_err()
-                {
-                    break;
-                }
+            ClientMessage::EndpointControl { kind, .. } => {
+                debug!(client_id, %kind, "ignoring unknown endpoint control message");
                 continue;
             }
             ClientMessage::Detach => {
                 let _ = server_event_tx.blocking_send(ServerEvent::ClientDetach { client_id });
                 break;
-            }
-            ClientMessage::AttachTerminal {
-                terminal_id,
-                takeover,
-            } => ServerEvent::ClientAttachTerminal {
-                client_id,
-                terminal_id,
-                takeover,
-            },
-            ClientMessage::AttachScroll {
-                source,
-                direction,
-                lines,
-                column,
-                row,
-                modifiers,
-            } => ServerEvent::ClientAttachScroll {
-                client_id,
-                source,
-                direction,
-                lines,
-                column,
-                row,
-                modifiers,
-            },
-            ClientMessage::AttachMouse {
-                kind,
-                position,
-                geometry,
-                modifiers,
-                lines,
-            } => ServerEvent::ClientAttachMouse {
-                client_id,
-                kind,
-                position,
-                geometry,
-                modifiers,
-                lines,
-            },
-            ClientMessage::TerminalHello { .. } | ClientMessage::ClientShellHello { .. } => {
-                // Duplicate handshake — ignore.
-                continue;
             }
         };
 
@@ -1293,13 +1014,7 @@ mod tests {
         let should_quit = Arc::new(AtomicBool::new(false));
         let read_quit = should_quit.clone();
         let handle = std::thread::spawn(move || {
-            client_read_loop_with_endpoint_controls(
-                server_stream,
-                7,
-                &server_event_tx,
-                &read_quit,
-                None,
-            )
+            client_read_loop(server_stream, 7, &server_event_tx, &read_quit)
         });
         (client_stream, server_event_rx, should_quit, handle, path)
     }
@@ -1307,6 +1022,7 @@ mod tests {
     fn endpoint_hello(surface_cols: u16, surface_rows: u16) -> ClientMessage {
         let hello = EndpointClientHello {
             generation: ENDPOINT_PROTOCOL_GENERATION,
+            client_version: crate::build_info::version(),
             cell_width_px: 8,
             cell_height_px: 16,
             surface_size: crate::protocol::ClientSurfaceSize {
@@ -1337,6 +1053,82 @@ mod tests {
         serde_json::from_str(&data).unwrap()
     }
 
+    fn rejected_handshake(message: ClientMessage) -> EndpointServerWelcome {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("rejected-handshake");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn(move || {
+            handle_client_handshake(server_stream, 43, &server_event_tx, &should_quit)
+        });
+        protocol::write_message(&mut client_stream, &message).expect("write rejected hello");
+        let welcome = endpoint_welcome(
+            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read rejection"),
+        );
+        handle.join().unwrap().unwrap();
+        assert!(matches!(
+            server_event_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
+        let next: Result<ServerMessage, _> =
+            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE);
+        assert!(matches!(next, Err(protocol::FramingError::UnexpectedEof)));
+        welcome
+    }
+
+    #[test]
+    fn handshake_rejects_different_builds_and_names_both_versions() {
+        let server_version = crate::build_info::version();
+        for client_version in ["older-build", "newer-build", ""] {
+            let ClientMessage::EndpointControl { kind, data } = endpoint_hello(80, 24) else {
+                unreachable!();
+            };
+            let mut hello: serde_json::Value = serde_json::from_str(&data).unwrap();
+            hello["client_version"] = client_version.into();
+            let welcome = rejected_handshake(ClientMessage::EndpointControl {
+                kind,
+                data: hello.to_string(),
+            });
+            assert_eq!(welcome.server_version, server_version);
+            let error = welcome.error.expect("different build rejected");
+            assert_eq!(error.code, "build_mismatch");
+            assert!(error
+                .message
+                .contains(&format!("client build {client_version:?}")));
+            assert!(error
+                .message
+                .contains(&format!("server build {server_version:?}")));
+        }
+    }
+
+    #[test]
+    fn handshake_requires_a_client_version_without_a_fallback() {
+        let ClientMessage::EndpointControl { kind, data } = endpoint_hello(80, 24) else {
+            unreachable!();
+        };
+        let mut hello: serde_json::Value = serde_json::from_str(&data).unwrap();
+        hello.as_object_mut().unwrap().remove("client_version");
+        let welcome = rejected_handshake(ClientMessage::EndpointControl {
+            kind,
+            data: hello.to_string(),
+        });
+        let error = welcome.error.expect("missing build rejected");
+        assert_eq!(error.code, "invalid_hello");
+        assert!(error.message.contains("missing field `client_version`"));
+    }
+
+    #[test]
+    fn handshake_rejects_direct_terminal_hello() {
+        let welcome = rejected_handshake(ClientMessage::TerminalHello {
+            version: crate::protocol::PROTOCOL_VERSION,
+            cols: 80,
+            rows: 24,
+            cell_width_px: 8,
+            cell_height_px: 16,
+            pixel_mouse: false,
+        });
+        assert_eq!(welcome.error.unwrap().code, "invalid_hello");
+    }
+
     fn recv_server_event(receiver: &mut mpsc::Receiver<ServerEvent>, context: &str) -> ServerEvent {
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
         loop {
@@ -1348,16 +1140,6 @@ mod tests {
                 Err(err) => panic!("{context}: {err}"),
             }
         }
-    }
-
-    fn bracketed_paste_with_total_len(total_len: usize) -> Vec<u8> {
-        const DELIMITER_BYTES: usize = b"\x1b[200~".len() + b"\x1b[201~".len();
-        assert!(total_len >= DELIMITER_BYTES);
-        let mut data = Vec::with_capacity(total_len);
-        data.extend_from_slice(b"\x1b[200~");
-        data.resize(total_len - b"\x1b[201~".len(), b'x');
-        data.extend_from_slice(b"\x1b[201~");
-        data
     }
 
     fn test_queue_writer() -> (ClientWriter, Arc<ClientWriterQueue>) {
@@ -1519,37 +1301,6 @@ mod tests {
     }
 
     #[test]
-    fn clamp_terminal_size_zero_zero() {
-        assert_eq!(
-            clamp_terminal_size(0, 0),
-            (MIN_CLIENT_COLS, MIN_CLIENT_ROWS)
-        );
-    }
-
-    #[test]
-    fn clamp_terminal_size_one_one() {
-        assert_eq!(clamp_terminal_size(1, 1), (1, 1));
-    }
-
-    #[test]
-    fn clamp_terminal_size_preserves_narrow_client_size() {
-        assert_eq!(clamp_terminal_size(40, 12), (40, 12));
-    }
-
-    #[test]
-    fn clamp_terminal_size_valid() {
-        assert_eq!(clamp_terminal_size(120, 40), (120, 40));
-    }
-
-    #[test]
-    fn clamp_terminal_size_exact_minimum() {
-        assert_eq!(
-            clamp_terminal_size(MIN_CLIENT_COLS, MIN_CLIENT_ROWS),
-            (MIN_CLIENT_COLS, MIN_CLIENT_ROWS)
-        );
-    }
-
-    #[test]
     fn client_shell_geometry_rejects_unsafe_dimensions_and_cell_sizes() {
         assert!(client_shell_geometry_error(
             crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 },
@@ -1606,74 +1357,6 @@ mod tests {
     }
 
     #[test]
-    fn handshake_negotiates_terminal_ansi_encoding() {
-        let (mut client_stream, server_stream, _path) = local_stream_pair("client-handshake-ansi");
-        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
-        let should_quit = Arc::new(AtomicBool::new(false));
-        let handshake_quit = should_quit.clone();
-        let handle = std::thread::spawn(move || {
-            handle_client_handshake(server_stream, 42, &server_event_tx, &handshake_quit)
-        });
-
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::TerminalHello {
-                version: PROTOCOL_VERSION,
-                cols: 100,
-                rows: 30,
-                cell_width_px: 8,
-                cell_height_px: 16,
-                pixel_mouse: true,
-            },
-        )
-        .expect("write hello");
-
-        let welcome: ServerMessage =
-            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read welcome");
-        match welcome {
-            ServerMessage::Welcome {
-                version,
-                encoding,
-                error,
-            } => {
-                assert_eq!(version, PROTOCOL_VERSION);
-                assert_eq!(encoding, RenderEncoding::TerminalAnsi);
-                assert_eq!(error, None);
-            }
-            other => panic!("expected Welcome, got {other:?}"),
-        }
-
-        match server_event_rx
-            .blocking_recv()
-            .expect("client connected event")
-        {
-            ServerEvent::ClientConnected {
-                client_id,
-                cols,
-                rows,
-                cell_width_px,
-                cell_height_px,
-                pixel_mouse,
-                writer,
-            } => {
-                assert_eq!(client_id, 42);
-                assert_eq!((cols, rows), (100, 30));
-                assert_eq!((cell_width_px, cell_height_px), (8, 16));
-                assert!(pixel_mouse);
-                drop(writer);
-            }
-            other => panic!("expected ClientConnected, got {other:?}"),
-        }
-
-        drop(client_stream);
-        should_quit.store(true, Ordering::Release);
-        handle
-            .join()
-            .expect("handshake thread join")
-            .expect("handshake thread result");
-    }
-
-    #[test]
     fn dedicated_client_shell_handshake_uses_surface_viewport() {
         let (mut client_stream, server_stream, _path) = local_stream_pair("client-shell-handshake");
         let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
@@ -1690,6 +1373,7 @@ mod tests {
             protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read welcome");
         let welcome = endpoint_welcome(welcome);
         assert_eq!(welcome.generation, ENDPOINT_PROTOCOL_GENERATION);
+        assert_eq!(welcome.server_version, crate::build_info::version());
         assert!(welcome.error.is_none());
         match server_event_rx
             .blocking_recv()
@@ -1757,6 +1441,62 @@ mod tests {
     }
 
     #[test]
+    fn connected_shell_does_not_reply_to_retired_health_ping() {
+        let (mut client_stream, server_stream, _path) = local_stream_pair("client-no-pong");
+        let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+        let should_quit = Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn(move || {
+            handle_client_handshake(server_stream, 43, &server_event_tx, &should_quit)
+        });
+        protocol::write_message(&mut client_stream, &endpoint_hello(80, 24)).unwrap();
+        let welcome =
+            endpoint_welcome(protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).unwrap());
+        assert!(welcome.error.is_none());
+        let ServerEvent::ClientShellConnected { writer, .. } =
+            recv_server_event(&mut server_event_rx, "shell connection")
+        else {
+            panic!("expected shell connection");
+        };
+        for (kind, data) in [
+            ("endpoint.health.ping.v1", "probe"),
+            (
+                crate::protocol::endpoint::PRESENTATION_EFFECTS_SYNC_KIND,
+                "barrier",
+            ),
+        ] {
+            protocol::write_message(
+                &mut client_stream,
+                &ClientMessage::EndpointControl {
+                    kind: kind.into(),
+                    data: data.into(),
+                },
+            )
+            .unwrap();
+        }
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "control barrier"),
+            ServerEvent::ClientShellPresentationSync { client_id: 43, token }
+                if token == "barrier"
+        ));
+        let marker = ServerMessage::ClientShellError {
+            message: "control queue barrier".into(),
+        };
+        writer.control.send(frame_server_message(&marker)).unwrap();
+        let reply: ServerMessage =
+            protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).unwrap();
+        assert!(matches!(
+            reply,
+            ServerMessage::ClientShellError { message } if message == "control queue barrier"
+        ));
+        protocol::write_message(&mut client_stream, &ClientMessage::Detach).unwrap();
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "shell detach"),
+            ServerEvent::ClientDetach { client_id: 43 }
+        ));
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
     fn client_read_loop_stops_after_detach() {
         let (mut client_stream, mut server_event_rx, _should_quit, handle, _path) =
             start_client_read_loop("client-read-detach");
@@ -1766,7 +1506,7 @@ mod tests {
         protocol::write_message(
             &mut messages,
             &ClientMessage::ClipboardImage {
-                target: crate::protocol::ClientClipboardImageTarget::DirectTerminal,
+                target: crate::protocol::ClientClipboardImageTarget::Pane("w1:p1".into()),
                 extension: "png".into(),
                 data: vec![1, 2, 3],
             },
@@ -1785,18 +1525,20 @@ mod tests {
     }
 
     #[test]
-    fn client_read_loop_ignores_unknown_endpoint_control() {
+    fn client_read_loop_ignores_unknown_controls_including_retired_health_ping() {
         let (mut client_stream, mut server_event_rx, _should_quit, handle, _path) =
             start_client_read_loop("client-read-future-control");
 
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::EndpointControl {
-                kind: "future.optional.v1".into(),
-                data: "{}".into(),
-            },
-        )
-        .unwrap();
+        for kind in ["future.optional.v1", "endpoint.health.ping.v1"] {
+            protocol::write_message(
+                &mut client_stream,
+                &ClientMessage::EndpointControl {
+                    kind: kind.into(),
+                    data: "{}".into(),
+                },
+            )
+            .unwrap();
+        }
         protocol::write_message(&mut client_stream, &ClientMessage::Detach).unwrap();
 
         assert!(matches!(
@@ -1804,6 +1546,68 @@ mod tests {
             ServerEvent::ClientDetach { client_id: 7 }
         ));
         handle.join().expect("read thread join");
+    }
+
+    #[test]
+    fn client_read_loop_rejects_oversized_shell_paste_without_disconnect() {
+        let (mut client_stream, mut server_event_rx, should_quit, handle, _path) =
+            start_client_read_loop("client-read-shell-paste");
+        for size in [MAX_INPUT_PAYLOAD, MAX_INPUT_PAYLOAD + 1, 1] {
+            protocol::write_message(
+                &mut client_stream,
+                &ClientMessage::ClientShellPaneInput {
+                    pane_id: "w1:p1".into(),
+                    events: vec![ClientPaneInputEvent::Paste("x".repeat(size))],
+                },
+            )
+            .unwrap();
+            match recv_server_event(&mut server_event_rx, "shell paste result") {
+                ServerEvent::ClientShellPaneInput {
+                    client_id, events, ..
+                } => {
+                    assert_eq!(client_id, 7);
+                    assert!(size <= MAX_INPUT_PAYLOAD);
+                    assert!(
+                        matches!(&events[..], [ClientPaneInputEvent::Paste(text)] if text.len() == size)
+                    );
+                }
+                ServerEvent::ClientPasteRejected {
+                    client_id,
+                    size: rejected,
+                    max,
+                } => {
+                    assert_eq!(client_id, 7);
+                    assert_eq!(size, MAX_INPUT_PAYLOAD + 1);
+                    assert_eq!(rejected, size);
+                    assert_eq!(max, MAX_INPUT_PAYLOAD);
+                }
+                other => panic!("unexpected shell paste result: {other:?}"),
+            }
+        }
+        drop(client_stream);
+        should_quit.store(true, Ordering::Release);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn client_read_loop_disconnects_oversized_shell_text() {
+        let (mut client_stream, mut server_event_rx, _should_quit, handle, _path) =
+            start_client_read_loop("client-read-shell-text");
+        protocol::write_message(
+            &mut client_stream,
+            &ClientMessage::ClientShellPaneInput {
+                pane_id: "w1:p1".into(),
+                events: vec![ClientPaneInputEvent::TextCommit(
+                    "x".repeat(MAX_INPUT_PAYLOAD + 1),
+                )],
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            recv_server_event(&mut server_event_rx, "oversized text disconnect"),
+            ServerEvent::ClientDisconnected { client_id: 7 }
+        ));
+        handle.join().unwrap();
     }
 
     #[test]
@@ -1829,115 +1633,6 @@ mod tests {
             recv_server_event(&mut server_event_rx, "unsafe resize disconnect"),
             ServerEvent::ClientDisconnected { client_id: 7 }
         ));
-        handle.join().expect("read thread join");
-    }
-
-    #[test]
-    fn client_read_loop_rejects_oversized_bracketed_paste_without_disconnect() {
-        let (mut client_stream, mut server_event_rx, should_quit, handle, _path) =
-            start_client_read_loop("client-read-oversized");
-
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::Input {
-                data: bracketed_paste_with_total_len(MAX_INPUT_PAYLOAD),
-            },
-        )
-        .expect("write maximum-size bracketed paste");
-
-        match recv_server_event(&mut server_event_rx, "maximum-size paste event") {
-            ServerEvent::ClientInput { client_id, data } => {
-                assert_eq!(client_id, 7);
-                assert_eq!(data.len(), MAX_INPUT_PAYLOAD);
-            }
-            other => panic!("expected maximum-size ClientInput, got {other:?}"),
-        }
-
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::Input {
-                data: bracketed_paste_with_total_len(MAX_INPUT_PAYLOAD + 1),
-            },
-        )
-        .expect("write oversized bracketed paste");
-
-        match recv_server_event(&mut server_event_rx, "oversized paste rejection") {
-            ServerEvent::ClientPasteRejected {
-                client_id,
-                size,
-                max,
-            } => {
-                assert_eq!(client_id, 7);
-                assert_eq!(size, MAX_INPUT_PAYLOAD + 1);
-                assert_eq!(max, MAX_INPUT_PAYLOAD);
-            }
-            ServerEvent::ClientDisconnected { .. } => {
-                panic!("oversized input must be rejected without disconnecting the client")
-            }
-            other => panic!("expected ClientPasteRejected, got {other:?}"),
-        }
-
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::Input {
-                data: b"still connected".to_vec(),
-            },
-        )
-        .expect("write valid input after rejection");
-
-        match recv_server_event(&mut server_event_rx, "valid input after rejection") {
-            ServerEvent::ClientInput { client_id, data } => {
-                assert_eq!(client_id, 7);
-                assert_eq!(data, b"still connected");
-            }
-            other => panic!("expected ClientInput after rejection, got {other:?}"),
-        }
-
-        drop(client_stream);
-        should_quit.store(true, Ordering::Release);
-        handle.join().expect("read thread join");
-    }
-
-    #[test]
-    fn client_read_loop_disconnects_oversized_non_paste_input() {
-        let (mut client_stream, mut server_event_rx, should_quit, handle, _path) =
-            start_client_read_loop("client-read-oversized-non-paste");
-
-        protocol::write_message(
-            &mut client_stream,
-            &ClientMessage::Input {
-                data: vec![b'x'; MAX_INPUT_PAYLOAD + 1],
-            },
-        )
-        .expect("write oversized non-paste input");
-
-        assert!(matches!(
-            recv_server_event(&mut server_event_rx, "oversized non-paste disconnect"),
-            ServerEvent::ClientDisconnected { client_id: 7 }
-        ));
-
-        drop(client_stream);
-        should_quit.store(true, Ordering::Release);
-        handle.join().expect("read thread join");
-    }
-
-    #[test]
-    fn client_read_loop_disconnects_marker_wrapped_invalid_utf8() {
-        let (mut client_stream, mut server_event_rx, should_quit, handle, _path) =
-            start_client_read_loop("client-read-invalid-utf8-paste");
-        let mut data = bracketed_paste_with_total_len(MAX_INPUT_PAYLOAD + 1);
-        data[b"\x1b[200~".len()] = 0xff;
-
-        protocol::write_message(&mut client_stream, &ClientMessage::Input { data })
-            .expect("write marker-wrapped invalid UTF-8 input");
-
-        assert!(matches!(
-            recv_server_event(&mut server_event_rx, "invalid UTF-8 input disconnect"),
-            ServerEvent::ClientDisconnected { client_id: 7 }
-        ));
-
-        drop(client_stream);
-        should_quit.store(true, Ordering::Release);
         handle.join().expect("read thread join");
     }
 
