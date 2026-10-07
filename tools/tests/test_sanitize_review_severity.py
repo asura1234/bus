@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = REPO_ROOT / "scripts" / "sanitize_review_severity.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = REPO_ROOT / "tools" / "review" / "sanitize_severity.py"
 
 
 class SanitizeReviewSeverityTests(unittest.TestCase):

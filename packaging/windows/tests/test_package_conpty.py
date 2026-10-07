@@ -4,13 +4,16 @@ import hashlib
 import io
 import json
 import struct
+import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 from unittest import mock
 
-from scripts import package_windows_conpty as package
+# Import the sibling tool directly because packaging is also an installed Python library.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import package_conpty as package  # noqa: E402
 
 
 class WindowsConptyPackageTests(unittest.TestCase):
@@ -36,7 +39,7 @@ class WindowsConptyPackageTests(unittest.TestCase):
             self.assertEqual(package.sha256_file(source), notice["sha256"])
 
     def test_powershell_wrapper_verifies_package_and_signatures(self) -> None:
-        wrapper = (package.PROJECT_ROOT / "scripts/package_windows_conpty.ps1").read_text(
+        wrapper = (package.PROJECT_ROOT / "packaging/windows/package_conpty.ps1").read_text(
             encoding="utf-8"
         )
         self.assertIn('"nuget", "verify", "--all"', wrapper)

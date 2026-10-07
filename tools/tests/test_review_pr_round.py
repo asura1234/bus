@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 REVIEW_ROUND_SCRIPT = REPO_ROOT / "skills/review-pr/scripts/review_round.py"
 # The prologue's lane / round / ledger part shares one implementation under cli_extensions with
 # /review-plan. The fixture copies the script into a synthetic repository to isolate git state, so that

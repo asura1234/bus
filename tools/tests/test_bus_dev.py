@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BINARY = Path(os.environ.get("BUS_TEST_BINARY", ROOT / "target/debug/bus"))
 
 

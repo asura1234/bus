@@ -27,7 +27,7 @@ function Invoke-NativeChecked {
     }
 }
 
-$packager = Join-Path $PSScriptRoot "package_windows_conpty.py"
+$packager = Join-Path $PSScriptRoot "package_conpty.py"
 Invoke-NativeChecked python @(
     $packager,
     "stage",

@@ -13,7 +13,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_METADATA = PROJECT_ROOT / "packaging" / "windows" / "conpty.json"
 MARKER_PATH = PurePosixPath("conpty/bus-conpty.json")
 DOWNLOAD_TIMEOUT_SECONDS = 60

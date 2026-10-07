@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 PROLOGUES = [
     "skills/review-pr/scripts/review_round.py",

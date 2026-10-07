@@ -26,7 +26,7 @@ from pathlib import Path
 from unittest import mock
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "cli_extensions"))
 
 from review_artifact import atomic_write  # noqa: E402
