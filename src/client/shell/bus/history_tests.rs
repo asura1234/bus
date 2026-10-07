@@ -1354,3 +1354,60 @@ fn dialog_notices_to_an_agent_never_show_in_room_history() {
     assert!(!screen.contains("wants to run"), "{screen}");
     assert!(!screen.contains("Bus"), "{screen}");
 }
+
+#[test]
+fn two_images_in_one_message_render_in_order_with_distinct_placements() {
+    let dir = thumbnail_dir("two");
+    let first = png(&dir, "first.png", (200, 80));
+    let second = png(&dir, "second.png", (100, 60));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[first.clone(), second.clone()]);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+
+    // Both images get their own rows, in message order, before the reply.
+    let lines = ui.history.cached();
+    let owner = |line: &history::Line| line.thumbnail.as_ref().map(|t| t.path.to_path_buf());
+    let order: Vec<_> = lines.iter().filter_map(owner).collect();
+    assert_eq!(
+        order,
+        [vec![first.clone(); 4], vec![second.clone(); 3]].concat()
+    );
+    let reply = lines
+        .iter()
+        .position(|line| line.text.starts_with("    author"))
+        .unwrap();
+    assert!(
+        lines
+            .iter()
+            .rposition(|line| line.thumbnail.is_some())
+            .unwrap()
+            < reply
+    );
+
+    // Each one is placed, with a placement id no other thumbnail shares.
+    let placed: Vec<_> = ui
+        .view
+        .thumbnails
+        .iter()
+        .map(|p| p.path.to_path_buf())
+        .collect();
+    assert_eq!(placed, [first, second]);
+    let graphics = String::from_utf8(ui.thumbnail_graphics()).unwrap();
+    let ids: Vec<&str> = graphics
+        .split("\x1b_G")
+        .filter(|command| command.starts_with("a=p,"))
+        .map(|command| {
+            command
+                .split(',')
+                .find(|key| key.starts_with("p="))
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(ids.len(), 2, "{graphics:?}");
+    assert_ne!(
+        ids[0], ids[1],
+        "a shared placement id lets one image replace the other"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -240,6 +240,7 @@ impl BusUi {
                         });
                     if let (Some(room), Some(paths)) = (self.room, paths) {
                         for path in paths {
+                            let path = self.keep_temporary_image(room, path);
                             self.queue(BusCommand::AttachFile(room, path), Effect::Files(room));
                         }
                     } else {
@@ -1105,6 +1106,23 @@ impl BusUi {
             Effect::Files(room),
         );
     }
+    /// A pasted image path in the OS temp folder (a macOS screenshot or a
+    /// terminal's image paste) vanishes once its app cleans up, and the message
+    /// would then lose the image. Bus keeps its own copy under the room's
+    /// attachments, as for a clipboard image; any other path is kept as given.
+    fn keep_temporary_image(&mut self, room: RoomId, path: String) -> String {
+        let Some(root) = crate::bus::entry::data_dir() else {
+            return path;
+        };
+        match copy_temporary_image(&root, room, std::path::Path::new(&path)) {
+            Ok(Some(copy)) => copy.display().to_string(),
+            Ok(None) => path,
+            Err(error) => {
+                tracing::warn!(event = "bus.paste_image.copy_failed", %error);
+                path
+            }
+        }
+    }
     fn history_entries(&self, room: RoomId) -> Vec<String> {
         let mut entries = self
             .locals
@@ -1630,6 +1648,38 @@ impl BusUi {
 /// Saves a pasted clipboard image where later readers can still open it: the
 /// Bus data directory outlives the session, unlike the system temp directory.
 /// Naming by content keeps repeated pastes of one image to a single file.
+/// Copies `path` into the room's attachments when it is an image in a
+/// temporary folder; `Ok(None)` leaves any other path as it is.
+pub(super) fn copy_temporary_image(
+    root: &std::path::Path,
+    room: RoomId,
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    if !super::thumbnails::is_image(path) {
+        return Ok(None);
+    }
+    let Ok(canonical) = path.canonicalize() else {
+        return Ok(None);
+    };
+    // Bus's own data dir can itself live in a temp folder (tests, isolated runs).
+    let owned = root
+        .canonicalize()
+        .is_ok_and(|root| canonical.starts_with(root));
+    let temporary = [std::env::temp_dir(), "/tmp".into()]
+        .into_iter()
+        .filter_map(|dir| dir.canonicalize().ok())
+        .any(|dir| canonical.starts_with(dir));
+    if owned || !temporary {
+        return Ok(None);
+    }
+    let extension = canonical
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("png")
+        .to_ascii_lowercase();
+    save_pasted_image(root, room, &std::fs::read(&canonical)?, &extension).map(Some)
+}
+
 pub(super) fn save_pasted_image(
     root: &std::path::Path,
     room: RoomId,

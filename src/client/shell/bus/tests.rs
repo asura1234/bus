@@ -3035,6 +3035,42 @@ fn pasted_images_are_saved_once_under_the_bus_data_dir() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[test]
+fn pasted_temporary_images_are_copied_into_the_room_attachments() {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp = std::env::temp_dir().join(format!("bus-temp-paste-{}-{stamp}", std::process::id()));
+    std::fs::create_dir_all(&temp).unwrap();
+    let pasted = temp.join("pasted-image.PNG");
+    std::fs::write(&pasted, b"\x89PNG pasted").unwrap();
+    let notes = temp.join("notes.md");
+    std::fs::write(&notes, "# notes").unwrap();
+    let root = temp.join("data");
+    let room = RoomId(3);
+
+    let copy = input::copy_temporary_image(&root, room, &pasted)
+        .unwrap()
+        .expect("a temp image is copied");
+    assert!(
+        copy.starts_with(root.canonicalize().unwrap().join("attachments/room-3"))
+            || copy.starts_with(root.join("attachments/room-3"))
+    );
+    assert_eq!(copy.extension().unwrap(), "png");
+    assert_eq!(std::fs::read(&copy).unwrap(), b"\x89PNG pasted");
+    assert_eq!(
+        input::copy_temporary_image(&root, room, &notes).unwrap(),
+        None
+    );
+    assert_eq!(
+        input::copy_temporary_image(&root, room, &copy).unwrap(),
+        None,
+        "an attachment Bus already owns stays where it is"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
 fn screen_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
     ui.compute_view(cols, rows);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));

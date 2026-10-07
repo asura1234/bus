@@ -200,7 +200,7 @@ impl Thumbnails {
                 .iter()
                 .any(|(next_id, next_copy, _)| (*next_id, *next_copy) == (id, copy))
             {
-                encode_delete_placement(&mut out, id, copy);
+                encode_delete_placement(&mut out, id, placement_id(id, copy));
             }
         }
         // A moved placement is re-placed under the same ids, which Kitty
@@ -211,7 +211,7 @@ impl Thumbnails {
                 .iter()
                 .any(|(next_id, next_copy, _)| (next_id, next_copy) == (id, copy))
             {
-                encode_delete_placement(&mut out, *id, *copy);
+                encode_delete_placement(&mut out, *id, placement_id(*id, *copy));
             }
         }
         for (id, copy, placement) in &next {
@@ -229,9 +229,10 @@ impl Thumbnails {
             }
             let _ = write!(
                 out,
-                "\x1b[{};{}H\x1b_Ga=p,i={id},p={copy},c={},r={},C=1,q=2;\x1b\\",
+                "\x1b[{};{}H\x1b_Ga=p,i={id},p={},c={},r={},C=1,q=2;\x1b\\",
                 placement.y + 1,
                 placement.x + 1,
+                placement_id(*id, *copy),
                 placement.cols,
                 placement.rows,
             );
@@ -297,7 +298,7 @@ impl Thumbnails {
             .into_iter()
             .chain(self.shown.drain(..).map(|(id, copy, _)| (id, copy)))
         {
-            encode_delete_placement(&mut out, id, copy);
+            encode_delete_placement(&mut out, id, placement_id(id, copy));
         }
         out
     }
@@ -307,6 +308,16 @@ impl Thumbnails {
         self.next_id = self.next_id.wrapping_add(1) % 0x1_0000;
         id
     }
+}
+
+/// The Kitty placement id of copy `copy` (from 1) of thumbnail image `id`,
+/// unique across all thumbnails and stable while the copy stays on screen.
+/// Kitty graphics name a placement by image id and placement id together, but
+/// iTerm2 3.7 lets a placement replace another image's placement that has the
+/// same placement id: two thumbnails in one message, both placed with `p=1`,
+/// left only the last one drawn and a blank gap where the first belonged.
+fn placement_id(id: u32, copy: u32) -> u32 {
+    (id.wrapping_sub(FIRST_IMAGE_ID) << 8) | copy.min(0xff)
 }
 
 /// Kitty upload of `png` as image `id`, in chunks that each carry `q=2`:
