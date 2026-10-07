@@ -49,7 +49,6 @@ pub use self::{
     terminal::{ScrollMetrics, TerminalCursorState},
 };
 
-const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::from_secs(1);
 const TERMINAL_COMPRESSION_IDLE: std::time::Duration = std::time::Duration::from_millis(250);
 const TERMINAL_COMPRESSION_STEP: std::time::Duration = std::time::Duration::from_millis(1);
 const PANE_TERM: &str = "xterm-256color";
@@ -194,12 +193,6 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PendingAgentRelease {
-    agent: Agent,
-    until: std::time::Instant,
-}
-
 #[derive(Clone, Copy, Default)]
 struct SpawnInitialState<'a> {
     detected_agent: Option<Agent>,
@@ -212,21 +205,6 @@ pub(crate) enum AgentDetection {
     Enabled,
     #[cfg(all(test, unix))]
     Disabled,
-}
-
-fn active_pending_release(
-    pending_release: &Mutex<Option<PendingAgentRelease>>,
-    now: std::time::Instant,
-) -> Option<Agent> {
-    let mut pending_release = pending_release.lock().ok()?;
-    match *pending_release {
-        Some(pending) if now < pending.until => Some(pending.agent),
-        Some(_) => {
-            *pending_release = None;
-            None
-        }
-        None => None,
-    }
 }
 
 async fn publish_state_changed_event(
@@ -458,7 +436,6 @@ fn apply_foreground_shell_agent_action(
 #[derive(Debug, Clone, Copy)]
 struct ProcessProbeInput {
     current_agent: Option<Agent>,
-    suppressed_agent: Option<Agent>,
     foreground_pgid: Option<u32>,
     last_foreground_pgid: Option<u32>,
     has_process_probe: bool,
@@ -485,33 +462,17 @@ fn process_group_for_change_tracking(
     probed_process_group_id.or(observed_foreground_pgid)
 }
 
-fn should_skip_process_probe_for_lifecycle_authority(
-    full_lifecycle_authority_active: bool,
-    input: ProcessProbeInput,
-) -> bool {
-    full_lifecycle_authority_active
-        && input.foreground_pgid.is_some()
-        && !input.pending_foreground_shell_clear
-        && input.suppressed_agent.is_none()
-        && input.has_process_probe
-        && !foreground_group_changed(input.foreground_pgid, input.last_foreground_pgid)
-}
-
 #[cfg(any(windows, test))]
 fn should_observe_foreground_process_group(
-    lifecycle_authority: bool,
     content_changed: bool,
-    elapsed: std::time::Duration,
     input: ProcessProbeInput,
 ) -> bool {
     !input.has_process_probe
         || input.current_agent.is_none()
-        || input.suppressed_agent.is_some()
         || input.pending_foreground_shell_clear
         || input.pending_restore_probe
         || content_changed
-        || (lifecycle_authority && elapsed >= PROCESS_RECHECK_IDENTIFIED)
-        || (!lifecycle_authority && input.elapsed_since_process_check >= PROCESS_RECHECK_IDENTIFIED)
+        || input.elapsed_since_process_check >= PROCESS_RECHECK_IDENTIFIED
 }
 
 fn should_probe_foreground_job(input: ProcessProbeInput) -> bool {
@@ -521,10 +482,6 @@ fn should_probe_foreground_job(input: ProcessProbeInput) -> bool {
 
     let foreground_group_changed =
         foreground_group_changed(input.foreground_pgid, input.last_foreground_pgid);
-
-    if input.suppressed_agent.is_some() {
-        return !input.has_process_probe || foreground_group_changed;
-    }
 
     if let Some(acquisition_age) = input.acquisition_age {
         let acquisition_interval = if acquisition_age <= PROCESS_ACQUISITION_FAST_WINDOW {
@@ -551,14 +508,13 @@ fn should_probe_foreground_job(input: ProcessProbeInput) -> bool {
 
 fn sync_content_change_acquisition(
     current_agent: Option<Agent>,
-    suppressed_agent: Option<Agent>,
     process_group_changed: bool,
     content_changed: bool,
     now: std::time::Instant,
     acquisition_started_at: &mut Option<std::time::Instant>,
     last_content_change_at: &mut Option<std::time::Instant>,
 ) {
-    if current_agent.is_some() || suppressed_agent.is_some() || process_group_changed {
+    if current_agent.is_some() || process_group_changed {
         return;
     }
 
@@ -975,9 +931,6 @@ pub struct PaneRuntime {
     content_seq: Arc<AtomicU64>,
     content_write_lock: Arc<Mutex<()>>,
     detection_content_seq: Arc<AtomicU64>,
-    full_lifecycle_authority_active: Arc<AtomicBool>,
-    detect_reset_notify: Arc<Notify>,
-    pending_release: Arc<Mutex<Option<PendingAgentRelease>>>,
     preserve_processes_on_drop: bool,
     // Task handles for deterministic shutdown
     compression: TerminalCompressionTask,
@@ -1714,7 +1667,6 @@ impl PaneRuntime {
         let child_wait_completed = Arc::new(AtomicBool::new(false));
         let content_seq = Arc::new(AtomicU64::new(0));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
-        let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
         {
             let child_pid = child_pid.clone();
             let child_wait_completed = child_wait_completed.clone();
@@ -1822,27 +1774,20 @@ impl PaneRuntime {
         };
 
         // --- Detection task ---
-        let (detect_handle, detect_reset_notify, pending_release) = if agent_detection
-            == AgentDetection::Enabled
-        {
+        let detect_handle = if agent_detection == AgentDetection::Enabled {
             use crate::detect;
             use std::time::{Duration, Instant};
 
             const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
             const TICK_IDENTIFIED: Duration = Duration::from_millis(300);
-            const TICK_PENDING_RELEASE: Duration = Duration::from_millis(50);
+            const TICK_TRANSIENT_COLOR_OVERRIDE: Duration = Duration::from_millis(50);
 
             let child_pid = child_pid.clone();
             let terminal = terminal.clone();
             let state_events = events.clone();
             let detection_content_seq = detection_content_seq.clone();
-            let full_lifecycle_authority_active_for_task = full_lifecycle_authority_active.clone();
             let render_notify = render_notify.clone();
             let render_dirty = render_dirty.clone();
-            let detect_reset_notify = Arc::new(Notify::new());
-            let detect_reset = detect_reset_notify.clone();
-            let pending_release = Arc::new(Mutex::new(None));
-            let pending_release_for_task = pending_release.clone();
 
             let handle = tokio::spawn(async move {
                 let mut agent_presence =
@@ -1858,7 +1803,6 @@ impl PaneRuntime {
                 let mut last_content_change_at = None;
                 let mut pending_foreground_shell_clear = false;
                 let mut foreground_shell_exit_reported = false;
-                let mut release_was_active = false;
                 let mut pending_restore_probe = initial_state.detected_agent.is_some();
                 let mut last_visible_blocker = false;
                 let mut last_visible_working = false;
@@ -1871,12 +1815,8 @@ impl PaneRuntime {
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
                 loop {
-                    let now_for_tick = Instant::now();
-                    let tick = if active_pending_release(&pending_release_for_task, now_for_tick)
-                        .is_some()
-                        || terminal.has_transient_default_color_override()
-                    {
-                        TICK_PENDING_RELEASE
+                    let tick = if terminal.has_transient_default_color_override() {
+                        TICK_TRANSIENT_COLOR_OVERRIDE
                     } else if pending_idle.active() {
                         AGENT_PENDING_IDLE_RECHECK
                     } else if agent_presence.current_agent().is_none() {
@@ -1884,45 +1824,13 @@ impl PaneRuntime {
                     } else {
                         TICK_IDENTIFIED
                     };
-                    tokio::select! {
-                        _ = tokio::time::sleep(tick) => {}
-                        _ = detect_reset.notified() => {
-                            agent_presence = AgentDetectionPresence::from_agent(None);
-                            state = AgentState::Unknown;
-                            last_visible_idle = false;
-                            last_foreground_pgid = None;
-                            has_process_probe = false;
-                            acquisition_started_at = None;
-                            last_content_change_at = None;
-                            pending_foreground_shell_clear = false;
-                            foreground_shell_exit_reported = false;
-                            release_was_active = false;
-                            pending_restore_probe = false;
-                            last_visible_blocker = false;
-                            last_visible_working = false;
-                            last_visible_signal_refresh = None;
-                            last_detection_text.clear();
-                            last_screen_scan_detection_content_seq = None;
-                            agent_startup_grace_until = None;
-                            pending_idle.clear();
-                        }
-                    }
+                    tokio::time::sleep(tick).await;
 
                     let now = Instant::now();
-                    let suppressed_agent = active_pending_release(&pending_release_for_task, now);
-                    if suppressed_agent.is_none() && release_was_active {
-                        has_process_probe = false;
-                        acquisition_started_at = None;
-                        last_content_change_at = None;
-                    }
-                    release_was_active = suppressed_agent.is_some();
                     let pid = child_pid.load(Ordering::Acquire);
                     let mut agent = agent_presence.current_agent();
-                    let lifecycle_authority_active =
-                        full_lifecycle_authority_active_for_task.load(Ordering::Acquire);
                     let process_probe_input = ProcessProbeInput {
                         current_agent: agent,
-                        suppressed_agent,
                         foreground_pgid: last_foreground_pgid,
                         last_foreground_pgid,
                         has_process_probe,
@@ -1938,11 +1846,9 @@ impl PaneRuntime {
                     let last_content_seq = last_observation.1;
                     #[cfg(windows)]
                     let foreground_observation_due = should_observe_foreground_process_group(
-                        lifecycle_authority_active,
                         last_content_seq != Some(content_seq)
                             && (last_content_seq.is_some()
                                 || now.duration_since(last_observation.0) >= TICK_IDENTIFIED),
-                        now.duration_since(last_observation.0),
                         process_probe_input,
                     );
                     #[cfg(not(windows))]
@@ -1965,10 +1871,7 @@ impl PaneRuntime {
                             foreground_pgid,
                             ..process_probe_input
                         };
-                        !should_skip_process_probe_for_lifecycle_authority(
-                            lifecycle_authority_active,
-                            process_probe_input,
-                        ) && should_probe_foreground_job(process_probe_input)
+                        should_probe_foreground_job(process_probe_input)
                     };
 
                     let mut agent_changed = false;
@@ -1985,17 +1888,7 @@ impl PaneRuntime {
                                 process_group_id,
                             );
                             let foreground_is_pane_shell = probe.foreground_is_pane_shell;
-                            let mut new_agent = probe.agent;
-
-                            if let Some(suppressed_agent) = suppressed_agent {
-                                if new_agent == Some(suppressed_agent) {
-                                    new_agent = None;
-                                } else if let Ok(mut pending_release) =
-                                    pending_release_for_task.lock()
-                                {
-                                    *pending_release = None;
-                                }
-                            }
+                            let new_agent = probe.agent;
 
                             let previous_agent = agent_presence.current_agent();
                             let foreground_action = foreground_shell_agent_action(
@@ -2094,11 +1987,6 @@ impl PaneRuntime {
                         && agent.is_some()
                         && !foreground_shell_exit_reported;
 
-                    if lifecycle_authority_active && !process_exited {
-                        pending_idle.clear();
-                        continue;
-                    }
-
                     if let Some(until) = agent_startup_grace_until {
                         if process_exited {
                             agent_startup_grace_until = None;
@@ -2143,7 +2031,6 @@ impl PaneRuntime {
                     }
                     sync_content_change_acquisition(
                         agent_presence.current_agent(),
-                        suppressed_agent,
                         process_group_changed,
                         content_changed,
                         now,
@@ -2209,13 +2096,9 @@ impl PaneRuntime {
                     }
                 }
             });
-            (
-                Some(handle.abort_handle()),
-                detect_reset_notify,
-                pending_release,
-            )
+            Some(handle.abort_handle())
         } else {
-            (None, Arc::new(Notify::new()), Arc::new(Mutex::new(None)))
+            None
         };
 
         Ok(Self {
@@ -2230,37 +2113,10 @@ impl PaneRuntime {
             content_seq,
             content_write_lock,
             detection_content_seq,
-            full_lifecycle_authority_active,
-            detect_reset_notify,
-            pending_release,
             preserve_processes_on_drop: false,
             compression,
             detect_handle,
         })
-    }
-
-    pub fn begin_graceful_release(&self, agent: Agent) {
-        if let Ok(mut pending_release) = self.pending_release.lock() {
-            *pending_release = Some(PendingAgentRelease {
-                agent,
-                until: std::time::Instant::now() + RELEASE_REACQUIRE_SUPPRESSION,
-            });
-        }
-        self.detect_reset_notify.notify_one();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn agent_detection_reset_notify_for_test(&self) -> Arc<Notify> {
-        self.detect_reset_notify.clone()
-    }
-
-    pub fn set_full_lifecycle_authority_active(&self, active: bool) {
-        let previous = self
-            .full_lifecycle_authority_active
-            .swap(active, Ordering::AcqRel);
-        if active && !previous {
-            self.detect_reset_notify.notify_one();
-        }
     }
 
     pub(crate) fn current_size(&self) -> (u16, u16) {
@@ -2469,14 +2325,6 @@ impl PaneRuntime {
 
     pub fn terminal_title(&self) -> Option<String> {
         self.terminal.terminal_title()
-    }
-
-    pub fn agent_osc_title(&self) -> String {
-        self.terminal.agent_osc_title()
-    }
-
-    pub fn agent_osc_progress(&self) -> String {
-        self.terminal.agent_osc_progress()
     }
 
     pub(crate) fn recent_text_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
@@ -2938,9 +2786,6 @@ impl PaneRuntime {
                 content_seq: Arc::new(AtomicU64::new(0)),
                 content_write_lock: Arc::new(Mutex::new(())),
                 detection_content_seq: Arc::new(AtomicU64::new(0)),
-                full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
-                detect_reset_notify: Arc::new(Notify::new()),
-                pending_release: Arc::new(Mutex::new(None)),
                 preserve_processes_on_drop: true,
                 compression,
                 detect_handle: Some(tokio::spawn(async {}).abort_handle()),
@@ -3646,9 +3491,6 @@ mod tests {
             content_seq: Arc::new(AtomicU64::new(0)),
             content_write_lock: Arc::new(Mutex::new(())),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
-            full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
-            detect_reset_notify: Arc::new(Notify::new()),
-            pending_release: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: true,
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
@@ -3683,9 +3525,6 @@ mod tests {
             content_seq: Arc::new(AtomicU64::new(0)),
             content_write_lock: Arc::new(Mutex::new(())),
             detection_content_seq: Arc::new(AtomicU64::new(0)),
-            full_lifecycle_authority_active: Arc::new(AtomicBool::new(false)),
-            detect_reset_notify: Arc::new(Notify::new()),
-            pending_release: Arc::new(Mutex::new(None)),
             preserve_processes_on_drop: true,
             compression,
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
@@ -3744,12 +3583,12 @@ mod tests {
         runtime.test_process_pty_bytes(b"\x1b]2;startup title\x1b\\\x1b]9;4;1;\x1b\\");
 
         clear_osc_evidence_for_agent_transition(&runtime.terminal, None);
-        assert_eq!(runtime.agent_osc_title(), "startup title");
-        assert_eq!(runtime.agent_osc_progress(), "4;1;");
+        assert_eq!(runtime.terminal.agent_osc_title(), "startup title");
+        assert_eq!(runtime.terminal.agent_osc_progress(), "4;1;");
 
         clear_osc_evidence_for_agent_transition(&runtime.terminal, Some(Agent::Claude));
-        assert_eq!(runtime.agent_osc_title(), "");
-        assert_eq!(runtime.agent_osc_progress(), "");
+        assert_eq!(runtime.terminal.agent_osc_title(), "");
+        assert_eq!(runtime.terminal.agent_osc_progress(), "");
     }
 
     #[test]
@@ -3896,7 +3735,6 @@ mod tests {
     fn process_probe_input() -> ProcessProbeInput {
         ProcessProbeInput {
             current_agent: None,
-            suppressed_agent: None,
             foreground_pgid: Some(42),
             last_foreground_pgid: Some(42),
             has_process_probe: true,
@@ -3908,23 +3746,20 @@ mod tests {
     }
 
     #[test]
-    fn windows_foreground_observation_schedule_preserves_lifecycle_checks() {
+    fn windows_foreground_observation_schedule_preserves_safety_checks() {
+        let before_safety_bound = PROCESS_RECHECK_IDENTIFIED - std::time::Duration::from_millis(1);
         let quiet = ProcessProbeInput {
             current_agent: Some(Agent::Codex),
+            elapsed_since_process_check: before_safety_bound,
             ..process_probe_input()
         };
-        let before_safety_bound = PROCESS_RECHECK_IDENTIFIED - std::time::Duration::from_millis(1);
         let content_retry = std::time::Duration::from_millis(300);
-        let observe = |lifecycle, content_changed, elapsed, input| {
-            should_observe_foreground_process_group(lifecycle, content_changed, elapsed, input)
-        };
         let content_due = |last: Option<u64>, current, elapsed| {
             last != Some(current) && (last.is_some() || elapsed >= content_retry)
         };
 
-        assert!(!observe(false, false, before_safety_bound, quiet));
-        assert!(observe(false, true, before_safety_bound, quiet));
-        assert!(observe(true, true, before_safety_bound, quiet));
+        assert!(!should_observe_foreground_process_group(false, quiet));
+        assert!(should_observe_foreground_process_group(true, quiet));
         assert!(content_due(Some(0), 1, std::time::Duration::ZERO));
         assert!(!content_due(
             None,
@@ -3932,16 +3767,13 @@ mod tests {
             content_retry - std::time::Duration::from_millis(1)
         ));
         assert!(content_due(None, 1, content_retry));
-        assert!(observe(
+        assert!(should_observe_foreground_process_group(
             false,
-            false,
-            before_safety_bound,
             ProcessProbeInput {
                 elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
                 ..quiet
             }
         ));
-        assert!(observe(true, false, PROCESS_RECHECK_IDENTIFIED, quiet));
 
         for immediate in [
             ProcessProbeInput {
@@ -3958,15 +3790,11 @@ mod tests {
                 ..quiet
             },
             ProcessProbeInput {
-                suppressed_agent: Some(Agent::Codex),
-                ..quiet
-            },
-            ProcessProbeInput {
                 pending_foreground_shell_clear: true,
                 ..quiet
             },
         ] {
-            assert!(observe(false, false, std::time::Duration::ZERO, immediate));
+            assert!(should_observe_foreground_process_group(false, immediate));
         }
     }
 
@@ -4051,120 +3879,6 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_authority_skips_stable_routine_process_probe() {
-        assert!(should_skip_process_probe_for_lifecycle_authority(
-            true,
-            ProcessProbeInput {
-                current_agent: Some(Agent::Pi),
-                elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
-                ..process_probe_input()
-            }
-        ));
-        assert!(!should_skip_process_probe_for_lifecycle_authority(
-            false,
-            ProcessProbeInput {
-                current_agent: Some(Agent::Pi),
-                elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
-                ..process_probe_input()
-            }
-        ));
-    }
-
-    #[test]
-    fn lifecycle_authority_keeps_periodic_probes_without_an_observed_group() {
-        let input = ProcessProbeInput {
-            current_agent: Some(Agent::Pi),
-            foreground_pgid: None,
-            last_foreground_pgid: None,
-            elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
-            ..process_probe_input()
-        };
-        assert!(!should_skip_process_probe_for_lifecycle_authority(
-            true, input
-        ));
-        assert!(should_probe_foreground_job(input));
-    }
-
-    #[test]
-    fn lifecycle_authority_preserves_process_exit_and_release_probes() {
-        assert!(!should_skip_process_probe_for_lifecycle_authority(
-            true,
-            ProcessProbeInput {
-                current_agent: Some(Agent::Pi),
-                pending_foreground_shell_clear: true,
-                ..process_probe_input()
-            }
-        ));
-        assert!(!should_skip_process_probe_for_lifecycle_authority(
-            true,
-            ProcessProbeInput {
-                current_agent: Some(Agent::Pi),
-                suppressed_agent: Some(Agent::Pi),
-                ..process_probe_input()
-            }
-        ));
-    }
-
-    #[test]
-    fn lifecycle_authority_preserves_initial_and_foreground_group_change_probes() {
-        assert!(!should_skip_process_probe_for_lifecycle_authority(
-            true,
-            ProcessProbeInput {
-                current_agent: None,
-                has_process_probe: false,
-                ..process_probe_input()
-            }
-        ));
-        assert!(!should_skip_process_probe_for_lifecycle_authority(
-            true,
-            ProcessProbeInput {
-                current_agent: Some(Agent::Pi),
-                foreground_pgid: Some(43),
-                ..process_probe_input()
-            }
-        ));
-    }
-
-    #[test]
-    fn pending_release_forces_initial_process_probe() {
-        assert!(should_probe_foreground_job(ProcessProbeInput {
-            current_agent: Some(Agent::Codex),
-            suppressed_agent: Some(Agent::Codex),
-            has_process_probe: false,
-            ..process_probe_input()
-        }));
-    }
-
-    #[test]
-    fn pending_release_forces_process_probe_after_runtime_identity_clears() {
-        assert!(should_probe_foreground_job(ProcessProbeInput {
-            current_agent: None,
-            suppressed_agent: Some(Agent::Codex),
-            has_process_probe: false,
-            ..process_probe_input()
-        }));
-    }
-
-    #[test]
-    fn pending_release_skips_repeated_probe_when_foreground_group_is_stable() {
-        assert!(!should_probe_foreground_job(ProcessProbeInput {
-            current_agent: None,
-            suppressed_agent: Some(Agent::Codex),
-            ..process_probe_input()
-        }));
-    }
-
-    #[test]
-    fn pending_release_probes_when_foreground_group_changes() {
-        assert!(should_probe_foreground_job(ProcessProbeInput {
-            current_agent: None,
-            suppressed_agent: Some(Agent::Codex),
-            foreground_pgid: Some(43),
-            ..process_probe_input()
-        }));
-    }
-
-    #[test]
     fn acquisition_window_catches_delayed_same_group_wrapper_startup() {
         assert!(!should_probe_foreground_job(ProcessProbeInput {
             current_agent: None,
@@ -4201,7 +3915,6 @@ mod tests {
 
         sync_content_change_acquisition(
             None,
-            None,
             false,
             true,
             now,
@@ -4213,7 +3926,6 @@ mod tests {
 
         let later = now + std::time::Duration::from_secs(1);
         sync_content_change_acquisition(
-            None,
             None,
             false,
             true,
@@ -4232,7 +3944,6 @@ mod tests {
             later + PROCESS_ACQUISITION_WINDOW + PROCESS_ACQUISITION_IDLE_RESET;
         sync_content_change_acquisition(
             None,
-            None,
             false,
             false,
             quiet_after_window,
@@ -4244,7 +3955,6 @@ mod tests {
 
         let next_burst = quiet_after_window + std::time::Duration::from_secs(1);
         sync_content_change_acquisition(
-            None,
             None,
             false,
             true,
@@ -4264,7 +3974,6 @@ mod tests {
 
         sync_content_change_acquisition(
             Some(Agent::Codex),
-            None,
             false,
             true,
             now,
@@ -4275,19 +3984,6 @@ mod tests {
         assert_eq!(last_content_change_at, None);
 
         sync_content_change_acquisition(
-            None,
-            Some(Agent::Codex),
-            false,
-            true,
-            now,
-            &mut acquisition_started_at,
-            &mut last_content_change_at,
-        );
-        assert_eq!(acquisition_started_at, None);
-        assert_eq!(last_content_change_at, None);
-
-        sync_content_change_acquisition(
-            None,
             None,
             true,
             true,
@@ -4308,7 +4004,6 @@ mod tests {
 
         sync_content_change_acquisition(
             None,
-            None,
             false,
             true,
             now,
@@ -4318,15 +4013,6 @@ mod tests {
 
         assert_eq!(acquisition_started_at, Some(now));
         assert_eq!(last_content_change_at, Some(now));
-    }
-
-    #[test]
-    fn release_expiry_can_force_reacquire_probe_by_resetting_probe_state() {
-        assert!(should_probe_foreground_job(ProcessProbeInput {
-            current_agent: None,
-            has_process_probe: false,
-            ..process_probe_input()
-        }));
     }
 
     #[test]
@@ -4401,50 +4087,6 @@ mod tests {
         let changed = presence.observe_process_probe(None);
         assert!(changed, "last confirmation miss should clear the agent");
         assert_eq!(presence.current_agent(), None);
-    }
-
-    #[tokio::test]
-    async fn set_full_lifecycle_authority_active_notifies_only_on_activation_transitions() {
-        let runtime = PaneRuntime::test_with_screen_bytes(80, 24, b"");
-        let reset_notify = runtime.agent_detection_reset_notify_for_test();
-
-        runtime.set_full_lifecycle_authority_active(true);
-        tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            reset_notify.notified(),
-        )
-        .await
-        .expect("false-to-true transition should notify detection reset");
-
-        runtime.set_full_lifecycle_authority_active(true);
-        assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(20),
-                reset_notify.notified()
-            )
-            .await
-            .is_err(),
-            "repeated true-to-true sync should not notify detection reset"
-        );
-
-        runtime.set_full_lifecycle_authority_active(false);
-        assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(20),
-                reset_notify.notified()
-            )
-            .await
-            .is_err(),
-            "true-to-false transition should not notify detection reset"
-        );
-
-        runtime.set_full_lifecycle_authority_active(true);
-        tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            reset_notify.notified(),
-        )
-        .await
-        .expect("re-entering active authority should notify detection reset");
     }
 
     #[cfg(unix)]

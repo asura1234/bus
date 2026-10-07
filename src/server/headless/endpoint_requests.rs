@@ -5,7 +5,7 @@ impl HeadlessServer {
         &mut self,
         client_id: u64,
         boot_id: String,
-        mut request: Box<api::schema::Request>,
+        mut request: api::schema::Request,
     ) -> bool {
         let Some(client) = self.clients.get(&client_id) else {
             return false;
@@ -107,7 +107,7 @@ impl HeadlessServer {
             | self.handle_client_shell_api_request(
                 client_id,
                 api::ApiRequestMessage {
-                    request: *request,
+                    request,
                     respond_to,
                 },
             )

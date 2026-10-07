@@ -139,14 +139,6 @@ impl TerminalRuntime {
         self.0.apply_host_terminal_appearance(appearance);
     }
 
-    pub fn begin_graceful_release(&self, agent: crate::detect::Agent) {
-        self.0.begin_graceful_release(agent);
-    }
-
-    pub fn set_full_lifecycle_authority_active(&self, active: bool) {
-        self.0.set_full_lifecycle_authority_active(active);
-    }
-
     pub fn resize(&self, rows: u16, cols: u16, cell_width_px: u32, cell_height_px: u32) {
         self.0.resize(rows, cols, cell_width_px, cell_height_px);
     }
@@ -255,14 +247,6 @@ impl TerminalRuntime {
 
     pub fn terminal_title(&self) -> Option<String> {
         self.0.terminal_title()
-    }
-
-    pub fn agent_osc_title(&self) -> String {
-        self.0.agent_osc_title()
-    }
-
-    pub fn agent_osc_progress(&self) -> String {
-        self.0.agent_osc_progress()
     }
 
     pub(crate) fn recent_text_snapshot(&self, lines: usize) -> crate::pane::TerminalReadSnapshot {

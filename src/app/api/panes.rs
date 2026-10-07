@@ -2218,24 +2218,6 @@ mod tests {
         app
     }
 
-    fn seed_terminal_states(app: &mut App) {
-        for ws in &app.state.workspaces {
-            for tab in &ws.tabs {
-                for pane in tab.panes.values() {
-                    app.state
-                        .terminals
-                        .entry(pane.attached_terminal_id.clone())
-                        .or_insert_with(|| {
-                            crate::terminal::TerminalState::new(
-                                pane.attached_terminal_id.clone(),
-                                std::path::PathBuf::from("/herdr-test"),
-                            )
-                        });
-                }
-            }
-        }
-    }
-
     #[test]
     fn api_pane_close_of_last_pane_closes_its_workspace() {
         let mut app = app_with_one_workspace();

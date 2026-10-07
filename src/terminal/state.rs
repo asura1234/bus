@@ -174,7 +174,7 @@ impl TerminalState {
         self
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(windows)]
     pub(crate) fn agent_process_exited_within(&self, now: Instant, max_age: Duration) -> bool {
         self.recent_agent_process_exit
             .is_some_and(|exit| now.saturating_duration_since(exit.observed_at) <= max_age)
@@ -195,21 +195,6 @@ impl TerminalState {
         fallback_state: AgentState,
     ) -> Option<EffectiveStateChange> {
         self.set_detected_state_with_visible_blocker(agent, fallback_state, false, false)
-    }
-
-    #[cfg(test)]
-    pub fn set_detected_state_with_mutation(
-        &mut self,
-        agent: Option<Agent>,
-        fallback_state: AgentState,
-    ) -> TerminalStateMutation {
-        self.set_detected_state_with_screen_signals_at(
-            agent,
-            fallback_state,
-            false,
-            false,
-            Instant::now(),
-        )
     }
 
     #[cfg(test)]
@@ -298,16 +283,6 @@ impl TerminalState {
     ) {
         self.persisted_agent_session = Some(session.clone());
         self.managed_agent_launch_session = Some(session);
-    }
-
-    pub fn set_agent_session_ref(
-        &mut self,
-        source: String,
-        agent_label: String,
-        session_ref: Option<crate::agent_resume::AgentSessionRef>,
-        seq: Option<u64>,
-    ) -> Option<TerminalStateMutation> {
-        self.set_agent_session_ref_for_session_start(source, agent_label, session_ref, seq, None)
     }
 
     pub fn set_agent_session_ref_for_session_start(
@@ -990,19 +965,21 @@ mod tests {
         let mut terminal = test_terminal();
         terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
         assert!(terminal
-            .set_agent_session_ref(
+            .set_agent_session_ref_for_session_start(
                 "herdr:pi".into(),
                 "pi".into(),
                 Some(session_id("first")),
                 Some(2),
+                None,
             )
             .is_some());
         assert!(terminal
-            .set_agent_session_ref(
+            .set_agent_session_ref_for_session_start(
                 "herdr:pi".into(),
                 "pi".into(),
                 Some(session_id("older")),
                 Some(2),
+                None,
             )
             .is_none());
         assert_eq!(
@@ -1021,11 +998,12 @@ mod tests {
             session_ref: session_id("codex"),
         });
         assert!(terminal
-            .set_agent_session_ref(
+            .set_agent_session_ref_for_session_start(
                 "herdr:claude".into(),
                 "claude".into(),
                 Some(session_id("claude")),
                 Some(1),
+                None,
             )
             .is_none());
     }

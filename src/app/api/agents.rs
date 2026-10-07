@@ -861,11 +861,12 @@ mod tests {
             .terminals
             .get_mut(&terminal_id)
             .unwrap()
-            .set_agent_session_ref(
+            .set_agent_session_ref_for_session_start(
                 "herdr:codex".into(),
                 "codex".into(),
                 crate::agent_resume::AgentSessionRef::id("already-bound"),
                 Some(1),
+                None,
             );
         assert!(run(&mut app, params).contains("agent_identity_changed"));
         assert!(rx.try_recv().is_err());
@@ -890,11 +891,12 @@ mod tests {
         );
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
         terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
-        terminal.set_agent_session_ref(
+        terminal.set_agent_session_ref_for_session_start(
             "bus".into(),
             "codex".into(),
             crate::agent_resume::AgentSessionRef::id("session"),
             Some(1),
+            None,
         );
         let (runtime, mut rx) =
             crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
@@ -980,11 +982,12 @@ mod tests {
         );
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
         terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
-        terminal.set_agent_session_ref(
+        terminal.set_agent_session_ref_for_session_start(
             "bus".into(),
             "codex".into(),
             crate::agent_resume::AgentSessionRef::id("session"),
             Some(1),
+            None,
         );
         let (runtime, mut writes) =
             crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
@@ -1226,11 +1229,12 @@ mod tests {
         terminal.set_agent_name("reviewer".into());
         terminal.set_detected_state(Some(Agent::Claude), AgentState::Blocked);
         if let Some(session) = session {
-            terminal.set_agent_session_ref(
+            terminal.set_agent_session_ref_for_session_start(
                 "bus".into(),
                 "claude".into(),
                 crate::agent_resume::AgentSessionRef::id(session),
                 Some(1),
+                None,
             );
         }
         let (runtime, writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
