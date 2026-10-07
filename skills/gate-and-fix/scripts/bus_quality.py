@@ -20,8 +20,30 @@ CONFIG = ROOT / "skills/gate-and-fix/references/python-coverage.ini"
 POLICY = ROOT / "skills/gate-and-fix/references/coverage-policy.json"
 LINT_POLICY = ROOT / "skills/gate-and-fix/references/lint-policy.toml"
 LANES = ("lint", "unit", "integration", "coverage")
-PYTHON_ROOTS = ("scripts", "skills", "cli_extensions")
-RUST_EXCLUDE = r"/(tests|vendor)/|/(tests|test_support)\.rs$|/build\.rs$|/src/ghostty/bindings\.rs$"
+PYTHON_ROOTS = ("scripts", "skills", "cli_extensions", "tools", "packaging")
+RUST_ROOTS = ("src", "tests")
+RUST_SOURCE_ROOT = "src"
+GENERATED_RUST = tuple(
+    tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))["generated_files"]
+)
+RUST_EXCLUDE = "|".join(
+    (
+        r"/(tests|vendor)/",
+        r"/(tests|test_support)\.rs$",
+        r"/build\.rs$",
+        *("/" + re.escape(path) + "$" for path in GENERATED_RUST),
+    )
+)
+IN_PROCESS_SERVER_TESTS = "server::headless::"
+ARCHITECTURE_TESTS = (
+    "tools/tests/test_ui_hot_path.py",
+    "tools/tests/test_import_boundaries.py",
+)
+IMPORT_BOUNDARIES = "tools.quality.import_boundaries"
+
+
+def python_roots() -> tuple[str, ...]:
+    return tuple(name for name in PYTHON_ROOTS if (ROOT / name).is_dir())
 
 
 def run(*argv: str, env: dict | None = None) -> int:
@@ -30,7 +52,7 @@ def run(*argv: str, env: dict | None = None) -> int:
 
 
 def python_files() -> list[Path]:
-    return sorted(path for name in PYTHON_ROOTS for path in (ROOT / name).rglob("*.py"))
+    return sorted(path for name in python_roots() for path in (ROOT / name).rglob("*.py"))
 
 
 def is_test(path: Path) -> bool:
@@ -61,7 +83,7 @@ def save_state(value: dict) -> None:
 
 
 def rust_test(
-    *targets: str, fresh: bool = False, test_filter: str | None = None
+    *targets: str, fresh: bool = False, in_process_server: bool | None = None
 ) -> int:
     # --no-report already preserves profiles and rejects --no-clean. Reset just the raw
     # profiles once per round, keeping the instrumented build cache warm.
@@ -87,15 +109,16 @@ def rust_test(
             "--success-output",
             "never",
         ]
-        if test_filter:
-            argv += ["-E", test_filter]
+        if in_process_server is not None:
+            test_filter = f"test(/^{re.escape(IN_PROCESS_SERVER_TESTS)}/)"
+            argv += ["-E", test_filter if in_process_server else f"not {test_filter}"]
     else:
         argv += ["--no-fail-fast", "--quiet"]
-        if test_filter == "not test(/^server::headless::/)":
-            argv += ["--", "--skip", "server::headless::"]
-        elif test_filter:
+        if in_process_server is False:
+            argv += ["--", "--skip", IN_PROCESS_SERVER_TESTS]
+        elif in_process_server is True:
             # cargo-llvm-cov test accepts a libtest substring before the `--` delimiter.
-            argv.append("server::headless::")
+            argv.append(IN_PROCESS_SERVER_TESTS)
     return run(*argv)
 
 
@@ -106,7 +129,7 @@ def file_lengths() -> int:
         raise ValueError("invalid file-length limit")
     failures = []
     paths = python_files() + [
-        path for folder in ("src", "tests") for path in (ROOT / folder).rglob("*.rs")
+        path for folder in RUST_ROOTS for path in (ROOT / folder).rglob("*.rs")
     ]
     for path in sorted(paths):
         name = path.relative_to(ROOT).as_posix()
@@ -114,7 +137,7 @@ def file_lengths() -> int:
             continue
         lines = len(path.read_text(encoding="utf-8").splitlines())
         if lines > limit:
-            if name in policy["file_length_exemptions"]:
+            if name in policy.get("file_length_exemptions", {}):
                 print(
                     f"file-length exemption: {name} ({lines} lines; split planned in restructure)"
                 )
@@ -128,6 +151,9 @@ def file_lengths() -> int:
 
 
 def lint() -> int:
+    roots = python_roots()
+    if not roots:
+        raise ValueError("no Python source roots found")
     results = [
         run("cargo", "fmt", "--check"),
         run("cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"),
@@ -139,9 +165,10 @@ def lint() -> int:
             "--isolated",
             "--select",
             "E9,F",
-            *PYTHON_ROOTS,
+            *roots,
         ),
-        run(sys.executable, "-m", "unittest", "scripts.test_ui_hot_path_architecture"),
+        run(sys.executable, "-m", "pytest", "-q", *ARCHITECTURE_TESTS),
+        run(sys.executable, "-m", IMPORT_BOUNDARIES),
         file_lengths(),
     ]
     return int(any(results))
@@ -156,9 +183,7 @@ def unit() -> int:
         (OUTPUT / name).unlink(missing_ok=True)
     value = {"head": head(), "unit": False, "integration": False}
     save_state(value)
-    rust = rust_test(
-        "--bin", "bus", fresh=True, test_filter="not test(/^server::headless::/)"
-    )
+    rust = rust_test("--bin", "bus", fresh=True, in_process_server=False)
     cli = run(
         "cargo",
         "llvm-cov",
@@ -204,7 +229,7 @@ def integration() -> int:
     value = state()
     results = [
         rust_test("--test", "*"),
-        rust_test("--bin", "bus", test_filter="test(/^server::headless::/)"),
+        rust_test("--bin", "bus", in_process_server=True),
     ]
     value["integration"] = not any(results)
     save_state(value)
@@ -215,7 +240,7 @@ def rust_lines(report: Path) -> tuple[int, int]:
     # LLVM's DA records already define executable lines. Only remove cfg(test) modules;
     # their high coverage must not inflate the production baseline.
     sys.path.insert(0, str(ROOT))
-    from scripts.test_ui_hot_path_architecture import (
+    from tools.quality.hot_path import (
         TEST_MODULE,
         mask_comments_and_literals,
     )
@@ -228,8 +253,8 @@ def rust_lines(report: Path) -> tuple[int, int]:
             path = Path(line[3:])
             if not path.is_absolute():
                 path = ROOT / path
-            in_source = path.is_relative_to(ROOT / "src") and not re.search(
-                RUST_EXCLUDE, str(path)
+            in_source = path.is_relative_to(ROOT / RUST_SOURCE_ROOT) and not re.search(
+                RUST_EXCLUDE, path.as_posix()
             )
             excluded = set()
             if in_source:
@@ -331,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("lane", choices=(*LANES, "ci"))
     args = parser.parse_args(argv)
     try:
-        required = ("ruff",) if args.lane == "lint" else ("coverage", "pytest")
+        required = ("ruff", "pytest") if args.lane == "lint" else ("coverage", "pytest")
         if any(importlib.util.find_spec(name) is None for name in required):
             raise ValueError(
                 "missing Python gate tools; install scripts/requirements.txt from this skill"

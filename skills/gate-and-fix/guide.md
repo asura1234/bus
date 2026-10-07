@@ -21,20 +21,24 @@ replace `rebase-origin-main`, `update-docs`, or PR creation.
 - Every round runs all four checks plus `git diff --check <base>...HEAD`, regardless of which
   files changed. No changed-file filter can remove a category or a skill test.
   - **Lint**: Cargo fmt, all-target Clippy with warnings denied, Ruff `E9,F` over all first-party
-    Python, and the static hot-path architecture contract. That contract reads source text; it is
-    not a UI test. Rust formatting and Python syntax/pyflakes violations fail the gate. Python
-    style-only rules and LibTV's TypeScript-specific complexity limits are not imported. All
+    Python, and the static hot-path architecture contract. The lint lane runs the hot-path and
+    import-boundary pytest suites under `tools/tests/`, then prints the import-boundary report.
+    Boundaries are report-only until S12 enables enforcement. These checks read source text;
+    they are not UI tests. Rust formatting and Python syntax/pyflakes violations fail the gate.
+    Python style-only rules and LibTV's TypeScript-specific complexity limits are not imported. All
     first-party Rust/Python files (including tests) have a 3,000 physical-line cap. Existing
     oversized handwritten files are individually exempted in
     [lint-policy.toml](references/lint-policy.toml), each marked for splitting during the
     restructure; generated Ghostty bindings are separately named. New/non-exempt files fail.
-  - **Unit**: instrumented Bus binary tests, excluding `server::headless::`, followed by every
-    `test_*.py` / `*_test.py` under `scripts/` and `skills/` with pytest under coverage.py.
+  - **Unit**: instrumented Bus binary tests, excluding the `IN_PROCESS_SERVER_TESTS` prefix in
+    `bus_quality.py`, followed by every `test_*.py` / `*_test.py` in its existing `PYTHON_ROOTS`
+    (`scripts/`, `skills/`, `cli_extensions/`, `tools/`, `packaging/`) with pytest under coverage.py.
     This includes all maintenance suites and all skill suites, on every round.
     The instrumented CLI is built before Python tests; its explicit `BUS_TEST_BINARY` and profile
     path ensure CLI tests measure this commit rather than an old `target/debug/bus`.
   - **Integration**: all Rust integration targets under `tests/`, then the in-process
-    `server::headless::` harness. No real LLM agents are launched.
+    `IN_PROCESS_SERVER_TESTS` harness. The same prefix drives nextest and libtest filters.
+    No real LLM agents are launched.
   - **Coverage**: cargo-llvm-cov exports the fresh unit + integration profiles; coverage.py combines
     the Python unit/subprocess profiles. Both production line percentages must meet their fixed
     floors in [coverage-policy.json](references/coverage-policy.json). Below-floor, missing/empty
@@ -51,11 +55,16 @@ replace `rebase-origin-main`, `update-docs`, or PR creation.
   The gate retains the parent `BUS_DATA_DIR`, `BUS_SESSION_ID`, and `HERDR_SESSION`; tests that
   model isolated config roots clear and restore those variables within their fixture boundaries.
 - Rust coverage includes host-compiled first-party `src/` executable lines. Vendor/dependencies,
-  build.rs, generated `src/ghostty/bindings.rs`, `tests/` and inline `#[cfg(test)] mod` bodies are
-  excluded. Host-inactive platform code is outside LLVM's inventory. Python includes every
-  production file under `scripts/`, `skills/`, and `cli_extensions/`, even files never imported;
+  build.rs, generated files from `lint-policy.toml`'s `generated_files`, `tests/` and inline
+  `#[cfg(test)] mod` bodies are excluded. Host-inactive platform code is outside LLVM's inventory.
+  Python includes every production file in the existing `PYTHON_ROOTS`, even files never imported;
   test files and the five individually justified live/manual drivers in the policy are excluded.
   Separate language floors keep an improvement in one language from hiding a drop in the other.
+- Restructure path inputs are grouped at the top of `bus_quality.py`. Missing Python roots are
+  skipped by discovery and Ruff; update `python-coverage.ini` sources when a new production root
+  gains Python files. `GENERATED_RUST` reads the lint policy and drives the coverage regex, so a
+  generated-file move requires only a policy edit. Rust source roots and architecture check paths
+  are listed in the same block.
 - The starting measurement on this branch was **81.73% Rust / 72.83% Python**; the fixed floors
   are **81% / 72%**. They leave less than one percentage point of initial headroom. The rule is
   aggregate production line coverage per language, not per-file or branch coverage. Review any

@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import runpy
 import sys
 import tempfile
 import unittest
@@ -21,11 +23,14 @@ class BusQualityTest(unittest.TestCase):
                 patch.object(
                     quality, "python_files", return_value=[root / "scripts/test_one.py"]
                 ),
-                patch.object(quality, "rust_test", return_value=0),
+                patch.object(quality, "rust_test", return_value=0) as rust_test,
                 patch.object(quality, "run", return_value=0) as run,
                 patch.dict(os.environ, {"BUS_TEST_BINARY": "/stale/bus"}),
             ):
                 self.assertEqual(quality.unit(), 0)
+                rust_test.assert_called_once_with(
+                    "--bin", "bus", fresh=True, in_process_server=False
+                )
                 self.assertEqual(
                     run.call_args_list[0].args[:3], ("cargo", "llvm-cov", "run")
                 )
@@ -62,6 +67,126 @@ class BusQualityTest(unittest.TestCase):
                 self.assertEqual(quality.file_lengths(), 1)
                 (source / "new.rs").write_text("line\n" * 3000)
                 self.assertEqual(quality.file_lengths(), 0)
+
+    def test_python_roots_discover_tools_and_packaging_and_skip_missing_directories(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            expected = []
+            for name in ("tools", "packaging"):
+                source = root / name / "nested/module.py"
+                source.parent.mkdir(parents=True)
+                source.write_text("value = 1\n")
+                expected.append(source)
+            (root / "scripts").write_text("not a directory")
+            with patch.object(quality, "ROOT", root):
+                self.assertEqual(quality.python_roots(), ("tools", "packaging"))
+                self.assertEqual(quality.python_files(), sorted(expected))
+
+    def test_generated_rust_exclusions_follow_the_policy_and_escape_paths(self):
+        for generated in (["src/generated.v1[ffi].rs"], []):
+            with (
+                self.subTest(generated=generated),
+                patch.object(
+                    Path,
+                    "read_text",
+                    autospec=True,
+                    return_value="generated_files = " + json.dumps(generated),
+                ) as read,
+            ):
+                loaded = runpy.run_path(quality.__file__)
+                read.assert_called_once_with(quality.LINT_POLICY, encoding="utf-8")
+                self.assertEqual(loaded["GENERATED_RUST"], tuple(generated))
+                pattern = loaded["RUST_EXCLUDE"]
+                for excluded in (
+                    "/repo/tests/integration.rs",
+                    "/repo/vendor/library.rs",
+                    "/repo/src/module/tests.rs",
+                    "/repo/src/module/test_support.rs",
+                    "/repo/build.rs",
+                    *("/repo/" + name for name in generated),
+                ):
+                    self.assertRegex(excluded, pattern)
+                for included in (
+                    "/repo/src/production.rs",
+                    "/repo/src/generatedXv1f.rs",
+                    "/repo/src/generated.v1[ffi].rs.extra",
+                ):
+                    self.assertNotRegex(included, pattern)
+
+    def test_file_length_cap_works_after_the_exemption_table_is_removed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "src/production.rs"
+            source.parent.mkdir()
+            source.write_text("line\n" * 801)
+            policy = root / "lint.toml"
+            policy.write_text("max_file_lines = 800\ngenerated_files = []\n")
+            with (
+                patch.object(quality, "ROOT", root),
+                patch.object(quality, "LINT_POLICY", policy),
+            ):
+                self.assertEqual(quality.file_lengths(), 1)
+
+    def test_lint_runs_the_architecture_suites_and_prints_report_without_enforcement(self):
+        with (
+            patch.object(quality, "python_roots", return_value=("tools", "skills")),
+            patch.object(quality, "file_lengths", return_value=0),
+            patch.object(quality, "run", return_value=0) as run,
+        ):
+            self.assertEqual(quality.lint(), 0)
+            calls = [call.args for call in run.call_args_list]
+            self.assertIn(
+                (
+                    sys.executable,
+                    "-m",
+                    "ruff",
+                    "check",
+                    "--isolated",
+                    "--select",
+                    "E9,F",
+                    "tools",
+                    "skills",
+                ),
+                calls,
+            )
+            self.assertIn(
+                (
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "tools/tests/test_ui_hot_path.py",
+                    "tools/tests/test_import_boundaries.py",
+                ),
+                calls,
+            )
+            self.assertIn(
+                (sys.executable, "-m", "tools.quality.import_boundaries"), calls
+            )
+            self.assertNotIn("--enforce", [arg for call in calls for arg in call])
+
+    def test_lint_rejects_an_empty_python_inventory_instead_of_scanning_the_cwd(self):
+        with (
+            patch.object(quality, "python_roots", return_value=()),
+            patch.object(quality, "run") as run,
+            self.assertRaisesRegex(ValueError, "no Python source roots"),
+        ):
+            quality.lint()
+        run.assert_not_called()
+
+    def test_integration_uses_the_shared_server_prefix_selection(self):
+        with (
+            patch.object(quality, "state", return_value={"unit": True}),
+            patch.object(quality, "save_state") as save,
+            patch.object(quality, "rust_test", return_value=0) as rust_test,
+        ):
+            self.assertEqual(quality.integration(), 0)
+            self.assertEqual(rust_test.call_args_list[0].args, ("--test", "*"))
+            self.assertEqual(rust_test.call_args_list[1].args, ("--bin", "bus"))
+            self.assertEqual(
+                rust_test.call_args_list[1].kwargs, {"in_process_server": True}
+            )
+            self.assertTrue(save.call_args.args[0]["integration"])
 
     def test_coverage_exit_status_enforces_both_language_floors(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -119,6 +244,25 @@ class BusQualityTest(unittest.TestCase):
             with patch.object(quality, "ROOT", root):
                 self.assertEqual(quality.rust_lines(report), (0, 0))
 
+    def test_rust_coverage_uses_the_configured_source_root_and_generated_exclusions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "moved/production.rs"
+            source.parent.mkdir()
+            source.write_text("fn missed() {}\n")
+            generated = root / "moved/generated.rs"
+            report = root / "report.lcov"
+            report.write_text(
+                f"SF:{source}\nDA:1,0\nend_of_record\n"
+                f"SF:{generated}\nDA:1,1\nend_of_record\n"
+            )
+            with (
+                patch.object(quality, "ROOT", root),
+                patch.object(quality, "RUST_SOURCE_ROOT", "moved"),
+                patch.object(quality, "RUST_EXCLUDE", r"/moved/generated\.rs$"),
+            ):
+                self.assertEqual(quality.rust_lines(report), (0, 1))
+
     def test_python_coverage_includes_never_imported_file(self):
         from coverage import Coverage
 
@@ -127,6 +271,10 @@ class BusQualityTest(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             (scripts / "unused.py").write_text("value = 1\n")
+            for name in ("tools", "packaging"):
+                source = root / name / "unused.py"
+                source.parent.mkdir()
+                source.write_text("value = 1\n")
             config = root / "coverage.ini"
             config.write_text(f"[run]\ndata_file = {root / '.coverage'}\n")
             Coverage(config_file=str(config)).save()
@@ -134,9 +282,9 @@ class BusQualityTest(unittest.TestCase):
                 patch.object(quality, "ROOT", root),
                 patch.object(quality, "CONFIG", config),
             ):
-                self.assertEqual(quality.python_lines({}), (0, 1))
+                self.assertEqual(quality.python_lines({}), (0, 3))
                 self.assertEqual(
-                    quality.python_lines({"scripts/unused.py": "fixture"}), (0, 0)
+                    quality.python_lines({"scripts/unused.py": "fixture"}), (0, 2)
                 )
 
     def test_missing_stale_or_failed_profiles_cannot_pass(self):
@@ -194,12 +342,7 @@ class BusQualityTest(unittest.TestCase):
                 ),
                 patch.object(quality, "run", return_value=0) as run,
             ):
-                quality.rust_test(
-                    "--bin",
-                    "bus",
-                    fresh=True,
-                    test_filter="not test(/^server::headless::/)",
-                )
+                quality.rust_test("--bin", "bus", fresh=True, in_process_server=False)
                 self.assertEqual(
                     run.call_args.args[2], "nextest" if nextest else "test"
                 )
@@ -210,6 +353,34 @@ class BusQualityTest(unittest.TestCase):
                     self.assertEqual(
                         run.call_args.args[-3:], ("--", "--skip", "server::headless::")
                     )
+
+    def test_server_prefix_changes_apply_to_nextest_and_libtest_in_both_lanes(self):
+        prefix = "server::tests::"
+        for nextest in (False, True):
+            for selection in (False, True, None):
+                with (
+                    self.subTest(nextest=nextest, selection=selection),
+                    patch.object(quality, "IN_PROCESS_SERVER_TESTS", prefix),
+                    patch.object(
+                        quality.shutil, "which", return_value="nextest" if nextest else None
+                    ),
+                    patch.object(quality, "run", return_value=0) as run,
+                ):
+                    quality.rust_test("--bin", "bus", in_process_server=selection)
+                    args = run.call_args.args
+                    if selection is None:
+                        self.assertNotIn("-E", args)
+                        self.assertNotIn("--skip", args)
+                        self.assertNotIn(prefix, args)
+                    elif nextest:
+                        expected = f"test(/^{re.escape(prefix)}/)"
+                        self.assertEqual(
+                            args[-2:], ("-E", expected if selection else f"not {expected}")
+                        )
+                    elif selection:
+                        self.assertEqual(args[-1], prefix)
+                    else:
+                        self.assertEqual(args[-3:], ("--", "--skip", prefix))
 
 
 if __name__ == "__main__":
