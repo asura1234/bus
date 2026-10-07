@@ -1,4 +1,7 @@
 use super::*;
+use bytes::Bytes;
+
+use crate::protocol::FrameData;
 
 #[path = "surface_interest.rs"]
 mod surface_interest_tests;
@@ -71,7 +74,6 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         sent_window_title: None,
         api_window_title: None,
         server_config_diagnostic: None,
-        terminal_attach_owners: HashMap::new(),
         pending_alt_screen_reads: Vec::new(),
         deferred_alt_screen_reads: Vec::new(),
         next_activity_stamp: 1,
@@ -106,13 +108,6 @@ fn frame_text(frame: &FrameData) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn read_server_shutdown_reason(bytes: Vec<u8>) -> Option<String> {
-    match read_server_message(bytes) {
-        ServerMessage::ServerShutdown { reason } => reason,
-        other => panic!("expected shutdown, got {other:?}"),
-    }
 }
 
 #[test]
@@ -346,7 +341,7 @@ fn an_attaching_client_gets_the_title_even_when_it_has_not_changed() {
         Some(Some("herd".to_string()))
     );
 
-    // ClientConnected assigns the foreground client directly rather than
+    // Client-shell connection assigns the foreground client directly rather than
     // going through promote_client_to_foreground, so the cache must notice
     // the new client on its own.
     let (client_tx, second_control_rx, _render_rx) = test_client_writer();
@@ -661,33 +656,6 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
         other => panic!("expected client shell endpoint response, got {other:?}"),
     }
     shutdown_test_runtimes(&mut server);
-}
-
-#[test]
-fn terminal_client_endpoint_request_error_removes_client() {
-    let mut server = test_headless_server();
-    let (writer, _control_rx, _render_rx) = test_client_writer();
-    let client_id = 42;
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: false,
-        writer,
-    }));
-
-    assert!(
-        server.handle_server_event(ServerEvent::ClientShellEndpointRequestError {
-            client_id,
-            boot_id: "boot".into(),
-            request_id: "request".into(),
-            code: "unsupported_method",
-            message: "unsupported".into(),
-        })
-    );
-    assert!(!server.clients.contains_key(&client_id));
 }
 
 #[tokio::test]
@@ -1784,8 +1752,7 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
     let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
     server.clients.insert(
         11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
+        ClientConnection::new(
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
@@ -1869,7 +1836,7 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
     );
     assert!(!server.paste_client_clipboard_image_path(
         11,
-        crate::protocol::ClientClipboardImageTarget::DirectTerminal,
+        crate::protocol::ClientClipboardImageTarget::Pane("missing:p1".into()),
         "/tmp/wrong-target.png".into(),
     ));
     assert!(input_rx.try_recv().is_err());
@@ -1977,8 +1944,7 @@ async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
     let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
     server.clients.insert(
         11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
+        ClientConnection::new(
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
@@ -2033,8 +1999,7 @@ async fn client_shell_mouse_motion_delivers_without_render_when_foreground() {
     let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
     server.clients.insert(
         11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
+        ClientConnection::new(
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
@@ -2072,8 +2037,7 @@ async fn client_shell_mouse_motion_promotes_and_requests_render() {
     let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
     server.clients.insert(
         11,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
+        ClientConnection::new(
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
@@ -2226,77 +2190,55 @@ fn client_shell_host_theme_follows_foreground_client() {
 }
 
 #[test]
-fn terminal_clients_store_known_cell_geometry_independently_of_pixel_mouse() {
-    let mut server = test_headless_server();
+fn client_shell_stores_known_cell_geometry_independently_of_pixel_mouse() {
+    with_terminal_session_test_server(|server, _, _, _| {
+        let (writer, _control_rx, _render_rx) = test_client_writer();
+        assert!(
+            server.handle_server_event(ServerEvent::ClientShellConnected {
+                client_id: 7,
+                surface_cols: 80,
+                surface_rows: 24,
+                cell_width_px: 0,
+                cell_height_px: 0,
+                pixel_mouse: true,
+                direct_graphics: false,
+                endpoint_keybindings: false,
+                mouse_capture: false,
+                surface_active: true,
+                writer,
+            })
+        );
+        assert!(!server.clients[&7].pixel_mouse);
+        assert_eq!(
+            server.clients[&7].cell_size,
+            crate::kitty_graphics::HostCellSize::default()
+        );
 
-    let (writer, _control_rx, _render_rx) = test_client_writer();
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id: 7,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: true,
-        writer,
-    }));
-    assert!(!server.clients[&7].pixel_mouse);
-    assert_eq!(
-        server.clients[&7].cell_size,
-        crate::kitty_graphics::HostCellSize::default()
-    );
-
-    let (writer, _control_rx, _render_rx) = test_client_writer();
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id: 8,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 10,
-        cell_height_px: 20,
-        pixel_mouse: false,
-        writer,
-    }));
-    assert!(!server.clients[&8].pixel_mouse);
-    assert_eq!(
-        server.clients[&8].cell_size,
-        crate::kitty_graphics::HostCellSize {
-            width_px: 10,
-            height_px: 20,
-        }
-    );
-}
-
-#[test]
-fn terminal_attach_rejects_missing_terminal_and_removes_client() {
-    let mut server = test_headless_server();
-    let (writer, control_rx, _render_rx) = test_client_writer();
-
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id: 7,
-        cols: 80,
-        rows: 24,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: false,
-        writer,
-    }));
-    assert!(matches!(
-        server.clients.get(&7).map(|client| &client.mode),
-        Some(ClientConnectionMode::TerminalPending)
-    ));
-
-    assert!(
-        !server.handle_server_event(ServerEvent::ClientAttachTerminal {
-            client_id: 7,
-            terminal_id: "term_missing".to_owned(),
-            takeover: false,
-        })
-    );
-    assert!(!server.clients.contains_key(&7));
-    let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
-    assert_eq!(
-        reason,
-        Some("terminal attach failed: terminal term_missing not found".to_owned())
-    );
+        let (writer, _control_rx, _render_rx) = test_client_writer();
+        assert!(
+            server.handle_server_event(ServerEvent::ClientShellConnected {
+                client_id: 8,
+                surface_cols: 80,
+                surface_rows: 24,
+                cell_width_px: 10,
+                cell_height_px: 20,
+                pixel_mouse: false,
+                direct_graphics: false,
+                endpoint_keybindings: false,
+                mouse_capture: false,
+                surface_active: true,
+                writer,
+            })
+        );
+        assert!(!server.clients[&8].pixel_mouse);
+        assert_eq!(
+            server.clients[&8].cell_size,
+            crate::kitty_graphics::HostCellSize {
+                width_px: 10,
+                height_px: 20,
+            }
+        );
+    });
 }
 
 fn with_terminal_session_test_server(
@@ -2325,31 +2267,6 @@ fn with_terminal_session_test_server(
     drop(server);
     drop(_runtime_guard);
     rt.shutdown_timeout(Duration::from_millis(100));
-}
-
-fn connect_pending_terminal_client(server: &mut HeadlessServer, client_id: u64) {
-    let _control_rx = connect_pending_terminal_client_with_control_rx(server, client_id);
-}
-
-fn connect_pending_terminal_client_with_control_rx(
-    server: &mut HeadlessServer,
-    client_id: u64,
-) -> std::sync::mpsc::Receiver<Vec<u8>> {
-    let (writer, control_rx, _render_rx) = test_client_writer();
-    assert!(!server.handle_server_event(ServerEvent::ClientConnected {
-        client_id,
-        cols: 100,
-        rows: 30,
-        cell_width_px: 0,
-        cell_height_px: 0,
-        pixel_mouse: false,
-        writer,
-    }));
-    assert!(matches!(
-        server.clients.get(&client_id).map(|client| &client.mode),
-        Some(ClientConnectionMode::TerminalPending)
-    ));
-    control_rx
 }
 
 #[test]
@@ -2408,481 +2325,6 @@ fn room_orchestrator_core_headless_explicit_agent_history_read_requires_idle_on_
             assert_eq!(server.agent_read_not_idle_error(&visible_request), None);
         },
     );
-}
-
-#[test]
-fn terminal_attach_disconnect_restores_client_shell_pane_size() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
-    let _runtime_guard = rt.enter();
-    let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("test");
-    let second_tab = workspace.test_add_tab(Some("second"));
-    let pane_id = workspace.tabs[0].root_pane;
-    let terminal_id = workspace.terminal_id(pane_id).expect("terminal id").clone();
-    let terminal_id_string = terminal_id.to_string();
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.ensure_test_terminals();
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    let second_tab_id = server
-        .app
-        .public_tab_id(0, second_tab)
-        .expect("second tab id");
-    server.app.terminal_runtimes.insert(
-        terminal_id.clone(),
-        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
-    );
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            unread_test_writer(),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.sync_foreground_client_state();
-    server.reconcile_client_shell_locations();
-    assert!(server.claim_unowned_shell_tab_geometry(1, true));
-    let expected_shell_size = server
-        .app
-        .terminal_runtimes
-        .get(&terminal_id)
-        .expect("runtime")
-        .current_size();
-
-    connect_pending_terminal_client(&mut server, 2);
-    assert!(
-        server.handle_server_event(ServerEvent::ClientAttachTerminal {
-            client_id: 2,
-            terminal_id: terminal_id_string,
-            takeover: false,
-        })
-    );
-    assert_eq!(server.foreground_client_id, Some(1));
-    assert!(server
-        .app
-        .state
-        .direct_attach_resize_locks
-        .contains(&terminal_id));
-    assert_eq!(
-        server
-            .app
-            .terminal_runtimes
-            .get(&terminal_id)
-            .expect("runtime")
-            .current_size(),
-        (30, 100)
-    );
-
-    assert!(server.focus_shell_client_on_tab(1, &second_tab_id));
-    assert!(server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 2 }));
-    assert!(!server
-        .app
-        .state
-        .direct_attach_resize_locks
-        .contains(&terminal_id));
-    assert_eq!(
-        server
-            .app
-            .terminal_runtimes
-            .get(&terminal_id)
-            .expect("runtime")
-            .current_size(),
-        expected_shell_size
-    );
-
-    drop(server);
-    drop(_runtime_guard);
-    rt.shutdown_timeout(Duration::from_millis(100));
-}
-
-#[test]
-fn terminal_observe_allows_multiple_clients_without_attach_ownership() {
-    with_terminal_session_test_server(|server, terminal_id, terminal_id_string, _| {
-        let initial_size = server
-            .app
-            .terminal_runtimes
-            .get(&terminal_id)
-            .expect("runtime")
-            .current_size();
-
-        for client_id in [7, 8] {
-            connect_pending_terminal_client(server, client_id);
-            assert!(
-                server.handle_server_event(ServerEvent::ClientObserveTerminal {
-                    client_id,
-                    target: terminal_id_string.clone(),
-                })
-            );
-        }
-
-        assert!(server.terminal_attach_owners.is_empty());
-        assert!(!server
-            .app
-            .state
-            .direct_attach_resize_locks
-            .contains(&terminal_id));
-        assert_eq!(
-            server
-                .app
-                .terminal_runtimes
-                .get(&terminal_id)
-                .expect("runtime")
-                .current_size(),
-            initial_size
-        );
-        assert_eq!(
-            terminal_stream_client_ids(&server.clients, &terminal_id_string).len(),
-            2
-        );
-    });
-}
-
-#[test]
-fn direct_terminal_observer_keeps_hidden_pty_source_renderable_with_client_shell() {
-    let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("test");
-    let background_tab = workspace.test_add_tab(Some("background"));
-    let background_pane = workspace.tabs[background_tab].root_pane;
-    let hidden_pane = workspace.tabs[0].root_pane;
-    let terminal_id = workspace
-        .terminal_id(background_pane)
-        .expect("background terminal id")
-        .to_string();
-    server.app.state.workspaces = vec![workspace];
-    server.app.state.active = Some(0);
-    server.app.state.selected = 0;
-    server.app.state.ensure_test_terminals();
-
-    let (shell_writer, _shell_control_rx, _shell_render_rx) = test_client_writer();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            shell_writer,
-        ),
-    );
-    assert!(!server.pty_sources_visible_to_any_render_target(&HashSet::from([background_pane])));
-
-    let (observer_writer, _observer_control_rx, _observer_render_rx) = test_client_writer();
-    server.clients.insert(
-        2,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::TerminalObserve { terminal_id },
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            observer_writer,
-        ),
-    );
-
-    assert!(server.pty_sources_visible_to_any_render_target(&HashSet::from([background_pane])));
-    server.sync_immediate_pty_sources();
-    assert!(server.app.render_dirty.request_pty(background_pane));
-    assert!(server.has_pending_presentation_work(false));
-    assert!(server.app.render_dirty.request_pty(hidden_pane));
-}
-
-#[test]
-fn terminal_observe_resolves_public_pane_id() {
-    with_terminal_session_test_server(|server, terminal_id, _, public_pane_id| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientObserveTerminal {
-                client_id: 7,
-                target: public_pane_id,
-            })
-        );
-
-        assert!(matches!(
-            server.clients.get(&7).map(|client| &client.mode),
-            Some(ClientConnectionMode::TerminalObserve { terminal_id: observed })
-                if observed == &terminal_id.to_string()
-        ));
-    });
-}
-
-#[test]
-fn terminal_control_resolves_public_pane_id_and_takes_ownership() {
-    with_terminal_session_test_server(|server, terminal_id, terminal_id_string, public_pane_id| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 7,
-                target: public_pane_id,
-                takeover: false,
-            })
-        );
-
-        assert!(matches!(
-            server.clients.get(&7).map(|client| &client.mode),
-            Some(ClientConnectionMode::TerminalAttach { terminal_id: attached })
-                if attached == &terminal_id_string
-        ));
-        assert_eq!(
-            server.terminal_attach_owners.get(&terminal_id_string),
-            Some(&7)
-        );
-        assert!(server
-            .app
-            .state
-            .direct_attach_resize_locks
-            .contains(&terminal_id));
-    });
-}
-
-#[test]
-fn terminal_control_rejects_attach_during_alt_screen_read() {
-    with_terminal_session_test_server(|server, terminal_id, terminal_id_string, _| {
-        let (respond_to, _response_rx) = std::sync::mpsc::channel();
-        server.pending_alt_screen_reads.push(
-            crate::server::alt_screen_read::PendingAltScreenRead::start(
-                terminal_id,
-                "read".into(),
-                respond_to,
-                "fallback".into(),
-                api::schema::PaneReadResult {
-                    pane_id: "w1:p1".into(),
-                    workspace_id: "w1".into(),
-                    tab_id: "w1:t1".into(),
-                    source: api::schema::ReadSource::Recent,
-                    format: api::schema::ReadFormat::Text,
-                    text: String::new(),
-                    revision: 0,
-                    truncated: false,
-                    viewport_rows: None,
-                    viewport_columns: None,
-                    requested_lines: Some(120),
-                    returned_lines: 0,
-                    available_lines: None,
-                    exhausted: None,
-                },
-                120,
-                false,
-                crate::terminal::ScreenSnapshot {
-                    cols: 80,
-                    rows: Vec::new(),
-                },
-                0,
-                Instant::now(),
-            ),
-        );
-        let control_rx = connect_pending_terminal_client_with_control_rx(server, 7);
-
-        assert!(
-            !server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
-        assert!(!server.clients.contains_key(&7));
-        assert!(!server
-            .terminal_attach_owners
-            .contains_key(&terminal_id_string));
-        let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
-        assert_eq!(
-                reason,
-                Some(format!(
-                    "terminal attach failed: terminal {terminal_id_string} has a read in progress; retry"
-                ))
-            );
-    });
-}
-
-#[test]
-fn terminal_control_rejects_second_controller_without_takeover() {
-    with_terminal_session_test_server(|server, _terminal_id, terminal_id_string, _| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
-
-        connect_pending_terminal_client(server, 8);
-        assert!(
-            !server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 8,
-                target: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
-
-        assert!(server.clients.contains_key(&7));
-        assert!(!server.clients.contains_key(&8));
-        assert_eq!(
-            server.terminal_attach_owners.get(&terminal_id_string),
-            Some(&7)
-        );
-    });
-}
-
-#[test]
-fn terminal_control_takeover_replaces_existing_controller() {
-    with_terminal_session_test_server(|server, _terminal_id, terminal_id_string, _| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
-
-        connect_pending_terminal_client(server, 8);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 8,
-                target: terminal_id_string.clone(),
-                takeover: true,
-            })
-        );
-
-        assert!(!server.clients.contains_key(&7));
-        assert!(server.clients.contains_key(&8));
-        assert_eq!(
-            server.terminal_attach_owners.get(&terminal_id_string),
-            Some(&8)
-        );
-    });
-}
-
-#[test]
-fn terminal_observe_can_coexist_with_terminal_control() {
-    with_terminal_session_test_server(|server, _terminal_id, terminal_id_string, _| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
-
-        connect_pending_terminal_client(server, 8);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientObserveTerminal {
-                client_id: 8,
-                target: terminal_id_string.clone(),
-            })
-        );
-
-        assert_eq!(
-            server.terminal_attach_owners.get(&terminal_id_string),
-            Some(&7)
-        );
-        assert!(matches!(
-            server.clients.get(&8).map(|client| &client.mode),
-            Some(ClientConnectionMode::TerminalObserve { terminal_id })
-                if terminal_id == &terminal_id_string
-        ));
-        assert_eq!(
-            terminal_stream_client_ids(&server.clients, &terminal_id_string).len(),
-            2
-        );
-    });
-}
-
-#[test]
-fn terminal_control_detach_sends_shutdown_before_removal() {
-    with_terminal_session_test_server(|server, _terminal_id, terminal_id_string, _| {
-        let control_rx = connect_pending_terminal_client_with_control_rx(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientControlTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
-
-        assert!(server.handle_server_event(ServerEvent::ClientDetach { client_id: 7 }));
-
-        assert!(!server.clients.contains_key(&7));
-        assert!(!server
-            .terminal_attach_owners
-            .contains_key(&terminal_id_string));
-        let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
-        assert_eq!(reason, Some("detached".to_owned()));
-    });
-}
-
-#[test]
-fn terminal_observe_rejects_later_attach_upgrade() {
-    with_terminal_session_test_server(|server, terminal_id, terminal_id_string, _| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientObserveTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-            })
-        );
-        assert!(
-            !server.handle_server_event(ServerEvent::ClientAttachTerminal {
-                client_id: 7,
-                terminal_id: terminal_id_string,
-                takeover: true,
-            })
-        );
-
-        assert!(!server.clients.contains_key(&7));
-        assert!(server.terminal_attach_owners.is_empty());
-        assert!(!server
-            .app
-            .state
-            .direct_attach_resize_locks
-            .contains(&terminal_id));
-    });
-}
-
-#[test]
-fn terminal_attach_rejects_later_observe_and_clears_ownership() {
-    with_terminal_session_test_server(|server, terminal_id, terminal_id_string, _| {
-        connect_pending_terminal_client(server, 7);
-        assert!(
-            server.handle_server_event(ServerEvent::ClientAttachTerminal {
-                client_id: 7,
-                terminal_id: terminal_id_string.clone(),
-                takeover: false,
-            })
-        );
-        assert_eq!(
-            server.terminal_attach_owners.get(&terminal_id_string),
-            Some(&7)
-        );
-        assert!(server
-            .app
-            .state
-            .direct_attach_resize_locks
-            .contains(&terminal_id));
-
-        assert!(
-            !server.handle_server_event(ServerEvent::ClientObserveTerminal {
-                client_id: 7,
-                target: terminal_id_string.clone(),
-            })
-        );
-
-        assert!(!server.clients.contains_key(&7));
-        assert!(server.terminal_attach_owners.is_empty());
-        assert!(!server
-            .app
-            .state
-            .direct_attach_resize_locks
-            .contains(&terminal_id));
-    });
 }
 
 #[tokio::test]
@@ -3004,49 +2446,6 @@ async fn pane_death_reapplies_controller_geometry() {
         grown.0 as usize
     );
     shutdown_test_runtimes(&mut server);
-}
-
-#[test]
-fn terminal_attach_scroll_moves_attached_runtime_viewport() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
-    let _runtime_guard = rt.enter();
-    let mut bytes = Vec::new();
-    for line in 0..80 {
-        bytes.extend_from_slice(format!("line {line:02}\r\n").as_bytes());
-    }
-    let runtime = crate::terminal::TerminalRuntime::test_with_scrollback_bytes(20, 5, 4096, &bytes);
-
-    apply_terminal_attach_scroll(
-        &runtime,
-        AttachScrollSource::Wheel,
-        AttachScrollDirection::Up,
-        3,
-        None,
-        None,
-        0,
-    )
-    .expect("scroll up");
-    let metrics = runtime.scroll_metrics().expect("scroll metrics");
-    assert_eq!(metrics.offset_from_bottom, 3);
-
-    apply_terminal_attach_scroll(
-        &runtime,
-        AttachScrollSource::Wheel,
-        AttachScrollDirection::Down,
-        2,
-        None,
-        None,
-        0,
-    )
-    .expect("scroll down");
-    let metrics = runtime.scroll_metrics().expect("scroll metrics");
-    assert_eq!(metrics.offset_from_bottom, 1);
-    drop(runtime);
-    drop(_runtime_guard);
-    rt.shutdown_timeout(Duration::from_millis(100));
 }
 
 #[test]
@@ -3280,50 +2679,7 @@ fn client_pane_wheel_input_accumulates_scrollback_offset() {
     rt.shutdown_timeout(Duration::from_millis(100));
 }
 
-#[test]
-fn terminal_attach_input_resets_scrolled_viewport() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
-    let _runtime_guard = rt.enter();
-    let mut bytes = Vec::new();
-    for line in 0..80 {
-        bytes.extend_from_slice(format!("line {line:02}\r\n").as_bytes());
-    }
-    let (runtime, mut input_rx) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-            20, 5, 4096, &bytes, 4,
-        );
-
-    runtime.scroll_up(4);
-    assert_eq!(
-        runtime
-            .scroll_metrics()
-            .expect("scroll metrics")
-            .offset_from_bottom,
-        4
-    );
-
-    apply_terminal_attach_input(&runtime, b"x".to_vec()).expect("attach input");
-    assert_eq!(
-        runtime
-            .scroll_metrics()
-            .expect("scroll metrics")
-            .offset_from_bottom,
-        0
-    );
-    assert_eq!(
-        input_rx.try_recv().expect("forwarded input"),
-        Bytes::from("x")
-    );
-
-    drop(runtime);
-    drop(_runtime_guard);
-    rt.shutdown_timeout(Duration::from_millis(100));
-}
-
-fn with_terminal_attach_runtime(
+fn with_client_pane_runtime(
     initial_bytes: &[u8],
     initial_scroll: usize,
     test: impl FnOnce(&crate::terminal::TerminalRuntime, &mut mpsc::Receiver<Bytes>),
@@ -3352,21 +2708,6 @@ fn with_terminal_attach_runtime(
     rt.shutdown_timeout(Duration::from_millis(100));
 }
 
-fn apply_terminal_attach_page_up(runtime: &crate::terminal::TerminalRuntime) {
-    apply_terminal_attach_scroll(
-        runtime,
-        AttachScrollSource::PageKey {
-            input: b"\x1b[5~".to_vec(),
-        },
-        AttachScrollDirection::Up,
-        4,
-        None,
-        None,
-        0,
-    )
-    .expect("page key");
-}
-
 fn client_page_key(
     code: crate::protocol::ClientKeyCode,
     modifiers: crossterm::event::KeyModifiers,
@@ -3387,7 +2728,7 @@ fn client_page_key(
 
 #[test]
 fn client_plain_page_keys_scroll_shell_transcript_by_pane_height() {
-    with_terminal_attach_runtime(b"", 0, |runtime, input_rx| {
+    with_client_pane_runtime(b"", 0, |runtime, input_rx| {
         apply_client_pane_input_events(
             runtime,
             &[client_page_key(
@@ -3444,7 +2785,7 @@ fn client_plain_page_keys_scroll_shell_transcript_by_pane_height() {
 
 #[test]
 fn client_page_keys_forward_when_modified_or_owned_by_application() {
-    with_terminal_attach_runtime(b"", 0, |runtime, input_rx| {
+    with_client_pane_runtime(b"", 0, |runtime, input_rx| {
         apply_client_pane_input_events(
             runtime,
             &[client_page_key(
@@ -3467,7 +2808,7 @@ fn client_page_keys_forward_when_modified_or_owned_by_application() {
         );
     });
 
-    with_terminal_attach_runtime(b"\x1b[?1h", 0, |runtime, input_rx| {
+    with_client_pane_runtime(b"\x1b[?1h", 0, |runtime, input_rx| {
         apply_client_pane_input_events(
             runtime,
             &[client_page_key(
@@ -3487,129 +2828,6 @@ fn client_page_keys_forward_when_modified_or_owned_by_application() {
                 .expect("scroll metrics")
                 .offset_from_bottom,
             0
-        );
-    });
-}
-
-#[test]
-fn terminal_attach_paste_uses_plain_text_when_runtime_did_not_enable_brackets() {
-    with_terminal_attach_runtime(b"", 0, |runtime, input_rx| {
-        apply_terminal_attach_input(runtime, b"\x1b[200~line one\nline two\x1b[201~".to_vec())
-            .expect("attach paste");
-
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded paste"),
-            Bytes::from_static(if cfg!(windows) {
-                b"line one\r\nline two"
-            } else {
-                b"line one\nline two"
-            })
-        );
-    });
-}
-
-#[test]
-fn terminal_attach_paste_preserves_brackets_when_runtime_enabled_them() {
-    with_terminal_attach_runtime(b"\x1b[?2004h", 0, |runtime, input_rx| {
-        apply_terminal_attach_input(runtime, b"\x1b[200~line one\nline two\x1b[201~".to_vec())
-            .expect("attach paste");
-
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded paste"),
-            Bytes::from_static(if cfg!(windows) {
-                b"\x1b[200~line one\r\nline two\x1b[201~"
-            } else {
-                b"\x1b[200~line one\nline two\x1b[201~"
-            })
-        );
-    });
-}
-
-#[test]
-fn terminal_attach_page_key_host_scrolls_plain_terminal() {
-    with_terminal_attach_runtime(b"", 0, |runtime, input_rx| {
-        apply_terminal_attach_page_up(runtime);
-
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            4
-        );
-        assert!(input_rx.try_recv().is_err());
-    });
-}
-
-#[test]
-fn terminal_attach_page_key_forwards_when_mouse_reporting() {
-    with_terminal_attach_runtime(b"\x1b[?1000h", 3, |runtime, input_rx| {
-        apply_terminal_attach_page_up(runtime);
-
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded page key"),
-            Bytes::from_static(b"\x1b[5~")
-        );
-    });
-}
-
-#[test]
-fn terminal_attach_page_key_forwards_when_application_cursor() {
-    with_terminal_attach_runtime(b"\x1b[?1h", 3, |runtime, input_rx| {
-        apply_terminal_attach_page_up(runtime);
-
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded page key"),
-            Bytes::from_static(b"\x1b[5~")
-        );
-    });
-}
-
-#[test]
-fn terminal_attach_page_key_host_scrolls_shell_like_decckm_with_bracketed_paste() {
-    with_terminal_attach_runtime(b"\x1b[?1h\x1b[?2004h", 0, |runtime, input_rx| {
-        apply_terminal_attach_page_up(runtime);
-
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            4
-        );
-        assert!(input_rx.try_recv().is_err());
-    });
-}
-
-#[test]
-fn terminal_attach_page_key_forwards_in_alternate_screen_without_mouse_reporting() {
-    with_terminal_attach_runtime(b"\x1b[?1049h", 3, |runtime, input_rx| {
-        apply_terminal_attach_page_up(runtime);
-
-        assert_eq!(
-            runtime
-                .scroll_metrics()
-                .expect("scroll metrics")
-                .offset_from_bottom,
-            0
-        );
-        assert_eq!(
-            input_rx.try_recv().expect("forwarded page key"),
-            Bytes::from_static(b"\x1b[5~")
         );
     });
 }
@@ -3750,112 +2968,8 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
 }
 
 #[test]
-fn terminal_attach_resize_uses_known_cell_geometry_without_pixel_mouse() {
-    with_terminal_session_test_server(|server, _other_terminal_id, terminal_id, _pane_id| {
-        let mut client = ClientConnection::new(
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::SemanticFrame,
-            unread_test_writer(),
-        );
-        client.mode = ClientConnectionMode::TerminalAttach {
-            terminal_id: terminal_id.clone(),
-        };
-        server.clients.insert(1, client);
-
-        assert!(server.handle_server_event(ServerEvent::ClientResize {
-            client_id: 1,
-            cols: 100,
-            rows: 30,
-            cell_width_px: 8,
-            cell_height_px: 16,
-            pixel_mouse: false,
-        }));
-        assert_eq!(
-            server
-                .runtime_for_terminal_id_string(&terminal_id)
-                .unwrap()
-                .pixel_size(),
-            Some((800, 480))
-        );
-        assert_eq!(
-            server.clients[&1].cell_size,
-            crate::kitty_graphics::HostCellSize {
-                width_px: 8,
-                height_px: 16,
-            }
-        );
-        assert!(!server.clients[&1].pixel_mouse);
-
-        assert!(server.handle_server_event(ServerEvent::ClientResize {
-            client_id: 1,
-            cols: 100,
-            rows: 30,
-            cell_width_px: 0,
-            cell_height_px: 0,
-            pixel_mouse: false,
-        }));
-        assert_eq!(
-            server
-                .runtime_for_terminal_id_string(&terminal_id)
-                .unwrap()
-                .pixel_size(),
-            None
-        );
-        assert_eq!(
-            server.clients[&1].cell_size,
-            crate::kitty_graphics::HostCellSize::default()
-        );
-        assert!(!server.clients[&1].pixel_mouse);
-    });
-}
-
-#[test]
-fn pending_terminal_resize_does_not_take_shell_foreground_or_geometry() {
-    let mut server = test_headless_server();
-    server.clients.insert(
-        1,
-        ClientConnection::new(
-            (100, 30),
-            crate::kitty_graphics::HostCellSize::default(),
-            2,
-            RenderEncoding::SemanticFrame,
-            unread_test_writer(),
-        ),
-    );
-    server.clients.insert(
-        2,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::TerminalPending,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            1,
-            RenderEncoding::TerminalAnsi,
-            unread_test_writer(),
-        ),
-    );
-    server.foreground_client_id = Some(1);
-    server.sync_foreground_client_state();
-    let shell_size = server.effective_size;
-
-    assert!(server.handle_server_event(ServerEvent::ClientResize {
-        client_id: 2,
-        cols: 200,
-        rows: 60,
-        cell_width_px: 10,
-        cell_height_px: 20,
-        pixel_mouse: false,
-    }));
-
-    assert_eq!(server.foreground_client_id, Some(1));
-    assert_eq!(server.effective_size, shell_size);
-    assert_eq!(server.clients[&2].terminal_size, (200, 60));
-}
-
-#[test]
 fn client_shell_streams_focused_pane_report_all_demand() {
-    with_terminal_session_test_server(|server, _other_terminal_id, terminal_id, _pane_id| {
+    with_terminal_session_test_server(|server, terminal_id, _terminal_id_string, _pane_id| {
         let (client_tx, client_control_rx, _client_rx) = test_client_writer();
         server.clients.insert(
             1,
@@ -3869,7 +2983,9 @@ fn client_shell_streams_focused_pane_report_all_demand() {
         );
         server.app.state.active = Some(0);
         server
-            .runtime_for_terminal_id_string(&terminal_id)
+            .app
+            .terminal_runtimes
+            .get(&terminal_id)
             .expect("focused runtime")
             .test_process_pty_bytes(b"\x1b[>15u");
 
@@ -4093,318 +3209,6 @@ fn client_shell_focus_promotes_and_reaches_reporting_pane() {
 }
 
 #[test]
-fn direct_terminal_streams_child_keyboard_and_mouse_modes() {
-    with_terminal_session_test_server(|server, _other_terminal_id, terminal_id, _pane_id| {
-        let (client_tx, client_control_rx, _client_rx) = test_client_writer();
-        server.clients.insert(
-            1,
-            ClientConnection::new_with_mode(
-                ClientConnectionMode::TerminalAttach {
-                    terminal_id: terminal_id.clone(),
-                },
-                (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
-                1,
-                RenderEncoding::TerminalAnsi,
-                client_tx,
-            ),
-        );
-        server
-            .clients
-            .get_mut(&1)
-            .expect("direct attach client")
-            .pixel_mouse = true;
-        server
-            .runtime_for_terminal_id_string(&terminal_id)
-            .expect("attached runtime")
-            .test_process_pty_bytes(b"\x1b[>15u\x1b[?1000h");
-
-        server.stream_direct_terminal_keyboard_mode();
-        assert!(matches!(
-            read_server_message(
-                client_control_rx
-                    .recv_timeout(Duration::from_millis(100))
-                    .expect("keyboard mode message")
-            ),
-            ServerMessage::DirectTerminalKeyboardProtocol {
-                flags: 15,
-                modify_other_keys_level: 0
-            }
-        ));
-
-        server
-            .runtime_for_terminal_id_string(&terminal_id)
-            .expect("attached runtime")
-            .test_process_pty_bytes(b"\x1b[<u\x1b[>3u\x1b[>4;1m");
-        server.stream_direct_terminal_keyboard_mode();
-        assert!(matches!(
-            read_server_message(
-                client_control_rx
-                    .recv_timeout(Duration::from_millis(100))
-                    .expect("modifyOtherKeys mode-one keyboard message")
-            ),
-            ServerMessage::DirectTerminalKeyboardProtocol {
-                flags: 3,
-                modify_other_keys_level: 1
-            }
-        ));
-
-        server
-            .runtime_for_terminal_id_string(&terminal_id)
-            .expect("attached runtime")
-            .test_process_pty_bytes(b"\x1b[>4;2m");
-        server.stream_direct_terminal_keyboard_mode();
-        assert!(matches!(
-            read_server_message(
-                client_control_rx
-                    .recv_timeout(Duration::from_millis(100))
-                    .expect("modifyOtherKeys mode-two keyboard message")
-            ),
-            ServerMessage::DirectTerminalKeyboardProtocol {
-                flags: 3,
-                modify_other_keys_level: 2
-            }
-        ));
-
-        server
-            .runtime_for_terminal_id_string(&terminal_id)
-            .expect("attached runtime")
-            .test_process_pty_bytes(b"\x1b[<u");
-        server.stream_direct_terminal_keyboard_mode();
-        assert!(matches!(
-            read_server_message(
-                client_control_rx
-                    .recv_timeout(Duration::from_millis(100))
-                    .expect("modifyOtherKeys-only keyboard mode message")
-            ),
-            ServerMessage::DirectTerminalKeyboardProtocol {
-                flags: 0,
-                modify_other_keys_level: 2
-            }
-        ));
-
-        server.stream_host_mouse_capture_mode();
-        assert!(matches!(
-            read_server_message(
-                client_control_rx
-                    .recv_timeout(Duration::from_millis(100))
-                    .expect("mouse capture message")
-            ),
-            ServerMessage::MouseCapture {
-                enabled: true,
-                sgr_pixels: false
-            }
-        ));
-
-        server
-            .runtime_for_terminal_id_string(&terminal_id)
-            .expect("attached runtime")
-            .test_process_pty_bytes(b"\x1b[?1016h");
-        server.stream_host_mouse_capture_mode();
-        assert!(matches!(
-            read_server_message(
-                client_control_rx
-                    .recv_timeout(Duration::from_millis(100))
-                    .expect("pixel mouse capture message")
-            ),
-            ServerMessage::MouseCapture {
-                enabled: true,
-                sgr_pixels: true
-            }
-        ));
-
-        server
-            .runtime_for_terminal_id_string(&terminal_id)
-            .expect("attached runtime")
-            .test_process_pty_bytes(b"\x1b[?1000l\x1b[?1016l");
-        server.stream_host_mouse_capture_mode();
-        assert!(matches!(
-            read_server_message(
-                client_control_rx
-                    .recv_timeout(Duration::from_millis(100))
-                    .expect("child mouse disable message")
-            ),
-            ServerMessage::MouseCapture {
-                enabled: false,
-                sgr_pixels: false
-            }
-        ));
-    });
-}
-
-#[test]
-fn direct_terminal_mouse_uses_runtime_protocol_encoding() {
-    with_terminal_session_test_server(|server, runtime_terminal_id, terminal_id, _pane_id| {
-        let (runtime, mut input_rx) =
-            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-                80,
-                24,
-                0,
-                b"\x1b[?1000h\x1b[?1006h",
-                4,
-            );
-        server
-            .app
-            .terminal_runtimes
-            .insert(runtime_terminal_id, runtime);
-        server.clients.insert(
-            1,
-            ClientConnection::new_with_mode(
-                ClientConnectionMode::TerminalAttach {
-                    terminal_id: terminal_id.clone(),
-                },
-                (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
-                1,
-                RenderEncoding::TerminalAnsi,
-                unread_test_writer(),
-            ),
-        );
-
-        assert!(server.handle_server_event(ServerEvent::ClientAttachMouse {
-            client_id: 1,
-            kind: protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
-            position: protocol::ClientMousePosition::Cell { column: 10, row: 5 },
-            geometry: None,
-            modifiers: 0,
-            lines: 1,
-        }));
-        assert_eq!(
-            input_rx.try_recv().expect("encoded direct mouse input"),
-            Bytes::from_static(b"\x1b[<0;11;6M")
-        );
-    });
-}
-
-#[test]
-fn direct_terminal_pixel_mouse_uses_runtime_tracking_and_coordinates() {
-    with_terminal_session_test_server(|server, runtime_terminal_id, terminal_id, _pane_id| {
-        let (runtime, mut input_rx) =
-            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
-                80,
-                24,
-                0,
-                b"\x1b[?1000h\x1b[?1006h\x1b[?1016h",
-                4,
-            );
-        runtime.resize(24, 80, 10, 20);
-        server
-            .app
-            .terminal_runtimes
-            .insert(runtime_terminal_id, runtime);
-        server.clients.insert(
-            1,
-            ClientConnection::new_with_mode(
-                ClientConnectionMode::TerminalAttach {
-                    terminal_id: terminal_id.clone(),
-                },
-                (80, 24),
-                crate::kitty_graphics::HostCellSize {
-                    width_px: 10,
-                    height_px: 20,
-                },
-                1,
-                RenderEncoding::TerminalAnsi,
-                unread_test_writer(),
-            ),
-        );
-        let client = server.clients.get_mut(&1).expect("direct attach client");
-        client.pixel_mouse = true;
-        client.host_sgr_pixels_active = Some(true);
-
-        assert!(!server.handle_server_event(ServerEvent::ClientAttachMouse {
-            client_id: 1,
-            kind: protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
-            position: protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 3,
-                row: 1,
-            },
-            geometry: Some(protocol::ClientMouseGeometry {
-                cols: 80,
-                rows: 24,
-                width_px: 800,
-                height_px: 480,
-            }),
-            modifiers: 0,
-            lines: 1,
-        }));
-        assert!(input_rx.try_recv().is_err());
-
-        assert!(server.handle_server_event(ServerEvent::ClientAttachMouse {
-            client_id: 1,
-            kind: protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
-            position: protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 2,
-                row: 1,
-            },
-            geometry: Some(protocol::ClientMouseGeometry {
-                cols: 80,
-                rows: 24,
-                width_px: 805,
-                height_px: 485,
-            }),
-            modifiers: 0,
-            lines: 1,
-        }));
-        assert_eq!(
-            input_rx
-                .try_recv()
-                .expect("proportionally mapped direct pixel mouse input"),
-            Bytes::from_static(b"\x1b[<0;21;22M")
-        );
-
-        assert!(server.handle_server_event(ServerEvent::ClientAttachMouse {
-            client_id: 1,
-            kind: protocol::ClientMouseKind::Moved,
-            position: protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 2,
-                row: 1,
-            },
-            geometry: Some(protocol::ClientMouseGeometry {
-                cols: 80,
-                rows: 24,
-                width_px: 800,
-                height_px: 480,
-            }),
-            modifiers: 0,
-            lines: 1,
-        }));
-        assert!(input_rx.try_recv().is_err());
-
-        assert!(server.handle_server_event(ServerEvent::ClientAttachMouse {
-            client_id: 1,
-            kind: protocol::ClientMouseKind::Down(protocol::ClientMouseButton::Left),
-            position: protocol::ClientMousePosition::Pixels {
-                x: 21,
-                y: 22,
-                column: 2,
-                row: 1,
-            },
-            geometry: Some(protocol::ClientMouseGeometry {
-                cols: 80,
-                rows: 24,
-                width_px: 800,
-                height_px: 480,
-            }),
-            modifiers: 0,
-            lines: 1,
-        }));
-        assert_eq!(
-            input_rx
-                .try_recv()
-                .expect("encoded direct pixel mouse input"),
-            Bytes::from_static(b"\x1b[<0;21;22M")
-        );
-    });
-}
-
-#[test]
 fn client_config_reload_request_refreshes_attached_clients() {
     let mut server = test_headless_server();
     let (client_tx, client_control_rx, _client_rx) = test_client_writer();
@@ -4589,16 +3393,14 @@ fn clipboard_write_failed_foreground_send_removes_client_without_visual_change()
 }
 
 #[test]
-fn semantic_notifications_broadcast_only_to_client_shells() {
+fn semantic_notifications_broadcast_to_all_client_shells() {
     let mut server = test_headless_server();
     let (shell_one_tx, shell_one_control, _shell_one_frames) = test_client_writer();
     let (shell_two_tx, shell_two_control, _shell_two_frames) = test_client_writer();
-    let (terminal_tx, terminal_control, _terminal_frames) = test_client_writer();
     for (client_id, writer) in [(1, shell_one_tx), (2, shell_two_tx)] {
         server.clients.insert(
             client_id,
-            ClientConnection::new_with_mode(
-                ClientConnectionMode::ClientShell,
+            ClientConnection::new(
                 (80, 24),
                 crate::kitty_graphics::HostCellSize::default(),
                 client_id,
@@ -4607,17 +3409,6 @@ fn semantic_notifications_broadcast_only_to_client_shells() {
             ),
         );
     }
-    server.clients.insert(
-        3,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::TerminalPending,
-            (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
-            3,
-            RenderEncoding::TerminalAnsi,
-            terminal_tx,
-        ),
-    );
     let event = protocol::SemanticNotification {
         kind: protocol::SemanticNotificationKind::Custom,
         title: "hello".into(),
@@ -4640,9 +3431,6 @@ fn semantic_notifications_broadcast_only_to_client_shells() {
             ServerMessage::SemanticNotification(event.clone())
         );
     }
-    assert!(terminal_control
-        .recv_timeout(Duration::from_millis(50))
-        .is_err());
 }
 
 #[test]
@@ -4652,8 +3440,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
     let (shell_tx, shell_control, _shell_frames) = test_client_writer();
     server.clients.insert(
         1,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
+        ClientConnection::new(
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
@@ -4805,8 +3592,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     let (shell_writer, shell_control_rx, _shell_render_rx) = test_client_writer();
     server.clients.insert(
         3,
-        ClientConnection::new_with_mode(
-            ClientConnectionMode::ClientShell,
+        ClientConnection::new(
             (100, 30),
             crate::kitty_graphics::HostCellSize::default(),
             3,
