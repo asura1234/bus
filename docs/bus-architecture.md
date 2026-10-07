@@ -22,7 +22,7 @@ acceptance tests.
 - `flake.nix`, `flake.lock`: Nix flake (must stay at the root)
 - `justfile`: lint, test, coverage, build and e2e recipes
 - `run`: repo launcher, `./run dev` (build and start) and `./run dev-control` (control commands, no rebuild)
-- `README.md`, `LICENSE`, `assets/` (logo, screenshots, `sounds/` with the built-in dings)
+- `README.md`, `LICENSE`, `assets/` (`logo.svg`, `sounds/` with the built-in dings)
 - `docs/`: user and agent documentation
   - `bus-architecture.md`: this document
   - `how-to-bus-cli.md`, `orchestrator-guide.md`, `orchestrator-rules.md`: CLI and orchestrator docs, also embedded in the binary
