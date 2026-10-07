@@ -30,6 +30,100 @@ fn codex_composer_is_empty(screen: &str) -> bool {
         )
 }
 
+/// Whether Claude Code's input box (the `❯` line between the two rules at the
+/// bottom of its screen, plus any wrapped lines down to the closing rule)
+/// holds no typed text. Typing into a box the Human already wrote in would
+/// merge both into one prompt Bus cannot match, or be swallowed, so a Bus
+/// delivery waits instead. Claude's dimmed prompt suggestion and the inverse
+/// cursor cell are not typed text. No visible box counts as not empty.
+fn claude_input_is_empty(screen_ansi: &str) -> bool {
+    let lines: Vec<Vec<(char, bool)>> = screen_ansi.lines().map(styled_chars).collect();
+    let plain = |line: &[(char, bool)]| line.iter().map(|(c, _)| *c).collect::<String>();
+    let is_rule = |line: &[(char, bool)]| plain(line).trim().starts_with('─');
+    let Some(start) = (1..lines.len()).rev().find(|&index| {
+        is_rule(&lines[index - 1]) && plain(&lines[index]).trim_start().starts_with('❯')
+    }) else {
+        return false;
+    };
+    let mut body = lines[start..].iter().take_while(|line| !is_rule(line));
+    let first = body
+        .next()
+        .into_iter()
+        .flat_map(|line| line.iter().skip_while(|(c, _)| *c != '❯').skip(1));
+    first
+        .chain(body.flatten())
+        .all(|(c, faint)| *faint || c.is_whitespace())
+}
+
+/// Each visible character of an ANSI screen line, with whether it is drawn
+/// dimmed or inverse.
+fn styled_chars(line: &str) -> Vec<(char, bool)> {
+    let mut out = Vec::new();
+    let (mut dim, mut inverse) = (false, false);
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push((c, dim || inverse));
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                let mut params = String::new();
+                let mut last = None;
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        last = Some(c);
+                        break;
+                    }
+                    params.push(c);
+                }
+                if last == Some('m') {
+                    apply_sgr(&params, &mut dim, &mut inverse);
+                }
+            }
+            // OSC (hyperlinks): skip to BEL or ST.
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn apply_sgr(params: &str, dim: &mut bool, inverse: &mut bool) {
+    let params: Vec<&str> = params.split(';').collect();
+    let mut index = 0;
+    while index < params.len() {
+        match params[index] {
+            "" | "0" => (*dim, *inverse) = (false, false),
+            "2" => *dim = true,
+            "22" => *dim = false,
+            "7" => *inverse = true,
+            "27" => *inverse = false,
+            // Extended colors carry their own numbers (38;2;R;G;B or 38;5;N),
+            // which must not read as dim or inverse.
+            "38" | "48" | "58" => {
+                index += match params.get(index + 1) {
+                    Some(&"5") => 2,
+                    Some(&"2") => 4,
+                    _ => 0,
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+}
+
 fn check_unbound_prompt_identity_and_idle(
     agent: &crate::api::schema::AgentInfo,
     params: &crate::api::schema::AgentPromptIfUnboundParams,
@@ -268,6 +362,23 @@ impl App {
                     id,
                     "agent_not_ready",
                     "Codex composer is not empty; prompt was not sent",
+                ));
+            }
+        }
+        if agent.agent.as_deref() == Some("claude") {
+            let resolved = self
+                .resolve_agent_target(&params.target)
+                .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
+            let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)
+            else {
+                return Err(agent_not_found(id, &params.target));
+            };
+            // A rejection keeps the Bus message queued for a later attempt.
+            if !claude_input_is_empty(&runtime.visible_ansi()) {
+                return Err(encode_error(
+                    id,
+                    "agent_not_ready",
+                    "Claude input box is not empty; prompt was not sent",
                 ));
             }
         }
@@ -768,6 +879,134 @@ mod tests {
             "history\n› check the logs\n  hello?\n  gpt-5.6-sol",
         ] {
             assert!(!codex_composer_is_empty(screen), "{screen}");
+        }
+    }
+
+    #[test]
+    fn claude_input_check_ignores_suggestions_and_finds_typed_text() {
+        let rule = "─".repeat(20);
+        let screen = |input: &str| format!("● done\n\n{rule}\n{input}\n{rule}\n  ⏵⏵ auto mode on");
+        for empty in [
+            screen("❯\u{a0}"),
+            // Claude's dimmed prompt suggestion, as captured from a live pane.
+            screen("❯\u{a0}\x1b[0m\x1b[2madd the just linux-lint recipe\x1b[0m"),
+            // The cursor cell drawn inverse over the suggestion's first letter.
+            screen("❯ \x1b[7ma\x1b[0m\x1b[2mdd the recipe\x1b[0m"),
+            // An earlier prompt in the history above the box is not the box.
+            format!("❯ ok is it merged?\n\n{rule}\n❯\u{a0}\n{rule}"),
+        ] {
+            assert!(claude_input_is_empty(&empty), "{empty:?}");
+        }
+        for typed in [
+            screen("❯\u{a0}master is where I coordinate"),
+            // A 24-bit color's "2" is not dim.
+            screen("❯ \x1b[38;2;200;200;200mtyped\x1b[0m"),
+            // A wrapped second line holds the typed text.
+            format!("{rule}\n❯\u{a0}\n  second line\n{rule}"),
+            // No visible input box: Bus cannot tell, so it waits.
+            "● working".to_owned(),
+        ] {
+            assert!(!claude_input_is_empty(&typed), "{typed:?}");
+        }
+    }
+
+    /// A ready, idle Claude agent whose screen ends with `input` in its box.
+    fn claude_agent_with_input(
+        input: &str,
+    ) -> (
+        App,
+        crate::api::schema::AgentPromptIfIdleParams,
+        tokio::sync::mpsc::Receiver<Bytes>,
+    ) {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        let now = std::time::Instant::now();
+        terminal.begin_managed_agent(
+            "bus-r1-a2".into(),
+            Agent::Claude,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(10),
+        );
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
+        terminal.set_agent_session_ref_for_session_start(
+            "bus".into(),
+            "claude".into(),
+            crate::agent_resume::AgentSessionRef::id("session"),
+            Some(1),
+            None,
+        );
+        let (runtime, writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 0, b"", 2,
+            );
+        let rule = "─".repeat(40);
+        runtime.test_process_pty_bytes(
+            format!(
+                "\x1b[?2004h\x1b[2J\x1b[H\x1b[2m{rule}\x1b[0m\r\n{input}\r\n\x1b[2m{rule}\x1b[0m"
+            )
+            .as_bytes(),
+        );
+        app.state.insert_test_runtime(pane_id, runtime);
+        let info = app.agent_info(0, pane_id).unwrap();
+        let params = crate::api::schema::AgentPromptIfIdleParams {
+            target: info.pane_id.clone(),
+            text: "from bus".into(),
+            expected_terminal_id: info.terminal_id,
+            expected_pane_id: info.pane_id,
+            expected_agent: "claude".into(),
+            expected_session_id: "session".into(),
+            steer: false,
+        };
+        (app, params, writes)
+    }
+
+    fn prompt_if_idle(
+        app: &mut App,
+        params: crate::api::schema::AgentPromptIfIdleParams,
+    ) -> String {
+        use crate::api::schema::{Method, Request};
+        let (respond_to, response) = std::sync::mpsc::channel();
+        assert!(app.handle_deferred_agent_api_request(
+            Request {
+                id: "claude-guard".into(),
+                method: Method::AgentPromptIfIdle(params),
+            },
+            respond_to,
+        ));
+        response.recv_timeout(Duration::from_secs(2)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn guarded_claude_prompt_waits_while_the_input_box_holds_typed_text() {
+        let (mut app, params, mut writes) =
+            claude_agent_with_input("❯\u{a0}master is where I coordinate");
+        let response = prompt_if_idle(&mut app, params);
+        // agent_not_ready is a definite rejection: the Bus message stays queued.
+        assert!(response.contains("agent_not_ready"), "{response}");
+        assert!(response.contains("input box is not empty"), "{response}");
+        assert!(writes.try_recv().is_err(), "nothing may be typed");
+    }
+
+    #[tokio::test]
+    async fn guarded_claude_prompt_types_into_an_empty_input_box() {
+        for input in [
+            "❯\u{a0}",
+            "❯\u{a0}\x1b[2madd the just linux-lint recipe\x1b[0m",
+        ] {
+            let (mut app, params, mut writes) = claude_agent_with_input(input);
+            let response = prompt_if_idle(&mut app, params);
+            assert!(response.contains("agent_prompted"), "{input:?}: {response}");
+            assert_eq!(
+                writes.try_recv().unwrap(),
+                Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
+            );
+            assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\r"));
         }
     }
 
