@@ -20,7 +20,7 @@ enum WriterCommand {
 }
 
 /// The UI only enqueues complete frames. A worker owns partial writes, cancellation, and the
-/// bridge lifetime, so neither socket backpressure nor bridge teardown can block other endpoints.
+/// bridge lifetime, so neither socket backpressure nor bridge teardown can block the UI.
 pub(crate) struct NativeEndpointTransport {
     sender: mpsc::SyncSender<WriterCommand>,
     queued_bytes: Arc<AtomicUsize>,
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_exit_flushes_queued_input_and_a_complete_detach() {
+    fn connection_exit_flushes_queued_input_and_a_complete_detach() {
         let (stream, mut peer, path) = streams();
         let transport = NativeEndpointTransport::with_lifetime(stream, ()).unwrap();
         let (done, received) = mpsc::channel();
@@ -251,19 +251,12 @@ mod tests {
             })();
             done.send(result).unwrap();
         });
-        let mut registry = super::super::EndpointRegistry::new(
-            transport,
-            1,
-            super::super::EndpointNegotiation::default(),
-        );
+        let mut connection = super::super::ServerConnection::new(transport);
         let input = ClientMessage::Input {
             data: b"queued input".to_vec(),
         };
-        assert_eq!(
-            registry.send(&input),
-            super::super::EndpointSendOutcome::Sent
-        );
-        drop(registry);
+        connection.send(&input).unwrap();
+        drop(connection);
         let (first, second) = received
             .recv_timeout(Duration::from_secs(3))
             .unwrap()
@@ -291,7 +284,7 @@ mod tests {
         };
         transport.send(&input).unwrap();
         transport.send(&ClientMessage::Detach).unwrap();
-        // Large-frame correctness must not depend on the registry's short exit grace period.
+        // Large-frame correctness must not depend on the connection's short exit grace period.
         transport
             .flush(Instant::now() + Duration::from_secs(10))
             .unwrap();

@@ -1,40 +1,36 @@
 use super::*;
 
 #[test]
-fn unavailable_endpoint_method_is_disabled_without_disconnect() {
+fn endpoint_method_before_the_first_snapshot_is_a_deduplicated_notice() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    state.set_endpoint_methods(Some(vec!["pane.focus".into()]));
     let mut outcome = ClientShellInput::default();
 
     state.push_endpoint_method(
         crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
-            workspace_id: "missing".into(),
+            workspace_id: "work".into(),
         }),
         &mut outcome,
     );
 
     assert!(outcome.actions.is_empty());
     assert!(outcome.repaint);
+    assert!(state.pending_requests.is_empty());
     let notice = state
         .visible_endpoint_notice
         .as_ref()
-        .expect("unsupported action notice");
-    assert_eq!(notice.key.kind, ClientEndpointNoticeKind::Unsupported);
-    assert_eq!(notice.key.code, "workspace.focus");
-    assert!(notice.body.contains("This server"));
+        .expect("not ready notice");
+    assert_eq!(notice.key.kind, ClientEndpointNoticeKind::Unavailable);
+    assert_eq!(notice.body, "Server is not ready");
     assert!(state.endpoint_error.is_none());
+    assert!(!state.receive_endpoint_unavailable("Server is not ready".into()));
+}
 
-    let mut repeated = ClientShellInput::default();
-    state.push_endpoint_method(
-        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
-            workspace_id: "missing".into(),
-        }),
-        &mut repeated,
-    );
-    assert!(repeated.actions.is_empty());
-    assert!(!repeated.repaint);
+#[test]
+fn endpoint_notice_is_dismissable_without_disconnect() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    assert!(state.receive_endpoint_unavailable("Server is busy".into()));
 
     state.compose(106, 20).expect("endpoint notice frame");
     assert!(!state.hits.notification_toast.is_empty());
@@ -151,23 +147,14 @@ fn endpoint_timeout_is_a_deduplicated_server_notice() {
 fn endpoint_notice_dedupe_resets_for_a_new_server_boot() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
-    state.set_endpoint_methods(Some(Vec::new()));
-    let method = || {
-        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
-            workspace_id: "work".into(),
-        })
-    };
-    let mut first = ClientShellInput::default();
-    state.push_endpoint_method(method(), &mut first);
-    assert!(first.repaint);
+    assert!(state.receive_endpoint_unavailable("Server is busy".into()));
+    assert!(!state.receive_endpoint_unavailable("Server is busy".into()));
 
     let mut next_snapshot = snapshot();
     next_snapshot.boot_id = "boot-2".into();
     state.set_snapshot(Box::new(next_snapshot));
-    let mut second = ClientShellInput::default();
-    state.push_endpoint_method(method(), &mut second);
 
-    assert!(second.repaint);
+    assert!(state.receive_endpoint_unavailable("Server is busy".into()));
     assert_eq!(
         state
             .visible_endpoint_notice

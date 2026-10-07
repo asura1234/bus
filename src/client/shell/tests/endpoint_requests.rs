@@ -1,5 +1,4 @@
 use super::*;
-use crate::client::endpoint::ClientEndpointId;
 
 fn request_id(actions: &[ClientShellAction]) -> &str {
     let [ClientShellAction::Endpoint { request, .. }] = actions else {
@@ -33,42 +32,69 @@ impl crate::client::endpoint::EndpointTransport for TestTransport {
     }
 }
 
+fn enqueue(
+    commands: &mut crate::client::endpoint_commands::EndpointCommands,
+    actions: Vec<ClientShellAction>,
+) {
+    for action in actions {
+        let ClientShellAction::Endpoint { boot_id, request } = action else {
+            panic!("expected endpoint request");
+        };
+        commands.enqueue(boot_id, request);
+    }
+}
+
 #[test]
-fn stale_queued_request_is_cancelled_without_blocking_the_current_generation() {
-    use crate::client::endpoint::{EndpointNegotiation, EndpointRegistry};
+fn queued_requests_run_one_at_a_time_in_order() {
+    use crate::client::endpoint::ServerConnection;
     use crate::client::endpoint_commands::EndpointCommands;
 
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
-    let actions = focus_workspace(&mut state);
-    let stale_id = request_id(&actions).to_owned();
-    let current = focus_workspace(&mut state);
-    let current_id = request_id(&current).to_owned();
+    let first = focus_workspace(&mut state);
+    let first_id = request_id(&first).to_owned();
+    let second = focus_workspace(&mut state);
     let mut commands = EndpointCommands::default();
-    for (generation, actions) in [(1, actions), (2, current)] {
-        for action in actions {
-            let ClientShellAction::Endpoint {
-                endpoint_id,
-                boot_id,
-                request,
-            } = action
-            else {
-                panic!("expected endpoint request");
-            };
-            commands.enqueue(endpoint_id, generation, boot_id, request);
-        }
+    enqueue(&mut commands, first);
+    enqueue(&mut commands, second);
+    let mut connection = ServerConnection::new(TestTransport { fail: false });
+
+    assert!(commands.send_next(&mut connection).is_empty());
+    assert!(commands.send_next(&mut connection).is_empty());
+    let response = serde_json::to_vec(&crate::api::schema::SuccessResponse {
+        id: first_id.clone(),
+        result: crate::api::schema::ResponseResult::Ok {},
+    })
+    .unwrap();
+    let completed = commands
+        .receive_chunk("boot-1", &first_id, true, response)
+        .expect("first request completes");
+    assert_eq!(completed.request_id, first_id);
+}
+
+#[test]
+fn a_failed_send_cancels_the_queued_requests() {
+    use crate::client::endpoint::ServerConnection;
+    use crate::client::endpoint_commands::EndpointCommands;
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let first = focus_workspace(&mut state);
+    let first_id = request_id(&first).to_owned();
+    let second = focus_workspace(&mut state);
+    let second_id = request_id(&second).to_owned();
+    let mut commands = EndpointCommands::default();
+    enqueue(&mut commands, first);
+    enqueue(&mut commands, second);
+    let mut connection = ServerConnection::new(TestTransport { fail: true });
+
+    let cancelled = commands.send_next(&mut connection);
+    assert_eq!(cancelled, vec![first_id.clone(), second_id.clone()]);
+    assert!(connection.take_failure().is_some());
+    for request_id in cancelled {
+        assert!(state.cancel_endpoint_request(&request_id));
     }
-    let mut endpoints = EndpointRegistry::new(
-        TestTransport { fail: false },
-        2,
-        EndpointNegotiation::default(),
-    );
-    let cancelled = commands.send_next(&ClientEndpointId::Local, &mut endpoints);
-    assert_eq!(cancelled, vec![stale_id.clone()]);
-    state.cancel_endpoint_request(&stale_id);
-    assert!(!commands.accepts_response(&ClientEndpointId::Local, 1, "boot-1", &stale_id));
-    assert!(commands.accepts_response(&ClientEndpointId::Local, 2, "boot-1", &current_id));
-    assert!(state.pending_requests.contains_key(&current_id));
+    assert!(state.pending_requests.is_empty());
 }
 
 #[test]

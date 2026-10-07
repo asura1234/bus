@@ -139,26 +139,11 @@ impl ClientShellState {
         kind: PendingEndpointKind,
         outcome: &mut ClientShellInput,
     ) -> bool {
-        if !self.endpoint_is_online(&self.active_endpoint_id) {
-            let label = self.active_endpoint_label().to_owned();
-            outcome.repaint |= self.receive_endpoint_unavailable(format!("{label} is not ready"));
-            return false;
-        }
-        let method_name = crate::api::api_method_name(&method).to_owned();
-        if !self.supports_endpoint_method(&method) {
-            outcome.repaint |= self.push_endpoint_notice(
-                ClientEndpointNoticeKind::Unsupported,
-                method_name.clone(),
-                "Action unavailable",
-                format!(
-                    "This server does not support {method_name} yet. Update and restart it to enable this action."
-                ),
-            );
-            return false;
-        }
         let Some(snapshot) = self.snapshot.as_deref() else {
+            outcome.repaint |= self.receive_endpoint_unavailable("Server is not ready".into());
             return false;
         };
+        let method_name = crate::api::api_method_name(&method).to_owned();
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id.saturating_add(1);
         let request_id = format!("client-shell:{request_id}");
@@ -171,7 +156,6 @@ impl ClientShellState {
             },
         );
         outcome.actions.push(ClientShellAction::Endpoint {
-            endpoint_id: self.active_endpoint_id.clone(),
             boot_id: snapshot.boot_id.clone(),
             request: Box::new(crate::api::schema::Request {
                 id: request_id,
