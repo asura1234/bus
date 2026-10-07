@@ -4,20 +4,15 @@ use super::*;
 use crate::bus::settings::{self, BusSettings, SoundPref};
 
 impl Worker {
-    /// At launch, MASTER takes the global sound. The first launch after an
-    /// upgrade records this session's MASTER sound as the global one instead.
+    /// At launch, MASTER takes the global sound.
     pub(super) fn apply_global_settings(&mut self) -> Result<(), String> {
         let Some(path) = self.settings_path.clone() else {
             return Ok(());
         };
-        let Some(master) = self.state.master_room() else {
+        let Some(id) = self.state.master_room().map(|master| master.id) else {
             return Ok(());
         };
-        let (id, current) = (master.id, room_sound(master));
-        let saved = settings::update(&path, |settings| {
-            settings.master_sound.get_or_insert(current);
-        })?;
-        let pref = saved.master_sound.unwrap_or_default();
+        let pref = settings::load(&path).unwrap_or_default().master_sound;
         let mut state = self.state.clone();
         state
             .set_room_sound(id, pref.enabled)
@@ -49,7 +44,7 @@ impl Worker {
             return Ok(());
         }
         let pref = room_sound(master);
-        settings::update(path, |settings| settings.master_sound = Some(pref)).map(|_| ())
+        settings::update(path, |settings| settings.master_sound = pref).map(|_| ())
     }
 
     /// Changes the global new-room sound and tells the UI.

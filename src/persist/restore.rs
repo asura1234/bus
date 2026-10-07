@@ -923,9 +923,6 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
-            sidebar_width: None,
-            sidebar_section_split: None,
-            collapsed_space_keys: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1015,9 +1012,6 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
-            sidebar_width: None,
-            sidebar_section_split: None,
-            collapsed_space_keys: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1121,9 +1115,6 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
-            sidebar_width: None,
-            sidebar_section_split: None,
-            collapsed_space_keys: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1230,9 +1221,6 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
-            sidebar_width: None,
-            sidebar_section_split: None,
-            collapsed_space_keys: Default::default(),
         };
         let (events, _event_rx) = mpsc::channel(4);
 
@@ -1398,9 +1386,6 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
-            sidebar_width: Some(26),
-            sidebar_section_split: Some(0.5),
-            collapsed_space_keys: Default::default(),
         };
         (snapshot, history)
     }

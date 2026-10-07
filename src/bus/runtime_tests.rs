@@ -1989,91 +1989,6 @@ fn reopen_saved(dir: &std::path::Path) -> Worker {
     .unwrap()
 }
 
-fn orchestrator_era_document() -> serde_json::Value {
-    serde_json::from_str(include_str!("testdata/legacy_orchestrator_state.json")).unwrap()
-}
-
-#[test]
-fn orchestrator_era_session_opens_with_master_and_reopens_unchanged() {
-    let (worker, dir) = open_saved_document(orchestrator_era_document());
-    let master = worker.state.master_room().expect("MASTER added").id;
-    let legacy = worker
-        .state
-        .rooms()
-        .find(|room| room.name == "legacy")
-        .expect("legacy room kept");
-    assert_eq!(legacy.kind, RoomKind::Work);
-    assert!(!legacy.sound_enabled());
-    assert!(worker.state.room(master).unwrap().sound_enabled());
-    assert_eq!(worker.state.requests().count(), 3);
-    // Every open re-observes agents as unavailable (bumping status revisions);
-    // everything else must survive a second open unchanged.
-    let durable = |state: &BusState| {
-        (
-            state.rooms().cloned().collect::<Vec<_>>(),
-            state.requests().cloned().collect::<Vec<_>>(),
-            state
-                .agents()
-                .map(|agent| {
-                    (
-                        agent.id,
-                        agent.room_id,
-                        agent.name.clone(),
-                        agent.orchestrates,
-                    )
-                })
-                .collect::<Vec<_>>(),
-        )
-    };
-    let first = durable(&worker.state);
-    drop(worker);
-
-    let reopened = reopen_saved(&dir);
-    assert_eq!(durable(&reopened.state), first);
-    drop(reopened);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn orchestrator_era_work_room_named_master_keeps_its_data_beside_the_new_master() {
-    let mut document = orchestrator_era_document();
-    document["state"]["rooms"]["1"]["name"] = json!("MASTER");
-    document["state"]["rooms"]["1"]["notes"] = json!("legacy notes");
-    let (mut worker, dir) = open_saved_document(document);
-    let master = worker.state.master_room().expect("MASTER added").id;
-    assert_ne!(master, RoomId(1));
-    let legacy = worker.state.room(RoomId(1)).expect("legacy room kept");
-    assert_eq!(legacy.kind, RoomKind::Work);
-    // Renamed once so MASTER keeps a unique name; everything else is kept.
-    assert_eq!(legacy.name, "Master (old)");
-    // The fixture room's legacy brief is folded in after its own notes.
-    assert_eq!(
-        legacy.notes,
-        "legacy notes\n\nGoal: goal\nNon-goals: non-goals"
-    );
-    // The name selector reaches the real MASTER; the legacy room stays reachable by id.
-    worker.dev_enabled = true;
-    let sound = |worker: &mut Worker, room: &str, on: bool| {
-        worker
-            .dev_response_with_events(
-                &crate::bus::control::Request {
-                    id: format!("sound-{room}-{on}-{}", io::now_ns()),
-                    method: "room.sound".into(),
-                    params: json!({"room": room, "on": on}),
-                },
-                None,
-            )
-            .ok
-    };
-    assert!(sound(&mut worker, "MASTER", false));
-    assert_eq!(worker.state.room(master).unwrap().sound, Some(false));
-    assert_eq!(worker.state.room(RoomId(1)).unwrap().sound, None);
-    assert!(sound(&mut worker, "1", true));
-    assert_eq!(worker.state.room(RoomId(1)).unwrap().sound, Some(true));
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
 #[test]
 fn master_session_saved_before_sound_and_compactions_keeps_its_orchestrators() {
     let mut state = BusState::new();
@@ -2111,20 +2026,6 @@ fn master_session_saved_before_sound_and_compactions_keeps_its_orchestrators() {
     let agent = worker.state.agent(orchestrator).unwrap();
     assert_eq!(agent.orchestrates, Some(work));
     assert_eq!(agent.compactions.count, 0);
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn retired_approve_once_fingerprints_still_load_as_spent_dialog_fingerprints() {
-    let fingerprint = "v1.eyJhIjoxfQ.0000";
-    let mut document = orchestrator_era_document();
-    document["state"]["consumed_permission_fingerprints"] = json!([fingerprint]);
-    document["state"]["orchestrator"]["operations"] = json!({
-        "1": {"operation_id": 1, "kind": "approve_permission_once", "intent_digest": "other"}
-    });
-    let (worker, dir) = open_saved_document(document);
-    assert!(worker.state.dialog_fingerprint_consumed(fingerprint));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

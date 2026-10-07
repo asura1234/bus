@@ -20,12 +20,6 @@ pub struct SessionSnapshot {
     pub workspaces: Vec<WorkspaceSnapshot>,
     pub active: Option<usize>,
     pub selected: usize,
-    #[serde(default)]
-    pub sidebar_width: Option<u16>,
-    #[serde(default)]
-    pub sidebar_section_split: Option<f32>,
-    #[serde(default)]
-    pub collapsed_space_keys: std::collections::HashSet<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -64,19 +58,6 @@ pub struct WorkspaceSnapshot {
     pub tabs: Vec<TabSnapshot>,
     #[serde(default)]
     pub active_tab: usize,
-}
-
-#[derive(Deserialize)]
-struct LegacyWorkspaceSnapshot {
-    #[serde(default)]
-    custom_name: Option<String>,
-    layout: LayoutSnapshot,
-    panes: HashMap<u32, PaneSnapshot>,
-    zoomed: bool,
-    #[serde(default)]
-    focused: Option<u32>,
-    #[serde(default)]
-    root_pane: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -139,112 +120,6 @@ pub enum DirectionSnapshot {
     Vertical,
 }
 
-impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
-    fn from(snap: LegacyWorkspaceSnapshot) -> Self {
-        let identity_cwd = legacy_identity_cwd(&snap);
-        let tab = TabSnapshot {
-            custom_name: None,
-            layout: snap.layout,
-            panes: snap.panes,
-            zoomed: snap.zoomed,
-            focused: snap.focused,
-            root_pane: snap.root_pane,
-        };
-
-        Self {
-            id: None,
-            custom_name: snap.custom_name,
-            identity_cwd,
-            public_pane_numbers: HashMap::new(),
-            next_public_pane_number: 0,
-            public_tab_numbers: Vec::new(),
-            next_public_tab_number: 0,
-            tabs: vec![tab],
-            active_tab: 0,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct RawSessionSnapshot {
-    #[serde(default)]
-    version: u32,
-    #[serde(default)]
-    workspaces: Vec<serde_json::Value>,
-    #[serde(default)]
-    active: Option<usize>,
-    #[serde(default)]
-    selected: usize,
-    #[serde(default)]
-    sidebar_width: Option<u16>,
-    #[serde(default)]
-    sidebar_section_split: Option<f32>,
-    #[serde(default)]
-    collapsed_space_keys: std::collections::HashSet<String>,
-}
-
-fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> {
-    Ok(SessionSnapshot {
-        version: raw.version,
-        workspaces: raw
-            .workspaces
-            .into_iter()
-            .map(migrate_workspace)
-            .collect::<Result<Vec<_>, _>>()?,
-        active: raw.active,
-        selected: raw.selected,
-        sidebar_width: raw.sidebar_width,
-        sidebar_section_split: raw.sidebar_section_split,
-        collapsed_space_keys: raw.collapsed_space_keys,
-    })
-}
-
-fn migrate_workspace(raw: serde_json::Value) -> Result<WorkspaceSnapshot, String> {
-    if raw.get("identity_cwd").is_some() {
-        return serde_json::from_value(raw).map_err(|e| e.to_string());
-    }
-
-    if raw.get("layout").is_some() {
-        let legacy =
-            serde_json::from_value::<LegacyWorkspaceSnapshot>(raw).map_err(|e| e.to_string())?;
-        return Ok(legacy.into());
-    }
-
-    Err("workspace snapshot is neither current nor legacy format".to_string())
-}
-
-fn legacy_identity_cwd(snap: &LegacyWorkspaceSnapshot) -> PathBuf {
-    let root_pane = snap
-        .root_pane
-        .or_else(|| first_pane_id_in_layout(&snap.layout));
-
-    root_pane
-        .and_then(|pane_id| snap.panes.get(&pane_id))
-        .map(|pane| pane.cwd.clone())
-        .or_else(|| {
-            first_pane_id_in_layout(&snap.layout)
-                .and_then(|pane_id| snap.panes.get(&pane_id))
-                .map(|pane| pane.cwd.clone())
-        })
-        .or_else(|| {
-            snap.panes
-                .keys()
-                .min()
-                .and_then(|pane_id| snap.panes.get(pane_id))
-                .map(|pane| pane.cwd.clone())
-        })
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()))
-}
-
-fn first_pane_id_in_layout(layout: &LayoutSnapshot) -> Option<u32> {
-    match layout {
-        LayoutSnapshot::Pane(id) => Some(*id),
-        LayoutSnapshot::Split { first, second, .. } => {
-            first_pane_id_in_layout(first).or_else(|| first_pane_id_in_layout(second))
-        }
-    }
-}
-
 /// Capture the current app state into a serializable snapshot.
 pub fn capture(
     workspaces: &[Workspace],
@@ -264,9 +139,6 @@ pub fn capture(
             .collect(),
         active,
         selected,
-        sidebar_width: None,
-        sidebar_section_split: None,
-        collapsed_space_keys: std::collections::HashSet::new(),
     }
 }
 
@@ -438,14 +310,14 @@ pub(super) fn capture_node(node: &Node) -> LayoutSnapshot {
 }
 
 pub(super) fn parse_snapshot(content: &str) -> Result<SessionSnapshot, String> {
-    let raw = serde_json::from_str::<RawSessionSnapshot>(content).map_err(|e| e.to_string())?;
-    if raw.version > SNAPSHOT_VERSION {
+    let snapshot = serde_json::from_str::<SessionSnapshot>(content).map_err(|e| e.to_string())?;
+    if snapshot.version > SNAPSHOT_VERSION {
         return Err(format!(
             "snapshot version {} is newer than supported {}",
-            raw.version, SNAPSHOT_VERSION
+            snapshot.version, SNAPSHOT_VERSION
         ));
     }
-    migrate_snapshot(raw)
+    Ok(snapshot)
 }
 
 pub(super) fn parse_history_snapshot(content: &str) -> Result<SessionHistorySnapshot, String> {
@@ -461,9 +333,14 @@ pub(super) fn parse_history_snapshot(content: &str) -> Result<SessionHistorySnap
 }
 
 pub(super) fn snapshot_file_version(content: &str) -> Option<u32> {
-    serde_json::from_str::<RawSessionSnapshot>(content)
+    #[derive(Deserialize)]
+    struct Version {
+        #[serde(default)]
+        version: u32,
+    }
+    serde_json::from_str::<Version>(content)
         .ok()
-        .map(|raw| raw.version)
+        .map(|file| file.version)
 }
 
 #[cfg(test)]
@@ -485,9 +362,6 @@ mod tests {
             }
             "current-herdr-dev" => {
                 include_str!("../../tests/fixtures/session/current-herdr-dev-session.json")
-            }
-            "legacy-pre-tabs-v2" => {
-                include_str!("../../tests/fixtures/session/legacy-pre-tabs-v2.json")
             }
             other => panic!("unknown session fixture: {other}"),
         }
@@ -589,16 +463,11 @@ mod tests {
             workspaces: vec![],
             active: None,
             selected: 0,
-            sidebar_width: Some(26),
-            sidebar_section_split: Some(0.5),
-            collapsed_space_keys: std::collections::HashSet::new(),
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored = parse_snapshot(&json).unwrap();
         assert!(restored.workspaces.is_empty());
         assert_eq!(restored.active, None);
-        assert_eq!(restored.sidebar_width, Some(26));
-        assert_eq!(restored.sidebar_section_split, Some(0.5));
     }
 
     #[test]
@@ -675,9 +544,6 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
-            sidebar_width: Some(26),
-            sidebar_section_split: Some(0.5),
-            collapsed_space_keys: std::collections::HashSet::new(),
             version: SNAPSHOT_VERSION,
         };
 
@@ -700,8 +566,6 @@ mod tests {
             restored.workspaces[0].tabs[0].panes[&1].label.as_deref(),
             Some("website")
         );
-        assert_eq!(restored.sidebar_width, Some(26));
-        assert_eq!(restored.sidebar_section_split, Some(0.5));
     }
 
     #[test]
@@ -712,8 +576,6 @@ mod tests {
         assert_eq!(snap.workspaces.len(), 2);
         assert_eq!(snap.active, Some(0));
         assert_eq!(snap.selected, 0);
-        assert_eq!(snap.sidebar_width, None);
-        assert_eq!(snap.sidebar_section_split, None);
         assert_eq!(snap.workspaces[0].tabs.len(), 2);
         assert_eq!(
             snap.workspaces[1].identity_cwd,
@@ -727,25 +589,8 @@ mod tests {
 
         assert_eq!(snap.version, 3);
         assert_eq!(snap.workspaces.len(), 2);
-        assert_eq!(snap.sidebar_section_split, Some(0.4));
         assert_eq!(snap.workspaces[0].active_tab, 1);
         assert_eq!(snap.workspaces[1].tabs[0].panes.len(), 2);
-    }
-
-    #[test]
-    fn old_snapshot_defaults_sidebar_fields() {
-        let json = serde_json::json!({
-            "version": SNAPSHOT_VERSION,
-            "workspaces": [],
-            "active": null,
-            "selected": 0
-        })
-        .to_string();
-
-        let restored = parse_snapshot(&json).unwrap();
-
-        assert_eq!(restored.sidebar_width, None);
-        assert_eq!(restored.sidebar_section_split, None);
     }
 
     #[test]
@@ -782,23 +627,6 @@ mod tests {
         let encoded = serde_json::to_string(&restored).unwrap();
         assert!(!encoded.contains("legacy-secret"));
         assert!(!encoded.contains("\"history\""));
-    }
-
-    #[test]
-    fn legacy_workspace_snapshot_migrates_to_single_tab() {
-        let snap = parse_snapshot(session_fixture("legacy-pre-tabs-v2")).unwrap();
-        let ws = &snap.workspaces[0];
-
-        assert_eq!(snap.version, 2);
-        assert_eq!(snap.workspaces.len(), 1);
-        assert_eq!(ws.custom_name.as_deref(), Some("legacy"));
-        assert_eq!(ws.identity_cwd, PathBuf::from("/tmp/pion"));
-        assert_eq!(ws.active_tab, 0);
-        assert_eq!(ws.tabs.len(), 1);
-        assert_eq!(ws.tabs[0].focused, Some(1));
-        assert_eq!(ws.tabs[0].root_pane, Some(0));
-        assert_eq!(ws.tabs[0].panes[&0].cwd, PathBuf::from("/tmp/pion"));
-        assert_eq!(ws.tabs[0].panes[&1].cwd, PathBuf::from("/tmp/herdr"));
     }
 
     #[test]
@@ -850,16 +678,6 @@ mod tests {
         assert_eq!(snapshot.workspaces[0].custom_name.as_deref(), Some("one"));
         assert_eq!(snapshot.active, Some(0));
         assert_eq!(snapshot.selected, 0);
-    }
-
-    #[test]
-    fn capture_contract_omits_legacy_server_chrome_state() {
-        let state = state_with_workspaces(&["one"]);
-
-        let snapshot = capture_from_state(&state);
-        assert_eq!(snapshot.sidebar_width, None);
-        assert_eq!(snapshot.sidebar_section_split, None);
-        assert!(snapshot.collapsed_space_keys.is_empty());
     }
 
     #[test]
@@ -1207,9 +1025,6 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
-            sidebar_width: Some(26),
-            sidebar_section_split: Some(0.5),
-            collapsed_space_keys: std::collections::HashSet::new(),
         };
 
         let json = serde_json::to_string(&snap).unwrap();

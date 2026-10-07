@@ -126,9 +126,9 @@ fn master_and_new_room_sounds_carry_into_every_later_session() {
 }
 
 #[test]
-fn the_first_launch_keeps_its_master_sound_and_resumed_sessions_follow_it() {
-    let root = root("seed");
-    // A session saved before global settings, whose MASTER plays Blow.
+fn resumed_sessions_follow_the_global_master_sound() {
+    let root = root("resume");
+    // A session whose own MASTER plays Blow.
     {
         let mut old = Worker::open(root.join("old"), Box::new(NoTerminals)).unwrap();
         let mut state = old.state.clone();
@@ -137,40 +137,20 @@ fn the_first_launch_keeps_its_master_sound_and_resumed_sessions_follow_it() {
             .unwrap();
         old.save(state).unwrap();
     }
-    // A settings file from before sound settings.
+    // Settings without a MASTER sound: MASTER rings with Bus's ding.
     std::fs::write(root.join("settings.json"), br#"{"color_blind_mode":true}"#).unwrap();
-    let other = session(&root, "other");
-    assert_eq!(sound(&other, master(&other)), (true, None));
-    let saved = crate::bus::settings::load(&root.join("settings.json")).unwrap();
-    assert!(saved.color_blind_mode, "seeding keeps the other settings");
-    assert_eq!(
-        saved.master_sound,
-        Some(crate::bus::settings::SoundPref {
-            enabled: true,
-            name: None
-        })
-    );
-    // Resuming the old session now follows the global MASTER sound.
     let old = session(&root, "old");
     assert_eq!(sound(&old, master(&old)), (true, None));
-    drop((other, old));
-    std::fs::remove_dir_all(root).unwrap();
-
-    // When the old session is the first to launch, its Blow becomes global.
-    let root = self::root("seed-first");
-    {
-        let mut old = Worker::open(root.join("old"), Box::new(NoTerminals)).unwrap();
-        let mut state = old.state.clone();
-        state
-            .set_room_sound_name(master(&old), Some("Blow".into()))
-            .unwrap();
-        old.save(state).unwrap();
-    }
-    let old = session(&root, "old");
-    assert_eq!(sound(&old, master(&old)), (true, Some("Blow".into())));
-    let fresh = session(&root, "fresh");
-    assert_eq!(sound(&fresh, master(&fresh)), (true, Some("Blow".into())));
-    drop((old, fresh));
+    let saved = crate::bus::settings::load(&root.join("settings.json")).unwrap();
+    assert!(saved.color_blind_mode, "launching keeps the other settings");
+    assert_eq!(
+        saved.master_sound,
+        crate::bus::settings::SoundPref {
+            enabled: true,
+            name: None
+        }
+    );
+    drop(old);
     std::fs::remove_dir_all(root).unwrap();
 }
 

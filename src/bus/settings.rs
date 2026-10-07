@@ -9,15 +9,27 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
-    /// None until a Bus first launches with this field: that launch keeps its
-    /// session's MASTER sound and records it here.
-    pub(crate) master_sound: Option<SoundPref>,
+    /// MASTER's sound in every session; it rings by default.
+    pub(crate) master_sound: SoundPref,
     /// What each new work room starts with.
     pub(crate) room_sound: SoundPref,
+}
+
+impl Default for BusSettings {
+    fn default() -> Self {
+        Self {
+            color_blind_mode: false,
+            master_sound: SoundPref {
+                enabled: true,
+                name: None,
+            },
+            room_sound: SoundPref::default(),
+        }
+    }
 }
 
 /// A sound notification choice: on or off, and the system sound by name
@@ -126,12 +138,13 @@ mod tests {
         ));
         let path = root.join("settings.json");
         std::fs::create_dir_all(&root).unwrap();
-        // A file from before sound settings: MASTER is not chosen yet and new
-        // rooms start silent with Bus's ding, as they always did.
+        // Unset sounds default: MASTER rings and new rooms start silent, both
+        // with Bus's ding.
         std::fs::write(&path, br#"{"color_blind_mode":true}"#).unwrap();
         let old = load(&path).unwrap();
         assert!(old.color_blind_mode);
-        assert_eq!(old.master_sound, None);
+        assert!(old.master_sound.enabled);
+        assert_eq!(old.master_sound.name, None);
         assert_eq!(old.room_sound, SoundPref::default());
         assert!(!old.room_sound.enabled);
 
@@ -142,10 +155,10 @@ mod tests {
         let saved = update(&path, |settings| settings.room_sound = glass.clone()).unwrap();
         assert!(saved.color_blind_mode);
         let saved = update(&path, |settings| {
-            settings.master_sound = Some(SoundPref {
+            settings.master_sound = SoundPref {
                 enabled: false,
                 name: None,
-            })
+            }
         })
         .unwrap();
         assert_eq!(saved.room_sound, glass);
@@ -188,30 +201,5 @@ mod tests {
                     .join("settings.json")
             )
         );
-    }
-
-    #[test]
-    fn settings_saved_with_the_retired_orchestrator_still_load() {
-        let root = std::env::temp_dir().join(format!(
-            "bus-settings-legacy-{}-{}",
-            std::process::id(),
-            super::super::io::now_ns()
-        ));
-        let path = root.join("settings.json");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(
-            &path,
-            br#"{"color_blind_mode":true,"orchestrator":{"enabled":true,"model":"deep-seek-v41-flash","content_selector":"production","system_prompt_override":"Custom"}}"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            load(&path),
-            Ok(BusSettings {
-                color_blind_mode: true,
-                ..BusSettings::default()
-            })
-        );
-        let _ = std::fs::remove_dir_all(root);
     }
 }

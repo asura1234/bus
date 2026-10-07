@@ -117,9 +117,7 @@ impl JsonStore {
                 source,
             }
         })?;
-        let mut state = document.state;
-        state.absorb_legacy_fields();
-        Ok(Some(state))
+        Ok(Some(document.state))
     }
 
     pub(crate) fn save(&self, state: &BusState) -> Result<(), StoreError> {
@@ -335,81 +333,6 @@ mod tests {
     }
 
     #[test]
-    fn state_saved_with_the_retired_orchestrator_still_loads() {
-        use crate::bus::model::Author;
-        use crate::bus::model::{PromptId, RequestId, RoomKind};
-
-        // Written by the orchestrator-era build: orchestrator journal, grants and drafts,
-        // a locked room brief, work ids, a trusted assignment frame, and every author shape
-        // ("orchestrator", {"agent":N}, and a prompt saved before authors existed).
-        let dir = temp_dir("legacy-orchestrator");
-        let path = dir.join("state.json");
-        fs::write(
-            &path,
-            include_str!("testdata/legacy_orchestrator_state.json"),
-        )
-        .expect("fixture");
-        let store = JsonStore::new(path);
-        let state = store.load().expect("load").expect("state");
-
-        let author = |id| {
-            state
-                .request(RequestId(id))
-                .expect("request")
-                .prompt
-                .author
-                .clone()
-        };
-        assert_eq!(author(4), Author::Orchestrator);
-        assert_eq!(author(6), Author::Agent(crate::bus::model::AgentId(2)));
-        assert_eq!(author(8), Author::Human);
-        // The retired trusted assignment frame no longer wraps delivery.
-        assert_eq!(
-            state
-                .request(RequestId(4))
-                .expect("request")
-                .prompt
-                .rendered_payload(),
-            "from orchestrator"
-        );
-        assert_eq!(
-            state.request(RequestId(8)).expect("request").prompt.id,
-            PromptId(7)
-        );
-        assert_eq!(
-            state.next_queued_request(crate::bus::model::AgentId(2)),
-            Some(RequestId(4))
-        );
-
-        // The session predates MASTER: opening it adds exactly one, renumbering nothing.
-        let mut state = state;
-        let rooms_before = state.rooms().map(|room| room.id).collect::<Vec<_>>();
-        let master = state.ensure_master_room();
-        assert_eq!(state.ensure_master_room(), master);
-        assert_eq!(
-            state
-                .rooms()
-                .filter(|room| room.kind == RoomKind::Master)
-                .count(),
-            1
-        );
-        assert!(!rooms_before.contains(&master));
-        // Old rooms load silent; the migrated MASTER rings.
-        assert!(state
-            .rooms()
-            .filter(|room| room.id != master)
-            .all(|room| !room.sound_enabled()));
-        assert!(state.room(master).expect("master").sound_enabled());
-        assert!(state
-            .agents()
-            .all(|agent| agent.orchestrates.is_none() && agent.room_id != master));
-
-        store.save(&state).expect("save");
-        assert_eq!(store.load().expect("reload").expect("state"), state);
-        fs::remove_dir_all(dir).expect("cleanup");
-    }
-
-    #[test]
     fn saved_sound_orchestrator_compactions_notes_and_draft_reload() {
         use crate::bus::model::RoomKind;
 
@@ -456,67 +379,6 @@ mod tests {
                 .filter(|room| room.kind == RoomKind::Master)
                 .count(),
             1
-        );
-        fs::remove_dir_all(dir).expect("cleanup");
-    }
-
-    #[test]
-    fn retired_approve_once_ledger_still_loads() {
-        let dir = temp_dir("legacy-fingerprint");
-        let path = dir.join("state.json");
-        let mut document: serde_json::Value =
-            serde_json::from_str(include_str!("testdata/legacy_orchestrator_state.json"))
-                .expect("fixture");
-        document["state"]["orchestrator"]["operations"]["1"] = serde_json::json!({
-            "operation_id": 1,
-            "room_id": 1,
-            "actor": "human",
-            "kind": "approve_permission_once",
-            "intent_digest": "fp-already-sent",
-            "phase": "Settled",
-            "uncertainty": null,
-            "result": {"Applied": {"receipt_digest": "fp-already-sent"}}
-        });
-        fs::write(&path, serde_json::to_vec_pretty(&document).expect("encode")).expect("write");
-        let state = JsonStore::new(path).load().expect("load").expect("state");
-        // Retired approve-once fingerprints can never match a dialog fingerprint.
-        assert!(!state.dialog_fingerprint_consumed("fp-already-sent"));
-        fs::remove_dir_all(dir).expect("cleanup");
-    }
-
-    #[test]
-    fn legacy_room_brief_is_folded_into_the_room_notes_once() {
-        let dir = temp_dir("legacy-brief");
-        let path = dir.join("state.json");
-        fs::write(
-            &path,
-            include_str!("testdata/legacy_orchestrator_state.json"),
-        )
-        .expect("fixture");
-        let store = JsonStore::new(path.clone());
-        let mut state = store.load().expect("load").expect("state");
-        state.ensure_master_room();
-        store.save(&state).expect("save");
-        // The brief feature is gone; its text lives on in the room notes, once.
-        let notes = |state: &BusState| {
-            state
-                .rooms()
-                .find(|room| room.name == "legacy")
-                .expect("legacy room")
-                .notes
-                .clone()
-        };
-        let reloaded = store.load().expect("reload").expect("state");
-        assert_eq!(notes(&reloaded), "Goal: goal\nNon-goals: non-goals");
-        let saved = fs::read_to_string(&path).expect("reread");
-        assert!(
-            !saved.contains("\"brief\""),
-            "the brief itself is not saved: {saved}"
-        );
-        store.save(&reloaded).expect("save again");
-        assert_eq!(
-            notes(&store.load().expect("third load").expect("state")),
-            "Goal: goal\nNon-goals: non-goals"
         );
         fs::remove_dir_all(dir).expect("cleanup");
     }

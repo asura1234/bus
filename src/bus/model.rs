@@ -18,13 +18,11 @@ id_type!(AgentId);
 id_type!(PromptId);
 id_type!(RequestId);
 
-/// Who wrote a prompt. Saved JSON is `"human"`, `"orchestrator"` or `{"agent":N}`;
-/// `Orchestrator` survives only in sessions saved by the retired built-in orchestrator.
+/// Who wrote a prompt. Saved JSON is `"human"`, `"bus"` or `{"agent":N}`.
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Author {
     Human,
-    Orchestrator,
     Agent(AgentId),
     /// Bus itself, such as a notice that an agent waits on a dialog.
     Bus,
@@ -242,9 +240,6 @@ pub(crate) struct Room {
     /// The system sound this room rings with, by name; None is Bus's own ding.
     #[serde(default)]
     pub(crate) sound_name: Option<String>,
-    /// Read-only: the retired Room Brief, folded into `notes` on load and never saved.
-    #[serde(default, rename = "brief", skip_serializing)]
-    legacy_brief: Option<serde_json::Value>,
 }
 
 impl Room {
@@ -636,12 +631,8 @@ pub(crate) struct BusState {
     unrelated_provider_turns: BTreeSet<String>,
     visible_room: Option<RoomId>,
     /// Dialog fingerprints already spent on an answer; each is single-use.
-    /// Retired approve-once fingerprints load here too and can never match.
-    #[serde(default, alias = "consumed_permission_fingerprints")]
+    #[serde(default)]
     consumed_dialog_fingerprints: BTreeSet<String>,
-    /// Read-only: the retired orchestrator ledger, accepted on load and never saved.
-    #[serde(default, rename = "orchestrator", skip_serializing)]
-    legacy_orchestrator: Option<serde_json::Value>,
 }
 
 fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, Agent>, D::Error>
@@ -708,41 +699,6 @@ impl BusState {
             unrelated_provider_turns: BTreeSet::new(),
             visible_room: None,
             consumed_dialog_fingerprints: BTreeSet::new(),
-            legacy_orchestrator: None,
-        }
-    }
-
-    /// Carries what the orchestrator build saved forward without the retired
-    /// features: its ledger is dropped, and a Room Brief's goal and non-goals
-    /// are appended once to the room notes. Malformed legacy data is ignored
-    /// rather than failing the load.
-    pub(crate) fn absorb_legacy_fields(&mut self) {
-        self.legacy_orchestrator = None;
-        for room in self.rooms.values_mut() {
-            let Some(brief) = room.legacy_brief.take() else {
-                continue;
-            };
-            let field = |name: &str| {
-                brief
-                    .get(name)
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::trim)
-                    .filter(|text| !text.is_empty())
-                    .map(str::to_owned)
-            };
-            let text = [("Goal", field("goal")), ("Non-goals", field("non_goals"))]
-                .into_iter()
-                .filter_map(|(label, text)| text.map(|text| format!("{label}: {text}")))
-                .collect::<Vec<_>>()
-                .join("\n");
-            if text.is_empty() || room.notes.contains(&text) {
-                continue;
-            }
-            room.notes = if room.notes.trim().is_empty() {
-                text
-            } else {
-                format!("{}\n\n{text}", room.notes.trim_end())
-            };
         }
     }
 
@@ -778,7 +734,6 @@ impl BusState {
                 kind: RoomKind::Work,
                 sound: None,
                 sound_name: None,
-                legacy_brief: None,
             },
         );
         Ok(id)
@@ -826,7 +781,6 @@ impl BusState {
                         kind: RoomKind::Master,
                         sound: None,
                         sound_name: None,
-                        legacy_brief: None,
                     },
                 );
                 MASTER_ROOM_ID
@@ -2158,7 +2112,6 @@ impl BusState {
     fn sender_name(&self, author: &Author) -> String {
         match author {
             Author::Human => "the human".into(),
-            Author::Orchestrator => "the orchestrator".into(),
             Author::Bus => "Bus".into(),
             Author::Agent(id) => self
                 .agents
@@ -2472,45 +2425,6 @@ mod tests {
             .remove("sound_name");
         let loaded: BusState = serde_json::from_value(document).unwrap();
         assert_eq!(loaded.room(work).unwrap().sound_name, None);
-    }
-
-    #[test]
-    fn legacy_briefs_join_existing_notes_once_and_malformed_ledgers_are_ignored() {
-        let mut state = BusState::new();
-        let kept = state.create_room("kept").unwrap();
-        let repeated = state.create_room("repeated").unwrap();
-        let empty = state.create_room("empty").unwrap();
-        let odd = state.create_room("odd").unwrap();
-        state.set_room_notes(kept, "My notes\n").unwrap();
-        state
-            .set_room_notes(repeated, "Goal: ship\nNon-goals: none")
-            .unwrap();
-        let mut document = serde_json::to_value(&state).unwrap();
-        let brief = serde_json::json!({"goal": "ship", "non_goals": "none", "locked": true});
-        for room in [kept, repeated] {
-            document["rooms"][room.0.to_string()]["brief"] = brief.clone();
-        }
-        document["rooms"][empty.0.to_string()]["brief"] =
-            serde_json::json!({"goal": " ", "non_goals": ""});
-        document["rooms"][odd.0.to_string()]["brief"] = serde_json::json!(5);
-        document["orchestrator"] = serde_json::json!({"operations": "not a map"});
-
-        let mut loaded: BusState = serde_json::from_value(document).unwrap();
-        loaded.absorb_legacy_fields();
-
-        assert_eq!(
-            loaded.room(kept).unwrap().notes,
-            "My notes\n\nGoal: ship\nNon-goals: none"
-        );
-        assert_eq!(
-            loaded.room(repeated).unwrap().notes,
-            "Goal: ship\nNon-goals: none"
-        );
-        assert_eq!(loaded.room(empty).unwrap().notes, "");
-        assert_eq!(loaded.room(odd).unwrap().notes, "");
-        let saved = serde_json::to_value(&loaded).unwrap();
-        assert!(saved.get("orchestrator").is_none());
-        assert!(saved["rooms"][kept.0.to_string()].get("brief").is_none());
     }
 
     #[test]
