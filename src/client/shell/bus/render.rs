@@ -225,7 +225,9 @@ impl View {
         for (index, line) in lines.iter().enumerate().skip(skip).take(height) {
             let row = Rect::new(rect.x, rect.y + (index - skip) as u16, rect.width, 1);
             let text = &editor.text[line.clone()];
-            self.row(row, display(text), None, focused, false);
+            // Typed text sits on the box's own background; focus shows as the
+            // cursor, and only a selection is highlighted.
+            self.row(row, display(text), None, false, false);
             if let Some(selection) = &selection {
                 let newline = editor.text[line.end..].starts_with('\n');
                 self.select(row, text, line.start, selection, newline);

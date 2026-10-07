@@ -3374,3 +3374,55 @@ fn master_room_shows_no_notes_and_f3_never_focuses_them() {
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     assert!(ui.notes_focus, "work rooms keep their notes");
 }
+
+/// Typed text in every input sits on the box's own background: the grey
+/// highlight is for selections and selected rows only, and the cursor still
+/// shows where typing goes.
+#[test]
+fn typed_text_in_inputs_has_no_highlight_background() {
+    let highlight = ratatui::style::Color::Rgb(46, 48, 58);
+    let typed_cells = |ui: &mut BusUi, text: &str| {
+        ui.compute_view(100, 30);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+        ui.render(&mut buffer);
+        let cursor = ui
+            .view
+            .cursor
+            .as_ref()
+            .expect("the focused input shows a cursor");
+        let row: String = (0..100).map(|x| buffer[(x, cursor.y)].symbol()).collect();
+        let start = row
+            .find(text)
+            .unwrap_or_else(|| panic!("{text} not on {row:?}"));
+        let start = row[..start].chars().count() as u16;
+        (0..text.len() as u16)
+            .map(|offset| buffer[(start + offset, cursor.y)].bg)
+            .collect::<Vec<_>>()
+    };
+    let type_text = |ui: &mut BusUi, text: &str| {
+        for c in text.chars() {
+            key(ui, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+    };
+
+    let (mut ui, room, _) = fixture();
+    ui.open_room(room);
+    type_text(&mut ui, "composerdraft");
+    let cells = typed_cells(&mut ui, "composerdraft");
+    assert!(
+        cells.iter().all(|bg| *bg != highlight),
+        "composer: {cells:?}"
+    );
+
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    type_text(&mut ui, "notesline");
+    let cells = typed_cells(&mut ui, "notesline");
+    assert!(cells.iter().all(|bg| *bg != highlight), "notes: {cells:?}");
+
+    let (mut ui, room, _) = fixture();
+    ui.open_room(room);
+    ui.action(render::Action::NewAgent);
+    type_text(&mut ui, "formname");
+    let cells = typed_cells(&mut ui, "formname");
+    assert!(cells.iter().all(|bg| *bg != highlight), "form: {cells:?}");
+}
