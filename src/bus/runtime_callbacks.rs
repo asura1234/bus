@@ -1,6 +1,9 @@
 //! Durable provider callback consumption and request correlation.
 use super::*;
 
+#[path = "runtime_reports.rs"]
+mod reports;
+
 impl Worker {
     /// A native hook can bind its session before the Bus spool is consumed.
     /// During deletion, reconcile only that first launch-attested identity;
@@ -412,7 +415,16 @@ impl Worker {
                     continue;
                 }
                 let started = matches!(callback.kind, CallbackEventKind::PromptStarted);
+                let report = reports::pending_report(&state, &callback);
                 let disposition = state.accept_callback(callback);
+                if let Some(report) = report {
+                    reports::post_report(
+                        &mut state,
+                        report,
+                        &disposition,
+                        crate::bus::io::now_ms(),
+                    );
+                }
                 // A turn the agent began on its own keeps it busy even while the
                 // native status still reads idle; settling it clears that.
                 match (&disposition, started) {
