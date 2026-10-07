@@ -304,18 +304,6 @@ pub fn should_skip_state_update(agent: Option<Agent>, screen_content: &str) -> b
     agent.is_some_and(|agent| manifest::should_skip_state_update(agent, screen_content))
 }
 
-pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> bool {
-    matches!(
-        (source, agent_label),
-        ("herdr:pi", "pi")
-            | ("herdr:omp", "omp")
-            | ("herdr:mastracode", "mastracode")
-            | ("herdr:opencode", "opencode")
-            | ("herdr:kilo", "kilo")
-            | ("herdr:kimi", "kimi")
-    )
-}
-
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),
@@ -893,22 +881,12 @@ mod tests {
     }
 
     #[test]
-    fn mastracode_is_hook_authority_without_screen_manifest() {
-        assert!(full_lifecycle_hook_authority(
-            "herdr:mastracode",
-            "mastracode"
-        ));
-        assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
-    }
-
-    #[test]
     fn session_identity_integrations_leave_state_to_screen_detection() {
         for (source, label, agent) in [
             ("herdr:hermes", "hermes", Agent::Hermes),
             ("herdr:qwen", "qwen", Agent::Qwen),
             ("herdr:antigravity_cli", "agy", Agent::Antigravity),
         ] {
-            assert!(!full_lifecycle_hook_authority(source, label));
             assert!(session_identity_only_integration(source, label));
             assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&agent));
         }

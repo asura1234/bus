@@ -201,16 +201,6 @@ fn capture_tab(
             .unwrap_or_default();
         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());
         let agent_session = terminal.and_then(|terminal| {
-            if let Some(authority) = terminal.hook_authority.as_ref() {
-                if let Some(session_ref) = authority.session_ref.as_ref() {
-                    return Some(PaneAgentSessionSnapshot {
-                        source: authority.source.clone(),
-                        agent: authority.agent_label.clone(),
-                        kind: session_ref.kind,
-                        value: session_ref.value.clone(),
-                    });
-                }
-            }
             terminal
                 .persisted_agent_session
                 .as_ref()
@@ -893,14 +883,6 @@ mod tests {
             agent: "pi".into(),
             session_ref: crate::agent_resume::AgentSessionRef::path(session_path.clone()).unwrap(),
         });
-        terminal.set_hook_authority_with_session_ref(
-            "herdr:pi".into(),
-            "pi".into(),
-            crate::detect::AgentState::Working,
-            None,
-            crate::agent_resume::AgentSessionRef::path(session_path.clone()),
-            Some(20),
-        );
 
         let snapshot = capture_from_state(&state);
         let agent_session = snapshot.workspaces[0].tabs[0].panes[&root.raw()]

@@ -40,7 +40,7 @@ impl Tab {
                     state: terminal.state,
                     seen: pane.seen,
                     last_agent_state_change_seq: terminal.last_agent_state_change_seq,
-                    tokens: terminal.metadata_tokens.values(),
+                    tokens: HashMap::new(),
                 })
             })
             .collect()
