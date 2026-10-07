@@ -867,7 +867,7 @@ async fn run_client_loop(
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
                         outcome.repaint |= shell.tick_bus();
-                        shell.finish_bus_exit(&mut outcome);
+                        outcome.detach |= shell.bus_exit_ready();
                         if let Some(expired) = expired {
                             let (repaint, actions) = shell.handle_endpoint_result(
                                 &expired.boot_id,

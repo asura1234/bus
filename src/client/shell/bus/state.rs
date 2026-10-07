@@ -165,8 +165,6 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) quitting: Option<std::time::Instant>,
     pub(super) force_exit_available: bool,
     pub exit_ready: bool,
-    /// F10 closes only the UI; Ctrl+Q also stops the server and its agents.
-    pub(super) keep_server: bool,
     pub(super) history_search: Option<HistorySearch>,
     pub(super) pending_line_continue: bool,
     pub(super) last_esc: Option<std::time::Instant>,
@@ -251,7 +249,6 @@ impl BusUi {
             quitting: None,
             force_exit_available: false,
             exit_ready: false,
-            keep_server: false,
             history_search: None,
             pending_line_continue: false,
             last_esc: None,

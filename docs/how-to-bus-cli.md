@@ -769,10 +769,6 @@ unsent drafts, then stops the session's server and every agent pane, the way
 `bus stop` does, and exits. It does not wait for the exit. `bus resume` then
 relaunches each agent into its saved conversation.
 
-To restart only the UI while the agents keep running, press F10 in the UI
-instead: it saves drafts and exits without stopping the server, and
-`bus resume --last` reattaches to the running agents.
-
 Stop the session's server and every agent pane it hosts:
 
 ```sh

@@ -2299,21 +2299,18 @@ fn ctrl_q_still_quits_from_room_and_agent_terminal_after_saving() {
 }
 
 #[test]
-fn ctrl_q_stops_the_server_once_saved_and_f10_keeps_it_running() {
-    for (bytes, keep_server) in [(b"\x11".as_slice(), false), (b"\x1b[21~", true)] {
-        let (ui, _, _) = fixture();
-        let mut shell = shell_with(ui);
-        let outcome = shell.handle_input_bytes(bytes);
-        assert!(!outcome.detach, "{bytes:?} must wait for the save");
-        let ui = shell.bus.as_mut().unwrap();
-        assert!(ui.quitting.is_some(), "{bytes:?} must save and quit");
-        // Stands in for the Shutdown acknowledgement after every save landed.
-        ui.exit_ready = true;
-        let mut outcome = crate::client::shell::ClientShellInput::default();
-        shell.finish_bus_exit(&mut outcome);
-        assert!(outcome.detach);
-        assert_eq!(outcome.keep_server, keep_server, "{bytes:?}");
-    }
+fn ctrl_q_exits_the_client_only_after_bus_saved() {
+    let (ui, _, _) = fixture();
+    let mut shell = shell_with(ui);
+    let outcome = shell.handle_input_bytes(b"\x11");
+    assert!(!outcome.detach, "Ctrl+Q must wait for the save");
+    assert!(!shell.bus_exit_ready());
+    let ui = shell.bus.as_mut().unwrap();
+    assert!(ui.quitting.is_some(), "Ctrl+Q must save and quit");
+    // Stands in for the Shutdown acknowledgement after every save landed; the
+    // client then detaches and stops the server (see shell_runtime tests).
+    ui.exit_ready = true;
+    assert!(shell.bus_exit_ready());
 }
 
 #[test]

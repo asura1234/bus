@@ -31,11 +31,7 @@ impl BusUi {
             }
             let quit = matches!(key.code, KeyCode::Char('q' | 'Q'))
                 && key.modifiers.contains(KeyModifiers::CONTROL);
-            // F10 saves like Ctrl+Q but leaves the server and agents running, so
-            // a UI-only fix can restart the client without relaunching agents.
-            let close_ui = key.code == KeyCode::F(10);
-            if (quit || close_ui) && key.kind != KeyEventKind::Release {
-                self.keep_server = close_ui;
+            if quit && key.kind != KeyEventKind::Release {
                 if key.modifiers.contains(KeyModifiers::SHIFT) && self.force_exit_available {
                     outcome.detach = true;
                 } else {

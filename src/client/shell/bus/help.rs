@@ -60,5 +60,4 @@ Esc            Cancel
 
 Quit
 Ctrl+Q         Save, stop the agents and the server, quit
-F10            Save and close only the UI; agents keep running
 Ctrl+Shift+Q   Force quit only after an unsaved warning";
