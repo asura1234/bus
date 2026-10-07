@@ -101,7 +101,7 @@ FOR EACH planned commit group:
     title = "<type>: <lowercase summary>"   # optional (scope) and ! allowed per the validator
     body  = 2-3 sentence description if useful (reason, issue reference)
     Append the Co-Authored-By trailer per your agent's own convention (if it has one);
-      also follow the repository skill rules in skills/AGENTS.md (Bus has no root AGENTS.md). Do NOT hardcode a model name.
+      Do NOT hardcode a model name.
   Validate: `python3 scripts/conventional_commits.py --message-file <message-file>`
     IF it rejects the subject: fix the subject and re-validate before committing.
 

@@ -39,10 +39,10 @@ exit != 0 → STOP.
 Run: python3 skills/delete-dead-code/scripts/dead_code_scope.py scope --repo "<repo>" --base "<base>"
 Exit 2 = the scope cannot be derived → STOP; never guess a scope and continue.
 
--- The output is the units in scope (by file count, descending). In PR mode a unit = a module (the nearest ancestor containing `AGENTS.md`, otherwise
---   the top-level subtree such as `src`); in explicit-directory mode a unit = the requested directory itself, which also owns nested modules. This is
+-- The output is the units in scope (by file count, descending). In PR mode a unit = a top-level subtree such as `src`;
+--   loose top-level files form a separate unit. In explicit-directory mode a unit = the requested directory itself, including subdirectories. This is
 --   the entire modifiable scope: dead code or duplicates outside it are recorded, never touched (guide.md "Why the scope must be mechanical").
--- Every unit carries `directories` (the scan list) and `excludes` (nested modules owned by others); both go into briefs verbatim.
+-- Every unit carries `directories` (the scan list) and `excludes` (empty for these disjoint units); both go into briefs verbatim.
 
 IF --track == duplicate: skip to TRACK B.
 
@@ -154,7 +154,7 @@ Report a nonzero `truncated` or `skippedBoilerplateWindows` in OUTPUT as is; rer
 groups (guide.md "Version numbers and compatibility branches").
 
 Dispatch ONE read-only subagent (semantic duplicates): the brief holds every unit and its `directories` from the scope output, and guide.md
-"Discovery: across the whole scope, two ways"; it compares each unit's `AGENTS.md` responsibility section (where one exists) and public surface, finds
+"Discovery: across the whole scope, two ways"; it derives each unit's responsibilities from its code and public surface, finds
 two places that claim the same job or hit the same socket API method / wire message / file format, reads code only for those candidates, and returns
 candidate groups (member `path:line`, evidence) without any write.
 
@@ -210,7 +210,7 @@ exit 1 = items pending review (the normal case); exit 0 = no consolidation and n
 FOR EACH CONSOLIDATED anchor it lists:
   a. Read the diff and identify the surviving copy (CANONICAL) and the deleted copy.
   b. Read back from production call sites and confirm the surviving copy is the behavior production was running; wiring is the only criterion, never
-     exports, docstrings, what tests point at, or `AGENTS.md`.
+     exports, docstrings, or what tests point at.
   c. Compare the observable differences of both copies: arguments, defaults, failure contract, boundary clamping, side effects.
   d. Confirm no forbidden dependency edge was added and no broad shared module was created.
   IF the surviving behavior != what production ran, or the dependency direction is illegal

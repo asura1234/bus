@@ -5,6 +5,8 @@ orchestrator of a Bus room. It builds on [How to use the Bus CLI](how-to-bus-cli
 read that first for the commands themselves. The binding rules are in
 [Orchestrator rules](orchestrator-rules.md).
 
+Code explains itself; use short inline comments to explain why it was built that way where it is not obvious, and agents read the code for the rest.
+
 ## What an orchestrator is
 
 A room is one unit of work: a PR, a feature, an investigation. The agents in the

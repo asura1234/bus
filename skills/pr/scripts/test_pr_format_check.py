@@ -23,12 +23,12 @@ def valid_body() -> str:
         [
             "## 摘要",
             "",
-            "- **主要变更**：重命名 update-docs 并合并两类文档审计",
+            "- **主要变更**：校验 PR 工作流和验证证据",
             "- **大小**：`M`",
             "",
             "## 目标",
             "",
-            "统一文档门禁",
+            "统一工作流校验",
             "",
             "## 非目标",
             "",
@@ -36,11 +36,7 @@ def valid_body() -> str:
             "",
             "## 变更内容",
             "",
-            "- 重命名 skill 并扩展审计范围",
-            "",
-            "## 文档同步",
-            "",
-            "- [x] `shell/packages/example/AGENTS.md` — verified current",
+            "- 统一 PR 模板与校验器",
             "",
             "## 自测 / Agent 测",
             "",
@@ -62,16 +58,12 @@ def valid_draft_body() -> str:
     return (
         valid_body()
         .replace(
-            "- [x] `shell/packages/example/AGENTS.md` — verified current",
-            "- [ ] Documentation audit：未提供",
-        )
-        .replace(
             "- [x] `./run test cli`：通过\n- [x] `./run lint check`：通过",
             "- [ ] Readiness verification：未提供",
         )
         .replace(
             "## 其他说明\n\n无",
-            "## 其他说明\n\n门禁与文档审计由 orchestrator 安排，本次未提供",
+            "## 其他说明\n\n门禁由 orchestrator 安排，本次未提供",
         )
     )
 
@@ -93,7 +85,6 @@ class PrFormatCheckTest(unittest.TestCase):
                 "目标",
                 "非目标",
                 "变更内容",
-                "文档同步",
                 "自测 / Agent 测",
                 "截图 / GIF",
                 "其他说明",
@@ -101,7 +92,7 @@ class PrFormatCheckTest(unittest.TestCase):
         )
 
     def test_valid_title_and_body_pass(self) -> None:
-        self.assertEqual(check_title("[infra] 统一模块文档门禁", self.title_types), [])
+        self.assertEqual(check_title("[infra] 统一工作流校验", self.title_types), [])
         self.assertEqual(check_body(valid_body(), self.sections, self.placeholders), [])
 
     def test_draft_phase_allows_only_scoped_pending_items(self) -> None:
@@ -112,22 +103,6 @@ class PrFormatCheckTest(unittest.TestCase):
 
         final_problems = check_body(body, self.sections, self.placeholders)
         self.assertTrue(any("unchecked boxes" in problem for problem in final_problems))
-
-        rendered_docs = body.replace(
-            "- [ ] Documentation audit：未提供",
-            "- [x] `skills/AGENTS.md` — verified current",
-        )
-        self.assertEqual(
-            check_body(rendered_docs, self.sections, self.placeholders, phase="draft"), []
-        )
-        hand_written_docs = body.replace(
-            "- [ ] Documentation audit：未提供",
-            "文档稍后补",
-        )
-        draft_problems = check_body(
-            hand_written_docs, self.sections, self.placeholders, phase="draft"
-        )
-        self.assertTrue(any("draft phase" in problem for problem in draft_problems))
 
         no_pending_test = body.replace(
             "- [ ] Readiness verification：未提供",
@@ -148,7 +123,7 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertTrue(any("needs at least one pending item" in problem for problem in draft_problems))
 
         unchecked_summary = body.replace(
-            "- **主要变更**：重命名 update-docs 并合并两类文档审计",
+            "- **主要变更**：校验 PR 工作流和验证证据",
             "- [ ] 摘要待补",
         )
         draft_problems = check_body(
@@ -158,30 +133,6 @@ class PrFormatCheckTest(unittest.TestCase):
             any("section `摘要` contains unchecked" in problem for problem in draft_problems)
         )
 
-    def test_docs_sync_section_is_optional_caller_input(self) -> None:
-        without_docs = valid_body().replace(
-            "## 文档同步\n\n- [x] `shell/packages/example/AGENTS.md` — verified current\n\n", ""
-        )
-        self.assertNotIn("## 文档同步", without_docs)
-        self.assertEqual(check_body(without_docs, self.sections, self.placeholders), [])
-        draft_without_docs = valid_draft_body().replace(
-            "## 文档同步\n\n- [ ] Documentation audit：未提供\n\n", ""
-        )
-        self.assertNotIn("## 文档同步", draft_without_docs)
-        self.assertEqual(
-            check_body(draft_without_docs, self.sections, self.placeholders, phase="draft"), []
-        )
-
-        misplaced_docs = without_docs.replace(
-            "## 其他说明", "## 其他说明\n\n无\n\n## 文档同步\n\n- [x] `skills/AGENTS.md` — verified current\n\n## 备注", 1
-        )
-        problems = check_body(misplaced_docs, self.sections, self.placeholders)
-        self.assertTrue(any("H2 sections" in problem for problem in problems))
-
-        missing_required = without_docs.replace("## 截图 / GIF\n\n无 UI 变更\n\n", "")
-        problems = check_body(missing_required, self.sections, self.placeholders)
-        self.assertTrue(any("H2 sections" in problem for problem in problems))
-
     def test_title_rejects_unknown_type_and_bad_shape(self) -> None:
         self.assertTrue(check_title("infra: 说明", self.title_types))
         self.assertTrue(check_title("[nope] 说明", self.title_types))
@@ -190,6 +141,11 @@ class PrFormatCheckTest(unittest.TestCase):
 
     def test_body_rejects_missing_or_reordered_sections(self) -> None:
         body = valid_body().replace("## 其他说明", "## 备注")
+        problems = check_body(body, self.sections, self.placeholders)
+        self.assertTrue(any("H2 sections" in problem for problem in problems))
+
+    def test_body_rejects_missing_required_sections(self) -> None:
+        body = valid_body().replace("## 截图 / GIF\n\n无 UI 变更\n\n", "")
         problems = check_body(body, self.sections, self.placeholders)
         self.assertTrue(any("H2 sections" in problem for problem in problems))
 
@@ -206,23 +162,13 @@ class PrFormatCheckTest(unittest.TestCase):
         problems = check_body(body, self.sections, self.placeholders)
         self.assertTrue(any("at least one checked item" in problem for problem in problems))
 
-    def test_body_rejects_placeholders_comments_and_hand_written_docs_sync(self) -> None:
+    def test_body_rejects_comments_and_invalid_size(self) -> None:
         problems = check_body(
             valid_body().replace("无 UI 变更", "<!-- 待补 -->"),
             self.sections,
             self.placeholders,
         )
         self.assertTrue(any("HTML comments" in problem for problem in problems))
-
-        problems = check_body(
-            valid_body().replace(
-                "- [x] `shell/packages/example/AGENTS.md` — verified current",
-                "手写的架构说明",
-            ),
-            self.sections,
-            self.placeholders,
-        )
-        self.assertTrue(any("renderer" in problem for problem in problems))
 
         problems = check_body(
             valid_body().replace("- **大小**：`M`", "- **大小**：`巨大`"),
@@ -282,14 +228,14 @@ class PrFormatCheckTest(unittest.TestCase):
             locked_goal_path = Path(directory) / ".locked-goal"
             body_path.write_text(valid_body(), encoding="utf-8")
             context_path.write_text(
-                "## 目标\n\n统一文档门禁\n\n## 非目标\n\n无\n",
+                "## 目标\n\n统一工作流校验\n\n## 非目标\n\n无\n",
                 encoding="utf-8",
             )
-            locked_goal_path.write_text("统一文档门禁\n", encoding="utf-8")
+            locked_goal_path.write_text("统一工作流校验\n", encoding="utf-8")
             self.assertEqual(
                 run(
                     TEMPLATE_PATH,
-                    "[infra] 统一模块文档门禁",
+                    "[infra] 统一工作流校验",
                     body_path,
                     goal_context_path=context_path,
                     locked_goal_path=locked_goal_path,
@@ -301,7 +247,7 @@ class PrFormatCheckTest(unittest.TestCase):
             self.assertEqual(
                 run(
                     TEMPLATE_PATH,
-                    "[infra] 统一模块文档门禁",
+                    "[infra] 统一工作流校验",
                     body_path,
                     goal_context_path=context_path,
                     locked_goal_path=locked_goal_path,
@@ -448,7 +394,7 @@ class PrFormatCheckTest(unittest.TestCase):
             body_path.write_text(valid_body(), encoding="utf-8")
             problems = run(
                 TEMPLATE_PATH,
-                "[infra] 统一模块文档门禁",
+                "[infra] 统一工作流校验",
                 body_path,
                 goal_context_path=context_path,
                 locked_goal_path=locked_goal_path,
@@ -461,13 +407,13 @@ class PrFormatCheckTest(unittest.TestCase):
             )
 
             body_path.write_text(
-                valid_body().replace("统一文档门禁", "计划原文").replace("\n无\n", "\n- 不做扩展\n"),
+                valid_body().replace("统一工作流校验", "计划原文").replace("\n无\n", "\n- 不做扩展\n"),
                 encoding="utf-8",
             )
             locked_goal_path.write_text("被改写的目标\n", encoding="utf-8")
             problems = run(
                 TEMPLATE_PATH,
-                "[infra] 统一模块文档门禁",
+                "[infra] 统一工作流校验",
                 body_path,
                 goal_context_path=context_path,
                 locked_goal_path=locked_goal_path,

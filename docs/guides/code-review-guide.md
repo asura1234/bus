@@ -5,7 +5,7 @@ The review agent receives `git diff <base>...HEAD` with `docs/plans/**` excluded
 It is not lint, not code polish, and not plan review. Code review focuses on the implementation's architecture boundaries, correctness, security, maintainability, and the long-term health of the codebase.
 Code review is a CI quality gate covering the full range from **macro (architecture/module) to micro (type/function)**.
 
-This guide is language-agnostic: the principles apply to Rust, Python, shell, or any other target language. Where concrete syntax is involved, follow the target language's conventions, and write examples in the target language closest to the current code. Module boundaries and dependency direction should be confirmed against each module's `AGENTS.md` (where one exists) and the applicable architecture sources of truth in this repository.
+This guide is language-agnostic: the principles apply to Rust, Python, shell, or any other target language. Where concrete syntax is involved, follow the target language's conventions, and write examples in the target language closest to the current code. Module boundaries and dependency direction should be confirmed against the code, its callers and tests, and the applicable architecture sources of truth in this repository.
 
 ## Review context: existing behavior is a verified baseline
 
@@ -121,7 +121,7 @@ This dimension only reviews owner, layering, module boundaries, and dependency d
 
 Checkpoints:
 - whether new units sit in the correct architecture layer (business logic / state / view / infrastructure)
-- whether module boundaries are broken (against the dependency graph in module `AGENTS.md` files and the repository's architecture sources of truth)
+- whether module boundaries are broken (against actual imports and call sites, and the repository's architecture sources of truth)
 - **whether visibility is minimized** — whether new symbols are narrowed to the smallest scope that satisfies current callers (see [Architecture principles "Minimal public API (visibility)"](architecture-principles.md#minimal-public-api-visibility))
 - whether dependency direction is correct
 
@@ -312,12 +312,12 @@ Severity:
 
 The narrative around the diff — commit messages, PR description, code comments, the linked plan — is, for the reviewer, a set of **claims to be verified**, not a source of facts. Adopting the author's explanation of the change and then "checking" it means being anchored to the author's perspective; the value of an independent review comes precisely from not sharing the author's derivation path.
 
-1. **Understand the problem independently first, then compare with the implementation** — at the start of the review, first read the touched modules' `AGENTS.md` (for cross-module topics, also the applicable architecture sources of truth) and the full current state of the changed files (not just hunks), independently understand the problem this change solves and its constraints, and if needed derive yourself "roughly what shape a reasonable implementation would take", then compare with the diff: if the implementation differs significantly from the independent derivation → chase what supports the difference (supported by the linked plan / `已归档的决策` → it stands; no support found → finding)
+1. **Understand the problem independently first, then compare with the implementation** — at the start of the review, first read the full current state of the changed files and their callers and tests (not just hunks; for cross-module topics, also the applicable architecture sources of truth), independently understand the problem this change solves and its constraints, and if needed derive yourself "roughly what shape a reasonable implementation would take", then compare with the diff: if the implementation differs significantly from the independent derivation → chase what supports the difference (supported by the linked plan / `已归档的决策` → it stands; no support found → finding)
 2. **The author's narrative is not evidence** — a commit message saying "fixed X", a comment saying "this is never null here", a PR description saying "behavior unchanged" — always go back to the code and tests to confirm; judgment can only rest on the actual behavior of code and tests. Quantities/limits, ordering and lifecycle guarantees, and universal "only/always/never" assertions (whether in comments, the PR description, or the linked plan) are the riskiest of these claims — verify each one, and for those that cannot be verified, suggest softening the wording rather than assuming they hold
 3. **Read the code before concluding** — if the diff says function A calls function B, Read function B to confirm its signature and behavior.
 4. **Do not guess** — if unsure, Read the source file.
 5. **Write test files only for behavior claims** — correctness (dimension 2) / security (dimension 3) / Bug (dimension 7) suspicions may create new test files or add your own cases to existing test files, and run tests narrowly to prove the hypothesis; the other dimensions are read-only and proven by source citations. Production code, configuration, build scripts, docs, and plan files are never touched, git write operations are all forbidden, and quality gates (lint / format check / coverage / build) are never run (see "Verification boundary").
-6. **Resolve conflicts by credibility ordering** — actual behavior of code and tests > module `AGENTS.md` / the repository's architecture sources of truth / official documentation > plan / PR description / commit messages / code comments. When a lower source conflicts with a higher one, judge by the higher one, and write the conflict itself as a finding.
+6. **Resolve conflicts by credibility ordering** — actual behavior of code and tests > the repository's architecture sources of truth / official documentation > plan / PR description / commit messages / code comments. When a lower source conflicts with a higher one, judge by the higher one, and write the conflict itself as a finding.
 7. **Distinguish facts from preferences** — architecture violations are facts; naming style is preference. Only facts can yield abandon.
 8. **Give concrete suggestions** — cite file paths and line numbers, and explain how it should change.
 9. **Reviewers are isolated from each other** — when multiple reviewers run in parallel, each reviewer reads only **its own lane's** round history and must not read other reviewers' review.md or any round artifacts (`temp/review-pr/<branch>/<other lane>/`). The independent perspective is by design: reading others' findings causes mutual anchoring, and N reviewers degrade into one. Lane findings converge only on the code author's side.
@@ -463,9 +463,8 @@ The output ends with the verdict line; nothing is appended after it.
 
 Internal project references:
 
-- **Module architecture**: module `AGENTS.md` files where present — module responsibility, dependency direction, public API, test scope
-- **Cross-module SOT**: the repository's architecture sources of truth under `docs/` and `skills/AGENTS.md` — test layering, quality gates, runtime topology, etc.
-- **Architecture doc template**: `docs/templates/module-agents-template.md`
+- **Module architecture**: code, imports, call sites and tests — module responsibility, dependency direction, public API, test scope
+- **Cross-module SOT**: the repository's architecture sources of truth under `docs/` and `skills/skill-architecture.md` — test layering, quality gates, runtime topology, etc.
 
 The review agent may use WebSearch/WebFetch or context7 to consult official documentation as needed:
 

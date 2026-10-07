@@ -2,7 +2,7 @@
 
 The goal is to converge every applicable gate failure of one committed diff into a single
 partitionable remediation, then prove the complete diff again with a new commit. It does not
-replace `rebase-origin-main`, `update-docs`, or PR creation.
+replace `rebase-origin-main` or PR creation.
 
 ## Evidence and boundaries
 

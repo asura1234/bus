@@ -65,11 +65,7 @@ def check_task_fields(plan_text: str) -> list[str]:
 
 
 def _canonical_owned_path(path: str) -> tuple[str, ...]:
-    pure = PurePosixPath(path)
-    parts = list(pure.parts)
-    if parts and parts[-1] in {"AGENTS.md", "CLAUDE.md"}:
-        parts[-1] = "__AI_INSTRUCTIONS__"
-    return tuple(parts)
+    return PurePosixPath(path).parts
 
 
 def _paths_overlap(left: str, right: str) -> bool:

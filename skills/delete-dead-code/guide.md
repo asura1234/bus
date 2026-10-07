@@ -42,9 +42,8 @@ observed once: the developer said "this PR", the agent was holding whole-reposit
 the reminder.
 
 So the scope is derived by `dead_code_scope.py` from `base...HEAD`, and artifacts are checked for out-of-scope edits,
-instead of relying on agent discipline. The module definition follows the repository's own boundary marker (the nearest
-ancestor directory containing `AGENTS.md`, otherwise the top-level subtree such as `src/` or `scripts/`); no separate
-layering table is kept.
+instead of relying on agent discipline. Each top-level subtree such as `src/` or `scripts/` is a unit; loose top-level
+files form a separate unit. No separate layering table is kept.
 
 Even confirmed dead code in a module the PR did not touch is **not in this scope**: record it and raise it separately,
 never delete it along the way.
@@ -66,8 +65,8 @@ The two modes differ in two ways, both essential:
 1. **How many files to look at**: PR mode looks only at the modules owning changed files; explicit mode looks at every
    tracked file in the whole tree. The scan must walk the directory list one by one, never carry over the habit of
    "look only at what the PR changed".
-2. **What a unit is**: in PR mode a unit is a module (the nearest ancestor containing `AGENTS.md`, otherwise the
-   top-level subtree); in explicit mode a unit is the requested directory itself, which also owns nested modules.
+2. **What a unit is**: in PR mode a unit is the top-level subtree, or the loose top-level files; in explicit mode a
+   unit is the requested directory itself, including its subdirectories.
 
 The second is decided by "can it act", not by "how large is the scan". Observed: the canonical home of real dead code is
 usually a **sibling module**: base64 in `tools` wanted to move to `codecs`, the Windows helper to `process`,
@@ -232,7 +231,7 @@ that holds the list. Both cases go through `HANDOFF`, and the reason states whic
 - **Platform gating**: code under `#[cfg(unix)]`, `#[cfg(windows)]`, `#[cfg(target_os = …)]`, or `#[cfg(test)]` /
   feature gates has no caller in another build configuration, but it is not dead code. Confirm the real build target set
   first (CI builds Windows; `just windows-lint` checks the Windows target from Unix).
-- **Prose is not a consumer**: a symbol mentioned in `AGENTS.md`, `docs/**/*.md`, or a skill does not make it alive.
+- **Prose is not a consumer**: a symbol mentioned in `docs/**/*.md` or a skill does not make it alive.
   Delete the symbol and fix the prose with it.
 
 ## Dead branches are checked in reverse: count producers, not consumers
@@ -387,8 +386,8 @@ other, and each is blind to the other's targets:
    output states how many were skipped and how many truncated.
 2. **Responsibility comparison (semantic duplicates)**: the same job in different code, which clone detection cannot find
    a single line of (observed: the engine's `export-wire.ts` and media-tools' `createCompositeMediaToolsClient` both hit
-   `/v1/exports`). The check compares **responsibility inventories**, not code: read each unit's `AGENTS.md`
-   responsibility section where one exists and its public surface (`pub` items in `mod.rs` / `lib.rs`, socket API
+   `/v1/exports`). Derive each unit's **responsibilities** from its code and public surface (`pub` items in
+   `mod.rs` / `lib.rs`, socket API
    methods, CLI subcommands, re-exports), find two places that claim the same job, or hit the same socket API method /
    wire message / file format, and only then read code for those candidates.
 
@@ -472,9 +471,9 @@ is exactly why they should converge rather than stay.
 ## Consolidation must preserve behavior
 
 **The canonical implementation = the copy production really calls today.** Not the exported one, not the one with a
-docstring, not the one tests point at, and not the one `AGENTS.md` calls "as-built". It went wrong once: two
-`createSessionScrubPreview` copies; the exported one had a full docstring, three tests pointing at it, and `AGENTS.md`
-describing its behavior as as-built, while production wiring went through a module-private copy in the same file. The
+docstring, and not the one tests point at. It went wrong once: two
+`createSessionScrubPreview` copies; the exported one had a full docstring and three tests pointing at it,
+while production wiring went through a module-private copy in the same file. The
 agent picked the exported one because it "looked more official", so **a cleanup action changed production behavior**
 (exact settle started keeping the visible frame).
 
@@ -505,7 +504,7 @@ that were **rewritten** rather than deleted) and exits nonzero while items are p
 cannot reach landing.
 
 The review accepts only one thing: **reading back from production call sites**. Exported or not, docstring or not, what
-tests point at, which copy `AGENTS.md` calls as-built: in practice all four pointed at the wrong copy.
+tests point at: in practice all three pointed at the wrong copy.
 
 # Shared
 
@@ -579,8 +578,6 @@ not recorded, not touched.
 Dead code inflates the surface the gates measure, and zombie tests provide exactly the part that makes dead code "look
 exercised". Deleting first means the gates measure the real surface. In the reverse order, gate-and-fix proves a tree
 that is changed right afterwards, and the most expensive stage runs twice.
-
-Likewise it must run before `update-docs`: deleting a module changes what `AGENTS.md` should say.
 
 The same holds between the two tracks: the dead-code track lands first, and the duplicate track discovers on the cleaned
 tree; otherwise it would consolidate dead copies as if they were live duplicates.

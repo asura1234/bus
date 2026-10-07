@@ -14,10 +14,10 @@ def test_directories_scope_covers_every_tracked_file_not_just_changed_ones(
     tmp_path: Path,
 ) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "m/AGENTS.md")
+    _write(repository, "m/README.md")
     _write(repository, "m/src/a.ts")
     _write(repository, "m/src/b.ts")
-    _write(repository, "other/AGENTS.md")
+    _write(repository, "other/README.md")
     _write(repository, "other/c.ts")
     _commit(repository, "base")
     base = _head(repository)
@@ -28,14 +28,14 @@ def test_directories_scope_covers_every_tracked_file_not_just_changed_ones(
     assert scope(repository, base)[0].file_count == 1
     explicit = scope(repository, directories=["m"])
     assert [m.name for m in explicit] == ["m"]
-    assert explicit[0].file_count == 3  # AGENTS.md + two source files
+    assert explicit[0].file_count == 3  # README.md + two source files
 
 
 def test_directories_scope_treats_each_directory_as_one_unit(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "parent/AGENTS.md")
+    _write(repository, "parent/README.md")
     _write(repository, "parent/own.ts")
-    _write(repository, "parent/child/AGENTS.md")
+    _write(repository, "parent/child/README.md")
     _write(repository, "parent/child/deep.ts")
     _commit(repository, "base")
     # Requesting one tree yields **one** unit; nested modules are not split out. The criterion is "can it act": the canonical home is usually in
@@ -49,9 +49,9 @@ def test_directories_scope_treats_each_directory_as_one_unit(tmp_path: Path) -> 
 
 def test_directories_scope_granularity_is_the_callers_choice(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "parent/AGENTS.md")
+    _write(repository, "parent/README.md")
     _write(repository, "parent/own.ts")
-    _write(repository, "parent/child/AGENTS.md")
+    _write(repository, "parent/child/README.md")
     _write(repository, "parent/child/deep.ts")
     _commit(repository, "base")
     # Pass more subdirectories to slice finer: granularity is the caller's choice, not the script's.
@@ -62,7 +62,7 @@ def test_directories_scope_granularity_is_the_callers_choice(tmp_path: Path) -> 
 
 def test_missing_directory_fails_closed(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "m/AGENTS.md")
+    _write(repository, "m/README.md")
     _commit(repository, "base")
     # Silently scanning nothing because of a misspelled directory returns in the shape of "this is clean"; nobody can tell the scan never happened.
     with pytest.raises(DeadCodeScopeError, match="directory does not exist"):
@@ -71,7 +71,7 @@ def test_missing_directory_fails_closed(tmp_path: Path) -> None:
 
 def test_directory_without_tracked_files_fails_closed(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "m/AGENTS.md")
+    _write(repository, "m/README.md")
     _commit(repository, "base")
     (repository / "empty").mkdir()
     with pytest.raises(DeadCodeScopeError, match="has no tracked files"):
@@ -90,9 +90,9 @@ def test_scope_requires_a_range_source(tmp_path: Path) -> None:
 
 def test_verify_uses_the_directories_scope_when_given(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "in/AGENTS.md")
+    _write(repository, "in/README.md")
     _write(repository, "in/a.ts")
-    _write(repository, "out/AGENTS.md")
+    _write(repository, "out/README.md")
     _write(repository, "out/b.ts")
     _commit(repository, "base")
     artifact = _artifact(repository, "ACTED", _FOUND, "- `in/a.ts:1` — DELETED — no consumer")

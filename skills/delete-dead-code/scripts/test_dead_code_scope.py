@@ -19,7 +19,6 @@ from dead_code_scope import (  # noqa: E402
     Module,
     module_directories,
     module_of,
-    nested_modules,
     plan_batches,
     scope,
     verify_artifact,
@@ -56,27 +55,25 @@ def _write(repository: Path, relative: str, text: str = "x\n") -> None:
 # --- module_of ---------------------------------------------------------------
 
 
-def test_module_is_the_nearest_agents_md_ancestor(tmp_path: Path) -> None:
-    _write(tmp_path, "shell/packages/video-editor/AGENTS.md")
-    _write(tmp_path, "shell/packages/video-editor/react/AGENTS.md")
-    # The nearest ancestor wins; a nested module is not folded into its parent.
-    assert module_of(tmp_path, "shell/packages/video-editor/react/src/a.ts") == "shell/packages/video-editor/react"
-    assert module_of(tmp_path, "shell/packages/video-editor/other/b.ts") == "shell/packages/video-editor"
+def test_module_is_the_top_level_subtree(tmp_path: Path) -> None:
+    _write(tmp_path, "shell/packages/video-editor/README.md")
+    _write(tmp_path, "shell/packages/video-editor/react/README.md")
+    # Nested directories and their documents belong to the same top-level subtree.
+    assert module_of("shell/packages/video-editor/react/src/a.ts") == "shell"
+    assert module_of("shell/packages/video-editor/other/b.ts") == "shell"
 
 
 def test_top_level_file_maps_to_repository_module_not_dot(tmp_path: Path) -> None:
-    _write(tmp_path, "AGENTS.md")
+    _write(tmp_path, "README.md")
     # `"."` matches no real path prefix and reads like "the whole repository is in scope".
-    assert module_of(tmp_path, ".prettierrc.json") == REPOSITORY_MODULE
+    assert module_of(".prettierrc.json") == REPOSITORY_MODULE
 
 
-def test_path_without_any_agents_md_falls_back_to_its_top_level_subtree(
-    tmp_path: Path,
-) -> None:
-    # `cli_extensions/`, `scripts/`, and `src/` carry no `AGENTS.md`. Folding them into one "repository root" bucket,
+def test_distinct_top_level_subtrees_are_separate_units() -> None:
+    # Folding `cli_extensions/`, `scripts/`, and `src/` into one "repository root" bucket,
     # touching one file would hand the agent the other two trees as well: exactly the out-of-scope shape this skill must prevent.
-    assert module_of(tmp_path, "cli_extensions/lint.py") == "cli_extensions"
-    assert module_of(tmp_path, "scripts/lint/deep/file.ts") == "scripts"
+    assert module_of("cli_extensions/lint.py") == "cli_extensions"
+    assert module_of("scripts/lint/deep/file.ts") == "scripts"
 
 
 def test_top_level_subtree_module_gets_its_own_directory_map(tmp_path: Path) -> None:
@@ -93,8 +90,8 @@ def test_top_level_subtree_module_gets_its_own_directory_map(tmp_path: Path) -> 
 
 def test_scope_counts_files_per_module_sorted_by_size(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "a/AGENTS.md")
-    _write(repository, "b/AGENTS.md")
+    _write(repository, "a/README.md")
+    _write(repository, "b/README.md")
     _write(repository, "seed.txt")
     _commit(repository, "base")
     base = subprocess.run(
@@ -174,8 +171,8 @@ def test_no_modules_fails_closed() -> None:
 
 def _scoped_repo(tmp_path: Path) -> tuple[Path, str]:
     repository = _repo(tmp_path)
-    _write(repository, "in/AGENTS.md")
-    _write(repository, "out/AGENTS.md")
+    _write(repository, "in/README.md")
+    _write(repository, "out/README.md")
     _write(repository, "seed.txt")
     _commit(repository, "base")
     base = subprocess.run(
@@ -264,24 +261,33 @@ def test_missing_artifact_fails_closed(tmp_path: Path) -> None:
         verify_artifact(repository, base, repository / "absent.md")
 
 
-# --- excludes (nested modules) ----------------------------------------------
+# --- top-level subtree ownership ----------------------------------------------
 
 
-def test_scope_reports_nested_modules_as_excludes(tmp_path: Path) -> None:
+def test_scope_includes_nested_directories_in_the_top_level_unit(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "parent/AGENTS.md")
-    _write(repository, "parent/child/AGENTS.md")
+    _write(repository, "parent/README.md")
+    _write(repository, "parent/child/README.md")
     _write(repository, "seed.txt")
     _commit(repository, "base")
     base = _head(repository)
     _write(repository, "parent/own.ts")
     _commit(repository, "change")
-    # Nested modules must be reported by the script instead of every agent re-deriving them from the tree.
-    assert scope(repository, base)[0].excludes == ("parent/child",)
+    # A child directory remains in the same write set even when it carries its own documentation.
+    unit = scope(repository, base)[0]
+    assert unit.name == "parent"
+    assert unit.excludes == ()
+    assert unit.directories == ("parent", "parent/child")
 
 
 def test_repository_module_has_no_excludes(tmp_path: Path) -> None:
-    assert nested_modules(tmp_path, REPOSITORY_MODULE) == ()
+    repository = _repo(tmp_path)
+    _write(repository, "Cargo.toml")
+    _commit(repository, "base")
+    base = _head(repository)
+    _write(repository, "justfile")
+    _commit(repository, "change")
+    assert scope(repository, base) == [Module(name=REPOSITORY_MODULE, file_count=1)]
 
 
 # --- directories (the module's own directory map) ------------------------------------
@@ -289,7 +295,7 @@ def test_repository_module_has_no_excludes(tmp_path: Path) -> None:
 
 def test_directories_list_module_root_and_tracked_subdirectories(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "m/AGENTS.md")
+    _write(repository, "m/README.md")
     _write(repository, "m/src/a.ts")
     _write(repository, "m/src/deep/b.ts")
     _write(repository, "m/tests/c.ts")
@@ -302,14 +308,14 @@ def test_directories_list_module_root_and_tracked_subdirectories(tmp_path: Path)
     )
 
 
-def test_directories_exclude_nested_module_subtrees(tmp_path: Path) -> None:
+def test_directories_respect_explicit_subtree_exclusions(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "parent/AGENTS.md")
+    _write(repository, "parent/README.md")
     _write(repository, "parent/own/a.ts")
-    _write(repository, "parent/child/AGENTS.md")
+    _write(repository, "parent/child/README.md")
     _write(repository, "parent/child/deep/b.ts")
     _commit(repository, "base")
-    # A nested module is someone else's territory: it is in excludes and must not appear on my directory map either.
+    # An explicitly excluded subtree must not appear on the scan map.
     assert module_directories(repository, "parent", ("parent/child",)) == (
         "parent",
         "parent/own",
@@ -319,7 +325,7 @@ def test_directories_exclude_nested_module_subtrees(tmp_path: Path) -> None:
 def test_directories_ignore_untracked_build_output(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
     _write(repository, ".gitignore", "node_modules/\ndist/\n")
-    _write(repository, "m/AGENTS.md")
+    _write(repository, "m/README.md")
     _write(repository, "m/src/a.ts")
     _commit(repository, "base")
     _write(repository, "m/node_modules/pkg/index.js")
@@ -334,7 +340,7 @@ def test_repository_module_has_no_directories(tmp_path: Path) -> None:
 
 def test_scope_attaches_directories_to_each_module(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "m/AGENTS.md")
+    _write(repository, "m/README.md")
     _write(repository, "m/src/a.ts")
     _write(repository, "seed.txt")
     _commit(repository, "base")

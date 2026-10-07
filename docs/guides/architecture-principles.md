@@ -4,7 +4,7 @@ This document is the architecture judgment baseline shared by code review and pl
 the [plan review guide](plan-review-guide.md) cite this document rather than each maintaining another set of principles.
 
 This document specifies only stable judgment criteria; it does not maintain package, API, schema, or lint inventories, or large drift-prone
-implementation examples. Module dependencies and invariants follow the nearest `AGENTS.md`, and concrete as-built evidence is taken from code,
+implementation examples. Module dependencies and invariants follow the code and its tests, and concrete as-built evidence is taken from code,
 contracts, configuration, and tests.
 
 ## Layering and boundaries
@@ -131,7 +131,7 @@ not ruled by a fixed number of files or lines.
 
 ### Follow existing patterns
 
-First discover the current pattern from adjacent code, machine configuration, and the nearest `AGENTS.md`. A new pattern is introduced only
+First discover the current pattern from adjacent code, its callers and tests, and machine configuration. A new pattern is introduced only
 when existing patterns cannot meet a real requirement, with its boundary and Owner stated; no existing pattern is exempt from DRY, YAGNI,
 KISS, and the minimal public surface.
 

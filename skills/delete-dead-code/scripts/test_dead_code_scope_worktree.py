@@ -23,9 +23,9 @@ from test_dead_code_scope_explicit import _FOUND
 def _shared_tree(tmp_path: Path) -> Path:
     """Two disjoint units `in` and `out` are committed, and the current branch is a feature branch."""
     repository = _repo(tmp_path)
-    _write(repository, "in/AGENTS.md")
+    _write(repository, "in/README.md")
     _write(repository, "in/a.ts")
-    _write(repository, "out/AGENTS.md")
+    _write(repository, "out/README.md")
     _write(repository, "out/b.ts")
     _commit(repository, "base")
     subprocess.run(["git", "-C", str(repository), "switch", "-q", "-c", "feat/x"], check=True)
@@ -66,10 +66,10 @@ def test_preflight_rejects_the_main_branch(tmp_path: Path) -> None:
     assert any("feature branch" in problem for problem in preflight(repository, None, ["in"]))
 
 
-def test_pr_mode_unit_excludes_nested_modules_owned_by_others(tmp_path: Path) -> None:
+def test_pr_mode_preflight_includes_dirty_child_directories(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "parent/AGENTS.md")
-    _write(repository, "parent/child/AGENTS.md")
+    _write(repository, "parent/README.md")
+    _write(repository, "parent/child/README.md")
     _write(repository, "parent/child/c.ts")
     _write(repository, "seed.txt")
     _commit(repository, "base")
@@ -77,19 +77,21 @@ def test_pr_mode_unit_excludes_nested_modules_owned_by_others(tmp_path: Path) ->
     _write(repository, "parent/p.ts")
     _commit(repository, "change")
     subprocess.run(["git", "-C", str(repository), "switch", "-q", "-c", "feat/x"], check=True)
-    # The nested module sits in the parent unit's tree but is another unit: its in-flight changes do not make the parent dirty.
+    # PR mode owns the entire top-level subtree, including child directories.
     _write(repository, "parent/child/c.ts", "changed\n")
-    assert preflight(repository, base, None) == []
+    assert [problem.split(": ")[0] for problem in preflight(repository, base, None)] == ["parent/child/c.ts"]
     _write(repository, "parent/p.ts", "changed\n")
-    assert [problem.split(": ")[0] for problem in preflight(repository, base, None)] == ["parent/p.ts"]
+    assert [problem.split(": ")[0] for problem in preflight(repository, base, None)] == [
+        "parent/child/c.ts", "parent/p.ts"
+    ]
 
 
-def test_dirty_paths_keep_nested_units_when_parent_and_child_are_both_owned(
+def test_dirty_paths_cover_child_files_in_the_top_level_unit(
     tmp_path: Path,
 ) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "parent/AGENTS.md")
-    _write(repository, "parent/child/AGENTS.md")
+    _write(repository, "parent/README.md")
+    _write(repository, "parent/child/README.md")
     _write(repository, "seed.txt")
     _commit(repository, "base")
     base = _head(repository)
@@ -97,7 +99,7 @@ def test_dirty_paths_keep_nested_units_when_parent_and_child_are_both_owned(
     _write(repository, "parent/child/c.ts")
     _commit(repository, "change")
     _write(repository, "parent/child/c.ts", "changed\n")
-    # If the parent unit's `:(exclude)` shares one git command with the child unit, it swallows the child's changes too.
+    # Both changed paths derive one parent unit; a dirty child file must still be reported.
     assert dirty_paths(repository, scope(repository, base)) == ["parent/child/c.ts"]
 
 

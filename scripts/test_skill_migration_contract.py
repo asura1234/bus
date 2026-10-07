@@ -18,7 +18,6 @@ CANONICAL_SKILLS = {
     "review-plan",
     "review-pr",
     "split-pr",
-    "update-docs",
     "worktree-close",
     "worktree-new",
 }
@@ -47,7 +46,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             for entry in SKILLS.iterdir()
             if entry.is_dir() and (entry / "SKILL.md").is_file()
         }
-        self.assertTrue(CANONICAL_SKILLS.issubset(actual))
+        self.assertEqual(actual, CANONICAL_SKILLS | {"workflow-create"})
         self.assertTrue(PRODUCT_ONLY_SKILLS.isdisjoint(actual))
         for name in CANONICAL_SKILLS:
             with self.subTest(skill=name):
@@ -71,7 +70,6 @@ class SkillMigrationContractTest(unittest.TestCase):
             "docs/guides/review-response-guide.md",
             "docs/guides/architecture-principles.md",
             "docs/templates/plan-template.md",
-            "docs/templates/module-agents-template.md",
             "cli_extensions/review_artifact.py",
             "cli_extensions/review_artifact_parser.py",
             "cli_extensions/review_artifact_text.py",
@@ -112,7 +110,6 @@ class SkillMigrationContractTest(unittest.TestCase):
         expected = {
             "docs/guides/consumer-fallout-format.md",
             "docs/guides/review-format.md",
-            "docs/templates/module-agents-template.md",
             "docs/templates/plan-template.md",
             "docs/templates/workflow-template.md",
             "skills/delete-dead-code/references/dead-code-findings-format.md",
@@ -120,7 +117,6 @@ class SkillMigrationContractTest(unittest.TestCase):
             "skills/gate-and-fix/references/gate-round-format.md",
             "skills/pr/references/pr-template.md",
             "skills/split-pr/references/split-plan-format.md",
-            "skills/update-docs/references/docs-audit-format.md",
         }
         actual = {
             path.relative_to(REPO).as_posix()
@@ -135,7 +131,6 @@ class SkillMigrationContractTest(unittest.TestCase):
             "App Server",
             "cmake/Coverage.cmake",
             "docs/architecture/process-environment.md",
-            "../../AGENTS.md",
             "shell/packages/",
             "LibTV PR 模板",
         ):

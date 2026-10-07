@@ -14,14 +14,14 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
   - `create.md`: how to draft and revise a workflow (the `workflow-create` skill points here)
   - `template.md`, `pr-review-loop.md`, `cross-repo-feature.md`
 - `skills/`: agent workflow skills; `.agents/skills` and `.claude/skills` link here
-  - `AGENTS.md` (with its `CLAUDE.md` link), `skill-architecture.md`: the shared skill contract
+  - `skill-architecture.md`: the shared skill contract
   - one folder per skill: `SKILL.md`, `guide.md`, `references/` and the skill's own `scripts/` (quality lanes, review lanes, PR signals,
     ledgers and plan checks stay with the skill that runs them; their tests are `scripts/tests/*_test.py`)
 - `cli_extensions/`: shared Python for the review skills (artifact parser and renderer, round and lane ownership)
 - `docs/`: repo-development docs
   - `bus-architecture.md`: this document
   - `guides/`: architecture principles, code review, plan review, review format and response, consumer-fallout format
-  - `templates/`: `plan-template.md`, `module-agents-template.md`
+  - `templates/`: `plan-template.md`
 - `tests/`: black-box integration tests against the built `bus` binary. Each folder is one test target whose root is
   `<folder>/<folder>_test.rs`, declared with `[[test]]` in `Cargo.toml`
   - `support/`: `process_test.rs` (pid and dir hygiene), `spawn_test.rs` (one `spawn_server`/`spawn_client`), `wire_test.rs`,

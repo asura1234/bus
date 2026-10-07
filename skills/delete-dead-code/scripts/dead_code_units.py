@@ -10,13 +10,10 @@ from pathlib import Path
 DEFAULT_MAX_PARALLEL = 5
 """Per-round concurrency cap. When there are more modules than this, rounds run serially instead of all at once."""
 
-MODULE_MARKER = "AGENTS.md"
-"""Module root marker: the nearest ancestor directory that carries an `AGENTS.md`."""
-
 REPOSITORY_MODULE = "<repository-root>"
 """Ownership identity for loose top-level files (`Cargo.toml`, `justfile`, ...). By definition it owns no directory.
 
-Top-level subtrees without an `AGENTS.md` (`src/`, `scripts/`, `tests/`) do **not** belong here: each one
+Top-level subtrees (`src/`, `scripts/`, `tests/`) do **not** belong here: each one
 becomes its own unit. Folding them into one "repository root" bucket has two consequences, and the second
 dogfood round hit both: touching one file in `scripts/` would hand the agent `src/`, `.github/`, and `tests/`
 as well (exactly the out-of-scope shape this skill exists to prevent); and judging membership by "the path has
@@ -84,42 +81,13 @@ def tracked_paths(repository: Path, directories: list[str]) -> list[str]:
     return sorted(paths)
 
 
-def module_of(repository: Path, path: str) -> str:
-    """The module root a path belongs to: the nearest ancestor directory that contains `AGENTS.md`.
+def module_of(path: str) -> str:
+    """Own the top-level subtree (`src/client/x.rs` -> `src`), or loose repository-root files.
 
-    The repository root is never returned as `"."`, even when it has an `AGENTS.md`: that name matches no real
-    path prefix and reads like "the whole repository is in scope". When no module marker is found it falls back
-    to the **top-level subtree** (`src/client/x.rs` -> `src`); only loose top-level files belong to
-    `REPOSITORY_MODULE`, which `_in_scope` judges separately.
+    Derive ownership from the Git path alone so adding or removing a document cannot change a write boundary.
     """
-    current = Path(path).parent
-    while current != Path("."):
-        if (repository / current / MODULE_MARKER).is_file():
-            return current.as_posix()
-        current = current.parent
     parts = Path(path).parts
     return parts[0] if len(parts) > 1 else REPOSITORY_MODULE
-
-
-def nested_modules(repository: Path, name: str) -> tuple[str, ...]:
-    """Subdirectories under `name` that carry their own `AGENTS.md`: they are someone else's modules, not `name`'s.
-
-    This list must come from the script: letting every agent derive "what does my module actually contain" from
-    the tree copies one mechanical fact into a dozen briefs, and one bad copy is an out-of-bounds deletion.
-
-    Markers come from `git ls-files`, not a filesystem walk: third-party packages under `target/` or
-    `node_modules/` may ship their own `AGENTS.md`, and a walk would report them as nested modules.
-    """
-    if name == REPOSITORY_MODULE:
-        return ()
-    if not (repository / name).is_dir():
-        return ()
-    nested = {
-        Path(entry).parent.as_posix()
-        for entry in _git(repository, "ls-files", "-z", "--", name).split("\0")
-        if entry and Path(entry).name == MODULE_MARKER and Path(entry).parent.as_posix() != name
-    }
-    return tuple(sorted(nested))
 
 
 def _directories_of(entries: list[str], root: str) -> tuple[str, ...]:
@@ -219,17 +187,15 @@ def scope(repository: Path, base: str | None = None, directories: list[str] | No
             raise DeadCodeScopeError(f"no changed files relative to {base}; the scope is empty")
     counts: dict[str, int] = {}
     for path in paths:
-        name = module_of(repository, path)
+        name = module_of(path)
         counts[name] = counts.get(name, 0) + 1
     modules: list[Module] = []
     for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
-        excludes = nested_modules(repository, name)
         modules.append(
             Module(
                 name=name,
                 file_count=count,
-                excludes=excludes,
-                directories=module_directories(repository, name, excludes),
+                directories=module_directories(repository, name),
             )
         )
     return modules

@@ -15,8 +15,8 @@ _BODY = "".join(f"  total = total + value{index} * {index}\n" for index in range
 
 def _clone_repo(tmp_path: Path) -> Path:
     repository = _repo(tmp_path)
-    _write(repository, "a/AGENTS.md")
-    _write(repository, "b/AGENTS.md")
+    _write(repository, "a/README.md")
+    _write(repository, "b/README.md")
     _write(repository, "a/one.ts", "import { x } from './x'\n\nfunction one() {\n" + _BODY + "}\n")
     # Different layout (extra comment, blank line, indentation) is still the same logic.
     _write(
@@ -81,16 +81,18 @@ def test_clone_min_lines_must_be_meaningful(tmp_path: Path) -> None:
 
 def test_scope_files_in_pr_mode_cover_whole_touched_modules(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    _write(repository, "a/AGENTS.md")
+    _write(repository, "a/README.md")
     _write(repository, "a/old.ts")
-    _write(repository, "a/nested/AGENTS.md")
+    _write(repository, "a/nested/README.md")
     _write(repository, "a/nested/n.ts")
-    _write(repository, "z/AGENTS.md")
+    _write(repository, "z/README.md")
     _write(repository, "z/z.ts")
     _commit(repository, "base")
     base = _head(repository)
     _write(repository, "a/new.ts")
     _commit(repository, "change")
     # Duplicates must be compared with **unchanged** files in the module, so the corpus is the whole touched module, not just changed files;
-    # nested modules and untouched modules are not part of it.
-    assert scope_files(repository, base) == ["a/AGENTS.md", "a/new.ts", "a/old.ts"]
+    # nested directories are included; untouched top-level subtrees are not.
+    assert scope_files(repository, base) == [
+        "a/README.md", "a/nested/README.md", "a/nested/n.ts", "a/new.ts", "a/old.ts"
+    ]

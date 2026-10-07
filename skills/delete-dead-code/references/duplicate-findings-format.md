@@ -56,7 +56,7 @@ member of one group uses the same group id.
 The main agent reviews these in B5 REVIEW (the script cannot judge them):
 
 - `CANONICAL` is the copy production is wired to: confirmed by reading back from production call sites, never by
-  exports, docstrings, what tests point at, or `AGENTS.md`. When versions coexist, the survivor is the newest version.
+  exports, docstrings, or what tests point at. When versions coexist, the survivor is the newest version.
 - A `CONSOLIDATED` reason states which `CANONICAL` it was repointed to, and the evidence of observable equivalence
   (arguments, defaults, failure contract, boundary clamping, side effects).
 - The consolidation adds no forbidden dependency edge and creates no broad shared module.

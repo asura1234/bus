@@ -77,7 +77,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 # Lane ownership, round claiming, and ledger discovery share one implementation with the other
-# review skill (skills/AGENTS.md: shared Python lives in the repo-root cli_extensions/). This code
+# review skill in the repo-root cli_extensions/. This code
 # once existed as byte-identical copies in both skills, and its drift fails silently: a wrong lane
 # only makes the reviewer read someone else's PREV_REVIEWS, with no red light anywhere.
 sys.path.insert(0, str(REPO_ROOT / "cli_extensions"))

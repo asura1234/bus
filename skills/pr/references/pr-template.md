@@ -1,9 +1,9 @@
 <!--
   Bus PR 模板。`pr` skill 读取本文件生成 PR 标题与正文，并用
   `skills/pr/scripts/pr_format_check.py` 机械校验标题与正文是否符合本模板。
-  `pr` 不运行门禁或文档审计：调用方（通常是 orchestrator）没有提供验证证据时用
+  `pr` 不运行门禁：调用方（通常是 orchestrator）没有提供验证证据时用
   `--phase draft`，提供了全部已执行的验证证据时用 `--phase final`（默认）。两种阶段共享
-  相同 section，区别只在 pending checkbox 契约；「文档同步」是唯一可省略的 section。
+  相同 section，区别只在 pending checkbox 契约。
   说明性内容（`>` 引用块与 HTML 注释）是给 AI 的指令，不得出现在最终 PR 里。
 -->
 
@@ -74,15 +74,6 @@
 
 - [变更项 1]
 - [变更项 2]
-
-## 文档同步
-
-> 可选节。调用方提供 `update-docs` audit 时，用
-> `python3 skills/update-docs/scripts/docs_audit.py render-pr --audit <audit>` 的 stdout
-> **完整替换本节（包括标题）**；不要手工填写、翻译、重排或推断。没有 audit 时删除整节
-> （`--phase draft` 下也可保留 `- [ ]` pending 项）。
-
-- [x] [renderer output]
 
 ## 自测 / Agent 测
 

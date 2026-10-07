@@ -7,11 +7,8 @@ the scope is left to natural-language constraints, an agent carrying whole-repos
 outward. Making scope derivation, batching, and artifact verification deterministic scripts is what turns
 out-of-scope edits and self-contradictions into nonzero exits instead of an ignored reminder.
 
-Modules follow the repository's own boundary marker: **module root = the nearest ancestor directory that contains
-`AGENTS.md`**. Bus has no root `AGENTS.md` and only a few marked subtrees (`skills/`, parts of
-`vendor/libghostty-vt/`), so most paths fall back to their top-level subtree (`src/`, `scripts/`, `tests/`,
-`docs/`, `workers/`), and each of those is its own unit. No separate path-layer table is kept; it would inevitably
-drift from the repository's real boundaries.
+In PR mode each top-level subtree (`src/`, `scripts/`, `tests/`, `docs/`, `skills/`, `vendor/`) is one unit;
+loose top-level files have a separate repository-root unit. Use explicit directories for finer boundaries.
 
 The scope has two mutually exclusive sources: by default the modules this PR touches, derived from `base...HEAD`;
 with `--directories`, dead code is searched in the given directories instead (for explicit requests like "sweep
@@ -66,7 +63,6 @@ from dead_code_units import (
     dirty_paths,
     module_directories,
     module_of,
-    nested_modules,
     plan_batches,
     preflight,
     scope,
@@ -89,7 +85,6 @@ __all__ = [
     "handoffs",
     "module_directories",
     "module_of",
-    "nested_modules",
     "plan_batches",
     "preflight",
     "rewritten_assertions",

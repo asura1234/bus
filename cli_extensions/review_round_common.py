@@ -11,9 +11,6 @@ Two copies inevitably drift, and drift here fails silently: a wrong lane ownersh
 only makes some reviewer read someone else's PREV_REVIEWS, so "cross-round reconciliation" is done
 against the wrong history. Wrong ledger discovery lets already-rejected findings reappear, or conversely
 suppresses code findings with plan-mode triage.
-
-`skills/AGENTS.md`: Python shared by multiple skills lives in the repo-root `cli_extensions/`, not inside
-any one skill directory.
 """
 
 from __future__ import annotations

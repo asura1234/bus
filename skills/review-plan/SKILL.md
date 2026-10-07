@@ -83,7 +83,7 @@ ELSE:
 ========== 5. MODE = full ==========
 
 IF MODE == full:
-  first read the material the plan references, the relevant source, and module AGENTS.md files,
+  first read the material the plan references and the relevant source,
   independently establish the current state, then verify the plan's claims; the plan's paraphrase itself is never evidence.
   fallout = `<dirname(SNAPSHOT)>/consumer-fallout.json`
   Run `python3 skills/review-plan/scripts/consumer_fallout.py --plan <PLAN> --output <fallout>`.

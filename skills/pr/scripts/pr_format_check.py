@@ -8,12 +8,10 @@ The template is the sole format source of truth: the title type enum comes from 
 Rules (all fail-closed):
 - The title has the shape `[类型] 简短描述`, the type belongs to the template enum, and the
   description is non-empty with no leading/trailing whitespace.
-- Body H2 sections match the template (same order), and every section is non-empty. `文档同步` is the
-  only optional section: it is present only when the caller supplies an `update-docs` audit.
-- The `draft` phase lets `文档同步` and `自测 / Agent 测` keep `- [ ]` pending items; other sections
-  still forbid unchecked items, and every `文档同步` entry is a `- [ ] ` or `- [x] ` checkbox line.
+- Body H2 sections match the template (same order), and every section is non-empty.
+- The `draft` phase lets `自测 / Agent 测` keep `- [ ]` pending items; other sections forbid unchecked items.
 - In the `final` phase, `自测 / Agent 测` has at least one checkbox and all are `- [x]`; the whole body
-  forbids unchecked items; every `文档同步` entry must be the renderer-output shape `- [x] `.
+  forbids unchecked items.
 - The whole body (outside code fences) allows no HTML comments or leftover template placeholders.
 - `摘要` must contain a valid `- **大小**：` size tier.
 - `目标` / `非目标` must equal the mechanically generated context verbatim, and the review-pr lock must equal the goal.
@@ -29,13 +27,10 @@ from pr_goal_context import parse_context, split_h2_sections
 
 
 SELF_TEST_SECTION = "自测 / Agent 测"
-DOCS_SYNC_SECTION = "文档同步"
 SUMMARY_SECTION = "摘要"
 GOAL_SECTION = "目标"
 NON_GOAL_SECTION = "非目标"
 PHASES = ("draft", "final")
-# Sections the body may omit: the docs audit is optional caller input, never produced by `pr` itself.
-OPTIONAL_SECTIONS = frozenset({DOCS_SYNC_SECTION})
 SIZE_PATTERN = re.compile(r"^- \*\*大小\*\*：`(XS|S|M|L|XL)`", re.MULTILINE)
 # Placeholders are derived from the template body, not hard-coded: a hard-coded list covers only the
 # few thought of at the time, placeholders added to the template later slip through silently, and the
@@ -155,11 +150,7 @@ def check_body(
 
     sections = split_h2_sections(body)
     section_titles = [title for title, _content in sections]
-    expected_sections = [
-        title
-        for title in required_sections
-        if title in section_titles or title not in OPTIONAL_SECTIONS
-    ]
+    expected_sections = list(required_sections)
     if section_titles != expected_sections:
         problems.append(
             "body: H2 sections must exactly match the template order: "
@@ -188,28 +179,11 @@ def check_body(
                 problems.append(
                     f"body: section `{SELF_TEST_SECTION}` needs at least one pending item"
                 )
-        if unchecked and (
-            phase == "final" or title not in {SELF_TEST_SECTION, DOCS_SYNC_SECTION}
-        ):
+        if unchecked and (phase == "final" or title != SELF_TEST_SECTION):
             problems.append(
                 f"body: section `{title}` contains unchecked boxes; "
                 "remove items that were not performed"
             )
-        if title == DOCS_SYNC_SECTION:
-            allowed_prefixes = ("- [ ] ", "- [x] ") if phase == "draft" else ("- [x] ",)
-            for line in content_lines:
-                if line.strip() and not line.startswith(allowed_prefixes):
-                    if phase == "final":
-                        problems.append(
-                            f"body: section `{DOCS_SYNC_SECTION}` must contain only renderer "
-                            f"`- [x] ` lines; found: {line.strip()!r}"
-                        )
-                    else:
-                        problems.append(
-                            f"body: section `{DOCS_SYNC_SECTION}` must contain only "
-                            f"`- [ ] ` or renderer `- [x] ` lines in draft phase; found: {line.strip()!r}"
-                        )
-                    break
         if (
             title == SUMMARY_SECTION
             and SIZE_PATTERN.search("\n".join(content_lines)) is None

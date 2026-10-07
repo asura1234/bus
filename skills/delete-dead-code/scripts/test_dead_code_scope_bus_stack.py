@@ -2,21 +2,23 @@
 
 from pathlib import Path
 
-from dead_code_scope import clone_candidates, nested_modules, rewritten_assertions, scope_files
+from dead_code_scope import clone_candidates, module_directories, rewritten_assertions, scope_files
 from test_dead_code_scope import _commit, _repo, _write
 from test_dead_code_scope_clones import _BODY
 
 
-def test_untracked_agents_md_under_build_output_is_not_a_nested_module(tmp_path: Path) -> None:
+def test_directory_map_ignores_untracked_build_output(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
     _write(repository, ".gitignore", "target/\nnode_modules/\n")
-    _write(repository, "vendor/libghostty-vt/AGENTS.md")
-    _write(repository, "vendor/libghostty-vt/src/inspector/AGENTS.md")
-    _write(repository, "vendor/libghostty-vt/node_modules/some-lib/AGENTS.md")
-    _write(repository, "vendor/libghostty-vt/target/debug/build/AGENTS.md")
+    _write(repository, "vendor/libghostty-vt/README.md")
+    _write(repository, "vendor/libghostty-vt/src/inspector/README.md")
+    _write(repository, "vendor/libghostty-vt/node_modules/some-lib/README.md")
+    _write(repository, "vendor/libghostty-vt/target/debug/build/README.md")
     _commit(repository, "base")
-    # An AGENTS.md shipped by a third-party package or left in build output is not a module of this repository.
-    assert nested_modules(repository, "vendor/libghostty-vt") == ("vendor/libghostty-vt/src/inspector",)
+    # The scan map contains tracked source directories, not package or build output.
+    assert module_directories(repository, "vendor") == (
+        "vendor", "vendor/libghostty-vt", "vendor/libghostty-vt/src", "vendor/libghostty-vt/src/inspector"
+    )
 
 
 def test_rust_and_python_assertion_rewrites_are_flagged(tmp_path: Path) -> None:

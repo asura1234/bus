@@ -1,22 +1,21 @@
 ---
 name: pr
-description: Feature-branch PR workflow. Land uncommitted work, rebase onto origin/master, then create or refresh an English Draft PR and its body. It does not run gates, documentation audits, or dead-code cleanup; the orchestrator sequences gate-and-fix, update-docs, and delete-dead-code itself and may hand their results to pr as optional --verification / --docs-audit inputs. Use when the user asks to "open a PR", "create a PR", "submit a PR", "update a PR", or "generate a PR description".
+description: Feature-branch PR workflow. Land uncommitted work, rebase onto origin/master, then create or refresh an English Draft PR and its body. It does not run gates or dead-code cleanup; the orchestrator sequences gate-and-fix and delete-dead-code itself and may hand their results to pr as optional --verification input. Use when the user asks to "open a PR", "create a PR", "submit a PR", "update a PR", or "generate a PR description".
 ---
 
 # PR
 
 ```text
-INPUT $ARGUMENTS = [--plan <plan-file>]... [--verification <file>] [--docs-audit <audit>]
+INPUT $ARGUMENTS = [--plan <plan-file>]... [--verification <file>]
 plans = every plan path the developer supplied this time, in order of appearance; never guess from diff, commits, or historical state.
 verification = optional Markdown file of `- [x] ` lines, each naming verification actually executed and the commit it proves
   (for example a gate-and-fix PASS artifact with its Head); supplied by the caller, never produced here.
-docs_audit = optional finalized `update-docs` audit path; supplied by the caller, never produced here.
 
 -- Rules
 - Code narrative takes only the current repository, current feature branch, and actual changes as its source of truth; plans lock only goal and non-goals.
 - Prior review-plan or review-pr invocation is not required.
-- This skill never runs or requires `gate-and-fix`, `update-docs`, or `delete-dead-code`, or their artifacts. The orchestrator
-  sequences them; their results reach the body only through `--verification` / `--docs-audit`.
+- This skill never runs or requires `gate-and-fix` or `delete-dead-code`, or their artifacts. The orchestrator
+  sequences them; their results reach the body only through `--verification`.
 - Do not read or guess another skill's private control state, callbacks, or temporary artifacts; the only cross-skill
   handoff is `temp/review-pr/<branch>/.locked-goal` and `temp/review-pr/<branch>/.locked-non-goals`, written and returned by `pr_goal_context.py`.
 - PR title and narrative are English; fixed headings and machine tokens stay byte-compatible with the format SOT
@@ -32,7 +31,6 @@ IF repo missing
   ERROR "The current directory is not a Git repository."
 IF branch empty OR branch IN {main, master}
   ERROR "A PR cannot be created from detached HEAD or main/master."
-IF docs_audit given AND the file is missing: ERROR "The supplied docs audit does not exist."
 IF verification given AND the file is missing or contains a line that is not a `- [x] ` item:
   ERROR "The supplied verification must contain only `- [x] ` lines."
 
@@ -111,13 +109,9 @@ from the live worktree, live `HEAD`, or the mutable `origin/master`.
 Fill every template section:
 - Insert the full `## 目标` and `## 非目标` sections of GOAL_CONTEXT_FILE verbatim; never add source labels,
   summaries, translations, or separators. Same-named sections from multiple plans were already appended by the renderer in input order.
-- `## 文档同步`: IF docs_audit given, run the following and insert stdout verbatim in the section's template
-  position (do not hand-edit, translate, reorder, or infer):
-    python3 skills/update-docs/scripts/docs_audit.py render-pr --audit "<docs_audit>"
-  ELSE omit the whole section.
 - `## 自测 / Agent 测`: IF verification given, insert its `- [x] ` lines verbatim and set phase = final.
   ELSE write one `- [ ] ` item stating that readiness verification was not provided to `pr`, and set phase = draft.
-  Never claim gates, docs audits, E2E, review, or manual verification that the caller did not supply.
+  Never claim gates, E2E, review, or manual verification that the caller did not supply.
 - When the diff touches delivery, callbacks or launch, note in `## 其他说明` that `just e2e` (live model usage)
   is pending unless the supplied verification already records it.
 
@@ -163,9 +157,9 @@ Report:
   - PR title and URL;
   - whether the PR was created as a Draft or an existing PR was refreshed (its draft/ready status unchanged);
   - head (the commit the body describes) and commits created or updated;
-  - the phase used, and which optional inputs (`--verification`, `--docs-audit`) were supplied or absent;
+  - the phase used, and whether optional `--verification` was supplied or absent;
   - `GOAL_CONTEXT_FILE`, plus `LOCKED_GOAL_FILE` and `LOCKED_NON_GOALS_FILE` for `review-pr` to consume;
   - pr_format_check result on the published PR;
-  - verification still pending (gates, docs audit, E2E, manual) for the orchestrator to sequence;
+  - verification still pending (gates, E2E, manual) for the orchestrator to sequence;
   - unrelated dirty files explicitly excluded from the PR.
 ```
