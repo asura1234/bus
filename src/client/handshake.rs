@@ -10,8 +10,9 @@ use tracing::info;
 
 use crate::ipc::LocalStream;
 use crate::protocol::endpoint::{
-    EndpointServerWelcome, BLOB_CODEC_V1, ENDPOINT_HELLO_KIND, ENDPOINT_PROTOCOL_GENERATION,
-    ENDPOINT_WELCOME_KIND, INPUT_CODEC_V1, SNAPSHOT_CODEC_V1, SURFACE_CODEC_V1,
+    EndpointClientHello, EndpointServerWelcome, BLOB_CODEC_V1, ENDPOINT_HELLO_KIND,
+    ENDPOINT_PROTOCOL_GENERATION, ENDPOINT_WELCOME_KIND, INPUT_CODEC_V1, SNAPSHOT_CODEC_V1,
+    SURFACE_CODEC_V1,
 };
 use crate::protocol::{self, ClientMessage, ServerMessage, MAX_FRAME_SIZE};
 
@@ -106,28 +107,28 @@ pub(super) fn do_handshake(
         .map_err(ClientError::ConnectionFailed)?;
 
     let client_build = crate::build_info::version();
-    let hello_json = serde_json::json!({
-        "generation": ENDPOINT_PROTOCOL_GENERATION,
-        "client_version": client_build,
-        "cell_width_px": cell_width_px,
-        "cell_height_px": cell_height_px,
-        "surface_size": shell_surface_size,
-        "pixel_mouse": exact_cell_size && cfg!(unix),
-        "direct_graphics": exact_cell_size
+    let hello = EndpointClientHello {
+        generation: ENDPOINT_PROTOCOL_GENERATION,
+        client_version: client_build.clone(),
+        cell_width_px,
+        cell_height_px,
+        surface_size: shell_surface_size,
+        pixel_mouse: exact_cell_size && cfg!(unix),
+        direct_graphics: exact_cell_size
             && cell_width_px > 0
             && cell_height_px > 0
             && direct_graphics_profile_allowed(),
-        "endpoint_keybindings": endpoint_keybindings,
-        "mouse_capture": mouse_capture,
-        "surface_active": true,
-        "snapshot_codecs": [SNAPSHOT_CODEC_V1],
-        "surface_codecs": [SURFACE_CODEC_V1],
-        "input_codecs": [INPUT_CODEC_V1],
-        "blob_codecs": [BLOB_CODEC_V1],
-    });
+        endpoint_keybindings,
+        mouse_capture,
+        surface_active: true,
+        snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
+        surface_codecs: vec![SURFACE_CODEC_V1.into()],
+        input_codecs: vec![INPUT_CODEC_V1.into()],
+        blob_codecs: vec![BLOB_CODEC_V1.into()],
+    };
     let hello = ClientMessage::EndpointControl {
         kind: ENDPOINT_HELLO_KIND.into(),
-        data: serde_json::to_string(&hello_json).map_err(|error| {
+        data: serde_json::to_string(&hello).map_err(|error| {
             ClientError::ConnectionFailed(io::Error::new(io::ErrorKind::InvalidData, error))
         })?,
     };
