@@ -40,7 +40,12 @@ rustPlatform.buildRustPackage {
     fileset = lib.fileset.intersection (lib.fileset.fromSource (lib.sources.cleanSource ./..)) (
       lib.fileset.unions [
         ../assets
+        # The orchestrator embeds these docs and the workflow skill at compile time.
+        ../docs
+        ../skills/workflow-create/SKILL.md
         ../src
+        # Unit tests embed fixtures outside src; keep those compile-time inputs too.
+        ../tests/fixtures
         ../vendor/libghostty-vt
         ../vendor/libghostty-vt.vendor.json
         ../vendor/portable-pty
