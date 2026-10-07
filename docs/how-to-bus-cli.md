@@ -764,9 +764,14 @@ Save and quit the interactive Bus, as Ctrl+Q does in the UI:
 bus quit
 ```
 
-A successful `quit` means the request was queued for the UI, which then saves
-unsent drafts and exits. It does not wait for the exit. The session's server and
-its agents keep running so `bus resume` can reattach to them.
+A successful `quit` means the request was queued for the UI. The UI saves
+unsent drafts, then stops the session's server and every agent pane, the way
+`bus stop` does, and exits. It does not wait for the exit. `bus resume` then
+relaunches each agent into its saved conversation.
+
+To restart only the UI while the agents keep running, press F10 in the UI
+instead: it saves drafts and exits without stopping the server, and
+`bus resume --last` reattaches to the running agents.
 
 Stop the session's server and every agent pane it hosts:
 
@@ -778,7 +783,8 @@ bus stop
 last opened session) and works without `--dev`. It waits until the server is
 gone and prints `{"stopped":true}`, or `{"stopped":false}` when no server was
 running. An attached UI loses its server and exits without saving drafts, so
-run `bus quit` (or press Ctrl+Q) first, as the end-to-end check does.
+quit the UI with `bus quit` or Ctrl+Q instead, which saves first and then stops
+the server itself.
 A destructive command without `--confirm` fails and names the missing flag.
 
 Deletion closes an agent's terminal only while the running server still

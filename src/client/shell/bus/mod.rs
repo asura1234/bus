@@ -112,8 +112,13 @@ impl super::ClientShellState {
     pub(crate) fn tick_bus(&mut self) -> bool {
         self.bus.as_mut().is_some_and(BusUi::tick)
     }
-    pub(crate) fn bus_exit_ready(&self) -> bool {
-        self.bus.as_ref().is_some_and(|bus| bus.exit_ready)
+    /// Ends the client once Bus has saved, stopping the server unless the
+    /// human closed only the UI.
+    pub(crate) fn finish_bus_exit(&self, outcome: &mut super::ClientShellInput) {
+        if let Some(bus) = self.bus.as_ref().filter(|bus| bus.exit_ready) {
+            outcome.detach = true;
+            outcome.keep_server = bus.keep_server;
+        }
     }
     pub(crate) fn edit_bus_composer(&mut self) -> Result<(), String> {
         let bus = self

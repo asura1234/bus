@@ -24,8 +24,8 @@ Ctrl+G         Open the prompt in $EDITOR
 Ctrl+V         Attach a clipboard image
 Ctrl+C         Clear the draft (never quits Bus)
 Mouse drag     Select notes, history or draft text and copy it
-@              Choose agents (Shift+2 on US keyboards)
-+ / Ctrl+F     Add files (Shift+= on US keyboards)
+Ctrl+P         Choose agents
+Ctrl+F         Add files
 Ctrl+Shift+E   Toggle full-height / compact composer
 Page Up/Down   Scroll the draft, or the notes while editing (F3)
 Mouse wheel    Scroll sidebar, notes, history, recipients or draft under the pointer
@@ -59,5 +59,6 @@ Ctrl+Enter     Confirm form
 Esc            Cancel
 
 Quit
-Ctrl+Q         Save and quit (retry if saving failed)
+Ctrl+Q         Save, stop the agents and the server, quit
+F10            Save and close only the UI; agents keep running
 Ctrl+Shift+Q   Force quit only after an unsaved warning";

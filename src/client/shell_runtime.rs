@@ -1,5 +1,20 @@
 use super::*;
 
+/// Set when the human quits Bus. The server and its agents stop only after the
+/// client has restored the terminal, so the stop wait and any error stay readable.
+static STOP_SERVER_AFTER_QUIT: AtomicBool = AtomicBool::new(false);
+
+/// Runs `stop` once if Bus was quit; a plain connection loss leaves the server alone.
+pub(super) fn stop_server_after_quit(
+    stop: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if STOP_SERVER_AFTER_QUIT.swap(false, Ordering::AcqRel) {
+        stop()
+    } else {
+        Ok(())
+    }
+}
+
 pub(super) fn dispatch_client_shell_actions(
     actions: Vec<shell::ClientShellAction>,
     endpoint_commands: &mut endpoint_commands::EndpointCommands,
@@ -119,6 +134,11 @@ pub(super) fn finish_client_shell_input(
     endpoint_commands: &mut endpoint_commands::EndpointCommands,
 ) -> Result<bool, ClientError> {
     if outcome.detach {
+        // Only Bus quits a shell client, and quitting Bus ends the whole session
+        // like `bus stop`: Bus state is already saved, the server saves the rest.
+        if !outcome.keep_server {
+            STOP_SERVER_AFTER_QUIT.store(true, Ordering::Release);
+        }
         let _ = write_to_server(connection, &ClientMessage::Detach);
         return Ok(true);
     }
@@ -178,4 +198,85 @@ pub(super) fn finish_client_shell_input(
         state.present_frame(frame);
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct RecordingTransport(Arc<Mutex<Vec<ClientMessage>>>);
+
+    impl endpoint::EndpointTransport for RecordingTransport {
+        fn send(&mut self, message: &ClientMessage) -> io::Result<()> {
+            self.0.lock().unwrap().push(message.clone());
+            Ok(())
+        }
+    }
+
+    fn client_state() -> ClientState {
+        ClientState {
+            blit_encoder: render_ansi::BlitEncoder::new(),
+            mouse_capture_active: false,
+            endpoint_mouse_capture_requested: false,
+            endpoint_sgr_pixels_requested: false,
+            host_palette_query_pending: Arc::default(),
+            host_palette_query_progress: Arc::default(),
+            shell_mouse_capture_preference: false,
+            pane_keyboard_report_all: false,
+            keyboard_report_all_active: false,
+            reported_size: (80, 24),
+            reported_cell_size: (0, 0),
+            sound_config: crate::config::SoundConfig::default(),
+            kitty_graphics_enabled: false,
+            pixel_geometry_enabled: false,
+            pixel_geometry_exact: false,
+            redraw_on_focus_gained: false,
+            repaint_pending: false,
+            draw_host_cursor: false,
+            detached_process_children: Vec::new(),
+            shell: None,
+        }
+    }
+
+    #[test]
+    fn quitting_bus_detaches_then_stops_the_server_once() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let mut connection = endpoint::ServerConnection::new(RecordingTransport(sent.clone()));
+        let mut commands = endpoint_commands::EndpointCommands::default();
+        let mut stops = 0;
+        // Nothing quit yet: losing the connection must not stop the server.
+        stop_server_after_quit(|| {
+            stops += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(stops, 0);
+
+        let outcome = shell::ClientShellInput {
+            detach: true,
+            ..Default::default()
+        };
+        let exit = finish_client_shell_input(
+            &mut client_state(),
+            outcome,
+            None,
+            &mut connection,
+            &mut commands,
+        )
+        .unwrap();
+        assert!(exit, "a Bus quit ends the client loop");
+        assert!(matches!(
+            sent.lock().unwrap().as_slice(),
+            [ClientMessage::Detach]
+        ));
+        for _ in 0..2 {
+            stop_server_after_quit(|| {
+                stops += 1;
+                Ok(())
+            })
+            .unwrap();
+        }
+        assert_eq!(stops, 1, "one quit stops the server exactly once");
+    }
 }

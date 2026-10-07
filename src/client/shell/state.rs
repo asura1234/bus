@@ -145,6 +145,8 @@ pub(crate) enum ClientShellAction {
 #[derive(Default)]
 pub(crate) struct ClientShellInput {
     pub detach: bool,
+    /// Detach without stopping the server, so agents keep running for a resume.
+    pub keep_server: bool,
     pub repaint: bool,
     pub resize: bool,
     pub query_host_appearance: bool,

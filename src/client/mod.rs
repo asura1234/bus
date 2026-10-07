@@ -250,6 +250,13 @@ fn run_client_with_mode(log_message: &'static str) -> io::Result<()> {
 
     // Restore the terminal before printing any final status message.
     let terminal_restore_failed = terminal_guard.restore().is_err();
+    let stopped = stop_server_after_quit(|| {
+        eprintln!("Stopping Bus and its agents...");
+        crate::session::stop_active_server()
+    });
+    if let Err(error) = &stopped {
+        let _ = writeln!(io::stderr(), "bus: could not stop the server: {error}");
+    }
 
     if let Err(err) = result {
         let _ = writeln!(io::stderr(), "herdr: {err}");
@@ -273,7 +280,7 @@ fn run_client_with_mode(log_message: &'static str) -> io::Result<()> {
 
     rt.shutdown_timeout(Duration::from_millis(100));
     crate::logging::shutdown("client");
-    Ok(())
+    stopped.map_err(io::Error::other)
 }
 
 /// The main client event loop.
@@ -860,7 +867,7 @@ async fn run_client_loop(
                         let shell = state.shell.as_mut().expect("checked shell mode");
                         let mut outcome = shell.tick_selection_autoscroll(now);
                         outcome.repaint |= shell.tick_bus();
-                        outcome.detach |= shell.bus_exit_ready();
+                        shell.finish_bus_exit(&mut outcome);
                         if let Some(expired) = expired {
                             let (repaint, actions) = shell.handle_endpoint_result(
                                 &expired.boot_id,

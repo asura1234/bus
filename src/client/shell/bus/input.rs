@@ -31,7 +31,11 @@ impl BusUi {
             }
             let quit = matches!(key.code, KeyCode::Char('q' | 'Q'))
                 && key.modifiers.contains(KeyModifiers::CONTROL);
-            if quit && key.kind != KeyEventKind::Release {
+            // F10 saves like Ctrl+Q but leaves the server and agents running, so
+            // a UI-only fix can restart the client without relaunching agents.
+            let close_ui = key.code == KeyCode::F(10);
+            if (quit || close_ui) && key.kind != KeyEventKind::Release {
+                self.keep_server = close_ui;
                 if key.modifiers.contains(KeyModifiers::SHIFT) && self.force_exit_available {
                     outcome.detach = true;
                 } else {
@@ -948,15 +952,9 @@ impl BusUi {
             }
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => self.action(Action::NewAgent),
             (KeyCode::Char('f'), KeyModifiers::CONTROL) => self.action(Action::Files),
-            (KeyCode::Char('@' | '+'), modifiers)
-                if !self.notes_focus && modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
-            {
-                self.action(if code == KeyCode::Char('@') {
-                    Action::Recipients
-                } else {
-                    Action::Files
-                });
-            }
+            // Pickers sit on Ctrl chords: every printable key, shifted symbols
+            // like @ and + included, must type into the composer.
+            (KeyCode::Char('p'), KeyModifiers::CONTROL) => self.action(Action::Recipients),
             (KeyCode::Char('j'), KeyModifiers::CONTROL) | (KeyCode::Enter, KeyModifiers::SHIFT) => {
                 self.insert("\n")
             }

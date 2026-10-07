@@ -300,41 +300,91 @@ fn creation_events_survive_snapshots_from_before_the_created_target() {
     assert_eq!(ui.terminal, Some(agent));
 }
 
+/// The three ways terminals report a shifted symbol: the bare symbol, the
+/// symbol with SHIFT, and the US base key with SHIFT plus the shifted codepoint.
+fn shifted_symbol_encodings(symbol: char, base: char) -> [TerminalKey; 3] {
+    [
+        TerminalKey::new(KeyCode::Char(symbol), KeyModifiers::NONE),
+        TerminalKey::new(KeyCode::Char(symbol), KeyModifiers::SHIFT),
+        TerminalKey::new(KeyCode::Char(base), KeyModifiers::SHIFT)
+            .with_shifted_codepoint(symbol as u32),
+    ]
+}
+
 #[test]
-fn composer_symbol_shortcuts_work_for_legacy_and_shifted_terminal_keys() {
-    for (symbol, base) in [('@', '2'), ('+', '=')] {
-        for input in [
-            TerminalKey::new(KeyCode::Char(symbol), KeyModifiers::NONE),
-            TerminalKey::new(KeyCode::Char(symbol), KeyModifiers::SHIFT),
-            TerminalKey::new(KeyCode::Char(base), KeyModifiers::SHIFT)
-                .with_shifted_codepoint(symbol as u32),
-        ] {
+fn typing_plus_in_the_composer_inserts_plus() {
+    for input in shifted_symbol_encodings('+', '=') {
+        let (mut ui, room, _) = fixture();
+        ui.input(
+            &RawInputEvent::Key(input.clone()),
+            false,
+            &mut Default::default(),
+        );
+        assert_eq!(ui.locals[&room].text.text, "+", "for {input:?}");
+        assert!(ui.form.is_none() && !ui.recipient_menu, "for {input:?}");
+    }
+}
+
+#[test]
+fn every_shifted_symbol_types_into_the_composer() {
+    let shifted = [
+        ('~', '`'),
+        ('!', '1'),
+        ('@', '2'),
+        ('#', '3'),
+        ('$', '4'),
+        ('%', '5'),
+        ('^', '6'),
+        ('&', '7'),
+        ('*', '8'),
+        ('(', '9'),
+        (')', '0'),
+        ('_', '-'),
+        ('+', '='),
+        ('{', '['),
+        ('}', ']'),
+        ('|', '\\'),
+        (':', ';'),
+        ('"', '\''),
+        ('<', ','),
+        ('>', '.'),
+        ('?', '/'),
+    ];
+    for (symbol, base) in shifted {
+        for input in shifted_symbol_encodings(symbol, base) {
             let (mut ui, room, agent) = fixture();
-            ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
             ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
             ui.input(
                 &RawInputEvent::Key(input.clone()),
                 false,
                 &mut Default::default(),
             );
-            if symbol == '@' {
-                assert!(ui.recipient_menu, "picker missing for {input:?}");
-                assert!(ui.form.is_none());
-            } else {
-                assert!(
-                    matches!(ui.form, Some(forms::Form::Files(_))),
-                    "file picker missing for {input:?}"
-                );
-            }
-            assert_eq!(ui.locals[&room].text.text, "keep draft");
-            assert_eq!(ui.locals[&room].recipients, [agent].into());
+            assert_eq!(
+                ui.locals[&room].text.text,
+                symbol.to_string(),
+                "{symbol} was not typed for {input:?}"
+            );
+            assert!(ui.form.is_none() && !ui.recipient_menu);
             assert!(ui.send_intent.is_none());
         }
     }
 }
 
 #[test]
-fn composer_symbol_shortcuts_leave_paste_notes_and_form_text_literal() {
+fn ctrl_chords_open_the_agent_and_file_pickers() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
+    key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
+    assert!(ui.recipient_menu && ui.form.is_none());
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    assert!(matches!(ui.form, Some(forms::Form::Files(_))));
+    assert_eq!(ui.locals[&room].text.text, "keep draft");
+}
+
+#[test]
+fn symbols_stay_literal_in_paste_notes_and_forms() {
     let (mut ui, room, _) = fixture();
     for event in [
         RawInputEvent::Paste("@author + file.md".into()),
@@ -1655,7 +1705,7 @@ fn composer_uses_full_height_and_toggle_preserves_draft_and_recipients() {
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     assert!(room_screen(&mut ui, 100, 30).contains("Add notes"));
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Char('@'), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
     assert!(room_screen(&mut ui, 100, 30).contains("[x] author"));
     key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
@@ -1711,7 +1761,7 @@ fn composer_full_height_picker_covers_draft() {
         .text
         .insert(&"underlying-draft-suffix-should-not-bleed-through\n".repeat(80));
     ui.compute_view(100, 30);
-    key(&mut ui, KeyCode::Char('@'), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
     ui.compute_view(100, 30);
     let hit = ui
         .view
@@ -1807,7 +1857,7 @@ fn consecutive_sends_keep_checked_recipients_and_queue_the_successor() {
             },
         )
         .unwrap();
-    key(&mut ui, KeyCode::Char('@'), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
@@ -2245,6 +2295,24 @@ fn ctrl_q_still_quits_from_room_and_agent_terminal_after_saving() {
         )));
         assert_eq!(ui.locals[&room].text.text, "keep this draft");
         assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text == "keep this draft")));
+    }
+}
+
+#[test]
+fn ctrl_q_stops_the_server_once_saved_and_f10_keeps_it_running() {
+    for (bytes, keep_server) in [(b"\x11".as_slice(), false), (b"\x1b[21~", true)] {
+        let (ui, _, _) = fixture();
+        let mut shell = shell_with(ui);
+        let outcome = shell.handle_input_bytes(bytes);
+        assert!(!outcome.detach, "{bytes:?} must wait for the save");
+        let ui = shell.bus.as_mut().unwrap();
+        assert!(ui.quitting.is_some(), "{bytes:?} must save and quit");
+        // Stands in for the Shutdown acknowledgement after every save landed.
+        ui.exit_ready = true;
+        let mut outcome = crate::client::shell::ClientShellInput::default();
+        shell.finish_bus_exit(&mut outcome);
+        assert!(outcome.detach);
+        assert_eq!(outcome.keep_server, keep_server, "{bytes:?}");
     }
 }
 

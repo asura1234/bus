@@ -37,9 +37,10 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   not. On a dev build, when you hit a Bus bug, dispatch a worker to fix it in the
   Bus repository and land it with `commit-and-push`. If the fix needs a restart,
   ask the human: you cannot restart the Bus you run in. A fix in the UI or the
-  Bus logic (`src/client/`, `src/bus/`) needs Ctrl+Q in the Bus terminal, then
-  `./run dev resume --last`; agents keep running and reattach. A fix in the
-  server (`src/server/`, `src/pane/`, `src/pty/`, `src/api/`) also needs
-  `./run dev stop` before the resume; every agent then relaunches into its
+  Bus logic (`src/client/`, `src/bus/`) needs F10 in the Bus terminal (save and
+  close only the UI), then `./run dev resume --last`; agents keep running and
+  reattach. A fix in the server (`src/server/`, `src/pane/`, `src/pty/`,
+  `src/api/`) needs Ctrl+Q instead, which saves and stops the server and its
+  agents, then `./run dev resume --last`; every agent then relaunches into its
   session. *Why:* the human sees the fix in the same session, and a dev build is
   where Bus is meant to improve.
