@@ -261,8 +261,6 @@ fn restore_workspace(
         identity_cwd: snap.identity_cwd.clone(),
         cached_identity_cwd: snap.identity_cwd.clone(),
         cached_auto_label,
-        metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
-        metadata_token_sequences: HashMap::new(),
         public_pane_numbers,
         next_public_pane_number,
         next_public_tab_number,

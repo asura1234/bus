@@ -20,7 +20,6 @@ mod ipc;
 mod kitty_graphics;
 mod layout;
 mod logging;
-mod metadata_tokens;
 #[cfg(any(windows, test))]
 mod noninteractive_process;
 mod pane;

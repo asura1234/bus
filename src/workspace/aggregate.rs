@@ -9,38 +9,27 @@ use super::{Tab, Workspace};
 /// Detail info for a single pane, used by the agent detail panel.
 pub struct PaneDetail {
     pub pane_id: PaneId,
-    pub tab_idx: usize,
-    pub agent_kind_label: Option<String>,
     pub state: AgentState,
     pub seen: bool,
     pub last_agent_state_change_seq: Option<u64>,
-    pub tokens: HashMap<String, String>,
 }
 
 impl Tab {
-    fn pane_details(
-        &self,
-        terminals: &HashMap<TerminalId, TerminalState>,
-        tab_idx: usize,
-    ) -> Vec<PaneDetail> {
+    fn pane_details(&self, terminals: &HashMap<TerminalId, TerminalState>) -> Vec<PaneDetail> {
         self.layout
             .pane_ids()
             .iter()
             .filter_map(|id| {
                 let pane = self.panes.get(id)?;
                 let terminal = terminals.get(&pane.attached_terminal_id)?;
-                let agent_kind_label = terminal.effective_agent_label().map(str::to_string);
-                if terminal.agent_name.is_none() && agent_kind_label.is_none() {
+                if terminal.agent_name.is_none() && terminal.effective_agent_label().is_none() {
                     return None;
                 }
                 Some(PaneDetail {
                     pane_id: *id,
-                    tab_idx,
-                    agent_kind_label,
                     state: terminal.state,
                     seen: pane.seen,
                     last_agent_state_change_seq: terminal.last_agent_state_change_seq,
-                    tokens: HashMap::new(),
                 })
             })
             .collect()
@@ -77,8 +66,7 @@ impl Workspace {
     pub fn pane_details(&self, terminals: &HashMap<TerminalId, TerminalState>) -> Vec<PaneDetail> {
         self.tabs
             .iter()
-            .enumerate()
-            .flat_map(|(tab_idx, tab)| tab.pane_details(terminals, tab_idx))
+            .flat_map(|tab| tab.pane_details(terminals))
             .collect()
     }
 }
@@ -157,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_details_use_tab_vector_index_not_stable_public_tab_number() {
+    fn pane_details_preserve_identity_after_tab_removal() {
         let mut ws = Workspace::test_new("test");
         let removed_tab = ws.test_add_tab(Some("removed"));
         let survivor_tab = ws.test_add_tab(Some("survivor"));
@@ -176,6 +164,7 @@ mod tests {
             .expect("surviving tab agent should be listed");
 
         assert_eq!(ws.tabs[1].number, 3);
-        assert_eq!(survivor.tab_idx, 1);
+        assert_eq!(survivor.pane_id, ws.tabs[1].root_pane);
+        assert_eq!(details.len(), 1);
     }
 }

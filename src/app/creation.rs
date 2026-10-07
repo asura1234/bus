@@ -388,7 +388,7 @@ impl App {
                 crate::workspace::public_tab_id_for_number(&ws.id, ws.active_tab + 1)
             }),
             agent_status: pane_agent_status(agg_state, seen),
-            tokens: ws.metadata_tokens.values(),
+            tokens: Default::default(),
         }
     }
 }

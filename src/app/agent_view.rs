@@ -19,10 +19,6 @@ pub(crate) fn apply_agent_view(app: &AppState, entries: &mut [AgentPanelEntry]) 
     }
 }
 
-pub(crate) fn presented_workspace_idx(app: &AppState) -> Option<usize> {
-    app.active
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,15 +93,5 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].ws_idx, 1);
         assert_eq!(entries[1].ws_idx, 0);
-    }
-
-    #[test]
-    fn presented_workspace_tracks_the_active_workspace() {
-        let mut state = state_with_agents();
-        assert_eq!(presented_workspace_idx(&state), Some(0));
-        state.active = Some(1);
-        assert_eq!(presented_workspace_idx(&state), Some(1));
-        state.active = None;
-        assert_eq!(presented_workspace_idx(&state), None);
     }
 }
