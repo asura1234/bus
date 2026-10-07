@@ -20,6 +20,12 @@ pub(super) struct DeleteDialog {
 
 impl BusUi {
     pub(super) fn start_delete(&mut self, target: DeleteTarget) {
+        if let DeleteTarget::Room(id) = target {
+            if self.is_master_room(id) {
+                self.error = Some(ModelError::MasterRoomFixed.to_string());
+                return;
+            }
+        }
         let exists = match target {
             DeleteTarget::Room(id) => self.snapshot.state.room(id).is_some(),
             DeleteTarget::Agent(id) => self.snapshot.state.agent(id).is_some(),
@@ -68,7 +74,7 @@ impl BusUi {
         // Once confirmed, a not-yet-dispatched room prompt must not outrun deletion.
         self.pending.retain(|pending| {
             pending.enqueued
-                || !matches!(pending.command, BusCommand::Submit(id) if Some(id) == room)
+                || !matches!(pending.command, BusCommand::Submit(id) | BusCommand::SubmitQueued(id) if Some(id) == room)
         });
         let command = match target {
             DeleteTarget::Room(id) => BusCommand::DeleteRoom(id),
@@ -188,10 +194,10 @@ pub(super) fn target_exists(command: &BusCommand, state: &BusState) -> bool {
         | BusCommand::SetNotes(id, _)
         | BusCommand::SetDraftText(id, _)
         | BusCommand::SetRecipients(id, _)
-        | BusCommand::Quote(id, _)
         | BusCommand::AttachFile(id, _)
         | BusCommand::RemoveFile(id, _)
-        | BusCommand::Submit(id) => state.room(*id).is_some(),
+        | BusCommand::Submit(id)
+        | BusCommand::SubmitQueued(id) => state.room(*id).is_some(),
         BusCommand::RenameAgent(id, _)
         | BusCommand::SetDetails(id, _)
         | BusCommand::FocusTerminal(id)

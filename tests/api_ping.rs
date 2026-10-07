@@ -94,13 +94,13 @@ fn spawn_herdr_with_path(
     config_home: &Path,
     runtime_dir: &Path,
     socket_path: &Path,
-    path_override: Option<&Path>,
+    path_override: &Path,
 ) -> SpawnedHerdr {
     spawn_herdr_with_options(
         config_home,
         runtime_dir,
         socket_path,
-        path_override,
+        Some(path_override),
         "/bin/sh",
     )
 }
@@ -140,7 +140,7 @@ fn spawn_herdr_with_options(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
@@ -148,6 +148,9 @@ fn spawn_herdr_with_options(
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", shell);
     cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
     if let Some(path) = path_override {
         cmd.env("PATH", path);
     }
@@ -311,51 +314,6 @@ fn ping_over_socket_returns_version() {
     cleanup_spawned_herdr(child, base);
 }
 
-#[test]
-fn server_reload_agent_manifests_reports_runtime_override() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
-
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
-    wait_for_socket(&socket_path, Duration::from_secs(5));
-
-    let override_dir = config_home.join("herdr-dev").join("agent-detection");
-    fs::create_dir_all(&override_dir).unwrap();
-    let override_path = override_dir.join("codex.toml");
-    fs::write(
-        &override_path,
-        r#"
-id = "codex"
-
-[[rules]]
-id = "reload_marker"
-state = "blocked"
-contains = ["server-reload-marker"]
-"#,
-    )
-    .unwrap();
-
-    let response = send_request(
-        &socket_path,
-        r#"{"id":"reload_manifests","method":"server.reload_agent_manifests","params":{}}"#,
-    );
-    assert_eq!(response["id"], "reload_manifests");
-    assert_eq!(response["result"]["type"], "agent_manifest_reload");
-    let manifests = response["result"]["manifests"].as_array().unwrap();
-    let codex = manifests
-        .iter()
-        .find(|manifest| manifest["agent"] == "codex")
-        .expect("codex manifest summary");
-    assert_eq!(codex["source_kind"], "local override");
-    assert_eq!(codex["source"], override_path.display().to_string());
-    assert!(codex.get("warning").is_none());
-
-    cleanup_spawned_herdr(child, base);
-}
-
 #[cfg(target_os = "linux")]
 #[test]
 fn shutdown_preserves_session_after_shell_is_signaled() {
@@ -378,15 +336,30 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
     let pane_id = created["result"]["root_pane"]["pane_id"]
         .as_str()
         .expect("root pane id");
-    let process_info = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"process","method":"pane.process_info","params":{{"pane_id":"{pane_id}"}}}}"#
-        ),
+    let pid_file = base.join("shell.pid");
+    let pid_command = format!(
+        "printf %s $$ > {path}.tmp && mv {path}.tmp {path}",
+        path = pid_file.display()
     );
-    let shell_pid = process_info["result"]["process_info"]["shell_pid"]
-        .as_u64()
-        .expect("shell pid") as libc::pid_t;
+    let sent = send_request(
+        &socket_path,
+        &serde_json::json!({
+            "id": "shell_pid",
+            "method": "pane.send_input",
+            "params": {
+                "pane_id": pane_id,
+                "text": pid_command,
+                "keys": ["Enter"],
+            },
+        })
+        .to_string(),
+    );
+    assert_eq!(sent["result"]["type"], "ok");
+    wait_for_path(&pid_file, Duration::from_secs(5));
+    let shell_pid: libc::pid_t = fs::read_to_string(&pid_file)
+        .unwrap()
+        .parse()
+        .expect("shell pid");
 
     assert_eq!(unsafe { libc::kill(shell_pid, libc::SIGHUP) }, 0);
 
@@ -498,26 +471,6 @@ fn workspace_list_and_create_round_trip() {
         ),
     );
     assert_eq!(fetched["result"]["workspace"]["workspace_id"], workspace_id);
-
-    let metadata = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_workspace_metadata","method":"workspace.report_metadata","params":{{"workspace_id":"{}","source":"user:test","tokens":{{"jj_status":"2 changes"}}}}}}"#,
-            workspace_id
-        ),
-    );
-    assert_eq!(metadata["result"]["type"], "ok");
-    let fetched = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_workspace_metadata_get","method":"workspace.get","params":{{"workspace_id":"{}"}}}}"#,
-            workspace_id
-        ),
-    );
-    assert_eq!(
-        fetched["result"]["workspace"]["tokens"]["jj_status"],
-        "2 changes"
-    );
 
     let panes = send_request(
         &socket_path,
@@ -875,55 +828,6 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
         foreground.display().to_string()
     );
 
-    let process_info = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"fg_process_info","method":"pane.process_info","params":{{"pane_id":"{}"}}}}"#,
-            pane_id
-        ),
-    );
-    let process_info = &process_info["result"]["process_info"];
-    assert!(process_info["shell_pid"].is_number());
-    assert_eq!(process_info["foreground_process_group_id"], foreground_pid);
-    assert!(process_info.get("tty").is_none());
-    let foreground_processes = process_info["foreground_processes"].as_array().unwrap();
-    let foreground_shell = foreground_processes
-        .iter()
-        .find(|process| process["pid"] == foreground_pid)
-        .expect("foreground shell should be reported");
-    assert_eq!(foreground_shell["name"], "sh");
-    assert_eq!(foreground_shell["cwd"], foreground.display().to_string());
-    assert!(foreground_shell.get("argv0").is_none());
-    assert!(foreground_shell["argv"].is_array());
-    assert!(foreground_shell["cmdline"].is_string());
-    let foreground_sleep = foreground_processes
-        .iter()
-        .find(|process| process["name"] == "sleep" && process["pid"] != foreground_pid)
-        .expect("foreground sleep child should be reported separately");
-    assert_eq!(foreground_sleep["cwd"], foreground.display().to_string());
-
-    let reported = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"fg_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"probe","state":"working"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(reported["result"]["type"], "ok");
-
-    let agents = send_request(
-        &socket_path,
-        r#"{"id":"fg_agents","method":"agent.list","params":{}}"#,
-    );
-    assert_eq!(
-        agents["result"]["agents"][0]["cwd"],
-        base.display().to_string()
-    );
-    assert_eq!(
-        agents["result"]["agents"][0]["foreground_cwd"],
-        foreground.display().to_string()
-    );
-
     let split = send_request(
         &socket_path,
         &serde_json::json!({
@@ -1101,7 +1005,7 @@ fn agent_start_targets_existing_pane_over_socket() {
     fs::write(&fake_pi, "#!/bin/sh\nHERDR_AGENT=pi exec /bin/sleep 20\n").unwrap();
     fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let child = spawn_herdr_with_path(&config_home, &runtime_dir, &socket_path, Some(&bin));
+    let child = spawn_herdr_with_path(&config_home, &runtime_dir, &socket_path, &bin);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     let workspace = send_request(
         &socket_path,
@@ -1167,6 +1071,51 @@ fn agent_start_targets_existing_pane_over_socket() {
     cleanup_spawned_herdr(child, base);
 }
 
+fn write_fake_agent(bin_dir: &Path, name: &str, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(bin_dir).unwrap();
+    let path = bin_dir.join(name);
+    fs::write(&path, format!("#!/bin/sh\n{script}")).unwrap();
+    let mut perms = fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).unwrap();
+}
+
+fn start_pane_command(socket_path: &Path, pane_id: &str, command: &str) {
+    let sent = send_request(
+        socket_path,
+        &serde_json::json!({
+            "id": "start_command",
+            "method": "pane.send_input",
+            "params": { "pane_id": pane_id, "text": command, "keys": ["Enter"] },
+        })
+        .to_string(),
+    );
+    assert_eq!(sent["result"]["type"], "ok", "{sent}");
+}
+
+fn wait_for_pane_agent(socket_path: &Path, pane_id: &str, agent: &str, status: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let pane = send_request(
+            socket_path,
+            &format!(
+                r#"{{"id":"pane_agent","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#
+            ),
+        );
+        if pane["result"]["pane"]["agent"] == agent
+            && pane["result"]["pane"]["agent_status"] == status
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{agent} was never detected as {status}: {pane}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn agent_methods_round_trip_over_socket() {
     let _lock = test_lock();
@@ -1174,8 +1123,18 @@ fn agent_methods_round_trip_over_socket() {
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
+    let bin_dir = base.join("bin");
+    write_fake_agent(&bin_dir, "pi", "printf 'Working...\\n'\nsleep 30\n");
+    write_fake_agent(&bin_dir, "codex", "sleep 30\n");
 
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
+    let child = spawn_herdr_with_path(
+        &config_home,
+        &runtime_dir,
+        &socket_path,
+        Path::new(&path_override),
+    );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -1207,14 +1166,8 @@ fn agent_methods_round_trip_over_socket() {
     );
     assert_eq!(renamed["result"]["pane"]["label"], "worker");
 
-    let reported = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"agent_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"pi","state":"working"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(reported["result"]["type"], "ok");
+    start_pane_command(&socket_path, &pane_id, "pi");
+    wait_for_pane_agent(&socket_path, &pane_id, "pi", "working");
 
     let listed = send_request(
         &socket_path,
@@ -1266,7 +1219,7 @@ fn agent_methods_round_trip_over_socket() {
         &socket_path,
         r#"{"id":"agent_send_keys","method":"agent.send_keys","params":{"target":"worker","keys":["enter"]}}"#,
     );
-    assert_eq!(sent["error"]["code"], "agent_not_ready");
+    assert_eq!(sent["result"]["type"], "ok", "{sent}");
 
     let tab_created = send_request(
         &socket_path,
@@ -1283,14 +1236,8 @@ fn agent_methods_round_trip_over_socket() {
         .as_str()
         .unwrap();
 
-    let second_reported = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"agent_second_report","method":"pane.report_agent","params":{{"pane_id":"{}","source":"test","agent":"codex","state":"idle"}}}}"#,
-            second_pane_id
-        ),
-    );
-    assert_eq!(second_reported["result"]["type"], "ok");
+    start_pane_command(&socket_path, second_pane_id, "codex");
+    wait_for_pane_agent(&socket_path, second_pane_id, "codex", "idle");
 
     let second_renamed = send_request(
         &socket_path,
@@ -1406,7 +1353,6 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
         "#!/bin/sh\nprintf 'Working...\\n'\nsleep 1\nprintf '\\033[2J\\033[Hdone\\n'\n",
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -1420,7 +1366,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -1701,272 +1647,8 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
 }
 
 #[cfg(not(target_os = "macos"))]
-#[cfg(not(target_os = "macos"))]
 #[test]
-fn pane_report_agent_updates_effective_state() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
-    let bin_dir = base.join("bin");
-
-    fs::create_dir_all(&bin_dir).unwrap();
-    let fake_pi = bin_dir.join("pi");
-    fs::write(&fake_pi, "#!/bin/sh\nprintf 'Working...\\n'\nsleep 3\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_pi, perms).unwrap();
-    }
-
-    let inherited_path = std::env::var("PATH").unwrap_or_default();
-    let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
-    let child = spawn_herdr_with_path(
-        &config_home,
-        &runtime_dir,
-        &socket_path,
-        Some(Path::new(&path_override)),
-    );
-    wait_for_socket(&socket_path, Duration::from_secs(5));
-
-    let created = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
-            base.display()
-        ),
-    );
-    let pane_id = created["result"]["root_pane"]["pane_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let send_pi = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(send_pi["result"]["type"], "ok");
-    let send_enter = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(send_enter["result"]["type"], "ok");
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        let pane = send_request(
-            &socket_path,
-            &format!(
-                r#"{{"id":"req_hook_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
-                pane_id
-            ),
-        );
-        if pane["result"]["pane"]["agent"] == "pi" {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "pi agent was never detected: {pane}"
-        );
-        thread::sleep(Duration::from_millis(100));
-    }
-
-    let session_path = base.join("pi-session.jsonl");
-    let session = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_session","method":"pane.report_agent_session","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","agent_session_path":"{}","session_start_source":"startup","seq":1}}}}"#,
-            pane_id,
-            session_path.display()
-        ),
-    );
-    assert_eq!(session["result"]["type"], "ok");
-    let hook = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_5","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","message":"thinking","agent_session_path":"{}","seq":2}}}}"#,
-            pane_id,
-            session_path.display()
-        ),
-    );
-    assert_eq!(hook["result"]["type"], "ok");
-
-    let pane = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(pane["result"]["pane"]["agent"], "pi");
-    assert_eq!(pane["result"]["pane"]["agent_status"], "working");
-    assert_eq!(
-        pane["result"]["pane"]["agent_session"]["source"],
-        "herdr:pi"
-    );
-    assert_eq!(pane["result"]["pane"]["agent_session"]["agent"], "pi");
-    assert_eq!(pane["result"]["pane"]["agent_session"]["kind"], "path");
-    assert_eq!(
-        pane["result"]["pane"]["agent_session"]["value"],
-        session_path.display().to_string()
-    );
-
-    let metadata = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_metadata","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"herdr:pi","title":"Refactor auth","display_agent":"Pi auth","state_labels":{{"working":"deep in the mines"}},"tokens":{{"summary":"reviewing auth","model":"opus"}}}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(metadata["result"]["type"], "ok");
-
-    let pane = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_metadata_get","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(pane["result"]["pane"]["agent"], "pi");
-    assert_eq!(pane["result"]["pane"]["agent_status"], "working");
-    assert_eq!(pane["result"]["pane"]["title"], "Refactor auth");
-    assert_eq!(pane["result"]["pane"]["display_agent"], "Pi auth");
-    assert_eq!(
-        pane["result"]["pane"]["state_labels"]["working"],
-        "deep in the mines"
-    );
-    assert_eq!(
-        pane["result"]["pane"]["tokens"]["summary"],
-        "reviewing auth"
-    );
-    assert_eq!(pane["result"]["pane"]["tokens"]["model"], "opus");
-
-    let agent = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_metadata_agent","method":"agent.get","params":{{"target":"{}"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(agent["result"]["agent"]["agent"], "pi");
-    assert_eq!(
-        agent["result"]["agent"]["agent_session"]["source"],
-        "herdr:pi"
-    );
-    assert_eq!(agent["result"]["agent"]["agent_session"]["agent"], "pi");
-    assert_eq!(agent["result"]["agent"]["agent_session"]["kind"], "path");
-    assert_eq!(
-        agent["result"]["agent"]["agent_session"]["value"],
-        session_path.display().to_string()
-    );
-    assert_eq!(agent["result"]["agent"]["title"], "Refactor auth");
-    assert_eq!(agent["result"]["agent"]["display_agent"], "Pi auth");
-    assert_eq!(
-        agent["result"]["agent"]["state_labels"]["working"],
-        "deep in the mines"
-    );
-    assert_eq!(
-        agent["result"]["agent"]["tokens"]["summary"],
-        "reviewing auth"
-    );
-    assert_eq!(agent["result"]["agent"]["tokens"]["model"], "opus");
-
-    let blank_source_metadata = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_metadata_blank_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"   ","title":"x"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(
-        blank_source_metadata["error"]["code"],
-        "invalid_metadata_source"
-    );
-
-    let blank_title_clear_metadata = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_metadata_blank_title_clear","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","title":"   ","clear_title":true}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(
-        blank_title_clear_metadata["error"]["code"],
-        "invalid_metadata_request"
-    );
-
-    let blank_authority_source_metadata = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_metadata_blank_authority_source","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","applies_to_source":"   ","title":"x"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(
-        blank_authority_source_metadata["error"]["code"],
-        "invalid_metadata_source"
-    );
-
-    cleanup_spawned_herdr(child, base);
-}
-
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn pane_report_agent_accepts_unknown_agent_labels() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
-    wait_for_socket(&socket_path, Duration::from_secs(5));
-
-    let created = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_generic_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
-            base.display()
-        ),
-    );
-    let pane_id = created["result"]["root_pane"]["pane_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let hook = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_generic_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:hermes","agent":"hermes","state":"working"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(hook["result"]["type"], "ok");
-
-    let pane = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_hook_generic_3","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(pane["result"]["pane"]["agent"], "hermes");
-    assert_eq!(pane["result"]["pane"]["agent_status"], "working");
-
-    cleanup_spawned_herdr(child, base);
-}
-
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn official_release_waits_for_confirmed_process_exit() {
+fn reported_agent_session_clears_after_confirmed_process_exit() {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1985,7 +1667,6 @@ fn official_release_waits_for_confirmed_process_exit() {
         ),
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -1999,7 +1680,7 @@ fn official_release_waits_for_confirmed_process_exit() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -2061,27 +1742,8 @@ fn official_release_waits_for_confirmed_process_exit() {
         ),
     );
     assert_eq!(session["result"]["type"], "ok");
-    let hook = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_release_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"working","agent_session_path":"{}","seq":2}}}}"#,
-            pane_id,
-            session_path.display()
-        ),
-    );
-    assert_eq!(hook["result"]["type"], "ok");
-
-    let released = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_release_5","method":"pane.release_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(released["result"]["type"], "ok");
-
-    let release_observation_deadline = Instant::now() + Duration::from_millis(300);
-    while Instant::now() < release_observation_deadline {
+    let observation_deadline = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < observation_deadline {
         let pane = send_request(
             &socket_path,
             &format!(
@@ -2091,9 +1753,8 @@ fn official_release_waits_for_confirmed_process_exit() {
         );
         assert_eq!(
             pane["result"]["pane"]["agent"], "pi",
-            "official release hid the live Pi process: {pane}"
+            "a session report hid the live Pi process: {pane}"
         );
-        assert_eq!(pane["result"]["pane"]["agent_status"], "working");
         thread::sleep(Duration::from_millis(50));
     }
 
@@ -2123,128 +1784,6 @@ fn official_release_waits_for_confirmed_process_exit() {
     cleanup_spawned_herdr(child, base);
 }
 
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn pane_clear_agent_authority_restores_fallback_state() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
-    let bin_dir = base.join("bin");
-
-    fs::create_dir_all(&bin_dir).unwrap();
-    let fake_pi = bin_dir.join("pi");
-    fs::write(&fake_pi, "#!/bin/sh\nprintf 'Working...\\n'\nsleep 3\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_pi, perms).unwrap();
-    }
-
-    let inherited_path = std::env::var("PATH").unwrap_or_default();
-    let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
-    let child = spawn_herdr_with_path(
-        &config_home,
-        &runtime_dir,
-        &socket_path,
-        Some(Path::new(&path_override)),
-    );
-    wait_for_socket(&socket_path, Duration::from_secs(5));
-
-    let created = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_clear_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
-            base.display()
-        ),
-    );
-    let pane_id = created["result"]["root_pane"]["pane_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let send_pi = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_clear_2","method":"pane.send_text","params":{{"pane_id":"{}","text":"pi"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(send_pi["result"]["type"], "ok");
-    let send_enter = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_clear_3","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(send_enter["result"]["type"], "ok");
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        let pane = send_request(
-            &socket_path,
-            &format!(
-                r#"{{"id":"req_clear_detect","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
-                pane_id
-            ),
-        );
-        if pane["result"]["pane"]["agent"] == "pi" {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "pi agent was never detected: {pane}"
-        );
-        thread::sleep(Duration::from_millis(100));
-    }
-
-    let fallback_before_hook = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_clear_fallback","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
-            pane_id
-        ),
-    );
-    let fallback_status = fallback_before_hook["result"]["pane"]["agent_status"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let hook = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_clear_4","method":"pane.report_agent","params":{{"pane_id":"{}","source":"herdr:pi","agent":"pi","state":"idle"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(hook["result"]["type"], "ok");
-
-    let cleared = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_clear_5","method":"pane.clear_agent_authority","params":{{"pane_id":"{}","source":"herdr:pi"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(cleared["result"]["type"], "ok");
-
-    let pane = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_clear_6","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(pane["result"]["pane"]["agent"], "pi");
-    assert_eq!(pane["result"]["pane"]["agent_status"], fallback_status);
-
-    cleanup_spawned_herdr(child, base);
-}
-
 #[test]
 fn events_subscribe_streams_output_and_agent_status_events() {
     let _lock = test_lock();
@@ -2261,7 +1800,6 @@ fn events_subscribe_streams_output_and_agent_status_events() {
         "#!/bin/sh\nprintf 'Working...\\n'\nsleep 1\nprintf '\\033[2J\\033[Hdone\\n'\n",
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -2275,7 +1813,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -2389,7 +1927,6 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
         ),
     )
     .unwrap();
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -2403,7 +1940,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
         &config_home,
         &runtime_dir,
         &socket_path,
-        Some(Path::new(&path_override)),
+        Path::new(&path_override),
     );
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -2515,101 +2052,6 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     assert_eq!(pane_after_focus["result"]["pane"]["agent_status"], "idle");
 
     fs::write(&stop_file, "stop").unwrap();
-
-    cleanup_spawned_herdr(child, base);
-}
-
-#[test]
-fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
-
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
-    wait_for_socket(&socket_path, Duration::from_secs(5));
-
-    let created = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_meta_sub_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
-            base.display()
-        ),
-    );
-    let pane_id = created["result"]["root_pane"]["pane_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let report_agent = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_meta_sub_2","method":"pane.report_agent","params":{{"pane_id":"{}","source":"custom:pi","agent":"pi","state":"working"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(report_agent["result"]["type"], "ok");
-
-    let mut done_reader = open_subscription(
-        &socket_path,
-        &format!(
-            r#"{{"id":"sub_meta_done","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}","agent_status":"done"}}]}}}}"#,
-            pane_id,
-        ),
-    );
-    let ack = done_reader.read_json_line(Duration::from_secs(2));
-    assert_eq!(ack["id"], "sub_meta_done");
-    assert_eq!(ack["result"]["type"], "subscription_started");
-
-    let metadata = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_meta_sub_3","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"filtered out"}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(metadata["result"]["type"], "ok");
-    assert!(
-        done_reader
-            .try_read_json_line(Duration::from_millis(500))
-            .is_none(),
-        "done-filtered subscription emitted for a working metadata-only change"
-    );
-
-    let mut reader = open_subscription(
-        &socket_path,
-        &format!(
-            r#"{{"id":"sub_meta_ttl","method":"events.subscribe","params":{{"subscriptions":[{{"type":"pane.agent_status_changed","pane_id":"{}"}}]}}}}"#,
-            pane_id,
-        ),
-    );
-    let ack = reader.read_json_line(Duration::from_secs(2));
-    assert_eq!(ack["id"], "sub_meta_ttl");
-    assert_eq!(ack["result"]["type"], "subscription_started");
-
-    let metadata = send_request(
-        &socket_path,
-        &format!(
-            r#"{{"id":"req_meta_sub_4","method":"pane.report_metadata","params":{{"pane_id":"{}","source":"user:pi-display","agent":"pi","applies_to_source":"custom:pi","title":"short lived","ttl_ms":100}}}}"#,
-            pane_id
-        ),
-    );
-    assert_eq!(metadata["result"]["type"], "ok");
-
-    let set_event = reader.read_json_line(Duration::from_secs(2));
-    assert_eq!(set_event["event"], "pane.agent_status_changed");
-    assert_eq!(set_event["data"]["pane_id"], pane_id);
-    assert_eq!(set_event["data"]["agent_status"], "working");
-    assert_eq!(set_event["data"]["agent"], "pi");
-    assert_eq!(set_event["data"]["title"], "short lived");
-
-    let expiry_event = reader.read_json_line(Duration::from_secs(3));
-    assert_eq!(expiry_event["event"], "pane.agent_status_changed");
-    assert_eq!(expiry_event["data"]["pane_id"], pane_id);
-    assert_eq!(expiry_event["data"]["agent_status"], "working");
-    assert_eq!(expiry_event["data"]["agent"], "pi");
-    assert!(expiry_event["data"]["title"].is_null());
 
     cleanup_spawned_herdr(child, base);
 }

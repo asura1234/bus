@@ -126,33 +126,22 @@ impl ActiveSubscription {
             Subscription::WorkspaceUpdated {} => {
                 Ok(event_subscription(EventKind::WorkspaceUpdated))
             }
-            Subscription::WorkspaceMetadataUpdated {} => {
-                Ok(event_subscription(EventKind::WorkspaceMetadataUpdated))
-            }
             Subscription::WorkspaceRenamed {} => {
                 Ok(event_subscription(EventKind::WorkspaceRenamed))
             }
             Subscription::WorkspaceMoved {} => Ok(event_subscription(EventKind::WorkspaceMoved)),
-            Subscription::WorkspaceReordered {} => {
-                Ok(event_subscription(EventKind::WorkspaceReordered))
-            }
             Subscription::WorkspaceClosed {} => Ok(event_subscription(EventKind::WorkspaceClosed)),
             Subscription::WorkspaceFocused {} => {
                 Ok(event_subscription(EventKind::WorkspaceFocused))
             }
-            Subscription::WorktreeCreated {} => Ok(event_subscription(EventKind::WorktreeCreated)),
-            Subscription::WorktreeOpened {} => Ok(event_subscription(EventKind::WorktreeOpened)),
-            Subscription::WorktreeRemoved {} => Ok(event_subscription(EventKind::WorktreeRemoved)),
             Subscription::TabCreated {} => Ok(event_subscription(EventKind::TabCreated)),
             Subscription::TabClosed {} => Ok(event_subscription(EventKind::TabClosed)),
             Subscription::TabFocused {} => Ok(event_subscription(EventKind::TabFocused)),
             Subscription::TabRenamed {} => Ok(event_subscription(EventKind::TabRenamed)),
-            Subscription::TabMoved {} => Ok(event_subscription(EventKind::TabMoved)),
             Subscription::PaneCreated {} => Ok(event_subscription(EventKind::PaneCreated)),
             Subscription::PaneClosed {} => Ok(event_subscription(EventKind::PaneClosed)),
             Subscription::PaneUpdated {} => Ok(event_subscription(EventKind::PaneUpdated)),
             Subscription::PaneFocused {} => Ok(event_subscription(EventKind::PaneFocused)),
-            Subscription::PaneMoved {} => Ok(event_subscription(EventKind::PaneMoved)),
             Subscription::PaneExited {} => Ok(event_subscription(EventKind::PaneExited)),
             Subscription::PaneAgentDetected {} => {
                 Ok(event_subscription(EventKind::PaneAgentDetected))
@@ -662,29 +651,6 @@ mod tests {
         event_hub.push(workspace_focused_event("after_setup"));
         let live_event = subscription.poll(&api_tx, &event_hub).expect("live event");
         assert_eq!(live_event["data"]["workspace_id"], "after_setup");
-    }
-
-    #[test]
-    fn workspace_metadata_subscription_uses_dedicated_event_kind() {
-        let event_hub = EventHub::default();
-        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let subscription = ActiveSubscription::new(
-            Subscription::WorkspaceMetadataUpdated {},
-            "test",
-            0,
-            &api_tx,
-            &event_hub,
-            event_hub.current_sequence(),
-        )
-        .expect("workspace metadata subscription");
-
-        assert!(matches!(
-            subscription,
-            ActiveSubscription::Event(ActiveEventSubscription {
-                event_kind: EventKind::WorkspaceMetadataUpdated,
-                ..
-            })
-        ));
     }
 
     #[test]

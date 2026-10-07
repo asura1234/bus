@@ -24,25 +24,6 @@ pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::C
     }
 }
 
-pub(crate) struct RemoteBridgeWake;
-
-impl RemoteBridgeWake {
-    pub(crate) fn new() -> std::io::Result<Self> {
-        Ok(Self)
-    }
-
-    pub(crate) fn cancel(&self) -> std::io::Result<()> {
-        // The named-pipe reader checks its cancellation flag between peeks.
-        Ok(())
-    }
-
-    pub(crate) fn wait(&self, _stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
-        // Synchronous named pipes still use peek-before-read polling on Windows.
-        std::thread::sleep(Duration::from_millis(1));
-        Ok(())
-    }
-}
-
 pub(crate) fn wait_client_stream_readable(
     _stream: &crate::ipc::LocalStream,
 ) -> std::io::Result<()> {
@@ -89,18 +70,12 @@ pub(crate) fn replace_file(
     }
 }
 
-pub(crate) fn set_default_plugin_pane_pwd(
-    _env: &mut Vec<(String, String)>,
-    _cwd: &std::path::Path,
-) {
-}
-
 use windows_sys::{
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
         Foundation::{
-            CloseHandle, GlobalFree, LocalFree, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE,
-            MAX_PATH, NTSTATUS, STATUS_SUCCESS, UNICODE_STRING,
+            CloseHandle, GlobalFree, LocalFree, FILETIME, HANDLE, INVALID_HANDLE_VALUE, NTSTATUS,
+            STATUS_SUCCESS, UNICODE_STRING,
         },
         Globalization::{CompareStringOrdinal, CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN},
         Security::SECURITY_ATTRIBUTES,
@@ -114,16 +89,13 @@ use windows_sys::{
             Diagnostics::{
                 Debug::ReadProcessMemory,
                 ToolHelp::{
-                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, Thread32First,
-                    Thread32Next, PROCESSENTRY32W, TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD,
-                    THREADENTRY32,
+                    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+                    TH32CS_SNAPPROCESS,
                 },
             },
             JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
-                JobObjectExtendedLimitInformation, QueryInformationJobObject,
-                SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                IsProcessInJob, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             },
             Memory::{
                 GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, VirtualQueryEx, GMEM_MOVEABLE,
@@ -131,28 +103,21 @@ use windows_sys::{
             },
             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
             Threading::{
-                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
-                QueryFullProcessImageNameW, ResumeThread, TerminateProcess, CREATE_NO_WINDOW,
-                CREATE_SUSPENDED, DETACHED_PROCESS, PROCESS_BASIC_INFORMATION,
-                PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
-                THREAD_SUSPEND_RESUME,
+                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess,
+                QueryFullProcessImageNameW, TerminateProcess, CREATE_NO_WINDOW, DETACHED_PROCESS,
+                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
             },
         },
         UI::{
-            Input::{
-                Ime::ImmGetDefaultIMEWnd,
-                KeyboardAndMouse::{
-                    GetKeyboardLayout, SendInput, ToUnicodeEx, INPUT, INPUT_0, INPUT_KEYBOARD,
-                    KEYBDINPUT, KEYEVENTF_KEYUP,
-                },
-            },
+            Input::KeyboardAndMouse::{GetKeyboardLayout, ToUnicodeEx},
             Shell::{
                 CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_TIP,
                 NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DestroyWindow, GetForegroundWindow, GetWindowThreadProcessId,
-                LoadIconW, SendMessageTimeoutW, IDI_APPLICATION, SMTO_ABORTIFHUNG, WM_IME_CONTROL,
+                LoadIconW, IDI_APPLICATION,
             },
         },
     },
@@ -173,44 +138,6 @@ pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
 
 pub(crate) fn prepare_paste_text_for_pty_platform(text: String) -> String {
     text.replace("\r\n", "\n").replace('\n', "\r\n")
-}
-
-pub(crate) fn plugin_runtime_path_platform(path: &std::path::Path) -> PathBuf {
-    use std::os::windows::ffi::OsStrExt;
-
-    let Some(candidate) = standard_windows_path(path) else {
-        return path.to_path_buf();
-    };
-    // Rust can canonicalize a long standard path by adding its own verbatim prefix, but native
-    // process consumers still need the original prefix when the plugin root exceeds MAX_PATH.
-    if candidate.join("").as_os_str().encode_wide().count() >= MAX_PATH as usize {
-        return path.to_path_buf();
-    }
-    match candidate.canonicalize() {
-        Ok(canonical) if canonical == path => candidate,
-        _ => path.to_path_buf(),
-    }
-}
-
-fn standard_windows_path(path: &std::path::Path) -> Option<PathBuf> {
-    use std::path::{Component, Prefix};
-
-    let mut components = path.components();
-    let Component::Prefix(prefix) = components.next()? else {
-        return None;
-    };
-    let mut candidate = match prefix.kind() {
-        Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:", char::from(drive))),
-        Prefix::VerbatimUNC(server, share) => {
-            let mut candidate = PathBuf::from(r"\\");
-            candidate.push(server);
-            candidate.push(share);
-            candidate
-        }
-        _ => return None,
-    };
-    candidate.push(components.as_path());
-    Some(candidate)
 }
 
 /// Resolves against the current foreground layout because asynchronous console
@@ -250,35 +177,6 @@ static PROCESS_RUNTIME_MARKER_CACHE: LazyLock<Mutex<HashMap<u32, CachedProcessRu
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static GIT_BASH_PROCESS_CACHE: LazyLock<Mutex<HashMap<u32, CachedGitBashProcess>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-
-pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
-    super::RemoteSshConfigPaths {
-        user_config: std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .map(|home| home.join(".ssh").join("config")),
-        system_config: std::env::var_os("PROGRAMDATA")
-            .map(PathBuf::from)
-            .map(|dir| dir.join("ssh").join("ssh_config")),
-        multiplexing: false,
-    }
-}
-
-pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::io::Result<PathBuf> {
-    let base = remote_private_temp_base();
-    std::fs::create_dir_all(&base)?;
-    for attempt in 0..100 {
-        let dir = base.join(format!("ssh-{}-{attempt}", std::process::id()));
-        match create_remote_private_dir(&dir) {
-            Ok(()) => return Ok(dir),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "failed to create private herdr ssh config directory",
-    ))
-}
 
 pub(crate) fn create_remote_ssh_config_file(
     path: &std::path::Path,
@@ -333,14 +231,6 @@ fn extended_length_path(path: &std::path::Path) -> std::io::Result<Vec<u16>> {
     Ok(extended)
 }
 
-pub(crate) fn remote_private_temp_base() -> PathBuf {
-    crate::config::state_dir().join("remote")
-}
-
-pub(crate) fn remote_bridge_endpoint_path(_readable_name: &str, short_name: &str) -> PathBuf {
-    remote_private_temp_base().join(short_name)
-}
-
 pub(crate) fn remote_reattach_program(program: &str) -> String {
     let path = std::env::current_exe()
         .ok()
@@ -352,7 +242,7 @@ pub(crate) fn remote_reattach_program(program: &str) -> String {
     )
 }
 
-pub(crate) fn remote_reattach_argument(value: &str) -> String {
+fn remote_reattach_argument(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
@@ -521,6 +411,7 @@ pub(crate) fn hostname() -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
+#[cfg(test)]
 pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {
     let mut timestamp: libc::time_t = 0;
     if unsafe { libc::time(&mut timestamp) } == -1 {
@@ -644,12 +535,6 @@ fn next_pane_runtime_marker() -> String {
     format!("{:x}-{timestamp:x}-{counter:x}", std::process::id())
 }
 
-fn raw_command_shell(comspec: Option<std::ffi::OsString>) -> std::ffi::OsString {
-    comspec
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
-}
-
 pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Option<String> {
     let shell_name = shell_name.to_ascii_lowercase();
     let powershell = shell_name.contains("powershell") || shell_name.contains("pwsh");
@@ -725,178 +610,6 @@ fn cmd_encoded_powershell_command(script: &str) -> String {
         .collect::<Vec<_>>();
     let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
     format!("powershell.exe -NoLogo -NoProfile -EncodedCommand {encoded}")
-}
-
-pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
-    detached_custom_command_process_with_comspec(command, std::env::var_os("ComSpec"))
-}
-
-pub(crate) fn status_commands_supported() -> bool {
-    true
-}
-
-pub(crate) fn configure_status_command(process: &mut std::process::Command) {
-    use std::os::windows::process::CommandExt;
-
-    // The process must not run before it is assigned to the kill-on-close job.
-    process.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
-}
-
-pub(crate) struct StatusCommandGuard {
-    job: usize,
-}
-
-impl StatusCommandGuard {
-    pub(crate) fn new(child: &tokio::process::Child) -> std::io::Result<Self> {
-        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if job.is_null() {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let limits_size = match u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()) {
-            Ok(size) => size,
-            Err(_) => {
-                unsafe {
-                    CloseHandle(job);
-                }
-                return Err(std::io::Error::other("job limits size exceeds u32"));
-            }
-        };
-        if unsafe {
-            SetInformationJobObject(
-                job,
-                JobObjectExtendedLimitInformation,
-                std::ptr::from_ref(&limits).cast(),
-                limits_size,
-            )
-        } == 0
-        {
-            let error = std::io::Error::last_os_error();
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(error);
-        }
-
-        let Some(process) = child.raw_handle() else {
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(std::io::Error::other(
-                "status command has no process handle",
-            ));
-        };
-        if unsafe { AssignProcessToJobObject(job, process.cast()) } == 0 {
-            let error = std::io::Error::last_os_error();
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(error);
-        }
-        if let Err(error) = resume_suspended_process(child.id()) {
-            unsafe {
-                CloseHandle(job);
-            }
-            return Err(error);
-        }
-
-        Ok(Self { job: job as usize })
-    }
-}
-
-fn resume_suspended_process(process_id: Option<u32>) -> std::io::Result<()> {
-    let process_id =
-        process_id.ok_or_else(|| std::io::Error::other("status command has no process id"))?;
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if snapshot == INVALID_HANDLE_VALUE {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    let result = (|| {
-        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
-        entry.dwSize = u32::try_from(size_of::<THREADENTRY32>())
-            .map_err(|_| std::io::Error::other("thread entry size exceeds u32"))?;
-        if unsafe { Thread32First(snapshot, &mut entry) } == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        loop {
-            if entry.th32OwnerProcessID == process_id {
-                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-                if thread.is_null() {
-                    return Err(std::io::Error::last_os_error());
-                }
-                let resume_result = unsafe { ResumeThread(thread) };
-                let resume_error = (resume_result == u32::MAX).then(std::io::Error::last_os_error);
-                unsafe {
-                    CloseHandle(thread);
-                }
-                if let Some(error) = resume_error {
-                    return Err(error);
-                }
-                return Ok(());
-            }
-            if unsafe { Thread32Next(snapshot, &mut entry) } == 0 {
-                return Err(std::io::Error::other(
-                    "status command primary thread was not found",
-                ));
-            }
-        }
-    })();
-
-    unsafe {
-        CloseHandle(snapshot);
-    }
-    result
-}
-
-impl StatusCommandGuard {
-    pub(crate) fn terminate(&mut self) {
-        if self.job != 0 {
-            // KILL_ON_JOB_CLOSE terminates the shell and every descendant still in
-            // the job, including on task cancellation and config reload.
-            unsafe {
-                CloseHandle(self.job as HANDLE);
-            }
-            self.job = 0;
-        }
-    }
-}
-
-impl Drop for StatusCommandGuard {
-    fn drop(&mut self) {
-        self.terminate();
-    }
-}
-
-fn detached_custom_command_process_with_comspec(
-    command: &str,
-    comspec: Option<std::ffi::OsString>,
-) -> std::process::Command {
-    use std::os::windows::process::CommandExt;
-
-    let mut process = std::process::Command::new(raw_command_shell(comspec));
-    process.arg("/d").arg("/c").raw_arg(command);
-    process
-}
-
-pub(crate) fn pane_custom_command_pty_builder_platform(
-    command: &str,
-) -> portable_pty::CommandBuilder {
-    pane_custom_command_pty_builder_with_comspec(command, std::env::var_os("ComSpec"))
-}
-
-fn pane_custom_command_pty_builder_with_comspec(
-    command: &str,
-    comspec: Option<std::ffi::OsString>,
-) -> portable_pty::CommandBuilder {
-    let mut builder = portable_pty::CommandBuilder::new(raw_command_shell(comspec));
-    builder.arg("/d");
-    builder.arg("/c");
-    builder.raw_arg(command);
-    builder
 }
 
 pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<Vec<String>> {
@@ -2046,10 +1759,6 @@ pub fn write_clipboard(bytes: &[u8]) -> bool {
     }
 }
 
-pub fn read_clipboard_text() -> Option<String> {
-    None
-}
-
 pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
     let operation = wide_null("open");
     let url = wide_null(url);
@@ -2365,309 +2074,6 @@ fn read_unicode_string(process: HANDLE, unicode: UNICODE_STRING) -> Option<Strin
     String::from_utf16(&buffer).ok()
 }
 
-// Prefix-mode ASCII input source support (see `switch_ascii_input_source_in_prefix`).
-//
-// Windows IMEs live in the terminal-emulator process, not in herdr. Empirically:
-//   - `WM_IME_CONTROL` / `IMC_GETOPENSTATUS` reads whether the IME is open
-//     (composing native characters) reliably across the process boundary (this
-//     is what kren-select uses), so we detect state with it. The read goes
-//     through `SendMessageTimeoutW` (`SMTO_ABORTIFHUNG`) so a hung host process
-//     cannot block us indefinitely.
-//   - Writing the state back (`IMC_SETOPENSTATUS` / `IMC_SETCONVERSIONMODE`)
-//     changes the flag value but does NOT affect real input in terminal/TSF
-//     hosts, so we cannot switch by writing the mode.
-//   - `ImmGetContext` on the foreground window returns null across the process
-//     boundary, so the ImmGetOpenStatus/ImmSetOpenStatus path is unavailable.
-// Therefore we switch the way kren-select does: inject the IME toggle key with
-// `SendInput`, which reaches the foreground input queue like a real keypress.
-//
-// The toggle key is language-specific, so we pick it from the foreground
-// keyboard layout's language id. Only Korean is mapped today; other IMEs are
-// detected and left untouched (a no-op) rather than toggled with the wrong key.
-
-/// `WM_IME_CONTROL` sub-command that reads whether the IME is open, i.e.
-/// composing native characters. This is `IMC_GETOPENSTATUS` (0x0005); for the
-/// Korean IME "open" is exactly the Hangul state and "closed" is English/ASCII
-/// direct input, which is the state we detect and toggle.
-const IMC_GETOPENSTATUS: usize = 0x0005;
-
-/// Virtual key that toggles Hangul/English on Korean IMEs.
-const VK_HANGUL: u16 = 0x15;
-
-/// Primary language id (low 10 bits of a LANGID) for Korean.
-const LANG_KOREAN: u32 = 0x12;
-
-/// Whether the IME reports itself open, i.e. composing native characters
-/// (Hangul for the Korean IME). `IMC_GETOPENSTATUS` returns nonzero when the
-/// IME is open and zero when it is in direct English/ASCII input.
-fn ime_open(open_status: isize) -> bool {
-    open_status != 0
-}
-
-/// Timeout (ms) for the cross-process IME open-status read. Short enough that a
-/// hung terminal never freezes prefix-mode entry/exit.
-const IME_STATUS_READ_TIMEOUT_MS: u32 = 200;
-
-/// Reads the IME open status (`IMC_GETOPENSTATUS`) with a bounded timeout.
-///
-/// `WM_IME_CONTROL` crosses into the terminal-emulator process, and a plain
-/// `SendMessageW` would block herdr's client thread until that process responds
-/// (indefinitely if it is hung). `SendMessageTimeoutW` with `SMTO_ABORTIFHUNG`
-/// caps the wait; on timeout or failure this returns `None` and callers leave
-/// the IME untouched rather than blocking or guessing.
-fn read_ime_open_status(ime_hwnd: HWND) -> Option<isize> {
-    let mut result: usize = 0;
-    // SAFETY: `ime_hwnd` is a non-null IME window from `ImmGetDefaultIMEWnd`, and
-    // `result` is a valid out-pointer for the message's `DWORD_PTR` result.
-    let ret = unsafe {
-        SendMessageTimeoutW(
-            ime_hwnd,
-            WM_IME_CONTROL,
-            IMC_GETOPENSTATUS,
-            0,
-            SMTO_ABORTIFHUNG,
-            IME_STATUS_READ_TIMEOUT_MS,
-            &mut result,
-        )
-    };
-    if ret == 0 {
-        // Timed out or failed; do not block or assume a state.
-        return None;
-    }
-    Some(result as isize)
-}
-
-/// The IME toggle key for a keyboard layout language id, or `None` when the
-/// language's toggle key is not known. `langid` is the full LANGID (LOWORD of
-/// an `HKL`); the primary language is its low 10 bits.
-///
-/// Only Korean is mapped: `VK_HANGUL` is the Hangul/English toggle. Japanese
-/// (half/full-width) and Chinese use different keys per IME, so they return
-/// `None` and are left untouched instead of toggled incorrectly.
-fn toggle_key_for_language(langid: u32) -> Option<u16> {
-    match langid & 0x3FF {
-        LANG_KOREAN => Some(VK_HANGUL),
-        _ => None,
-    }
-}
-
-/// Builds the key-down then key-up `INPUT` pair for `vk`.
-fn key_tap_inputs(vk: u16) -> [INPUT; 2] {
-    let key_event = |flags| INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: vk,
-                wScan: 0,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    };
-    [key_event(0), key_event(KEYEVENTF_KEYUP)]
-}
-
-/// Injects a key-down then key-up for `vk` via `SendInput`.
-///
-/// Returns `true` when the key-down was queued and the IME may have toggled.
-/// Thin wrapper over [`send_vk_tap_with`] that plugs in the real `SendInput`;
-/// the injection policy lives there so it can be unit-tested without the OS.
-fn send_vk_tap(vk: u16) -> bool {
-    send_vk_tap_with(vk, |events| {
-        // SAFETY: `events` outlives the call; its `INPUT_KEYBOARD` entries have
-        // the `ki` union variant fully initialized, which is the variant
-        // SendInput reads for keyboard input. `size_of::<INPUT>()` is the
-        // required `cbSize`.
-        unsafe {
-            SendInput(
-                events.len() as u32,
-                events.as_ptr(),
-                size_of::<INPUT>() as i32,
-            )
-        }
-    })
-}
-
-/// Core key-tap logic with the raw event injector abstracted behind `inject`,
-/// which returns how many of the passed events it actually queued. This keeps
-/// the success / partial-injection / total-failure branches unit-testable
-/// without touching the real `SendInput`.
-///
-/// `SendInput` returns how many events it queued; a short count means injection
-/// was blocked (e.g. by UIPI). Returns `true` whenever the key-down was queued,
-/// because the IME may have toggled and callers must retain restoration state.
-/// When only the key-down landed, the key-up is retried so the key is not left
-/// logically held down.
-fn send_vk_tap_with(vk: u16, mut inject: impl FnMut(&[INPUT]) -> u32) -> bool {
-    let inputs = key_tap_inputs(vk);
-    let sent = inject(&inputs);
-    if sent as usize == inputs.len() {
-        return true;
-    }
-
-    if sent == 1 {
-        // The key-down landed and may already have toggled the IME. Retry the
-        // dropped key-up, but report that restoration state is still required.
-        let key_up = [inputs[1]];
-        let up_sent = inject(&key_up);
-        tracing::warn!(
-            vk,
-            sent,
-            expected = inputs.len(),
-            key_up_retry_sent = up_sent,
-            "SendInput dropped the IME toggle key-up; retried key-up"
-        );
-        return true;
-    }
-
-    tracing::warn!(
-        vk,
-        sent,
-        expected = inputs.len(),
-        "SendInput did not inject the IME toggle key tap"
-    );
-    false
-}
-
-pub(crate) fn pump_input_source_runloop() {}
-
-/// Switch the foreground window's IME to ASCII-capable input for prefix mode.
-///
-/// Returns `None` (nothing to restore) when there is no foreground IME, the
-/// keyboard language has no known toggle key, or the IME is already
-/// ASCII-capable, matching the macOS contract.
-pub(crate) fn switch_to_ascii_input_source() -> Option<InputSourceRestore> {
-    // SAFETY: all calls are Win32 UI functions invoked on the client's main
-    // thread. Every HWND is null-checked before use; `fg_thread` is a thread id
-    // (not a handle) used only as `GetKeyboardLayout` input, where 0 harmlessly
-    // falls back to the calling thread's layout.
-    unsafe {
-        let fg = GetForegroundWindow();
-        if fg.is_null() {
-            return None;
-        }
-
-        // Pick the toggle key for the foreground keyboard language. Unknown
-        // languages (Japanese, Chinese, ...) are left untouched.
-        let fg_thread = GetWindowThreadProcessId(fg, null_mut());
-        let langid = (GetKeyboardLayout(fg_thread) as usize as u32) & 0xFFFF;
-        let Some(toggle_vk) = toggle_key_for_language(langid) else {
-            tracing::debug!(
-                langid = format!("{langid:#06x}"),
-                "prefix IME switch: no toggle key for keyboard language, leaving IME as-is"
-            );
-            return None;
-        };
-
-        // Detect the open (Hangul) state via the bounded read path.
-        let ime_hwnd = ImmGetDefaultIMEWnd(fg);
-        if ime_hwnd.is_null() {
-            return None;
-        }
-        let Some(open) = read_ime_open_status(ime_hwnd) else {
-            tracing::debug!("prefix IME switch skipped: IME open-status read timed out");
-            return None;
-        };
-        if !ime_open(open) {
-            // Already in English/ASCII input; nothing to switch or restore.
-            return None;
-        }
-
-        // The bounded cross-process status read can take long enough for focus
-        // to change. Recheck immediately before using the global input queue.
-        if GetForegroundWindow() != fg {
-            tracing::debug!("prefix IME switch skipped: foreground window changed");
-            return None;
-        }
-
-        // Toggle to ASCII by injecting the language's IME toggle key. Only arm
-        // restoration when the toggle actually landed, so we never try to
-        // restore a switch that never happened.
-        if !send_vk_tap(toggle_vk) {
-            tracing::warn!(
-                langid = format!("{langid:#06x}"),
-                "prefix IME switch: toggle injection failed, leaving IME as-is"
-            );
-            return None;
-        }
-        tracing::debug!(
-            langid = format!("{langid:#06x}"),
-            "switched host IME to ASCII for prefix mode"
-        );
-        Some(InputSourceRestore {
-            toggle_vk,
-            origin_hwnd: fg as isize,
-        })
-    }
-}
-
-/// Restores the native (Hangul) IME state that was active before prefix mode.
-///
-/// Only constructed by [`switch_to_ascii_input_source`] after it successfully
-/// toggled the IME to English/ASCII. Dropping it re-injects the same toggle key
-/// to go back, but only after two guards, so restoration never fights the user
-/// or another application:
-///   - the same window that was switched must still be focused, otherwise the
-///     toggle would land on whatever app the user moved to;
-///   - the IME must still be in English (our switch still in effect), otherwise
-///     the user manually returned to Hangul during prefix mode and we must leave
-///     their choice alone.
-///
-/// `origin_hwnd` stores the foreground window at switch time as raw pointer bits
-/// (`isize`, not `HWND`) so the guard stays `Send` when parked in the client's
-/// prefix-input state across `.await` points.
-#[derive(Debug)]
-pub(crate) struct InputSourceRestore {
-    toggle_vk: u16,
-    origin_hwnd: isize,
-}
-
-impl Drop for InputSourceRestore {
-    fn drop(&mut self) {
-        // SAFETY: all calls are Win32 UI functions invoked on the client's main
-        // thread. Every HWND is null-checked before use.
-        unsafe {
-            // Guard 1: only restore if the window we switched is still focused,
-            // so the toggle never lands on a different application.
-            let fg = GetForegroundWindow();
-            if fg.is_null() || fg as isize != self.origin_hwnd {
-                tracing::debug!(
-                    "prefix IME restore skipped: foreground window changed since switch"
-                );
-                return;
-            }
-
-            // Guard 2: only restore if the IME is still in English (our switch is
-            // still in effect). If the user manually switched back to Hangul
-            // during prefix mode, leave their choice untouched.
-            let ime_hwnd = ImmGetDefaultIMEWnd(fg);
-            if ime_hwnd.is_null() {
-                return;
-            }
-            let Some(open) = read_ime_open_status(ime_hwnd) else {
-                tracing::debug!("prefix IME restore skipped: IME open-status read timed out");
-                return;
-            };
-            if ime_open(open) {
-                tracing::debug!("prefix IME restore skipped: IME already back to native input");
-                return;
-            }
-
-            // The bounded cross-process status read can take long enough for
-            // focus to change. Recheck immediately before using SendInput.
-            if GetForegroundWindow() != fg {
-                tracing::debug!("prefix IME restore skipped: foreground window changed");
-                return;
-            }
-
-            if send_vk_tap(self.toggle_vk) {
-                tracing::debug!("restored host IME after prefix mode");
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -2681,73 +2087,6 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
-
-    #[test]
-    fn windows_standard_plugin_runtime_paths_drop_only_disk_and_unc_verbatim_prefixes() {
-        assert_eq!(
-            super::standard_windows_path(std::path::Path::new(r"\\?\C:\plugins\example")),
-            Some(std::path::PathBuf::from(r"C:\plugins\example"))
-        );
-        assert_eq!(
-            super::standard_windows_path(std::path::Path::new(
-                r"\\?\UNC\server\share\plugins\example"
-            )),
-            Some(std::path::PathBuf::from(r"\\server\share\plugins\example"))
-        );
-        assert_eq!(
-            super::standard_windows_path(std::path::Path::new(
-                r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\plugins"
-            )),
-            None
-        );
-    }
-
-    #[test]
-    fn windows_plugin_runtime_path_keeps_extended_path_when_normal_form_is_not_equivalent() {
-        let path = std::path::PathBuf::from(format!(
-            r"\\?\C:\herdr-missing-plugin-runtime-path-{}",
-            std::process::id()
-        ));
-        assert_eq!(super::plugin_runtime_path_platform(&path), path);
-    }
-
-    #[test]
-    fn windows_plugin_runtime_path_keeps_verbatim_root_beyond_max_path() {
-        use std::os::windows::ffi::OsStrExt;
-
-        let base = std::env::temp_dir().join(format!(
-            "herdr-plugin-runtime-path-limit-test-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&base).expect("create test base");
-        let extended_base = base.canonicalize().expect("canonicalize test base");
-        let normal_base = super::standard_windows_path(&extended_base)
-            .expect("test base has a standard drive path");
-        let normal_base_len = normal_base.as_os_str().encode_wide().count();
-        let root_at_length = |length| {
-            let component_len = length - normal_base_len - 1;
-            let path = extended_base.join("é".repeat(component_len));
-            fs::create_dir(&path).expect("create length-boundary test root");
-            path.canonicalize()
-                .expect("canonicalize length-boundary test root")
-        };
-
-        let at_limit = root_at_length(windows_sys::Win32::Foundation::MAX_PATH as usize - 2);
-        let at_limit_normal =
-            super::standard_windows_path(&at_limit).expect("convert root at MAX_PATH boundary");
-        assert_eq!(
-            super::plugin_runtime_path_platform(&at_limit),
-            at_limit_normal
-        );
-
-        let beyond_limit = root_at_length(windows_sys::Win32::Foundation::MAX_PATH as usize - 1);
-        assert_eq!(
-            super::plugin_runtime_path_platform(&beyond_limit),
-            beyond_limit
-        );
-
-        fs::remove_dir_all(base).expect("remove test directory");
-    }
 
     #[test]
     fn paste_text_uses_windows_line_endings() {
@@ -2909,7 +2248,7 @@ mod tests {
 
     #[test]
     fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
-        let _lock = crate::integration::integration_env_lock();
+        let _lock = crate::pane::env::env_lock();
         let base = std::env::temp_dir().join(format!(
             "herdr-agent-argv-{}-{}",
             std::process::id(),
@@ -3111,7 +2450,8 @@ mod tests {
 
         let parent_pid = std::process::id().to_string();
         let test_exe = std::env::current_exe().expect("resolve test executable");
-        let configurations: [(&str, fn(&mut Command)); 2] = [
+        type CommandConfigurator = fn(&mut Command);
+        let configurations: [(&str, CommandConfigurator); 2] = [
             ("background", super::configure_background_command_platform),
             ("server daemon", super::detach_server_daemon_command),
         ];
@@ -3133,97 +2473,11 @@ mod tests {
             );
         }
 
-        let command = format!(
-            r#""{}" windows_background_and_server_daemon_commands_do_not_have_consoles"#,
-            test_exe.display()
-        );
-        let status = crate::platform::detached_custom_command_process(&command)
-            .env(CONSOLE_TEST_CHILD_ENV, "detached custom command descendant")
-            .env(CONSOLE_TEST_PARENT_PID_ENV, &parent_pid)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("spawn detached custom command test child");
-        assert!(
-            status.success(),
-            "detached custom command descendant opened or inherited a console"
-        );
-
         if allocated_console {
             unsafe {
                 FreeConsole();
             }
         }
-    }
-
-    fn argv_strings(argv: &[std::ffi::OsString]) -> Vec<String> {
-        argv.into_iter()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    #[test]
-    fn pane_custom_command_uses_cmd() {
-        let builder = super::pane_custom_command_pty_builder_with_comspec(
-            "echo hello",
-            Some(r"C:\Windows\System32\cmd.exe".into()),
-        );
-
-        assert_eq!(
-            argv_strings(builder.get_argv()),
-            [r"C:\Windows\System32\cmd.exe", "/d", "/c"]
-        );
-    }
-
-    #[test]
-    fn detached_custom_command_uses_cmd() {
-        let expected_shell = std::env::var_os("ComSpec")
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
-            .to_string_lossy()
-            .into_owned();
-
-        let process = super::detached_custom_command_process_platform("echo hello");
-
-        assert_eq!(process.get_program().to_string_lossy(), expected_shell);
-        assert_eq!(
-            process
-                .get_args()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-            ["/d", "/c", "echo hello"]
-        );
-    }
-
-    #[test]
-    fn custom_command_falls_back_when_comspec_is_empty() {
-        let builder =
-            super::pane_custom_command_pty_builder_with_comspec("echo hello", Some("".into()));
-
-        assert_eq!(
-            argv_strings(builder.get_argv()),
-            [r"C:\Windows\System32\cmd.exe", "/d", "/c"]
-        );
-    }
-
-    #[test]
-    fn detached_custom_command_preserves_quoted_command_tail() {
-        let path = std::env::temp_dir().join(format!(
-            "herdr-raw-command-quotes-{}.txt",
-            std::process::id()
-        ));
-        let command = format!(r#"echo "hi" > "{}""#, path.display());
-
-        let status = super::detached_custom_command_process_platform(&command)
-            .status()
-            .expect("spawn raw command");
-
-        assert!(status.success(), "{status:?}");
-        let content = std::fs::read_to_string(&path).expect("read command output");
-        let _ = std::fs::remove_file(&path);
-        assert!(content.contains(r#""hi""#), "{content:?}");
-        assert!(!content.contains(r#"\"hi\""#), "{content:?}");
     }
 
     #[test]
@@ -4113,116 +3367,5 @@ mod tests {
             .is_some_and(|value| !value.is_empty()));
         assert!(cmd.get_env(super::PANE_RUNTIME_MARKER_ENV_VAR).is_none());
         fs::remove_dir_all(root).expect("remove Git Bash fixture");
-    }
-
-    #[test]
-    fn ime_open_reflects_open_status() {
-        // IMC_GETOPENSTATUS returns nonzero when the IME is open (Hangul
-        // composing) and zero for direct English/ASCII input.
-        assert!(super::ime_open(1));
-        assert!(!super::ime_open(0));
-        // Any nonzero value is treated as open, not just 1.
-        assert!(super::ime_open(2));
-    }
-
-    #[test]
-    fn toggle_key_maps_korean_and_ignores_other_languages() {
-        // Korean (0x0412) -> Hangul/English toggle.
-        assert_eq!(
-            super::toggle_key_for_language(0x0412),
-            Some(super::VK_HANGUL)
-        );
-        // Korean with a different sublanguage still resolves by primary id.
-        assert_eq!(
-            super::toggle_key_for_language(0x0812),
-            Some(super::VK_HANGUL)
-        );
-        // Japanese (0x0411) and Chinese (0x0804) have no mapped key yet.
-        assert_eq!(super::toggle_key_for_language(0x0411), None);
-        assert_eq!(super::toggle_key_for_language(0x0804), None);
-        // English (0x0409): nothing to toggle.
-        assert_eq!(super::toggle_key_for_language(0x0409), None);
-    }
-
-    #[test]
-    fn send_vk_tap_reports_success_when_full_tap_is_queued() {
-        let mut calls = 0;
-        let ok = super::send_vk_tap_with(super::VK_HANGUL, |events| {
-            calls += 1;
-            events.len() as u32
-        });
-        assert!(ok, "a fully queued tap is reported as success");
-        assert_eq!(calls, 1, "a clean tap needs no retry");
-    }
-
-    #[test]
-    fn send_vk_tap_retries_keyup_and_reports_toggle_on_partial_injection() {
-        let mut calls = 0;
-        let mut retry_len = 0;
-        let mut retry_is_keyup = false;
-        let ok = super::send_vk_tap_with(super::VK_HANGUL, |events| {
-            calls += 1;
-            if calls == 1 {
-                // Only the key-down is queued; the key-up is dropped.
-                1
-            } else {
-                retry_len = events.len();
-                // SAFETY: keyboard inputs, so reading the `ki` union is valid.
-                retry_is_keyup =
-                    unsafe { events[0].Anonymous.ki.dwFlags } == super::KEYEVENTF_KEYUP;
-                events.len() as u32
-            }
-        });
-        assert!(ok, "the queued key-down may have toggled the IME");
-        assert_eq!(calls, 2, "the dropped key-up is retried exactly once");
-        assert_eq!(retry_len, 1, "only the key-up is retried");
-        assert!(retry_is_keyup, "the retry injects the key-up event");
-    }
-
-    #[test]
-    fn send_vk_tap_reports_toggle_when_keyup_retry_fails() {
-        let mut calls = 0;
-        let ok = super::send_vk_tap_with(super::VK_HANGUL, |_events| {
-            calls += 1;
-            if calls == 1 {
-                1
-            } else {
-                0
-            }
-        });
-        assert!(ok, "the queued key-down may have toggled the IME");
-        assert_eq!(calls, 2, "the dropped key-up is retried exactly once");
-    }
-
-    #[test]
-    fn send_vk_tap_reports_failure_without_retry_when_nothing_is_queued() {
-        let mut calls = 0;
-        let ok = super::send_vk_tap_with(super::VK_HANGUL, |_events| {
-            calls += 1;
-            0
-        });
-        assert!(!ok, "a fully blocked tap is reported as failure");
-        assert_eq!(
-            calls, 1,
-            "nothing was queued, so there is no key-up to retry"
-        );
-    }
-
-    #[test]
-    fn key_tap_inputs_emit_keydown_then_keyup() {
-        let inputs = super::key_tap_inputs(super::VK_HANGUL);
-        // SAFETY: both entries are keyboard inputs, so reading the `ki` union is valid.
-        unsafe {
-            assert_eq!(inputs[0].r#type, super::INPUT_KEYBOARD);
-            assert_eq!(inputs[0].Anonymous.ki.wVk, super::VK_HANGUL);
-            assert_eq!(inputs[0].Anonymous.ki.dwFlags, 0, "first event is key-down");
-            assert_eq!(inputs[1].r#type, super::INPUT_KEYBOARD);
-            assert_eq!(inputs[1].Anonymous.ki.wVk, super::VK_HANGUL);
-            assert_eq!(
-                inputs[1].Anonymous.ki.dwFlags,
-                super::KEYEVENTF_KEYUP,
-                "second event is key-up"
-            );
-        }
     }
 }

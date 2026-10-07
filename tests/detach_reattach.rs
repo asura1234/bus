@@ -28,8 +28,6 @@ headless_cols = 132
 headless_rows = 41
 
 [ui]
-sidebar_start_collapsed = true
-sidebar_collapsed_mode = "hidden"
 hide_tab_bar_when_single_tab = true
 pane_scrollbars = false
 "#;
@@ -88,13 +86,11 @@ fn spawn_server(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    client_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
     spawn_server_with_config(
         config_home,
         runtime_dir,
         api_socket_path,
-        client_socket_path,
         "onboarding = false\n",
     )
 }
@@ -103,7 +99,6 @@ fn spawn_server_with_config(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    _client_socket_path: &PathBuf,
     config: &str,
 ) -> SpawnedHerdr {
     fs::create_dir_all(config_home.join("herdr")).unwrap();
@@ -120,7 +115,7 @@ fn spawn_server_with_config(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
@@ -129,6 +124,9 @@ fn spawn_server_with_config(
     cmd.env("HERDR_CONFIG_PATH", config_home.join("herdr/config.toml"));
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -293,7 +291,7 @@ fn explicit_detach_message_causes_clean_disconnect() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -352,7 +350,7 @@ fn reattach_after_detach_shows_current_state() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -443,7 +441,7 @@ fn processes_survive_during_and_after_detach() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -530,7 +528,7 @@ fn server_persists_after_client_connection_drop() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -578,13 +576,11 @@ fn pane_created_without_client_uses_configured_headless_size() {
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
     let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
 
     let spawned = spawn_server_with_config(
         &config_home,
         &runtime_dir,
         &api_socket,
-        &client_socket,
         CUSTOM_HEADLESS_SIZE_CONFIG,
     );
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -623,7 +619,6 @@ fn pane_created_after_detach_uses_configured_headless_size() {
         &config_home,
         &runtime_dir,
         &api_socket,
-        &client_socket,
         CUSTOM_HEADLESS_SIZE_CONFIG,
     );
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -690,7 +685,7 @@ fn detached_output_preserves_last_attached_pty_size() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -758,7 +753,7 @@ fn output_accumulated_while_detached_visible_on_reattach() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 

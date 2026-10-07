@@ -5,10 +5,12 @@ mod callback_runtime;
 mod commands;
 #[path = "runtime_control.rs"]
 mod dev_control;
-#[path = "runtime_orchestrator.rs"]
-mod orchestrator_runtime;
+#[path = "runtime_dialogs.rs"]
+mod dialogs;
 #[path = "runtime_resume.rs"]
 mod resume;
+#[path = "runtime_settings.rs"]
+mod settings_runtime;
 use super::{
     callbacks::{self, Parsed},
     launch::{self, AddAgent},
@@ -31,29 +33,34 @@ use std::{
 pub(crate) enum BusCommand {
     CreateRoom(String),
     RenameRoom(RoomId, String),
+    SetRoomSound(RoomId, bool),
+    /// A system sound name, or None for Bus's own ding.
+    SetRoomSoundName(RoomId, Option<String>),
+    /// Every work room's sound on or off, also what new work rooms start with.
+    SetAllRoomsSound(bool),
+    /// Every work room's sound name (None is Bus's own ding), also saved for new rooms.
+    SetAllRoomsSoundName(Option<String>),
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),
     DeleteAgent(AgentId),
     SelectRoom(RoomId),
     LeaveRoom,
-    #[allow(dead_code)] // Optional worker API; the shell marks seen with SelectRoom.
+    /// Dev `room seen`; the shell marks rooms seen with SelectRoom.
     MarkRoomSeen(RoomId),
     SetNotes(RoomId, String),
     SetDraftText(RoomId, String),
     SetRecipients(RoomId, AgentRecipients),
-    #[allow(dead_code)]
-    // Worker API for persisted drafts; shell quotes into its newer local editor.
-    Quote(RoomId, AgentId),
     AttachFile(RoomId, String),
     RemoveFile(RoomId, PathBuf),
     Submit(RoomId),
+    /// Like `Submit`, but each message waits for its agent's own turn.
+    SubmitQueued(RoomId),
     SetDetails(AgentId, bool),
     AddAgent(AddAgent),
+    /// Adds a MASTER agent, launched with its orchestrator system prompt.
+    AddOrchestrator(AddAgent, super::orchestrator::OrchestratorSpec),
     FocusTerminal(AgentId),
     CompleteHookSetup(AgentId),
-    ConfirmRoomBriefProposal(crate::bus::orchestrator::ConfirmRoomBriefProposal),
-    CreateDeveloperWorkflowApproval(crate::bus::orchestrator::CreateDeveloperWorkflowApproval),
-    MessageOrchestrator(crate::bus::orchestrator::HumanOrchestratorMessage),
     Suggestions {
         query_id: u64,
         input: String,
@@ -70,6 +77,10 @@ pub(crate) enum BusEvent {
         room: RoomId,
         agent: Option<AgentId>,
     },
+    /// Dev `quit`: run the UI's own save-and-quit, as Ctrl+Q does.
+    DevQuitRequested,
+    /// The coordinator saved these global settings; the UI applies them.
+    SettingsChanged(super::settings::BusSettings),
     /// Outcome of this exact command, independent of later snapshot acknowledgements.
     CommandFinished {
         command_id: u64,
@@ -87,6 +98,7 @@ pub(crate) enum BusEvent {
     },
     SetupRequired {
         input: AddAgent,
+        orchestrator: Option<super::orchestrator::OrchestratorSpec>,
         notice: launch::SetupNotice,
     },
     /// A deletion finished, but these terminals were no longer Bus-owned and were left open.
@@ -118,6 +130,12 @@ pub(crate) struct BusHandle {
 }
 
 pub(crate) const DEFAULT_SESSION: &str = "bus";
+/// Why a MASTER agent needs a room: its system prompt names that room at launch.
+pub(crate) const MASTER_AGENT_NEEDS_ROOM: &str = "A MASTER agent orchestrates exactly one work room for its whole life: add it with --orchestrates ROOM (create the work room first)";
+
+/// How long Bus holds delivery after an agent begins a turn of its own,
+/// unless that turn's Stop arrives first.
+const OWN_TURN_GRACE: Duration = Duration::from_secs(10);
 
 impl BusHandle {
     #[cfg(test)]
@@ -140,6 +158,11 @@ impl BusHandle {
     pub(crate) fn start(data_dir: PathBuf, target: ConnectionTarget) -> Result<Self, String> {
         let mut worker = Worker::open(data_dir.clone(), Box::new(HerdrTransport::new(target)))?;
         worker.dev_enabled = super::diagnostics::dev_enabled();
+        worker.settings_path = super::settings::path();
+        if let Err(error) = worker.apply_global_settings() {
+            tracing::warn!(%error, "global Bus settings not applied");
+            worker.error = Some(error);
+        }
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
         let (commands, receiver) = mpsc::sync_channel(256);
         let dev_control = super::control::start(worker.dev_enabled, &data_dir, commands.clone())?;
@@ -186,11 +209,25 @@ struct Worker {
     error: Option<String>,
     storage_failed: bool,
     branch_checks: BTreeMap<AgentId, std::time::Instant>,
+    /// Each agent's latest dialog wait and how many polls it has held.
+    dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
     delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
+    /// When each agent last began a turn of its own that has not settled.
+    own_turns: BTreeMap<AgentId, std::time::Instant>,
     dev_enabled: bool,
-    dev_receipts: BTreeMap<String, (super::control::Request, super::control::Response)>,
+    /// Mutation receipts by request ID, so a retried request replays its
+    /// response instead of running twice. Oldest first in `dev_receipt_order`.
+    dev_receipts: BTreeMap<String, dev_control::DevReceipt>,
+    dev_receipt_order: std::collections::VecDeque<String>,
     dev_receipt_bytes: usize,
-    room_orchestrator: Option<orchestrator_runtime::RoomOrchestratorRuntime>,
+    /// How long a receipt is kept before it may be evicted to make room.
+    dev_receipt_retention: Duration,
+    /// Provider allowance for dev `state`; in memory only, never persisted.
+    usage: super::usage::Usage,
+    /// The UI's settings file; set only for a real launch so tests never touch it.
+    settings_path: Option<PathBuf>,
+    /// Folders listed for system sounds; None reads the operating system's.
+    sound_dirs: Option<Vec<PathBuf>>,
 }
 
 impl Worker {
@@ -201,6 +238,8 @@ impl Worker {
         })?;
         let store = JsonStore::new(data_dir.join("state.json"));
         let mut state = store.load().map_err(|e| e.to_string())?.unwrap_or_default();
+        // Sessions saved before MASTER existed gain it here, once, before any client sees them.
+        state.ensure_master_room();
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.
@@ -211,9 +250,7 @@ impl Worker {
                 .map_err(|e| e.to_string())?;
         }
         store.save(&state).map_err(|e| e.to_string())?;
-        let room_orchestrator =
-            orchestrator_runtime::RoomOrchestratorRuntime::production(&data_dir)?;
-        let mut worker = Self {
+        Ok(Self {
             state,
             store,
             data_dir,
@@ -224,14 +261,18 @@ impl Worker {
             error: None,
             storage_failed: false,
             branch_checks: BTreeMap::new(),
+            dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
+            own_turns: BTreeMap::new(),
             dev_enabled: false,
             dev_receipts: BTreeMap::new(),
+            dev_receipt_order: std::collections::VecDeque::new(),
             dev_receipt_bytes: 0,
-            room_orchestrator,
-        };
-        worker.refresh_workflow_promotion_reviews();
-        Ok(worker)
+            dev_receipt_retention: dev_control::DEV_RECEIPT_RETENTION,
+            usage: super::usage::Usage::default(),
+            settings_path: None,
+            sound_dirs: None,
+        })
     }
 
     fn snapshot(&self) -> BusSnapshot {
@@ -243,47 +284,7 @@ impl Worker {
         }
     }
 
-    fn save(&mut self, mut state: BusState) -> Result<(), String> {
-        let newly_settled = state
-            .requests()
-            .filter_map(|request| {
-                let settlement = match request.phase {
-                    RequestPhase::Completed => {
-                        crate::bus::orchestrator::ProviderRequestSettlement::Completed
-                    }
-                    RequestPhase::Abandoned => {
-                        crate::bus::orchestrator::ProviderRequestSettlement::Abandoned
-                    }
-                    _ => return None,
-                };
-                if self.state.request(request.id).is_some_and(|previous| {
-                    matches!(
-                        previous.phase,
-                        RequestPhase::Completed | RequestPhase::Abandoned
-                    )
-                }) {
-                    return None;
-                }
-                Some((
-                    request.room_id,
-                    crate::bus::orchestrator::JournalFact::RequestSettled {
-                        request_id: request.id,
-                        message_id: crate::bus::orchestrator::RoomMessageId(request.prompt.id.0),
-                        participant: crate::bus::orchestrator::ParticipantId::Agent(
-                            request.agent_id,
-                        ),
-                        settlement,
-                        reply_digest: request
-                            .pending_final
-                            .as_ref()
-                            .map(|final_reply| crate::bus::io::digest(final_reply.text.as_bytes())),
-                    },
-                ))
-            })
-            .collect::<Vec<_>>();
-        for (room_id, fact) in newly_settled {
-            state.orchestrator_state_mut().record_fact(room_id, fact);
-        }
+    fn save(&mut self, state: BusState) -> Result<(), String> {
         if let Err(error) = self.store.save(&state) {
             self.storage_failed = true;
             tracing::error!(
@@ -344,7 +345,8 @@ impl Worker {
                     let _ = call.reply.try_send(response);
                 }
                 Ok((id, command)) => {
-                    let submitting = matches!(command, BusCommand::Submit(_));
+                    let submitting =
+                        matches!(command, BusCommand::Submit(_) | BusCommand::SubmitQueued(_));
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
                     let result = if self.storage_failed {
                         Err("Bus storage unavailable; restart after fixing storage".into())
@@ -431,13 +433,6 @@ impl Worker {
                     })?;
             }
         }
-        self.drive_orchestrator().inspect_err(|_| {
-            tracing::warn!(
-                event = "bus.orchestrator.failed",
-                stage = "drive",
-                "Room orchestrator drive failed without choosing a recovery action"
-            );
-        })?;
         self.submit_ready_while(can_deliver).inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",
@@ -468,6 +463,7 @@ impl Worker {
         };
         let mut state = self.state.clone();
         let mut rebound = Vec::new();
+        let mut waits = Vec::new();
         for agent in self.state.agents() {
             let info = infos
                 .iter()
@@ -547,6 +543,18 @@ impl Worker {
             state
                 .observe_status(agent.id, status, super::io::now_ms())
                 .map_err(|e| e.to_string())?;
+            let dialog_id = info.and_then(|info| info.dialog_id.clone());
+            state
+                .observe_dialog(agent.id, dialog_id.is_some())
+                .map_err(|e| e.to_string())?;
+            if info.is_some() {
+                waits.push((
+                    agent.id,
+                    dialog_id.or_else(|| {
+                        (status == RuntimeStatus::Blocked).then(|| dialogs::BLOCKED.to_owned())
+                    }),
+                ));
+            }
             if let Some(info) = info {
                 let cwd = info
                     .foreground_cwd
@@ -578,7 +586,7 @@ impl Worker {
                 previous_terminal_id = ?previous, terminal_id = current,
                 "Reconnected the saved provider conversation; request ownership preserved");
         }
-        Ok(())
+        self.notify_dialogs(waits)
     }
 
     #[cfg(test)]
@@ -596,6 +604,8 @@ impl Worker {
             if !can_deliver() {
                 break;
             }
+            // Messages waited because the agent could not take them yet.
+            let waited = self.delivery_waits.contains_key(&agent.id);
             if let Some(request) = self.state.queued_requests(agent.id).first().copied() {
                 if let Some(reason) = super::diagnostics::wait_reason(&agent) {
                     if self.delivery_waits.insert(agent.id, (request, reason))
@@ -613,6 +623,22 @@ impl Worker {
                 }
             } else {
                 self.delivery_waits.remove(&agent.id);
+            }
+            if let Some((request, lead)) = self.state.next_steering(agent.id) {
+                if agent.hook_setup_confirmed && !agent.session_binding_invalidated {
+                    self.steer(&agent, request, lead)?;
+                }
+                continue;
+            }
+            // The native status lags a turn the agent just began on its own (a
+            // task notification, say); text typed then joins that turn and is
+            // never seen starting. Its Stop, or the status catching up, ends this.
+            if self
+                .own_turns
+                .get(&agent.id)
+                .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE)
+            {
+                continue;
             }
             if agent.status != RuntimeStatus::Idle
                 || !agent.hook_setup_confirmed
@@ -636,28 +662,15 @@ impl Worker {
                 continue;
             };
             let mut state = self.state.clone();
-            if let Some(facts) = state
-                .assignment_facts(
-                    request,
-                    launch,
-                    &super::io::digest(
-                        super::orchestrator::ROOM_AGENT_CONTENT_INTERFACE_V1.as_bytes(),
-                    ),
-                )
-                .map_err(|error| error.to_string())?
-            {
-                let discovery =
-                    super::trusted_assignment::open_discovery(&self.data_dir, agent.id, launch)?;
-                let frame = super::trusted_assignment::publish(&discovery, facts)?;
-                state
-                    .bind_trusted_assignment(request, frame)
-                    .map_err(|error| error.to_string())?;
-            }
-            let text = state
-                .request(request)
-                .ok_or("Missing queued request")?
-                .prompt
-                .rendered_payload();
+            // Messages that piled up while the agent was unavailable go as one prompt.
+            let text = match waited.then(|| state.coalesce_queue(request)).flatten() {
+                Some(text) => text,
+                None => state
+                    .request(request)
+                    .ok_or("Missing queued request")?
+                    .prompt
+                    .rendered_payload(),
+            };
             let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
                 .map_err(|e| e.to_string())?;
             state
@@ -691,6 +704,7 @@ impl Worker {
                     expected_pane_id: pane.clone(),
                     expected_agent: launch::provider_kind(agent.provider).into(),
                     expected_session_id: session.clone(),
+                    steer: false,
                 })
             } else {
                 Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {
@@ -741,6 +755,64 @@ impl Worker {
     }
 }
 
+impl Worker {
+    /// Types `request` into the agent's running turn, the way a person types
+    /// while an agent works, so it joins `lead`'s group and shares its reply.
+    fn steer(&mut self, agent: &Agent, request: RequestId, lead: RequestId) -> Result<(), String> {
+        let identity = &agent.runtime_identity;
+        let (Some(terminal), Some(pane), Some(session)) = (
+            &identity.terminal_id,
+            &identity.pane_id,
+            &identity.session_id,
+        ) else {
+            return Ok(());
+        };
+        let mut state = self.state.clone();
+        let text = state
+            .request(request)
+            .ok_or("Missing queued request")?
+            .prompt
+            .rendered_payload();
+        state
+            .begin_steering(request, lead)
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
+        super::diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
+        let outcome = match self.transport.request(Method::AgentPromptIfIdle(
+            schema::AgentPromptIfIdleParams {
+                target: pane.clone(),
+                text,
+                expected_terminal_id: terminal.clone(),
+                expected_pane_id: pane.clone(),
+                expected_agent: launch::provider_kind(agent.provider).into(),
+                expected_session_id: session.clone(),
+                steer: true,
+            },
+        )) {
+            Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
+                provider_session_id: Some(session.clone()),
+                provider_turn_id: None,
+            },
+            Ok(other) => SubmissionOutcome::Uncertain {
+                message: format!("Unexpected steering response: {other:?}"),
+            },
+            Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
+                message: error.message,
+            },
+            Err(error) => SubmissionOutcome::Uncertain {
+                message: error.message,
+            },
+        };
+        tracing::info!(event = "bus.delivery.result", request_id = request.0, lead_id = lead.0,
+            mode = "steer", outcome = ?outcome, "Typed into the running turn");
+        let mut state = self.state.clone();
+        state
+            .record_steering(request, outcome)
+            .map_err(|e| e.to_string())?;
+        self.save(state)
+    }
+}
+
 fn branch_for(cwd: &Path) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["-C"])
@@ -756,9 +828,8 @@ fn branch_for(cwd: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "runtime_test_harness.rs"]
-pub(crate) mod test_harness;
-
+#[path = "runtime_steering_tests.rs"]
+mod steering_tests;
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod tests;

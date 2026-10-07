@@ -1,26 +1,9 @@
-use crate::config::{Keybinds, NewTerminalCwdConfig, SoundConfig, ToastConfig};
-use crossterm::event::{KeyCode, KeyModifiers};
+use crate::config::{NewTerminalCwdConfig, SoundConfig, ToastConfig};
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::detect::AgentState;
 use crate::layout::{PaneId, PaneInfo};
-
-pub(crate) type InstalledPluginRegistry =
-    std::collections::HashMap<String, crate::api::schema::InstalledPluginInfo>;
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PluginPaneRecord {
-    pub plugin_id: String,
-    pub entrypoint: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PopupPaneState {
-    pub pane_id: PaneId,
-    pub terminal_id: crate::terminal::TerminalId,
-    pub width: Option<crate::popup_size::PopupSize>,
-    pub height: Option<crate::popup_size::PopupSize>,
-}
 
 use crate::terminal_theme::{HostAppearance, TerminalTheme};
 use crate::workspace::Workspace;
@@ -746,30 +729,11 @@ pub struct AgentNotificationDelivery {
     pub kind: ToastKind,
     pub toast: Option<ToastNotification>,
     pub client_notification: Option<ToastNotification>,
-    pub sound: Option<crate::sound::Sound>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyFeedback {
     pub message: String,
-}
-
-#[derive(Debug)]
-pub struct ReleaseNotesState {
-    pub version: String,
-    pub body: String,
-    pub scroll: u16,
-    pub preview: bool,
-}
-
-#[derive(Debug)]
-pub struct ProductAnnouncementState {
-    pub version: String,
-    pub id: String,
-    pub title: String,
-    pub body: String,
-    pub scroll: u16,
-    pub preview: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -780,17 +744,9 @@ pub(crate) struct PaneFocusTarget {
 
 /// All application state — pure data, no channels or async runtime.
 /// Testable without PTYs or a tokio runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TabBarStatusSegment {
-    Zoom,
-    Text(Option<String>),
-}
-
 pub struct AppState {
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
-    /// Terminal ids whose size is currently owned by a direct attach client.
-    pub direct_attach_resize_locks: std::collections::HashSet<crate::terminal::TerminalId>,
     pub(crate) pane_id_aliases: std::collections::HashMap<u32, PaneId>,
     pub(crate) public_pane_id_aliases: std::collections::HashMap<String, PaneId>,
     pub workspaces: Vec<Workspace>,
@@ -802,17 +758,9 @@ pub struct AppState {
     /// Set when the headless server should ask attached clients to reload
     /// their client-local sound config from disk.
     pub request_client_config_reload: bool,
-    pub worktree_directory: std::path::PathBuf,
-    /// Latest endpoint-owned release notes, cached outside render paths.
-    pub latest_release_notes: Option<crate::release_notes::ReleaseNotes>,
-    pub product_announcement: Option<ProductAnnouncementState>,
     // Geometry of the most recently computed server pane surface.
     pub view: ViewState,
     // Notifications
-    pub update_available: Option<String>,
-    pub update_install_command: String,
-    pub latest_release_notes_available: bool,
-    pub update_dismissed: bool,
     pub config_diagnostic: Option<String>,
     pub toast: Option<ToastNotification>,
     pub pending_agent_notifications: std::collections::HashMap<PaneId, PendingAgentNotification>,
@@ -820,15 +768,9 @@ pub struct AppState {
     /// None means unsupported or not yet reported, which preserves active-pane suppression.
     pub outer_terminal_focus: Option<bool>,
     // Config
-    pub prefix_code: KeyCode,
-    pub prefix_mods: KeyModifiers,
     /// Virtual terminal size (columns, rows) used when no client is attached.
     pub(crate) headless_size: (u16, u16),
     pub agent_panel_sort: AgentPanelSort,
-    /// Transient session-wide projection override for the built-in Agents view.
-    pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
-    pub sidebar_agents: crate::config::AgentsSidebarConfig,
-    pub sidebar_spaces: crate::config::SpacesSidebarConfig,
     pub next_agent_state_change_seq: u64,
     pub confirm_close: bool,
     pub pane_borders: crate::config::PaneBordersConfig,
@@ -836,8 +778,6 @@ pub struct AppState {
     pub pane_scrollbars: bool,
     pub pane_gaps: bool,
     pub show_agent_labels_on_pane_borders: bool,
-    pub tab_bar_right: Vec<TabBarStatusSegment>,
-    pub tab_bar_right_separator: String,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
     pub reveal_hidden_cursor_for_cjk_ime: bool,
@@ -854,7 +794,6 @@ pub struct AppState {
     pub pane_scrollback_limit_bytes: usize,
     pub sound: SoundConfig,
     pub toast_config: ToastConfig,
-    pub keybinds: Keybinds,
     /// UI color palette — all sidebar/UI colors centralized for theming.
     pub palette: Palette,
     /// Currently applied theme name (for settings UI).
@@ -865,21 +804,6 @@ pub struct AppState {
     pub host_terminal_appearance: Option<HostAppearance>,
     /// True when the foreground host explicitly reported appearance via Mode 2031.
     pub host_terminal_appearance_explicit: bool,
-    /// Cached integration recommendations and detection manifest summaries.
-    pub integration_recommendations: Vec<crate::integration::IntegrationRecommendation>,
-    pub agent_manifest_summaries: Vec<crate::detect::manifest::AgentManifestSummary>,
-    /// Cached remote detection manifest update diagnostics for runtime/API status.
-    pub agent_manifest_update_status: crate::detect::manifest_update::ManifestUpdateStatus,
-    /// Installed or linked plugins known to this running Herdr instance.
-    pub(crate) installed_plugins: InstalledPluginRegistry,
-    /// Pane ids opened through the plugin pane API.
-    pub(crate) plugin_panes: std::collections::HashMap<PaneId, PluginPaneRecord>,
-    /// Session-modal terminal popup. This is intentionally outside workspace layouts.
-    pub(crate) popup_pane: Option<PopupPaneState>,
-    /// Recent plugin action/event command executions.
-    pub(crate) plugin_command_logs: Vec<crate::api::schema::PluginCommandLogInfo>,
-    pub(crate) next_plugin_command_log_id: u64,
-    pub(crate) plugin_commands_in_flight: usize,
     /// Resolved host terminal default colors for theming embedded panes.
     pub host_terminal_theme: TerminalTheme,
     /// Last known foreground host terminal cell size in pixels.
@@ -898,27 +822,6 @@ impl AppState {
 
     pub(crate) fn remove_alias_shadowed_by_new_pane(&mut self, pane_id: PaneId) {
         self.pane_id_aliases.remove(&pane_id.raw());
-    }
-
-    pub(crate) fn pane_exposes_host_cursor(
-        &self,
-        _ws_idx: usize,
-        _pane_id: crate::layout::PaneId,
-    ) -> bool {
-        true
-    }
-
-    pub(crate) fn refresh_agent_manifest_summaries(&mut self) {
-        self.agent_manifest_summaries = crate::detect::manifest::manifest_summaries();
-    }
-
-    pub(crate) fn integration_updates_available(&self) -> bool {
-        self.integration_recommendations
-            .iter()
-            .any(|recommendation| {
-                recommendation.state == crate::integration::IntegrationStatusKind::Outdated
-                    && recommendation.needs_install()
-            })
     }
 
     pub fn estimate_pane_size(&self) -> (u16, u16) {
@@ -999,18 +902,6 @@ impl AppState {
     }
 }
 
-#[cfg(test)]
-pub fn key_matches(
-    key: &crossterm::event::KeyEvent,
-    expected_code: KeyCode,
-    expected_mods: KeyModifiers,
-) -> bool {
-    crate::config::terminal_key_matches_combo(
-        &crate::input::TerminalKey::from(*key),
-        (expected_code, expected_mods),
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
@@ -1021,7 +912,6 @@ impl AppState {
     pub fn test_new() -> Self {
         Self {
             terminals: std::collections::HashMap::new(),
-            direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),
             public_pane_id_aliases: std::collections::HashMap::new(),
             workspaces: Vec::new(),
@@ -1031,31 +921,19 @@ impl AppState {
             mode: Mode::Navigate,
             should_quit: false,
             request_client_config_reload: false,
-            worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
-            latest_release_notes: None,
-            product_announcement: None,
             view: ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),
             },
-            update_available: None,
-            update_install_command: "herdr update".into(),
-            latest_release_notes_available: false,
-            update_dismissed: false,
             config_diagnostic: None,
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
             outer_terminal_focus: None,
-            prefix_code: KeyCode::Char('b'),
-            prefix_mods: KeyModifiers::CONTROL,
             headless_size: (
                 crate::config::DEFAULT_HEADLESS_COLS,
                 crate::config::DEFAULT_HEADLESS_ROWS,
             ),
             agent_panel_sort: AgentPanelSort::Spaces,
-            agent_view_override: None,
-            sidebar_agents: crate::config::AgentsSidebarConfig::default(),
-            sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
             next_agent_state_change_seq: 0,
             confirm_close: true,
             pane_borders: crate::config::PaneBordersConfig::Auto,
@@ -1063,8 +941,6 @@ impl AppState {
             pane_scrollbars: true,
             pane_gaps: false,
             show_agent_labels_on_pane_borders: false,
-            tab_bar_right: Vec::new(),
-            tab_bar_right_separator: " ".into(),
             reveal_hidden_cursor_for_cjk_ime: false,
             cjk_ime_agent_filter_configured: false,
             cjk_ime_agents: Vec::new(),
@@ -1079,7 +955,6 @@ impl AppState {
                 ..SoundConfig::default()
             },
             toast_config: ToastConfig::default(),
-            keybinds: Keybinds::default(),
             palette: Palette::catppuccin(),
             theme_name: "catppuccin".to_string(),
             theme_runtime: ThemeRuntimeConfig {
@@ -1092,16 +967,6 @@ impl AppState {
             },
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
-            integration_recommendations: Vec::new(),
-            agent_manifest_summaries: Vec::new(),
-            agent_manifest_update_status:
-                crate::detect::manifest_update::ManifestUpdateStatus::default(),
-            installed_plugins: std::collections::HashMap::new(),
-            plugin_panes: std::collections::HashMap::new(),
-            popup_pane: None,
-            plugin_command_logs: Vec::new(),
-            next_plugin_command_log_id: 1,
-            plugin_commands_in_flight: 0,
             host_terminal_theme: TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
@@ -1159,10 +1024,6 @@ impl AppState {
             assert!(
                 self.previous_pane_focus.is_none(),
                 "empty app state must not keep previous pane focus"
-            );
-            assert!(
-                self.plugin_panes.is_empty(),
-                "empty app state must not keep plugin pane records"
             );
             assert!(
                 self.pending_agent_notifications.is_empty(),
@@ -1273,22 +1134,6 @@ impl AppState {
                 "pending agent notification",
             );
         }
-        if let Some(popup) = &self.popup_pane {
-            assert!(
-                self.terminals.contains_key(&popup.terminal_id),
-                "popup {:?} references missing terminal {}",
-                popup.pane_id,
-                popup.terminal_id
-            );
-            assert!(
-                !attached_terminal_ids.contains(&popup.terminal_id),
-                "popup terminal {} must not be attached to a tiled pane",
-                popup.terminal_id
-            );
-        }
-        for &pane_id in self.plugin_panes.keys() {
-            assert_live_pane(pane_id, "plugin pane record");
-        }
     }
 
     pub fn insert_test_runtime(
@@ -1309,7 +1154,6 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::KeyEvent;
 
     #[test]
     fn pane_size_estimate_uses_headless_size_before_first_view() {
@@ -1317,28 +1161,6 @@ mod tests {
         state.headless_size = (132, 41);
 
         assert_eq!(state.estimate_pane_size(), (41, 132));
-    }
-
-    #[test]
-    fn agent_terminal_keeps_final_child_cursor_exposed() {
-        let mut state = AppState::test_new();
-        let ws = crate::workspace::Workspace::test_new("test");
-        let pane_id = ws.tabs[0].root_pane;
-        state.terminals.insert(
-            ws.tabs[0].panes[&pane_id].attached_terminal_id.clone(),
-            crate::terminal::TerminalState::new(
-                ws.tabs[0].panes[&pane_id].attached_terminal_id.clone(),
-                std::path::PathBuf::from("/tmp"),
-            ),
-        );
-        state
-            .terminals
-            .get_mut(&ws.tabs[0].panes[&pane_id].attached_terminal_id)
-            .expect("terminal state")
-            .launch_argv = Some(vec!["codex".to_string()]);
-        state.workspaces = vec![ws];
-
-        assert!(state.pane_exposes_host_cursor(0, pane_id));
     }
 
     #[test]
@@ -1473,32 +1295,5 @@ mod tests {
                 "theme should resolve: {name}"
             );
         }
-    }
-
-    #[test]
-    fn key_matches_requires_exact_modifiers() {
-        assert!(key_matches(
-            &KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
-            KeyCode::Char('b'),
-            KeyModifiers::CONTROL,
-        ));
-
-        assert!(!key_matches(
-            &KeyEvent::new(
-                KeyCode::Char('b'),
-                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-            ),
-            KeyCode::Char('b'),
-            KeyModifiers::CONTROL,
-        ));
-    }
-
-    #[test]
-    fn key_matches_letters_case_insensitively() {
-        assert!(key_matches(
-            &KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT),
-            KeyCode::Char('b'),
-            KeyModifiers::SHIFT,
-        ));
     }
 }

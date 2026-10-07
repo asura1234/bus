@@ -3,7 +3,6 @@ use super::{
     deletion::DeleteTarget,
     editor::Editor,
     forms::{Form, RenameTarget},
-    orchestrator_ui::{CoordinationAction, RecipientEntry},
 };
 use crate::bus::model::*;
 use ratatui::style::{Color, Style};
@@ -38,7 +37,6 @@ pub(super) enum Action {
     Composer,
     Recipients,
     Recipient(Option<crate::bus::model::AgentId>),
-    RecipientEntry(RecipientEntry),
     Files,
     RemoveFile(std::path::PathBuf),
     FileDetail(std::path::PathBuf),
@@ -46,120 +44,16 @@ pub(super) enum Action {
     Quote(crate::bus::model::RequestId),
     Field(usize),
     Provider(Provider),
+    Orchestrates,
     Suggestion(usize),
     Settings,
     ToggleColorBlindMode,
-    ToggleOrchestrator,
-    ResetOrchestratorPrompt,
-    Coordination(CoordinationAction),
+    ToggleSound(SoundTarget),
+    /// Picks the next (true) or previous system sound for a Settings sound row.
+    CycleSound(SoundTarget, bool),
     Cancel,
     Add,
 }
-/// Rows of Worker-owned room coordination facts. Each action carries the facts it displays.
-/// A workflow approval is offered only after its complete review fits the visible header, so
-/// the developer cannot approve a diff that is clipped by rows or width.
-fn orchestrator_header(
-    state: &BusState,
-    room: &Room,
-    notes: &str,
-    visible_rows: usize,
-    width: u16,
-) -> Vec<(String, Option<Action>, bool)> {
-    let mut rows = Vec::new();
-    if !room.brief.goal.is_empty() {
-        rows.push((format!("Goal: {}", room.brief.goal), None, false));
-    }
-    if !room.brief.non_goals.is_empty() {
-        rows.push((format!("Non-goals: {}", room.brief.non_goals), None, false));
-    }
-    if let Some((revision, digest)) = state.room_brief_proposal(room.id) {
-        rows.push((
-            format!("Confirm proposal rev {revision}"),
-            Some(Action::Coordination(CoordinationAction::ApproveProposal {
-                revision,
-                digest,
-            })),
-            false,
-        ));
-    }
-    if let Some(receipt) = state.room_brief_confirmation(room.id) {
-        rows.push((
-            format!(
-                "Confirmed rev {} {}",
-                receipt.approved_revision, receipt.proposal_digest
-            ),
-            None,
-            true,
-        ));
-    }
-    rows.push(match notes.lines().next() {
-        Some(line) => (format!("Notes: {line}"), Some(Action::Notes), false),
-        None => ("Add notes… (F3)".into(), Some(Action::Notes), true),
-    });
-    for approval in state.developer_workflow_approvals(room.id) {
-        rows.push((
-            format!(
-                "Approved {} rev {} {}",
-                approval.workflow_id, approval.draft_revision, approval.approval_id
-            ),
-            None,
-            true,
-        ));
-    }
-    for review in state.workflow_promotion_reviews(room.id) {
-        let mut block = vec![
-            (
-                format!(
-                    "Review {} · draft {} rev {}",
-                    review.workflow_id, review.draft_id, review.draft_revision
-                ),
-                None,
-                false,
-            ),
-            (format!("content {}", review.content_digest), None, true),
-            (
-                format!(
-                    "base {}",
-                    review.standard_base_digest.as_deref().unwrap_or("absent")
-                ),
-                None,
-                true,
-            ),
-            (format!("diff {}", review.reviewed_diff_digest), None, true),
-        ];
-        block.extend(
-            review
-                .rendered_diff
-                .lines()
-                .map(|line| (line.to_owned(), None, false)),
-        );
-        block.push((
-            format!("Approve workflow {}", review.workflow_id),
-            Some(Action::Coordination(
-                CoordinationAction::ApproveWorkflowPromotion(Box::new(review.clone())),
-            )),
-            false,
-        ));
-        let fits = rows.len() + block.len() <= visible_rows
-            && block.iter().all(|(text, _, _)| {
-                unicode_width::UnicodeWidthStr::width(display(text).as_str()) <= usize::from(width)
-            });
-        if fits {
-            rows.extend(block);
-        } else {
-            rows.push((
-                format!(
-                    "Review {} diff is not fully shown; enlarge the terminal to approve",
-                    review.workflow_id
-                ),
-                None,
-                true,
-            ));
-        }
-    }
-    rows
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct Hit {
     pub rect: Rect,
@@ -197,21 +91,28 @@ pub(super) struct View {
     pub composer_rows: usize,
     composer_box: Rect,
     composer_divider: Rect,
-    notes_box: Rect,
+    pub notes_box: Rect,
     history_divider: Rect,
     dialog: Rect,
     dialog_rows_start: usize,
     pub help: Rect,
     pub help_scroll: usize,
     pub help_max_scroll: usize,
+    /// The scrollable sound-notification rows of the Settings form.
+    pub settings_list: Rect,
+    pub settings_max_scroll: usize,
     rows: Vec<Row>,
     pub cursor: Option<crate::protocol::CursorState>,
     pub notes: Rect,
     pub notes_scroll: usize,
+    /// Wrapped rows of the room notes, of which `notes` shows a window.
+    pub notes_rows: usize,
     /// Text columns of the visible history rows.
     pub history_text: Rect,
     /// Selected cells, painted after the rows they cover.
     selection: Vec<Rect>,
+    /// Image thumbnails wholly inside the history viewport.
+    pub thumbnails: Vec<super::thumbnails::Placement>,
 }
 impl View {
     fn overlay_row(&mut self, rect: Rect, text: String, action: Option<Action>, selected: bool) {
@@ -324,7 +225,9 @@ impl View {
         for (index, line) in lines.iter().enumerate().skip(skip).take(height) {
             let row = Rect::new(rect.x, rect.y + (index - skip) as u16, rect.width, 1);
             let text = &editor.text[line.clone()];
-            self.row(row, display(text), None, focused, false);
+            // Typed text sits on the box's own background; focus shows as the
+            // cursor, and only a selection is highlighted.
+            self.row(row, display(text), None, false, false);
             if let Some(selection) = &selection {
                 let newline = editor.text[line.end..].starts_with('\n');
                 self.select(row, text, line.start, selection, newline);
@@ -524,7 +427,7 @@ fn agent_status(agent: &Agent) -> &'static str {
     {
         "Not ready"
     } else {
-        status(agent.status)
+        status(agent.shown_status())
     }
 }
 
@@ -536,6 +439,24 @@ fn identity_color(agent: &Agent, settings: &crate::bus::settings::BusSettings) -
         agent.color
     };
     Color::Rgb(r, g, b)
+}
+
+/// The color of an agent's name in a message: in a work room, every MASTER
+/// orchestrator is drawn in You's green, which agent allocation (standard and
+/// color blind) keeps clear of, so it never shares a worker's color. MASTER
+/// itself keeps identity colors to tell its orchestrators apart.
+fn message_name_color(
+    state: &BusState,
+    open_room: Option<RoomId>,
+    agent: &Agent,
+    settings: &crate::bus::settings::BusSettings,
+) -> Color {
+    let in_master = |room| state.master_room().is_some_and(|master| master.id == room);
+    if in_master(agent.room_id) && !open_room.is_some_and(in_master) {
+        ACCENT
+    } else {
+        identity_color(agent, settings)
+    }
 }
 
 fn midpoint_color(first: Color, second: Color) -> Color {
@@ -564,8 +485,8 @@ fn working_status_colors(word: &str, keyframe: usize) -> Vec<Color> {
         .collect()
 }
 
-fn animated_agent_status_colors(agent: &Agent, phase: u8) -> Option<Vec<Color>> {
-    let word = agent_status(agent);
+/// Animated colors for a status word shown on an agent or room row.
+fn animated_status_colors(word: &str, phase: u8) -> Option<Vec<Color>> {
     match word {
         "Working" => {
             let keyframe = usize::from(phase / 2);
@@ -601,12 +522,214 @@ fn animated_agent_status_colors(agent: &Agent, phase: u8) -> Option<Vec<Color>> 
         _ => None,
     }
 }
+/// What a Settings sound row sets: a room's sound (MASTER's is global), or
+/// every work room at once, which is also what new work rooms start with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SoundTarget {
+    Room(RoomId),
+    AllRooms,
+}
+
+/// One row of the Settings form's sound-notification list.
+pub(super) enum SoundSettingsLine {
+    Heading(&'static str),
+    Empty(&'static str),
+    /// `field` is the row's Settings focus index; color blind mode is field 0.
+    Sound {
+        target: SoundTarget,
+        field: usize,
+    },
+}
+
+impl BusUi {
+    /// MASTER in its own group first, then the new-room default and every
+    /// work room, in sidebar order.
+    pub(super) fn sound_settings_targets(&self) -> Vec<SoundTarget> {
+        let state = &self.snapshot.state;
+        let master = state.master_room().map(|room| SoundTarget::Room(room.id));
+        let work = state
+            .rooms()
+            .filter(|room| room.kind == RoomKind::Work && !room.deletion_pending)
+            .map(|room| SoundTarget::Room(room.id));
+        master
+            .into_iter()
+            .chain(std::iter::once(SoundTarget::AllRooms))
+            .chain(work)
+            .collect()
+    }
+
+    pub(super) fn sound_settings_lines(&self) -> Vec<SoundSettingsLine> {
+        let master = self
+            .snapshot
+            .state
+            .master_room()
+            .map(|room| SoundTarget::Room(room.id));
+        let mut lines = Vec::new();
+        let mut targets = self
+            .sound_settings_targets()
+            .into_iter()
+            .enumerate()
+            .map(|(index, target)| SoundSettingsLine::Sound {
+                target,
+                field: index + 1,
+            })
+            .peekable();
+        if let Some(line) =
+            targets.next_if(|line| matches!(line, SoundSettingsLine::Sound { target, .. } if Some(*target) == master))
+        {
+            lines.push(SoundSettingsLine::Heading("MASTER"));
+            lines.push(line);
+            lines.push(SoundSettingsLine::Empty(""));
+        }
+        lines.push(SoundSettingsLine::Heading("ROOMS"));
+        lines.extend(targets.next());
+        if targets.peek().is_none() {
+            lines.push(SoundSettingsLine::Empty("No rooms yet"));
+        }
+        lines.extend(targets);
+        lines
+    }
+
+    /// A Settings sound row's checkbox label, whether it is on (None when the
+    /// rooms under All rooms differ), and its sound.
+    pub(super) fn sound_row(&self, target: SoundTarget) -> Option<(String, Option<bool>, String)> {
+        match target {
+            SoundTarget::Room(room) => {
+                let room = self.snapshot.state.room(room)?;
+                Some((
+                    format!("# {}", room.name),
+                    Some(room.sound_enabled()),
+                    self.sound_label(room.sound_name.as_deref()),
+                ))
+            }
+            SoundTarget::AllRooms => {
+                let (enabled, name) = self.all_rooms_sound();
+                let sound = match name {
+                    Some(name) => self.sound_label(name.as_deref()),
+                    None => "Mixed".into(),
+                };
+                Some(("All rooms".into(), enabled, sound))
+            }
+        }
+    }
+
+    /// The work rooms' shared on/off state and sound, each None when the rooms
+    /// differ. Without work rooms it is the saved default new rooms get.
+    pub(super) fn all_rooms_sound(&self) -> (Option<bool>, Option<Option<String>>) {
+        let mut rooms = self
+            .snapshot
+            .state
+            .rooms()
+            .filter(|room| room.kind == RoomKind::Work && !room.deletion_pending)
+            .map(|room| (room.sound_enabled(), room.sound_name.clone()));
+        let Some((enabled, name)) = rooms.next() else {
+            let pref = &self.settings.room_sound;
+            return (Some(pref.enabled), Some(pref.name.clone()));
+        };
+        let (mut enabled, mut name) = (Some(enabled), Some(name));
+        for (other_enabled, other_name) in rooms {
+            if enabled != Some(other_enabled) {
+                enabled = None;
+            }
+            if name.as_ref() != Some(&other_name) {
+                name = None;
+            }
+        }
+        (enabled, name)
+    }
+}
+
+/// Rows taken by the MASTER room entry and the gap before ROOMS.
+const MASTER_SECTION_ROWS: usize = 2;
+
+/// Rows of a MASTER agent: name, provider, orchestrated room and a gap.
+const MASTER_AGENT_ROWS: usize = 4;
+
+/// The logical row of the ROOMS header while `selected` is open. With MASTER
+/// open, its AGENTS section sits between MASTER and ROOMS.
+fn sidebar_rooms_header(state: &BusState, selected: Option<RoomId>) -> usize {
+    let Some(master) = state.master_room().map(|master| master.id) else {
+        return 1;
+    };
+    if selected != Some(master) {
+        return 1 + MASTER_SECTION_ROWS;
+    }
+    let agents = state
+        .agents()
+        .filter(|agent| agent.room_id == master)
+        .count();
+    // AGENTS header, gap, the agents, then the divider.
+    1 + MASTER_SECTION_ROWS + 2 + agents * MASTER_AGENT_ROWS + 1
+}
+
+/// The logical sidebar row of a room while `selected` is open: MASTER is the
+/// first entry, alone above the rest; work rooms follow the ROOMS header.
+pub(super) fn sidebar_room_row(
+    state: &BusState,
+    room: RoomId,
+    selected: Option<RoomId>,
+) -> Option<usize> {
+    if state.master_room().is_some_and(|master| master.id == room) {
+        return Some(1);
+    }
+    let first = sidebar_rooms_header(state, selected) + 2;
+    state
+        .rooms()
+        .filter(|candidate| candidate.kind == RoomKind::Work)
+        .position(|candidate| candidate.id == room)
+        .map(|index| first + index)
+}
+
+/// A room's sidebar label, its name truncated to fit in `width` cells.
+pub(super) fn room_label(room: &Room, width: usize) -> String {
+    let room_width = width.saturating_sub(2);
+    let name = if cells(&room.name) <= room_width {
+        room.name.clone()
+    } else {
+        let mut name = String::new();
+        let mut used = 0;
+        for c in room.name.chars() {
+            if used + cell_width(c) + 1 > room_width {
+                break;
+            }
+            used += cell_width(c);
+            name.push(c);
+        }
+        name.push('…');
+        name
+    };
+    format!("# {name}")
+}
+
+/// The MASTER line under an agent's provider: the room it orchestrates, or
+/// `# unassigned` for a saved orchestrator whose room failed the load checks.
+/// Written like the ROOMS list, `# name`.
+pub(super) fn orchestrated_room_label(state: &BusState, agent: &Agent) -> String {
+    match agent.orchestrates.and_then(|room| state.room(room)) {
+        Some(room) => format!("# {}", room.name),
+        None => "# unassigned".into(),
+    }
+}
+
 impl BusUi {
     pub fn cursor(&self) -> Option<crate::protocol::CursorState> {
         self.view.cursor.clone()
     }
     pub fn compute_view(&mut self, cols: u16, rows: u16) {
         self.sync_toast();
+        let key = super::ViewKey {
+            room: self.room,
+            terminal: self.terminal,
+            form: self.form.as_ref().map(std::mem::discriminant),
+            deletion: self.deletion.is_some(),
+        };
+        if self
+            .view_key
+            .replace(key)
+            .is_some_and(|previous| previous != key)
+        {
+            self.full_repaint = true;
+        }
         let layout = layout(cols, rows);
         let sidebar = layout.sidebar;
         let main = layout.pane_surface;
@@ -624,6 +747,15 @@ impl BusUi {
             .agents()
             .filter(|a| Some(a.room_id) == self.room)
             .map(|agent| {
+                // MASTER agents show name, provider and orchestrated room only.
+                if self
+                    .snapshot
+                    .state
+                    .master_room()
+                    .is_some_and(|master| master.id == agent.room_id)
+                {
+                    return (agent, true, Vec::new(), MASTER_AGENT_ROWS);
+                }
                 let paths = if agent.details_disclosed {
                     wrap(&agent.cwd.to_string_lossy(), sw)
                 } else {
@@ -632,11 +764,18 @@ impl BusUi {
                 let height = 3
                     + usize::from(agent.details_disclosed && agent.branch.is_some())
                     + paths.len();
-                (agent, paths, height)
+                (agent, false, paths, height)
             })
             .collect();
-        let content_height =
-            6 + rooms.len() + agents.iter().map(|(_, _, height)| height).sum::<usize>();
+        let master_header_rows = if self.snapshot.state.master_room().is_some() {
+            MASTER_SECTION_ROWS - 1
+        } else {
+            0
+        };
+        let content_height = 6
+            + master_header_rows
+            + rooms.len()
+            + agents.iter().map(|(_, _, _, height)| height).sum::<usize>();
         let notices = if self.force_exit_available {
             2
         } else {
@@ -656,26 +795,52 @@ impl BusUi {
                 Rect::default()
             }
         };
-        view.row(at(1, 1, sw), "ROOMS", None, false, true);
+        // A work room lists ROOMS, then its AGENTS; MASTER lists its
+        // orchestrator AGENTS first, so it is clear whose agents they are.
+        let master_open = self
+            .snapshot
+            .state
+            .master_room()
+            .is_some_and(|master| Some(master.id) == self.room);
+        let rooms_header = sidebar_rooms_header(&self.snapshot.state, self.room);
+        let work_rooms = rooms
+            .iter()
+            .filter(|room| room.kind == RoomKind::Work)
+            .count();
+        let (divider_row, agents_header) = if master_open {
+            (rooms_header - 1, 1 + MASTER_SECTION_ROWS)
+        } else {
+            let divider = rooms_header + 2 + work_rooms;
+            (divider, divider + 1)
+        };
+        view.row(at(1, rooms_header, sw), "ROOMS", None, false, true);
         view.row(
-            at(sidebar.width.saturating_sub(3), 1, 1),
+            at(sidebar.width.saturating_sub(3), rooms_header, 1),
             "+",
             Some(Action::NewRoom),
             false,
             false,
         );
-        let mut y = 3usize;
         for room in &rooms {
-            let rect = at(1, y, sw.saturating_sub(2));
-            y += 1;
+            let Some(row) = sidebar_room_row(&self.snapshot.state, room.id, self.room) else {
+                continue;
+            };
+            // A work room's status sits left of its delete button, as on agent
+            // rows; MASTER shows just its name.
+            let right = match room.kind {
+                RoomKind::Work => status(self.snapshot.state.room_status(room.id)),
+                RoomKind::Master => "",
+            };
+            let name_width = if right.is_empty() {
+                sw.saturating_sub(2)
+            } else {
+                sw.saturating_sub(right.len() as u16 + 3)
+            };
+            let rect = at(1, row, name_width);
             if rect.height == 0 {
                 continue;
             }
-            let label = if room.unread_count > 0 {
-                format!("# {}  {}", room.name, room.unread_count)
-            } else {
-                format!("# {}", room.name)
-            };
+            let label = room_label(room, usize::from(name_width));
             if let Some(rename) = self
                 .rename
                 .as_ref()
@@ -691,9 +856,21 @@ impl BusUi {
                     false,
                 );
             }
-            if Some(room.id) == self.room {
+            if !right.is_empty() {
+                let status_rect = at(
+                    sidebar.width.saturating_sub(right.len() as u16 + 4),
+                    row,
+                    right.len() as u16,
+                );
+                view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
+                if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
+                    view.color_last_row_characters(status_rect, colors);
+                }
+            }
+            // MASTER is permanent, so it never offers a delete button.
+            if Some(room.id) == self.room && room.kind == RoomKind::Work {
                 view.row(
-                    at(sidebar.width.saturating_sub(3), y - 1, 1),
+                    at(sidebar.width.saturating_sub(3), row, 1),
                     "×",
                     Some(Action::Delete(DeleteTarget::Room(room.id))),
                     false,
@@ -701,8 +878,8 @@ impl BusUi {
                 );
             }
         }
-        view.sidebar_divider = at(1, y, sw);
-        y += 1;
+        view.sidebar_divider = at(1, divider_row, sw);
+        let mut y = agents_header;
         view.row(at(1, y, sw), "AGENTS", None, false, true);
         view.row(
             at(sidebar.width.saturating_sub(3), y, 1),
@@ -712,7 +889,7 @@ impl BusUi {
             false,
         );
         y += 2;
-        for (agent, paths, height) in agents {
+        for (agent, in_master, paths, height) in agents {
             if y >= visible_end {
                 break;
             }
@@ -751,7 +928,7 @@ impl BusUi {
                 false,
                 true,
             );
-            if let Some(colors) = animated_agent_status_colors(agent, self.status_animation_phase) {
+            if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
                 view.color_last_row_characters(status_rect, colors);
             }
             view.row(
@@ -769,6 +946,20 @@ impl BusUi {
                 false,
                 true,
             );
+            if in_master {
+                y += 1;
+                // An orchestrator keeps its room for life, so the room line
+                // opens that room instead of offering to reassign it.
+                view.row(
+                    at(1, y, sw),
+                    orchestrated_room_label(&self.snapshot.state, agent),
+                    agent.orchestrates.map(Action::Room),
+                    false,
+                    true,
+                );
+                y += 2;
+                continue;
+            }
             view.row(
                 at(sidebar.width.saturating_sub(3), y, 1),
                 if agent.details_disclosed { "v" } else { ">" },
@@ -805,7 +996,7 @@ impl BusUi {
             if self.quitting.is_some() {
                 "Saving before exit…"
             } else if self.force_exit_available {
-                "Ctrl+C retries saving"
+                "Ctrl+Q retries saving"
             } else {
                 ""
             },
@@ -845,7 +1036,48 @@ impl BusUi {
         if self.deletion.is_some() {
             self.delete_view(&mut view, Rect::new(0, 0, cols, rows));
         }
+        // Kitty images draw above text, so hide them under anything that can
+        // cover the history. A notice is not one: the room view shows it on
+        // its own status line under the composer, and the other screens that
+        // show it are covers already.
+        if view.dialog.width > 0
+            || self.form.is_some()
+            || self.deletion.is_some()
+            || self.terminal.is_some()
+            || self.rename.is_some()
+        {
+            view.thumbnails.clear();
+        }
         self.view = view;
+    }
+
+    /// Graphics commands updating the history thumbnails for the latest view.
+    /// A full repaint of this frame erases iTerm2 images, so they are drawn
+    /// again after it; moving or removing them asks for that repaint.
+    pub fn thumbnail_graphics(&mut self) -> Vec<u8> {
+        // The last thumbnail bytes never reached the terminal (the frame was
+        // dropped), so it may lack images Bus believes it sent.
+        if std::mem::take(&mut self.graphics_unconfirmed) {
+            self.thumbnails.forget_terminal();
+        }
+        if self.full_repaint {
+            self.thumbnails.invalidate();
+        }
+        let graphics = self.thumbnails.encode(&self.view.thumbnails);
+        if self.thumbnails.take_repaint() {
+            self.full_repaint = true;
+        }
+        self.graphics_unconfirmed = !graphics.is_empty();
+        graphics
+    }
+
+    /// The client wrote the latest frame. `cleared` when it cleared the screen
+    /// first, which removes images placed by earlier frames.
+    pub fn graphics_presented(&mut self, cleared: bool) {
+        self.graphics_unconfirmed = false;
+        if cleared {
+            self.thumbnails.forget_terminal();
+        }
     }
     fn room_view(&mut self, view: &mut View, main: Rect) {
         let Some(room) = self.room.and_then(|id| self.snapshot.state.room(id)) else {
@@ -874,9 +1106,8 @@ impl BusUi {
             .map(|search| (search.query.clone(), search.selected));
         let search_status = search_status.map(|(query, selected)| {
             let total = self
-                .room
-                .map(|room| self.filtered_history(room, &query).len())
-                .unwrap_or(0)
+                .filtered_history(self.room.unwrap(), &query)
+                .len()
                 .max(1);
             (query, selected, total)
         });
@@ -962,24 +1193,18 @@ impl BusUi {
                 false,
             );
         }
-        let orchestrator = self.settings.orchestrator.enabled;
-        // Worker coordination rows yield to at least three conversation rows.
-        let header_budget = composer_y.saturating_sub(9);
-        let header = if orchestrator {
-            orchestrator_header(
-                &self.snapshot.state,
-                room,
-                &local.notes.text,
-                usize::from(header_budget),
-                width,
-            )
+        // The notes box grows with its text up to a quarter of the window,
+        // keeps one row for the F3 prompt, and scrolls beyond that. History
+        // takes the rows below it. MASTER has no notes (the human talks to
+        // orchestrators there; status boards live in work rooms), so its
+        // history starts right under the room name.
+        let has_notes = room.kind != RoomKind::Master;
+        let note_lines = wrap(&local.notes.text, width).len().max(1);
+        let note_height = if has_notes {
+            (note_lines.min(usize::from((main.height / 4).max(1))) as u16)
+                .min(composer_y.saturating_sub(5))
         } else {
-            Vec::new()
-        };
-        let note_height = if orchestrator {
-            (header.len() as u16).min(header_budget)
-        } else {
-            3.min(composer_y.saturating_sub(5))
+            0
         };
         if note_height > 0 {
             view.notes_box =
@@ -987,49 +1212,52 @@ impl BusUi {
         }
         // The expanded draft may hide the top section. Never paint a history
         // separator over its editor or reserve rows from full-screen editing.
-        let history_y = match (orchestrator, note_height) {
-            (false, _) => 8,
-            (true, 0) => 3,
-            (true, rows) => rows + 5,
-        };
+        let history_y = if has_notes { 5 + note_height.max(1) } else { 3 };
         if history_y - 1 < view.composer_box.y {
             view.history_divider =
                 Rect::new(main.x + 1, history_y - 1, main.width.saturating_sub(2), 1);
         }
         view.notes = Rect::new(x, 3, width, note_height);
-        if orchestrator && !self.notes_focus {
-            view.notes_scroll = self.view.notes_scroll;
-            for (index, (text, action, muted)) in header
-                .into_iter()
-                .take(usize::from(note_height))
-                .enumerate()
-            {
+        (view.notes_scroll, view.notes_rows) = view.editor_scrolled(
+            view.notes,
+            &local.notes,
+            Some(Action::Notes),
+            self.notes_focus,
+            // Read unfocused notes from the top unless the wheel moved them.
+            local.notes_scroll.or((!self.notes_focus).then_some(0)),
+            self.view.notes_scroll,
+        );
+        // Mark hidden notes on the box's top and bottom borders.
+        let notes_box = view.notes_box;
+        if note_height > 0 && notes_box.width > 12 {
+            let more_x = notes_box.right().saturating_sub(9);
+            if view.notes_scroll > 0 {
                 view.row(
-                    Rect::new(x, 3 + index as u16, width, 1),
-                    text,
-                    action,
-                    false,
-                    muted,
-                );
-            }
-        } else {
-            (view.notes_scroll, _) = view.editor_scrolled(
-                view.notes,
-                &local.notes,
-                Some(Action::Notes),
-                self.notes_focus,
-                None,
-                self.view.notes_scroll,
-            );
-            if note_height > 0 && local.notes.text.is_empty() {
-                view.row(
-                    Rect::new(x, 3, width, 1),
-                    "Add notes… (F3)",
-                    Some(Action::Notes),
+                    Rect::new(more_x, notes_box.y, 7, 1),
+                    "↑ more",
+                    None,
                     false,
                     true,
                 );
             }
+            if view.notes_scroll + usize::from(note_height) < view.notes_rows {
+                view.row(
+                    Rect::new(more_x, notes_box.bottom() - 1, 7, 1),
+                    "↓ more",
+                    None,
+                    false,
+                    true,
+                );
+            }
+        }
+        if note_height > 0 && local.notes.text.is_empty() {
+            view.row(
+                Rect::new(x, 3, width, 1),
+                "Add notes… (F3)",
+                Some(Action::Notes),
+                false,
+                true,
+            );
         }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1043,6 +1271,7 @@ impl BusUi {
             width,
             self.snapshot.revision,
             now,
+            &mut self.thumbnails,
         );
         if let Some(anchor) = visible_anchor {
             if let Some(index) = self.history.index_of(anchor) {
@@ -1081,6 +1310,19 @@ impl BusUi {
                 false,
                 matches!(line.tone, super::history::Tone::Muted),
             );
+            if let Some(thumbnail) = line.thumbnail.as_ref().filter(|thumbnail| {
+                // Partly scrolled thumbnails keep their blank rows and name.
+                thumbnail.row == 0
+                    && index + usize::from(thumbnail.rows) <= usize::from(view.history.height)
+            }) {
+                view.thumbnails.push(super::thumbnails::Placement {
+                    path: std::sync::Arc::clone(&thumbnail.path),
+                    x,
+                    y: rect.y,
+                    cols: thumbnail.cols,
+                    rows: thumbnail.rows,
+                });
+            }
             let line_index = self.main_scroll + index;
             if let Some((start, end)) =
                 selection.filter(|(start, end)| (start.line..=end.line).contains(&line_index))
@@ -1105,11 +1347,16 @@ impl BusUi {
                 let span_width = unicode_width::UnicodeWidthStr::width(text.as_str()) as u16;
                 let color = match tone {
                     super::history::Tone::You => Some(ACCENT),
-                    super::history::Tone::Agent(id) => self
-                        .snapshot
-                        .state
-                        .agent(*id)
-                        .map(|agent| identity_color(agent, &self.settings)),
+                    super::history::Tone::Agent(id) => {
+                        self.snapshot.state.agent(*id).map(|agent| {
+                            message_name_color(
+                                &self.snapshot.state,
+                                self.room,
+                                agent,
+                                &self.settings,
+                            )
+                        })
+                    }
                     _ => None,
                 };
                 if let Some(color) = color {
@@ -1179,7 +1426,9 @@ impl BusUi {
                 .snapshot
                 .state
                 .agent(chip.agent)
-                .map_or(ACCENT, |agent| identity_color(agent, &self.settings));
+                .map_or(ACCENT, |agent| {
+                    message_name_color(&self.snapshot.state, self.room, agent, &self.settings)
+                });
             view.recipient_chips.push((rect, color));
             let label_rect = Rect::new(rect.x + 2, rect.y + 1, rect.width.saturating_sub(4), 1);
             view.row(label_rect, &chip.label, None, false, false);
@@ -1306,6 +1555,8 @@ impl BusUi {
                 view.cursor = None;
             }
             view.selection.retain(|rect| !rect.intersects(popup));
+            view.thumbnails
+                .retain(|thumbnail| !thumbnail.rect().intersects(popup));
         }
         if self.recipient_menu {
             let agents: Vec<_> = self
@@ -1314,74 +1565,53 @@ impl BusUi {
                 .agents()
                 .filter(|a| a.room_id == room.id)
                 .collect();
-            let entries = super::orchestrator_ui::recipient_entries(
-                self.settings.orchestrator.enabled,
-                agents.iter().map(|agent| agent.id),
-            );
             let available_above = composer_y.saturating_sub(2);
-            let (y, height) = if available_above >= entries.len().min(3) as u16 {
-                let height = entries.len().min(usize::from(available_above)) as u16;
+            // At full height the picker overlays the draft, not an empty area
+            // above it. Its later hit targets win over the editor beneath.
+            let (y, height) = if available_above >= (agents.len() + 1).min(3) as u16 {
+                let height = (agents.len() + 1).min(usize::from(available_above)) as u16;
                 (composer_y - 1 - height, height)
             } else {
                 (
                     view.composer.y,
-                    entries.len().min(usize::from(text_height)) as u16,
+                    (agents.len() + 1).min(usize::from(text_height)) as u16,
                 )
             };
             let start = self
                 .recipient_index
                 .saturating_sub(height.saturating_sub(1) as usize);
             let all = !agents.is_empty() && agents.iter().all(|a| local.recipients.contains(&a.id));
-            for (index, entry) in entries.iter().enumerate().skip(start).take(height as usize) {
-                let label = match entry {
-                    super::orchestrator_ui::RecipientEntry::Orchestrator => format!(
-                        "[{}] Orchestrator",
-                        if local.to_orchestrator { "x" } else { " " }
-                    ),
-                    super::orchestrator_ui::RecipientEntry::Separator => "────────".into(),
-                    super::orchestrator_ui::RecipientEntry::AllAgents => {
-                        format!("[{}] All", if all { "x" } else { " " })
-                    }
-                    super::orchestrator_ui::RecipientEntry::Agent(id) => agents
-                        .iter()
-                        .find(|agent| agent.id == *id)
-                        .map(|agent| {
-                            format!(
-                                "[{}] {}  {}  {}",
-                                if local.recipients.contains(&agent.id) {
-                                    "x"
-                                } else {
-                                    " "
-                                },
-                                agent.name,
-                                provider(agent.provider),
-                                status_name(agent.status)
-                            )
-                        })
-                        .unwrap_or_default(),
-                };
-                let action = match entry {
-                    super::orchestrator_ui::RecipientEntry::Orchestrator => {
-                        Some(Action::RecipientEntry(entry.clone()))
-                    }
-                    super::orchestrator_ui::RecipientEntry::Separator => None,
-                    super::orchestrator_ui::RecipientEntry::AllAgents => {
-                        Some(Action::Recipient(None))
-                    }
-                    super::orchestrator_ui::RecipientEntry::Agent(id) => {
-                        Some(Action::Recipient(Some(*id)))
-                    }
-                };
+            let entries = std::iter::once((format!("[{}] All", if all { "x" } else { " " }), None))
+                .chain(agents.iter().map(|a| {
+                    (
+                        format!(
+                            "[{}] {}  {}  {}",
+                            if local.recipients.contains(&a.id) {
+                                "x"
+                            } else {
+                                " "
+                            },
+                            a.name,
+                            provider(a.provider),
+                            status_name(a.shown_status())
+                        ),
+                        Some(a.id),
+                    )
+                }));
+            for (index, (label, id)) in entries.enumerate().skip(start).take(height as usize) {
                 view.overlay_row(
                     Rect::new(x, y + (index - start) as u16, width, 1),
                     label,
-                    action,
+                    Some(Action::Recipient(id)),
                     index == self.recipient_index,
                 );
             }
             view.cursor = None;
             let menu = Rect::new(x, y, width, height);
             view.selection.retain(|rect| !rect.intersects(menu));
+            // Kitty images draw over text, so they would hide the choices.
+            view.thumbnails
+                .retain(|thumbnail| !thumbnail.rect().intersects(menu));
         }
     }
     fn delete_view(&self, view: &mut View, area: Rect) {
@@ -1395,13 +1625,13 @@ impl BusUi {
                     .state
                     .room(id)
                     .map_or("room", |room| room.name.as_str());
-                let count = self
-                    .snapshot
-                    .state
-                    .agents()
-                    .filter(|agent| agent.room_id == id)
-                    .count();
-                (format!("Delete room \"{name}\"?"), format!("This will close its {count} agents and permanently delete this room’s session data."))
+                let state = &self.snapshot.state;
+                let count = state.agents().filter(|agent| agent.room_id == id).count();
+                // The orchestrator lives in MASTER but exists only for this room.
+                let orchestrator = state.orchestrator_of(id).map_or(String::new(), |agent| {
+                    format!(" and its orchestrator \"{}\" in MASTER", agent.name)
+                });
+                (format!("Delete room \"{name}\"?"), format!("This will close its {count} agents{orchestrator} and permanently delete this room’s session data."))
             }
             DeleteTarget::Agent(id) => {
                 let name = self
@@ -1532,119 +1762,101 @@ impl BusUi {
                     false,
                 );
                 view.lines(
-                    Rect::new(x + 4, 4, width.saturating_sub(4), 2),
+                    Rect::new(x + 4, 4, width.saturating_sub(4), 3),
                     "Agent colors stay distinct and readable with red-green or blue-yellow color blindness.",
                     None,
                     true,
                 );
                 view.row(
-                    Rect::new(x, 7, width, 1),
-                    "Orchestrator",
+                    Rect::new(x, 8, width, 1),
+                    "Sound notifications",
                     None,
                     false,
                     false,
                 );
-                view.row(
-                    Rect::new(x, 8, width, 1),
-                    format!(
-                        "[{}] Enable room Orchestrator",
-                        if self.settings.orchestrator.enabled {
-                            "x"
-                        } else {
-                            " "
+                let footer = main.bottom().saturating_sub(2);
+                let error = self.visible_error().map(str::to_owned);
+                let list_bottom = footer.saturating_sub(if error.is_some() { 4 } else { 1 });
+                view.settings_list = Rect::new(x, 10, width, list_bottom.saturating_sub(10));
+                let lines = self.sound_settings_lines();
+                view.settings_max_scroll = lines
+                    .len()
+                    .saturating_sub(usize::from(view.settings_list.height));
+                let scroll = self.settings_scroll.min(view.settings_max_scroll);
+                for (index, line) in lines
+                    .iter()
+                    .skip(scroll)
+                    .take(usize::from(view.settings_list.height))
+                    .enumerate()
+                {
+                    let rect = Rect::new(x, 10 + index as u16, width, 1);
+                    match line {
+                        SoundSettingsLine::Heading(text) => {
+                            view.row(rect, *text, None, false, true);
                         }
-                    ),
-                    Some(Action::ToggleOrchestrator),
-                    self.settings_field == 1,
-                    false,
-                );
-                let key_label = if !self.settings_key.text.is_empty() {
-                    super::orchestrator_ui::redact_secret(&self.settings_key.text)
-                } else if let Some(digest) = self.credential_digest() {
-                    format!("stored digest {digest}")
-                } else {
-                    "API key".into()
-                };
-                view.row(
-                    Rect::new(x, 10, width, 1),
-                    key_label,
-                    Some(Action::Field(2)),
-                    self.settings_field == 2,
-                    self.settings_key.text.is_empty(),
-                );
-                if self.credential_digest().is_some() {
-                    let error = self.visible_error();
-                    let close_y = main.bottom().saturating_sub(2);
-                    let reset_y = close_y.saturating_sub(2);
-                    let warning_y = reset_y.saturating_sub(if error.is_some() { 6 } else { 3 });
-                    let hint_y = warning_y.saturating_sub(1);
-                    let editor_y = 13;
-                    let editor_height = hint_y.saturating_sub(editor_y + 1);
-                    let source = if self.settings.orchestrator.system_prompt_override.is_some() {
-                        "custom"
-                    } else {
-                        "bundle default"
-                    };
-                    view.row(
-                        Rect::new(x, 12, width, 1),
-                        format!("System prompt ({source})"),
-                        Some(Action::Field(3)),
-                        self.settings_field == 3,
-                        false,
-                    );
-                    view.editor(
-                        Rect::new(x, editor_y, width, editor_height),
-                        &self.settings_prompt,
-                        Some(Action::Field(3)),
-                        self.settings_field == 3,
-                    );
-                    view.row(
-                        Rect::new(x, hint_y, width, 1),
-                        "Ctrl+S saves · Enter adds a line · Tab leaves the editor",
-                        None,
-                        false,
-                        true,
-                    );
-                    view.lines(
-                        Rect::new(x, warning_y, width, 2),
-                        "This changes Orchestrator behavior. Bus still enforces its permissions.",
-                        None,
-                        true,
-                    );
-                    if let Some(error) = error {
-                        view.lines(
-                            Rect::new(x, reset_y.saturating_sub(3), width, 2),
-                            error,
-                            None,
-                            false,
-                        );
+                        SoundSettingsLine::Empty(text) => {
+                            view.row(rect, *text, None, false, true);
+                        }
+                        SoundSettingsLine::Sound { target, field } => {
+                            let Some((label, enabled, sound)) = self.sound_row(*target) else {
+                                continue;
+                            };
+                            let selected = self.settings_field == *field;
+                            // The row's sound sits right of its checkbox:
+                            // ‹ previous · name · next ›.
+                            let name = display(&sound);
+                            let name_width = (unicode_width::UnicodeWidthStr::width(name.as_str())
+                                as u16)
+                                .min(width.saturating_sub(16));
+                            let choice_width = name_width + 4;
+                            let choice_x = x + width.saturating_sub(choice_width);
+                            view.row(
+                                Rect::new(x, rect.y, width.saturating_sub(choice_width + 1), 1),
+                                format!(
+                                    "[{}] {label}",
+                                    match enabled {
+                                        Some(true) => "x",
+                                        Some(false) => " ",
+                                        // All rooms while the rooms differ.
+                                        None => "-",
+                                    }
+                                ),
+                                Some(Action::ToggleSound(*target)),
+                                selected,
+                                false,
+                            );
+                            view.row(
+                                Rect::new(choice_x, rect.y, 2, 1),
+                                "‹",
+                                Some(Action::CycleSound(*target, false)),
+                                selected,
+                                true,
+                            );
+                            view.row(
+                                Rect::new(choice_x + 2, rect.y, name_width + 2, 1),
+                                format!("{name} ›"),
+                                Some(Action::CycleSound(*target, true)),
+                                selected,
+                                false,
+                            );
+                        }
                     }
-                    view.row(
-                        Rect::new(x, reset_y, width, 1),
-                        "Reset to bundle default",
-                        Some(Action::ResetOrchestratorPrompt),
-                        self.settings_field == 4,
+                }
+                if let Some(error) = error {
+                    view.lines(
+                        Rect::new(x, footer.saturating_sub(4), width, 3),
+                        &error,
+                        None,
                         false,
                     );
-                    view.row(
-                        Rect::new(x, close_y, width, 1),
-                        "Close (Esc)",
-                        Some(Action::Cancel),
-                        false,
-                        true,
-                    );
-                    return;
                 }
                 view.row(
-                    Rect::new(x, 12, width, 1),
-                    "Close (Esc) · Enter toggles",
+                    Rect::new(x, footer, width, 1),
+                    "Close (Esc) · ↑↓ move · Enter toggles · ←→ sound",
                     Some(Action::Cancel),
                     false,
                     true,
                 );
-                if let Some(error) = self.visible_error() {
-                    view.lines(Rect::new(x, 14, width, 3), error, None, false);
-                }
                 return;
             }
             Form::Room(editor) => {
@@ -1677,7 +1889,10 @@ impl BusUi {
                 cwd,
                 args,
                 field,
+                orchestrates,
+                prompt,
             } => {
+                let gap = agent_form_gap(main, form);
                 for (index, label, editor) in [
                     (0, "Name", Some(name)),
                     (1, "Agent", None),
@@ -1708,7 +1923,52 @@ impl BusUi {
                             false,
                         );
                     }
-                    y += 2;
+                    y += gap;
+                }
+                if let Some(choice) = orchestrates {
+                    view.row(
+                        Rect::new(x, y, width, 1),
+                        "Orchestrates room",
+                        Some(Action::Field(super::forms::ORCHESTRATES_FIELD)),
+                        false,
+                        true,
+                    );
+                    y += 1;
+                    let target = choice
+                        .0
+                        .and_then(|room| self.snapshot.state.room(room))
+                        .map_or("no work room without an orchestrator", |room| {
+                            room.name.as_str()
+                        });
+                    view.row(
+                        Rect::new(x, y, width, 1),
+                        format!("< {target} >"),
+                        Some(Action::Orchestrates),
+                        *field == super::forms::ORCHESTRATES_FIELD,
+                        false,
+                    );
+                    y += gap;
+                }
+                if let Some(prompt) = prompt {
+                    let index = super::forms::PROMPT_FIELD;
+                    view.row(
+                        Rect::new(x, y, width, 1),
+                        "System prompt (Enter adds a line, Ctrl+Enter adds the agent)",
+                        Some(Action::Field(index)),
+                        false,
+                        true,
+                    );
+                    y += 1;
+                    // The prompt takes what the buttons and a validation error leave.
+                    let below = if self.visible_error().is_some() { 7 } else { 3 };
+                    let height = main.bottom().saturating_sub(y + below).clamp(1, 16);
+                    view.editor(
+                        Rect::new(x, y, width, height),
+                        &prompt.editor,
+                        Some(Action::Field(index)),
+                        *field == index,
+                    );
+                    y += height + 1;
                 }
             }
             Form::Consent { notice, .. } => {
@@ -1769,15 +2029,19 @@ impl BusUi {
         if let Form::Agent {
             provider_cursor,
             field: 1,
+            orchestrates,
             ..
         } = form
         {
-            for (index, kind) in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor]
-                .into_iter()
+            // Below the Agent field's value row.
+            let top = 6 + agent_form_gap(main, form);
+            for (index, kind) in super::forms::provider_choices(orchestrates.is_some())
+                .iter()
+                .copied()
                 .enumerate()
             {
                 view.row(
-                    Rect::new(x, 8 + index as u16, width, 1),
+                    Rect::new(x, top + index as u16, width, 1),
                     provider(kind),
                     Some(Action::Provider(kind)),
                     *provider_cursor == kind,
@@ -1883,10 +2147,7 @@ impl BusUi {
                     if x.saturating_add(width) > right {
                         break;
                     }
-                    let color = colors
-                        .get(index)
-                        .copied()
-                        .unwrap_or(style.fg.unwrap_or_default());
+                    let color = colors.get(index).copied().unwrap_or(style.fg.unwrap());
                     buffer.set_stringn(
                         x,
                         row.y,
@@ -1925,7 +2186,17 @@ pub(in crate::client::shell) fn layout(
     crate::client::shell::ClientShellLayout {
         sidebar: Rect::new(0, 0, width, rows),
         pane_surface: Rect::new(width, 0, cols - width, rows),
-        tab_bar: Rect::default(),
-        mobile_header: Rect::default(),
+    }
+}
+
+/// Rows from one agent-form field to the next: the MASTER form, which adds a
+/// room and a prompt, drops the blank line in short terminals so its buttons
+/// and validation error stay on screen.
+fn agent_form_gap(main: Rect, form: &Form) -> u16 {
+    match form {
+        Form::Agent {
+            prompt: Some(_), ..
+        } if main.height < 34 => 1,
+        _ => 2,
     }
 }

@@ -10,27 +10,9 @@ pub(crate) struct TerminalTitleChanges {
 }
 
 impl App {
-    pub(crate) fn terminal_title_sidebar_changed(&self, changes: &TerminalTitleChanges) -> bool {
-        let config = &self.state.sidebar_agents;
-        std::iter::once(&config.rows)
-            .chain(config.rows_by_agent.values())
-            .flatten()
-            .flatten()
-            .any(|token| match token.parts().0 {
-                crate::config::AgentSidebarToken::TerminalTitle => changes.raw_changed,
-                crate::config::AgentSidebarToken::TerminalTitleStripped => changes.stripped_changed,
-                _ => false,
-            })
-    }
-
     pub(crate) fn sync_pending_terminal_titles(&mut self) -> TerminalTitleChanges {
         let sources = self.render_dirty.pending_terminal_title_sources();
-        let changes = self.sync_terminal_titles(&sources);
-        if self.terminal_title_sidebar_changed(&changes) {
-            self.render_dirty.request_generic();
-            self.render_notify.notify_one();
-        }
-        changes
+        self.sync_terminal_titles(&sources)
     }
 
     pub(crate) fn sync_terminal_titles(
@@ -164,7 +146,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn syncing_pending_titles_preserves_sidebar_render_impact() {
+    async fn syncing_pending_titles_records_the_title_without_a_repaint() {
         let event_hub = crate::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
@@ -177,9 +159,6 @@ mod tests {
         app.state.workspaces = vec![Workspace::test_new("one")];
         app.state.active = Some(0);
         app.state.ensure_test_terminals();
-        app.state.sidebar_agents.rows = vec![vec![
-            crate::config::AgentSidebarToken::TerminalTitleStripped,
-        ]];
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.state.workspaces[0]
             .terminal_id(pane_id)
@@ -193,44 +172,9 @@ mod tests {
         let changes = app.sync_pending_terminal_titles();
 
         assert!(changes.stripped_changed);
+        // The built-in sidebar shows no terminal title, so a title change alone repaints nothing.
         let render_request = app.render_dirty.take();
-        assert!(render_request.generic);
-    }
-
-    #[test]
-    fn sidebar_redraws_only_for_the_configured_title_form() {
-        let event_hub = crate::api::EventHub::default();
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            event_hub,
-        );
-        app.state.sidebar_agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
-        app.state.sidebar_agents.rows_by_agent.insert(
-            "claude".into(),
-            vec![vec![
-                crate::config::AgentSidebarToken::TerminalTitleStripped,
-            ]],
-        );
-
-        let spinner_only = TerminalTitleChanges {
-            raw_changed: true,
-            ..TerminalTitleChanges::default()
-        };
-        assert!(!app.terminal_title_sidebar_changed(&spinner_only));
-        assert!(app.terminal_title_sidebar_changed(&TerminalTitleChanges {
-            stripped_changed: true,
-            ..TerminalTitleChanges::default()
-        }));
-
-        app.state.sidebar_agents.rows_by_agent.insert(
-            "claude".into(),
-            vec![vec![crate::config::AgentSidebarToken::TerminalTitle]],
-        );
-        assert!(app.terminal_title_sidebar_changed(&spinner_only));
+        assert!(!render_request.generic);
     }
 
     fn pane_updated_events(event_hub: &crate::api::EventHub) -> usize {

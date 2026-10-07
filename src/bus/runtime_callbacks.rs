@@ -23,7 +23,8 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         let mut sessions = BTreeSet::new();
         for (_, record) in records {
-            let Ok(Parsed::Session(session)) = callbacks::parse(agent.provider, &record.value)
+            let Ok(Parsed::Session { session, .. }) =
+                callbacks::parse(agent.provider, &record.value)
             else {
                 continue;
             };
@@ -57,19 +58,24 @@ impl Worker {
         Ok(true)
     }
 
+    /// The provider session the native server attributes to `pane`.
+    pub(super) fn native_session(&mut self, pane: &str) -> Result<Option<String>, String> {
+        match self
+            .transport
+            .request(Method::AgentGet(schema::AgentTarget {
+                target: pane.to_owned(),
+            }))
+            .map_err(|e| e.message)?
+        {
+            ResponseResult::AgentInfo { agent } => Ok(agent.agent_session.map(|s| s.value)),
+            _ => Err("Unexpected native agent response".into()),
+        }
+    }
+
     pub(super) fn consume_callbacks(&mut self, id: AgentId, dir: &Path) -> Result<(), String> {
+        let mut rollout = None;
         let mut records = callbacks::records(dir).map_err(|e| e.to_string())?;
-        // Companion hooks can reach the spool in either order, including after reconnect.
-        records.sort_by_key(|(_, r)| {
-            (
-                match callbacks::parse(r.manifest.provider, &r.value) {
-                    Ok(Parsed::Session(_)) => 0,
-                    Ok(Parsed::Started { .. }) => 1,
-                    _ => 2,
-                },
-                r.sequence,
-            )
-        });
+        order_records(&mut records);
         for (path, record) in &records {
             let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
             let _span = tracing::info_span!("bus.callback", agent_id = id.0,
@@ -124,7 +130,7 @@ impl Worker {
             );
             let mut state = self.state.clone();
             let callback_session = match &parsed {
-                Parsed::Session(session)
+                Parsed::Session { session, .. }
                 | Parsed::Started { session, .. }
                 | Parsed::Final { session, .. }
                 | Parsed::BackgroundPending { session, .. }
@@ -139,6 +145,77 @@ impl Worker {
                     .session_id
                     .as_ref()
                     .is_some_and(|known| known != session)
+                    && agent.session_reset_pending
+                {
+                    // `agent clear` started a fresh provider context in this
+                    // terminal. Claude and Codex announce it with SessionStart;
+                    // Cursor's first new turn names its new conversation.
+                    let pane = agent
+                        .runtime_identity
+                        .pane_id
+                        .clone()
+                        .ok_or("Callback arrived before pane creation was recorded")?;
+                    let source = match &parsed {
+                        Parsed::Session { source, .. } => source.clone(),
+                        _ => None,
+                    };
+                    self.transport
+                        .request(Method::PaneReportAgentSession(
+                            schema::PaneReportAgentSessionParams {
+                                pane_id: pane.clone(),
+                                source: format!("herdr:{}", launch::provider_kind(agent.provider)),
+                                agent: launch::provider_kind(agent.provider).into(),
+                                seq: Some(record.sequence),
+                                agent_session_id: Some(session.clone()),
+                                agent_session_path: None,
+                                session_start_source: Some(source.unwrap_or_else(|| "new".into())),
+                            },
+                        ))
+                        .map_err(|e| e.message)?;
+                    // The server answers ok even when it keeps the old session,
+                    // as a server older than this build does for a Cursor new
+                    // chat. Rebinding then would leave Bus and the terminal
+                    // disagreeing, so the agent could not be read or deleted.
+                    if self.native_session(&pane)?.as_deref() != Some(session.as_str()) {
+                        tracing::warn!(
+                            event = "bus.callback.rejected",
+                            reason = "session_reset_refused",
+                            "Native server kept the previous provider session"
+                        );
+                        state
+                            .invalidate_agent_session(id)
+                            .map_err(|e| e.to_string())?;
+                        state
+                            .observe_status(
+                                id,
+                                RuntimeStatus::Unavailable,
+                                crate::bus::io::now_ms(),
+                            )
+                            .map_err(|e| e.to_string())?;
+                        state.set_agent_error(id, Some("The Bus server kept the previous provider session after agent clear, so Bus can no longer follow this agent. Delete it and add a new one; restart Bus first if its server predates this build.".into())).map_err(|e| e.to_string())?;
+                        self.save(state)?;
+                        std::fs::remove_file(path).map_err(|e| e.to_string())?;
+                        crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
+                        continue;
+                    }
+                    tracing::info!(
+                        event = "bus.callback.rebound",
+                        reason = "session_reset",
+                        "Agent rebound to its fresh provider session"
+                    );
+                    state
+                        .rebind_reset_session(id, session.clone())
+                        .map_err(|e| e.to_string())?;
+                    self.save(state)?;
+                    // The callback stays spooled and is consumed on the next pass,
+                    // now under the rebound session.
+                    return Ok(());
+                }
+                if agent
+                    .runtime_identity
+                    .session_id
+                    .as_ref()
+                    .is_some_and(|known| known != session)
                 {
                     tracing::warn!(
                         event = "bus.callback.rejected",
@@ -147,7 +224,7 @@ impl Worker {
                     );
                     // Retain the attested identity even on uncertain sends. Clearing
                     // it would let a repeated foreign SessionStart silently rebind.
-                    if matches!(parsed, Parsed::Session(_)) {
+                    if matches!(parsed, Parsed::Session { .. }) {
                         state
                             .invalidate_agent_session(id)
                             .map_err(|e| e.to_string())?;
@@ -162,7 +239,7 @@ impl Worker {
                     continue;
                 }
                 if agent.runtime_identity.session_id.is_none()
-                    && !matches!(parsed, Parsed::Session(_))
+                    && !matches!(parsed, Parsed::Session { .. })
                 {
                     tracing::debug!(
                         event = "bus.callback.deferred",
@@ -174,9 +251,14 @@ impl Worker {
                     continue;
                 }
             }
+            if agent.provider == Provider::Codex && matches!(parsed, Parsed::Final { .. }) {
+                rollout = crate::bus::usage::codex_rollout_path(&record.value)
+                    .map(Path::to_path_buf)
+                    .or(rollout);
+            }
             let mut remove = vec![path.clone()];
             let callback = match parsed {
-                Parsed::Session(session) => {
+                Parsed::Session { session, source } => {
                     let mut identity = agent.runtime_identity.clone();
                     let pane = identity
                         .pane_id
@@ -198,10 +280,22 @@ impl Worker {
                             },
                         ))
                         .map_err(|e| e.message)?;
-                    identity.session_id = Some(session);
+                    identity.session_id = Some(session.clone());
                     state
                         .set_agent_runtime_identity(id, identity)
                         .map_err(|e| e.to_string())?;
+                    if agent.session_reset_pending {
+                        // A reset agent that had no session yet binds its first one here.
+                        state
+                            .rebind_reset_session(id, session)
+                            .map_err(|e| e.to_string())?;
+                    }
+                    // Identical hooks share one spool file, so a hook retry counts once.
+                    if source.as_deref() == Some("compact") {
+                        state
+                            .record_compaction(id, record.at_ms)
+                            .map_err(|e| e.to_string())?;
+                    }
                     if agent.current_request.is_none() {
                         state
                             .set_agent_error(
@@ -290,7 +384,10 @@ impl Worker {
                 Parsed::Ignore => None,
             };
             if let Some(callback) = callback {
-                if matches!(callback.kind, CallbackEventKind::Final { .. })
+                if matches!(
+                    callback.kind,
+                    CallbackEventKind::Final { .. } | CallbackEventKind::BackgroundPending
+                ) && !state.is_unrelated_turn(&callback)
                     && state
                         .agent(id)
                         .and_then(|a| a.current_request)
@@ -300,18 +397,41 @@ impl Worker {
                                 && callback.sequence > r.submission_boundary.unwrap_or(u64::MAX)
                         })
                 {
+                    // It may also end a turn the agent started on its own before
+                    // the submit hook ran, so it is not an agent error.
                     tracing::debug!(
                         event = "bus.callback.deferred",
                         reason = "trusted_start_missing",
-                        "Final retained until matching submit hook arrives"
+                        "Stop retained until matching submit hook arrives"
                     );
-                    state.set_agent_error(id,Some("Awaiting trusted submit-hook binding; final callback retained and no retry will occur".into())).map_err(|e|e.to_string())?;
-                    self.save(state)?;
                     continue;
                 }
+                let started = matches!(callback.kind, CallbackEventKind::PromptStarted);
                 let disposition = state.accept_callback(callback);
+                // A turn the agent began on its own keeps it busy even while the
+                // native status still reads idle; settling it clears that.
+                match (&disposition, started) {
+                    (
+                        CallbackDisposition::Rejected(
+                            CallbackRejection::UnrelatedTurn | CallbackRejection::NoActiveRequest,
+                        ),
+                        true,
+                    ) => {
+                        self.own_turns.insert(id, std::time::Instant::now());
+                    }
+                    (_, false) => {
+                        self.own_turns.remove(&id);
+                    }
+                    _ => {}
+                }
                 tracing::info!(event = "bus.callback.correlated", disposition = ?disposition,
                     "Provider callback correlation result");
+                if disposition == CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn) {
+                    tracing::info!(
+                        event = "bus.callback.unrelated_turn",
+                        "Agent activity outside the Bus request"
+                    );
+                }
                 if matches!(
                     disposition,
                     CallbackDisposition::Rejected(
@@ -335,6 +455,82 @@ impl Worker {
             }
             crate::platform::sync_parent_directory(dir).map_err(|e| e.to_string())?;
         }
+        if let Some(path) = rollout {
+            self.refresh_codex_usage(id, &path);
+        }
+        if let Some(agent) = self.state.agent(id) {
+            self.usage.refresh_claude(agent, dir);
+        }
         Ok(())
     }
+
+    /// Codex writes rate limits into its rollout after each turn. Usage is
+    /// advisory: a failed read keeps the previous snapshot and never errors.
+    fn refresh_codex_usage(&mut self, id: AgentId, path: &Path) {
+        match crate::bus::usage::read_codex_rollout(path) {
+            Ok(Some(windows)) => {
+                self.usage.codex = Some(crate::bus::usage::UsageSnapshot {
+                    windows,
+                    read_at_ms: crate::bus::io::now_ms(),
+                    observed_by_agent: id,
+                });
+            }
+            Ok(None) => tracing::debug!(
+                event = "bus.usage.unavailable",
+                agent_id = id.0,
+                "Codex rollout has no rate limits yet"
+            ),
+            Err(error) => tracing::debug!(
+                event = "bus.usage.unavailable",
+                agent_id = id.0,
+                %error,
+                "Codex rollout unreadable"
+            ),
+        }
+    }
+}
+
+/// Applies turns in the order they began, so a later turn (a task notification,
+/// or the user typing) can never overtake the Stop of the turn Bus submitted.
+/// Session starts go first, and within a turn the submit hook goes first:
+/// companion hooks can reach the spool in either order, including after reconnect.
+fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
+    let mut keyed: Vec<_> = std::mem::take(records)
+        .into_iter()
+        .map(|entry| {
+            let parsed = callbacks::parse(entry.1.manifest.provider, &entry.1.value);
+            let turn = match &parsed {
+                Ok(
+                    Parsed::Started { session, turn, .. }
+                    | Parsed::Final { session, turn, .. }
+                    | Parsed::BackgroundPending { session, turn }
+                    | Parsed::CursorResponse { session, turn, .. }
+                    | Parsed::CursorStop { session, turn }
+                    | Parsed::Failure { session, turn, .. },
+                ) => Some((session.clone(), turn.clone())),
+                _ => None,
+            };
+            let rank = match parsed {
+                Ok(Parsed::Session { .. }) => 0,
+                Ok(Parsed::Started { .. }) => 1,
+                _ => 2,
+            };
+            (rank, turn, entry)
+        })
+        .collect();
+    let mut began = BTreeMap::new();
+    for (_, turn, (_, record)) in &keyed {
+        if let Some(turn) = turn {
+            let first = began.entry(turn.clone()).or_insert(record.sequence);
+            *first = (*first).min(record.sequence);
+        }
+    }
+    keyed.sort_by_key(|(rank, turn, (_, record))| {
+        let turn_began = turn
+            .as_ref()
+            .and_then(|turn| began.get(turn).copied())
+            .unwrap_or(record.sequence);
+        (*rank != 0, turn_began, *rank, record.sequence)
+    });
+    records.extend(keyed.into_iter().map(|(_, _, entry)| entry));
 }

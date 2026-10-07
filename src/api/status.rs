@@ -6,8 +6,8 @@ use crate::api::schema::{Method, Request, ResponseResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeStatus {
-    pub version: Option<String>,
-    pub protocol: Option<u32>,
+    pub version: String,
+    pub protocol: u32,
     pub capabilities: Option<crate::api::schema::ServerCapabilities>,
 }
 
@@ -49,8 +49,8 @@ pub fn read_runtime_status_at(
             protocol,
             capabilities,
         } => Ok(Some(RuntimeStatus {
-            version: Some(version),
-            protocol: Some(protocol),
+            version,
+            protocol,
             capabilities,
         })),
         result => Err(io::Error::other(format!(

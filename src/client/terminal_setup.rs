@@ -1,7 +1,9 @@
 //! Terminal setup and restoration for the rendered client.
 
 use std::io::{self, Write as _};
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+#[cfg(unix)]
+use std::sync::atomic::AtomicU16;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
@@ -26,26 +28,9 @@ use super::terminal_geometry::should_query_host_terminal_theme;
 ///
 /// Returns a guard that restores the terminal when dropped.
 pub(super) fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
-    setup_terminal_with_capabilities(true, mouse_capture)
-}
-
-/// Sets up a direct attach terminal.
-///
-/// Direct attach forwards stdin to the attached PTY. When configured, mouse
-/// capture lets wheel events drive the attached viewport or reach child
-/// programs that requested mouse input.
-pub(super) fn setup_direct_attach_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
-    setup_terminal_with_capabilities(false, mouse_capture)
-}
-
-pub(super) fn setup_terminal_with_capabilities(
-    enable_client_protocols: bool,
-    mouse_capture: bool,
-) -> io::Result<TerminalGuard> {
     ratatui::init();
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
-    let host_color_scheme_reports =
-        should_enable_host_color_scheme_reports(enable_client_protocols);
+    let host_color_scheme_reports = should_enable_host_color_scheme_reports();
 
     #[cfg(windows)]
     let windows_ssh_session = is_ssh_session();
@@ -57,29 +42,20 @@ pub(super) fn setup_terminal_with_capabilities(
             WindowsVirtualTerminalInputSetup::default()
         };
 
-    if enable_client_protocols {
-        set_mouse_capture(mouse_capture, false)?;
-        execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
-        if host_color_scheme_reports {
-            write_host_color_scheme_report_mode(&mut io::stdout(), true)?;
-        }
-        push_keyboard_enhancement_flags()?;
-    } else {
-        if should_query_host_terminal_theme() {
-            write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
-        }
-        set_mouse_capture(mouse_capture, false)?;
-        execute!(io::stdout(), EnableBracketedPaste)?;
+    set_mouse_capture(mouse_capture, false)?;
+    execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
+    if host_color_scheme_reports {
+        write_host_color_scheme_report_mode(&mut io::stdout(), true)?;
     }
+    push_keyboard_enhancement_flags()?;
 
     #[cfg(windows)]
-    if enable_client_protocols && windows_vti_input_backend_enabled() && !windows_ssh_session {
+    if windows_vti_input_backend_enabled() && !windows_ssh_session {
         windows_virtual_terminal_input = enable_windows_virtual_terminal_input();
     }
 
     #[cfg(windows)]
-    if enable_client_protocols
-        && windows_vti_input_backend_enabled()
+    if windows_vti_input_backend_enabled()
         && windows_virtual_terminal_input.active
         && windows_win32_input_mode_enabled()
     {
@@ -91,9 +67,7 @@ pub(super) fn setup_terminal_with_capabilities(
         }
     }
 
-    let modify_other_keys_mode = enable_client_protocols
-        .then(crate::input::host_modify_other_keys_mode)
-        .flatten();
+    let modify_other_keys_mode = crate::input::host_modify_other_keys_mode();
     if let Some(mode) = modify_other_keys_mode {
         io::stdout().write_all(mode.set_sequence())?;
         io::stdout().flush()?;
@@ -102,7 +76,7 @@ pub(super) fn setup_terminal_with_capabilities(
     execute!(io::stdout(), DisableLineWrap)?;
 
     Ok(TerminalGuard {
-        reset_keyboard_enhancements: enable_client_protocols,
+        reset_keyboard_enhancements: true,
         reset_modify_other_keys: modify_other_keys_mode.is_some(),
         reset_host_color_scheme_reports: host_color_scheme_reports,
         restore_claimed: Arc::new(AtomicBool::new(false)),
@@ -112,8 +86,8 @@ pub(super) fn setup_terminal_with_capabilities(
     })
 }
 
-pub(super) fn should_enable_host_color_scheme_reports(enable_client_protocols: bool) -> bool {
-    enable_client_protocols && should_query_host_terminal_theme()
+pub(super) fn should_enable_host_color_scheme_reports() -> bool {
+    should_query_host_terminal_theme()
 }
 
 #[cfg(unix)]
@@ -300,13 +274,6 @@ fn restore_windows_input_mode_value(mode: u32) {
     if unsafe { SetConsoleMode(handle, mode) } == 0 {
         tracing::warn!("failed to restore Windows console input mode");
     }
-}
-
-pub(super) fn effective_mouse_capture(
-    server_enabled: bool,
-    direct_attach_preference: bool,
-) -> bool {
-    server_enabled || direct_attach_preference
 }
 
 pub(super) fn effective_sgr_pixel_mouse(

@@ -2,11 +2,12 @@ use std::path::PathBuf;
 
 use crate::api::schema::{
     EventData, EventEnvelope, EventKind, ResponseResult, TabCreateParams, TabListParams,
-    TabMoveParams, TabRenameParams, TabTarget,
+    TabRenameParams, TabTarget,
 };
 use crate::app::{App, Mode};
 
 use super::responses::{encode_error, encode_success};
+use super::workspaces::workspace_not_found;
 
 impl App {
     pub(super) fn handle_tab_list(&mut self, id: String, params: TabListParams) -> String {
@@ -171,48 +172,6 @@ impl App {
         encode_success(id, ResponseResult::TabInfo { tab })
     }
 
-    pub(super) fn handle_tab_move(&mut self, id: String, params: TabMoveParams) -> String {
-        let Some((ws_idx, tab_idx)) = self.parse_tab_id(&params.tab_id) else {
-            return tab_not_found(id, &params.tab_id);
-        };
-        let Some(ws) = self.state.workspaces.get(ws_idx) else {
-            return tab_not_found(id, &params.tab_id);
-        };
-        if params.insert_index > ws.tabs.len() {
-            return encode_error(
-                id,
-                "tab_move_failed",
-                format!("insert_index {} is out of bounds", params.insert_index),
-            );
-        }
-
-        let tab_id = self
-            .public_tab_id(ws_idx, tab_idx)
-            .unwrap_or_else(|| crate::workspace::public_tab_id_for_number(&ws.id, tab_idx + 1));
-        let workspace_id = self.public_workspace_id(ws_idx);
-        let insert_index = params.insert_index;
-        let moved = self
-            .state
-            .workspaces
-            .get_mut(ws_idx)
-            .is_some_and(|ws| ws.move_tab(tab_idx, insert_index));
-        let tabs = self.tab_list_info(ws_idx);
-        if moved {
-            self.schedule_session_save();
-            self.emit_event(EventEnvelope {
-                event: EventKind::TabMoved,
-                data: EventData::TabMoved {
-                    tab_id,
-                    workspace_id,
-                    insert_index,
-                    tabs: tabs.clone(),
-                },
-            });
-        }
-
-        encode_success(id, ResponseResult::TabList { tabs })
-    }
-
     pub(super) fn handle_tab_close(&mut self, id: String, target: TabTarget) -> String {
         let Some((ws_idx, tab_idx)) = self.parse_tab_id(&target.tab_id) else {
             return tab_not_found(id, &target.tab_id);
@@ -233,17 +192,10 @@ impl App {
             .unwrap_or_default();
 
         if closes_workspace {
-            if self.state.confirm_implicit_worktree_group_close(ws_idx) {
-                return encode_error(
-                    id,
-                    "confirmation_required",
-                    "closing this tab would close a worktree group",
-                );
-            }
             let workspace = self.workspace_info(ws_idx);
             self.state.selected = ws_idx;
             self.state.close_selected_workspace();
-            self.state.remove_plugin_pane_records(pane_ids);
+            self.state.forget_closed_pane_focus(pane_ids);
             self.shutdown_detached_terminal_runtimes();
             self.emit_event(EventEnvelope {
                 event: EventKind::TabClosed,
@@ -272,7 +224,7 @@ impl App {
                 format!("tab {} could not be closed", target.tab_id),
             );
         }
-        self.state.remove_plugin_pane_records(pane_ids);
+        self.state.forget_closed_pane_focus(pane_ids);
         self.state.remove_unattached_terminal_ids(terminal_ids);
         self.shutdown_detached_terminal_runtimes();
         self.schedule_session_save();
@@ -298,14 +250,6 @@ impl App {
             })
             .unwrap_or_default()
     }
-}
-
-fn workspace_not_found(id: String, workspace_id: &str) -> String {
-    encode_error(
-        id,
-        "workspace_not_found",
-        format!("workspace {workspace_id} not found"),
-    )
 }
 
 fn tab_not_found(id: String, tab_id: &str) -> String {
@@ -375,54 +319,80 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn api_tab_move_reorders_tabs_in_target_workspace() {
-        let event_hub = crate::api::EventHub::default();
+    fn app_with_workspaces(names: &[&str]) -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
             crate::app::AppPolicy::TEST,
             None,
             api_rx,
-            event_hub.clone(),
+            crate::api::EventHub::default(),
         );
-        let mut workspace = Workspace::test_new("tabs");
-        workspace.test_add_tab(Some("two"));
-        workspace.test_add_tab(Some("three"));
-        app.state.workspaces = vec![workspace];
+        app.state.workspaces = names.iter().map(|name| Workspace::test_new(name)).collect();
+        app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
-        let moved_root = app.state.workspaces[0].tabs[0].root_pane;
-        let moved_id = app.public_tab_id(0, 0).unwrap();
+        app
+    }
 
-        let response = app.handle_tab_move(
-            "req".into(),
-            TabMoveParams {
-                tab_id: moved_id.clone(),
-                insert_index: 3,
-            },
-        );
-
+    fn close_tab(app: &mut App, ws_idx: usize, tab_idx: usize) {
+        let tab_id = app.public_tab_id(ws_idx, tab_idx).unwrap();
+        let response = app.handle_tab_close("req".into(), TabTarget { tab_id });
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-        let ResponseResult::TabList { tabs } = success.result else {
-            panic!("expected tab list");
-        };
-        assert_eq!(app.state.workspaces[0].tabs[2].root_pane, moved_root);
-        assert_eq!(tabs[2].tab_id, app.public_tab_id(0, 2).unwrap());
-        let events = event_hub.events_after(0);
-        assert!(events.iter().any(|(_, event)| {
-            matches!(
-                &event.data,
-                EventData::TabMoved {
-                    tab_id,
-                    workspace_id,
-                    insert_index: 3,
-                    tabs,
-                } if tab_id == &moved_id
-                    && workspace_id == &app.public_workspace_id(0)
-                    && tabs[2].tab_id == moved_id
-            )
-        }));
+        assert_eq!(success.result, ResponseResult::Ok {});
+    }
+
+    #[test]
+    fn api_tab_close_removes_unattached_terminal_states() {
+        let mut app = app_with_workspaces(&["test"]);
+        let tab_idx = app.state.workspaces[0].test_add_tab(Some("logs"));
+        app.state.ensure_test_terminals();
+        let pane_id = app.state.workspaces[0].tabs[tab_idx].root_pane;
+        let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+
+        close_tab(&mut app, 0, tab_idx);
+
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert!(!app.state.terminals.contains_key(&terminal_id));
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn api_tab_close_last_tab_closes_target_workspace_not_selected_workspace() {
+        let mut app = app_with_workspaces(&["selected", "target"]);
+        let target_terminal_id = app
+            .state
+            .terminal_id_for_pane(1, app.state.workspaces[1].tabs[0].root_pane)
+            .unwrap();
+
+        close_tab(&mut app, 1, 0);
+
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].display_name(), "selected");
+        assert!(!app.state.terminals.contains_key(&target_terminal_id));
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn api_tab_close_is_reflected_in_session_capture() {
+        let mut app = app_with_workspaces(&["one"]);
+        let second_tab = app.state.workspaces[0].test_add_tab(Some("logs"));
+        app.state.ensure_test_terminals();
+        app.state.workspaces[0].switch_tab(second_tab);
+
+        close_tab(&mut app, 0, second_tab);
+
+        let snapshot = crate::persist::capture(
+            &app.state.workspaces,
+            &app.state.terminals,
+            &app.terminal_runtimes,
+            app.state.active,
+            app.state.selected,
+        );
+        let workspace = &snapshot.workspaces[0];
+        assert_eq!(workspace.tabs.len(), 1);
+        assert_eq!(workspace.active_tab, 0);
+        assert!(workspace.tabs[0].custom_name.is_none());
     }
 
     #[tokio::test]
@@ -468,8 +438,8 @@ mod tests {
         let created_terminal_id = created.terminal_id(created.root_pane).unwrap();
         let created_cwd = &app.state.terminals.get(created_terminal_id).unwrap().cwd;
         assert_eq!(
-            crate::worktree::canonical_or_original(created_cwd),
-            crate::worktree::canonical_or_original(&cached_cwd)
+            crate::home_path::canonical_or_original(created_cwd),
+            crate::home_path::canonical_or_original(&cached_cwd)
         );
         shutdown_test_runtimes(&mut app);
     }

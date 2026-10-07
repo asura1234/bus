@@ -86,7 +86,7 @@ pub struct TileLayout {
     focus: PaneId,
     /// Pane focused before `focus`, used by `close_focused`. Only a real focus
     /// move writes it; tree edits go through the target-taking primitives
-    /// (`split_pane`, `close_pane`, unfocused `insert_pane_near`) so internal
+    /// (`split_pane`, `close_pane`) so internal
     /// focus excursions never corrupt it.
     prev_focus: Option<PaneId>,
 }
@@ -170,34 +170,6 @@ impl TileLayout {
         let old = std::mem::replace(&mut self.root, Node::Pane(placeholder));
         self.root = split_at(old, target, direction, new_id, valid_split_ratio(ratio));
         Some(new_id)
-    }
-
-    /// Insert an existing pane id next to a target pane without allocating a new
-    /// pane or spawning a terminal runtime. When `focus` is false, focus and its
-    /// history are left untouched.
-    pub fn insert_pane_near(
-        &mut self,
-        target: PaneId,
-        moved: PaneId,
-        direction: Direction,
-        ratio: f32,
-        focus: bool,
-    ) -> bool {
-        if target == moved {
-            return false;
-        }
-        let ids = self.pane_ids();
-        if !ids.contains(&target) || ids.contains(&moved) {
-            return false;
-        }
-
-        let placeholder = PaneId::from_raw(0);
-        let old = std::mem::replace(&mut self.root, Node::Pane(placeholder));
-        self.root = split_at(old, target, direction, moved, valid_split_ratio(ratio));
-        if focus {
-            self.set_focus(moved);
-        }
-        true
     }
 
     /// Close the focused pane, returning focus to the pane it came from when
@@ -297,10 +269,8 @@ impl TileLayout {
         });
 
         if let Some(split) = best {
-            let path = split.path.clone();
-            let current_ratio = get_ratio_at(&self.root, &path).unwrap_or(0.5);
             let adj = if grows { delta } else { -delta };
-            self.set_ratio_at(&path, current_ratio + adj);
+            self.set_ratio_at(&split.path, split.ratio + adj);
         }
     }
 
@@ -333,7 +303,6 @@ impl TileLayout {
         &self.root
     }
 
-    /// Reconstruct a layout from a saved tree.
     /// Reconstruct a layout from a saved tree.
     pub fn from_saved(root: Node, focus: PaneId) -> Self {
         Self {
@@ -668,26 +637,6 @@ fn set_ratio_at(node: &mut Node, path: &[bool], new_ratio: f32) -> bool {
     }
 }
 
-fn get_ratio_at(node: &Node, path: &[bool]) -> Option<f32> {
-    if let Node::Split {
-        ratio,
-        first,
-        second,
-        ..
-    } = node
-    {
-        if path.is_empty() {
-            Some(*ratio)
-        } else if path[0] {
-            get_ratio_at(second, &path[1..])
-        } else {
-            get_ratio_at(first, &path[1..])
-        }
-    } else {
-        None
-    }
-}
-
 fn split_rect(area: Rect, direction: Direction, ratio: f32) -> (Rect, Rect) {
     match direction {
         Direction::Horizontal => {
@@ -809,22 +758,6 @@ mod tests {
         assert_eq!(pane_rects(&layout), before_rects);
         assert_eq!(split_snapshot(&layout), before_splits);
         assert_eq!(layout.focused(), before_focus);
-    }
-
-    #[test]
-    fn insert_existing_pane_near_target_preserves_existing_ids_and_focuses_moved_pane() {
-        let (mut layout, root) = TileLayout::new();
-        let moved = pane(99);
-
-        assert!(layout.insert_pane_near(root, moved, Direction::Horizontal, 0.25, true));
-
-        assert_eq!(layout.pane_count(), 2);
-        assert_eq!(layout.pane_ids(), vec![root, moved]);
-        assert_eq!(layout.focused(), moved);
-        let splits = split_snapshot(&layout);
-        assert_eq!(splits, vec![(Direction::Horizontal, 0.25)]);
-        assert_eq!(pane_rect(&layout, root), Rect::new(0, 0, 25, 40));
-        assert_eq!(pane_rect(&layout, moved), Rect::new(25, 0, 75, 40));
     }
 
     #[test]
@@ -1136,18 +1069,6 @@ mod tests {
         );
 
         assert_eq!(layout.pane_ids(), ids);
-    }
-
-    #[test]
-    fn insert_pane_near_unfocused_keeps_focus_and_history() {
-        let mut layout = sample_layout();
-        layout.focus_pane(pane(4));
-
-        assert!(layout.insert_pane_near(pane(1), pane(9), Direction::Horizontal, 0.5, false));
-
-        assert_eq!(layout.focused(), pane(4));
-        assert!(layout.close_focused());
-        assert_eq!(layout.focused(), pane(2));
     }
 
     #[test]

@@ -25,66 +25,6 @@ impl TerminalRuntime {
         self.0.stop_session_for_close()
     }
 
-    #[cfg(unix)]
-    pub fn duplicate_handoff_fd(&self) -> std::io::Result<std::os::fd::RawFd> {
-        self.0.duplicate_handoff_fd()
-    }
-
-    #[cfg(unix)]
-    pub fn preserve_for_handoff(self) {
-        self.0.preserve_for_handoff()
-    }
-
-    #[cfg(unix)]
-    pub fn assume_handoff_ownership(&mut self) {
-        self.0.assume_handoff_ownership();
-    }
-
-    #[cfg(unix)]
-    pub fn set_handoff_reader_paused(&self, paused: bool) {
-        self.0.set_handoff_reader_paused(paused);
-    }
-
-    #[cfg(unix)]
-    pub fn pause_handoff_reader(&self, timeout: std::time::Duration) -> std::io::Result<()> {
-        self.0.pause_handoff_reader(timeout)
-    }
-
-    #[cfg(unix)]
-    pub fn handoff_runtime_state(
-        &self,
-        pane_id: u32,
-    ) -> crate::handoff_runtime::HandoffRuntimeState {
-        self.0.handoff_runtime_state(pane_id)
-    }
-
-    #[cfg(unix)]
-    pub fn handoff_history_ansi(&self) -> Option<String> {
-        self.0.handoff_history_ansi()
-    }
-
-    #[cfg(unix)]
-    pub fn from_handoff_fd(
-        import: crate::handoff_runtime::ImportedHandoffRuntime,
-        scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
-        render_notify: Arc<Notify>,
-        render_dirty: Arc<RenderSignal>,
-    ) -> std::io::Result<Self> {
-        crate::pane::PaneRuntime::from_handoff_fd(
-            import,
-            scrollback_limit_bytes,
-            host_terminal_theme,
-            host_terminal_appearance,
-            events,
-            render_notify,
-            render_dirty,
-        )
-        .map(Self)
-    }
-
     // Wrapper mirrors pane runtime construction arguments.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
@@ -153,41 +93,6 @@ impl TerminalRuntime {
         .map(Self)
     }
 
-    // Wrapper mirrors pane runtime construction arguments.
-    #[allow(clippy::too_many_arguments)]
-    pub fn spawn_shell_command(
-        pane_id: PaneId,
-        rows: u16,
-        cols: u16,
-        cwd: std::path::PathBuf,
-        command: &str,
-        launch_env: &crate::pane::PaneLaunchEnv,
-        agent_detection: crate::pane::AgentDetection,
-        scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
-        render_notify: Arc<Notify>,
-        render_dirty: Arc<RenderSignal>,
-    ) -> std::io::Result<Self> {
-        crate::pane::PaneRuntime::spawn_shell_command(
-            pane_id,
-            rows,
-            cols,
-            cwd,
-            command,
-            launch_env,
-            agent_detection,
-            scrollback_limit_bytes,
-            host_terminal_theme,
-            host_terminal_appearance,
-            events,
-            render_notify,
-            render_dirty,
-        )
-        .map(Self)
-    }
-
     // Wrapper mirrors pane runtime construction arguments, including detection policy.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_argv_command(
@@ -234,32 +139,8 @@ impl TerminalRuntime {
         self.0.apply_host_terminal_appearance(appearance);
     }
 
-    pub fn begin_graceful_release(&self, agent: crate::detect::Agent) {
-        self.0.begin_graceful_release(agent);
-    }
-
-    pub fn reset_agent_detection(&self) {
-        self.0.reset_agent_detection();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn agent_detection_reset_notify_for_test(
-        &self,
-    ) -> std::sync::Arc<tokio::sync::Notify> {
-        self.0.agent_detection_reset_notify_for_test()
-    }
-
-    pub fn set_full_lifecycle_authority_active(&self, active: bool) {
-        self.0.set_full_lifecycle_authority_active(active);
-    }
-
     pub fn resize(&self, rows: u16, cols: u16, cell_width_px: u32, cell_height_px: u32) {
         self.0.resize(rows, cols, cell_width_px, cell_height_px);
-    }
-
-    #[cfg(unix)]
-    pub fn nudge_child_redraw_after_handoff(&self) {
-        self.0.nudge_child_redraw_after_handoff();
     }
 
     pub fn scroll_up(&self, lines: usize) {
@@ -368,14 +249,6 @@ impl TerminalRuntime {
         self.0.terminal_title()
     }
 
-    pub fn agent_osc_title(&self) -> String {
-        self.0.agent_osc_title()
-    }
-
-    pub fn agent_osc_progress(&self) -> String {
-        self.0.agent_osc_progress()
-    }
-
     pub(crate) fn recent_text_snapshot(&self, lines: usize) -> crate::pane::TerminalReadSnapshot {
         self.0.recent_text_snapshot(lines)
     }
@@ -457,14 +330,21 @@ impl TerminalRuntime {
         self.0.try_send_bytes(bytes)
     }
 
-    pub(crate) fn try_approve_permission_once(
+    pub(crate) fn try_choose_dialog_option(
         &self,
-        expected_revision: u64,
-        expected_prompt_digest: &str,
-        response: Bytes,
-    ) -> Result<bool, mpsc::error::TrySendError<Bytes>> {
-        self.0
-            .try_approve_permission_once(expected_revision, expected_prompt_digest, response)
+        expected_digest: &str,
+        option: u32,
+    ) -> Result<crate::pane::DialogChoice, String> {
+        self.0.try_choose_dialog_option(expected_digest, option)
+    }
+
+    pub(crate) fn try_answer_dialog(
+        &self,
+        expected_digest: &str,
+        text: Option<String>,
+        skip: bool,
+    ) -> Result<crate::pane::DialogChoice, String> {
+        self.0.try_answer_dialog(expected_digest, text, skip)
     }
 
     pub fn queue_user_input_submission(
@@ -521,8 +401,8 @@ impl TerminalRuntime {
         None
     }
 
-    pub(crate) fn visible_text_snapshot_with_seq(&self) -> Option<(String, u64)> {
-        self.0.visible_text_snapshot_with_seq()
+    pub(crate) fn visible_ansi_snapshot_with_seq(&self) -> Option<(String, u64)> {
+        self.0.visible_ansi_snapshot_with_seq()
     }
 
     pub(crate) fn visible_text_snapshot_with_dimensions(&self) -> Option<(String, u16, u16, u64)> {

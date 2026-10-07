@@ -3,44 +3,9 @@ use std::process::Command;
 
 use super::{ClipboardImage, ForegroundJob, Signal};
 
-#[cfg(unix)]
-pub(crate) use super::unix_common::set_default_plugin_pane_pwd;
-
-#[cfg(not(unix))]
-pub(crate) fn set_default_plugin_pane_pwd(
-    _env: &mut Vec<(String, String)>,
-    _cwd: &std::path::Path,
-) {
-}
-
 #[cfg(not(unix))]
 pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
     crossterm::terminal::size()
-}
-
-pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
-    super::RemoteSshConfigPaths {
-        user_config: std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .map(|home| home.join(".ssh").join("config")),
-        system_config: None,
-        multiplexing: false,
-    }
-}
-
-pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::io::Result<PathBuf> {
-    for attempt in 0..100 {
-        let dir = std::env::temp_dir().join(format!("herdr-ssh-{}-{attempt}", std::process::id()));
-        match create_remote_private_dir(&dir) {
-            Ok(()) => return Ok(dir),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "failed to create private herdr ssh config directory",
-    ))
 }
 
 pub(crate) fn create_remote_ssh_config_file(
@@ -66,20 +31,8 @@ pub(crate) fn create_remote_private_dir(path: &std::path::Path) -> std::io::Resu
     builder.create(path)
 }
 
-pub(crate) fn remote_private_temp_base() -> PathBuf {
-    std::env::temp_dir()
-}
-
-pub(crate) fn remote_bridge_endpoint_path(readable_name: &str, _short_name: &str) -> PathBuf {
-    std::env::temp_dir().join(readable_name)
-}
-
 pub(crate) fn remote_reattach_program(program: &str) -> String {
     shell_quote(program)
-}
-
-pub(crate) fn remote_reattach_argument(value: &str) -> String {
-    shell_quote(value)
 }
 
 fn shell_quote(value: &str) -> String {
@@ -112,45 +65,13 @@ pub(crate) fn hostname() -> Option<String> {
     None
 }
 
+#[cfg(test)]
 pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {
     None
 }
 
 pub(crate) fn local_datetime_at(_seconds: i64) -> Option<time::PrimitiveDateTime> {
     None
-}
-
-pub(crate) fn status_commands_supported() -> bool {
-    false
-}
-
-pub(crate) fn configure_status_command(_process: &mut std::process::Command) {}
-
-pub(crate) struct StatusCommandGuard;
-
-impl StatusCommandGuard {
-    pub(crate) fn new(_child: &tokio::process::Child) -> std::io::Result<Self> {
-        Ok(Self)
-    }
-
-    pub(crate) fn terminate(&mut self) {}
-}
-
-fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
-    vec!["/bin/sh".into(), flag.into(), command.into()]
-}
-
-pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
-    let argv = raw_command_argv(command, "-lc");
-    let mut command = std::process::Command::new(&argv[0]);
-    command.args(&argv[1..]);
-    command
-}
-
-pub(crate) fn pane_custom_command_pty_builder_platform(
-    command: &str,
-) -> portable_pty::CommandBuilder {
-    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-c"))
 }
 
 pub(crate) fn interactive_shell_command(_argv: &[String], _shell_name: &str) -> Option<String> {
@@ -213,11 +134,6 @@ pub fn process_exists(_pid: u32) -> bool {
 /// Unsupported platform stub.
 pub fn write_clipboard(_bytes: &[u8]) -> bool {
     false
-}
-
-/// Unsupported platform stub.
-pub fn read_clipboard_text() -> Option<String> {
-    None
 }
 
 /// Unsupported platform stub.

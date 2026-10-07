@@ -63,34 +63,6 @@ fn request_uses_dot_method_names() {
 }
 
 #[test]
-fn workspace_close_group_intent_defaults_false_and_round_trips() {
-    let request: Request = serde_json::from_value(serde_json::json!({
-        "id": "close",
-        "method": "workspace.close",
-        "params": { "workspace_id": "w1" }
-    }))
-    .unwrap();
-    assert!(matches!(
-        request.method,
-        Method::WorkspaceClose(WorkspaceCloseParams {
-            close_group: false,
-            ..
-        })
-    ));
-
-    let explicit = Request {
-        id: "close-group".into(),
-        method: Method::WorkspaceClose(WorkspaceCloseParams {
-            workspace_id: "w1".into(),
-            close_group: true,
-        }),
-    };
-    let json = serde_json::to_value(&explicit).unwrap();
-    assert_eq!(json["params"]["close_group"], true);
-    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), explicit);
-}
-
-#[test]
 fn agent_start_and_prompt_requests_round_trip() {
     let start = Request {
         id: "start".into(),
@@ -234,95 +206,6 @@ fn request_round_trips_for_server_reload_config() {
 }
 
 #[test]
-fn request_round_trips_for_server_reload_agent_manifests() {
-    let request = Request {
-        id: "req_reload_agent_manifests".into(),
-        method: Method::ServerReloadAgentManifests(EmptyParams::default()),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "server.reload_agent_manifests");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
-}
-
-#[test]
-fn request_round_trips_for_server_agent_manifests() {
-    let request = Request {
-        id: "req_agent_manifests".into(),
-        method: Method::ServerAgentManifests(EmptyParams::default()),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "server.agent_manifests");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
-}
-
-#[test]
-fn request_round_trips_for_agent_explain() {
-    let request = Request {
-        id: "req_agent_explain".into(),
-        method: Method::AgentExplain(AgentTarget {
-            target: "agent-1".into(),
-        }),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "agent.explain");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
-}
-
-#[test]
-fn integration_list_request_and_response_round_trip() {
-    let request = Request {
-        id: "req_integrations".into(),
-        method: Method::IntegrationList(EmptyParams::default()),
-    };
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "integration.list");
-    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
-
-    let response = SuccessResponse {
-        id: "req_integrations".into(),
-        result: ResponseResult::IntegrationList {
-            integrations: vec![IntegrationInfo {
-                target: IntegrationTarget::Codex,
-                label: "codex".into(),
-                command: "codex".into(),
-                available: true,
-                state: IntegrationState::Outdated,
-            }],
-        },
-    };
-    let json = serde_json::to_value(&response).unwrap();
-    assert_eq!(json["result"]["type"], "integration_list");
-    assert_eq!(json["result"]["integrations"][0]["state"], "outdated");
-    assert_eq!(
-        serde_json::from_value::<SuccessResponse>(json).unwrap(),
-        response
-    );
-}
-
-#[test]
-fn command_invoke_request_round_trips_without_command_text() {
-    let request = Request {
-        id: "req_command".into(),
-        method: Method::CommandInvoke(CommandInvokeParams {
-            command_id: "cmd_0123456789abcdef0123456789abcdef".into(),
-            workspace_id: Some("w1".into()),
-            tab_id: Some("w1:t1".into()),
-            pane_id: Some("w1:p1".into()),
-            selection: None,
-        }),
-    };
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "command.invoke");
-    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), request);
-}
-
-#[test]
 fn notification_show_request_parses() {
     let json = r#"{"id":"req_1","method":"notification.show","params":{"title":"build failed","body":"api workspace","position":"top-left","sound":"request"}}"#;
     let request: Request = serde_json::from_str(json).unwrap();
@@ -371,49 +254,6 @@ fn client_window_title_requests_round_trip() {
     assert_eq!(json["method"], "client.window_title.clear");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, clear);
-}
-
-#[test]
-fn agent_view_requests_round_trip() {
-    let set_json = serde_json::json!({
-        "id": "view-set",
-        "method": "agent.view.set",
-        "params": {
-            "source": "example.views",
-            "label": "current + attention",
-            "filter": {
-                "op": "any",
-                "filters": [
-                    {
-                        "op": "eq",
-                        "field": "workspace_id",
-                        "value": {"context": "current_workspace_id"}
-                    },
-                    {
-                        "op": "in",
-                        "field": "status",
-                        "values": ["blocked", "done"]
-                    }
-                ]
-            },
-            "sort": [
-                {"field": "attention", "order": "desc"},
-                {"field": "state_change_seq", "order": "desc"}
-            ]
-        }
-    });
-    let request: Request = serde_json::from_value(set_json.clone()).unwrap();
-    assert!(matches!(request.method, Method::AgentViewSet(_)));
-    assert_eq!(serde_json::to_value(request).unwrap(), set_json);
-
-    let clear_json = serde_json::json!({
-        "id": "view-clear",
-        "method": "agent.view.clear",
-        "params": {"source": "example.views"}
-    });
-    let request: Request = serde_json::from_value(clear_json.clone()).unwrap();
-    assert!(matches!(request.method, Method::AgentViewClear(_)));
-    assert_eq!(serde_json::to_value(request).unwrap(), clear_json);
 }
 
 #[test]
@@ -516,22 +356,6 @@ fn pane_current_request_round_trips() {
 }
 
 #[test]
-fn pane_process_info_request_round_trips() {
-    let request = Request {
-        id: "req_process_info".into(),
-        method: Method::PaneProcessInfo(PaneProcessInfoParams {
-            pane_id: Some("w1-1".into()),
-        }),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "pane.process_info");
-    assert_eq!(json["params"]["pane_id"], "w1-1");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
-}
-
-#[test]
 fn event_envelope_round_trips() {
     let events = [
         EventEnvelope {
@@ -548,23 +372,6 @@ fn event_envelope_round_trips() {
                 workspace_id: "w_1".into(),
                 insert_index: 2,
                 workspaces: vec![],
-            },
-        },
-        EventEnvelope {
-            event: EventKind::WorkspaceReordered,
-            data: EventData::WorkspaceReordered {
-                workspace_ids: vec!["w_1".into(), "w_2".into()],
-                before_workspace_id: Some("w_3".into()),
-                workspaces: vec![],
-            },
-        },
-        EventEnvelope {
-            event: EventKind::TabMoved,
-            data: EventData::TabMoved {
-                tab_id: "w_1:1".into(),
-                workspace_id: "w_1".into(),
-                insert_index: 1,
-                tabs: vec![],
             },
         },
         EventEnvelope {
@@ -694,84 +501,94 @@ fn subscription_event_envelope_round_trips() {
 }
 
 #[test]
-fn agent_approve_once_schema_has_no_launch_or_arbitrary_keys() {
+fn agent_dialog_choose_schema_has_no_launch_or_arbitrary_keys() {
     let request = Request {
-        id: "approve-1".into(),
-        method: Method::AgentApproveOnce(AgentApproveOnceParams {
+        id: "choose-1".into(),
+        method: Method::AgentDialogChoose(AgentDialogChooseParams {
             target: "w1:p2".into(),
             expected_terminal_id: "terminal-1".into(),
             expected_pane_id: "w1:p2".into(),
-            expected_session_id: "session-1".into(),
-            expected_content_revision: 8,
-            expected_prompt_digest: "abc".into(),
-            response: ApprovedPermissionResponse::AllowOnce,
+            expected_session_id: None,
+            expected_dialog_digest: "abc".into(),
+            option: 2,
         }),
     };
     let value = serde_json::to_value(&request).unwrap();
-    assert_eq!(value["method"], "agent.approve_once");
+    assert_eq!(value["method"], "agent.dialog.choose");
     let params = &value["params"];
-    assert!(params.get("launch_id").is_none());
+    assert!(params.get("expected_session_id").is_none());
     assert!(params.get("keys").is_none());
-    assert_eq!(params["response"], "allow-once");
+    assert_eq!(serde_json::from_value::<Request>(value).unwrap(), request);
     assert!(serde_json::from_value::<Request>(serde_json::json!({
-        "id":"x","method":"agent.approve_once","params":{
+        "id":"x","method":"agent.dialog.choose","params":{
             "target":"w1:p2","expected_terminal_id":"terminal-1","expected_pane_id":"w1:p2",
-            "expected_session_id":"session-1","expected_content_revision":8,
-            "expected_prompt_digest":"abc","response":"allow-once","keys":["enter"]
+            "expected_dialog_digest":"abc","option":1,"keys":["enter"]
         }
     }))
     .is_err());
 }
 
 #[test]
-fn agent_approve_once_observation_round_trips_typed_eligibility() {
-    let observation = AgentPermissionObservation {
-        terminal_id: "terminal-1".into(),
-        pane_id: "w1:p2".into(),
-        session_id: "session-1".into(),
-        content_revision: 10,
-        prompt_digest: "digest".into(),
-        prompt_text: "Allow read-only command: rg --files".into(),
-        eligibility: PermissionEligibility::Allowlisted {
-            action: SafePermissionAction::ReadOnlyInspection,
-            root: "/repo".into(),
-        },
-        allowed_responses: vec![ApprovedPermissionResponse::AllowOnce],
-    };
-    let result = ResponseResult::AgentPermission { observation };
-    assert_eq!(
-        serde_json::from_str::<ResponseResult>(&serde_json::to_string(&result).unwrap()).unwrap(),
-        result
-    );
+fn agent_dialog_observation_round_trips_with_and_without_a_dialog() {
+    for dialog in [
+        None,
+        Some(AgentDialog {
+            kind: AgentDialogKind::Choice,
+            text: "Do you want to proceed?".into(),
+            options: vec![AgentDialogOption {
+                number: 1,
+                label: "Yes".into(),
+                selected: true,
+            }],
+            hint: None,
+            id: "id".into(),
+            digest: "digest".into(),
+        }),
+    ] {
+        let result = ResponseResult::AgentDialog {
+            observation: AgentDialogObservation {
+                terminal_id: "terminal-1".into(),
+                pane_id: "w1:p2".into(),
+                session_id: Some("session-1".into()),
+                content_revision: 10,
+                dialog,
+            },
+        };
+        assert_eq!(
+            serde_json::from_str::<ResponseResult>(&serde_json::to_string(&result).unwrap())
+                .unwrap(),
+            result
+        );
+    }
 }
 
 #[test]
-fn agent_approve_once_allowlist_rejects_read_commands_with_write_or_exec_modes() {
-    use super::safe_permission_command;
-
-    for safe in [
-        "Allow read-only command: pwd",
-        "Allow read-only command: rg --files",
-        "Allow read-only command: sed -n 1,20p src/lib.rs",
-    ] {
-        assert!(
-            safe_permission_command(safe).is_some(),
-            "expected safe: {safe}"
-        );
-    }
-    for unsafe_command in [
-        "Allow read-only command: sed -i s/old/new/ src/lib.rs",
-        "Allow read-only command: sed -n 1woutput.txt src/lib.rs",
-        "Allow read-only command: rg --pre helper pattern",
-        "Allow read-only command: git diff --output=report.txt",
-        "Allow read-only command: git diff --ext-diff",
-        "Allow read-only command: cat file | sh",
-    ] {
-        assert!(
-            safe_permission_command(unsafe_command).is_none(),
-            "expected rejection: {unsafe_command}"
-        );
-    }
+fn agent_dialog_answer_schema_round_trips_and_old_dialogs_default_to_choice() {
+    let request = Request {
+        id: "answer".into(),
+        method: Method::AgentDialogAnswer(AgentDialogAnswerParams {
+            target: "pane".into(),
+            expected_terminal_id: "terminal".into(),
+            expected_pane_id: "pane".into(),
+            expected_session_id: None,
+            expected_dialog_digest: "digest".into(),
+            text: Some("token".into()),
+            skip: false,
+        }),
+    };
+    let mut value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["method"], "agent.dialog.answer");
+    assert_eq!(
+        serde_json::from_value::<Request>(value.clone()).unwrap(),
+        request
+    );
+    value["params"]["keys"] = serde_json::json!(["enter"]);
+    assert!(serde_json::from_value::<Request>(value).is_err());
+    let old = serde_json::json!({"text":"Allow?","options":[],"id":"id","digest":"digest"});
+    assert_eq!(
+        serde_json::from_value::<AgentDialog>(old).unwrap().kind,
+        AgentDialogKind::Choice
+    );
 }
 
 #[test]
@@ -809,7 +626,6 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
-                live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
                 surface_interest: true,
@@ -858,361 +674,7 @@ fn session_snapshot_request_and_response_round_trip() {
 }
 
 #[test]
-fn worktree_request_and_response_round_trip() {
-    let request = Request {
-        id: "req_worktree".into(),
-        method: Method::WorktreeCreate(WorktreeCreateParams {
-            workspace_id: Some("1".into()),
-            branch: Some("worktree/api".into()),
-            base: Some("HEAD".into()),
-            focus: true,
-            trust_repository: true,
-            ..WorktreeCreateParams::default()
-        }),
-    };
-    let json = serde_json::to_string(&request).unwrap();
-    assert!(json.contains("\"trust_repository\":true"));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, request);
-
-    let response = SuccessResponse {
-        id: "req_worktree".into(),
-        result: ResponseResult::WorktreeCreated {
-            workspace: WorkspaceInfo {
-                workspace_id: "w_1".into(),
-                number: 2,
-                label: "herdr".into(),
-                focused: true,
-                pane_count: 1,
-                tab_count: 1,
-                active_tab_id: "w_1:1".into(),
-                agent_status: AgentStatus::Unknown,
-                tokens: HashMap::new(),
-                worktree: Some(WorkspaceWorktreeInfo {
-                    repo_key: "/repo/herdr/.git".into(),
-                    repo_name: "herdr".into(),
-                    repo_root: "/repo/herdr".into(),
-                    checkout_path: "/worktrees/herdr/worktree-api".into(),
-                    is_linked_worktree: true,
-                }),
-            },
-            tab: TabInfo {
-                tab_id: "w_1:1".into(),
-                workspace_id: "w_1".into(),
-                number: 1,
-                label: "herdr".into(),
-                focused: true,
-                pane_count: 1,
-                agent_status: AgentStatus::Unknown,
-            },
-            root_pane: PaneInfo {
-                pane_id: "w_1-1".into(),
-                terminal_id: "term_1".into(),
-                workspace_id: "w_1".into(),
-                tab_id: "w_1:1".into(),
-                focused: true,
-                cwd: Some("/worktrees/herdr/worktree-api".into()),
-                foreground_cwd: None,
-                label: None,
-                agent: None,
-                title: None,
-                terminal_title: None,
-                terminal_title_stripped: None,
-                display_agent: None,
-                agent_status: AgentStatus::Unknown,
-                state_labels: HashMap::new(),
-                tokens: HashMap::new(),
-                agent_session: None,
-                scroll: None,
-                revision: 0,
-            },
-            worktree: WorktreeInfo {
-                path: "/worktrees/herdr/worktree-api".into(),
-                branch: Some("worktree/api".into()),
-                is_bare: false,
-                is_detached: false,
-                is_prunable: false,
-                is_linked_worktree: true,
-                open_workspace_id: Some("w_1".into()),
-                label: "herdr".into(),
-            },
-        },
-    };
-    let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("\"type\":\"worktree_created\""));
-    assert!(json.contains("\"worktree\""));
-    let restored: SuccessResponse = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, response);
-}
-
-#[test]
-fn worktree_lifecycle_events_round_trip() {
-    let subscription = Request {
-        id: "sub_worktrees".into(),
-        method: Method::EventsSubscribe(EventsSubscribeParams {
-            subscriptions: vec![
-                Subscription::WorktreeCreated {},
-                Subscription::WorktreeOpened {},
-                Subscription::WorktreeRemoved {},
-            ],
-        }),
-    };
-    let json = serde_json::to_string(&subscription).unwrap();
-    assert!(json.contains("\"type\":\"worktree.created\""));
-    assert!(json.contains("\"type\":\"worktree.opened\""));
-    assert!(json.contains("\"type\":\"worktree.removed\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, subscription);
-
-    let workspace = WorkspaceInfo {
-        workspace_id: "w_2".into(),
-        number: 2,
-        label: "herdr".into(),
-        focused: true,
-        pane_count: 1,
-        tab_count: 1,
-        active_tab_id: "w_2:1".into(),
-        agent_status: AgentStatus::Unknown,
-        tokens: HashMap::new(),
-        worktree: Some(WorkspaceWorktreeInfo {
-            repo_key: "/repo/herdr/.git".into(),
-            repo_name: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/worktrees/herdr/worktree-api".into(),
-            is_linked_worktree: true,
-        }),
-    };
-    let worktree = WorktreeInfo {
-        path: "/worktrees/herdr/worktree-api".into(),
-        branch: Some("worktree/api".into()),
-        is_bare: false,
-        is_detached: false,
-        is_prunable: false,
-        is_linked_worktree: true,
-        open_workspace_id: Some("w_2".into()),
-        label: "herdr".into(),
-    };
-
-    for event in [
-        EventEnvelope {
-            event: EventKind::WorktreeCreated,
-            data: EventData::WorktreeCreated {
-                workspace: workspace.clone(),
-                worktree: worktree.clone(),
-            },
-        },
-        EventEnvelope {
-            event: EventKind::WorktreeOpened,
-            data: EventData::WorktreeOpened {
-                workspace: workspace.clone(),
-                worktree: worktree.clone(),
-                already_open: false,
-            },
-        },
-        EventEnvelope {
-            event: EventKind::WorktreeRemoved,
-            data: EventData::WorktreeRemoved {
-                workspace_id: "w_2".into(),
-                workspace: Some(workspace.clone()),
-                worktree: WorktreeInfo {
-                    open_workspace_id: None,
-                    ..worktree.clone()
-                },
-                forced: false,
-            },
-        },
-        EventEnvelope {
-            event: EventKind::WorkspaceClosed,
-            data: EventData::WorkspaceClosed {
-                workspace_id: "w_2".into(),
-                workspace: Some(workspace.clone()),
-            },
-        },
-    ] {
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: EventEnvelope = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored, event);
-    }
-}
-
-#[test]
-fn plugin_link_list_unlink_round_trip() {
-    let link = Request {
-        id: "plugin_link".into(),
-        method: Method::PluginLink(PluginLinkParams {
-            path: "/plugins/worktree-bootstrap".into(),
-            enabled: true,
-            source: None,
-        }),
-    };
-    let json = serde_json::to_string(&link).unwrap();
-    assert!(json.contains("\"method\":\"plugin.link\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, link);
-
-    let list = Request {
-        id: "plugin_list".into(),
-        method: Method::PluginList(PluginListParams {
-            plugin_id: Some("example.worktree-bootstrap".into()),
-        }),
-    };
-    let json = serde_json::to_string(&list).unwrap();
-    assert!(json.contains("\"method\":\"plugin.list\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, list);
-
-    let unlink = Request {
-        id: "plugin_unlink".into(),
-        method: Method::PluginUnlink(PluginUnlinkParams {
-            plugin_id: "example.worktree-bootstrap".into(),
-        }),
-    };
-    let json = serde_json::to_string(&unlink).unwrap();
-    assert!(json.contains("\"method\":\"plugin.unlink\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, unlink);
-
-    let plugin = InstalledPluginInfo {
-        plugin_id: "example.worktree-bootstrap".into(),
-        name: "Worktree Bootstrap".into(),
-        version: "0.1.0".into(),
-        min_herdr_version: crate::build_info::BASE_VERSION.into(),
-        description: Some("Prepare new worktrees".into()),
-        manifest_path: "/plugins/worktree-bootstrap/herdr-plugin.toml".into(),
-        plugin_root: "/plugins/worktree-bootstrap".into(),
-        enabled: true,
-        platforms: None,
-        build: vec![PluginManifestBuild {
-            platforms: None,
-            command: vec!["bun".into(), "install".into()],
-        }],
-        startup: vec![],
-        actions: vec![PluginManifestAction {
-            id: "bootstrap".into(),
-            title: "Bootstrap worktree".into(),
-            description: None,
-            contexts: vec![PluginActionContext::Workspace],
-            platforms: None,
-            command: vec!["bun".into(), "run".into(), "bootstrap.ts".into()],
-        }],
-        events: vec![PluginManifestEventHook {
-            on: "worktree.created".into(),
-            platforms: None,
-            command: vec!["bun".into(), "run".into(), "bootstrap.ts".into()],
-        }],
-        panes: vec![PluginManifestPane {
-            id: "board".into(),
-            title: "Board".into(),
-            description: None,
-            platforms: None,
-            placement: PluginPanePlacement::Overlay,
-            width: None,
-            height: None,
-            command: vec!["bun".into(), "run".into(), "board.ts".into()],
-        }],
-        link_handlers: vec![PluginManifestLinkHandler {
-            id: "github-pr".into(),
-            title: "Open GitHub PR".into(),
-            pattern: "^https://github.com/[^/]+/[^/]+/(issues|pull)/[0-9]+$".into(),
-            action: "bootstrap".into(),
-            platforms: None,
-        }],
-        source: Default::default(),
-        warnings: vec![],
-    };
-
-    for response in [
-        SuccessResponse {
-            id: "plugin_link".into(),
-            result: ResponseResult::PluginLinked {
-                plugin: plugin.clone(),
-            },
-        },
-        SuccessResponse {
-            id: "plugin_list".into(),
-            result: ResponseResult::PluginList {
-                plugins: vec![plugin.clone()],
-            },
-        },
-        SuccessResponse {
-            id: "plugin_unlink".into(),
-            result: ResponseResult::PluginUnlinked {
-                plugin_id: plugin.plugin_id.clone(),
-                removed: true,
-            },
-        },
-    ] {
-        let json = serde_json::to_string(&response).unwrap();
-        let restored: SuccessResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored, response);
-    }
-}
-
-#[test]
-fn layout_export_apply_round_trip() {
-    let root = LayoutNode::Split {
-        direction: SplitDirection::Right,
-        ratio: 0.6,
-        first: Box::new(LayoutNode::Pane {
-            pane: LayoutPane {
-                label: Some("editor".into()),
-                cwd: Some("/repo".into()),
-                ..Default::default()
-            },
-        }),
-        second: Box::new(LayoutNode::Pane {
-            pane: LayoutPane {
-                label: Some("tests".into()),
-                command: Some(vec!["sh".into(), "-c".into(), "just test".into()]),
-                env: HashMap::from([("HERDR_ROLE".into(), "tests".into())]),
-                ..Default::default()
-            },
-        }),
-    };
-
-    let export = Request {
-        id: "layout_export".into(),
-        method: Method::LayoutExport(LayoutExportParams {
-            tab_id: Some("w1:1".into()),
-            pane_id: None,
-        }),
-    };
-    let json = serde_json::to_string(&export).unwrap();
-    assert!(json.contains("\"method\":\"layout.export\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, export);
-
-    let apply = Request {
-        id: "layout_apply".into(),
-        method: Method::LayoutApply(LayoutApplyParams {
-            workspace_id: Some("w1".into()),
-            tab_id: None,
-            tab_label: Some("dev".into()),
-            focus: true,
-            root: root.clone(),
-        }),
-    };
-    let json = serde_json::to_string(&apply).unwrap();
-    assert!(json.contains("\"method\":\"layout.apply\""));
-    let restored: Request = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, apply);
-
-    let response = SuccessResponse {
-        id: "layout_export".into(),
-        result: ResponseResult::LayoutExport {
-            layout: LayoutDescription {
-                workspace_id: "w1".into(),
-                tab_id: "w1:1".into(),
-                zoomed: false,
-                focused_pane_id: "w1-1".into(),
-                root,
-            },
-        },
-    };
-    let json = serde_json::to_string(&response).unwrap();
-    let restored: SuccessResponse = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, response);
-
+fn layout_split_ratio_response_round_trips() {
     let response = SuccessResponse {
         id: "layout_ratio".into(),
         result: ResponseResult::LayoutSplitRatioSet {
@@ -1250,30 +712,6 @@ fn authority_mutation_requests_round_trip() {
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, workspace_move);
 
-    let workspace_move_block = Request {
-        id: "move_ws_block".into(),
-        method: Method::WorkspaceMoveBlock(WorkspaceMoveBlockParams {
-            workspace_ids: vec!["w1".into(), "w2".into()],
-            before_workspace_id: Some("w3".into()),
-        }),
-    };
-    let json = serde_json::to_value(&workspace_move_block).unwrap();
-    assert_eq!(json["method"], "workspace.move_block");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, workspace_move_block);
-
-    let tab_move = Request {
-        id: "move_tab".into(),
-        method: Method::TabMove(TabMoveParams {
-            tab_id: "w1:1".into(),
-            insert_index: 1,
-        }),
-    };
-    let json = serde_json::to_value(&tab_move).unwrap();
-    assert_eq!(json["method"], "tab.move");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, tab_move);
-
     let pane_focus = Request {
         id: "focus_pane".into(),
         method: Method::PaneFocus(PaneTarget {
@@ -1304,16 +742,12 @@ fn authority_mutation_requests_round_trip() {
         method: Method::EventsSubscribe(EventsSubscribeParams {
             subscriptions: vec![
                 Subscription::WorkspaceMoved {},
-                Subscription::WorkspaceReordered {},
-                Subscription::TabMoved {},
                 Subscription::LayoutUpdated {},
             ],
         }),
     };
     let json = serde_json::to_string(&subscription).unwrap();
     assert!(json.contains("\"type\":\"workspace.moved\""));
-    assert!(json.contains("\"type\":\"workspace.reordered\""));
-    assert!(json.contains("\"type\":\"tab.moved\""));
     assert!(json.contains("\"type\":\"layout.updated\""));
     let restored: Request = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, subscription);
@@ -1433,90 +867,4 @@ fn pane_link_activate_round_trips() {
     let json = serde_json::to_string(&response).unwrap();
     let restored: ResponseResult = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, response);
-}
-
-#[test]
-fn plugin_action_list_and_invoke_round_trips() {
-    let list = Request {
-        id: "req_plugin_action_list".into(),
-        method: Method::PluginActionList(PluginActionListParams {
-            plugin_id: Some("example.issue-flow".into()),
-        }),
-    };
-    let json = serde_json::to_value(&list).unwrap();
-    assert_eq!(json["method"], "plugin.action.list");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, list);
-
-    let invoke = Request {
-        id: "req_plugin_action_invoke".into(),
-        method: Method::PluginActionInvoke(PluginActionInvokeParams {
-            plugin_id: Some("example.issue-flow".into()),
-            action_id: "assign-issue".into(),
-            context: None,
-        }),
-    };
-    let json = serde_json::to_value(&invoke).unwrap();
-    assert_eq!(json["method"], "plugin.action.invoke");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, invoke);
-
-    let action_info = PluginActionInfo {
-        plugin_id: "example.issue-flow".into(),
-        action_id: "assign-issue".into(),
-        title: "Assign Issue".into(),
-        description: Some("Open the issue assignment UI".into()),
-        contexts: vec![PluginActionContext::Workspace, PluginActionContext::Pane],
-        command: vec!["assign".into(), "--issue".into()],
-        platforms: Some(vec![PluginPlatform::Linux, PluginPlatform::Macos]),
-    };
-    assert_eq!(
-        action_info.qualified_id(),
-        "example.issue-flow.assign-issue"
-    );
-    let json = serde_json::to_string(&action_info).unwrap();
-    let restored: PluginActionInfo = serde_json::from_str(&json).unwrap();
-    assert_eq!(restored, action_info);
-}
-
-#[test]
-fn plugin_pane_open_request_round_trips() {
-    let request = Request {
-        id: "req_plugin_pane".into(),
-        method: Method::PluginPaneOpen(PluginPaneOpenParams {
-            plugin_id: "example.board".into(),
-            entrypoint: "board".into(),
-            placement: Some(PluginPanePlacement::Popup),
-            width: Some(crate::popup_size::PopupSize::Cells(90)),
-            height: Some(crate::popup_size::PopupSize::Percent(80)),
-            workspace_id: None,
-            target_pane_id: None,
-            direction: None,
-            cwd: Some("/tmp".into()),
-            focus: true,
-            env: [("HERDR_ROLE".to_string(), "board".to_string())].into(),
-        }),
-    };
-
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(json["method"], "plugin.pane.open");
-    assert_eq!(json["params"]["placement"], "popup");
-    assert_eq!(json["params"]["width"], 90);
-    assert_eq!(json["params"]["height"], "80%");
-    assert_eq!(json["params"]["env"]["HERDR_ROLE"], "board");
-    let restored: Request = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, request);
-}
-
-#[test]
-fn popup_close_request_round_trips() {
-    let request = Request {
-        id: "popup-close".into(),
-        method: Method::PopupClose(EmptyParams::default()),
-    };
-
-    let json = serde_json::to_value(request).unwrap();
-
-    assert_eq!(json["method"], "popup.close");
-    assert_eq!(json["params"], serde_json::json!({}));
 }

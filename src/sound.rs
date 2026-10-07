@@ -1,4 +1,4 @@
-//! Sound notifications for agent state changes.
+//! Notification sounds and Bus room dings.
 //!
 //! Embeds mp3 files in the binary and plays them via system audio tools.
 //! Uses afplay (macOS), Windows MediaPlayer, or decoder-capable Linux audio
@@ -25,15 +25,12 @@ const AUDIO_PLAYER_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 static SOUND_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static SOUND_DONE: &[u8] = include_bytes!("../assets/sounds/done.mp3");
-static SOUND_REQUEST: &[u8] = include_bytes!("../assets/sounds/request.mp3");
 
 /// Which notification sound to play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sound {
-    /// Agent finished work (transitioned to Idle).
+    /// Something finished.
     Done,
-    /// Agent needs input (transitioned to Blocked).
-    Request,
 }
 
 /// Play a notification sound in a background thread.
@@ -56,7 +53,6 @@ pub fn play(sound: Sound, config: &crate::config::SoundConfig) {
 
         let data = match sound {
             Sound::Done => SOUND_DONE,
-            Sound::Request => SOUND_REQUEST,
         };
 
         if let Err(err) = play_bytes(data) {
@@ -84,15 +80,11 @@ fn play_bytes(data: &[u8]) -> Result<(), String> {
     file.write_all(data).map_err(|e| e.to_string())?;
     drop(file);
 
-    let result = run_player(&tmp);
+    let result = play_file(&tmp);
 
     let _ = std::fs::remove_file(&tmp);
 
-    match result {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => Err(playback_error(&output)),
-        Err(e) => Err(e),
-    }
+    result
 }
 
 fn playback_error(output: &Output) -> String {
@@ -352,9 +344,224 @@ fn player_error(player: AudioPlayer, output: &Output) -> String {
     }
 }
 
+/// The name Bus shows for its own built-in ding.
+pub const DEFAULT_SOUND_NAME: &str = "Default";
+/// Audio files the platform players can decode, by extension.
+const SYSTEM_SOUND_EXTENSIONS: &[&str] = &["aiff", "aif", "caf", "wav", "oga", "ogg", "mp3"];
+/// Sound themes nest by theme and variant; stop before unrelated trees.
+const SYSTEM_SOUND_DEPTH: usize = 3;
+
+/// A sound file installed with the operating system, named by its file stem.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SystemSound {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+/// The operating system's own notification sounds, sorted by name.
+pub fn system_sounds() -> Vec<SystemSound> {
+    list_sounds(&system_sound_dirs())
+}
+
+#[cfg(target_os = "macos")]
+fn system_sound_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/System/Library/Sounds"),
+        PathBuf::from("/Library/Sounds"),
+    ];
+    if let Some(home) = std::env::home_dir() {
+        dirs.push(home.join("Library/Sounds"));
+    }
+    dirs
+}
+
+#[cfg(windows)]
+fn system_sound_dirs() -> Vec<PathBuf> {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    vec![PathBuf::from(root).join("Media")]
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn system_sound_dirs() -> Vec<PathBuf> {
+    // The freedesktop theme first, so its names win over other themes' copies.
+    vec![
+        PathBuf::from("/usr/share/sounds/freedesktop/stereo"),
+        PathBuf::from("/usr/share/sounds"),
+    ]
+}
+
+/// Sound files under `dirs`, one per name (earlier directories win), sorted
+/// case-insensitively. Missing directories are skipped.
+pub(crate) fn list_sounds(dirs: &[PathBuf]) -> Vec<SystemSound> {
+    let mut found = Vec::new();
+    for dir in dirs {
+        collect_sounds(dir, SYSTEM_SOUND_DEPTH, &mut found);
+    }
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|sound: &SystemSound| {
+        sound.name != DEFAULT_SOUND_NAME && seen.insert(sound.name.to_lowercase())
+    });
+    found.sort_by_key(|sound| sound.name.to_lowercase());
+    found
+}
+
+fn collect_sounds(dir: &Path, depth: usize, found: &mut Vec<SystemSound>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            if depth > 1 {
+                collect_sounds(&path, depth - 1, found);
+            }
+            continue;
+        }
+        let is_sound = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                SYSTEM_SOUND_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+            });
+        let name = path.file_stem().and_then(|stem| stem.to_str());
+        if let (true, Some(name)) = (is_sound, name) {
+            found.push(SystemSound {
+                name: name.to_owned(),
+                path: path.clone(),
+            });
+        }
+    }
+}
+
+/// The sound named `name`, ignoring case.
+pub fn find_sound<'a>(sounds: &'a [SystemSound], name: &str) -> Option<&'a SystemSound> {
+    sounds
+        .iter()
+        .find(|sound| sound.name.eq_ignore_ascii_case(name))
+}
+
+/// Plays a room's sound in a background thread: the named system sound, or
+/// the built-in ding when `name` is None, no longer installed, or unplayable.
+pub fn play_named(name: Option<&str>, config: &crate::config::SoundConfig) {
+    if sound_playback_disabled_by_env() {
+        return;
+    }
+    let Some(path) = resolve_sound(name, &system_sounds()) else {
+        play(Sound::Done, config);
+        return;
+    };
+    let config = config.clone();
+    std::thread::spawn(move || {
+        if let Err(err) = play_file(&path) {
+            warn!(path = %path.display(), err = %err, "system sound playback failed, playing the default ding");
+            play(Sound::Done, &config);
+        }
+    });
+}
+
+/// The file to play for a room's sound name, or None for the default ding:
+/// no name chosen, or that sound is no longer installed.
+fn resolve_sound(name: Option<&str>, sounds: &[SystemSound]) -> Option<PathBuf> {
+    let name = name?;
+    let sound = find_sound(sounds, name);
+    if sound.is_none() {
+        warn!(name, "system sound not found, playing the default ding");
+    }
+    sound.map(|sound| sound.path.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sound_tree(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "bus-system-sounds-{label}-{}-{}",
+            std::process::id(),
+            SOUND_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn touch(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+
+    #[test]
+    fn system_sounds_list_audio_files_by_name_across_folders() {
+        let root = sound_tree("list");
+        let mac = root.join("System/Library/Sounds");
+        let windows = root.join("Windows/Media");
+        let linux = root.join("usr/share/sounds");
+        for path in [
+            mac.join("Glass.aiff"),
+            mac.join("Basso.aiff"),
+            windows.join("Windows Notify.wav"),
+            windows.join("chimes.WAV"),
+            linux.join("freedesktop/stereo/complete.oga"),
+            linux.join("freedesktop/stereo/message.oga"),
+            linux.join("freedesktop/index.theme"),
+            mac.join("README.txt"),
+        ] {
+            touch(&path);
+        }
+        let sounds = list_sounds(&[mac.clone(), windows, linux, root.join("missing")]);
+        let names: Vec<_> = sounds.iter().map(|sound| sound.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Basso",
+                "chimes",
+                "complete",
+                "Glass",
+                "message",
+                "Windows Notify"
+            ]
+        );
+        assert_eq!(
+            find_sound(&sounds, "glass").map(|sound| sound.path.clone()),
+            Some(mac.join("Glass.aiff"))
+        );
+        assert!(find_sound(&sounds, "Sosumi").is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_or_unchosen_sounds_fall_back_to_the_default_ding() {
+        let sounds = [SystemSound {
+            name: "Glass".into(),
+            path: PathBuf::from("/sounds/Glass.aiff"),
+        }];
+        assert_eq!(
+            resolve_sound(Some("glass"), &sounds),
+            Some(PathBuf::from("/sounds/Glass.aiff"))
+        );
+        assert_eq!(resolve_sound(Some("Sosumi"), &sounds), None);
+        assert_eq!(resolve_sound(None, &sounds), None);
+    }
+
+    #[test]
+    fn earlier_sound_folders_win_duplicate_names_and_default_is_reserved() {
+        let root = sound_tree("duplicates");
+        let preferred = root.join("freedesktop/stereo");
+        let other = root.join("other");
+        touch(&preferred.join("bell.oga"));
+        touch(&other.join("Bell.wav"));
+        touch(&other.join("Default.wav"));
+        touch(&other.join("a/b/c/too-deep.wav"));
+        let sounds = list_sounds(&[preferred.clone(), other]);
+        assert_eq!(
+            sounds,
+            [SystemSound {
+                name: "bell".into(),
+                path: preferred.join("bell.oga"),
+            }]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn temp_sound_paths_are_unique() {
@@ -450,7 +657,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_media_player_reports_invalid_media_without_waiting_for_timeout() {
-        let _lock = crate::integration::integration_env_lock();
+        let _lock = crate::pane::env::env_lock();
         let path = temp_sound_path();
         std::fs::write(&path, b"not an mp3").unwrap();
         let output = run_windows_player(&path).unwrap();

@@ -7,17 +7,22 @@ use std::{
 };
 
 pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
-    if path.exists() {
-        let meta = std::fs::symlink_metadata(path)?;
-        if !meta.is_dir() || meta.file_type().is_symlink() {
-            return Err(io::Error::other("Bus directory is not a real directory"));
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            private_dir(parent)?;
         }
-        return Ok(());
+        match crate::platform::create_remote_private_dir(path) {
+            Ok(()) => return Ok(()),
+            // Another process or thread created it first; validate theirs.
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
     }
-    if let Some(parent) = path.parent() {
-        private_dir(parent)?;
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err(io::Error::other("Bus directory is not a real directory"));
     }
-    crate::platform::create_remote_private_dir(path)
+    Ok(())
 }
 
 pub(crate) fn lock(path: &Path) -> io::Result<File> {
@@ -82,6 +87,26 @@ pub(crate) fn digest(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn private_dir_creates_missing_roots_owner_only_even_when_racing() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("bus-private-dir-{}", super::now_ns()));
+        let root = base.join("data");
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| super::private_dir(&root).unwrap());
+            }
+        });
+        for dir in [&base, &root] {
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", dir.display());
+        }
+        std::fs::write(base.join("file"), b"").unwrap();
+        assert!(super::private_dir(&base.join("file")).is_err());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn exclusive_lock_is_released_on_drop_and_atomic_files_roundtrip() {
         let dir = std::env::temp_dir().join(format!("bus-lock-test-{}", super::now_ns()));

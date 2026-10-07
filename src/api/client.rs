@@ -6,9 +6,7 @@ use std::time::Duration;
 use interprocess::local_socket::traits::Stream as _;
 use serde::de::DeserializeOwned;
 
-use crate::api::schema::{
-    ErrorResponse, Method, PingParams, Request, ResponseResult, SuccessResponse,
-};
+use crate::api::schema::{ErrorResponse, Request, SuccessResponse};
 use crate::ipc::LocalStream;
 
 /// API connection target resolved by clients at the process edge.
@@ -35,29 +33,12 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    pub fn local() -> Self {
-        Self::for_target(ConnectionTarget::LocalSession(None))
-    }
-
     pub fn for_target(target: ConnectionTarget) -> Self {
         Self { target }
     }
 
     pub fn socket_path(&self) -> PathBuf {
         self.target.socket_path()
-    }
-
-    pub fn request(&self, request: Request) -> Result<SuccessResponse, ApiClientError> {
-        let value = self.request_value(&request)?;
-        parse_response_value(value)
-    }
-
-    pub fn request_value(&self, request: &Request) -> Result<serde_json::Value, ApiClientError> {
-        let mut stream = self.connect()?;
-        write_request(&mut stream, request)?;
-
-        let mut reader = BufReader::new(stream);
-        read_json_line(&mut reader)
     }
 
     pub fn request_value_with_timeout(
@@ -72,25 +53,6 @@ impl ApiClient {
 
         let mut reader = BufReader::new(stream);
         read_json_line(&mut reader)
-    }
-
-    pub fn status(&self) -> Result<crate::api::RuntimeStatus, ApiClientError> {
-        let response = self.request(Request {
-            id: "api-client:status".into(),
-            method: Method::Ping(PingParams::default()),
-        })?;
-        match response.result {
-            ResponseResult::Pong {
-                version,
-                protocol,
-                capabilities,
-            } => Ok(crate::api::RuntimeStatus {
-                version: Some(version),
-                protocol: Some(protocol),
-                capabilities,
-            }),
-            result => Err(ApiClientError::UnexpectedResult(format!("{result:?}"))),
-        }
     }
 
     fn connect(&self) -> io::Result<LocalStream> {
@@ -126,7 +88,6 @@ pub enum ApiClientError {
     Json(serde_json::Error),
     ErrorResponse(ErrorResponse),
     EmptyResponse,
-    UnexpectedResult(String),
 }
 
 impl fmt::Display for ApiClientError {
@@ -136,7 +97,6 @@ impl fmt::Display for ApiClientError {
             Self::Json(err) => write!(f, "{err}"),
             Self::ErrorResponse(response) => write!(f, "{}", response.error.message),
             Self::EmptyResponse => write!(f, "empty api response"),
-            Self::UnexpectedResult(result) => write!(f, "unexpected api result: {result}"),
         }
     }
 }

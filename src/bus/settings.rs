@@ -1,51 +1,50 @@
 //! User preferences shared by every local Bus session.
+//!
+//! Choices that are not tied to one room live here, so a change made in any
+//! Bus is what every Bus launched afterwards starts with: color blind mode,
+//! MASTER's sound (every session has MASTER), and the last All rooms sound,
+//! which a new work room starts with. A room's own sound stays in its session. Running Bus
+//! instances read this file at launch and when they create a room; they do
+//! not follow another instance's changes live.
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
-    pub(crate) orchestrator: OrchestratorSettings,
+    /// MASTER's sound in every session; it rings by default.
+    pub(crate) master_sound: SoundPref,
+    /// The last All rooms choice: set on every work room at once, and what
+    /// each new work room starts with.
+    pub(crate) room_sound: SoundPref,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default)]
-pub(crate) struct OrchestratorSettings {
-    pub(crate) enabled: bool,
-    pub(crate) model: OrchestratorModelSetting,
-    pub(crate) content_selector: OrchestratorContentSetting,
-    pub(crate) system_prompt_override: Option<String>,
-}
-
-impl Default for OrchestratorSettings {
+impl Default for BusSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
-            model: OrchestratorModelSetting::DeepSeekV41Flash,
-            content_selector: OrchestratorContentSetting::Production,
-            system_prompt_override: None,
+            color_blind_mode: false,
+            master_sound: SoundPref {
+                enabled: true,
+                name: None,
+            },
+            room_sound: SoundPref::default(),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum OrchestratorModelSetting {
-    #[default]
-    DeepSeekV41Flash,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum OrchestratorContentSetting {
-    TestAgentLed,
-    #[default]
-    Production,
+/// A sound notification choice: on or off, and the system sound by name
+/// (None is Bus's own ding).
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub(crate) struct SoundPref {
+    pub(crate) enabled: bool,
+    pub(crate) name: Option<String>,
 }
 
 /// Registry sessions share one file beside the registry; an explicit
-/// `BUS_DATA_DIR` root stays isolated with its own copy.
+/// `BUS_DATA_DIR` root (tests, e2e, isolated development copies) stays
+/// isolated with its own `settings.json` in that root.
 pub(crate) fn path() -> Option<PathBuf> {
     if std::env::var_os("BUS_SESSION_ID").is_some() {
         if let Ok(base) = super::local_sessions::default_base_dir() {
@@ -69,6 +68,26 @@ pub(crate) fn load(path: &Path) -> Result<BusSettings, String> {
             path.display()
         )),
     }
+}
+
+/// Changes the saved settings under a lock, so concurrent writers (another Bus,
+/// or this one's UI and coordinator) each keep the fields they did not change.
+/// A file that does not parse is replaced from defaults, as `load` reports.
+pub(crate) fn update(
+    path: &Path,
+    change: impl FnOnce(&mut BusSettings),
+) -> Result<BusSettings, String> {
+    let failed = |error: &dyn std::fmt::Display| {
+        format!("Could not save Bus settings to {}: {error}", path.display())
+    };
+    let parent = path.parent().ok_or_else(|| failed(&"missing parent"))?;
+    super::io::private_dir(parent).map_err(|error| failed(&error))?;
+    let _lease = super::io::append_lock(&path.with_extension("json.lock"))
+        .map_err(|error| failed(&error))?;
+    let mut settings = load(path).unwrap_or_default();
+    change(&mut settings);
+    save(path, &settings)?;
+    Ok(settings)
 }
 
 pub(crate) fn save(path: &Path, settings: &BusSettings) -> Result<(), String> {
@@ -112,27 +131,76 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_system_prompt_override_round_trips_multiline_text() {
+    fn sound_choices_default_to_today_and_update_keeps_other_fields() {
         let root = std::env::temp_dir().join(format!(
-            "bus-settings-prompt-{}-{}",
+            "bus-settings-sound-{}-{}",
             std::process::id(),
             super::super::io::now_ns()
         ));
         let path = root.join("settings.json");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(
-            &path,
-            br#"{"orchestrator":{"system_prompt_override":"Custom conductor\nUse repo-native skills."}}"#,
-        )
+        // Unset sounds default: MASTER rings and new rooms start silent, both
+        // with Bus's ding.
+        std::fs::write(&path, br#"{"color_blind_mode":true}"#).unwrap();
+        let old = load(&path).unwrap();
+        assert!(old.color_blind_mode);
+        assert!(old.master_sound.enabled);
+        assert_eq!(old.master_sound.name, None);
+        assert_eq!(old.room_sound, SoundPref::default());
+        assert!(!old.room_sound.enabled);
+
+        let glass = SoundPref {
+            enabled: true,
+            name: Some("Glass".into()),
+        };
+        let saved = update(&path, |settings| settings.room_sound = glass.clone()).unwrap();
+        assert!(saved.color_blind_mode);
+        let saved = update(&path, |settings| {
+            settings.master_sound = SoundPref {
+                enabled: false,
+                name: None,
+            }
+        })
         .unwrap();
+        assert_eq!(saved.room_sound, glass);
+        assert_eq!(load(&path), Ok(saved));
 
-        let loaded = load(&path).unwrap();
-        let encoded = serde_json::to_value(loaded).unwrap();
-        assert_eq!(
-            encoded["orchestrator"]["system_prompt_override"],
-            "Custom conductor\nUse repo-native skills."
-        );
-
+        // An unreadable file is replaced from defaults rather than blocking a change.
+        std::fs::write(&path, b"not json").unwrap();
+        let fresh = update(&path, |settings| settings.color_blind_mode = true).unwrap();
+        assert_eq!(fresh.room_sound, SoundPref::default());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn registry_sessions_share_one_file_and_an_explicit_data_dir_stays_isolated() {
+        let _guard = crate::config::test_config_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous: Vec<_> = ["BUS_DATA_DIR", "BUS_SESSION_ID"]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect();
+        let root = std::env::temp_dir().join("bus-settings-isolated-root");
+        std::env::set_var("BUS_DATA_DIR", &root);
+        std::env::remove_var("BUS_SESSION_ID");
+        let isolated = path();
+        std::env::set_var("BUS_SESSION_ID", "0123456789abcdef");
+        let shared = path();
+        for (key, value) in previous {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        assert_eq!(isolated, Some(root.join("settings.json")));
+        assert_eq!(
+            shared,
+            Some(
+                super::super::local_sessions::default_base_dir()
+                    .unwrap()
+                    .join("settings.json")
+            )
+        );
     }
 }

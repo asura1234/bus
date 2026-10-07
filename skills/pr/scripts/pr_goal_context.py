@@ -11,11 +11,6 @@ from typing import Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CLI_EXTENSIONS = REPO_ROOT / "cli_extensions"
-if str(CLI_EXTENSIONS) not in sys.path:
-    sys.path.insert(0, str(CLI_EXTENSIONS))
-
-from room_assignment_context import OrchestratedContext, read_assignment_context  # noqa: E402
 
 
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -108,16 +103,6 @@ def locked_context_paths(repo_root: Path, branch: str) -> tuple[Path, Path]:
     return lane_root / ".locked-goal", lane_root / ".locked-non-goals"
 
 
-def _verified_room_brief(path: Path) -> tuple[str, str]:
-    context = read_assignment_context(path)
-    if not isinstance(context, OrchestratedContext):
-        raise ValueError("room assignment context 必须来自 verified TRUSTED_ROOM_ASSIGNMENT_V1")
-    return (
-        _trim_boundary_blank_lines(context.goal),
-        _trim_boundary_blank_lines(context.non_goals),
-    )
-
-
 def prepare_context(
     *,
     branch: str,
@@ -126,27 +111,17 @@ def prepare_context(
     plan_paths: Sequence[Path] = (),
     goal_path: Path | None = None,
     non_goal_path: Path | None = None,
-    assignment_context_path: Path | None = None,
 ) -> Path:
     if not branch or branch in {"main", "master"}:
         raise ValueError("必须提供非 main/master 的具名 feature branch")
     authored = goal_path is not None or non_goal_path is not None
-    if authored and (plan_paths or assignment_context_path is not None):
-        raise ValueError("authored goal/non-goal 模式不能与计划或 room assignment context 混用")
+    if authored and plan_paths:
+        raise ValueError("authored goal/non-goal 模式不能与计划混用")
 
-    room_brief = (
-        _verified_room_brief(assignment_context_path)
-        if assignment_context_path is not None
-        else None
-    )
     if plan_paths:
         goal, non_goal = build_context(
             [path.read_text(encoding="utf-8") for path in plan_paths]
         )
-        if room_brief is not None and (goal, non_goal) != room_brief:
-            raise ValueError("计划 Goal/Non-goals 与 verified Room Brief 不一致；不得覆盖")
-    elif room_brief is not None:
-        goal, non_goal = room_brief
     else:
         if goal_path is None or non_goal_path is None:
             raise ValueError("无计划时必须同时提供 --goal-file 与 --non-goal-file")
@@ -180,7 +155,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--plan", type=Path, action="append", default=[])
     parser.add_argument("--goal-file", type=Path)
     parser.add_argument("--non-goal-file", type=Path)
-    parser.add_argument("--assignment-context", type=Path)
     args = parser.parse_args(argv)
     try:
         locked_goal_path = prepare_context(
@@ -190,7 +164,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan_paths=args.plan,
             goal_path=args.goal_file,
             non_goal_path=args.non_goal_file,
-            assignment_context_path=args.assignment_context,
         )
     except (OSError, UnicodeError, ValueError) as error:
         print(f"pr goal context failed: {error}", file=sys.stderr)

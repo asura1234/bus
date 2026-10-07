@@ -12,18 +12,6 @@ pub(crate) fn pane_scrollbar_rect(info: &PaneInfo) -> Option<Rect> {
     info.scrollbar_rect
 }
 
-pub(crate) fn release_notes_scrollbar_rect(
-    body: Rect,
-    metrics: crate::pane::ScrollMetrics,
-) -> Option<Rect> {
-    (should_show_scrollbar(metrics) && body.width > 1).then_some(Rect::new(
-        body.x + body.width - 1,
-        body.y,
-        1,
-        body.height,
-    ))
-}
-
 pub(crate) fn should_show_scrollbar(metrics: crate::pane::ScrollMetrics) -> bool {
     metrics.max_offset_from_bottom > 0
 }
@@ -44,9 +32,6 @@ pub(crate) fn scrollbar_thumb(
 
     let track_height = track.height as usize;
     let total_rows = metrics.max_offset_from_bottom + metrics.viewport_rows;
-    if total_rows == 0 {
-        return None;
-    }
 
     let thumb_len = ((metrics.viewport_rows * track_height) as f32 / total_rows as f32)
         .round()
@@ -56,7 +41,7 @@ pub(crate) fn scrollbar_thumb(
     let scrolled_from_top = metrics
         .max_offset_from_bottom
         .saturating_sub(metrics.offset_from_bottom);
-    let thumb_top = if max_thumb_top == 0 || metrics.max_offset_from_bottom == 0 {
+    let thumb_top = if max_thumb_top == 0 {
         0
     } else {
         ((scrolled_from_top * max_thumb_top) as f32 / metrics.max_offset_from_bottom as f32)

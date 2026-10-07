@@ -24,15 +24,28 @@ pub(super) enum ComposerSize {
     Compact,
 }
 
+/// Which screen the Bus view shows. A change repaints every terminal cell, so
+/// cells a terminal shows differently from the last frame (which the diff
+/// encoder would never revisit, like the blank right margin) heal on every
+/// screen switch, even in terminals that send no focus events.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ViewKey {
+    pub room: Option<RoomId>,
+    pub terminal: Option<AgentId>,
+    pub form: Option<std::mem::Discriminant<super::forms::Form>>,
+    pub deletion: bool,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct LocalRoom {
     pub text: Editor,
     pub notes: Editor,
     pub recipients: AgentRecipients,
-    pub to_orchestrator: bool,
     pub composer_size: ComposerSize,
     // None follows the caret; Some is an independently scrolled viewport.
     pub composer_scroll: Option<usize>,
+    // The notes box scrolls the same way: None follows the caret.
+    pub notes_scroll: Option<usize>,
     pub recall: Vec<String>,
     pub stash: Vec<String>,
     pub history_index: Option<usize>,
@@ -50,9 +63,9 @@ impl From<&Room> for LocalRoom {
             text: Editor::new(room.draft.text.clone()),
             notes: Editor::new(room.notes.clone()),
             recipients: room.draft.recipient_ids.clone(),
-            to_orchestrator: false,
             composer_size: ComposerSize::Auto,
             composer_scroll: None,
+            notes_scroll: None,
             recall: Vec::new(),
             stash: Vec::new(),
             history_index: None,
@@ -106,6 +119,8 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) pending: VecDeque<Pending>,
     pub next_id: u64,
     pub send_intent: Option<RoomId>,
+    /// The pending send waits for each agent's own turn instead of steering.
+    pub(super) send_queued: bool,
     pub error: Option<String>,
     pub(super) dismissed_snapshot_error: Option<String>,
     pub(super) toast: Option<Toast>,
@@ -127,6 +142,16 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) main_scroll: usize,
     pub(super) history_follow_tail: bool,
     pub(super) history: super::history::History,
+    pub(super) thumbnails: super::thumbnails::Thumbnails,
+    /// The screen the last view showed: room, agent terminal, form, dialog.
+    pub(super) view_key: Option<ViewKey>,
+    /// The view switched screens since the client last repainted every cell.
+    pub(super) full_repaint: bool,
+    /// The client presents Kitty graphics and the host terminal draws them.
+    /// The host's image protocol, or None when thumbnails are not drawn.
+    pub(super) graphics: Option<super::thumbnails::Protocol>,
+    /// Thumbnail bytes were composed but the client has not written them yet.
+    pub(super) graphics_unconfirmed: bool,
     /// Region receiving the current left-button drag, if it started a selection.
     pub(super) drag: Option<super::selection::Region>,
     /// History selection as (anchor, head); editor selections live in `Editor`.
@@ -146,9 +171,14 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) settings: crate::bus::settings::BusSettings,
     /// None keeps toggles in memory only.
     pub(super) settings_path: Option<std::path::PathBuf>,
+    /// Settings focus: 0 is color blind mode, then one row per sound room.
     pub(super) settings_field: usize,
-    pub(super) settings_key: super::editor::Editor,
-    pub(super) settings_prompt: super::editor::Editor,
+    pub(super) settings_scroll: usize,
+    /// Set only by the coordinator-owning client; `None` never plays a sound.
+    pub(super) sound_config: Option<crate::config::SoundConfig>,
+    /// System sound names, read from the OS when Settings first opens.
+    pub(super) system_sounds: Option<Vec<String>>,
+    pub(super) ringer: super::ring::Ringer,
 }
 
 #[derive(Clone, Debug)]
@@ -160,7 +190,13 @@ pub(super) struct HistorySearch {
 
 impl BusUi {
     pub fn new(snapshot: Arc<BusSnapshot>) -> Self {
-        let room = snapshot.state.rooms().next().map(|r| r.id);
+        // Land in the first work room; MASTER is the fallback, not the default.
+        let room = snapshot
+            .state
+            .rooms()
+            .find(|r| r.kind == RoomKind::Work)
+            .or_else(|| snapshot.state.rooms().next())
+            .map(|r| r.id);
         let locals = snapshot
             .state
             .rooms()
@@ -175,6 +211,7 @@ impl BusUi {
             pending: VecDeque::new(),
             next_id: 1,
             send_intent: None,
+            send_queued: false,
             error: None,
             dismissed_snapshot_error: None,
             toast: None,
@@ -196,6 +233,11 @@ impl BusUi {
             main_scroll: 0,
             history_follow_tail: true,
             history: super::history::History::default(),
+            thumbnails: super::thumbnails::Thumbnails::default(),
+            view_key: None,
+            full_repaint: false,
+            graphics: None,
+            graphics_unconfirmed: false,
             drag: None,
             history_selection: None,
             recipient_scroll: 0,
@@ -213,148 +255,30 @@ impl BusUi {
             settings: crate::bus::settings::BusSettings::default(),
             settings_path: None,
             settings_field: 0,
-            settings_key: super::editor::Editor::default(),
-            settings_prompt: super::editor::Editor::default(),
+            settings_scroll: 0,
+            sound_config: None,
+            system_sounds: None,
+            ringer: super::ring::Ringer::new(std::time::Instant::now()),
         }
     }
     /// Applies immediately; a failed save keeps the choice for this run only.
     pub(super) fn toggle_color_blind_mode(&mut self) {
-        self.settings.color_blind_mode = !self.settings.color_blind_mode;
-        self.persist_settings();
-    }
-    pub(super) fn toggle_orchestrator_enabled(&mut self) {
-        self.settings.orchestrator.enabled = !self.settings.orchestrator.enabled;
-        self.persist_settings();
-    }
-    fn persist_settings(&mut self) {
+        let on = !self.settings.color_blind_mode;
+        self.settings.color_blind_mode = on;
         if let Some(path) = &self.settings_path {
-            if let Err(error) = crate::bus::settings::save(path, &self.settings) {
-                self.error = Some(error);
+            // Change only this field; the coordinator saves the sound fields.
+            match crate::bus::settings::update(path, |settings| settings.color_blind_mode = on) {
+                Ok(saved) => self.settings = saved,
+                Err(error) => self.error = Some(error),
             }
         }
-    }
-    pub(super) fn save_orchestrator_key(&mut self) {
-        let key = self.settings_key.text.trim().to_owned();
-        if key.is_empty() {
-            return;
-        }
-        let Some(path) = &self.settings_path else {
-            self.error = Some("Bus settings path is unavailable".into());
-            return;
-        };
-        let root = path.parent().unwrap_or(path.as_path());
-        match crate::bus::credentials::CredentialStore::new(root).replace(&key) {
-            Ok(_) => {
-                self.settings_key = super::editor::Editor::default();
-                self.settings.orchestrator.enabled = true;
-                self.persist_settings();
-                self.load_orchestrator_prompt();
-            }
-            Err(error) => self.error = Some(error),
-        }
-    }
-    pub(super) fn credential_digest(&self) -> Option<String> {
-        let path = self.settings_path.as_ref()?;
-        let root = path.parent().unwrap_or(path.as_path());
-        crate::bus::credentials::CredentialStore::new(root)
-            .load()
-            .map(|credential| credential.digest)
-    }
-    pub(super) fn load_orchestrator_prompt(&mut self) {
-        let prompt = self
-            .settings
-            .orchestrator
-            .system_prompt_override
-            .clone()
-            .map(Ok)
-            .unwrap_or_else(|| self.default_orchestrator_prompt());
-        match prompt {
-            Ok(prompt) => {
-                self.settings_prompt = super::editor::Editor::new(prompt);
-                self.settings_prompt.cursor = 0;
-            }
-            Err(error) => self.error = Some(error),
-        }
-    }
-    pub(super) fn save_orchestrator_prompt(&mut self) {
-        if self.settings_prompt.text.trim().is_empty() {
-            self.error = Some(
-                "System prompt cannot be empty. Reset it to the bundle default instead.".into(),
-            );
-            return;
-        }
-        self.settings.orchestrator.system_prompt_override = Some(self.settings_prompt.text.clone());
-        self.error = None;
-        self.persist_settings();
-    }
-    pub(super) fn reset_orchestrator_prompt(&mut self) {
-        self.settings.orchestrator.system_prompt_override = None;
-        self.error = None;
-        self.persist_settings();
-        self.load_orchestrator_prompt();
-    }
-    fn default_orchestrator_prompt(&self) -> Result<String, String> {
-        use crate::bus::orchestrator::{ContentLoader, ContentSelector};
-
-        let selector = match self.settings.orchestrator.content_selector {
-            crate::bus::settings::OrchestratorContentSetting::TestAgentLed => {
-                ContentSelector::TestAgentLed
-            }
-            crate::bus::settings::OrchestratorContentSetting::Production => {
-                ContentSelector::Production
-            }
-        };
-        ContentLoader::test_bundle()
-            .load(selector)
-            .map(|content| content.system)
-            .map_err(|error| format!("Orchestrator system prompt unavailable: {error:?}"))
-    }
-    pub(super) fn toggle_recipient_entry(&mut self, entry: super::orchestrator_ui::RecipientEntry) {
-        match entry {
-            super::orchestrator_ui::RecipientEntry::Orchestrator => {
-                let Some(room) = self.room else {
-                    return;
-                };
-                if let Some(local) = self.locals.get_mut(&room) {
-                    local.to_orchestrator = !local.to_orchestrator;
-                }
-            }
-            super::orchestrator_ui::RecipientEntry::Separator => {}
-            super::orchestrator_ui::RecipientEntry::AllAgents => self.toggle_recipient(None),
-            super::orchestrator_ui::RecipientEntry::Agent(id) => self.toggle_recipient(Some(id)),
-        }
-    }
-    /// Dispatches the displayed Worker facts unchanged; only the Worker decides staleness.
-    pub(super) fn dispatch_coordination(
-        &mut self,
-        action: super::orchestrator_ui::CoordinationAction,
-    ) {
-        let command = match action {
-            super::orchestrator_ui::CoordinationAction::ApproveProposal { revision, digest } => {
-                let Some(room) = self.room else {
-                    return;
-                };
-                BusCommand::ConfirmRoomBriefProposal(
-                    crate::bus::orchestrator::ConfirmRoomBriefProposal {
-                        room_id: room,
-                        expected_developer: crate::bus::orchestrator::ParticipantId::Human,
-                        expected_proposal_revision: revision,
-                        expected_proposal_digest: digest,
-                    },
-                )
-            }
-            super::orchestrator_ui::CoordinationAction::ApproveWorkflowPromotion(review) => {
-                BusCommand::CreateDeveloperWorkflowApproval(review.approval_command())
-            }
-        };
-        self.queue(command, Effect::None);
     }
     pub(super) fn queue(&mut self, command: BusCommand, effect: Effect) -> u64 {
         self.pending.retain(|p|p.enqueued || !matches!((&p.effect,&effect),
             (Effect::Text(a,_),Effect::Text(b,_)) | (Effect::Notes(a,_),Effect::Notes(b,_)) | (Effect::Recipients(a,_),Effect::Recipients(b,_)) if a==b));
         let id = self.next_id;
         self.next_id += 1;
-        if let BusCommand::Submit(room) = &command {
+        if let BusCommand::Submit(room) | BusCommand::SubmitQueued(room) = &command {
             tracing::info!(
                 event = "bus.message.submit",
                 room_id = room.0,
@@ -474,6 +398,8 @@ impl BusUi {
     }
     pub fn receive_event(&mut self, event: BusEvent) {
         match event {
+            BusEvent::DevQuitRequested => self.request_quit(),
+            BusEvent::SettingsChanged(settings) => self.settings = settings,
             BusEvent::DevFocusRequested { room, agent } => {
                 if let Some(agent) = agent {
                     // Show this agent's room in the sidebar without marking the
@@ -520,10 +446,18 @@ impl BusUi {
                     Err(error) => self.error = Some(error),
                 }
             }
-            BusEvent::SetupRequired { input, notice } => {
+            BusEvent::SetupRequired {
+                input,
+                orchestrator,
+                notice,
+            } => {
                 self.suggestions.entries.clear();
                 self.suggestions.query_id += 1;
-                self.form = Some(Form::Consent { input, notice });
+                self.form = Some(Form::Consent {
+                    input,
+                    orchestrator,
+                    notice,
+                });
             }
             _ => {}
         }
@@ -546,6 +480,18 @@ impl BusUi {
             }
         }
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        if let Some(config) = &self.sound_config {
+            if let Some(room) = super::ring::ringing_room(&previous.state, &self.snapshot.state)
+                .filter(|_| self.ringer.allow(std::time::Instant::now()))
+            {
+                let name = self
+                    .snapshot
+                    .state
+                    .room(room)
+                    .and_then(|room| room.sound_name.as_deref());
+                crate::sound::play_named(name, config);
+            }
+        }
         self.reconcile_deleted_targets(&previous.state);
         self.sync_toast();
     }
@@ -596,20 +542,12 @@ impl BusUi {
                         _ => {}
                     }
                     if let Effect::Submit(room, generation) = pending.effect {
-                        let mut cleared = false;
                         if let Some(local) = self.locals.get_mut(&room) {
                             if local.text_generation == generation {
                                 local.text = Editor::default();
                                 local.composer_size = ComposerSize::Auto;
                                 local.composer_scroll = None;
-                                cleared = true;
                             }
-                        }
-                        // Only an agent Submit clears the Worker draft, so an Orchestrator-only
-                        // message saves the cleared composer explicitly.
-                        if cleared && matches!(pending.command, BusCommand::MessageOrchestrator(_))
-                        {
-                            self.text_changed(room);
                         }
                     }
                     // Local editors remain authoritative; an old successful save never replaces
@@ -620,44 +558,27 @@ impl BusUi {
         }
         if self.pending.is_empty() {
             if let Some(room) = self.send_intent.take() {
-                let orchestrator_enabled = self.settings.orchestrator.enabled;
-                let (generation, body, to_agents, to_orchestrator) =
-                    self.locals
-                        .get(&room)
-                        .map_or((0, String::new(), false, false), |local| {
-                            (
-                                local.text_generation,
-                                local.text.text.clone(),
-                                !local.recipients.is_empty(),
-                                orchestrator_enabled && local.to_orchestrator,
-                            )
-                        });
-                // The Orchestrator is never an agent recipient: its message is a Worker room
-                // message, and the agent Submit is sent only when agents are selected.
-                if to_orchestrator {
-                    let effect = if to_agents {
-                        Effect::None
-                    } else {
-                        Effect::Submit(room, generation)
-                    };
-                    self.queue(
-                        BusCommand::MessageOrchestrator(
-                            crate::bus::orchestrator::HumanOrchestratorMessage {
-                                room_id: room,
-                                body,
-                            },
-                        ),
-                        effect,
-                    );
-                }
-                if to_agents || !to_orchestrator {
-                    self.queue(BusCommand::Submit(room), Effect::Submit(room, generation));
-                }
+                let generation = self
+                    .locals
+                    .get(&room)
+                    .map_or(0, |local| local.text_generation);
+                let command = if std::mem::take(&mut self.send_queued) {
+                    BusCommand::SubmitQueued(room)
+                } else {
+                    BusCommand::Submit(room)
+                };
+                self.queue(command, Effect::Submit(room, generation));
             } else if self.quitting.is_some() && self.failed.is_empty() && !self.exit_ready {
                 self.queue(BusCommand::Shutdown, Effect::Shutdown);
             }
         }
     }
+    /// Sends like Enter, but the message waits for each agent's own turn.
+    pub fn request_queued_send(&mut self, room: RoomId) {
+        self.request_send(room);
+        self.send_queued = self.send_intent == Some(room);
+    }
+
     pub fn request_send(&mut self, room: RoomId) {
         if let Some(local) = self
             .locals
@@ -678,10 +599,11 @@ impl BusUi {
             self.suggestions.query_id += 1;
             return;
         }
-        let orchestrator_enabled = self.settings.orchestrator.enabled;
-        if self.locals.get(&room).is_none_or(|local| {
-            local.recipients.is_empty() && !(orchestrator_enabled && local.to_orchestrator)
-        }) {
+        if self
+            .locals
+            .get(&room)
+            .is_none_or(|local| local.recipients.is_empty())
+        {
             self.error = Some("Choose agents with @ before sending.".into());
             tracing::info!(
                 event = "bus.message.rejected",
@@ -768,6 +690,8 @@ impl BusUi {
     }
     pub fn notes_changed(&mut self, room: RoomId) {
         if let Some(local) = self.locals.get_mut(&room) {
+            // Editing brings the caret back into view.
+            local.notes_scroll = None;
             local.notes_generation += 1;
             let (text, generation) = (local.notes.text.clone(), local.notes_generation);
             self.queue(
@@ -812,7 +736,7 @@ impl BusUi {
         {
             self.quitting = None;
             self.force_exit_available = true;
-            self.error=Some("Unsaved changes or slow storage. Ctrl+C retries saving; Ctrl+Shift+Q exits and may lose unsaved edits.".into());
+            self.error=Some("Unsaved changes or slow storage. Ctrl+Q retries saving; Ctrl+Shift+Q exits and may lose unsaved edits.".into());
             changed = true;
         }
         // Confirmation must reach the worker even while an earlier Submit is
@@ -850,6 +774,7 @@ impl BusUi {
         }
         changed |= self.tick_status_animation(std::time::Instant::now());
         changed |= self.tick_toast(std::time::Instant::now());
+        changed |= self.thumbnails.stale();
         changed
     }
 
@@ -877,18 +802,25 @@ impl BusUi {
     fn tick_status_animation(&mut self, now: std::time::Instant) -> bool {
         const FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-        let animated_status_visible = self.room.is_some_and(|room| {
-            self.snapshot.state.agents().any(|agent| {
-                agent.room_id == room
-                    && agent.hook_setup_confirmed
-                    && !agent.session_binding_invalidated
-                    && !agent.deletion_pending
-                    && matches!(
-                        agent.status,
-                        RuntimeStatus::Working | RuntimeStatus::Blocked
-                    )
-            })
+        let room_animated = self.snapshot.state.rooms().any(|room| {
+            matches!(
+                self.snapshot.state.room_status(room.id),
+                RuntimeStatus::Working | RuntimeStatus::Blocked
+            )
         });
+        let animated_status_visible = room_animated
+            || self.room.is_some_and(|room| {
+                self.snapshot.state.agents().any(|agent| {
+                    agent.room_id == room
+                        && agent.hook_setup_confirmed
+                        && !agent.session_binding_invalidated
+                        && !agent.deletion_pending
+                        && matches!(
+                            agent.shown_status(),
+                            RuntimeStatus::Working | RuntimeStatus::Blocked
+                        )
+                })
+            });
         if !animated_status_visible {
             self.status_animation_phase = 0;
             self.status_animation_last_tick = None;
@@ -905,8 +837,8 @@ impl BusUi {
         self.status_animation_last_tick = Some(now);
         true
     }
-    /// Ctrl+C clears a visible room draft before it may quit Bus. A draft that
-    /// is already being sent stays intact, but still keeps Bus open.
+    /// Ctrl+C clears a visible room draft; it never quits Bus. A draft that is
+    /// already being sent stays intact.
     pub(super) fn clear_composer(&mut self) -> bool {
         if self.quitting.is_some()
             || self.force_exit_available

@@ -3,9 +3,10 @@ use std::time::Duration;
 use bytes::Bytes;
 
 use crate::api::schema::{
-    AgentApproveOnceParams, AgentPermissionObservation, AgentPromptParams, AgentRenameParams,
-    AgentSendKeysParams, AgentStartParams, AgentTarget, ApprovedPermissionResponse, PaneReadResult,
-    PermissionEligibility, ResponseResult, SafePermissionAction,
+    AgentDialog, AgentDialogAnswerParams, AgentDialogChooseParams, AgentDialogChooseResult,
+    AgentDialogKind, AgentDialogObservation, AgentDialogOption, AgentPromptParams,
+    AgentRenameParams, AgentSendKeysParams, AgentStartParams, AgentTarget, PaneReadResult,
+    ResponseResult,
 };
 use crate::app::App;
 
@@ -27,6 +28,100 @@ fn codex_composer_is_empty(screen: &str) -> bool {
             body,
             "Ask Codex to do anything" | "Use /skills to list available skills"
         )
+}
+
+/// Whether Claude Code's input box (the `❯` line between the two rules at the
+/// bottom of its screen, plus any wrapped lines down to the closing rule)
+/// holds no typed text. Typing into a box the Human already wrote in would
+/// merge both into one prompt Bus cannot match, or be swallowed, so a Bus
+/// delivery waits instead. Claude's dimmed prompt suggestion and the inverse
+/// cursor cell are not typed text. No visible box counts as not empty.
+fn claude_input_is_empty(screen_ansi: &str) -> bool {
+    let lines: Vec<Vec<(char, bool)>> = screen_ansi.lines().map(styled_chars).collect();
+    let plain = |line: &[(char, bool)]| line.iter().map(|(c, _)| *c).collect::<String>();
+    let is_rule = |line: &[(char, bool)]| plain(line).trim().starts_with('─');
+    let Some(start) = (1..lines.len()).rev().find(|&index| {
+        is_rule(&lines[index - 1]) && plain(&lines[index]).trim_start().starts_with('❯')
+    }) else {
+        return false;
+    };
+    let mut body = lines[start..].iter().take_while(|line| !is_rule(line));
+    let first = body
+        .next()
+        .into_iter()
+        .flat_map(|line| line.iter().skip_while(|(c, _)| *c != '❯').skip(1));
+    first
+        .chain(body.flatten())
+        .all(|(c, faint)| *faint || c.is_whitespace())
+}
+
+/// Each visible character of an ANSI screen line, with whether it is drawn
+/// dimmed or inverse.
+fn styled_chars(line: &str) -> Vec<(char, bool)> {
+    let mut out = Vec::new();
+    let (mut dim, mut inverse) = (false, false);
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push((c, dim || inverse));
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                let mut params = String::new();
+                let mut last = None;
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        last = Some(c);
+                        break;
+                    }
+                    params.push(c);
+                }
+                if last == Some('m') {
+                    apply_sgr(&params, &mut dim, &mut inverse);
+                }
+            }
+            // OSC (hyperlinks): skip to BEL or ST.
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn apply_sgr(params: &str, dim: &mut bool, inverse: &mut bool) {
+    let params: Vec<&str> = params.split(';').collect();
+    let mut index = 0;
+    while index < params.len() {
+        match params[index] {
+            "" | "0" => (*dim, *inverse) = (false, false),
+            "2" => *dim = true,
+            "22" => *dim = false,
+            "7" => *inverse = true,
+            "27" => *inverse = false,
+            // Extended colors carry their own numbers (38;2;R;G;B or 38;5;N),
+            // which must not read as dim or inverse.
+            "38" | "48" | "58" => {
+                index += match params.get(index + 1) {
+                    Some(&"5") => 2,
+                    Some(&"2") => 4,
+                    _ => 0,
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
 }
 
 fn check_unbound_prompt_identity_and_idle(
@@ -77,7 +172,12 @@ fn check_prompt_identity_and_idle(
             "Agent identity changed; prompt was not sent",
         ));
     }
-    if !matches!(agent.agent_status, AgentStatus::Idle | AgentStatus::Done) {
+    let accepted = match agent.agent_status {
+        AgentStatus::Idle | AgentStatus::Done => true,
+        AgentStatus::Working => params.steer,
+        AgentStatus::Blocked | AgentStatus::Unknown => false,
+    };
+    if !accepted || agent.dialog_id.is_some() {
         return Err(("agent_not_idle", "Agent is not idle; prompt was not sent"));
     }
     if agent.launch_pending || !agent.interactive_ready {
@@ -265,6 +365,23 @@ impl App {
                 ));
             }
         }
+        if agent.agent.as_deref() == Some("claude") {
+            let resolved = self
+                .resolve_agent_target(&params.target)
+                .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
+            let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)
+            else {
+                return Err(agent_not_found(id, &params.target));
+            };
+            // A rejection keeps the Bus message queued for a later attempt.
+            if !claude_input_is_empty(&runtime.visible_ansi()) {
+                return Err(encode_error(
+                    id,
+                    "agent_not_ready",
+                    "Claude input box is not empty; prompt was not sent",
+                ));
+            }
+        }
         self.queue_agent_prompt(
             id,
             AgentPromptParams {
@@ -422,7 +539,7 @@ impl App {
         )
     }
 
-    pub(super) fn handle_agent_permission_observe(
+    pub(super) fn handle_agent_dialog_observe(
         &mut self,
         id: String,
         target: AgentTarget,
@@ -439,39 +556,40 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
             return agent_not_found(id, &target.target);
         };
-        let Some(observation) = permission_observation(&agent, runtime) else {
+        let Some(observation) = dialog_observation(&agent, runtime) else {
             return encode_error(
                 id,
-                "permission_observation_unavailable",
-                "Agent permission surface changed while it was being observed",
+                "dialog_observation_unavailable",
+                "Agent screen changed while it was being observed",
             );
         };
-        encode_success(id, ResponseResult::AgentPermission { observation })
+        encode_success(id, ResponseResult::AgentDialog { observation })
     }
 
-    pub(super) fn handle_agent_approve_once(
+    /// Answers a choice dialog only while the agent's identity and the exact
+    /// observed dialog still hold; otherwise nothing is sent.
+    pub(super) fn handle_agent_dialog_choose(
         &mut self,
         id: String,
-        params: AgentApproveOnceParams,
+        params: AgentDialogChooseParams,
     ) -> String {
         self.reconcile_managed_agent_target(&params.target);
         let agent = match self.agent_info_for_target(&params.target) {
             Ok(agent) => agent,
             Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
         };
+        let session = agent.agent_session.as_ref().map(|session| &session.value);
         if agent.terminal_id != params.expected_terminal_id
             || agent.pane_id != params.expected_pane_id
-            || agent
-                .agent_session
+            || params
+                .expected_session_id
                 .as_ref()
-                .map(|session| session.value.as_str())
-                != Some(params.expected_session_id.as_str())
-            || params.expected_session_id.is_empty()
+                .is_some_and(|expected| session != Some(expected))
         {
             return encode_error(
                 id,
                 "agent_identity_changed",
-                "Agent terminal, pane, or session identity changed; no permission response was sent",
+                "Agent terminal, pane, or session identity changed; no keys were sent",
             );
         }
         let resolved = match self.resolve_agent_target(&params.target) {
@@ -481,115 +599,108 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
             return agent_not_found(id, &params.target);
         };
-        let response = match (agent.agent.as_deref(), params.response) {
-            (Some("codex"), ApprovedPermissionResponse::AllowOnce) => Bytes::from_static(b"1\r"),
-            (Some("claude" | "cursor"), ApprovedPermissionResponse::AllowOnce) => {
-                Bytes::from_static(b"\r")
+        let (keys, reason) = match runtime
+            .try_choose_dialog_option(&params.expected_dialog_digest, params.option)
+        {
+            Ok(crate::pane::DialogChoice::Sent(keys)) => (keys, None),
+            Ok(crate::pane::DialogChoice::Stale) => (Vec::new(), Some("stale_or_changed_dialog")),
+            Ok(crate::pane::DialogChoice::Unreachable) => {
+                (Vec::new(), Some("option_missing_or_selection_not_visible"))
             }
-            _ => {
-                return encode_error(
-                    id,
-                    "unsupported_permission_response",
-                    "The active provider has no audited allow-once response",
-                )
+            Ok(crate::pane::DialogChoice::NotQuestion) => {
+                (Vec::new(), Some("not_a_free_text_question"))
             }
+            Err(error) => return encode_error(id, "dialog_write_failed", error),
         };
-        let written = match runtime.try_approve_permission_once(
-            params.expected_content_revision,
-            &params.expected_prompt_digest,
-            response,
-        ) {
-            Ok(written) => written,
-            Err(error) => return encode_error(id, "permission_write_failed", error.to_string()),
-        };
-        let Some(observation) = permission_observation(&agent, runtime) else {
+        let Some(observation) = dialog_observation(&agent, runtime) else {
             return encode_error(
                 id,
-                "permission_observation_unavailable",
-                "Agent permission surface changed while its result was being reported",
+                "dialog_observation_unavailable",
+                "Agent screen changed while the result was being reported",
             );
         };
         encode_success(
             id,
-            ResponseResult::AgentApprovedOnce {
-                approval: crate::api::schema::AgentApproveOnceResult {
-                    written,
-                    reason: (!written).then(|| "stale_or_changed_prompt".into()),
+            ResponseResult::AgentDialogChosen {
+                choice: AgentDialogChooseResult {
+                    written: reason.is_none(),
+                    reason: reason.map(str::to_owned),
+                    keys,
                     observation,
                 },
             },
         )
     }
 
-    pub(super) fn handle_agent_explain(&mut self, id: String, target: AgentTarget) -> String {
-        let resolved = match self.resolve_agent_target(&target.target) {
-            Ok(resolved) => resolved,
-            Err(err) => return encode_error_body(id, self.agent_target_error_body(err)),
-        };
-        let Some((pane, _workspace_id)) = self.lookup_runtime(resolved.ws_idx, resolved.pane_id)
-        else {
-            return agent_not_found(id, &target.target);
-        };
-        let Some(terminal_id) = self
-            .state
-            .workspaces
-            .get(resolved.ws_idx)
-            .and_then(|workspace| workspace.terminal_id(resolved.pane_id))
-        else {
-            return agent_not_found(id, &target.target);
-        };
-        let Some(terminal) = self.state.terminals.get(terminal_id) else {
-            return agent_not_found(id, &target.target);
-        };
-        if terminal.full_lifecycle_hook_authority_active() {
-            let explain = serde_json::json!({
-                "agent": terminal.effective_agent_label().unwrap_or("unknown"),
-                "state": crate::detect::manifest::agent_state_label(terminal.state),
-                "manifest_source": null,
-                "manifest_version": null,
-                "cached_remote_version": null,
-                "local_override_shadowing_remote": false,
-                "remote_update_status": null,
-                "remote_update_error": null,
-                "matched_rule": null,
-                "visible_idle": false,
-                "visible_blocker": false,
-                "visible_working": false,
-                "screen_detection_skipped": true,
-                "screen_detection_skip_reason": "full_lifecycle_hook_authority",
-                "skip_state_update": false,
-                "skipped_update_reason": null,
-                "fallback_reason": null,
-                "warning": null,
-                "evaluated_rules": [],
-            });
-            return encode_success(id, ResponseResult::AgentExplain { explain });
+    pub(super) fn handle_agent_dialog_answer(
+        &mut self,
+        id: String,
+        params: AgentDialogAnswerParams,
+    ) -> String {
+        if let Err(error) =
+            AgentDialogAnswerParams::validate_answer(params.text.as_deref(), params.skip)
+        {
+            return encode_error(id, "invalid_params", error);
         }
-        let Some(agent) = terminal.effective_known_agent().or(terminal.detected_agent) else {
+        self.reconcile_managed_agent_target(&params.target);
+        let agent = match self.agent_info_for_target(&params.target) {
+            Ok(agent) => agent,
+            Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
+        };
+        let session = agent.agent_session.as_ref().map(|session| &session.value);
+        if agent.terminal_id != params.expected_terminal_id
+            || agent.pane_id != params.expected_pane_id
+            || params
+                .expected_session_id
+                .as_ref()
+                .is_some_and(|expected| session != Some(expected))
+        {
             return encode_error(
                 id,
-                "agent_explain_unavailable",
-                format!(
-                    "agent target {} does not have a detected agent label",
-                    target.target
-                ),
+                "agent_identity_changed",
+                "Agent terminal, pane, or session identity changed; no keys were sent",
+            );
+        }
+        let resolved = match self.resolve_agent_target(&params.target) {
+            Ok(resolved) => resolved,
+            Err(error) => return encode_error_body(id, self.agent_target_error_body(error)),
+        };
+        let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
+            return agent_not_found(id, &params.target);
+        };
+        let (keys, reason) = match runtime.try_answer_dialog(
+            &params.expected_dialog_digest,
+            params.text,
+            params.skip,
+        ) {
+            Ok(crate::pane::DialogChoice::Sent(keys)) => (keys, None),
+            Ok(crate::pane::DialogChoice::Stale) => (Vec::new(), Some("stale_or_changed_dialog")),
+            Ok(crate::pane::DialogChoice::NotQuestion) => {
+                (Vec::new(), Some("not_a_free_text_question"))
+            }
+            Ok(crate::pane::DialogChoice::Unreachable) => {
+                (Vec::new(), Some("question_input_unavailable"))
+            }
+            Err(error) => return encode_error(id, "dialog_write_failed", error),
+        };
+        let Some(observation) = dialog_observation(&agent, runtime) else {
+            return encode_error(
+                id,
+                "dialog_observation_unavailable",
+                "Agent screen changed while the result was being reported",
             );
         };
-
-        let screen = pane.detection_text();
-        let osc_title = pane.agent_osc_title();
-        let osc_progress = pane.agent_osc_progress();
-        let explain = crate::detect::manifest::explain_with_input(
-            agent,
-            crate::detect::manifest::DetectionInput {
-                screen: &screen,
-                osc_title: &osc_title,
-                osc_progress: &osc_progress,
+        encode_success(
+            id,
+            ResponseResult::AgentDialogChosen {
+                choice: AgentDialogChooseResult {
+                    written: reason.is_none(),
+                    reason: reason.map(str::to_owned),
+                    keys,
+                    observation,
+                },
             },
-        );
-        let value = crate::detect::manifest::explain_to_json_value(&explain);
-
-        encode_success(id, ResponseResult::AgentExplain { explain: value })
+        )
     }
 
     pub(super) fn handle_agent_send_keys(
@@ -638,45 +749,38 @@ impl App {
     }
 }
 
-fn permission_observation(
+fn dialog_observation(
     agent: &crate::api::schema::AgentInfo,
     runtime: &crate::terminal::TerminalRuntime,
-) -> Option<AgentPermissionObservation> {
-    let (prompt_text, content_revision) = runtime.visible_text_snapshot_with_seq()?;
-    let session_id = agent.agent_session.as_ref()?.value.clone();
-    let command = crate::api::schema::safe_permission_command(&prompt_text);
-    let eligibility = command.map_or_else(
-        || {
-            if prompt_text.to_ascii_lowercase().contains("permission")
-                || prompt_text.to_ascii_lowercase().contains("allow")
-            {
-                PermissionEligibility::Risky
-            } else {
-                PermissionEligibility::Unknown
-            }
-        },
-        |_| PermissionEligibility::Allowlisted {
-            action: SafePermissionAction::ReadOnlyInspection,
-            root: agent
-                .foreground_cwd
-                .clone()
-                .or_else(|| agent.cwd.clone())
-                .unwrap_or_else(|| agent.workspace_id.clone()),
-        },
-    );
-    let allowed_responses = matches!(eligibility, PermissionEligibility::Allowlisted { .. })
-        .then_some(ApprovedPermissionResponse::AllowOnce)
-        .into_iter()
-        .collect();
-    Some(AgentPermissionObservation {
+) -> Option<AgentDialogObservation> {
+    let (screen, content_revision) = runtime.visible_ansi_snapshot_with_seq()?;
+    Some(AgentDialogObservation {
         terminal_id: agent.terminal_id.clone(),
         pane_id: agent.pane_id.clone(),
-        session_id,
+        session_id: agent
+            .agent_session
+            .as_ref()
+            .map(|session| session.value.clone()),
         content_revision,
-        prompt_digest: crate::api::schema::permission_prompt_digest(&prompt_text),
-        prompt_text,
-        eligibility,
-        allowed_responses,
+        dialog: crate::detect::dialog::parse(&screen).map(|dialog| AgentDialog {
+            kind: match dialog.kind {
+                crate::detect::dialog::DialogKind::Choice => AgentDialogKind::Choice,
+                crate::detect::dialog::DialogKind::Question => AgentDialogKind::Question,
+            },
+            id: dialog.id(),
+            digest: dialog.digest(),
+            text: dialog.text,
+            options: dialog
+                .options
+                .into_iter()
+                .map(|option| AgentDialogOption {
+                    number: option.number,
+                    label: option.label,
+                    selected: option.selected,
+                })
+                .collect(),
+            hint: dialog.hint,
+        }),
     })
 }
 
@@ -778,6 +882,134 @@ mod tests {
         }
     }
 
+    #[test]
+    fn claude_input_check_ignores_suggestions_and_finds_typed_text() {
+        let rule = "─".repeat(20);
+        let screen = |input: &str| format!("● done\n\n{rule}\n{input}\n{rule}\n  ⏵⏵ auto mode on");
+        for empty in [
+            screen("❯\u{a0}"),
+            // Claude's dimmed prompt suggestion, as captured from a live pane.
+            screen("❯\u{a0}\x1b[0m\x1b[2madd the just linux-lint recipe\x1b[0m"),
+            // The cursor cell drawn inverse over the suggestion's first letter.
+            screen("❯ \x1b[7ma\x1b[0m\x1b[2mdd the recipe\x1b[0m"),
+            // An earlier prompt in the history above the box is not the box.
+            format!("❯ ok is it merged?\n\n{rule}\n❯\u{a0}\n{rule}"),
+        ] {
+            assert!(claude_input_is_empty(&empty), "{empty:?}");
+        }
+        for typed in [
+            screen("❯\u{a0}master is where I coordinate"),
+            // A 24-bit color's "2" is not dim.
+            screen("❯ \x1b[38;2;200;200;200mtyped\x1b[0m"),
+            // A wrapped second line holds the typed text.
+            format!("{rule}\n❯\u{a0}\n  second line\n{rule}"),
+            // No visible input box: Bus cannot tell, so it waits.
+            "● working".to_owned(),
+        ] {
+            assert!(!claude_input_is_empty(&typed), "{typed:?}");
+        }
+    }
+
+    /// A ready, idle Claude agent whose screen ends with `input` in its box.
+    fn claude_agent_with_input(
+        input: &str,
+    ) -> (
+        App,
+        crate::api::schema::AgentPromptIfIdleParams,
+        tokio::sync::mpsc::Receiver<Bytes>,
+    ) {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        let now = std::time::Instant::now();
+        terminal.begin_managed_agent(
+            "bus-r1-a2".into(),
+            Agent::Claude,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(10),
+        );
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
+        terminal.set_agent_session_ref_for_session_start(
+            "bus".into(),
+            "claude".into(),
+            crate::agent_resume::AgentSessionRef::id("session"),
+            Some(1),
+            None,
+        );
+        let (runtime, writes) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 0, b"", 2,
+            );
+        let rule = "─".repeat(40);
+        runtime.test_process_pty_bytes(
+            format!(
+                "\x1b[?2004h\x1b[2J\x1b[H\x1b[2m{rule}\x1b[0m\r\n{input}\r\n\x1b[2m{rule}\x1b[0m"
+            )
+            .as_bytes(),
+        );
+        app.state.insert_test_runtime(pane_id, runtime);
+        let info = app.agent_info(0, pane_id).unwrap();
+        let params = crate::api::schema::AgentPromptIfIdleParams {
+            target: info.pane_id.clone(),
+            text: "from bus".into(),
+            expected_terminal_id: info.terminal_id,
+            expected_pane_id: info.pane_id,
+            expected_agent: "claude".into(),
+            expected_session_id: "session".into(),
+            steer: false,
+        };
+        (app, params, writes)
+    }
+
+    fn prompt_if_idle(
+        app: &mut App,
+        params: crate::api::schema::AgentPromptIfIdleParams,
+    ) -> String {
+        use crate::api::schema::{Method, Request};
+        let (respond_to, response) = std::sync::mpsc::channel();
+        assert!(app.handle_deferred_agent_api_request(
+            Request {
+                id: "claude-guard".into(),
+                method: Method::AgentPromptIfIdle(params),
+            },
+            respond_to,
+        ));
+        response.recv_timeout(Duration::from_secs(2)).unwrap()
+    }
+
+    #[tokio::test]
+    async fn guarded_claude_prompt_waits_while_the_input_box_holds_typed_text() {
+        let (mut app, params, mut writes) =
+            claude_agent_with_input("❯\u{a0}master is where I coordinate");
+        let response = prompt_if_idle(&mut app, params);
+        // agent_not_ready is a definite rejection: the Bus message stays queued.
+        assert!(response.contains("agent_not_ready"), "{response}");
+        assert!(response.contains("input box is not empty"), "{response}");
+        assert!(writes.try_recv().is_err(), "nothing may be typed");
+    }
+
+    #[tokio::test]
+    async fn guarded_claude_prompt_types_into_an_empty_input_box() {
+        for input in [
+            "❯\u{a0}",
+            "❯\u{a0}\x1b[2madd the just linux-lint recipe\x1b[0m",
+        ] {
+            let (mut app, params, mut writes) = claude_agent_with_input(input);
+            let response = prompt_if_idle(&mut app, params);
+            assert!(response.contains("agent_prompted"), "{input:?}: {response}");
+            assert_eq!(
+                writes.try_recv().unwrap(),
+                Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
+            );
+            assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\r"));
+        }
+    }
+
     #[tokio::test]
     async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing() {
         use crate::api::schema::{AgentPromptIfUnboundParams, Method, Request};
@@ -868,11 +1100,12 @@ mod tests {
             .terminals
             .get_mut(&terminal_id)
             .unwrap()
-            .set_agent_session_ref(
+            .set_agent_session_ref_for_session_start(
                 "herdr:codex".into(),
                 "codex".into(),
                 crate::agent_resume::AgentSessionRef::id("already-bound"),
                 Some(1),
+                None,
             );
         assert!(run(&mut app, params).contains("agent_identity_changed"));
         assert!(rx.try_recv().is_err());
@@ -897,11 +1130,12 @@ mod tests {
         );
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
         terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
-        terminal.set_agent_session_ref(
+        terminal.set_agent_session_ref_for_session_start(
             "bus".into(),
             "codex".into(),
             crate::agent_resume::AgentSessionRef::id("session"),
             Some(1),
+            None,
         );
         let (runtime, mut rx) =
             crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
@@ -919,6 +1153,7 @@ mod tests {
             expected_pane_id: info.pane_id.clone(),
             expected_agent: "codex".into(),
             expected_session_id: "session".into(),
+            steer: false,
         };
         let run = |app: &mut App, params: AgentPromptIfIdleParams| {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -986,11 +1221,12 @@ mod tests {
         );
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
         terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
-        terminal.set_agent_session_ref(
+        terminal.set_agent_session_ref_for_session_start(
             "bus".into(),
             "codex".into(),
             crate::agent_resume::AgentSessionRef::id("session"),
             Some(1),
+            None,
         );
         let (runtime, mut writes) =
             crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
@@ -1012,6 +1248,7 @@ mod tests {
                     expected_pane_id: info.pane_id,
                     expected_agent: "codex".into(),
                     expected_session_id: "session".into(),
+                    steer: false,
                 }),
             },
             respond_to,
@@ -1215,8 +1452,13 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    #[tokio::test]
-    async fn agent_approve_once_safe_prompt_is_atomic_and_fixed_response() {
+    const CLAUDE_BASH_DIALOG: &[u8] = b" Do you want to proceed?\r\n \xe2\x9d\xaf 1. Yes\r\n   2. Yes, and don't ask again for: curl *\r\n   3. No\r\n\r\n Esc to cancel \xc2\xb7 Tab to amend\r\n";
+
+    /// A named Claude agent showing `screen`; `session` is unset while launching.
+    fn app_with_dialog(
+        screen: &[u8],
+        session: Option<&str>,
+    ) -> (App, tokio::sync::mpsc::Receiver<Bytes>) {
         let mut app = app_with_agent();
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
@@ -1224,102 +1466,280 @@ mod tests {
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
-        terminal.set_detected_state(Some(Agent::Codex), AgentState::Blocked);
-        terminal.set_agent_session_ref(
-            "bus".into(),
-            "codex".into(),
-            crate::agent_resume::AgentSessionRef::id("session"),
-            Some(1),
-        );
-        let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        runtime.test_process_pty_bytes(b"Allow read-only command: rg --files");
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Blocked);
+        if let Some(session) = session {
+            terminal.set_agent_session_ref_for_session_start(
+                "bus".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id(session),
+                Some(1),
+                None,
+            );
+        }
+        let (runtime, writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        runtime.test_process_pty_bytes(screen);
         app.state.insert_test_runtime(pane_id, runtime);
-        let info = app.agent_info(0, pane_id).unwrap();
-        let observed = app.handle_agent_permission_observe(
+        (app, writes)
+    }
+
+    fn observe_dialog(app: &mut App) -> AgentDialogObservation {
+        let observed = app.handle_agent_dialog_observe(
             "observe".into(),
             AgentTarget {
                 target: "reviewer".into(),
             },
         );
         let success: SuccessResponse = serde_json::from_str(&observed).unwrap();
-        let ResponseResult::AgentPermission { observation } = success.result else {
+        let ResponseResult::AgentDialog { observation } = success.result else {
             panic!("unexpected observation response");
         };
-        assert!(matches!(
-            observation.eligibility,
-            PermissionEligibility::Allowlisted { .. }
-        ));
-        let approved = app.handle_agent_approve_once(
-            "approve".into(),
-            AgentApproveOnceParams {
+        observation
+    }
+
+    fn choose(
+        app: &mut App,
+        observation: &AgentDialogObservation,
+        session: Option<&str>,
+        digest: &str,
+        option: u32,
+    ) -> String {
+        app.handle_agent_dialog_choose(
+            "choose".into(),
+            AgentDialogChooseParams {
                 target: "reviewer".into(),
-                expected_terminal_id: info.terminal_id,
-                expected_pane_id: info.pane_id,
-                expected_session_id: "session".into(),
-                expected_content_revision: observation.content_revision,
-                expected_prompt_digest: observation.prompt_digest,
-                response: ApprovedPermissionResponse::AllowOnce,
+                expected_terminal_id: observation.terminal_id.clone(),
+                expected_pane_id: observation.pane_id.clone(),
+                expected_session_id: session.map(str::to_owned),
+                expected_dialog_digest: digest.into(),
+                option,
             },
-        );
-        let success: SuccessResponse = serde_json::from_str(&approved).unwrap();
-        let ResponseResult::AgentApprovedOnce { approval } = success.result else {
-            panic!("unexpected approval response");
+        )
+    }
+
+    fn chosen(response: &str) -> AgentDialogChooseResult {
+        let success: SuccessResponse = serde_json::from_str(response).unwrap();
+        let ResponseResult::AgentDialogChosen { choice } = success.result else {
+            panic!("unexpected choice response: {response}");
         };
-        assert!(approval.written);
-        assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"1\r"));
+        choice
+    }
+
+    const CODEX_TEXT_DIALOG: &[u8] = "• Queued follow-up inputs\r\n\r\nWhat token should Bus use?\r\n\r\nType your answer\r\n\r\nenter submit   ctrl+] skip   shift+→ main prompt\r\n".as_bytes();
+
+    fn answer_params(
+        observation: &AgentDialogObservation,
+        text: Option<&str>,
+        skip: bool,
+    ) -> AgentDialogAnswerParams {
+        AgentDialogAnswerParams {
+            target: "reviewer".into(),
+            expected_terminal_id: observation.terminal_id.clone(),
+            expected_pane_id: observation.pane_id.clone(),
+            expected_session_id: observation.session_id.clone(),
+            expected_dialog_digest: observation.dialog.as_ref().unwrap().digest.clone(),
+            text: text.map(str::to_owned),
+            skip,
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_answer_pastes_literal_text_then_enters_and_encodes_skip() {
+        let (mut app, mut writes) = app_with_dialog(CODEX_TEXT_DIALOG, Some("session"));
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(b"\x1b[?2004h");
+        let observation = observe_dialog(&mut app);
+        assert_eq!(
+            observation.dialog.as_ref().unwrap().kind,
+            AgentDialogKind::Question
+        );
+        let params = answer_params(&observation, Some("hello 世界"), false);
+        let choice = chosen(&app.handle_agent_dialog_answer("answer".into(), params));
+        assert!(choice.written);
+        assert_eq!(choice.keys, ["enter"]);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from("\x1b[200~hello 世界\x1b[201~")
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), writes.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            Bytes::from_static(b"\r")
+        );
+        let skipped = chosen(
+            &app.handle_agent_dialog_answer("skip".into(), answer_params(&observation, None, true)),
+        );
+        assert!(skipped.written);
+        assert_eq!(skipped.keys, ["ctrl+]"]);
+        assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\x1d"));
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_answer_sends_nothing_for_changed_identity_screen_or_invalid_text() {
+        let (mut app, mut writes) = app_with_dialog(CODEX_TEXT_DIALOG, Some("session"));
+        let observed = observe_dialog(&mut app);
+        for field in ["terminal", "pane", "session", "digest"] {
+            let mut params = answer_params(&observed, Some("token"), false);
+            match field {
+                "terminal" => params.expected_terminal_id = "wrong".into(),
+                "pane" => params.expected_pane_id = "wrong".into(),
+                "session" => params.expected_session_id = Some("wrong".into()),
+                _ => params.expected_dialog_digest = "wrong".into(),
+            }
+            let result = app.handle_agent_dialog_answer("reject".into(), params);
+            if field == "digest" {
+                assert!(!chosen(&result).written);
+            } else {
+                assert!(serde_json::from_str::<crate::api::schema::ErrorResponse>(&result).is_ok());
+            }
+            assert!(writes.try_recv().is_err());
+        }
+        for (text, skip) in [
+            (Some("token"), true),
+            (None, false),
+            (Some(" "), false),
+            (Some("a\x1d"), false),
+            (Some("a\x1b[201~"), false),
+        ] {
+            let result = app
+                .handle_agent_dialog_answer("invalid".into(), answer_params(&observed, text, skip));
+            assert!(serde_json::from_str::<crate::api::schema::ErrorResponse>(&result).is_ok());
+            assert!(writes.try_recv().is_err());
+        }
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let edited = format!(
+            "\x1b[2J\x1b[H{}",
+            String::from_utf8_lossy(CODEX_TEXT_DIALOG).replace("Type your answer", "human edit")
+        );
+        app.lookup_runtime_sender(0, pane)
+            .unwrap()
+            .test_process_pty_bytes(edited.as_bytes());
+        let stale = chosen(
+            &app.handle_agent_dialog_answer("edited".into(), answer_params(&observed, None, true)),
+        );
+        assert!(!stale.written);
+        assert!(writes.try_recv().is_err());
+        let (mut app, mut writes) = app_with_dialog(CLAUDE_BASH_DIALOG, None);
+        let observed = observe_dialog(&mut app);
+        let result = chosen(&app.handle_agent_dialog_answer(
+            "choice".into(),
+            answer_params(&observed, Some("token"), false),
+        ));
+        assert!(!result.written);
+        assert_eq!(result.reason.as_deref(), Some("not_a_free_text_question"));
         assert!(writes.try_recv().is_err());
     }
 
     #[tokio::test]
-    async fn agent_approve_once_content_race_fails_closed_without_keys() {
-        let mut app = app_with_agent();
+    async fn agent_dialog_choose_moves_from_the_selected_option_then_confirms() {
+        let (mut app, mut writes) = app_with_dialog(CLAUDE_BASH_DIALOG, Some("session"));
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
-        terminal.set_agent_name("reviewer".into());
-        terminal.set_detected_state(Some(Agent::Codex), AgentState::Blocked);
-        terminal.set_agent_session_ref(
-            "bus".into(),
-            "codex".into(),
-            crate::agent_resume::AgentSessionRef::id("session"),
-            Some(1),
+        assert!(app.agent_info(0, pane_id).unwrap().dialog_id.is_some());
+        let observation = observe_dialog(&mut app);
+        let dialog = observation.dialog.clone().unwrap();
+        assert_eq!(dialog.text, "Do you want to proceed?");
+        assert_eq!(dialog.options.len(), 3);
+        assert!(dialog.options[0].selected);
+
+        let choice = chosen(&choose(
+            &mut app,
+            &observation,
+            Some("session"),
+            &dialog.digest,
+            3,
+        ));
+        assert!(choice.written);
+        assert_eq!(choice.keys, ["down", "down", "enter"]);
+        let moves = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
+        assert_eq!(moves.unwrap().unwrap(), Bytes::from_static(b"\x1b[B\x1b[B"));
+        let enter = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
+        assert_eq!(enter.unwrap().unwrap(), Bytes::from_static(b"\r"));
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_choose_finds_a_highlighted_selection_without_a_marker() {
+        // The cursor row is drawn in inverse video; no marker character.
+        let screen = b" Choose a model\r\n\r\n   1. Fast\r\n\x1b[7m   2. Balanced\x1b[0m\r\n   3. Thorough\r\n\r\n Enter to select \xc2\xb7 Esc to cancel\r\n";
+        let (mut app, mut writes) = app_with_dialog(screen, Some("session"));
+        let observation = observe_dialog(&mut app);
+        let dialog = observation.dialog.clone().unwrap();
+        let selected: Vec<_> = dialog
+            .options
+            .iter()
+            .map(|option| option.selected)
+            .collect();
+        assert_eq!(selected, [false, true, false]);
+        let choice = chosen(&choose(
+            &mut app,
+            &observation,
+            Some("session"),
+            &dialog.digest,
+            1,
+        ));
+        assert_eq!(choice.keys, ["up", "enter"]);
+        let moves = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
+        assert_eq!(moves.unwrap().unwrap(), Bytes::from_static(b"\x1b[A"));
+        let enter = tokio::time::timeout(Duration::from_secs(2), writes.recv()).await;
+        assert_eq!(enter.unwrap().unwrap(), Bytes::from_static(b"\r"));
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_choose_works_while_launching_without_a_session() {
+        let (mut app, mut writes) = app_with_dialog(CLAUDE_BASH_DIALOG, None);
+        let observation = observe_dialog(&mut app);
+        assert_eq!(observation.session_id, None);
+        let digest = observation.dialog.clone().unwrap().digest;
+        let choice = chosen(&choose(&mut app, &observation, None, &digest, 1));
+        assert_eq!(choice.keys, ["enter"]);
+        assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\r"));
+        assert!(writes.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn agent_dialog_choose_sends_nothing_for_stale_missing_or_foreign_dialogs() {
+        let (mut app, mut writes) = app_with_dialog(CLAUDE_BASH_DIALOG, Some("session"));
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let observation = observe_dialog(&mut app);
+        let digest = observation.dialog.clone().unwrap().digest;
+
+        let error: crate::api::schema::ErrorResponse = serde_json::from_str(&choose(
+            &mut app,
+            &observation,
+            Some("other-session"),
+            &digest,
+            1,
+        ))
+        .unwrap();
+        assert_eq!(error.error.code, "agent_identity_changed");
+
+        let missing = chosen(&choose(&mut app, &observation, Some("session"), &digest, 4));
+        assert!(!missing.written);
+        assert_eq!(
+            missing.reason.as_deref(),
+            Some("option_missing_or_selection_not_visible")
         );
-        let (runtime, mut writes) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
-        runtime.test_process_pty_bytes(b"Allow read-only command: rg --files");
-        app.state.insert_test_runtime(pane_id, runtime);
-        let observed = app.handle_agent_permission_observe(
-            "observe".into(),
-            AgentTarget {
-                target: "reviewer".into(),
-            },
-        );
-        let success: SuccessResponse = serde_json::from_str(&observed).unwrap();
-        let ResponseResult::AgentPermission { observation } = success.result else {
-            panic!()
-        };
+
         app.lookup_runtime_sender(0, pane_id)
             .unwrap()
-            .test_process_pty_bytes(b"\r\nAllow shell command: rm -rf build");
-        let rejected = app.handle_agent_approve_once(
-            "approve".into(),
-            AgentApproveOnceParams {
-                target: "reviewer".into(),
-                expected_terminal_id: observation.terminal_id,
-                expected_pane_id: observation.pane_id,
-                expected_session_id: observation.session_id,
-                expected_content_revision: observation.content_revision,
-                expected_prompt_digest: observation.prompt_digest,
-                response: ApprovedPermissionResponse::AllowOnce,
-            },
-        );
-        let success: SuccessResponse = serde_json::from_str(&rejected).unwrap();
-        let ResponseResult::AgentApprovedOnce { approval } = success.result else {
-            panic!()
-        };
-        assert!(!approval.written);
-        assert_eq!(approval.reason.as_deref(), Some("stale_or_changed_prompt"));
+            .test_process_pty_bytes(b"\x1b[2J\x1b[H Allow rm -rf build?\r\n \xe2\x9d\xaf 1. Yes\r\n   2. No\r\n\r\n Esc to cancel\r\n");
+        let stale = chosen(&choose(&mut app, &observation, Some("session"), &digest, 1));
+        assert!(!stale.written);
+        assert_eq!(stale.reason.as_deref(), Some("stale_or_changed_dialog"));
+        assert!(stale.keys.is_empty());
+
+        app.lookup_runtime_sender(0, pane_id)
+            .unwrap()
+            .test_process_pty_bytes(b"\x1b[2J\x1b[H\xe2\x9d\xaf \r\n");
+        let idle = observe_dialog(&mut app);
+        assert_eq!(idle.dialog, None);
+        assert_eq!(app.agent_info(0, pane_id).unwrap().dialog_id, None);
+        assert!(!chosen(&choose(&mut app, &idle, Some("session"), &digest, 1)).written);
         assert!(writes.try_recv().is_err());
     }
 

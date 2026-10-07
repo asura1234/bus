@@ -12,12 +12,11 @@ use super::{
     LimitedRead, Signal,
 };
 
+#[cfg(test)]
+pub(crate) use super::unix_common::local_datetime;
 pub(crate) use super::unix_common::{
-    configure_status_command, create_remote_private_dir, create_remote_ssh_config_dir,
-    create_remote_ssh_config_file, hostname, local_datetime, local_datetime_at,
-    remote_bridge_endpoint_path, remote_private_temp_base, remote_reattach_argument,
-    remote_reattach_program, remote_ssh_config_paths, set_default_plugin_pane_pwd,
-    status_commands_supported, wait_client_stream_readable, StatusCommandGuard,
+    create_remote_private_dir, create_remote_ssh_config_file, hostname, local_datetime_at,
+    remote_reattach_program, wait_client_stream_readable,
 };
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
@@ -89,23 +88,6 @@ fn process_detection_mode() -> ProcessDetectionMode {
     })
 }
 
-fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
-    vec!["/bin/sh".into(), flag.into(), command.into()]
-}
-
-pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
-    let argv = raw_command_argv(command, "-lc");
-    let mut command = std::process::Command::new(&argv[0]);
-    command.args(&argv[1..]);
-    command
-}
-
-pub(crate) fn pane_custom_command_pty_builder_platform(
-    command: &str,
-) -> portable_pty::CommandBuilder {
-    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-c"))
-}
-
 pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<Vec<String>> {
     let quoted_path = shell_quote(&path.display().to_string());
     let command = format!(
@@ -166,10 +148,6 @@ fn foreground_job_for_group(child_pid: u32, process_group_id: u32) -> Option<For
             }
         })
         .collect::<Vec<_>>();
-
-    if processes.is_empty() {
-        return None;
-    }
 
     Some(ForegroundJob {
         process_group_id,
@@ -458,15 +436,6 @@ pub fn write_clipboard(bytes: &[u8]) -> bool {
     false
 }
 
-pub fn read_clipboard_text() -> Option<String> {
-    for command in read_clipboard_text_commands() {
-        if let Some(text) = read_clipboard_text_with_command(&command) {
-            return Some(text);
-        }
-    }
-    None
-}
-
 pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
     Command::new("xdg-open")
         .arg(url)
@@ -672,72 +641,6 @@ fn clipboard_commands() -> Vec<ClipboardCommand> {
     }
 
     commands
-}
-
-fn read_clipboard_text_commands() -> Vec<ClipboardCommand> {
-    let mut commands = Vec::new();
-
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        commands.push(ClipboardCommand {
-            program: "wl-paste",
-            args: &["--type", "text/plain;charset=utf-8"],
-        });
-        commands.push(ClipboardCommand {
-            program: "wl-paste",
-            args: &["--type", "text/plain"],
-        });
-    }
-
-    if std::env::var_os("DISPLAY").is_some() {
-        commands.push(ClipboardCommand {
-            program: "xclip",
-            args: &["-selection", "clipboard", "-out"],
-        });
-        commands.push(ClipboardCommand {
-            program: "xsel",
-            args: &["--clipboard", "--output"],
-        });
-    }
-
-    commands
-}
-
-fn read_clipboard_text_with_command(command: &ClipboardCommand) -> Option<String> {
-    const MAX_CLIPBOARD_TEXT_BYTES: usize = 1024 * 1024;
-
-    let mut child = Command::new(command.program)
-        .args(command.args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    let stdout = child.stdout.take()?;
-    let read = match read_limited_reader(stdout, MAX_CLIPBOARD_TEXT_BYTES) {
-        Ok(LimitedRead::Oversized) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        Ok(read) => read,
-        Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-    };
-
-    let status = child.wait().ok()?;
-    if !status.success() {
-        return None;
-    }
-
-    match read {
-        LimitedRead::Complete(bytes) => String::from_utf8(bytes).ok(),
-        LimitedRead::Empty => None,
-        LimitedRead::Oversized => unreachable!("oversized clipboard text is handled before wait"),
-    }
 }
 
 fn run_clipboard_command(command: &ClipboardCommand, bytes: &[u8]) -> bool {
@@ -1332,44 +1235,6 @@ mod tests {
         assert_eq!(commands.len(), 2);
         assert_eq!(commands[0].program, "xclip");
         assert_eq!(commands[1].program, "xsel");
-    }
-
-    #[test]
-    fn read_clipboard_text_commands_include_session_backends() {
-        let _guard = env_lock().lock().unwrap();
-        unsafe {
-            std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
-            std::env::set_var("DISPLAY", ":0");
-        }
-
-        let commands = read_clipboard_text_commands();
-        assert_eq!(commands[0].program, "wl-paste");
-        assert_eq!(commands[1].program, "wl-paste");
-        assert_eq!(commands[2].program, "xclip");
-        assert_eq!(commands[3].program, "xsel");
-    }
-
-    #[test]
-    fn read_clipboard_text_with_command_reads_utf8() {
-        let command = ClipboardCommand {
-            program: "printf",
-            args: &["feature/linear-302"],
-        };
-
-        assert_eq!(
-            read_clipboard_text_with_command(&command).as_deref(),
-            Some("feature/linear-302")
-        );
-    }
-
-    #[test]
-    fn read_clipboard_text_with_command_rejects_oversized_output() {
-        let command = ClipboardCommand {
-            program: "sh",
-            args: &["-c", "yes x | head -c 1048578"],
-        };
-
-        assert_eq!(read_clipboard_text_with_command(&command), None);
     }
 
     #[test]

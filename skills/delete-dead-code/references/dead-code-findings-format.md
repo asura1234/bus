@@ -1,81 +1,104 @@
-# Dead Code Findings Format
+# Dead Code Findings Format (dead-code track)
 
-每个模块 agent 产出一份该模块的 findings artifact。`dead_code_scope.py verify` 按本文的 finding
-行锚点做范围校验：**只有 finding 行参与校验**，正文散文提到路径不算 finding。
+Each module agent of the dead-code track produces one findings artifact for its module. `dead_code_scope.py verify`
+checks scope by the finding-line anchors defined here: **only finding lines take part in the check**; paths mentioned
+in prose are not findings. The duplicate track's artifact format is in
+[duplicate-findings-format.md](./duplicate-findings-format.md).
 
-产物路径：`temp/delete-dead-code/<branch-slug>/<module-slug>.md`，其中 `<module-slug>` 是模块名把
-`/` 换成 `-`；`<repository-root>` 写作 `repository-root`。
+Artifact path: `temp/delete-dead-code/<branch-slug>/dead-<module-slug>.md`, where `<module-slug>` is the module name
+with `/` replaced by `-`; `<repository-root>` is written as `repository-root`.
 
-## 结构
+## Structure
 
 ````markdown
 # Dead Code Findings
 
-- Module: `<模块名，与 scope 输出逐字一致>`
-- Base: `<不可变 base commit SHA；显式目录模式写扫描时的 HEAD>`
+- Module: `<module name, verbatim from the scope output>`
+- Track: `dead`
+- Base: `<immutable base commit SHA; in explicit-directory mode, HEAD at scan time>`
 - Outcome: `CLEAN|ACTED|REPORTED`
 
 ## Findings
 
-- `<repo 相对路径>:<行号>` — DUPLICATE|DEAD-BRANCH|DEAD-CODE — `<符号名>` — <一句话描述> — CONFIRMED|LIKELY — <用于确认的 grep>
+- `<repo-relative path>:<line>` — DEAD-BRANCH|DEAD-CODE — `<symbol>` — <one-sentence description> — CONFIRMED|LIKELY — <grep used to confirm>
 
 ## Disposition
 
-- `<repo 相对路径>:<行号>` — DELETED|CONSOLIDATED|KEPT|HANDOFF — <为什么；KEPT 给出保留机制，HANDOFF 必须写明阻塞在哪个模块、那边要改什么>
+- `<repo-relative path>:<line>` — DELETED|KEPT|HANDOFF — <why; KEPT names the keeping mechanism, HANDOFF must name the blocking module and what must change there>
 
 ## Verification
 
-- `<命令>` — <真实结果摘要>
+- `<command>` — <summary of the real result>
 ````
 
-## 规则
+## Rules
 
-- 三种 Outcome 互斥，且由 `verify` 机械判定，不是自述：
-  - `CLEAN` —— 一条 finding 都没有。`## Findings` 与 `## Disposition` 都必须是 `- 无`。
-  - `ACTED` —— 至少有一条 `DELETED` 或 `CONSOLIDATED`。
-  - `REPORTED` —— 有 finding，但一条都没动（跨模块、LIKELY、故意重复）。
-  **`REPORTED` 存在的理由**：没有它，「查到十条真死代码但一条都动不了」只能记成 `CLEAN`，
-  汇总就会把有问题的模块报成干净的。dogfood 第一轮真实发生过。
-- `HANDOFF` 是删除动作跨出了本模块：符号在我这儿，唯一的调用方或测试在别人那儿。写明目标模块，
-  主 agent 会在 fan-out 结束后配对处置。**不要为了让 Outcome 好看而把 HANDOFF 写成 KEPT。**
-- finding 行必须以 `` `path:line` `` 开头（允许前导空白与 `-`/`*` 列表符）。这是 verify 的唯一锚点；
-  写成别的形状等于这条 finding 不参与范围校验，属于格式错误。
-- 路径一律仓库相对、POSIX 分隔符，不写绝对路径。
-- `CONFIRMED` 表示已按仓库全量 grep 确认无引用，证据列出实际执行的 grep；`LIKELY` 表示查不到引用
-  但可能被字符串、动态、跨语言或平台条件到达。
-- **只有 `CONFIRMED` 可以 `DELETED` 或 `CONSOLIDATED`。`LIKELY` 一律 `KEPT`**，由主 agent 汇总上报。
-- `KEPT` 的理由必须具体到机制（真注入缝 / 平台门控 / 边界测试钉死的故意重复 / 生成契约），
-  不接受「保守起见」。
-- 同一 `path:line` 在 `## Findings` 与 `## Disposition` 中各出现一次，两边必须一一对应；`verify` 对单边出现的 anchor 报错。
-- 置信度字段后可以补一句限定语，但 `CONFIRMED` / `LIKELY` 本身必须紧跟在一个 `— ` 之后。
+- `- Track: \`dead\`` is required. This track only deletes: finding kinds may only be `DEAD-CODE` / `DEAD-BRANCH`,
+  and dispositions only `DELETED` / `KEPT` / `HANDOFF`. `verify` rejects `DUPLICATE`, `CONSOLIDATED`, or `CANONICAL`:
+  a consolidation mixed into the deletion track gets waved through as a deletion during review. Duplicates where both
+  copies are alive are not recorded here; the duplicate track discovers them.
+- The three Outcomes are mutually exclusive and judged mechanically by `verify`, not self-reported:
+  - `CLEAN` — no finding at all. `## Findings` and `## Disposition` must both be `- None`.
+  - `ACTED` — at least one `DELETED`.
+  - `REPORTED` — there are findings, but none was deleted (cross-module, LIKELY, needs a developer ruling).
+  **Why `REPORTED` exists**: without it, "found ten real dead-code items but could act on none" could only be
+  recorded as `CLEAN`, and the summary would report a problem module as clean. This really happened in the first
+  dogfood round.
+- `HANDOFF` means the deletion crosses out of this module: the symbol is mine, but its only caller, test, the baseline
+  pinning it, or the producer still emitting the old shape is somewhere else. Name the target module; the main agent
+  pairs these after the fan-out. **Never write a HANDOFF as KEPT to make the Outcome look better.**
+- A finding line must start with `` `path:line` `` (leading whitespace and a `-`/`*` list marker are allowed). This is
+  verify's only anchor; any other shape means the finding escapes the scope check, which is a format error.
+- Paths are always repository-relative with POSIX separators, never absolute.
+- `CONFIRMED` means a whole-repository grep confirmed no references (dead branch: confirmed no producer), and the
+  evidence lists the greps actually run; `LIKELY` means no references were found but the code may be reached through
+  strings, dynamic dispatch, another language, or a platform condition.
+- **Only `CONFIRMED` may be `DELETED`. `LIKELY` is always `KEPT`**, and the main agent summarizes and reports it.
+- A `KEPT` reason must name a concrete mechanism (a real injection seam / platform gating / intentional duplication
+  pinned by a boundary test / a generated contract / optionality required by the current contract); "to be safe" is
+  not accepted. For uncertain version/compatibility items the reason is fixed as
+  "needs developer ruling: version/compat", and the main agent builds the developer-ruling list from it.
+- The same `path:line` appears exactly once in `## Findings` and once in `## Disposition`, one-to-one; `verify`
+  rejects an anchor that appears on only one side.
+- A qualifier may follow the confidence field, but `CONFIRMED` / `LIKELY` itself must come right after a `— `.
+- `## Verification` lists **every file this agent changed** and the commands actually run. In a shared worktree the
+  whole-tree diff already contains other units' changes, so out-of-bounds writes can only be judged from this
+  self-report; an unreported file will not be staged at landing either.
+- `verify` uses `--unit` to restrict anchors to the artifact's own unit: sibling units of the same invocation are out
+  of scope too.
 
-## 正例（CLEAN）
+## Positive example (CLEAN)
 
 ````markdown
 # Dead Code Findings
 
-- Module: `src/client`
+- Module: `src`
+- Track: `dead`
 - Base: `844205cb5df4303378daafa917c74f1770749df4`
 - Outcome: `CLEAN`
 
 ## Findings
 
-- 无
+- None
 
 ## Disposition
 
-- 无
+- None
 
 ## Verification
 
-- `just lint` — passed
+- No file changed; no verification run
 ````
 
-## 反例
+## Negative examples
 
-- `Outcome: CLEAN` 却列了 finding：状态与内容自相矛盾，`verify` 拒绝并提示应记为 `REPORTED`。
-- `Outcome: ACTED` 却一条 `DELETED`/`CONSOLIDATED` 都没有，或 `REPORTED` 却动了东西：同样拒绝。
-- finding 有 anchor 而 Disposition 没有（或反之）：拒绝——处置漏写等于这条 finding 没有结论。
-- finding 行写成 `- src/client/render.rs:12 — DEAD-CODE …`（缺反引号）：不会被 verify 锚点匹配，
-  这条 finding 事实上逃过了范围校验。
-- `LIKELY` 配 `DELETED`：未经确认的删除，拒绝。
+- No `- Track:` line, or `duplicate` with dead-code findings: `verify` rejects it.
+- `Outcome: CLEAN` with findings listed: state and content contradict each other; `verify` rejects it and suggests
+  `REPORTED`.
+- `Outcome: ACTED` without a single `DELETED`, or `REPORTED` that deleted something: rejected as well.
+- A finding anchor without a Disposition (or the reverse): rejected; a missing disposition means the finding has no
+  conclusion.
+- A finding line written as `- src/client/render.rs:12 — DEAD-CODE …` (no backticks): verify's anchor does not match
+  it, so the finding effectively escapes the scope check.
+- `LIKELY` with `DELETED`: an unconfirmed deletion, rejected.
+- Recording two live duplicates as `CONSOLIDATED` in the dead track: rejected; it belongs to the duplicate track.

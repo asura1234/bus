@@ -14,7 +14,6 @@ use super::widgets::panel_contrast_fg;
 use crate::app::state::Palette;
 use crate::app::AppState;
 use crate::layout::PaneInfo;
-use crate::popup_size::resolve_popup_geometry;
 use crate::terminal::{TerminalRuntime, TerminalRuntimeRegistry};
 
 pub(crate) fn pane_is_scrolled_back(rt: &TerminalRuntime) -> bool {
@@ -22,7 +21,7 @@ pub(crate) fn pane_is_scrolled_back(rt: &TerminalRuntime) -> bool {
         .is_some_and(|metrics| metrics.offset_from_bottom > 0)
 }
 
-fn pane_border_title(label: &str, pane_width: u16, _focused: bool) -> Option<String> {
+fn pane_border_title(label: &str, pane_width: u16) -> Option<String> {
     let label = label.trim();
     if label.is_empty() || pane_width <= 4 {
         return None;
@@ -217,7 +216,7 @@ pub(super) fn resize_tab_panes(
 
     if tab.zoomed {
         let focused_id = tab.layout.focused();
-        if let Some((terminal_id, rt)) =
+        if let Some((_, rt)) =
             runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, focused_id)
         {
             let borders = if app.pane_borders.shows_borders(multi_pane) && app.pane_outer_borders {
@@ -227,14 +226,12 @@ pub(super) fn resize_tab_panes(
             };
             let pane_inner = pane_inner_rect(area, borders);
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
-            if !app.direct_attach_resize_locks.contains(terminal_id) {
-                rt.resize(
-                    inner_rect.height,
-                    inner_rect.width,
-                    cell_size.width_px,
-                    cell_size.height_px,
-                );
-            }
+            rt.resize(
+                inner_rect.height,
+                inner_rect.width,
+                cell_size.width_px,
+                cell_size.height_px,
+            );
         }
         return;
     }
@@ -247,18 +244,16 @@ pub(super) fn resize_tab_panes(
     ) {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
 
-        if let Some((terminal_id, rt)) =
+        if let Some((_, rt)) =
             runtime_for_tab_pane(app, terminal_runtimes, workspace_index, tab, info.id)
         {
             let inner_rect = terminal_inner_rect(rt, pane_inner, app.pane_scrollbars);
-            if !app.direct_attach_resize_locks.contains(terminal_id) {
-                rt.resize(
-                    inner_rect.height,
-                    inner_rect.width,
-                    cell_size.width_px,
-                    cell_size.height_px,
-                );
-            }
+            rt.resize(
+                inner_rect.height,
+                inner_rect.width,
+                cell_size.width_px,
+                cell_size.height_px,
+            );
         }
     }
 }
@@ -296,11 +291,7 @@ pub(super) fn compute_pane_infos_for_tab(
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, focused_id) {
             (inner_rect, scrollbar_rect) =
                 stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
-            if resize_panes
-                && tab.terminal_id(focused_id).is_some_and(|terminal_id| {
-                    !app.direct_attach_resize_locks.contains(terminal_id)
-                })
-            {
+            if resize_panes {
                 rt.resize(
                     inner_rect.height,
                     inner_rect.width,
@@ -334,11 +325,7 @@ pub(super) fn compute_pane_infos_for_tab(
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
             (inner_rect, scrollbar_rect) =
                 stable_scrollbar_gutter(rt, pane_inner, app.pane_scrollbars);
-            if resize_panes
-                && tab.terminal_id(info.id).is_some_and(|terminal_id| {
-                    !app.direct_attach_resize_locks.contains(terminal_id)
-                })
-            {
+            if resize_panes {
                 rt.resize(
                     inner_rect.height,
                     inner_rect.width,
@@ -401,46 +388,13 @@ pub(super) fn render_panes(
 
     for info in pane_infos {
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
-            let show_cursor = info.is_focused
-                && !pane_is_scrolled_back(rt)
-                && app.pane_exposes_host_cursor(ws_idx, info.id);
+            let show_cursor = info.is_focused && !pane_is_scrolled_back(rt);
             rt.render(frame, info.inner_rect, show_cursor);
             render_pane_scrollbar(app, frame, info, rt);
         }
     }
 
     render_pane_borders(app, ws, pane_infos, split_borders, frame);
-}
-
-pub(crate) fn popup_pane_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {
-    let popup = app.popup_pane.as_ref()?;
-    resolve_popup_geometry(popup.width, popup.height, area)
-        .map(|geometry| (geometry.outer, geometry.inner))
-}
-
-pub(super) fn resize_popup_pane(
-    app: &AppState,
-    terminal_runtimes: &TerminalRuntimeRegistry,
-    area: Rect,
-    cell_size: crate::kitty_graphics::HostCellSize,
-) {
-    let Some(popup) = app.popup_pane.as_ref() else {
-        return;
-    };
-    let Some((_outer, inner)) = popup_pane_rects(app, area) else {
-        return;
-    };
-    if app.direct_attach_resize_locks.contains(&popup.terminal_id) {
-        return;
-    }
-    if let Some(rt) = terminal_runtimes.get(&popup.terminal_id) {
-        rt.resize(
-            inner.height,
-            inner.width,
-            cell_size.width_px,
-            cell_size.height_px,
-        );
-    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -636,7 +590,7 @@ fn render_pane_border_titles(
             .pane_state(info.id)
             .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
             .and_then(|terminal| terminal.border_label(app.show_agent_labels_on_pane_borders))
-            .and_then(|label| pane_border_title(&label, info.rect.width, info.is_focused))
+            .and_then(|label| pane_border_title(&label, info.rect.width))
         else {
             continue;
         };
@@ -850,28 +804,17 @@ mod tests {
     #[test]
     fn pane_border_title_trims_and_truncates() {
         assert_eq!(
-            pane_border_title(" claude ", 20, false).as_deref(),
+            pane_border_title(" claude ", 20).as_deref(),
             Some(" claude ")
         );
-        assert_eq!(
-            pane_border_title(" claude ", 20, true).as_deref(),
-            Some(" claude ")
-        );
-        assert_eq!(pane_border_title("", 20, false), None);
-        assert_eq!(
-            pane_border_title("abcdef", 8, false).as_deref(),
-            Some(" abc… ")
-        );
-        assert_eq!(
-            pane_border_title("abcdef", 8, true).as_deref(),
-            Some(" abc… ")
-        );
-        assert_eq!(pane_border_title("abcdef", 4, false), None);
+        assert_eq!(pane_border_title("", 20), None);
+        assert_eq!(pane_border_title("abcdef", 8).as_deref(), Some(" abc… "));
+        assert_eq!(pane_border_title("abcdef", 4), None);
     }
 
     #[test]
     fn pane_border_title_truncates_cjk_by_display_width() {
-        let title = pane_border_title("1 模块组织（已定）", 12, false).unwrap();
+        let title = pane_border_title("1 模块组织（已定）", 12).unwrap();
 
         assert_eq!(title, " 1 模块… ");
         assert!(display_width(title.as_str()) <= 10);

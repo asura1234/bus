@@ -1,6 +1,7 @@
 /// Client-only help. These commands never become agent prompts.
 pub(super) const TEXT: &str = "Composer
-Enter          Send to checked agents
+Enter          Send; a working agent takes it into its current turn
+Option+Enter   Send to wait for each agent's next turn of its own
 Shift+Enter    New line
 Ctrl+J         New line (legacy terminal fallback)
 \\ then Enter   New line in any terminal
@@ -21,13 +22,13 @@ Ctrl+R         Search prompt history
 Ctrl+S         Stash the current prompt; empty composer restores it
 Ctrl+G         Open the prompt in $EDITOR
 Ctrl+V         Attach a clipboard image
-Ctrl+C         Clear the draft; quits only when it is empty
+Ctrl+C         Clear the draft (never quits Bus)
 Mouse drag     Select notes, history or draft text and copy it
-@              Choose agents (Shift+2 on US keyboards)
-+ / Ctrl+F     Add files (Shift+= on US keyboards)
+Ctrl+P         Choose agents
+Ctrl+F         Add files
 Ctrl+Shift+E   Toggle full-height / compact composer
-Page Up/Down   Scroll the draft without moving the caret
-Mouse wheel    Scroll sidebar, history, recipients or draft under the pointer
+Page Up/Down   Scroll the draft, or the notes while editing (F3)
+Mouse wheel    Scroll sidebar, notes, history, recipients or draft under the pointer
 F3             Switch notes / composer
 /help + Enter  Open this guide locally
 
@@ -42,17 +43,21 @@ Ctrl+N         Add an agent
 F2             Rename selected room or agent
 Double-click   Rename a room or agent name
 × beside name  Delete open room / any agent after confirmation
+Click #room    On a MASTER agent, open the room it orchestrates for
+               life; click its name to open its terminal
 Esc / Enter    Cancel / OK in the delete warning
 F6             Return from terminal to room
+Ctrl+C         In an agent terminal, interrupt the agent
 
 Forms
 Tab / Shift+Tab  Move fields
 Up / Down      Select path suggestions or agent type
 Tab            Complete a selected path
 Enter          Add agent / room; complete or add file
+               (in a MASTER agent's system prompt, add a line)
 Ctrl+Enter     Confirm form
 Esc            Cancel
 
 Quit
-Ctrl+C / Ctrl+Q Save and quit (retry if saving failed)
+Ctrl+Q         Save, stop the agents and the server, quit
 Ctrl+Shift+Q   Force quit only after an unsaved warning";

@@ -1,8 +1,9 @@
 <!--
   Bus PR 模板。`pr` skill 读取本文件生成 PR 标题与正文，并用
-  `skills/pr/scripts/pr_format_check.py` 机械校验最终标题与正文是否符合本模板。
-  rebase 后立即创建的 Draft 使用 `--phase draft`，门禁与文档同步完成后的正文使用
-  `--phase final`（默认）。两种阶段共享相同 section，区别只在 pending checkbox 契约。
+  `skills/pr/scripts/pr_format_check.py` 机械校验标题与正文是否符合本模板。
+  `pr` 不运行门禁：调用方（通常是 orchestrator）没有提供验证证据时用
+  `--phase draft`，提供了全部已执行的验证证据时用 `--phase final`（默认）。两种阶段共享
+  相同 section，区别只在 pending checkbox 契约。
   说明性内容（`>` 引用块与 HTML 注释）是给 AI 的指令，不得出现在最终 PR 里。
 -->
 
@@ -69,26 +70,16 @@
 
 ## 变更内容
 
-> 汇总门禁通过时 `baseline...gated_head` 的代码 commit，按主题组织；不要罗列文件名。
-> PR 打开后落盘的 `update-docs`-only commit 只由「文档同步」节表达，不重复进本节。
+> 汇总 `baseline...head` 的 commit，按主题组织；不要罗列文件名。
 
 - [变更项 1]
 - [变更项 2]
 
-## 文档同步
-
-> rebase 后立即创建 Draft 时，只写 `- [ ]` pending 项并用 `--phase draft` 校验。最终正文用
-> `python3 skills/update-docs/scripts/docs_audit.py render-pr --audit <audit>` 的 stdout
-> **完整替换本节（包括标题）**，再用 `--phase final` 校验；不要手工填写、翻译、重排或推断。
-
-- [x] [renderer output]
-
 ## 自测 / Agent 测
 
-> rebase 后立即创建 Draft 时，尚未执行的 readiness gate 可以保留为 `- [ ]`，并用
-> `--phase draft` 校验。最终正文只逐条保留**合并前实际执行过**的自测与 Agent 测试，全部
-> 勾选 `- [x]`；未执行的项移到「其他说明」，不得保留未勾选框，至少保留一项，并用
-> `--phase final` 校验。每项写明命令或场景与结果，不得假装通过。
+> 只写调用方提供的、**实际执行过**的验证证据（如 gate-and-fix PASS 及其 Head），全部
+> 勾选 `- [x]`，至少一项，并用 `--phase final` 校验。没有提供证据时写一条 `- [ ]` pending
+> 项说明验证尚未提供，并用 `--phase draft` 校验。每项写明命令或场景与结果，不得假装通过。
 
 <!-- 示例：开始 -->
 - [x] `just test` — passed

@@ -6,17 +6,12 @@ use ratatui::layout::Direction;
 use tokio::sync::{mpsc, Notify};
 
 use crate::events::AppEvent;
-use crate::layout::{Node, PaneId, TileLayout};
+use crate::layout::{PaneId, TileLayout};
 use crate::pane::{PaneLaunchEnv, PaneState};
 use crate::render_signal::RenderSignal;
 use crate::terminal::{TerminalId, TerminalRuntime, TerminalRuntimeRegistry, TerminalState};
 
 pub(crate) type DetachedPane = (PaneId, TerminalId);
-
-pub(crate) struct MovedPane {
-    pub pane_id: PaneId,
-    pub pane_state: PaneState,
-}
 
 pub struct NewPane {
     pub pane_id: PaneId,
@@ -25,10 +20,6 @@ pub struct NewPane {
 }
 
 enum SplitCommand<'a> {
-    Shell {
-        command: &'a str,
-        launch_env: &'a PaneLaunchEnv,
-    },
     Argv {
         argv: &'a [String],
         launch_env: &'a PaneLaunchEnv,
@@ -205,38 +196,6 @@ impl Tab {
         self.custom_name = Some(name);
     }
 
-    pub fn split_focused_command(
-        &mut self,
-        direction: Direction,
-        rows: u16,
-        cols: u16,
-        cwd: Option<PathBuf>,
-        command: &str,
-        launch_env: &PaneLaunchEnv,
-        scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-    ) -> std::io::Result<NewPane> {
-        self.split_pane_with_runtime(
-            self.layout.focused(),
-            true,
-            direction,
-            None,
-            rows,
-            cols,
-            cwd,
-            scrollback_limit_bytes,
-            host_terminal_theme,
-            host_terminal_appearance,
-            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
-            launch_env,
-            Some(SplitCommand::Shell {
-                command,
-                launch_env,
-            }),
-        )
-    }
-
     /// Split `target` with a shell pane. Focus moves to the new pane only when
     /// `focus_new_pane` is set; a spawn failure rolls the layout back without
     /// touching focus or its history.
@@ -343,24 +302,6 @@ impl Tab {
             None
         };
         let runtime = match command {
-            Some(SplitCommand::Shell {
-                command,
-                launch_env,
-            }) => TerminalRuntime::spawn_shell_command(
-                new_id,
-                rows,
-                cols,
-                actual_cwd.clone(),
-                command,
-                launch_env,
-                crate::pane::AgentDetection::Enabled,
-                scrollback_limit_bytes,
-                host_terminal_theme,
-                host_terminal_appearance,
-                self.events.clone(),
-                self.render_notify.clone(),
-                self.render_dirty.clone(),
-            ),
             Some(SplitCommand::Argv { argv, launch_env }) => TerminalRuntime::spawn_argv_command(
                 new_id,
                 rows,
@@ -429,73 +370,6 @@ impl Tab {
 
     pub fn remove_pane(&mut self, pane_id: PaneId) -> Option<DetachedPane> {
         self.detach_pane(pane_id)
-    }
-
-    pub(crate) fn from_existing_pane(
-        number: usize,
-        custom_name: Option<String>,
-        moved: MovedPane,
-        events: mpsc::Sender<AppEvent>,
-        render_notify: Arc<Notify>,
-        render_dirty: Arc<RenderSignal>,
-    ) -> Self {
-        let mut panes = HashMap::new();
-        let pane_id = moved.pane_id;
-        panes.insert(pane_id, moved.pane_state);
-        Self {
-            custom_name,
-            number,
-            root_pane: pane_id,
-            layout: TileLayout::from_saved(Node::Pane(pane_id), pane_id),
-            panes,
-            #[cfg(test)]
-            runtimes: HashMap::new(),
-            zoomed: false,
-            events,
-            render_notify,
-            render_dirty,
-        }
-    }
-
-    pub(crate) fn take_pane_for_move(&mut self, pane_id: PaneId) -> Option<MovedPane> {
-        if !self.panes.contains_key(&pane_id) {
-            return None;
-        }
-
-        if self.layout.pane_count() > 1 {
-            let next_root = self.promoted_root_if_needed(pane_id);
-            self.layout.close_pane(pane_id);
-            if let Some(next_root) = next_root {
-                self.root_pane = next_root;
-            }
-        }
-
-        let pane_state = self.panes.remove(&pane_id)?;
-        self.zoomed = false;
-        Some(MovedPane {
-            pane_id,
-            pane_state,
-        })
-    }
-
-    pub(crate) fn insert_existing_pane(
-        &mut self,
-        target_pane_id: PaneId,
-        moved: MovedPane,
-        direction: Direction,
-        ratio: f32,
-        focus: bool,
-    ) -> Result<PaneId, MovedPane> {
-        if !self
-            .layout
-            .insert_pane_near(target_pane_id, moved.pane_id, direction, ratio, focus)
-        {
-            return Err(moved);
-        }
-        let pane_id = moved.pane_id;
-        self.panes.insert(pane_id, moved.pane_state);
-        self.zoomed = false;
-        Ok(pane_id)
     }
 
     fn detach_pane(&mut self, pane_id: PaneId) -> Option<DetachedPane> {

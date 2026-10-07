@@ -3,23 +3,14 @@ use serde::{Deserialize, Serialize};
 use super::agents::AgentInfo;
 use super::common::{ClientWindowTitleReason, NotificationShowReason};
 use super::events::EventEnvelope;
-use super::integrations::{
-    IntegrationInstallResult, IntegrationTarget, IntegrationUninstallResult,
-};
 use super::panes::{
-    LayoutDescription, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot,
-    PaneMoveResult, PaneNeighborResult, PaneProcessInfo, PaneReadResult, PaneResizeResult,
-    PaneSwapResult, PaneTextPoint, PaneTextRange, PaneZoomResult,
-};
-use super::plugins::{
-    InstalledPluginInfo, PluginActionInfo, PluginCommandLogInfo, PluginInvocationContext,
-    PluginPaneInfo,
+    LayoutDescription, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot, PaneReadResult,
+    PaneResizeResult, PaneSwapResult, PaneTextPoint, PaneTextRange, PaneZoomResult,
 };
 use super::server::ServerCapabilities;
 use super::session::SessionSnapshot;
 use super::tabs::TabInfo;
 use super::workspaces::WorkspaceInfo;
-use super::worktrees::{WorktreeInfo, WorktreeSourceInfo};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SuccessResponse {
@@ -39,6 +30,8 @@ pub struct ErrorBody {
     pub message: String,
 }
 
+// Built once per API response and serialized immediately; variant size does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
@@ -61,28 +54,6 @@ pub enum ResponseResult {
     },
     WorkspaceList {
         workspaces: Vec<WorkspaceInfo>,
-    },
-    WorktreeList {
-        source: WorktreeSourceInfo,
-        worktrees: Vec<WorktreeInfo>,
-    },
-    WorktreeCreated {
-        workspace: WorkspaceInfo,
-        tab: TabInfo,
-        root_pane: PaneInfo,
-        worktree: WorktreeInfo,
-    },
-    WorktreeOpened {
-        workspace: WorkspaceInfo,
-        tab: TabInfo,
-        root_pane: PaneInfo,
-        worktree: WorktreeInfo,
-        already_open: bool,
-    },
-    WorktreeRemoved {
-        workspace_id: String,
-        path: String,
-        forced: bool,
     },
     TabInfo {
         tab: TabInfo,
@@ -107,18 +78,11 @@ pub enum ResponseResult {
     AgentList {
         agents: Vec<AgentInfo>,
     },
-    AgentPermission {
-        observation: super::agents::AgentPermissionObservation,
+    AgentDialog {
+        observation: super::agents::AgentDialogObservation,
     },
-    AgentApprovedOnce {
-        approval: super::agents::AgentApproveOnceResult,
-    },
-    AgentView {
-        active: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        source: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        label: Option<String>,
+    AgentDialogChosen {
+        choice: super::agents::AgentDialogChooseResult,
     },
     PaneInfo {
         pane: PaneInfo,
@@ -132,32 +96,14 @@ pub enum ResponseResult {
     PaneSwap {
         swap: PaneSwapResult,
     },
-    PaneMove {
-        move_result: PaneMoveResult,
-    },
     PaneZoom {
         zoom: PaneZoomResult,
     },
     PaneLayout {
         layout: PaneLayoutSnapshot,
     },
-    PaneProcessInfo {
-        process_info: PaneProcessInfo,
-    },
-    LayoutExport {
-        layout: LayoutDescription,
-    },
-    LayoutApply {
-        layout: LayoutDescription,
-    },
     LayoutSplitRatioSet {
         layout: LayoutDescription,
-    },
-    PaneNeighbor {
-        neighbor: PaneNeighborResult,
-    },
-    PaneEdges {
-        edges: PaneEdgesResult,
     },
     PaneFocusDirection {
         focus: PaneFocusDirectionResult,
@@ -187,36 +133,6 @@ pub enum ResponseResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_global: Option<u64>,
     },
-    PaneGraphicsFrameAck {
-        sequence: u64,
-        revision: u64,
-    },
-    PaneGraphicsInfo {
-        cell_width_px: u32,
-        cell_height_px: u32,
-        /// True only when this pane is on the currently rendered terminal surface.
-        pane_visible: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_directory: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        file_frame_formats: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_max_bytes: Option<usize>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_direct_max_bytes: Option<usize>,
-        /// Accepts damage metadata while still consuming a complete canonical file.
-        #[serde(default)]
-        file_frame_damage: bool,
-        #[serde(default)]
-        max_layers_per_pane: usize,
-        #[serde(default)]
-        pixel_mouse: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_transport: Option<String>,
-    },
-    AgentExplain {
-        explain: serde_json::Value,
-    },
     SubscriptionStarted {},
     WaitMatched {
         event: EventEnvelope,
@@ -235,67 +151,10 @@ pub enum ResponseResult {
         changed: bool,
         reason: ClientWindowTitleReason,
     },
-    IntegrationList {
-        integrations: Vec<super::integrations::IntegrationInfo>,
-    },
-    IntegrationInstall {
-        target: IntegrationTarget,
-        details: IntegrationInstallResult,
-    },
-    IntegrationUninstall {
-        target: IntegrationTarget,
-        details: IntegrationUninstallResult,
-    },
-    AgentManifestReload {
-        manifests: Vec<AgentManifestInfo>,
-    },
-    AgentManifestStatus {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        last_check_unix: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        last_result: Option<String>,
-        manifests: Vec<AgentManifestInfo>,
-    },
-    PluginLinked {
-        plugin: InstalledPluginInfo,
-    },
-    PluginList {
-        plugins: Vec<InstalledPluginInfo>,
-    },
-    PluginUnlinked {
-        plugin_id: String,
-        removed: bool,
-    },
-    PluginEnabled {
-        plugin: InstalledPluginInfo,
-    },
-    PluginDisabled {
-        plugin: InstalledPluginInfo,
-    },
-    PluginActionList {
-        actions: Vec<PluginActionInfo>,
-    },
-    PluginActionInvoked {
-        action: PluginActionInfo,
-        context: PluginInvocationContext,
-        log: PluginCommandLogInfo,
-    },
     PaneLinkActivated {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         url: Option<String>,
         handled: bool,
-    },
-    PluginLogList {
-        logs: Vec<PluginCommandLogInfo>,
-    },
-    PluginPaneOpened {
-        plugin_pane: PluginPaneInfo,
-    },
-    PluginPaneFocused {
-        plugin_pane: PluginPaneInfo,
-    },
-    PluginPaneClosed {
-        pane_id: String,
     },
     ConfigReload {
         status: crate::config::ConfigReloadStatus,
@@ -308,24 +167,4 @@ pub enum ResponseResult {
         projection_revision: u64,
     },
     Ok {},
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentManifestInfo {
-    pub agent: String,
-    pub source: String,
-    pub source_kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cached_remote_version: Option<String>,
-    pub local_override_shadowing_remote: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_update_result: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_update_error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_last_checked_unix: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub warning: Option<String>,
 }

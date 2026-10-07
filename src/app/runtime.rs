@@ -3,9 +3,7 @@ use std::time::Instant;
 #[cfg(test)]
 use std::time::Duration;
 
-use super::{
-    background_update_check_enabled, App, AUTO_UPDATE_CHECK_INTERVAL, MIN_RENDER_INTERVAL,
-};
+use super::{App, MIN_RENDER_INTERVAL};
 fn retain_detached_process_after_wait(
     pid: u32,
     result: std::io::Result<Option<std::process::ExitStatus>>,
@@ -40,37 +38,6 @@ impl App {
         }
     }
 
-    pub(crate) fn sync_agent_metadata_deadline(&mut self) {
-        self.agent_metadata_deadline = self.state.next_agent_metadata_expiry();
-    }
-
-    pub(crate) fn expire_due_metadata(&mut self, now: Instant) -> bool {
-        let Some(deadline) = self
-            .agent_metadata_deadline
-            .filter(|deadline| now >= *deadline)
-        else {
-            return false;
-        };
-        self.expire_metadata_at(deadline, now);
-        true
-    }
-
-    pub(crate) fn expire_metadata_at(&mut self, deadline: Instant, now: Instant) {
-        let previous_toast = self.state.toast.clone();
-        for update in self.state.expire_agent_metadata_at(deadline, now) {
-            self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
-            self.emit_pane_state_update(&update);
-        }
-        let (panes, workspaces) = self.state.expire_metadata_tokens(now);
-        for (ws_idx, pane_id) in panes {
-            self.emit_pane_updated(ws_idx, pane_id);
-        }
-        for ws_idx in workspaces {
-            self.emit_workspace_token_updated(ws_idx);
-        }
-        self.sync_agent_metadata_deadline();
-    }
-
     pub(crate) fn can_render_now(&self, now: Instant) -> bool {
         match self.last_render_at {
             Some(last_render_at) => now.duration_since(last_render_at) >= MIN_RENDER_INTERVAL,
@@ -94,49 +61,10 @@ impl App {
         }
     }
 
-    pub(crate) fn run_auto_update_check(&mut self) {
-        if !background_update_check_enabled(
-            self.policy.background_updates,
-            self.update_version_check_enabled,
-        ) {
-            self.next_auto_update_check = None;
-            return;
-        }
-
-        self.next_auto_update_check = self
-            .state
-            .update_available
-            .is_none()
-            .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
-
-        if self.state.update_available.is_some() {
-            return;
-        }
-
-        let update_tx = self.event_tx.clone();
-        std::thread::spawn(move || crate::update::auto_update(update_tx));
-    }
-
-    pub(crate) fn run_agent_manifest_update_check(&mut self) {
-        if !background_update_check_enabled(
-            self.policy.background_updates,
-            self.update_manifest_check_enabled,
-        ) {
-            self.next_agent_manifest_update_check = None;
-            return;
-        }
-
-        self.next_agent_manifest_update_check = Some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
-
-        let manifest_update_tx = self.event_tx.clone();
-        std::thread::spawn(move || crate::detect::manifest_update::auto_update(manifest_update_tx));
-    }
-
-    pub(crate) fn next_headless_loop_deadline_with_git_refresh(
+    pub(crate) fn next_headless_loop_deadline(
         &self,
         now: Instant,
         needs_render: bool,
-        include_git_refresh: bool,
     ) -> Option<Instant> {
         let render_deadline = if needs_render {
             self.last_render_at
@@ -151,15 +79,8 @@ impl App {
             self.toast_deadline,
             self.state.next_pending_agent_notification_deadline(),
             self.state.next_managed_agent_deadline(),
-            include_git_refresh
-                .then(|| self.git_refresh_deadline())
-                .flatten(),
-            self.next_auto_update_check,
-            self.next_agent_manifest_update_check,
-            self.agent_metadata_deadline,
             self.pending_agent_resume_deadline,
             self.session_save_deadline,
-            self.next_tab_bar_status_deadline(),
             render_deadline,
         ]
         .into_iter()

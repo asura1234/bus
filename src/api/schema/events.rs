@@ -6,7 +6,6 @@ use super::common::{AgentStatus, ReadSource};
 use super::panes::{PaneInfo, PaneReadResult, PaneScrollInfo};
 use super::tabs::TabInfo;
 use super::workspaces::WorkspaceInfo;
-use super::worktrees::WorktreeInfo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct EventsSubscribeParams {
@@ -20,24 +19,14 @@ pub enum Subscription {
     WorkspaceCreated {},
     #[serde(rename = "workspace.updated")]
     WorkspaceUpdated {},
-    #[serde(rename = "workspace.metadata_updated")]
-    WorkspaceMetadataUpdated {},
     #[serde(rename = "workspace.renamed")]
     WorkspaceRenamed {},
     #[serde(rename = "workspace.moved")]
     WorkspaceMoved {},
-    #[serde(rename = "workspace.reordered")]
-    WorkspaceReordered {},
     #[serde(rename = "workspace.closed")]
     WorkspaceClosed {},
     #[serde(rename = "workspace.focused")]
     WorkspaceFocused {},
-    #[serde(rename = "worktree.created")]
-    WorktreeCreated {},
-    #[serde(rename = "worktree.opened")]
-    WorktreeOpened {},
-    #[serde(rename = "worktree.removed")]
-    WorktreeRemoved {},
     #[serde(rename = "tab.created")]
     TabCreated {},
     #[serde(rename = "tab.closed")]
@@ -46,8 +35,6 @@ pub enum Subscription {
     TabFocused {},
     #[serde(rename = "tab.renamed")]
     TabRenamed {},
-    #[serde(rename = "tab.moved")]
-    TabMoved {},
     #[serde(rename = "pane.created")]
     PaneCreated {},
     #[serde(rename = "pane.closed")]
@@ -56,8 +43,6 @@ pub enum Subscription {
     PaneUpdated {},
     #[serde(rename = "pane.focused")]
     PaneFocused {},
-    #[serde(rename = "pane.moved")]
-    PaneMoved {},
     #[serde(rename = "pane.exited")]
     PaneExited {},
     #[serde(rename = "pane.agent_detected")]
@@ -194,168 +179,23 @@ pub enum EventMatch {
 pub enum EventKind {
     WorkspaceCreated,
     WorkspaceUpdated,
-    WorkspaceMetadataUpdated,
     WorkspaceClosed,
     WorkspaceRenamed,
     WorkspaceMoved,
-    WorkspaceReordered,
     WorkspaceFocused,
-    WorktreeCreated,
-    WorktreeOpened,
-    WorktreeRemoved,
     TabCreated,
     TabClosed,
     TabRenamed,
-    TabMoved,
     TabFocused,
     PaneCreated,
     PaneClosed,
     PaneUpdated,
     PaneFocused,
-    PaneMoved,
     PaneOutputChanged,
     PaneExited,
     PaneAgentDetected,
     PaneAgentStatusChanged,
     LayoutUpdated,
-}
-
-impl EventKind {
-    pub fn dot_name(self) -> &'static str {
-        match self {
-            EventKind::WorkspaceCreated => "workspace.created",
-            EventKind::WorkspaceUpdated => "workspace.updated",
-            EventKind::WorkspaceMetadataUpdated => "workspace.metadata_updated",
-            EventKind::WorkspaceClosed => "workspace.closed",
-            EventKind::WorkspaceRenamed => "workspace.renamed",
-            EventKind::WorkspaceMoved => "workspace.moved",
-            EventKind::WorkspaceReordered => "workspace.reordered",
-            EventKind::WorkspaceFocused => "workspace.focused",
-            EventKind::WorktreeCreated => "worktree.created",
-            EventKind::WorktreeOpened => "worktree.opened",
-            EventKind::WorktreeRemoved => "worktree.removed",
-            EventKind::TabCreated => "tab.created",
-            EventKind::TabClosed => "tab.closed",
-            EventKind::TabRenamed => "tab.renamed",
-            EventKind::TabMoved => "tab.moved",
-            EventKind::TabFocused => "tab.focused",
-            EventKind::PaneCreated => "pane.created",
-            EventKind::PaneClosed => "pane.closed",
-            EventKind::PaneUpdated => "pane.updated",
-            EventKind::PaneFocused => "pane.focused",
-            EventKind::PaneMoved => "pane.moved",
-            EventKind::PaneOutputChanged => "pane.output_changed",
-            EventKind::PaneExited => "pane.exited",
-            EventKind::PaneAgentDetected => "pane.agent_detected",
-            EventKind::PaneAgentStatusChanged => "pane.agent_status_changed",
-            EventKind::LayoutUpdated => "layout.updated",
-        }
-    }
-}
-
-#[cfg(test)]
-pub const KNOWN_EVENT_KINDS: &[EventKind] = &[
-    EventKind::WorkspaceCreated,
-    EventKind::WorkspaceUpdated,
-    EventKind::WorkspaceMetadataUpdated,
-    EventKind::WorkspaceClosed,
-    EventKind::WorkspaceRenamed,
-    EventKind::WorkspaceMoved,
-    EventKind::WorkspaceReordered,
-    EventKind::WorkspaceFocused,
-    EventKind::WorktreeCreated,
-    EventKind::WorktreeOpened,
-    EventKind::WorktreeRemoved,
-    EventKind::TabCreated,
-    EventKind::TabClosed,
-    EventKind::TabRenamed,
-    EventKind::TabMoved,
-    EventKind::TabFocused,
-    EventKind::PaneCreated,
-    EventKind::PaneClosed,
-    EventKind::PaneUpdated,
-    EventKind::PaneFocused,
-    EventKind::PaneMoved,
-    EventKind::PaneOutputChanged,
-    EventKind::PaneExited,
-    EventKind::PaneAgentDetected,
-    EventKind::PaneAgentStatusChanged,
-    EventKind::LayoutUpdated,
-];
-
-pub const PLUGIN_HOOK_EVENT_KINDS: &[EventKind] = &[
-    EventKind::WorkspaceCreated,
-    EventKind::WorkspaceUpdated,
-    EventKind::WorkspaceClosed,
-    EventKind::WorkspaceRenamed,
-    EventKind::WorkspaceMoved,
-    EventKind::WorkspaceReordered,
-    EventKind::WorkspaceFocused,
-    EventKind::WorktreeCreated,
-    EventKind::WorktreeOpened,
-    EventKind::WorktreeRemoved,
-    EventKind::TabCreated,
-    EventKind::TabClosed,
-    EventKind::TabRenamed,
-    EventKind::TabMoved,
-    EventKind::TabFocused,
-    EventKind::PaneCreated,
-    EventKind::PaneClosed,
-    EventKind::PaneFocused,
-    EventKind::PaneMoved,
-    EventKind::PaneExited,
-    EventKind::PaneAgentDetected,
-    EventKind::PaneAgentStatusChanged,
-];
-
-#[cfg(test)]
-pub fn known_event_names() -> Vec<&'static str> {
-    KNOWN_EVENT_KINDS
-        .iter()
-        .copied()
-        .map(EventKind::dot_name)
-        .collect()
-}
-
-/// Event names that manifest `[[events]] on` hooks can reference. This is
-/// intentionally narrower than `EventKind` until high-volume output-change hook
-/// semantics are implemented.
-pub fn plugin_hook_event_names() -> Vec<&'static str> {
-    PLUGIN_HOOK_EVENT_KINDS
-        .iter()
-        .copied()
-        .map(EventKind::dot_name)
-        .collect()
-}
-
-#[cfg(test)]
-mod known_event_name_tests {
-    use super::*;
-
-    #[test]
-    fn known_event_names_stay_in_sync_with_event_kind() {
-        let mut from_kind = KNOWN_EVENT_KINDS
-            .iter()
-            .map(|kind| kind.dot_name())
-            .collect::<Vec<_>>();
-        from_kind.sort_unstable();
-        let mut known = known_event_names();
-        known.sort_unstable();
-        assert_eq!(
-            from_kind, known,
-            "known_event_names() out of sync with EventKind"
-        );
-    }
-
-    #[test]
-    fn plugin_hook_event_names_exclude_high_volume_events() {
-        let names = plugin_hook_event_names();
-        assert!(!names.contains(&"pane.output_changed"));
-        assert!(!names.contains(&"layout.updated"));
-        assert!(!names.contains(&"workspace.metadata_updated"));
-        assert!(!names.contains(&"pane.updated"));
-        assert!(names.contains(&"pane.moved"));
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -426,9 +266,6 @@ pub enum EventData {
     WorkspaceUpdated {
         workspace: WorkspaceInfo,
     },
-    WorkspaceMetadataUpdated {
-        workspace: WorkspaceInfo,
-    },
     WorkspaceClosed {
         workspace_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -443,30 +280,8 @@ pub enum EventData {
         insert_index: usize,
         workspaces: Vec<WorkspaceInfo>,
     },
-    WorkspaceReordered {
-        workspace_ids: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        before_workspace_id: Option<String>,
-        workspaces: Vec<WorkspaceInfo>,
-    },
     WorkspaceFocused {
         workspace_id: String,
-    },
-    WorktreeCreated {
-        workspace: WorkspaceInfo,
-        worktree: WorktreeInfo,
-    },
-    WorktreeOpened {
-        workspace: WorkspaceInfo,
-        worktree: WorktreeInfo,
-        already_open: bool,
-    },
-    WorktreeRemoved {
-        workspace_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        workspace: Option<WorkspaceInfo>,
-        worktree: WorktreeInfo,
-        forced: bool,
     },
     TabCreated {
         tab: TabInfo,
@@ -479,12 +294,6 @@ pub enum EventData {
         tab_id: String,
         workspace_id: String,
         label: String,
-    },
-    TabMoved {
-        tab_id: String,
-        workspace_id: String,
-        insert_index: usize,
-        tabs: Vec<TabInfo>,
     },
     TabFocused {
         tab_id: String,
@@ -503,20 +312,6 @@ pub enum EventData {
     PaneFocused {
         pane_id: String,
         workspace_id: String,
-    },
-    PaneMoved {
-        previous_pane_id: String,
-        previous_workspace_id: String,
-        previous_tab_id: String,
-        pane: Box<PaneInfo>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        created_workspace: Option<WorkspaceInfo>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        created_tab: Option<TabInfo>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        closed_workspace_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        closed_tab_id: Option<String>,
     },
     PaneOutputChanged {
         pane_id: String,

@@ -22,8 +22,6 @@ pub struct WorkspaceCreateParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceCloseParams {
     pub workspace_id: String,
-    #[serde(default, skip_serializing_if = "super::is_false")]
-    pub close_group: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -39,26 +37,6 @@ pub struct WorkspaceMoveParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct WorkspaceMoveBlockParams {
-    pub workspace_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before_workspace_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct WorkspaceReportMetadataParams {
-    pub workspace_id: String,
-    pub source: String,
-    #[schemars(schema_with = "super::common::metadata_token_patch_schema")]
-    pub tokens: HashMap<String, Option<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub seq: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 86_400_000))]
-    pub ttl_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceInfo {
     pub workspace_id: String,
     pub number: usize,
@@ -71,15 +49,4 @@ pub struct WorkspaceInfo {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     #[schemars(schema_with = "super::common::metadata_token_values_schema")]
     pub tokens: HashMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<WorkspaceWorktreeInfo>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct WorkspaceWorktreeInfo {
-    pub repo_key: String,
-    pub repo_name: String,
-    pub repo_root: String,
-    pub checkout_path: String,
-    pub is_linked_worktree: bool,
 }

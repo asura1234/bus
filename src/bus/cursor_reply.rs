@@ -69,17 +69,24 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
                     .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
                     .filter_map(|part| part.get("text").and_then(Value::as_str))
                     .collect::<String>();
-                // An assistant message containing a tool call is commentary.
-                let final_text = (!text.trim().is_empty()
-                    && !content
-                        .iter()
-                        .any(|part| part.get("type").and_then(Value::as_str) == Some("tool_use")))
-                .then_some(text.clone());
-                for (accumulated, last) in &mut candidates {
-                    accumulated.push_str(&text);
-                    *last = final_text.clone();
+                // 带工具调用的是说明，不是终稿。说明末尾可能多出钩子删掉的内容。
+                let commentary = content
+                    .iter()
+                    .any(|part| part.get("type").and_then(Value::as_str) == Some("tool_use"));
+                let final_text = (!text.trim().is_empty() && !commentary).then_some(text.clone());
+                let mut next = Vec::new();
+                for (accumulated, _) in &candidates {
+                    let piece = if commentary {
+                        commentary_kept(accumulated, &text, hook_text)
+                    } else {
+                        text.as_str()
+                    };
+                    let accumulated = format!("{accumulated}{piece}");
+                    if hook_text.starts_with(&accumulated) {
+                        next.push((accumulated, final_text.clone()));
+                    }
                 }
-                candidates.retain(|(accumulated, _)| hook_text.starts_with(accumulated.as_str()));
+                candidates = next;
                 direct_last = final_text;
             }
             _ => {}
@@ -99,7 +106,36 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
             direct_last = None;
         }
     }
+    // stop 已报完成才会来这里。这份 jsonl 经常不写 turn_ended，回复停在
+    // 最后一条 assistant 上；不在结尾结算的话请求会一直停在 delivered。
+    observe_candidates(
+        &candidates,
+        direct_last.as_deref(),
+        hook_text,
+        &mut matched,
+        &mut ambiguous,
+    );
     (!ambiguous).then_some(matched).flatten()
+}
+
+/// 说明文字里钩子没带上的后缀（例如转录多写的标记）不参与对齐。
+/// 终稿不走这里，避免把答案截短后误配上。
+fn commentary_kept<'a>(accumulated: &str, text: &'a str, hook_text: &str) -> &'a str {
+    if !hook_text.starts_with(accumulated) {
+        return text;
+    }
+    let rest = &hook_text[accumulated.len()..];
+    if rest.starts_with(text) {
+        return text;
+    }
+    let bytes = text
+        .char_indices()
+        .zip(rest.chars())
+        .take_while(|((_, transcript), hook)| transcript == hook)
+        .last()
+        .map(|((index, ch), _)| index + ch.len_utf8())
+        .unwrap_or(0);
+    &text[..bytes]
 }
 
 fn observe_candidates(
@@ -150,18 +186,63 @@ mod tests {
         }
     }
 
+    /// 消息 1422：后续问题的说明块比钩子多一段后缀，且 jsonl 没有 turn_ended。
+    #[test]
+    fn cursor_final_reply_ignores_commentary_suffix_the_hook_omits() {
+        for omitted in ["\\n\\n[REDACTED]", "\\n\\n<dropped>"] {
+            let transcript = format!(
+                "{{\"role\":\"user\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"research\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"I'll check.\"}},{{\"type\":\"tool_use\",\"name\":\"Shell\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"First answer.\"}}]}}}}\n\
+                 {{\"role\":\"user\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"also search the web\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"I'll search the docs.{omitted}\"}},{{\"type\":\"tool_use\",\"name\":\"CallDynamicTool\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Grep\"}}]}}}}\n\
+                 {{\"role\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"Second answer.\"}}]}}}}\n"
+            );
+            assert_eq!(
+                matching_completed_message(&transcript, "I'll search the docs.Second answer.")
+                    .as_deref(),
+                Some("Second answer."),
+                "{omitted}"
+            );
+            assert_eq!(
+                matching_completed_message(&transcript, "I'll check.First answer.").as_deref(),
+                Some("First answer."),
+                "{omitted}"
+            );
+        }
+        // 终稿里的同样字样属于答案，钩子带上了就必须原样匹配。
+        let kept = concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"see [REDACTED]\"}]}}\n",
+        );
+        assert_eq!(
+            matching_completed_message(kept, "see [REDACTED]").as_deref(),
+            Some("see [REDACTED]")
+        );
+    }
+
     #[test]
     fn cursor_final_reply_waits_for_completed_matching_turn() {
         assert!(matching_completed_message(TURN, "unrelated response").is_none());
         for incomplete in [
             TURN.replace("\"status\":\"success\"", "\"status\":\"error\""),
-            TURN.lines().take(3).collect::<Vec<_>>().join("\n"),
+            TURN.lines().take(2).collect::<Vec<_>>().join("\n"),
             format!("{TURN}{{\"role\":\"assistant\""),
         ] {
             assert!(
                 matching_completed_message(&incomplete, "Question first.final answer").is_none()
             );
         }
+        // 终稿已经在文件里、只是没有 turn_ended 时也要结算。
+        assert_eq!(
+            matching_completed_message(
+                &TURN.lines().take(3).collect::<Vec<_>>().join("\n"),
+                "Question first.final answer"
+            )
+            .as_deref(),
+            Some("final answer")
+        );
     }
 
     #[test]

@@ -15,16 +15,16 @@
 >
 > | # | phase | 含义 | `in-progress` 写入时机 | `complete` 写入时机 |
 > |---|-------|------|-----------------------|---------------------|
-> | 1 | `create-plan` | 计划文档撰写 | `/create-plan` 启动 | 落盘等待审查 |
-> | 2 | `review-plan` | 计划审查 | `/address-review-comments` 首次处理评审时（`/review-plan` 对计划只读、不写状态） | 审查通过（`/execute-plan` 的最低门槛） |
-> | 3 | `plan-execution` | 任务图实施 | `/execute-plan` 启动 | 全部任务验收 + 自动 EXIT CHECK 达标，并以最后一步 `commit-and-push` 提交、推送精确 tree |
+> | 1 | `create-plan` | 计划文档撰写 | 作者开始撰写 | 落盘等待审查 |
+> | 2 | `review-plan` | 计划审查 | `/address-review-comments` 首次处理评审时（`/review-plan` 对计划只读、不写状态） | 审查通过（开始执行的最低门槛） |
+> | 3 | `plan-execution` | 任务图实施 | 执行者（编排 agent 或开发者）开始实施 | 全部任务验收 + 自动 EXIT CHECK 达标，并以最后一步 `commit-and-push` 提交、推送精确 tree |
 > | 4 | `manual-test` | 人工手动测试 | 开发者手动 | 开发者手动 |
 > | 5 | `code-review` | 最终代码审查 | 人工测试完成后开始 | 审查通过 |
 > | 6 | `merge` | PR 合入 `master` | — （无 in-progress） | 合并完成后由开发者或合并流程写入（终态） |
 >
 > **门控规则**：
-> - `/review-plan` 与 `/execute-plan` 只依赖本文档格式和状态，不依赖 `/create-plan` session 或额外私有状态；开发者手写但通过同一格式/gate 的计划同样合法
-> - `/execute-plan` 在自动 gate 全绿后以 `commit-and-push` 作为最后一步，结束于已提交并推送到当前具名分支的精确 tree；之后依次由开发者人工验证、`/pr` 创建或更新面向 `master` 的 PR、`/review-pr` 审查。只有开发者明确要求时才直接落盘 `master`
+> - `/review-plan` 与执行者只依赖本文档格式和状态，不依赖撰写会话或额外私有状态；开发者手写但通过同一格式/gate 的计划同样合法
+> - 执行者在自动 gate 全绿后以 `commit-and-push` 作为最后一步，结束于已提交并推送到当前具名分支的精确 tree；之后依次由开发者人工验证、`/pr` 创建或更新面向 `master` 的 PR、`/review-pr` 审查。只有开发者明确要求时才直接落盘 `master`
 > - 本仓库没有校验计划状态的 CI workflow，`状态` 由上述 workflow skill 自己消费。已进入 `plan-execution-complete` 及之后状态的计划文档视为已用，不得被新 PR 复用；需要新工作时新建计划文档
 
 > **⚠️ 不可修改**：以下规则部分必须包含在每个计划文档中，AI 和开发者不得修改此部分。
@@ -33,9 +33,8 @@
 ## 规则优先级
 
 1. 开发者在对话中的最新明确要求。
-2. 触及范围内实际存在的 `AGENTS.md`。
-3. 本计划的目标、非目标与已归档决策。
-4. 本模板、计划指南与代码现状。
+2. 本计划的目标、非目标与已归档决策。
+3. 本模板、计划指南与代码现状。
 
 事实必须区分为：当前源码已验证、开发者明确决定、待验证假设、延期工作。POC 的 ceiling 假设不得写成生产承诺。
 
@@ -50,12 +49,12 @@
 用**一句话**声明本计划交付的**单一结果**：完成后要交付什么、达成什么结果。整份计划的每个任务和文件改动都必须服务于这一个目标。
 
 > **重要**：
-> - **目标与非目标共同标示本计划的意图（intent）与范围（scope）**：目标声明**要做什么 / 交付什么**（**强制**——写任何计划正文前必须先清晰设定，见 create-plan 的 GOAL GATE），非目标声明**刻意不做什么**（**可选**——未声明即视为无、AI 不问不猜，但**一旦声明即被强制执行**）；二者一起把计划的意图与边界钉死，是后续 create / review / execute 全程锁定的地基。
+> - **目标与非目标共同标示本计划的意图（intent）与范围（scope）**：目标声明**要做什么 / 交付什么**（**强制**——写任何计划正文前必须先清晰设定），非目标声明**刻意不做什么**（**可选**——未声明即视为无、AI 不问不猜，但**一旦声明即被强制执行**）；二者一起把计划的意图与边界钉死，是后续 create / review / execute 全程锁定的地基。
 > - 计划必须**单一目标**。判断标准是**目标是否内聚**，不是任务数量——一个 XXXL 计划可以有多个粗粒度任务，只要它们共同服务同一个目标，它就仍是单一目标。
 > - 类比：「建一座动物园」是单一目标，即使内部有建狮笼、建鸡舍、修围栏等多个任务，它们仍共同拼成一个成果。若顶层目标是多件互不相关的事，则应拆成多份单一目的计划。
 > - 目标陈述聚焦**做什么 / 交付什么**（结果），不描述**怎么做**（实现细节留给后续章节）。
 > - 计划一律 one-shot 执行、执行后再做 e2e 验证、一个计划一个 PR，与大小无关；不要把「单一目标 + 大」误当成「多目的」而拆散。
-> - **目标在 create-plan 阶段定稿后即锁定**：只有开发者可修改。plan review / 任何 agent **不得推翻、扩张、缩小或重新定义**它，只能检查计划正文是否服务于该目标（详见 [`docs/guides/plan-review-guide.md`](../guides/plan-review-guide.md)「工作流结构是既定常量」）。
+> - **目标在计划撰写阶段定稿后即锁定**：只有开发者可修改。plan review / 任何 agent **不得推翻、扩张、缩小或重新定义**它，只能检查计划正文是否服务于该目标（详见 [`docs/guides/plan-review-guide.md`](../guides/plan-review-guide.md)「工作流结构是既定常量」）。
 
 ## 非目标
 
@@ -80,19 +79,19 @@
 
 ## 参考资料
 
-列出任务实施所需的所有文档、参考资料和集成指南，包括库文档、模块 `AGENTS.md` 以及第三方 SDK 的集成文档。
+列出任务实施所需的所有文档、参考资料和集成指南，包括相关源码、库文档以及第三方 SDK 的集成文档。
 
 - `[实际读取的路径或 URL]`
 
 > **重要**：
 > - 使用官方库 / 框架 / SDK 文档，并在本节记录实际读取的链接
-> - 如果任务涉及现有模块，必须包含适用的 `AGENTS.md`；Bus 当前只有 `skills/` 与 vendored libghostty-vt 树维护局部 `AGENTS.md`
+> - 如果任务涉及现有模块，必须读取相关源码、调用点与测试
 > - 如果任务跨模块或触及仓库级契约，必须包含对应的根文档、`docs/` 文档或 `skills/skill-architecture.md`
 > - 如果任务涉及第三方 SDK，应包含以下链接：
 >   - SDK 集成文档
 >   - 如何启用 XX 功能的文档
-> - 创建计划时先阅读所有适用 `AGENTS.md`，再由现有模块和调用点确定职责、依赖方向、公开 API、测试与验收入口
-> - 新增的模块、文件、类型、函数命名应遵循相邻代码与对应模块 `AGENTS.md` 中体现的命名约定
+> - 创建计划时由现有模块、调用点与测试确定职责、依赖方向、公开 API 与验收入口
+> - 新增的模块、文件、类型、函数命名应遵循相邻代码中体现的命名约定
 > - 如果计划包含测试，应参考相邻 Rust `#[cfg(test)]`、模块测试、`scripts/test_*.py` 或集成资源测试的既有模式
 > - 如果计划涉及日志输出或运行时不变量，必须读取实际拥有该行为的 Rust 模块和现有测试
 > - 如果计划涉及跨平台行为，必须说明 Unix/macOS 与 Windows 各自的可用验证入口
@@ -234,7 +233,7 @@
 >   - 文档文件（如 `.md`、`.txt`）
 >   - 仅涉及 import 语句变更的文件
 > - 上述例外只豁免本节逐文件代码片段，不豁免任务 ownership、验收闸门或模块 SOT 同步。计划已经明确点名的文件与测试路径必须进入本节文件契约，并被一个且仅一个任务 owner containment 覆盖；合理 deviation 可在稳定 owner 内新增未预知文件。
-> - 改变 skill 架构或公开工作流契约时，`skills/AGENTS.md`、`skills/skill-architecture.md` 与受影响的共享 guide 必须进入同一 owner 与 gate。
+> - 改变 skill 架构或公开工作流契约时，`skills/skill-architecture.md` 与受影响的共享 guide 必须进入同一 owner 与 gate。
 
 <!-- 示例：开始（代码片段用目标语言书写，下例为 Rust） -->
 - **新文件**：`[repo-relative path]`
@@ -347,8 +346,8 @@ match command {
 > - 对迁移 / 删除生产模块运行 `skills/review-plan/scripts/consumer_fallout.py`，逐项核实 Rust `use` / `mod`、其他语言 import/require 与同名测试候选；相关项进入文件契约、owner 和 gate，不相关项写明排除依据。inventory 只辅助发现，不替代语义 review。
 > - `目标` 描述做完后是什么样；`工具` 列出必读 SOT、harness 和命令；`约束` 只写必须成立的硬顺序和不变量；`验收闸门` 固定以 `[TASK_LOCAL]` 开头，只给出 `just test-one <filter>`、直接 Cargo/Python/Bun 测试或模块编译等局部正确性命令与二元判定，不把 scoped rustfmt 或完整平台 build 重复写进 task gate。命令必须按当前 `justfile` 与测试 harness 核验；exit 0 但选择零测试或错误 harness 不算通过。
 > - 任务块内禁止 `(需要手动操作)`。人工验证只写在「手动测试」section；若人工裁决是后续实施的硬前置，拆成两份计划。
-> - 主 agent 只在 task report evidence 有效、`review-task Ready` 且所属 wave isolation 通过时勾选 `**完成**`。主 agent 不逐任务重跑 gate/lint；任务完成复选框是共享工作树进度，不表示已 commit。
-> - 自动 gate 完成前所有 actor 必须零 Git：不得 `git add/commit/push`。全部自动 gate 对最终计划 delta 全绿后，`execute-plan` 以 `commit-and-push` 作为最后一步提交并推送到当前具名分支；此后不得再改树。随后交回人工验证、`pr` 与最终 `review-pr`。
+> - 主 agent 只在 task report evidence 有效、该任务验收通过且所属 wave isolation 通过时勾选 `**完成**`。主 agent 不逐任务重跑 gate/lint；任务完成复选框是共享工作树进度，不表示已 commit。
+> - 自动 gate 完成前所有 actor 必须零 Git：不得 `git add/commit/push`。全部自动 gate 对最终计划 delta 全绿后，执行者以 `commit-and-push` 作为最后一步提交并推送到当前具名分支；此后不得再改树。随后交回人工验证、`pr` 与最终 `review-pr`。
 > - 全局 EXIT CHECK 固定为 `just lint` → `just test` → 可选 `just build`，不得使用 task/file filter。任何修复改树都从 final lint 重新开始。任务级 Ready 与局部 review 对最终 PR review 不可替代。
 
 <!-- 示例：开始 -->
@@ -361,7 +360,7 @@ match command {
 - **produces**：[提供给下游的明确契约；无则写无]
 - **consumes**：[生产方任务 id；无则写无]
 - **工具**：[必读 SOT、harness、命令]
-- **参考实现**：[若任务迁移既有行为，列出 task agent 必须读取的 repo/file/`AGENTS.md`；无则写无]
+- **参考实现**：[若任务迁移既有行为，列出 task agent 必须读取的 repo/file；无则写无]
 - **约束**：[边界、非目标、兼容性或 POC 假设；无则写无]
 - **验收闸门**：[TASK_LOCAL] `[精确、真实存在的窄命令]` + [二元通过条件]
 <!-- 示例：结束 -->
@@ -459,7 +458,7 @@ fn invariant_violation_fails_at_the_owner() {
 ## 计划执行规则
 
 - AI 只以计划状态判断评审就绪：首次执行必须为 `review-plan-complete`，恢复执行允许为 `plan-execution-in-progress`。
-- `execute-plan` 不再重复检查计划完整程度或逐文件审查状态；文件契约、任务 owner、依赖图与验收闸门仍必须通过结构和安全校验。
+- 执行者不再重复检查计划完整程度或逐文件审查状态；文件契约、任务 owner、依赖图与验收闸门仍必须通过结构和安全校验。
 - **最小变更原则**：
   - 仅修改任务直接要求的代码
   - 除非明确要求，否则不得重写、重新排序或重构不相关的文件或模块
@@ -482,10 +481,10 @@ fn invariant_violation_fails_at_the_owner() {
   - **一个计划 = 一次性执行 = 一个 PR，与大小无关**：任务图只用于安全并行和硬依赖调度，不是人工断点；编排方不得将非法图或资源限制不透明地静默串行化。
   - 执行开始前记录 `DIRTY_BASELINE`；与任务 owner 重叠的预存脏路径必须 STOP，不重叠的 baseline 必须保持逐字不变。
   - 执行期任务只能写自己的 owner；发现 owner gap 必须停止并修计划，不得越界。
-  - 每个任务必须发布与当前 generation、文件内容和 gate 日志绑定的 evidence，再经过 `/execute-plan` 内部 task review。
+  - 每个任务必须发布与当前 generation、文件内容和 gate 日志绑定的 evidence，再经过执行者的任务验收。
   - 全部任务 Ready 后，在同一 candidate tree 上运行完整 EXIT CHECK；任何修复改树都从 final lint 重建证据。
   - 最终工作树必须包含任务 checkbox、deviation report 和 `plan-execution-complete` 状态，再计算 tree hash。
-  - 全部 task Ready 后，`/execute-plan` 在 final gate 前机械写入 `plan-execution-complete`，使状态本身进入被验证 tree；任一 final gate 失败或 tree 漂移必须恢复 in-progress，修复后重新写入 complete 并从 final lint 重建证据。
+  - 全部 task Ready 后，执行者在 final gate 前写入 `plan-execution-complete`，使状态本身进入被验证 tree；任一 final gate 失败或 tree 漂移必须恢复 in-progress，修复后重新写入 complete 并从 final lint 重建证据。
   - agent-driven e2e 必须在该精确 tree 上运行；人工 e2e 只记录待验证 tree 与清单，不冒充通过。
   - 任务内不得出现 `(需要手动操作)`；人工验证只存在于「手动测试」section。人工结果若是后续实施的硬前置，必须拆成两份计划。
   - task acceptance 只是局部安全门；人工验证后仍必须运行完整 `/review-pr`。
@@ -495,5 +494,5 @@ fn invariant_violation_fails_at_the_owner() {
   - 从进入 `plan-execution-in-progress` 到全部自动 gate 完成，所有 actor 必须零 Git：不得 `git add`、`commit`、`push`、`stash`、`rebase` 或切换 ref。
   - 自动 gate 全绿后只允许以 `commit-and-push` 作为最后一步落盘，之后不得再改树。
   - 默认不在共享分支落盘；开发者明确要求直接在 `master` commit-and-push 时，该要求授权普通提交和显式 `git push origin master:master`，但不授权 force-push。
-  - feature 分支落盘后交回开发者人工验证，再由 `pr` 创建或更新面向 `master` 的 PR，并由 `review-pr` 完成最终审查；`execute-plan` 自身不 rebase、不创建 PR。
+  - feature 分支落盘后交回开发者人工验证，再由 `pr` 创建或更新面向 `master` 的 PR，并由 `review-pr` 完成最终审查；执行者自身不 rebase、不创建 PR。
 <!-- 计划执行规则：结束 -->

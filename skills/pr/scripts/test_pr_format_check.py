@@ -13,11 +13,6 @@ from pr_goal_context import (  # noqa: E402
     locked_context_paths,
     prepare_context,
 )
-from room_assignment_context import (  # noqa: E402
-    OrchestratedContext,
-    StandaloneContext,
-    render_context as render_assignment_context,
-)
 
 
 TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "references" / "pr-template.md"
@@ -28,12 +23,12 @@ def valid_body() -> str:
         [
             "## 摘要",
             "",
-            "- **主要变更**：重命名 update-docs 并合并两类文档审计",
+            "- **主要变更**：校验 PR 工作流和验证证据",
             "- **大小**：`M`",
             "",
             "## 目标",
             "",
-            "统一文档门禁",
+            "统一工作流校验",
             "",
             "## 非目标",
             "",
@@ -41,11 +36,7 @@ def valid_body() -> str:
             "",
             "## 变更内容",
             "",
-            "- 重命名 skill 并扩展审计范围",
-            "",
-            "## 文档同步",
-            "",
-            "- [x] `shell/packages/example/AGENTS.md` — verified current",
+            "- 统一 PR 模板与校验器",
             "",
             "## 自测 / Agent 测",
             "",
@@ -67,16 +58,12 @@ def valid_draft_body() -> str:
     return (
         valid_body()
         .replace(
-            "- [x] `shell/packages/example/AGENTS.md` — verified current",
-            "- [ ] `update-docs`：待代码门禁完成后执行",
-        )
-        .replace(
             "- [x] `./run test cli`：通过\n- [x] `./run lint check`：通过",
-            "- [ ] `gate-and-fix`：待执行",
+            "- [ ] Readiness verification：未提供",
         )
         .replace(
             "## 其他说明\n\n无",
-            "## 其他说明\n\nDraft 已在 rebase 后创建；readiness convergence 待完成",
+            "## 其他说明\n\n门禁由 orchestrator 安排，本次未提供",
         )
     )
 
@@ -98,7 +85,6 @@ class PrFormatCheckTest(unittest.TestCase):
                 "目标",
                 "非目标",
                 "变更内容",
-                "文档同步",
                 "自测 / Agent 测",
                 "截图 / GIF",
                 "其他说明",
@@ -106,7 +92,7 @@ class PrFormatCheckTest(unittest.TestCase):
         )
 
     def test_valid_title_and_body_pass(self) -> None:
-        self.assertEqual(check_title("[infra] 统一模块文档门禁", self.title_types), [])
+        self.assertEqual(check_title("[infra] 统一工作流校验", self.title_types), [])
         self.assertEqual(check_body(valid_body(), self.sections, self.placeholders), [])
 
     def test_draft_phase_allows_only_scoped_pending_items(self) -> None:
@@ -118,17 +104,8 @@ class PrFormatCheckTest(unittest.TestCase):
         final_problems = check_body(body, self.sections, self.placeholders)
         self.assertTrue(any("unchecked boxes" in problem for problem in final_problems))
 
-        checked_docs = body.replace(
-            "- [ ] `update-docs`：待代码门禁完成后执行",
-            "- [x] `update-docs`：通过",
-        )
-        draft_problems = check_body(
-            checked_docs, self.sections, self.placeholders, phase="draft"
-        )
-        self.assertTrue(any("draft phase" in problem for problem in draft_problems))
-
         no_pending_test = body.replace(
-            "- [ ] `gate-and-fix`：待执行",
+            "- [ ] Readiness verification：未提供",
             "- [x] `./run test cli`：通过",
         )
         draft_problems = check_body(
@@ -137,8 +114,8 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertTrue(any("needs at least one pending item" in problem for problem in draft_problems))
 
         malformed_pending_test = body.replace(
-            "- [ ] `gate-and-fix`：待执行",
-            "- [ ]`gate-and-fix`：待执行",
+            "- [ ] Readiness verification：未提供",
+            "- [ ]Readiness verification：未提供",
         )
         draft_problems = check_body(
             malformed_pending_test, self.sections, self.placeholders, phase="draft"
@@ -146,7 +123,7 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertTrue(any("needs at least one pending item" in problem for problem in draft_problems))
 
         unchecked_summary = body.replace(
-            "- **主要变更**：重命名 update-docs 并合并两类文档审计",
+            "- **主要变更**：校验 PR 工作流和验证证据",
             "- [ ] 摘要待补",
         )
         draft_problems = check_body(
@@ -167,6 +144,11 @@ class PrFormatCheckTest(unittest.TestCase):
         problems = check_body(body, self.sections, self.placeholders)
         self.assertTrue(any("H2 sections" in problem for problem in problems))
 
+    def test_body_rejects_missing_required_sections(self) -> None:
+        body = valid_body().replace("## 截图 / GIF\n\n无 UI 变更\n\n", "")
+        problems = check_body(body, self.sections, self.placeholders)
+        self.assertTrue(any("H2 sections" in problem for problem in problems))
+
     def test_body_rejects_unchecked_boxes_and_empty_self_test(self) -> None:
         body = valid_body().replace(
             "- [x] `./run test cli`：通过", "- [ ] `./run test cli`：未跑"
@@ -180,23 +162,13 @@ class PrFormatCheckTest(unittest.TestCase):
         problems = check_body(body, self.sections, self.placeholders)
         self.assertTrue(any("at least one checked item" in problem for problem in problems))
 
-    def test_body_rejects_placeholders_comments_and_hand_written_docs_sync(self) -> None:
+    def test_body_rejects_comments_and_invalid_size(self) -> None:
         problems = check_body(
             valid_body().replace("无 UI 变更", "<!-- 待补 -->"),
             self.sections,
             self.placeholders,
         )
         self.assertTrue(any("HTML comments" in problem for problem in problems))
-
-        problems = check_body(
-            valid_body().replace(
-                "- [x] `shell/packages/example/AGENTS.md` — verified current",
-                "手写的架构说明",
-            ),
-            self.sections,
-            self.placeholders,
-        )
-        self.assertTrue(any("renderer" in problem for problem in problems))
 
         problems = check_body(
             valid_body().replace("- **大小**：`M`", "- **大小**：`巨大`"),
@@ -206,15 +178,16 @@ class PrFormatCheckTest(unittest.TestCase):
         self.assertTrue(any("大小" in problem for problem in problems))
 
     def test_placeholders_are_derived_from_the_template(self) -> None:
-        """占位符必须来自模板本身，而不是脚本里写死的一份清单。
+        """Placeholders must come from the template itself, not from a list hard-coded in the script.
 
-        写死的清单只覆盖当时想到的几个：模板里的目标槽位与 `[变更项 2]` 都可能
-        漏网，留着它们的 PR 正文照样判通过——门禁的全部意义正是挡住这类残留。
+        A hard-coded list covers only the few thought of at the time: the template's goal slots and
+        `[变更项 2]` could both slip through, and a PR body that keeps them would still pass, while the
+        whole point of the gate is to block exactly this residue.
         """
         self.assertIn("[变更项 2]", self.placeholders)
         self.assertIn("[目标原文或 agent 撰写的目标]", self.placeholders)
         self.assertIn("[非目标原文或无]", self.placeholders)
-        # 标题小节的示例不是正文槽位：正文完全可能正当地讨论该用哪个类型。
+        # Title-section examples are not body slots: the body may legitimately discuss which type to use.
         for title_example in ("[feat]", "[fix]", "[infra]", "[类型]"):
             self.assertNotIn(title_example, self.placeholders)
 
@@ -230,10 +203,10 @@ class PrFormatCheckTest(unittest.TestCase):
             )
 
     def test_placeholder_inside_a_fence_is_not_residue(self) -> None:
-        """围栏内的占位符是**引用**而不是残留。
+        """A placeholder inside a fence is a **quotation**, not residue.
 
-        未勾选 checkbox 与 HTML 注释都按「代码块外」判定，占位符若改扫原始正文，一份
-        正当引用了模板片段的 PR 会被判成没填完。
+        Unchecked checkboxes and HTML comments are both judged "outside code fences"; if placeholders
+        scanned the raw body, a PR that legitimately quotes a template fragment would be judged unfinished.
         """
         body = valid_body().replace(
             "无 UI 变更",
@@ -255,14 +228,14 @@ class PrFormatCheckTest(unittest.TestCase):
             locked_goal_path = Path(directory) / ".locked-goal"
             body_path.write_text(valid_body(), encoding="utf-8")
             context_path.write_text(
-                "## 目标\n\n统一文档门禁\n\n## 非目标\n\n无\n",
+                "## 目标\n\n统一工作流校验\n\n## 非目标\n\n无\n",
                 encoding="utf-8",
             )
-            locked_goal_path.write_text("统一文档门禁\n", encoding="utf-8")
+            locked_goal_path.write_text("统一工作流校验\n", encoding="utf-8")
             self.assertEqual(
                 run(
                     TEMPLATE_PATH,
-                    "[infra] 统一模块文档门禁",
+                    "[infra] 统一工作流校验",
                     body_path,
                     goal_context_path=context_path,
                     locked_goal_path=locked_goal_path,
@@ -274,7 +247,7 @@ class PrFormatCheckTest(unittest.TestCase):
             self.assertEqual(
                 run(
                     TEMPLATE_PATH,
-                    "[infra] 统一模块文档门禁",
+                    "[infra] 统一工作流校验",
                     body_path,
                     goal_context_path=context_path,
                     locked_goal_path=locked_goal_path,
@@ -386,87 +359,11 @@ class PrFormatCheckTest(unittest.TestCase):
                 "无\n",
             )
 
-    def write_assignment_context(self, root: Path, context) -> Path:
-        path = root / "assignment-context.json"
-        path.write_text(render_assignment_context(context), encoding="utf-8")
-        return path
-
-    def test_prepare_context_uses_verified_room_brief_when_planless(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            context = self.write_assignment_context(
-                root,
-                OrchestratedContext(
-                    goal="房间目标\n- 逐字保留",
-                    non_goals="不做 X",
-                    assignment={"request_id": 4},
-                ),
-            )
-            output = root / "pr-goal-context.md"
-
-            locked = prepare_context(
-                branch="feat/room",
-                output_path=output,
-                repo_root=root,
-                assignment_context_path=context,
-            )
-
-            goal_lock, non_goals_lock = locked_context_paths(root, "feat/room")
-            self.assertEqual(locked, goal_lock)
-            self.assertEqual(
-                output.read_text(encoding="utf-8"),
-                "## 目标\n\n房间目标\n- 逐字保留\n\n## 非目标\n\n不做 X\n",
-            )
-            self.assertEqual(goal_lock.read_text(encoding="utf-8"), "房间目标\n- 逐字保留\n")
-            self.assertEqual(non_goals_lock.read_text(encoding="utf-8"), "不做 X\n")
-
-    def test_prepare_context_requires_plan_to_match_verified_room_brief(self) -> None:
+    def test_prepare_context_rejects_mixed_plan_and_authored_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             plan = root / "plan.md"
             plan.write_text("## 目标\n\n计划目标\n\n## 非目标\n\n计划非目标\n", encoding="utf-8")
-            output = root / "pr-goal-context.md"
-            matching = self.write_assignment_context(
-                root, OrchestratedContext(goal="计划目标", non_goals="计划非目标")
-            )
-            prepare_context(
-                branch="feat/room",
-                output_path=output,
-                repo_root=root,
-                plan_paths=[plan],
-                assignment_context_path=matching,
-            )
-            goal_lock, non_goals_lock = locked_context_paths(root, "feat/room")
-            self.assertEqual(non_goals_lock.read_text(encoding="utf-8"), "计划非目标\n")
-
-            goal_lock.unlink()
-            non_goals_lock.unlink()
-            drifted = self.write_assignment_context(
-                root, OrchestratedContext(goal="计划目标", non_goals="房间另有非目标")
-            )
-            with self.assertRaisesRegex(ValueError, "不一致"):
-                prepare_context(
-                    branch="feat/room",
-                    output_path=output,
-                    repo_root=root,
-                    plan_paths=[plan],
-                    assignment_context_path=drifted,
-                )
-            self.assertFalse(goal_lock.exists())
-            self.assertFalse(non_goals_lock.exists())
-
-    def test_prepare_context_rejects_standalone_context_and_mixed_authored_input(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            output = root / "pr-goal-context.md"
-            standalone = self.write_assignment_context(root, StandaloneContext())
-            with self.assertRaisesRegex(ValueError, "verified"):
-                prepare_context(
-                    branch="feat/room",
-                    output_path=output,
-                    repo_root=root,
-                    assignment_context_path=standalone,
-                )
             goal = root / "goal.md"
             non_goal = root / "non-goal.md"
             goal.write_text("目标\n", encoding="utf-8")
@@ -474,11 +371,11 @@ class PrFormatCheckTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "混用"):
                 prepare_context(
                     branch="feat/room",
-                    output_path=output,
+                    output_path=root / "pr-goal-context.md",
                     repo_root=root,
+                    plan_paths=[plan],
                     goal_path=goal,
                     non_goal_path=non_goal,
-                    assignment_context_path=standalone,
                 )
             self.assertFalse(locked_context_paths(root, "feat/room")[0].exists())
 
@@ -497,7 +394,7 @@ class PrFormatCheckTest(unittest.TestCase):
             body_path.write_text(valid_body(), encoding="utf-8")
             problems = run(
                 TEMPLATE_PATH,
-                "[infra] 统一模块文档门禁",
+                "[infra] 统一工作流校验",
                 body_path,
                 goal_context_path=context_path,
                 locked_goal_path=locked_goal_path,
@@ -510,13 +407,13 @@ class PrFormatCheckTest(unittest.TestCase):
             )
 
             body_path.write_text(
-                valid_body().replace("统一文档门禁", "计划原文").replace("\n无\n", "\n- 不做扩展\n"),
+                valid_body().replace("统一工作流校验", "计划原文").replace("\n无\n", "\n- 不做扩展\n"),
                 encoding="utf-8",
             )
             locked_goal_path.write_text("被改写的目标\n", encoding="utf-8")
             problems = run(
                 TEMPLATE_PATH,
-                "[infra] 统一模块文档门禁",
+                "[infra] 统一工作流校验",
                 body_path,
                 goal_context_path=context_path,
                 locked_goal_path=locked_goal_path,

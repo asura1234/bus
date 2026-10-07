@@ -8,17 +8,16 @@ REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
 CANONICAL_SKILLS = {
     "address-review-comments",
+    "best-of-n",
     "commit-and-push",
-    "create-plan",
     "delete-dead-code",
-    "execute-plan",
     "gate-and-fix",
+    "merge-pr",
     "pr",
     "rebase-origin-main",
     "review-plan",
     "review-pr",
     "split-pr",
-    "update-docs",
     "worktree-close",
     "worktree-new",
 }
@@ -47,7 +46,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             for entry in SKILLS.iterdir()
             if entry.is_dir() and (entry / "SKILL.md").is_file()
         }
-        self.assertTrue(CANONICAL_SKILLS.issubset(actual))
+        self.assertEqual(actual, CANONICAL_SKILLS | {"workflow-create"})
         self.assertTrue(PRODUCT_ONLY_SKILLS.isdisjoint(actual))
         for name in CANONICAL_SKILLS:
             with self.subTest(skill=name):
@@ -69,18 +68,13 @@ class SkillMigrationContractTest(unittest.TestCase):
             "docs/guides/plan-review-guide.md",
             "docs/guides/code-review-guide.md",
             "docs/guides/review-response-guide.md",
-            "docs/guides/task-review-guide.md",
-            "docs/guides/plan-execution-guide.md",
-            "docs/guides/room-brief-projection-format.md",
-            "docs/guides/room-orchestrator-content-interface-format.md",
-            "docs/guides/task-agent-report-format.md",
-            "docs/guides/execute-plan-action-format.md",
+            "docs/guides/architecture-principles.md",
             "docs/templates/plan-template.md",
-            "docs/templates/module-agents-template.md",
             "cli_extensions/review_artifact.py",
             "cli_extensions/review_artifact_parser.py",
-            "cli_extensions/review_artifact_task.py",
+            "cli_extensions/review_artifact_text.py",
             "cli_extensions/review_artifact_types.py",
+            "cli_extensions/review_round_common.py",
         )
         for relative in required:
             with self.subTest(path=relative):
@@ -93,9 +87,8 @@ class SkillMigrationContractTest(unittest.TestCase):
             {"可执行（Ready）", "需要完善（Needs Refinement）", "废弃（Abandon）"},
         )
         self.assertEqual(verdicts["pr"], {"Ready", "Needs Refinement", "Abandon"})
-        self.assertEqual(
-            verdicts["task"], {"Ready", "Needs Refinement", "Plan Repair Required"}
-        )
+        # Task review left with execute-plan; only plan and PR reviews remain.
+        self.assertEqual(set(verdicts), {"plan", "pr"})
         markdown = "\n".join(
             path.read_text(encoding="utf-8")
             for root in (SKILLS, REPO / "docs")
@@ -116,17 +109,14 @@ class SkillMigrationContractTest(unittest.TestCase):
     def test_template_and_format_inventory_is_complete(self) -> None:
         expected = {
             "docs/guides/consumer-fallout-format.md",
-            "docs/guides/execute-plan-action-format.md",
             "docs/guides/review-format.md",
-            "docs/guides/room-brief-projection-format.md",
-            "docs/guides/room-orchestrator-content-interface-format.md",
-            "docs/guides/task-agent-report-format.md",
-            "docs/templates/module-agents-template.md",
             "docs/templates/plan-template.md",
+            "docs/templates/workflow-template.md",
             "skills/delete-dead-code/references/dead-code-findings-format.md",
+            "skills/delete-dead-code/references/duplicate-findings-format.md",
             "skills/gate-and-fix/references/gate-round-format.md",
             "skills/pr/references/pr-template.md",
-            "skills/update-docs/references/docs-audit-format.md",
+            "skills/split-pr/references/split-plan-format.md",
         }
         actual = {
             path.relative_to(REPO).as_posix()
@@ -141,7 +131,6 @@ class SkillMigrationContractTest(unittest.TestCase):
             "App Server",
             "cmake/Coverage.cmake",
             "docs/architecture/process-environment.md",
-            "../../AGENTS.md",
             "shell/packages/",
             "LibTV PR 模板",
         ):

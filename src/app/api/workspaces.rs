@@ -2,12 +2,10 @@ use std::path::PathBuf;
 
 use crate::api::schema::{
     EventData, EventEnvelope, EventKind, ResponseResult, WorkspaceCloseParams,
-    WorkspaceCreateParams, WorkspaceMoveBlockParams, WorkspaceMoveParams, WorkspaceRenameParams,
-    WorkspaceReportMetadataParams, WorkspaceTarget,
+    WorkspaceCreateParams, WorkspaceMoveParams, WorkspaceRenameParams, WorkspaceTarget,
 };
 use crate::app::App;
 
-use super::super::api_helpers::{normalize_metadata_source, normalize_metadata_ttl};
 use super::responses::{encode_error, encode_success};
 
 impl App {
@@ -168,146 +166,6 @@ impl App {
         encode_success(id, ResponseResult::WorkspaceList { workspaces })
     }
 
-    pub(super) fn handle_workspace_move_block(
-        &mut self,
-        id: String,
-        params: WorkspaceMoveBlockParams,
-    ) -> String {
-        if params.workspace_ids.is_empty() {
-            return encode_error(
-                id,
-                "workspace_move_block_failed",
-                "workspace_ids must not be empty",
-            );
-        }
-
-        let mut workspace_ids = Vec::with_capacity(params.workspace_ids.len());
-        let mut seen_ids = std::collections::HashSet::new();
-        for requested_id in &params.workspace_ids {
-            let Some(index) = self.parse_workspace_id(requested_id) else {
-                return workspace_not_found(id, requested_id);
-            };
-            let Some(workspace) = self.state.workspaces.get(index) else {
-                return workspace_not_found(id, requested_id);
-            };
-            if !seen_ids.insert(workspace.id.clone()) {
-                return encode_error(
-                    id,
-                    "workspace_move_block_failed",
-                    format!("workspace {requested_id} appears more than once"),
-                );
-            }
-            workspace_ids.push(workspace.id.clone());
-        }
-
-        let before_workspace_id = match params.before_workspace_id {
-            Some(requested_id) => {
-                let Some(index) = self.parse_workspace_id(&requested_id) else {
-                    return workspace_not_found(id, &requested_id);
-                };
-                let Some(workspace) = self.state.workspaces.get(index) else {
-                    return workspace_not_found(id, &requested_id);
-                };
-                if seen_ids.contains(&workspace.id) {
-                    return encode_error(
-                        id,
-                        "workspace_move_block_failed",
-                        "before_workspace_id must not be part of workspace_ids",
-                    );
-                }
-                Some(workspace.id.clone())
-            }
-            None => None,
-        };
-
-        let moved = self
-            .state
-            .move_workspace_block(&workspace_ids, before_workspace_id.as_deref());
-        let workspaces = self.workspace_list_info();
-        if moved {
-            self.emit_event(EventEnvelope {
-                event: EventKind::WorkspaceReordered,
-                data: EventData::WorkspaceReordered {
-                    workspace_ids,
-                    before_workspace_id,
-                    workspaces: workspaces.clone(),
-                },
-            });
-        }
-
-        encode_success(id, ResponseResult::WorkspaceList { workspaces })
-    }
-
-    pub(super) fn handle_workspace_report_metadata(
-        &mut self,
-        id: String,
-        params: WorkspaceReportMetadataParams,
-    ) -> String {
-        let Some(index) = self.parse_workspace_id(&params.workspace_id) else {
-            return workspace_not_found(id, &params.workspace_id);
-        };
-        let source = match normalize_metadata_source(params.source) {
-            Ok(source) => source,
-            Err(message) => return encode_error(id, "invalid_metadata_source", message),
-        };
-        let ttl = match normalize_metadata_ttl(params.ttl_ms) {
-            Ok(ttl) => ttl,
-            Err(message) => return encode_error(id, "invalid_metadata_ttl", message),
-        };
-        let tokens = match super::super::api_helpers::normalize_metadata_tokens(params.tokens) {
-            Ok(tokens) => tokens,
-            Err(message) => return encode_error(id, "invalid_metadata_token", message),
-        };
-        let Some(workspace) = self.state.workspaces.get_mut(index) else {
-            return workspace_not_found(id, &params.workspace_id);
-        };
-        if !crate::metadata_tokens::sequence_is_fresh(
-            &workspace.metadata_token_sequences,
-            &source,
-            params.seq,
-        ) {
-            return encode_success(id, ResponseResult::Ok {});
-        }
-        if workspace.metadata_tokens.key_count_after_patch(&tokens)
-            > super::super::api_helpers::MAX_METADATA_TOKEN_KEYS_PER_RESOURCE
-        {
-            return encode_error(
-                id,
-                "metadata_token_limit",
-                format!(
-                    "workspace metadata may contain at most {} tokens",
-                    super::super::api_helpers::MAX_METADATA_TOKEN_KEYS_PER_RESOURCE
-                ),
-            );
-        }
-        match crate::metadata_tokens::accept_sequence(
-            &mut workspace.metadata_token_sequences,
-            &source,
-            params.seq,
-        ) {
-            Ok(true) => {}
-            Ok(false) => return encode_success(id, ResponseResult::Ok {}),
-            Err(()) => {
-                return encode_error(
-                    id,
-                    "metadata_sequence_source_limit",
-                    format!(
-                        "workspace metadata may track at most {} sequenced sources",
-                        crate::metadata_tokens::MAX_SEQUENCE_SOURCES
-                    ),
-                );
-            }
-        }
-        let changed = workspace
-            .metadata_tokens
-            .patch(tokens, ttl, std::time::Instant::now());
-        if changed {
-            self.sync_agent_metadata_deadline();
-            self.emit_workspace_token_updated(index);
-        }
-        encode_success(id, ResponseResult::Ok {})
-    }
-
     pub(super) fn handle_workspace_close(
         &mut self,
         id: String,
@@ -319,23 +177,7 @@ impl App {
         if self.state.workspaces.get(index).is_none() {
             return workspace_not_found(id, &params.workspace_id);
         }
-        let close_indices = self.state.workspace_close_indices(index);
-        if close_indices.len() >= 2 && !params.close_group {
-            return encode_error(
-                id,
-                "workspace_group_close_required",
-                "workspace has linked worktree workspaces; use --group (close_group=true in the API) to close the group",
-            );
-        }
-        let closed_workspaces = close_indices
-            .iter()
-            .map(|index| {
-                (
-                    self.public_workspace_id(*index),
-                    self.workspace_info(*index),
-                )
-            })
-            .collect::<Vec<_>>();
+        let closed_workspaces = [(self.public_workspace_id(index), self.workspace_info(index))];
         self.state.selected = index;
         self.state.close_selected_workspace();
         self.shutdown_detached_terminal_runtimes();
@@ -362,7 +204,7 @@ impl App {
     }
 }
 
-fn workspace_not_found(id: String, workspace_id: &str) -> String {
+pub(super) fn workspace_not_found(id: String, workspace_id: &str) -> String {
     encode_error(
         id,
         "workspace_not_found",
@@ -451,12 +293,12 @@ mod tests {
         ));
         let created_cwd = &app.state.workspaces[1].identity_cwd;
         assert_eq!(
-            crate::worktree::canonical_or_original(created_cwd),
-            crate::worktree::canonical_or_original(&focused_cwd)
+            crate::home_path::canonical_or_original(created_cwd),
+            crate::home_path::canonical_or_original(&focused_cwd)
         );
         assert_ne!(
-            crate::worktree::canonical_or_original(created_cwd),
-            crate::worktree::canonical_or_original(&root_cwd)
+            crate::home_path::canonical_or_original(created_cwd),
+            crate::home_path::canonical_or_original(&root_cwd)
         );
         shutdown_test_runtimes(&mut app);
         let _ = std::fs::remove_dir_all(&focused_cwd);
@@ -510,8 +352,8 @@ mod tests {
             ResponseResult::WorkspaceCreated { .. }
         ));
         assert_eq!(
-            crate::worktree::canonical_or_original(&app.state.workspaces[2].identity_cwd),
-            crate::worktree::canonical_or_original(&source_cwd)
+            crate::home_path::canonical_or_original(&app.state.workspaces[2].identity_cwd),
+            crate::home_path::canonical_or_original(&source_cwd)
         );
 
         let invalid = app.handle_workspace_create(
@@ -543,311 +385,11 @@ mod tests {
             ResponseResult::WorkspaceCreated { .. }
         ));
         assert_eq!(
-            crate::worktree::canonical_or_original(&app.state.workspaces[3].identity_cwd),
-            crate::worktree::canonical_or_original(&source_cwd)
+            crate::home_path::canonical_or_original(&app.state.workspaces[3].identity_cwd),
+            crate::home_path::canonical_or_original(&source_cwd)
         );
         shutdown_test_runtimes(&mut app);
         let _ = std::fs::remove_dir_all(&source_cwd);
-    }
-
-    fn app_with_linked_worktree() -> App {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        app.state.workspaces = vec![Workspace::test_new("issue")];
-        app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
-            key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-issue".into(),
-            is_linked_worktree: true,
-        });
-        app
-    }
-
-    fn app_with_worktree_group() -> App {
-        let mut app = app_with_linked_worktree();
-        let mut parent = Workspace::test_new("parent");
-        parent.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
-            key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr".into(),
-            is_linked_worktree: false,
-        });
-        app.state.workspaces.insert(0, parent);
-        app.state.active = Some(1);
-        app.state.selected = 1;
-        app.state.mode = crate::app::Mode::Terminal;
-        app
-    }
-
-    #[test]
-    fn api_workspace_close_parent_group_requires_explicit_group_intent() {
-        for confirm_close in [true, false] {
-            let mut app = app_with_worktree_group();
-            app.state.confirm_close = confirm_close;
-            let parent_id = app.public_workspace_id(0);
-            let workspace_ids = app
-                .state
-                .workspaces
-                .iter()
-                .map(|workspace| workspace.id.clone())
-                .collect::<Vec<_>>();
-
-            let request: crate::api::schema::Request = serde_json::from_value(serde_json::json!({
-                "id": "req",
-                "method": "workspace.close",
-                "params": { "workspace_id": parent_id }
-            }))
-            .unwrap();
-            let response = app.handle_api_request(request);
-
-            let response: serde_json::Value = serde_json::from_str(&response).unwrap();
-            assert_eq!(response["error"]["code"], "workspace_group_close_required");
-            assert!(app.event_hub.events_after(0).is_empty());
-            assert_eq!(app.state.mode, crate::app::Mode::Terminal);
-            assert_eq!(app.state.active, Some(1));
-            assert_eq!(app.state.selected, 1);
-            assert_eq!(
-                app.state
-                    .workspaces
-                    .iter()
-                    .map(|workspace| workspace.id.clone())
-                    .collect::<Vec<_>>(),
-                workspace_ids
-            );
-        }
-    }
-
-    #[test]
-    fn api_workspace_close_noncontiguous_group_preserves_adversarial_identity_state() {
-        let mut app = app_with_worktree_group();
-        let parent = app.state.workspaces.remove(0);
-        let linked = app.state.workspaces.remove(0);
-        app.state = crate::app::state::AppState::test_with_adversarial_identity_state();
-        let survivor_id = app.state.workspaces[0].id.clone();
-        app.state.workspaces.insert(0, parent);
-        app.state.workspaces.push(linked);
-        app.state.active = Some(1);
-        app.state.selected = 1;
-        app.state.mode = crate::app::Mode::Terminal;
-        app.state.ensure_test_terminals();
-        let closed_pane_ids = [0, 2].map(|index| app.state.workspaces[index].tabs[0].root_pane);
-        let closed_terminal_ids = [0, 2].map(|index| {
-            app.state
-                .terminal_id_for_pane(index, app.state.workspaces[index].tabs[0].root_pane)
-                .expect("closed workspace pane has a terminal")
-        });
-        for pane_id in closed_pane_ids {
-            app.state.plugin_panes.insert(
-                pane_id,
-                crate::app::state::PluginPaneRecord {
-                    plugin_id: "example.pane".into(),
-                    entrypoint: "board".into(),
-                },
-            );
-        }
-        app.state.assert_invariants_for_test();
-
-        let parent_id = app.public_workspace_id(0);
-        let closed = [0, 2]
-            .into_iter()
-            .map(|index| (app.public_workspace_id(index), app.workspace_info(index)))
-            .collect::<Vec<_>>();
-
-        let response = app.handle_workspace_close(
-            "req".into(),
-            WorkspaceCloseParams {
-                workspace_id: parent_id,
-                close_group: true,
-            },
-        );
-
-        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-        assert_eq!(success.id, "req");
-        assert_eq!(app.state.workspaces.len(), 1);
-        assert_eq!(app.state.workspaces[0].id, survivor_id);
-        for terminal_id in closed_terminal_ids {
-            assert!(!app.state.terminals.contains_key(&terminal_id));
-        }
-        for pane_id in closed_pane_ids {
-            assert!(!app.state.plugin_panes.contains_key(&pane_id));
-        }
-        assert!(app.state.terminal_runtime_shutdowns.is_empty());
-        app.state.assert_invariants_for_test();
-        let events = app.event_hub.events_after(0);
-        assert_eq!(events.len(), closed.len());
-        for ((_, event), (workspace_id, workspace)) in events.iter().zip(closed) {
-            assert!(matches!(event.event, EventKind::WorkspaceClosed));
-            assert!(matches!(
-                &event.data,
-                EventData::WorkspaceClosed {
-                    workspace_id: closed_id,
-                    workspace: Some(closed_workspace),
-                } if closed_id == &workspace_id && closed_workspace == &workspace
-            ));
-        }
-    }
-
-    #[test]
-    fn api_workspace_close_closes_linked_worktree_workspace_only() {
-        let mut app = app_with_worktree_group();
-        let linked_id = app.public_workspace_id(1);
-
-        let response = app.handle_workspace_close(
-            "req".into(),
-            WorkspaceCloseParams {
-                workspace_id: linked_id,
-                close_group: true,
-            },
-        );
-
-        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-        assert_eq!(success.id, "req");
-        assert_eq!(app.state.workspaces.len(), 1);
-        assert_eq!(app.state.workspaces[0].display_name(), "parent");
-    }
-
-    #[test]
-    fn api_workspace_close_event_includes_final_worktree_snapshot() {
-        let event_hub = crate::api::EventHub::default();
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            event_hub.clone(),
-        );
-        app.state.workspaces = app_with_linked_worktree().state.workspaces;
-        let workspace_id = app.state.workspaces[0].id.clone();
-
-        let response = app.handle_workspace_close(
-            "req".into(),
-            WorkspaceCloseParams {
-                workspace_id: workspace_id.clone(),
-                close_group: false,
-            },
-        );
-
-        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-        assert_eq!(success.id, "req");
-        let events = event_hub.events_after(0);
-        assert!(events.iter().any(|(_, event)| {
-            matches!(
-                &event.data,
-                EventData::WorkspaceClosed {
-                    workspace_id: closed_id,
-                    workspace: Some(workspace),
-                } if closed_id == &workspace_id
-                    && workspace
-                        .worktree
-                        .as_ref()
-                        .is_some_and(|worktree| worktree.is_linked_worktree)
-            )
-        }));
-    }
-
-    #[test]
-    fn workspace_metadata_tokens_patch_clear_and_emit_snapshot() {
-        let event_hub = crate::api::EventHub::default();
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            event_hub.clone(),
-        );
-        app.state.workspaces = vec![Workspace::test_new("one")];
-        let workspace_id = app.public_workspace_id(0);
-
-        for (tokens, expected) in [
-            (
-                std::collections::HashMap::from([
-                    ("summary".into(), Some("reviewing auth".into())),
-                    ("jj_status".into(), Some("2 changes".into())),
-                ]),
-                std::collections::HashMap::from([
-                    ("summary".into(), "reviewing auth".into()),
-                    ("jj_status".into(), "2 changes".into()),
-                ]),
-            ),
-            (
-                std::collections::HashMap::from([
-                    ("summary".into(), Some("done".into())),
-                    ("jj_status".into(), None),
-                ]),
-                std::collections::HashMap::from([("summary".into(), "done".into())]),
-            ),
-        ] {
-            let response = app.handle_api_request(crate::api::schema::Request {
-                id: "req".into(),
-                method: crate::api::schema::Method::WorkspaceReportMetadata(
-                    WorkspaceReportMetadataParams {
-                        workspace_id: workspace_id.clone(),
-                        source: "user:test".into(),
-                        tokens,
-                        seq: None,
-                        ttl_ms: None,
-                    },
-                ),
-            });
-            let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-            assert_eq!(success.result, ResponseResult::Ok {});
-            assert_eq!(app.workspace_info(0).tokens, expected);
-        }
-
-        assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
-            &event.data,
-            EventData::WorkspaceMetadataUpdated { workspace }
-                if workspace.tokens.get("summary").map(String::as_str) == Some("done")
-                    && !workspace.tokens.contains_key("jj_status")
-        )));
-    }
-
-    #[test]
-    fn workspace_token_ttl_expires_through_runtime_and_emits_update() {
-        let event_hub = crate::api::EventHub::default();
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            event_hub.clone(),
-        );
-        app.state.workspaces = vec![Workspace::test_new("one")];
-        let workspace_id = app.public_workspace_id(0);
-        let response = app.handle_workspace_report_metadata(
-            "req".into(),
-            WorkspaceReportMetadataParams {
-                workspace_id,
-                source: "user:test".into(),
-                tokens: std::collections::HashMap::from([(
-                    "summary".into(),
-                    Some("temporary".into()),
-                )]),
-                seq: None,
-                ttl_ms: Some(1),
-            },
-        );
-        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
-        let deadline = app.agent_metadata_deadline.expect("token deadline");
-
-        app.expire_metadata_at(deadline, deadline);
-
-        assert!(app.workspace_info(0).tokens.is_empty());
-        assert!(event_hub.events_after(0).iter().any(|(_, event)| matches!(
-            &event.data,
-            EventData::WorkspaceMetadataUpdated { workspace } if workspace.tokens.is_empty()
-        )));
     }
 
     #[test]
@@ -896,65 +438,6 @@ mod tests {
                     && workspaces[2].workspace_id == moved_id
             )
         }));
-    }
-
-    #[test]
-    fn api_workspace_move_block_reorders_atomically() {
-        let event_hub = crate::api::EventHub::default();
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(
-            &Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            event_hub.clone(),
-        );
-        app.state.workspaces = vec![
-            Workspace::test_new("child"),
-            Workspace::test_new("normal"),
-            Workspace::test_new("parent"),
-            Workspace::test_new("tail"),
-        ];
-        let parent_id = app.public_workspace_id(2);
-        let child_id = app.public_workspace_id(0);
-        let tail_id = app.public_workspace_id(3);
-
-        let response = app.handle_workspace_move_block(
-            "req".into(),
-            WorkspaceMoveBlockParams {
-                workspace_ids: vec![parent_id.clone(), child_id.clone()],
-                before_workspace_id: Some(tail_id.clone()),
-            },
-        );
-
-        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
-        let ResponseResult::WorkspaceList { workspaces } = success.result else {
-            panic!("expected workspace list");
-        };
-        assert_eq!(
-            app.state
-                .workspaces
-                .iter()
-                .map(|workspace| workspace.display_name())
-                .collect::<Vec<_>>(),
-            ["normal", "parent", "child", "tail"]
-        );
-        assert_eq!(workspaces[1].workspace_id, parent_id);
-        assert_eq!(workspaces[2].workspace_id, child_id);
-        let events = event_hub.events_after(0);
-        assert_eq!(events.len(), 1);
-        assert!(matches!(
-            &events[0].1.data,
-            EventData::WorkspaceReordered {
-                workspace_ids,
-                before_workspace_id,
-                workspaces,
-            } if workspace_ids.first() == Some(&parent_id)
-                && workspace_ids.get(1) == Some(&child_id)
-                && workspace_ids.len() == 2
-                && before_workspace_id.as_deref() == Some(tail_id.as_str())
-                && workspaces[1].workspace_id == parent_id
-        ));
     }
 
     #[test]

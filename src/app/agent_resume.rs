@@ -155,53 +155,6 @@ impl App {
         pane_infos
     }
 
-    pub(crate) fn start_pending_agent_resume_for_terminal(
-        &mut self,
-        terminal_id: &crate::terminal::TerminalId,
-        rows: u16,
-        cols: u16,
-        allow_empty_theme: bool,
-    ) -> bool {
-        if self.terminal_runtimes.get(terminal_id).is_some() {
-            return false;
-        }
-        let Some((pane_id, cwd, plan)) = self.state.workspaces.iter().find_map(|ws| {
-            ws.tabs.iter().find_map(|tab| {
-                tab.layout.pane_ids().into_iter().find_map(|pane_id| {
-                    let pane = tab.panes.get(&pane_id)?;
-                    if &pane.attached_terminal_id != terminal_id {
-                        return None;
-                    }
-                    let terminal = self.state.terminals.get(terminal_id)?;
-                    Some((
-                        pane_id,
-                        terminal.cwd.clone(),
-                        terminal.pending_agent_resume_plan.clone()?,
-                    ))
-                })
-            })
-        }) else {
-            return false;
-        };
-
-        let changed = self.start_pending_agent_resume(
-            pane_id,
-            terminal_id.clone(),
-            cwd,
-            plan,
-            rows,
-            cols,
-            allow_empty_theme,
-        );
-        if changed {
-            self.schedule_session_save();
-        }
-        if !self.has_pending_agent_resumes() {
-            self.pending_agent_resume_deadline = None;
-        }
-        changed
-    }
-
     fn start_pending_agent_resume(
         &mut self,
         pane_id: crate::layout::PaneId,
@@ -235,25 +188,34 @@ impl App {
                         crate::detect::AgentState::Unknown,
                         false,
                         false,
-                        false,
-                        false,
                         Instant::now(),
                     );
                 }
                 return true;
             }
         };
+        let plan = match &extras.session {
+            Some(session) => {
+                let Some(plan) = crate::agent_resume::plan(
+                    &session.source,
+                    &session.agent,
+                    &session.session_ref,
+                ) else {
+                    return false;
+                };
+                tracing::info!(event = "bus.resume.session_corrected", pane = pane_id.raw(),
+                    terminal = %terminal_id, session = %session.session_ref.value,
+                    "Resuming the conversation Bus bound instead of the terminal's stale one");
+                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                    terminal.set_persisted_agent_session(session.clone());
+                }
+                plan
+            }
+            None => plan,
+        };
         let mut argv = plan.argv;
         argv.extend(extras.args);
-        let Some(resume_command) = shell_command_from_argv(&argv) else {
-            tracing::warn!(
-                pane = pane_id.raw(),
-                terminal = %terminal_id,
-                agent = %plan.agent,
-                "failed to start deferred agent resume with empty argv"
-            );
-            return false;
-        };
+        let resume_command = shell_command_from_argv(&argv);
         let Some(launch_env) = self
             .find_pane(pane_id)
             .and_then(|(ws_idx, _)| self.pane_launch_env(ws_idx, pane_id, extras.env))
@@ -349,15 +311,11 @@ fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
     )
 }
 
-fn shell_command_from_argv(argv: &[String]) -> Option<String> {
-    let mut parts = argv.iter();
-    let first = shell_quote(parts.next()?);
-    let mut command = first;
-    for part in parts {
-        command.push(' ');
-        command.push_str(&shell_quote(part));
-    }
-    Some(command)
+fn shell_command_from_argv(argv: &[String]) -> String {
+    argv.iter()
+        .map(|part| shell_quote(part))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn shell_quote(value: &str) -> String {
@@ -877,9 +835,8 @@ mod tests {
         ];
 
         assert_eq!(
-            shell_command_from_argv(&argv).as_deref(),
-            Some("claude --resume 'session with '\\'' quote'")
+            shell_command_from_argv(&argv),
+            "claude --resume 'session with '\\'' quote'"
         );
-        assert_eq!(shell_command_from_argv(&[]), None);
     }
 }

@@ -7,7 +7,7 @@ pub mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -85,33 +85,6 @@ fn spawn_client_process(
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
-    spawn_client_process_with_args(config_home, runtime_dir, api_socket_path, &["client"])
-}
-
-fn spawn_client_shell_process(
-    config_home: &PathBuf,
-    runtime_dir: &PathBuf,
-    api_socket_path: &PathBuf,
-) -> SpawnedHerdr {
-    spawn_client_process_with_args(config_home, runtime_dir, api_socket_path, &["client"])
-}
-
-fn spawn_client_process_with_args(
-    config_home: &PathBuf,
-    runtime_dir: &PathBuf,
-    api_socket_path: &PathBuf,
-    args: &[&str],
-) -> SpawnedHerdr {
-    spawn_client_process_with_args_and_env(config_home, runtime_dir, api_socket_path, args, &[])
-}
-
-fn spawn_client_process_with_args_and_env(
-    config_home: &PathBuf,
-    runtime_dir: &PathBuf,
-    api_socket_path: &PathBuf,
-    args: &[&str],
-    extra_env: &[(&str, &str)],
-) -> SpawnedHerdr {
     register_runtime_dir(runtime_dir);
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -122,8 +95,8 @@ fn spawn_client_process_with_args_and_env(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
-    cmd.args(args);
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
+    cmd.arg("client");
     cmd.env("HERDR_DISABLE_SOUND", "1");
     cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
     cmd.env("XDG_CONFIG_HOME", config_home);
@@ -132,9 +105,9 @@ fn spawn_client_process_with_args_and_env(
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
-    for (key, value) in extra_env {
-        cmd.env(key, value);
-    }
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -150,13 +123,11 @@ fn spawn_server(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    client_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
     spawn_server_with_config(
         config_home,
         runtime_dir,
         api_socket_path,
-        client_socket_path,
         "onboarding = false\n",
     )
 }
@@ -165,7 +136,6 @@ fn spawn_server_with_config(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket_path: &PathBuf,
-    _client_socket_path: &PathBuf,
     config: &str,
 ) -> SpawnedHerdr {
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
@@ -182,7 +152,7 @@ fn spawn_server_with_config(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
@@ -190,6 +160,9 @@ fn spawn_server_with_config(
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -263,7 +236,7 @@ fn client_connects_and_receives_pane_surface() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -279,123 +252,6 @@ fn client_connects_and_receives_pane_surface() {
 }
 
 #[test]
-fn direct_attach_initial_mouse_capture_follows_config() {
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-    let config_path = config_home.join(app_dir_name()).join("config.toml");
-
-    let spawned_server = spawn_server_with_config(
-        &config_home,
-        &runtime_dir,
-        &api_socket,
-        &client_socket,
-        "onboarding = false\n[ui]\nmouse_capture = false\n",
-    );
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    wait_for_socket(&client_socket, Duration::from_secs(10));
-    let created = send_json_request(
-        &api_socket,
-        &serde_json::json!({
-            "id": "create-workspace-for-direct-attach",
-            "method": "workspace.create",
-            "params": {"cwd": base},
-        })
-        .to_string(),
-    );
-    let terminal_id = created["result"]["root_pane"]["terminal_id"]
-        .as_str()
-        .expect("created terminal id")
-        .to_string();
-
-    let mut attach = spawn_client_process_with_args(
-        &config_home,
-        &runtime_dir,
-        &api_socket,
-        &["terminal", "attach", &terminal_id],
-    );
-    let output = spawn_pty_drain(
-        attach
-            ._master
-            .as_ref()
-            .expect("direct attach master")
-            .try_clone_reader()
-            .expect("clone direct attach PTY reader"),
-    );
-    assert!(
-        wait_until(Duration::from_secs(5), Duration::from_millis(20), || {
-            read_output(&output).contains("\x1b[?7l")
-        }),
-        "direct attach terminal setup should complete; output: {:?}",
-        read_output(&output)
-    );
-    assert!(
-        !read_output(&output).contains("\x1b[?1000h"),
-        "mouse capture disabled must not enable host mouse reporting; output: {:?}",
-        read_output(&output)
-    );
-    assert!(
-        read_output(&output).contains("\x1b[?2004h"),
-        "direct attach must enable host bracketed paste; output: {:?}",
-        read_output(&output)
-    );
-
-    let restore_watermark = output_len(&output);
-    attach
-        ._master
-        .as_ref()
-        .expect("direct attach master")
-        .take_writer()
-        .expect("direct attach PTY writer")
-        .write_all(b"\x02q")
-        .expect("detach direct attach client");
-    let restore_output = drain_until_client_exits(&mut attach, &output, restore_watermark);
-    assert!(
-        restore_output.contains("\x1b[?2004l"),
-        "direct attach must disable host bracketed paste on restore; output: {restore_output:?}"
-    );
-    drop(attach);
-
-    fs::write(
-        &config_path,
-        "onboarding = false\n[ui]\nmouse_capture = true\n",
-    )
-    .unwrap();
-    let attach = spawn_client_process_with_args(
-        &config_home,
-        &runtime_dir,
-        &api_socket,
-        &["terminal", "attach", &terminal_id],
-    );
-    let output = spawn_pty_drain(
-        attach
-            ._master
-            .as_ref()
-            .expect("direct attach master")
-            .try_clone_reader()
-            .expect("clone direct attach PTY reader"),
-    );
-    assert!(
-        wait_until(Duration::from_secs(5), Duration::from_millis(20), || {
-            read_output(&output).contains("\x1b[?7l")
-        }),
-        "direct attach terminal setup should complete; output: {:?}",
-        read_output(&output)
-    );
-    assert!(
-        read_output(&output).contains("\x1b[?1000h"),
-        "mouse capture enabled must retain host mouse reporting; output: {:?}",
-        read_output(&output)
-    );
-
-    drop(spawned_server);
-    cleanup_spawned_herdr(attach, base);
-}
-
-#[test]
 fn client_sees_headless_startup_config_diagnostic() {
     let _lock = test_lock();
     let base = unique_test_dir();
@@ -404,11 +260,7 @@ fn client_sees_headless_startup_config_diagnostic() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let app_dir = if cfg!(debug_assertions) {
-        "herdr-dev"
-    } else {
-        "herdr"
-    };
+    let app_dir = app_dir_name();
     fs::create_dir_all(config_home.join(app_dir)).unwrap();
     fs::write(
         config_home.join(app_dir).join("config.toml"),
@@ -427,7 +279,7 @@ fn client_sees_headless_startup_config_diagnostic() {
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
@@ -435,6 +287,9 @@ fn client_sees_headless_startup_config_diagnostic() {
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -447,7 +302,7 @@ fn client_sees_headless_startup_config_diagnostic() {
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
-    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let client = spawn_client_process(&config_home, &runtime_dir, &api_socket);
     let output = spawn_pty_drain(
         client
             ._master
@@ -488,7 +343,7 @@ fn server_unreachable_shows_clear_error() {
     )
     .unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bus"))
         .arg("client")
         .env("HERDR_DISABLE_SOUND", "1")
         .env("XDG_CONFIG_HOME", &config_home)
@@ -497,6 +352,9 @@ fn server_unreachable_shows_clear_error() {
         .env("HERDR_SOCKET_PATH", &api_socket)
         .env_remove("HERDR_CLIENT_SOCKET_PATH")
         .env_remove("HERDR_ENV")
+        .env_remove("BUS_DATA_DIR")
+        .env_remove("BUS_SESSION_ID")
+        .env_remove("HERDR_SESSION")
         .output()
         .expect("client command should run");
 
@@ -532,7 +390,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -558,6 +416,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
                     let out = String::from_utf8_lossy(&buf[..n]);
                     output.push_str(&out);
                     if out.contains("\u{2500}")
+                        || out.contains("$")
                         || out.contains("workspace")
                         || out.contains("pane")
                         || out.contains("terminal")
@@ -696,7 +555,7 @@ fn attach_thin_client(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket: &PathBuf,
-    client_socket: &PathBuf,
+    client_socket: &Path,
 ) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
     attach_thin_client_with_config(
         config_home,
@@ -711,11 +570,10 @@ fn attach_thin_client_with_config(
     config_home: &PathBuf,
     runtime_dir: &PathBuf,
     api_socket: &PathBuf,
-    client_socket: &PathBuf,
+    client_socket: &Path,
     config: &str,
 ) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
-    let spawned_server =
-        spawn_server_with_config(config_home, runtime_dir, api_socket, client_socket, config);
+    let spawned_server = spawn_server_with_config(config_home, runtime_dir, api_socket, config);
     wait_for_socket(api_socket, Duration::from_secs(10));
     wait_for_socket(client_socket, Duration::from_secs(10));
 
@@ -733,6 +591,7 @@ fn attach_thin_client_with_config(
     while Instant::now() < deadline {
         let out = read_output(&output);
         if out.contains('\u{2500}')
+            || out.contains("$")
             || out.contains("workspace")
             || out.contains("pane")
             || out.contains("terminal")
@@ -755,271 +614,6 @@ fn attach_thin_client_with_config(
 }
 
 #[test]
-fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let _lock = test_lock();
-    for select_remote in [false, true] {
-        let base = unique_test_dir();
-        let config_home = base.join("config");
-        let runtime_dir = base.join("runtime");
-        let api_socket = runtime_dir.join("herdr.sock");
-        fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
-        fs::write(
-            config_home.join(app_dir_name()).join("config.toml"),
-            "onboarding = false\n",
-        )
-        .unwrap();
-        let catalog_dir = runtime_dir
-            .join("state")
-            .join(app_dir_name())
-            .join("client");
-        fs::create_dir_all(&catalog_dir).unwrap();
-        let profile = "0123456789abcdef0123456789abcdef";
-        fs::write(catalog_dir.join("endpoints.json"), serde_json::json!({
-            "version": 1, "selected_profile": select_remote.then_some(profile),
-            "ssh": [{"id": profile, "label": "Unavailable remote", "target": "test-only", "session": "default", "enabled": true}],
-        }).to_string()).unwrap();
-        let bin = base.join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        fs::write(bin.join("ssh"), "#!/bin/sh\nexit 255\n").unwrap();
-        fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o700)).unwrap();
-        let path = format!(
-            "{}:{}",
-            bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        );
-
-        // Exercise both auto-start and a subsequent attach to the healthy Local server.
-        for args in [&[][..], &["client"][..]] {
-            let client = spawn_client_process_with_args_and_env(
-                &config_home,
-                &runtime_dir,
-                &api_socket,
-                args,
-                &[("PATH", &path)],
-            );
-            let output =
-                spawn_pty_drain(client._master.as_ref().unwrap().try_clone_reader().unwrap());
-            wait_for_socket(&api_socket, Duration::from_secs(10));
-            assert!(wait_until(
-                Duration::from_secs(10),
-                Duration::from_millis(20),
-                || { read_output(&output).contains("Local") }
-            ));
-            let mut input = client._master.as_ref().unwrap().take_writer().unwrap();
-            input
-                .write_all(b"printf 'LOCAL_%s\\n' DIRECT_READY\r")
-                .unwrap();
-            assert!(wait_until(Duration::from_secs(10), Duration::from_millis(20), || {
-                read_output(&output).contains("LOCAL_DIRECT_READY")
-            }), "Local must accept input without waiting for SSH (remote selected: {select_remote}): {}", read_output(&output));
-            let text = read_output(&output);
-            assert!(!text.contains("Local: connecting"), "{text}");
-            assert!(!text.contains("Local: reconnecting"), "{text}");
-            drop(input);
-            drop(client);
-        }
-        let _ = send_json_request(
-            &api_socket,
-            r#"{"id":"stop","method":"server.stop","params":{}}"#,
-        );
-        cleanup_test_base(&base);
-    }
-}
-
-#[test]
-fn federated_client_starts_without_local_and_survives_its_restart() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let _lock = test_lock();
-    let base = unique_test_dir();
-    let config_home = base.join("config");
-    let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
-    let remote_config = base.join("remote-config");
-    let remote_runtime = base.join("remote-runtime");
-    let remote_api = remote_runtime.join("herdr.sock");
-    let remote_client = remote_runtime.join("herdr-client.sock");
-    let mut remote_server =
-        spawn_server(&remote_config, &remote_runtime, &remote_api, &remote_client);
-    wait_for_socket(&remote_api, Duration::from_secs(10));
-    wait_for_socket(&remote_client, Duration::from_secs(10));
-    let created = send_json_request(
-        &remote_api,
-        &serde_json::json!({
-            "id": "remote-workspace", "method": "workspace.create",
-            "params": {"cwd": base, "focus": true, "label": "remote-ready"},
-        })
-        .to_string(),
-    );
-    let remote_pane = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
-    send_pane_shell_command(&remote_api, remote_pane, "printf 'REMOTE_INITIAL_FRAME\\n'");
-
-    fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
-    fs::write(
-        config_home.join(app_dir_name()).join("config.toml"),
-        "onboarding = false\n",
-    )
-    .unwrap();
-    let catalog_dir = runtime_dir
-        .join("state")
-        .join(app_dir_name())
-        .join("client");
-    fs::create_dir_all(&catalog_dir).unwrap();
-    let profile = "0123456789abcdef0123456789abcdef";
-    fs::write(catalog_dir.join("endpoints.json"), serde_json::json!({
-        "version": 1, "selected_profile": profile,
-        "ssh": [{"id": profile, "label": "Test remote", "target": "test-only", "session": "default", "enabled": true}],
-    }).to_string()).unwrap();
-
-    // The SSH executable is private to this client. Discovery and the stdio bridge run the real
-    // binary against a second disposable local server, never the developer's saved hosts.
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    fs::create_dir_all(base.join("home")).unwrap();
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_herdr"), bin.join("herdr")).unwrap();
-    let quote =
-        |path: &std::path::Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
-    fs::write(bin.join("ssh"), format!(
-        "#!/bin/sh\nexport HOME={} XDG_CONFIG_HOME={} XDG_RUNTIME_DIR={} HERDR_SOCKET_PATH={}\nunset HERDR_CLIENT_SOCKET_PATH HERDR_SESSION\nfor arg do last=\"$arg\"; done\nexec /bin/sh -c \"$last\"\n",
-        quote(&base.join("home")), quote(&remote_config), quote(&remote_runtime), quote(&remote_api),
-    )).unwrap();
-    fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o700)).unwrap();
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let mut client = spawn_client_process_with_args_and_env(
-        &config_home,
-        &runtime_dir,
-        &api_socket,
-        &["client"],
-        &[("PATH", &path)],
-    );
-    let output = spawn_pty_drain(client._master.as_ref().unwrap().try_clone_reader().unwrap());
-    assert!(
-        wait_until(Duration::from_secs(12), Duration::from_millis(20), || {
-            read_output(&output).contains("REMOTE_INITIAL_FRAME")
-        }),
-        "remote must be usable before Local exists: {}",
-        read_output(&output)
-    );
-
-    let mut local = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    let created = send_json_request(
-        &api_socket,
-        &serde_json::json!({
-            "id": "local-workspace", "method": "workspace.create",
-            "params": {"cwd": base, "focus": true, "label": "local-online"},
-        })
-        .to_string(),
-    );
-    assert_eq!(created["result"]["type"], "workspace_created");
-    assert!(wait_until(
-        Duration::from_secs(10),
-        Duration::from_millis(20),
-        || read_output(&output).contains("local-online")
-    ));
-
-    local.child.kill().unwrap();
-    local.close_master();
-    drop(local);
-    let watermark = output_len(&output);
-    let mut input = client._master.as_ref().unwrap().take_writer().unwrap();
-    input
-        .write_all(b"printf 'REMOTE_%s\\n' SURVIVED\r")
-        .unwrap();
-    assert!(
-        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
-            read_output(&output)[watermark..].contains("REMOTE_SURVIVED")
-        }),
-        "Local loss must not interrupt remote input or output"
-    );
-    assert!(client.child.try_wait().unwrap().is_none());
-
-    let restarted = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
-    wait_for_socket(&api_socket, Duration::from_secs(10));
-    let created = send_json_request(
-        &api_socket,
-        &serde_json::json!({
-            "id": "local-returned", "method": "workspace.create",
-            "params": {"cwd": base, "focus": true, "label": "local-returned"},
-        })
-        .to_string(),
-    );
-    assert_eq!(created["result"]["type"], "workspace_created");
-    assert!(
-        wait_until(Duration::from_secs(12), Duration::from_millis(20), || {
-            read_output(&output).contains("local-returned")
-        }),
-        "Local must reconnect with fresh metadata"
-    );
-    let watermark = output_len(&output);
-    input
-        .write_all(b"printf 'REMOTE_%s\\n' STILL_SELECTED\r")
-        .unwrap();
-    assert!(
-        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
-            read_output(&output)[watermark..].contains("REMOTE_STILL_SELECTED")
-        }),
-        "Local recovery must not steal selection"
-    );
-    let watermark = output_len(&output);
-    remote_server.child.kill().unwrap();
-    assert!(
-        wait_until(Duration::from_secs(10), Duration::from_millis(20), || {
-            read_output(&output)[watermark..].contains("reconnecting")
-        }),
-        "the selected remote must be marked disconnected"
-    );
-    let text = read_output(&output);
-    assert!(
-        text.rfind("\x1b[?1000h") > text.rfind("\x1b[?1000l"),
-        "losing the selected remote must keep host mouse reporting enabled"
-    );
-
-    let local_pane = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
-    send_pane_shell_command(
-        &api_socket,
-        local_pane,
-        "printf 'LOCAL_RECOVERED_SURFACE\\n'",
-    );
-    let watermark = output_len(&output);
-    // Select the fresh workspace below Local's restored workspace.
-    input.write_all(b"\x1b[<0;7;5M\x1b[<0;7;5m").unwrap();
-    assert!(
-        wait_until(Duration::from_secs(10), Duration::from_millis(20), || {
-            read_output(&output)[watermark..].contains("LOCAL_RECOVERED_SURFACE")
-        }),
-        "recovered Local must be selectable: {}",
-        read_output(&output)
-    );
-    // A coherent frame precedes the final host-effects fence; input stays gated until then.
-    assert!(
-        wait_until(Duration::from_secs(8), Duration::from_millis(100), || {
-            if read_output(&output)[watermark..].contains("LOCAL_INPUT_RECOVERED") {
-                return true;
-            }
-            input
-                .write_all(b"printf 'LOCAL_%s\\n' INPUT_RECOVERED\r")
-                .unwrap();
-            false
-        }),
-        "recovered Local must accept input: {}",
-        read_output(&output)
-    );
-    drop(input);
-    drop(client);
-    drop(restarted);
-    drop(remote_server);
-    cleanup_test_base(&base);
-}
-
-#[test]
 fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     let _lock = test_lock();
     let base = unique_test_dir();
@@ -1028,7 +622,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let mut server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let mut server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1048,7 +642,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
         .to_string();
     send_pane_shell_command(&api_socket, &pane_id, "printf 'SHELL_LIFECYCLE_INITIAL\\n'");
 
-    let mut client_a = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let mut client_a = spawn_client_process(&config_home, &runtime_dir, &api_socket);
     let output_a = spawn_pty_drain(
         client_a
             ._master
@@ -1067,14 +661,11 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     );
 
     let detach_watermark = output_len(&output_a);
-    client_a
-        ._master
-        .as_ref()
-        .expect("first client shell PTY")
-        .take_writer()
-        .expect("first client shell writer")
-        .write_all(b"\x02q")
-        .expect("detach first client shell");
+    // There are no client-owned keybindings; terminate the client the way a closed tab would.
+    let client_a_pid = client_a.child.process_id().expect("first client shell pid");
+    unsafe {
+        libc::kill(client_a_pid as libc::pid_t, libc::SIGTERM);
+    }
     let detach_output = drain_until_client_exits(&mut client_a, &output_a, detach_watermark);
     assert!(
         output_has_mouse_teardown(&detach_output),
@@ -1091,7 +682,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
         &pane_id,
         "printf 'SHELL_LIFECYCLE_DETACHED\\n'",
     );
-    let mut client_b = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let mut client_b = spawn_client_process(&config_home, &runtime_dir, &api_socket);
     let output_b = spawn_pty_drain(
         client_b
             ._master
@@ -1423,6 +1014,7 @@ fn read_until_client_attaches(client: &SpawnedHerdr) -> String {
             Err(err) => panic!("read thin client PTY: {err}"),
         }
         if output.contains('\u{2500}')
+            || output.contains("$")
             || output.contains("workspace")
             || output.contains("pane")
             || output.contains("terminal")
@@ -1442,7 +1034,7 @@ fn client_exits_cleanly_when_terminal_and_transport_hang_up() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let mut spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let mut spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1501,7 +1093,7 @@ fn client_exits_cleanly_when_terminal_hangs_up() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned_server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1548,7 +1140,7 @@ fn client_receives_pane_surface_after_pane_output() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1621,14 +1213,18 @@ fn pane_spawn_cwd_fallback_in_server() {
     let missing_cwd = missing_cwd.to_str().expect("test cwd should be UTF-8");
     fs::create_dir_all(&data_dir).unwrap();
     let session = serde_json::json!({
-        "version": 2,
+        "version": 3,
         "workspaces": [{
             "custom_name": "missing-cwd",
-            "layout": { "Pane": 0 },
-            "panes": { "0": { "cwd": missing_cwd } },
-            "zoomed": false,
-            "focused": 0,
-            "root_pane": 0
+            "identity_cwd": missing_cwd,
+            "tabs": [{
+                "layout": { "Pane": 0 },
+                "panes": { "0": { "cwd": missing_cwd } },
+                "zoomed": false,
+                "focused": 0,
+                "root_pane": 0
+            }],
+            "active_tab": 0
         }],
         "active": 0,
         "selected": 0
@@ -1639,7 +1235,7 @@ fn pane_spawn_cwd_fallback_in_server() {
     )
     .unwrap();
 
-    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1671,7 +1267,7 @@ fn pane_spawn_cwd_fallback_in_server() {
         "fallback cwd should exist: {cwd}"
     );
 
-    let client_shell = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let client_shell = spawn_client_process(&config_home, &runtime_dir, &api_socket);
     let output = spawn_pty_drain(
         client_shell
             ._master
@@ -1703,7 +1299,7 @@ fn graceful_shutdown_sends_server_shutdown_to_client() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
@@ -1750,9 +1346,8 @@ fn graceful_shutdown_sends_server_shutdown_to_client() {
 
 #[test]
 fn client_receives_notify_on_agent_state_change() {
-    // Notification events (sound/toast) are forwarded as
-    // ServerMessage::Notify to connected clients when an agent state change
-    // is triggered via the API (pane.report_agent).
+    // Agent toasts are forwarded to connected clients as semantic
+    // notifications when a detected agent's screen state changes.
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -1760,11 +1355,37 @@ fn client_receives_notify_on_agent_state_change() {
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
 
-    // Enable toast and sound in config so the server produces notifications.
+    // A fake `pi` starts idle, shows Pi's working marker once the go file
+    // appears, then clears the screen when the stop file appears and stays
+    // alive so screen detection reports idle again.
+    let bin_dir = base.join("bin");
+    let go_file = base.join("pi-go");
+    let stop_file = base.join("pi-stop");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let fake_pi = bin_dir.join("pi");
+    fs::write(
+        &fake_pi,
+        format!(
+            "#!/bin/sh\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'Working...\\n'\nwhile [ ! -f '{stop}' ]; do sleep 0.05; done\nprintf '\\033[2J\\033[Hdone\\n'\nsleep 30\n",
+            go = go_file.display(),
+            stop = stop_file.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_pi, perms).unwrap();
+    }
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
+
+    // Enable toasts in config so the server produces notifications.
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::write(
         config_home.join(app_dir_name()).join("config.toml"),
-        "onboarding = false\n[ui.toast]\nenabled = true\n[ui.sound]\nenabled = true\n",
+        "onboarding = false\n[ui.toast]\ndelivery = \"herdr\"\n",
     )
     .unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
@@ -1781,14 +1402,18 @@ fn client_receives_notify_on_agent_state_change() {
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
     cmd.env("HERDR_SOCKET_PATH", &api_socket);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
+    cmd.env("PATH", &path_override);
     cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -1840,46 +1465,29 @@ fn client_receives_notify_on_agent_state_change() {
         .unwrap_or("p_1_1")
         .to_string();
 
-    // Report agent as Blocked via the API — this should trigger a
-    // ServerMessage::Notify with kind=Sound (Request sound).
-    let mut report_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let report_request = format!(
-        r#"{{"id":"3","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"blocked","source":"test"}}}}"#
+    // Start the fake agent. The first idle after detection never notifies.
+    let started = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "3",
+            "method": "pane.send_input",
+            "params": { "pane_id": &pane_id, "text": "pi", "keys": ["Enter"] },
+        })
+        .to_string(),
     );
-    writeln!(report_stream, "{}", report_request).unwrap();
-    let mut report_reader = BufReader::new(report_stream);
-    let mut report_response = String::new();
-    report_reader.read_line(&mut report_response).unwrap();
-
-    // Read messages from the client stream and look for the semantic notification.
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut found_notify = false;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        match read_server_message(&mut stream) {
-            Ok((variant, _payload)) => {
-                if variant == SERVER_MESSAGE_SEMANTIC_NOTIFICATION {
-                    found_notify = true;
-                    break;
-                }
-                // Snapshot and pane-surface messages may arrive first.
-            }
-            Err(_) => {
-                break;
-            }
-        }
-    }
-
+    assert_eq!(started["result"]["type"], "ok", "{started}");
+    let pane_get =
+        format!(r#"{{"id":"pane","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#);
     assert!(
-        found_notify,
-        "client should receive a semantic notification after pane.report_agent"
+        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+            let pane = send_json_request(&api_socket, &pane_get);
+            pane["result"]["pane"]["agent"] == "pi"
+                && pane["result"]["pane"]["agent_status"] == "idle"
+        }),
+        "fake pi should be detected as idle"
     );
 
-    // Now report Idle from Working — this should trigger a Done sound
-    // if the pane is in a background workspace.
-    // First, create a second workspace to make the first one "background".
+    // Create and focus a second workspace so the agent's pane is in the background.
     let mut ws2_stream = UnixStream::connect(&api_socket).expect("connect to API");
     let ws2_request = r#"{"id":"4","method":"workspace.create","params":{}}"#;
     writeln!(ws2_stream, "{}", ws2_request).unwrap();
@@ -1887,7 +1495,6 @@ fn client_receives_notify_on_agent_state_change() {
     let mut ws2_response = String::new();
     ws2_reader.read_line(&mut ws2_response).unwrap();
 
-    // Focus the new workspace (making the first one background).
     let ws2_id = ws2_response
         .split('"')
         .find(|s| s.starts_with("w_"))
@@ -1909,32 +1516,15 @@ fn client_receives_notify_on_agent_state_change() {
         "server should stay responsive after workspace focus"
     );
 
-    // Report agent as Working first, then Idle — this transition in a
-    // background workspace should trigger a Done sound notification.
-    let mut work_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let work_request = format!(
-        r#"{{"id":"6","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"working","source":"test"}}}}"#
-    );
-    writeln!(work_stream, "{}", work_request).unwrap();
-    let mut work_reader = BufReader::new(work_stream);
-    let mut work_response = String::new();
-    work_reader.read_line(&mut work_response).unwrap();
-
+    // Working→Idle in a background workspace is a Done toast.
+    fs::write(&go_file, "go").unwrap();
     assert!(
-        wait_until(Duration::from_secs(2), Duration::from_millis(25), || {
-            ping_socket(&api_socket).contains("pong")
+        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+            send_json_request(&api_socket, &pane_get)["result"]["pane"]["agent_status"] == "working"
         }),
-        "server should stay responsive after working state report"
+        "fake pi should be detected as working"
     );
-
-    let mut idle_stream = UnixStream::connect(&api_socket).expect("connect to API");
-    let idle_request = format!(
-        r#"{{"id":"7","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","state":"idle","source":"test"}}}}"#
-    );
-    writeln!(idle_stream, "{}", idle_request).unwrap();
-    let mut idle_reader = BufReader::new(idle_stream);
-    let mut idle_response = String::new();
-    idle_reader.read_line(&mut idle_response).unwrap();
+    fs::write(&stop_file, "stop").unwrap();
 
     // Read messages and look for the done semantic notification.
     stream
@@ -1961,6 +1551,162 @@ fn client_receives_notify_on_agent_state_change() {
     assert!(
         found_done_notify,
         "client should receive a semantic notification when a background pane transitions Working→Idle"
+    );
+
+    cleanup_spawned_herdr(spawned, base);
+}
+
+#[test]
+fn client_receives_notify_when_detected_agent_becomes_blocked() {
+    // pane.report_agent 已删除，阻塞通知只能靠屏幕检测。amp 把
+    // “waiting for approval” 判成 blocked，空屏是 idle，这样才能走出
+    // idle→blocked 并发出 needs-attention 通知。
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let bin_dir = base.join("bin");
+    let go_file = base.join("amp-go");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let fake_amp = bin_dir.join("amp");
+    fs::write(
+        &fake_amp,
+        format!(
+            "#!/bin/sh\nwhile [ ! -f '{go}' ]; do sleep 0.05; done\nprintf 'waiting for approval\\n'\nsleep 30\n",
+            go = go_file.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&fake_amp).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_amp, perms).unwrap();
+    }
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
+
+    fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
+    fs::write(
+        config_home.join(app_dir_name()).join("config.toml"),
+        "onboarding = false\n[ui.toast]\ndelivery = \"herdr\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(&runtime_dir).unwrap();
+    register_runtime_dir(&runtime_dir);
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
+    cmd.arg("server");
+    cmd.env("XDG_CONFIG_HOME", &config_home);
+    cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
+    cmd.env("HERDR_SOCKET_PATH", &api_socket);
+    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("SHELL", "/bin/sh");
+    cmd.env("PATH", &path_override);
+    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
+
+    let child = pair.slave.spawn_command(cmd).unwrap();
+    register_spawned_herdr_pid(child.process_id());
+    drop(pair.slave);
+
+    let spawned = SpawnedHerdr {
+        _master: Some(pair.master),
+        child,
+    };
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    let mut stream = UnixStream::connect(&client_socket).expect("should connect");
+    let (version, error) = client_shell_handshake(&mut stream, CURRENT_PROTOCOL, 54, 23)
+        .expect("handshake should succeed");
+    assert_eq!(version, CURRENT_PROTOCOL);
+    assert!(error.is_none(), "{error:?}");
+    wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(5))
+        .expect("client shell bootstrap");
+
+    let created = send_json_request(
+        &api_socket,
+        r#"{"id":"1","method":"workspace.create","params":{}}"#,
+    );
+    let ws_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap_or("w_1")
+        .to_string();
+    let pane_id = first_pane_id_in_workspace(&api_socket, &ws_id);
+
+    let started = send_json_request(
+        &api_socket,
+        &serde_json::json!({
+            "id": "3",
+            "method": "pane.send_input",
+            "params": { "pane_id": &pane_id, "text": "amp", "keys": ["Enter"] },
+        })
+        .to_string(),
+    );
+    assert_eq!(started["result"]["type"], "ok", "{started}");
+    let pane_get =
+        format!(r#"{{"id":"pane","method":"pane.get","params":{{"pane_id":"{pane_id}"}}}}"#);
+    assert!(
+        wait_until(Duration::from_secs(10), Duration::from_millis(50), || {
+            let pane = send_json_request(&api_socket, &pane_get);
+            pane["result"]["pane"]["agent"] == "amp"
+                && pane["result"]["pane"]["agent_status"] == "idle"
+        }),
+        "fake amp should be detected as idle before the blocker appears"
+    );
+
+    support::drain_messages(&mut stream);
+    fs::write(&go_file, "go").unwrap();
+
+    stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    let mut found_blocked_notify = false;
+    let mut saw_blocked = false;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && !(found_blocked_notify && saw_blocked) {
+        match read_server_message(&mut stream) {
+            Ok((variant, payload)) => {
+                if variant == SERVER_MESSAGE_SEMANTIC_NOTIFICATION
+                    && payload
+                        .windows(b"needs attention".len())
+                        .any(|window| window == b"needs attention")
+                {
+                    found_blocked_notify = true;
+                }
+            }
+            Err(error) if error.contains("timed out") => {}
+            Err(error) => {
+                eprintln!("read error while looking for blocked notification: {error}");
+                break;
+            }
+        }
+        if !saw_blocked {
+            saw_blocked = send_json_request(&api_socket, &pane_get)["result"]["pane"]
+                ["agent_status"]
+                == "blocked";
+        }
+    }
+
+    assert!(saw_blocked, "fake amp should be detected as blocked");
+    assert!(
+        found_blocked_notify,
+        "client should receive a needs-attention notification when a detected agent becomes blocked"
     );
 
     cleanup_spawned_herdr(spawned, base);

@@ -34,6 +34,8 @@ pub(crate) struct PathSuggestion {
 pub(crate) struct PreparedLaunch {
     pub(crate) cwd: PathBuf,
     pub(crate) args: Vec<String>,
+    /// The existing provider session this launch resumes instead of starting one.
+    pub(crate) adopted_session: Option<String>,
     pub(crate) env: HashMap<String, String>,
     pub(crate) manifest: Manifest,
 }
@@ -84,6 +86,105 @@ pub(crate) fn canonical_directory(input: &str) -> Result<PathBuf, String> {
         return Err("Agent PWD must be an existing directory".into());
     }
     Ok(path)
+}
+
+/// Takes the reviewed resume form out of the user's launch args so the agent
+/// adopts an existing provider session: `--resume ID` for Claude Code and
+/// Cursor, a leading `resume ID` subcommand for Codex. The ID must be a session
+/// UUID. Pickers and `--continue`/`--last` stay outside the allowlist, so the
+/// remaining args still go through [`validate_args`].
+pub(crate) fn take_adopted_session(
+    provider: Provider,
+    args: &mut Vec<String>,
+) -> Result<Option<String>, String> {
+    let mut found = None;
+    let mut index = 0;
+    while index < args.len() {
+        let attached = match provider {
+            // A subcommand only counts first; later it may be an option value.
+            Provider::Codex if index == 0 && args[0] == "resume" => None,
+            Provider::Codex => break,
+            Provider::ClaudeCode | Provider::Cursor if args[index] == "--resume" => None,
+            Provider::ClaudeCode | Provider::Cursor => {
+                match args[index].strip_prefix("--resume=") {
+                    Some(value) => Some(value.to_owned()),
+                    None => {
+                        index += 1;
+                        continue;
+                    }
+                }
+            }
+        };
+        if found.is_some() {
+            return Err("Give at most one session to resume".into());
+        }
+        args.remove(index);
+        let value = match attached {
+            Some(value) => value,
+            None if index < args.len() => args.remove(index),
+            None => String::new(),
+        };
+        if !is_session_uuid(&value) {
+            return Err(format!(
+                "Resume needs a session ID (a UUID), not {value:?}; pickers, --continue and --last are not supported"
+            ));
+        }
+        found = Some(value);
+    }
+    Ok(found)
+}
+
+/// The adopted session in an agent's launch args, without the other checks.
+pub(crate) fn adopted_session(
+    provider: Provider,
+    extra_args: &str,
+) -> Result<Option<String>, String> {
+    let mut args = super::files::parse_path_tokens(extra_args).map_err(|e| e.to_string())?;
+    take_adopted_session(provider, &mut args)
+}
+
+fn is_session_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.char_indices().all(|(index, c)| match index {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// The user's validated launch args with Bus's runtime args, led by the resume
+/// form when the agent adopts an existing session.
+fn launch_args(
+    provider: Provider,
+    extra_args: &str,
+) -> Result<(Vec<String>, Option<String>), String> {
+    let mut args = super::files::parse_path_tokens(extra_args).map_err(|e| e.to_string())?;
+    let adopted = take_adopted_session(provider, &mut args)?;
+    validate_args(provider, &args)?;
+    if let Some(session) = &adopted {
+        args.splice(0..0, resume_args(provider, session));
+    }
+    args.extend(runtime_args(provider));
+    Ok((args, adopted))
+}
+
+/// Holds a launch's adopted session in its callback folder from launch on, so
+/// no second agent adopts it before the provider's SessionStart binds it.
+const ADOPTED_SESSION_FILE: &str = "adopted-session";
+
+/// The session a launch adopted, from its callback folder.
+pub(crate) fn reserved_session(spool: &Path) -> Option<String> {
+    std::fs::read_to_string(spool.join(ADOPTED_SESSION_FILE))
+        .ok()
+        .map(|session| session.trim().to_owned())
+        .filter(|session| !session.is_empty())
+}
+
+/// The provider argv that resumes `session`; Codex's is a leading subcommand.
+fn resume_args(provider: Provider, session: &str) -> Vec<String> {
+    match provider {
+        Provider::Codex => vec!["resume".into(), session.into()],
+        Provider::ClaudeCode | Provider::Cursor => vec!["--resume".into(), session.into()],
+    }
 }
 
 enum LaunchOption {
@@ -183,15 +284,55 @@ fn project_root(cwd: &Path) -> PathBuf {
     }
 }
 
-fn hook_command(binary: &Path, provider: Provider) -> String {
-    // Hook definitions are shell commands; provider launch arguments never are.
-    let quoted = crate::platform::remote_reattach_program(&binary.to_string_lossy());
-    let adapter = match provider {
+fn hook_adapter(provider: Provider) -> &'static str {
+    match provider {
         Provider::Codex => "codex-hook",
         Provider::ClaudeCode => "claude-hook",
         Provider::Cursor => "cursor-hook",
+    }
+}
+
+fn hook_command(binary: &Path, provider: Provider) -> String {
+    // Hook definitions are shell commands; provider launch arguments never are.
+    let quoted = crate::platform::remote_reattach_program(&binary.to_string_lossy());
+    format!("{quoted} --bus-callback {}", hook_adapter(provider))
+}
+
+fn hook_entry(provider: Provider, command: &str) -> Value {
+    if provider == Provider::Cursor {
+        json!({"command":command})
+    } else {
+        json!({"hooks":[{"type":"command","command":command,"timeout":5}]})
+    }
+}
+
+/// Whether `entry` is one Bus wrote for `provider` from any Bus executable: its
+/// exact shape, with a command that is one program quoted the way Bus quotes it
+/// plus this provider's callback. A moved or rebuilt binary leaves these behind.
+fn is_owned_entry(entry: &Value, provider: Provider) -> bool {
+    let command = if provider == Provider::Cursor {
+        &entry["command"]
+    } else {
+        &entry["hooks"][0]["command"]
     };
-    format!("{quoted} --bus-callback {adapter}")
+    let Some(command) = command.as_str() else {
+        return false;
+    };
+    let Some(program) =
+        command.strip_suffix(&format!(" --bus-callback {}", hook_adapter(provider)))
+    else {
+        return false;
+    };
+    let path = match program
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+    {
+        Some(quoted) => quoted.replace("'\\''", "'"),
+        None => program.to_owned(),
+    };
+    !path.is_empty()
+        && crate::platform::remote_reattach_program(&path) == program
+        && *entry == hook_entry(provider, command)
 }
 
 fn hook_entries(provider: Provider, binary: &Path) -> Vec<(&'static str, Value)> {
@@ -208,16 +349,7 @@ fn hook_entries(provider: Provider, binary: &Path) -> Vec<(&'static str, Value)>
     };
     events
         .iter()
-        .map(|event| {
-            (
-                *event,
-                if provider == Provider::Cursor {
-                    json!({"command":command})
-                } else {
-                    json!({"hooks":[{"type":"command","command":command,"timeout":5}]})
-                },
-            )
-        })
+        .map(|event| (*event, hook_entry(provider, &command)))
         .collect()
 }
 
@@ -239,7 +371,20 @@ fn merge_hooks(mut document: Value, provider: Provider, binary: &Path) -> Result
             .or_insert(json!([]))
             .as_array_mut()
             .ok_or("Hook event must contain an array")?;
-        if group.contains(&owned) {
+        // Entries from another Bus executable move to this one, in place.
+        let mut placed = false;
+        group.retain_mut(|entry| {
+            if !is_owned_entry(entry, provider) {
+                return true;
+            }
+            if placed {
+                return false;
+            }
+            placed = true;
+            *entry = owned.clone();
+            true
+        });
+        if placed {
             continue;
         }
         if group
@@ -255,8 +400,38 @@ fn merge_hooks(mut document: Value, provider: Provider, binary: &Path) -> Result
     Ok(document)
 }
 
+/// Moves this provider's Bus hooks in `path` to `binary` when every hook event
+/// already holds a Bus-owned entry, as one that another Bus executable (a
+/// rebuilt, moved or throwaway binary) rewrote in place. A missing file or a
+/// missing event is the user's choice and is never recreated here.
+pub(crate) fn rebind_owned_hooks(
+    path: &Path,
+    provider: Provider,
+    binary: &Path,
+) -> Result<(), String> {
+    let document: Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let owned = hook_entries(provider, binary).iter().all(|(event, _)| {
+        document["hooks"][*event]
+            .as_array()
+            .is_some_and(|group| group.iter().any(|entry| is_owned_entry(entry, provider)))
+    });
+    if !owned {
+        return Err("Bus hooks are missing; existing configuration was kept".into());
+    }
+    install_hooks(path, provider, binary)
+}
+
 pub(crate) fn install_hooks(path: &Path, provider: Provider, binary: &Path) -> Result<(), String> {
     let parent = path.parent().ok_or("Missing hook config parent")?;
+    // A test binary written into a real project's hooks silently captures the
+    // callbacks of every live agent there; tests must use a temporary project.
+    #[cfg(test)]
+    assert!(
+        is_temporary(path),
+        "tests must not install hooks outside the temp directory: {}",
+        path.display()
+    );
     super::io::private_dir(parent).map_err(|e| e.to_string())?;
     let _lease = super::io::lock(&parent.join(".bus-hooks.lock")).map_err(|e| e.to_string())?;
     let previous = match std::fs::read(path) {
@@ -284,6 +459,13 @@ pub(crate) fn install_hooks(path: &Path, provider: Provider, binary: &Path) -> R
     .map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
+fn is_temporary(path: &Path) -> bool {
+    let temp = std::env::temp_dir();
+    let canonical = temp.canonicalize().unwrap_or_else(|_| temp.clone());
+    path.starts_with(&temp) || path.starts_with(&canonical)
+}
+
 pub(crate) fn prepare(
     input: &AddAgent,
     agent_id: AgentId,
@@ -294,9 +476,7 @@ pub(crate) fn prepare(
     if input.name.trim().is_empty() {
         return Err("Agent name is required".into());
     }
-    let mut args = super::files::parse_path_tokens(&input.extra_args).map_err(|e| e.to_string())?;
-    validate_args(input.provider, &args)?;
-    args.extend(runtime_args(input.provider));
+    let (mut args, adopted_session) = launch_args(input.provider, &input.extra_args)?;
     let available = std::env::var_os("PATH").is_some_and(|path| {
         std::env::split_paths(&path).any(|dir| dir.join(executable(input.provider)).is_file())
     });
@@ -332,23 +512,28 @@ pub(crate) fn prepare(
     };
     let spool = data_dir.join("callbacks").join(&launch_id);
     super::callbacks::initialize(&spool, &manifest).map_err(|e| e.to_string())?;
+    if let Some(session) = &adopted_session {
+        super::io::atomic_write(&spool.join(ADOPTED_SESSION_FILE), session.as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
     if input.provider == Provider::ClaudeCode {
         let settings = spool.join("claude-settings.json");
         install_hooks(&settings, input.provider, binary)?;
+        super::usage::claude_statusline::install(&spool, &project_root(&cwd), binary)
+            .map_err(|e| e.to_string())?;
         args.extend(["--settings".into(), settings.to_string_lossy().into_owned()]);
     }
-    let discovery = super::trusted_assignment::prepare_discovery(data_dir, agent_id, &launch_id)?;
-    let mut env = HashMap::from([
+    let env = HashMap::from([
         ("BUS_LAUNCH_ID".into(), launch_id),
         (
             "BUS_CALLBACK_DIR".into(),
             spool.to_string_lossy().into_owned(),
         ),
     ]);
-    env.extend(discovery.env(binary));
     Ok(PreparedLaunch {
         cwd,
         args,
+        adopted_session,
         env,
         manifest,
     })
@@ -521,6 +706,78 @@ mod tests {
     }
 
     #[test]
+    fn launch_args_adopt_one_session_by_uuid_in_each_providers_resume_form() {
+        let id = "160d1f8b-9023-44b8-9bc7-24333effb185";
+        let owned = |args: &[&str]| args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            launch_args(
+                Provider::ClaudeCode,
+                &format!("--model sonnet --resume {id}")
+            )
+            .unwrap(),
+            (
+                owned(&["--resume", id, "--model", "sonnet"]),
+                Some(id.into())
+            )
+        );
+        assert_eq!(
+            launch_args(Provider::Cursor, &format!("--resume={id}")).unwrap(),
+            (owned(&["--resume", id]), Some(id.into()))
+        );
+        assert_eq!(
+            launch_args(Provider::Codex, &format!("resume {id} -m gpt-test")).unwrap(),
+            (
+                owned(&["resume", id, "-m", "gpt-test", "--no-daemon"]),
+                Some(id.into())
+            )
+        );
+        // A later "resume" is an option value, not the subcommand.
+        assert_eq!(
+            launch_args(Provider::Codex, "--model resume").unwrap(),
+            (owned(&["--model", "resume", "--no-daemon"]), None)
+        );
+        for (provider, input) in [
+            (Provider::ClaudeCode, "--resume"),
+            (Provider::ClaudeCode, "--resume not-a-uuid"),
+            (
+                Provider::ClaudeCode,
+                "--resume 160d1f8b-9023-44b8-9bc7-24333effb18",
+            ),
+            (
+                Provider::ClaudeCode,
+                "--resume 160d1f8b_9023-44b8-9bc7-24333effb185",
+            ),
+            (
+                Provider::ClaudeCode,
+                &format!("--resume {id} --resume {id}"),
+            ),
+            (Provider::ClaudeCode, &format!("--resume {id} --continue")),
+            (
+                Provider::ClaudeCode,
+                &format!("--resume {id} --fork-session"),
+            ),
+            (
+                Provider::ClaudeCode,
+                "-r 160d1f8b-9023-44b8-9bc7-24333effb185",
+            ),
+            (Provider::ClaudeCode, "--continue"),
+            (Provider::ClaudeCode, &format!("--session-id {id}")),
+            (Provider::Codex, "resume --last"),
+            (Provider::Codex, "resume"),
+            (Provider::Codex, &format!("resume {id} resume {id}")),
+            (Provider::Codex, &format!("-m gpt resume {id}")),
+            (Provider::Codex, &format!("resume {id} --all")),
+            (Provider::Cursor, "--resume --continue"),
+            (Provider::Cursor, "--continue"),
+        ] {
+            assert!(
+                launch_args(provider, input).is_err(),
+                "accepted {provider:?}: {input}"
+            );
+        }
+    }
+
+    #[test]
     fn codex_launches_host_their_own_runtime_so_hooks_inherit_launch_env() {
         assert_eq!(
             runtime_args(Provider::Codex),
@@ -543,8 +800,53 @@ mod tests {
             merge_hooks(merged.clone(), Provider::Codex, binary).unwrap(),
             merged
         );
-        assert!(merge_hooks(merged, Provider::Codex, Path::new("/tmp/other-bus")).is_err());
         assert!(hook_command(binary, Provider::Codex).starts_with("'/tmp/a path/it'\\''s bus' "));
+    }
+
+    #[test]
+    fn hook_merge_moves_bus_entries_from_another_executable_and_fails_closed_on_lookalikes() {
+        let old = Path::new("/tmp/a path/it's bus-frozen");
+        let current = Path::new("/repo/target/debug/bus");
+        for provider in [Provider::Codex, Provider::ClaudeCode, Provider::Cursor] {
+            let user = if provider == Provider::Cursor {
+                json!({"command":"existing"})
+            } else {
+                json!({"hooks":[{"type":"command","command":"existing"}]})
+            };
+            let mut stale = merge_hooks(json!({"other":true}), provider, old).unwrap();
+            for (event, _) in hook_entries(provider, old) {
+                let group = stale["hooks"][event].as_array_mut().unwrap();
+                group.insert(0, user.clone());
+                group.push(user.clone());
+            }
+            let moved = merge_hooks(stale, provider, current).unwrap();
+            assert_eq!(moved["other"], true);
+            for (event, owned) in hook_entries(provider, current) {
+                // The Bus entry keeps its place between the user's own hooks.
+                assert_eq!(moved["hooks"][event], json!([user, owned, user]));
+            }
+            assert_eq!(
+                merge_hooks(moved.clone(), provider, current).unwrap(),
+                moved
+            );
+        }
+
+        // Only Bus's exact entry shape and quoting count as owned.
+        let owned = |command: &str| json!({"hooks":{"Stop":[{"hooks":[{"type":"command","command":command,"timeout":5}]}]}});
+        for lookalike in [
+            owned("sh -c 'bus' --bus-callback codex-hook"),
+            owned("/tmp/bus --bus-callback codex-hook; rm -rf /"),
+            owned("'/tmp/bus' --bus-callback codex-hook"),
+            owned("/tmp/bus --bus-callback claude-hook"),
+            owned(" --bus-callback codex-hook"),
+            json!({"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/tmp/bus --bus-callback codex-hook","timeout":5,"extra":1}]}]}}),
+            json!({"hooks":{"Stop":[{"matcher":"x","hooks":[{"type":"command","command":"/tmp/bus --bus-callback codex-hook","timeout":5}]}]}}),
+        ] {
+            assert!(
+                merge_hooks(lookalike.clone(), Provider::Codex, current).is_err(),
+                "{lookalike}"
+            );
+        }
     }
 
     #[test]
@@ -567,8 +869,6 @@ mod tests {
             1
         );
         install_hooks(&path, Provider::Cursor, binary).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), installed);
-        assert!(install_hooks(&path, Provider::Cursor, Path::new("/tmp/different bus")).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), installed);
         std::fs::write(&path, b"corrupt original").unwrap();
         assert!(install_hooks(&path, Provider::Cursor, binary).is_err());

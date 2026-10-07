@@ -10,8 +10,10 @@ use std::sync::Arc;
 mod history_tests;
 #[path = "keys_tests.rs"]
 mod keys_tests;
-#[path = "orchestrator_ui_tests.rs"]
-mod orchestrator_ui_tests;
+#[path = "master_tests.rs"]
+mod master_tests;
+#[path = "sound_tests.rs"]
+mod sound_tests;
 fn fixture() -> (BusUi, RoomId, AgentId) {
     let mut state = BusState::default();
     let room = state.create_room("room").unwrap();
@@ -298,41 +300,91 @@ fn creation_events_survive_snapshots_from_before_the_created_target() {
     assert_eq!(ui.terminal, Some(agent));
 }
 
+/// The three ways terminals report a shifted symbol: the bare symbol, the
+/// symbol with SHIFT, and the US base key with SHIFT plus the shifted codepoint.
+fn shifted_symbol_encodings(symbol: char, base: char) -> [TerminalKey; 3] {
+    [
+        TerminalKey::new(KeyCode::Char(symbol), KeyModifiers::NONE),
+        TerminalKey::new(KeyCode::Char(symbol), KeyModifiers::SHIFT),
+        TerminalKey::new(KeyCode::Char(base), KeyModifiers::SHIFT)
+            .with_shifted_codepoint(symbol as u32),
+    ]
+}
+
 #[test]
-fn composer_symbol_shortcuts_work_for_legacy_and_shifted_terminal_keys() {
-    for (symbol, base) in [('@', '2'), ('+', '=')] {
-        for input in [
-            TerminalKey::new(KeyCode::Char(symbol), KeyModifiers::NONE),
-            TerminalKey::new(KeyCode::Char(symbol), KeyModifiers::SHIFT),
-            TerminalKey::new(KeyCode::Char(base), KeyModifiers::SHIFT)
-                .with_shifted_codepoint(symbol as u32),
-        ] {
+fn typing_plus_in_the_composer_inserts_plus() {
+    for input in shifted_symbol_encodings('+', '=') {
+        let (mut ui, room, _) = fixture();
+        ui.input(
+            &RawInputEvent::Key(input.clone()),
+            false,
+            &mut Default::default(),
+        );
+        assert_eq!(ui.locals[&room].text.text, "+", "for {input:?}");
+        assert!(ui.form.is_none() && !ui.recipient_menu, "for {input:?}");
+    }
+}
+
+#[test]
+fn every_shifted_symbol_types_into_the_composer() {
+    let shifted = [
+        ('~', '`'),
+        ('!', '1'),
+        ('@', '2'),
+        ('#', '3'),
+        ('$', '4'),
+        ('%', '5'),
+        ('^', '6'),
+        ('&', '7'),
+        ('*', '8'),
+        ('(', '9'),
+        (')', '0'),
+        ('_', '-'),
+        ('+', '='),
+        ('{', '['),
+        ('}', ']'),
+        ('|', '\\'),
+        (':', ';'),
+        ('"', '\''),
+        ('<', ','),
+        ('>', '.'),
+        ('?', '/'),
+    ];
+    for (symbol, base) in shifted {
+        for input in shifted_symbol_encodings(symbol, base) {
             let (mut ui, room, agent) = fixture();
-            ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
             ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
             ui.input(
                 &RawInputEvent::Key(input.clone()),
                 false,
                 &mut Default::default(),
             );
-            if symbol == '@' {
-                assert!(ui.recipient_menu, "picker missing for {input:?}");
-                assert!(ui.form.is_none());
-            } else {
-                assert!(
-                    matches!(ui.form, Some(forms::Form::Files(_))),
-                    "file picker missing for {input:?}"
-                );
-            }
-            assert_eq!(ui.locals[&room].text.text, "keep draft");
-            assert_eq!(ui.locals[&room].recipients, [agent].into());
+            assert_eq!(
+                ui.locals[&room].text.text,
+                symbol.to_string(),
+                "{symbol} was not typed for {input:?}"
+            );
+            assert!(ui.form.is_none() && !ui.recipient_menu);
             assert!(ui.send_intent.is_none());
         }
     }
 }
 
 #[test]
-fn composer_symbol_shortcuts_leave_paste_notes_and_form_text_literal() {
+fn ctrl_chords_open_the_agent_and_file_pickers() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
+    key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
+    assert!(ui.recipient_menu && ui.form.is_none());
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
+    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    assert!(matches!(ui.form, Some(forms::Form::Files(_))));
+    assert_eq!(ui.locals[&room].text.text, "keep draft");
+}
+
+#[test]
+fn symbols_stay_literal_in_paste_notes_and_forms() {
     let (mut ui, room, _) = fixture();
     for event in [
         RawInputEvent::Paste("@author + file.md".into()),
@@ -390,7 +442,7 @@ fn room_chrome_uses_shared_phosphor_green() {
         (1, 4, "─"),                       // Rooms/agents separator.
         (27, 0, "│"),                      // Column separator.
         (29, 2, "┌"),                      // Notes box.
-        (29, 7, "─"),                      // History separator.
+        (29, 5, "─"),                      // History separator under one-row notes.
         (editor.x - 1, editor.y - 3, "┌"), // Composer box.
         (editor.x, editor.y - 1, "─"),     // Composer toolbar separator.
     ] {
@@ -1086,19 +1138,20 @@ fn room_notes_have_a_box_and_top_section_is_separated_from_history() {
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
     ui.render(&mut buffer);
     let color = buffer[(27, 0)].fg;
-    for (x, y, symbol) in [(29, 2, "┌"), (98, 2, "┐"), (29, 6, "└"), (98, 6, "┘")] {
+    // One line of notes gets a one-row box; history starts right below it.
+    for (x, y, symbol) in [(29, 2, "┌"), (98, 2, "┐"), (29, 4, "└"), (98, 4, "┘")] {
         assert_eq!(buffer[(x, y)].symbol(), symbol);
         assert_eq!(buffer[(x, y)].fg, color);
     }
     for x in 30..98 {
-        for y in [2, 6, 7] {
+        for y in [2, 4, 5] {
             assert_eq!(buffer[(x, y)].symbol(), "─");
             assert_eq!(buffer[(x, y)].fg, color);
         }
     }
     assert_eq!(buffer[(30, 3)].symbol(), "R");
-    assert_eq!(buffer[(30, 8)].symbol(), "Y");
-    assert_eq!(buffer[(30, 9)].symbol(), "h");
+    assert_eq!(buffer[(30, 6)].symbol(), "Y");
+    assert_eq!(buffer[(30, 7)].symbol(), "h");
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     key(&mut ui, KeyCode::Char('!'), KeyModifiers::NONE);
     assert_eq!(ui.locals[&room].notes.text, "Room notes!");
@@ -1426,6 +1479,8 @@ fn agent_enter_adds_from_non_model_fields_with_its_own_directory_and_escape_canc
             cwd: editor::Editor::new("/projects/frontend".into()),
             args: Box::new(editor::Editor::new("--model sonnet".into())),
             field,
+            orchestrates: None,
+            prompt: None,
         });
         // Suggestions must not hijack Enter; Tab remains path completion.
         ui.suggestions
@@ -1650,7 +1705,7 @@ fn composer_uses_full_height_and_toggle_preserves_draft_and_recipients() {
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
     assert!(room_screen(&mut ui, 100, 30).contains("Add notes"));
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Char('@'), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
     assert!(room_screen(&mut ui, 100, 30).contains("[x] author"));
     key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
@@ -1706,7 +1761,7 @@ fn composer_full_height_picker_covers_draft() {
         .text
         .insert(&"underlying-draft-suffix-should-not-bleed-through\n".repeat(80));
     ui.compute_view(100, 30);
-    key(&mut ui, KeyCode::Char('@'), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
     ui.compute_view(100, 30);
     let hit = ui
         .view
@@ -1802,7 +1857,7 @@ fn consecutive_sends_keep_checked_recipients_and_queue_the_successor() {
             },
         )
         .unwrap();
-    key(&mut ui, KeyCode::Char('@'), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
@@ -2099,9 +2154,89 @@ fn quit_waits_for_draft_then_shutdown_ack_instead_of_exiting_immediately() {
         .any(|p| matches!(p.command, BusCommand::Shutdown)));
 }
 
+fn shell_with(ui: BusUi) -> crate::client::shell::ClientShellState {
+    let mut shell = crate::client::shell::ClientShellState::new(
+        crate::client::shell::ClientShellConfig::from_config(&crate::config::Config::default()),
+    );
+    shell.bus = Some(ui);
+    shell.snapshot = Some(Box::new(crate::client::shell::tests::snapshot()));
+    shell.pane_surface = Some(crate::client::shell::tests::surface());
+    shell.compose(100, 30);
+    shell
+}
+
+fn forwards_ctrl_c_to(outcome: &crate::client::shell::ClientShellInput, pane: &str) -> bool {
+    outcome.requests.iter().any(|r| {
+        matches!(
+            r,
+            crate::protocol::ClientMessage::ClientShellPaneInput { pane_id, events }
+                if pane_id == pane
+                    && matches!(
+                        &events[..],
+                        [crate::protocol::ClientPaneInputEvent::Key {
+                            code: crate::protocol::ClientKeyCode::Char('c'),
+                            modifiers,
+                            ..
+                        }] if *modifiers == KeyModifiers::CONTROL.bits()
+                    )
+        )
+    })
+}
+
 #[test]
-fn ctrl_c_clears_room_draft_then_quits_from_any_view_without_forwarding_or_losing_saves() {
-    for view in ["room", "form", "terminal"] {
+fn ctrl_c_in_focused_agent_terminal_is_forwarded_and_does_not_quit_bus() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("keep this draft");
+    ui.text_changed(room);
+    ui.open_terminal(agent);
+    ui.receive_event(BusEvent::TerminalFocused {
+        agent,
+        pane_id: "pane_1".into(),
+    });
+    let mut shell = shell_with(ui);
+    for _ in 0..2 {
+        let outcome = shell.handle_input_bytes(b"\x03");
+        assert!(!outcome.detach);
+        assert!(
+            forwards_ctrl_c_to(&outcome, "pane_1"),
+            "Ctrl+C must reach the agent unchanged"
+        );
+        let ui = shell.bus.as_ref().unwrap();
+        assert!(ui.quitting.is_none(), "Ctrl+C must not quit Bus");
+        assert!(ui.terminal.is_some(), "the agent terminal stays open");
+        assert_eq!(ui.locals[&room].text.text, "keep this draft");
+    }
+}
+
+#[test]
+fn ctrl_c_in_room_clears_the_draft_and_never_quits_bus() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().text.insert("clear me");
+    ui.text_changed(room);
+    let mut shell = shell_with(ui);
+    // The first press clears the draft; an empty composer then ignores it.
+    for expected in ["", ""] {
+        let outcome = shell.handle_input_bytes(b"\x03");
+        assert!(!outcome.detach);
+        assert!(!outcome.requests.iter().any(|r| matches!(
+            r,
+            crate::protocol::ClientMessage::ClientShellPaneInput { .. }
+        )));
+        let ui = shell.bus.as_ref().unwrap();
+        assert!(ui.quitting.is_none(), "Ctrl+C must not quit Bus");
+        assert_eq!(ui.locals[&room].text.text, expected);
+    }
+    let ui = shell.bus.as_ref().unwrap();
+    assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text.is_empty())));
+}
+
+#[test]
+fn ctrl_c_in_forms_and_unfocused_terminals_does_nothing() {
+    for view in ["form", "rename", "terminal_not_ready"] {
         let (mut ui, room, agent) = fixture();
         ui.locals
             .get_mut(&room)
@@ -2109,34 +2244,47 @@ fn ctrl_c_clears_room_draft_then_quits_from_any_view_without_forwarding_or_losin
             .text
             .insert("keep this draft");
         ui.text_changed(room);
-        if view == "form" {
-            ui.action(render::Action::NewRoom);
-        } else if view == "terminal" {
+        match view {
+            "form" => ui.action(render::Action::NewRoom),
+            "rename" => key(&mut ui, KeyCode::F(2), KeyModifiers::NONE),
+            _ => ui.open_terminal(agent),
+        }
+        assert!(ui.form.is_some() || ui.rename.is_some() || ui.terminal.is_some());
+        assert!(view != "rename" || ui.rename.is_some());
+        let mut shell = shell_with(ui);
+        let outcome = shell.handle_input_bytes(b"\x03");
+        assert!(!outcome.detach);
+        assert!(!forwards_ctrl_c_to(&outcome, "pane_1"), "{view}");
+        let ui = shell.bus.as_ref().unwrap();
+        assert!(
+            ui.quitting.is_none(),
+            "Ctrl+C must not quit Bus from {view}"
+        );
+        assert_eq!(ui.locals[&room].text.text, "keep this draft");
+    }
+}
+
+#[test]
+fn ctrl_q_still_quits_from_room_and_agent_terminal_after_saving() {
+    for view in ["room", "terminal"] {
+        let (mut ui, room, agent) = fixture();
+        ui.locals
+            .get_mut(&room)
+            .unwrap()
+            .text
+            .insert("keep this draft");
+        ui.text_changed(room);
+        if view == "terminal" {
             ui.open_terminal(agent);
             ui.receive_event(BusEvent::TerminalFocused {
                 agent,
                 pane_id: "pane_1".into(),
             });
         }
-        let mut shell = crate::client::shell::ClientShellState::new(
-            crate::client::shell::ClientShellConfig::from_config(&crate::config::Config::default()),
-        );
-        shell.bus = Some(ui);
-        shell.snapshot = Some(Box::new(crate::client::shell::tests::snapshot()));
-        shell.pane_surface = Some(crate::client::shell::tests::surface());
-        shell.compose(100, 30);
-        // Only the room shows the draft box, so only there Ctrl+C clears it first.
-        let expected = if view == "room" {
-            shell.handle_input_bytes(b"\x03");
-            let ui = shell.bus.as_ref().unwrap();
-            assert!(ui.quitting.is_none(), "a visible draft blocks quitting");
-            ""
-        } else {
-            "keep this draft"
-        };
-        let outcome = shell.handle_input_bytes(b"\x03");
-        let ui = shell.bus.as_mut().unwrap();
-        assert!(ui.quitting.is_some(), "Ctrl+C must quit from {view}");
+        let mut shell = shell_with(ui);
+        let outcome = shell.handle_input_bytes(b"\x11");
+        let ui = shell.bus.as_ref().unwrap();
+        assert!(ui.quitting.is_some(), "Ctrl+Q must quit from {view}");
         assert!(
             !outcome.detach && !ui.exit_ready,
             "wait for save acknowledgements"
@@ -2145,13 +2293,24 @@ fn ctrl_c_clears_room_draft_then_quits_from_any_view_without_forwarding_or_losin
             r,
             crate::protocol::ClientMessage::ClientShellPaneInput { .. }
         )));
-        assert_eq!(ui.locals[&room].text.text, expected);
-        assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text == expected)));
-        assert!(!ui
-            .pending
-            .iter()
-            .any(|p| matches!(p.command, BusCommand::Shutdown)));
+        assert_eq!(ui.locals[&room].text.text, "keep this draft");
+        assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text == "keep this draft")));
     }
+}
+
+#[test]
+fn ctrl_q_exits_the_client_only_after_bus_saved() {
+    let (ui, _, _) = fixture();
+    let mut shell = shell_with(ui);
+    let outcome = shell.handle_input_bytes(b"\x11");
+    assert!(!outcome.detach, "Ctrl+Q must wait for the save");
+    assert!(!shell.bus_exit_ready());
+    let ui = shell.bus.as_mut().unwrap();
+    assert!(ui.quitting.is_some(), "Ctrl+Q must save and quit");
+    // Stands in for the Shutdown acknowledgement after every save landed; the
+    // client then detaches and stops the server (see shell_runtime tests).
+    ui.exit_ready = true;
+    assert!(shell.bus_exit_ready());
 }
 
 #[test]
@@ -2168,11 +2327,12 @@ fn ctrl_c_release_and_modified_copy_chords_do_not_quit_bus() {
         KeyModifiers::SUPER,
         KeyModifiers::CONTROL | KeyModifiers::SHIFT,
         KeyModifiers::CONTROL | KeyModifiers::ALT,
+        KeyModifiers::CONTROL,
     ] {
         key(&mut ui, KeyCode::Char('c'), modifiers);
     }
     assert!(ui.quitting.is_none());
-    key(&mut ui, KeyCode::Char('c'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert!(ui.quitting.is_some());
 }
 
@@ -2278,17 +2438,12 @@ fn drag_copy(ui: &mut BusUi, from: (u16, u16), to: (u16, u16)) -> Option<String>
 }
 
 #[test]
-fn dragging_history_copies_rejoined_soft_wraps_and_highlights_the_cells() {
+fn dragging_a_rendered_prompt_copies_its_raw_source_and_highlights_it() {
     let (mut ui, room, agent) = fixture();
+    let source = "alpha **beta** gamma delta epsilon zeta eta theta\nsecond line";
     let mut snapshot = (*ui.snapshot).clone();
     snapshot.state.set_draft_recipients(room, [agent]).unwrap();
-    snapshot
-        .state
-        .set_draft_text(
-            room,
-            "alpha beta gamma delta epsilon zeta eta theta\nsecond line",
-        )
-        .unwrap();
+    snapshot.state.set_draft_text(room, source).unwrap();
     snapshot.state.submit_draft(room, 1).unwrap();
     ui.receive_snapshot(Arc::new(snapshot));
     ui.compute_view(60, 30);
@@ -2305,19 +2460,16 @@ fn dragging_history_copies_rejoined_soft_wraps_and_highlights_the_cells() {
     let first = row_of(&ui, "alpha beta");
     let second = row_of(&ui, "second");
     assert!(second > first + 1, "the long prompt must soft-wrap");
+    // Rendered Markdown has no stable offsets back into its source, so any
+    // selection touching the prompt copies the whole raw source.
     let copied = drag_copy(&mut ui, (text.x + 6, first), (text.x + 5, second));
-    assert_eq!(
-        copied.as_deref(),
-        Some("beta gamma delta epsilon zeta eta theta\nsecond")
-    );
+    assert_eq!(copied.as_deref(), Some(source));
     ui.compute_view(60, 30);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 30));
     ui.render(&mut buffer);
     let tint = ratatui::style::Color::Rgb(44, 88, 56);
-    assert_eq!(buffer[(text.x + 6, first)].bg, tint);
-    assert_ne!(buffer[(text.x + 5, first)].bg, tint);
-    assert_eq!(buffer[(text.x + 5, second)].bg, tint);
-    assert_ne!(buffer[(text.x + 6, second)].bg, tint);
+    assert_eq!(buffer[(text.x, first)].bg, tint);
+    assert_eq!(buffer[(text.x + 10, second)].bg, tint);
     // Typing ends the history selection.
     key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
     assert!(ui.history_selection.is_none());
@@ -2668,6 +2820,7 @@ fn hook_consent_clears_old_pwd_suggestions_before_enter_can_confirm() {
             extra_args: String::new(),
             consent_project_hooks: false,
         },
+        orchestrator: None,
         notice: crate::bus::launch::SetupNotice {
             path: "/project/.codex/hooks.json".into(),
             message: "review hooks".into(),
@@ -2692,14 +2845,20 @@ fn sidebar_calls_an_unconfirmed_idle_agent_not_ready() {
     ui.compute_view(100, 30);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
     ui.render(&mut buffer);
-    let mut sidebar = String::new();
-    for y in 0..ui.view.sidebar.height {
-        for x in 0..ui.view.sidebar.width {
-            sidebar.push_str(buffer[(x, y)].symbol());
-        }
-    }
-    assert!(sidebar.contains("Not ready"), "{sidebar}");
-    assert!(!sidebar.contains("Idle"), "{sidebar}");
+    let sidebar: Vec<String> = (0..ui.view.sidebar.height)
+        .map(|y| {
+            (0..ui.view.sidebar.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    // The room row shows its own status; the agent row never says Idle.
+    let agent_row = sidebar
+        .iter()
+        .find(|row| row.contains("author"))
+        .expect("agent row");
+    assert!(agent_row.contains("Not ready"), "{sidebar:?}");
+    assert!(!agent_row.contains("Idle"), "{sidebar:?}");
 }
 
 fn mouse(ui: &mut BusUi, kind: crossterm::event::MouseEventKind, column: u16, row: u16) {
@@ -2915,4 +3074,355 @@ fn overflow_mixed_file_chips_keep_full_path_inspection_and_removal() {
         }
     }
     assert_eq!(ui.main_scroll, 0, "file scrolling must not move replies");
+}
+
+#[test]
+fn pasted_images_are_saved_once_under_the_bus_data_dir() {
+    let root = std::env::temp_dir().join(format!(
+        "bus-paste-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let room = RoomId(7);
+    let first = input::save_pasted_image(&root, room, b"\x89PNG fake", "png").unwrap();
+    let again = input::save_pasted_image(&root, room, b"\x89PNG fake", "png").unwrap();
+    let other = input::save_pasted_image(&root, room, b"other", "png").unwrap();
+
+    assert!(first.is_absolute());
+    assert!(first.starts_with(root.join("attachments").join("room-7")));
+    assert_eq!(first.extension().unwrap(), "png");
+    assert_eq!(std::fs::read(&first).unwrap(), b"\x89PNG fake");
+    assert_eq!(first, again, "one image pasted twice is one file");
+    assert_ne!(first, other);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn pasted_temporary_images_are_copied_into_the_room_attachments() {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp = std::env::temp_dir().join(format!("bus-temp-paste-{}-{stamp}", std::process::id()));
+    std::fs::create_dir_all(&temp).unwrap();
+    let pasted = temp.join("pasted-image.PNG");
+    std::fs::write(&pasted, b"\x89PNG pasted").unwrap();
+    let notes = temp.join("notes.md");
+    std::fs::write(&notes, "# notes").unwrap();
+    let root = temp.join("data");
+    let room = RoomId(3);
+
+    let copy = input::copy_temporary_image(&root, room, &pasted)
+        .unwrap()
+        .expect("a temp image is copied");
+    assert!(
+        copy.starts_with(root.canonicalize().unwrap().join("attachments/room-3"))
+            || copy.starts_with(root.join("attachments/room-3"))
+    );
+    assert_eq!(copy.extension().unwrap(), "png");
+    assert_eq!(std::fs::read(&copy).unwrap(), b"\x89PNG pasted");
+    assert_eq!(
+        input::copy_temporary_image(&root, room, &notes).unwrap(),
+        None
+    );
+    assert_eq!(
+        input::copy_temporary_image(&root, room, &copy).unwrap(),
+        None,
+        "an attachment Bus already owns stays where it is"
+    );
+    std::fs::remove_dir_all(&temp).unwrap();
+}
+
+fn screen_rows(ui: &mut BusUi, cols: u16, rows: u16) -> Vec<String> {
+    ui.compute_view(cols, rows);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
+    ui.render(&mut buffer);
+    (0..rows)
+        .map(|y| (0..cols).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+fn checklist(lines: usize) -> String {
+    (1..=lines)
+        .map(|line| format!("- [ ] item {line:02}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn room_notes_grow_to_a_quarter_of_the_window_and_history_takes_the_rest() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().notes = editor::Editor::new(checklist(30));
+    let rows = screen_rows(&mut ui, 100, 30);
+    // 30 rows / 4 = 7 note rows inside the box's borders.
+    assert_eq!(ui.view.notes.height, 7);
+    assert_eq!(ui.view.notes_box, ratatui::layout::Rect::new(29, 2, 70, 9));
+    assert_eq!(ui.view.history_text.y, 12, "history starts under the box");
+    assert!(rows[1].contains("# "), "the room name keeps its row");
+    assert!(rows[3].contains("item 01") && rows[9].contains("item 07"));
+    assert!(rows[10].contains("↓ more"), "{:?}", rows[10]);
+    assert!(!rows[2].contains("↑ more"));
+
+    for (cols, height, notes) in [(100, 40, 10), (100, 24, 6), (60, 24, 6)] {
+        screen_rows(&mut ui, cols, height);
+        assert_eq!(ui.view.notes.height, notes, "{cols}x{height}");
+        assert!(ui.view.notes_box.bottom() < ui.view.history_text.y);
+        assert!(
+            ui.view.history_text.height >= 1,
+            "{cols}x{height}: history keeps a row"
+        );
+    }
+
+    // Short notes shrink the box back; empty notes keep the F3 prompt row.
+    ui.locals.get_mut(&room).unwrap().notes = editor::Editor::new("two\nlines".into());
+    screen_rows(&mut ui, 100, 30);
+    assert_eq!(ui.view.notes.height, 2);
+    assert_eq!(ui.view.history_text.y, 7);
+    ui.locals.get_mut(&room).unwrap().notes = editor::Editor::new(String::new());
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert_eq!(ui.view.notes.height, 1);
+    assert!(rows[3].contains("Add notes… (F3)"));
+}
+
+#[test]
+fn room_notes_scroll_with_the_wheel_and_page_keys_and_keep_the_caret_visible() {
+    use crossterm::event::MouseEventKind::{ScrollDown, ScrollUp};
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().notes = editor::Editor::new(checklist(30));
+    screen_rows(&mut ui, 100, 30);
+    let notes = ui.view.notes;
+
+    // The wheel over the box scrolls only the notes.
+    mouse(&mut ui, ScrollDown, notes.x + 2, notes.y + 1);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(rows[3].contains("item 02"), "{:?}", rows[3]);
+    assert!(rows[2].contains("↑ more") && rows[10].contains("↓ more"));
+    assert_eq!(ui.main_scroll, ui.view.history_max_scroll);
+    for _ in 0..40 {
+        mouse(&mut ui, ScrollDown, notes.x + 2, notes.y + 1);
+    }
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(rows[9].contains("item 30") && !rows[10].contains("↓ more"));
+    mouse(&mut ui, ScrollUp, notes.x + 2, notes.y + 1);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(rows[9].contains("item 29"));
+
+    // While editing, the caret starts in view, PgDn/PgUp page, and typing or
+    // arrows bring the caret back into view.
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(
+        rows[9].contains("item 30"),
+        "F3 brings the end caret into view"
+    );
+    ui.locals.get_mut(&room).unwrap().notes.cursor = 0;
+    screen_rows(&mut ui, 100, 30);
+    let visible = |ui: &BusUi| {
+        ui.cursor()
+            .is_some_and(|cursor| ui.view.notes.contains((cursor.x, cursor.y).into()))
+    };
+    assert!(visible(&ui));
+    key(&mut ui, KeyCode::PageDown, KeyModifiers::NONE);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(
+        rows[3].contains("item 07"),
+        "a page keeps one row of context"
+    );
+    assert!(!visible(&ui), "paging scrolls without moving the caret");
+    key(&mut ui, KeyCode::PageUp, KeyModifiers::NONE);
+    let rows = screen_rows(&mut ui, 100, 30);
+    assert!(rows[3].contains("item 01"));
+    for _ in 0..20 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+        screen_rows(&mut ui, 100, 30);
+        assert!(visible(&ui), "arrow keys keep the caret visible");
+    }
+    key(&mut ui, KeyCode::PageUp, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::PageUp, KeyModifiers::NONE);
+    screen_rows(&mut ui, 100, 30);
+    assert!(!visible(&ui));
+    key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
+    screen_rows(&mut ui, 100, 30);
+    assert!(visible(&ui), "typing scrolls back to the caret");
+    assert!(ui.locals[&room].notes.text.contains("x- [ ] item 21"));
+}
+
+#[test]
+fn switching_bus_screens_requests_one_full_repaint() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.compute_view(100, 30);
+    ui.full_repaint = false;
+    ui.compute_view(100, 30);
+    assert!(!ui.full_repaint, "redrawing the same screen diffs as usual");
+    ui.action(render::Action::Settings);
+    ui.compute_view(100, 30);
+    assert!(std::mem::take(&mut ui.full_repaint), "opening a form");
+    ui.compute_view(100, 30);
+    assert!(!ui.full_repaint, "once per switch");
+    ui.action(render::Action::Cancel);
+    ui.compute_view(100, 30);
+    assert!(std::mem::take(&mut ui.full_repaint), "closing a form");
+    ui.open_room(other);
+    ui.compute_view(100, 30);
+    assert!(std::mem::take(&mut ui.full_repaint), "switching rooms");
+    ui.open_room(room);
+    ui.terminal = Some(agent);
+    ui.compute_view(100, 30);
+    assert!(
+        std::mem::take(&mut ui.full_repaint),
+        "opening an agent terminal"
+    );
+}
+
+/// Replays real room frames through a terminal emulator, as a host terminal
+/// would show them.
+#[test]
+fn a_screen_switch_repaints_stale_cells_in_the_right_margin() {
+    use crate::protocol::render_ansi::BlitEncoder;
+    let (cols, rows) = (100u16, 30u16);
+    let frame = |ui: &mut BusUi| {
+        ui.compute_view(cols, rows);
+        let mut buffer =
+            ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
+        ui.render(&mut buffer);
+        crate::protocol::FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[])
+    };
+    let margin = |terminal: &crate::ghostty::Terminal| -> String {
+        (0..u32::from(rows))
+            .map(|row| {
+                let (_, graphemes) = terminal.screen_cell(cols - 1, row).unwrap();
+                graphemes
+                    .first()
+                    .and_then(|code| char::from_u32(*code))
+                    .unwrap_or(' ')
+            })
+            .collect()
+    };
+    let (mut ui, room, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let other = snapshot.state.create_room("other").unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    let mut terminal = crate::ghostty::Terminal::new(cols, rows, 0).unwrap();
+    let mut encoder = BlitEncoder::new();
+    let mut present = |terminal: &mut crate::ghostty::Terminal, frame, repaint| {
+        let encoded = encoder.encode(&frame, repaint);
+        terminal.write(&encoded.bytes);
+        encoder.commit(frame, encoded);
+    };
+
+    let first = frame(&mut ui);
+    present(&mut terminal, first, false);
+    assert!(
+        margin(&terminal).trim().is_empty(),
+        "Bus never draws in the margin"
+    );
+
+    // The terminal shows something in the margin that no Bus frame drew
+    // there (e.g. text a terminal draws differently). The diff encoder never
+    // revisits cells whose frame content is unchanged.
+    terminal.write(b"\x1b[5;100Hr\x1b[20;100Hd");
+    ui.locals.get_mut(&room).unwrap().notes.insert("changed");
+    let changed = frame(&mut ui);
+    present(&mut terminal, changed, ui.full_repaint);
+    assert_eq!(
+        margin(&terminal).replace(' ', ""),
+        "rd",
+        "a diff frame keeps them"
+    );
+
+    // Any screen switch repaints every cell, margin included.
+    ui.open_room(other);
+    let switched = frame(&mut ui);
+    assert!(ui.full_repaint);
+    present(
+        &mut terminal,
+        switched,
+        std::mem::take(&mut ui.full_repaint),
+    );
+    assert!(
+        margin(&terminal).trim().is_empty(),
+        "{:?}",
+        margin(&terminal)
+    );
+}
+
+#[test]
+fn master_room_shows_no_notes_and_f3_never_focuses_them() {
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    let mut ui = BusUi::new(Arc::new(BusSnapshot {
+        state,
+        revision: 0,
+        last_command_id: 0,
+        error: None,
+    }));
+    ui.open_room(master);
+    assert!(!room_screen(&mut ui, 100, 30).contains("Add notes"));
+    assert_eq!(ui.view.notes_box.height, 0);
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    assert!(!ui.notes_focus, "MASTER has no notes to edit");
+
+    ui.open_room(work);
+    assert!(room_screen(&mut ui, 100, 30).contains("Add notes"));
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    assert!(ui.notes_focus, "work rooms keep their notes");
+}
+
+/// Typed text in every input sits on the box's own background: the grey
+/// highlight is for selections and selected rows only, and the cursor still
+/// shows where typing goes.
+#[test]
+fn typed_text_in_inputs_has_no_highlight_background() {
+    let highlight = ratatui::style::Color::Rgb(46, 48, 58);
+    let typed_cells = |ui: &mut BusUi, text: &str| {
+        ui.compute_view(100, 30);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+        ui.render(&mut buffer);
+        let cursor = ui
+            .view
+            .cursor
+            .as_ref()
+            .expect("the focused input shows a cursor");
+        let row: String = (0..100).map(|x| buffer[(x, cursor.y)].symbol()).collect();
+        let start = row
+            .find(text)
+            .unwrap_or_else(|| panic!("{text} not on {row:?}"));
+        let start = row[..start].chars().count() as u16;
+        (0..text.len() as u16)
+            .map(|offset| buffer[(start + offset, cursor.y)].bg)
+            .collect::<Vec<_>>()
+    };
+    let type_text = |ui: &mut BusUi, text: &str| {
+        for c in text.chars() {
+            key(ui, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+    };
+
+    let (mut ui, room, _) = fixture();
+    ui.open_room(room);
+    type_text(&mut ui, "composerdraft");
+    let cells = typed_cells(&mut ui, "composerdraft");
+    assert!(
+        cells.iter().all(|bg| *bg != highlight),
+        "composer: {cells:?}"
+    );
+
+    key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
+    type_text(&mut ui, "notesline");
+    let cells = typed_cells(&mut ui, "notesline");
+    assert!(cells.iter().all(|bg| *bg != highlight), "notes: {cells:?}");
+
+    let (mut ui, room, _) = fixture();
+    ui.open_room(room);
+    ui.action(render::Action::NewAgent);
+    type_text(&mut ui, "formname");
+    let cells = typed_cells(&mut ui, "formname");
+    assert!(cells.iter().all(|bg| *bg != highlight), "form: {cells:?}");
 }

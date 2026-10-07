@@ -85,21 +85,17 @@ impl HeadlessServer {
         let Some(agent_label) = agent_label.or(previous_agent_label) else {
             return false;
         };
-        let (semantic_kind, event_text, sound) = match kind {
+        let (semantic_kind, event_text) = match kind {
             crate::app::state::ToastKind::NeedsAttention => (
                 protocol::SemanticNotificationKind::NeedsAttention,
                 "needs attention",
-                Some(protocol::SemanticNotificationSound::Request),
             ),
-            crate::app::state::ToastKind::Finished => (
-                protocol::SemanticNotificationKind::Finished,
-                "finished",
-                Some(protocol::SemanticNotificationSound::Done),
-            ),
+            crate::app::state::ToastKind::Finished => {
+                (protocol::SemanticNotificationKind::Finished, "finished")
+            }
             crate::app::state::ToastKind::UpdateInstalled => (
                 protocol::SemanticNotificationKind::UpdateInstalled,
                 "updated",
-                None,
             ),
         };
         let workspace_id = workspace.id.clone();
@@ -116,7 +112,7 @@ impl HeadlessServer {
                 kind: semantic_kind,
                 title: format!("{agent_label} {event_text}"),
                 body: non_empty_body(&context),
-                sound,
+                sound: None,
                 agent,
                 workspace_id: Some(workspace_id),
                 tab_id: Some(tab_id),
@@ -140,24 +136,6 @@ impl HeadlessServer {
             .pane_is_in_active_tab(update.ws_idx, update.pane_id);
         let suppress_active_tab_notifications =
             self.active_tab_suppresses_notifications(is_active_tab);
-
-        if !update.suppress_completion && self.app.state.sound.allows(update.known_agent) {
-            if let Some(sound) =
-                crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                    suppress_active_tab_notifications,
-                    update.previous_state,
-                    update.state,
-                    update.previous_agent_label.as_deref(),
-                    update.agent_label.as_deref(),
-                )
-            {
-                self.send_notify_to_foreground_client(
-                    protocol::NotifyKind::Sound,
-                    sound_notify_message(sound),
-                    None,
-                );
-            }
-        }
 
         if !should_forward_toast_to_clients(self.app.state.toast_config.delivery) {
             return;
@@ -199,14 +177,6 @@ impl HeadlessServer {
         &mut self,
         delivery: &crate::app::state::AgentNotificationDelivery,
     ) {
-        if let Some(sound) = delivery.sound {
-            self.send_notify_to_foreground_client(
-                protocol::NotifyKind::Sound,
-                sound_notify_message(sound),
-                None,
-            );
-        }
-
         if should_forward_toast_to_clients(self.app.state.toast_config.delivery) {
             if let Some(toast) = &delivery.client_notification {
                 self.send_notify_to_foreground_client(
@@ -311,8 +281,8 @@ impl HeadlessServer {
         )
     }
 
-    /// Handles a single internal event with forwarding logic for clipboard,
-    /// sound, and toast notifications to connected clients.
+    /// Handles a single internal event with forwarding logic for clipboard
+    /// and toast notifications to connected clients.
     ///
     /// ALL internal events MUST be routed through this method to ensure
     /// clipboard/notify forwarding is never bypassed. Do not call
@@ -320,20 +290,7 @@ impl HeadlessServer {
     /// in the headless server — use this method instead.
     ///
     /// Returns true if the event changed visual state (requiring a re-render).
-    pub(super) fn handle_internal_event_with_forwarding(&mut self, mut ev: AppEvent) -> bool {
-        let mut focused_worktree_response = if let AppEvent::WorktreeAddFinished(result) = &mut ev {
-            result
-                .api_request
-                .as_mut()
-                .filter(|request| request.focus)
-                .map(|request| {
-                    let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
-                    let original = std::mem::replace(&mut request.respond_to, proxy_tx);
-                    (original, proxy_rx)
-                })
-        } else {
-            None
-        };
+    pub(super) fn handle_internal_event_with_forwarding(&mut self, ev: AppEvent) -> bool {
         match &ev {
             AppEvent::TerminalBell { pane_id, count } => {
                 if !self.send_to_foreground_client(ServerMessage::TerminalBell { count: *count }) {
@@ -351,21 +308,17 @@ impl HeadlessServer {
                 self.send_to_foreground_client(ServerMessage::Clipboard { data });
                 false
             }
-            AppEvent::StateChanged { pane_id, agent, .. } => {
+            AppEvent::StateChanged { pane_id, .. } => {
                 // Capture toast before handling.
                 let toast_before = self.app.state.toast.clone();
                 let pane_id_val = *pane_id;
-                let agent_val = *agent;
 
                 // Find the previous effective state of this pane before the event
-                // is processed. Notifications must follow effective state changes,
-                // not raw fallback reports that may be masked by hook authority.
+                // is processed, so notifications follow effective state changes.
                 let prev_state = self.pane_effective_state(pane_id_val);
                 let prev_agent_label = self.pane_effective_agent_label(pane_id_val);
 
                 // Handle the state change (updates pane state, sets toast on AppState).
-                // Headless mode disables local sound playback separately from the
-                // sound policy so reloads can keep server-side notification policy live.
                 self.sync_foreground_client_state();
                 let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
                 let suppress_completion = pane_updates
@@ -378,7 +331,6 @@ impl HeadlessServer {
                     self.forward_semantic_agent_notification(update);
                 }
 
-                // Forward sound notification to clients when server-side sound policy allows it.
                 let is_active_tab = self
                     .app
                     .state
@@ -393,28 +345,6 @@ impl HeadlessServer {
                     self.active_tab_suppresses_notifications(is_active_tab);
 
                 let next_state = self.pane_effective_state(pane_id_val);
-                let next_agent_label = self.pane_effective_agent_label(pane_id_val);
-
-                if !suppress_completion
-                    && self.app.state.toast_config.delay_seconds == 0
-                    && self.app.state.sound.allows(agent_val)
-                {
-                    if let Some(sound) =
-                        crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                            suppress_active_tab_notifications,
-                            prev_state,
-                            next_state,
-                            prev_agent_label.as_deref(),
-                            next_agent_label.as_deref(),
-                        )
-                    {
-                        self.send_notify_to_foreground_client(
-                            protocol::NotifyKind::Sound,
-                            sound_notify_message(sound),
-                            None,
-                        );
-                    }
-                }
 
                 let toast_msg = if !suppress_completion
                     && self.app.state.toast_config.delay_seconds == 0
@@ -451,245 +381,18 @@ impl HeadlessServer {
 
                 true
             }
-            AppEvent::HookStateReported {
-                pane_id,
-                agent_label,
-                ..
-            } => {
-                // Hook reports can be stale or no-op after sequence rejection.
-                // Forward only effective state changes observed after handling.
-                let toast_before = self.app.state.toast.clone();
+            AppEvent::PaneDied { pane_id, .. } => {
+                let focus_before = self.shell_focus_targets();
+                let focused_tabs_before = self.focused_shell_tabs();
                 let pane_id_val = *pane_id;
-                let agent_val = crate::detect::parse_agent_label(agent_label);
-
-                // Capture the previous effective state for this pane. Hook reports
-                // are already folded into pane.state; raw hook transitions must not
-                // produce a second notification path.
-                let prev_state = self.pane_effective_state(pane_id_val);
-                let prev_agent_label = self.pane_effective_agent_label(pane_id_val);
-
-                self.sync_foreground_client_state();
-                let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
-                let suppress_completion = pane_updates
-                    .iter()
-                    .any(|update| update.pane_id == pane_id_val && update.suppress_completion);
-                for update in pane_updates
-                    .iter()
-                    .filter(|update| update.pane_id == pane_id_val)
-                {
-                    self.forward_semantic_agent_notification(update);
-                }
-
-                // Forward sound notification based on the effective transition when
-                // server-side sound policy allows it.
-                let is_active_tab = self
+                if let Some(update) = self
                     .app
                     .state
-                    .active
-                    .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
-                    .is_some_and(|ws| {
-                        ws.find_tab_index_for_pane(pane_id_val)
-                            .is_some_and(|tab_idx| ws.active_tab_index() == tab_idx)
-                    });
-
-                let suppress_active_tab_notifications =
-                    self.active_tab_suppresses_notifications(is_active_tab);
-
-                let next_state = self.pane_effective_state(pane_id_val);
-                let next_agent_label = self.pane_effective_agent_label(pane_id_val);
-
-                if !suppress_completion
-                    && self.app.state.toast_config.delay_seconds == 0
-                    && self.app.state.sound.allows(agent_val)
+                    .publish_pane_process_exit_if_agent(pane_id_val, false)
                 {
-                    if let Some(sound) =
-                        crate::app::actions::notification_sound_for_state_change_with_agent_labels(
-                            suppress_active_tab_notifications,
-                            prev_state,
-                            next_state,
-                            prev_agent_label.as_deref(),
-                            next_agent_label.as_deref(),
-                        )
-                    {
-                        self.send_notify_to_foreground_client(
-                            protocol::NotifyKind::Sound,
-                            sound_notify_message(sound),
-                            None,
-                        );
-                    }
-                }
-
-                let toast_msg = if !suppress_completion
-                    && self.app.state.toast_config.delay_seconds == 0
-                    && should_forward_toast_to_clients(self.app.state.toast_config.delivery)
-                {
-                    if self.app.state.toast.is_some() && self.app.state.toast != toast_before {
-                        self.app
-                            .state
-                            .toast
-                            .as_ref()
-                            .map(|toast| format!("{}: {}", toast.title, toast.context))
-                    } else {
-                        toast_message_from_state_change(
-                            &self.app.state,
-                            &self.app.terminal_runtimes,
-                            pane_id_val,
-                            suppress_active_tab_notifications,
-                            prev_state,
-                            next_state,
-                            prev_agent_label.as_deref(),
-                        )
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(msg) = toast_msg {
-                    self.send_flat_toast_to_foreground_client(
-                        toast_notify_kind(self.app.state.toast_config.delivery)
-                            .expect("toast forwarding requires a client notification kind"),
-                        msg,
-                    );
-                }
-
-                true
-            }
-            AppEvent::UpdateReady {
-                version,
-                install_command,
-            } => {
-                let toast_before = self.app.state.toast.clone();
-                let version = version.clone();
-                let install_command = install_command.clone();
-
-                self.app.handle_internal_event(ev);
-                self.send_to_client_shells(ServerMessage::SemanticNotification(
-                    protocol::SemanticNotification {
-                        kind: protocol::SemanticNotificationKind::UpdateInstalled,
-                        title: format!("Herdr v{version} available"),
-                        body: Some(crate::update::update_install_instruction(&install_command)),
-                        sound: None,
-                        agent: None,
-                        workspace_id: None,
-                        tab_id: None,
-                        pane_id: None,
-                        position: None,
-                    },
-                ));
-
-                let toast_msg =
-                    if should_forward_toast_to_clients(self.app.state.toast_config.delivery) {
-                        if self.app.state.toast.is_some() && self.app.state.toast != toast_before {
-                            self.app
-                                .state
-                                .toast
-                                .as_ref()
-                                .map(|toast| format!("{}: {}", toast.title, toast.context))
-                        } else {
-                            Some(format!(
-                                "v{version} available: {}",
-                                crate::update::update_install_instruction(&install_command)
-                            ))
-                        }
-                    } else {
-                        None
-                    };
-
-                if let Some(msg) = toast_msg {
-                    self.send_flat_toast_to_foreground_client(
-                        toast_notify_kind(self.app.state.toast_config.delivery)
-                            .expect("toast forwarding requires a client notification kind"),
-                        msg,
-                    );
-                }
-
-                true
-            }
-            AppEvent::WorktreeAddFinished(result) => {
-                let deferred_request_id = result
-                    .api_request
-                    .as_ref()
-                    .map(|request| request.id.as_str());
-                let shell_navigation_pending = deferred_request_id.is_some_and(|request_id| {
-                    self.clients.values().any(|client| {
-                        client.shell_deferred_navigation_request_id.as_deref() == Some(request_id)
-                    })
-                });
-                let changed = self.app.handle_internal_event_with_render_impact(ev);
-                let api_focus_succeeded = super::client_views::forward_proxied_api_response(
-                    focused_worktree_response.take(),
-                );
-                self.reconcile_client_shell_locations();
-                if shell_navigation_pending {
-                    self.app.accept_current_focus_without_events();
-                } else if api_focus_succeeded {
-                    self.focus_all_shell_clients_on_default_target();
-                }
-                changed
-            }
-            AppEvent::WorktreeRemoveFinished(result) => {
-                let focus_before = self.shell_focus_targets();
-                let focused_tabs_before = self.focused_shell_tabs();
-                let shutdown_terminals = result
-                    .api_request
-                    .as_ref()
-                    .map(|request| {
-                        request
-                            .shutdown_panes
-                            .iter()
-                            .filter_map(|pane_id| {
-                                self.app.find_pane(*pane_id).map(|(_, pane)| {
-                                    (*pane_id, pane.attached_terminal_id.to_string())
-                                })
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-                let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
-                for update in &pane_updates {
-                    self.forward_semantic_agent_notification(update);
-                    self.forward_pane_state_update_notifications_to_clients(update);
-                }
-                self.reconcile_client_shell_locations();
-                self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);
-                self.reapply_controlled_shell_tab_geometry(false);
-                for (pane_id, terminal_id) in shutdown_terminals {
-                    if self.app.find_pane(pane_id).is_none() {
-                        self.shutdown_terminal_stream_clients(
-                            &terminal_id,
-                            format!("terminal {terminal_id} exited"),
-                        );
-                    }
-                }
-                true
-            }
-            AppEvent::PaneDied { pane_id, .. }
-            | AppEvent::WorktreeRuntimeRestoreFailed { pane_id, .. } => {
-                let focus_before = self.shell_focus_targets();
-                let focused_tabs_before = self.focused_shell_tabs();
-                let pane_id_val = *pane_id;
-                let terminal_id = self.app.state.workspaces.iter().find_map(|ws| {
-                    ws.tabs.iter().find_map(|tab| {
-                        tab.panes
-                            .get(pane_id)
-                            .map(|pane| pane.attached_terminal_id.to_string())
-                    })
-                });
-                if matches!(&ev, AppEvent::PaneDied { .. })
-                    && !self
-                        .app
-                        .pending_worktree_remove_runtime_exits
-                        .contains_key(&pane_id_val)
-                {
-                    if let Some(update) = self
-                        .app
-                        .state
-                        .publish_pane_process_exit_if_agent(pane_id_val, false)
-                    {
-                        self.app.emit_pane_state_update(&update);
-                        self.forward_semantic_agent_notification(&update);
-                        self.forward_pane_state_update_notifications_to_clients(&update);
-                    }
+                    self.app.emit_pane_state_update(&update);
+                    self.forward_semantic_agent_notification(&update);
+                    self.forward_pane_state_update_notifications_to_clients(&update);
                 }
 
                 let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
@@ -700,15 +403,6 @@ impl HeadlessServer {
                 self.reconcile_client_shell_locations();
                 self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);
                 self.reapply_controlled_shell_tab_geometry(false);
-
-                if self.app.find_pane(pane_id_val).is_none() {
-                    if let Some(terminal_id) = terminal_id {
-                        self.shutdown_terminal_stream_clients(
-                            &terminal_id,
-                            format!("terminal {terminal_id} exited"),
-                        );
-                    }
-                }
 
                 true
             }
@@ -716,14 +410,12 @@ impl HeadlessServer {
         }
     }
 
-    /// Drains internal events, forwarding clipboard, sound, and toast
-    /// notifications to connected clients instead of processing them locally.
+    /// Drains internal events, forwarding clipboard and toast notifications
+    /// to connected clients instead of processing them locally.
     ///
-    /// The server has no host terminal or audio subsystem, so we:
+    /// The server has no host terminal, so we:
     /// - Forward `ClipboardWrite` as `ServerMessage::Clipboard` to the
     ///   foreground client only.
-    /// - Detect when a sound would be played and forward as
-    ///   `ServerMessage::Notify { kind: Sound }` to the foreground client.
     /// - Detect when a toast is set on AppState and forward as
     ///   `ServerMessage::Notify` to the foreground client for terminal/system delivery.
     pub(super) fn drain_internal_events_with_forwarding(&mut self) -> bool {

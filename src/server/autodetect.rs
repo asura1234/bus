@@ -40,7 +40,6 @@ pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HERDR_STARTUP_CWD";
 /// connection is refused, no server is running. Stale sockets (from a crashed
 /// server) are detected because connect returns `ConnectionRefused`
 /// when nobody is listening.
-#[allow(dead_code)] // Public API for external use and testing
 pub fn is_server_listening() -> bool {
     is_server_listening_at(&client_socket_path())
 }
@@ -145,7 +144,7 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
 fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<()> {
     let Some(status) = read_server_status()? else {
         return Err(io::Error::other(format!(
-            "a herdr server is listening, but its status API is unavailable.\n\n{}\nIf that fails, stop the old server process manually.",
+            "a Bus server is listening, but its status API is unavailable.\n\n{}\nIf that fails, stop the old server process manually.",
             crate::session::active_restart_after_update_guidance()
         )));
     };
@@ -166,8 +165,8 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
         "the stable endpoint generation is incompatible"
     };
     Err(io::Error::other(format!(
-        "This session needs one final server update before Herdr can attach ({requirement}).\n\nserver: v{} endpoint generation {}\nclient: v{} endpoint generation {}\n\n{}",
-        status.version.as_deref().unwrap_or("unknown"),
+        "This session needs one final server update before Bus can attach ({requirement}).\n\nserver: v{} endpoint generation {}\nclient: v{} endpoint generation {}\n\n{}",
+        status.version,
         endpoint_generation
             .map(|value| value.to_string())
             .unwrap_or_else(|| "unavailable".to_string()),
@@ -329,11 +328,10 @@ mod tests {
     use std::ffi::OsStr;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::config::test_config_env_lock()
     }
 
     fn unique_test_dir(name: &str) -> std::path::PathBuf {
@@ -525,8 +523,8 @@ test "$sid" = "$$"
             .unwrap()
             .unwrap();
         let _ = handle.join();
-        assert_eq!(status.version.as_deref(), Some("0.5.5"));
-        assert_eq!(status.protocol, Some(2));
+        assert_eq!(status.version, "0.5.5");
+        assert_eq!(status.protocol, 2);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -551,6 +549,7 @@ test "$sid" = "$$"
     #[test]
     fn validate_running_server_compatibility_names_session_commands_for_protocol_mismatch() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let dir = unique_test_dir("named-protocol");
         std::env::set_var("XDG_CONFIG_HOME", &dir);
         std::env::set_var(crate::session::SESSION_ENV_VAR, "work");
@@ -583,11 +582,11 @@ test "$sid" = "$$"
             "unexpected error: {message}"
         );
         assert!(
-            message.contains("Run `herdr session stop work`"),
+            message.contains("Run `bus stop`"),
             "unexpected error: {message}"
         );
         assert!(
-            message.contains("then run `herdr session attach work` again"),
+            message.contains("then run `bus` again"),
             "unexpected error: {message}"
         );
         std::env::remove_var("XDG_CONFIG_HOME");

@@ -30,20 +30,12 @@ pub enum Signal {
 pub enum ChildExitReason {
     Exited,
     Interrupted,
-    /// Imported runtimes have no child wait handle in the replacement server.
-    #[cfg(unix)]
-    Handoff,
     WaitFailed,
 }
 
 impl ChildExitReason {
     pub(crate) fn requires_session_checkpoint(self) -> bool {
-        match self {
-            Self::Interrupted => true,
-            #[cfg(unix)]
-            Self::Handoff => true,
-            _ => false,
-        }
+        matches!(self, Self::Interrupted)
     }
 }
 
@@ -55,31 +47,12 @@ pub(crate) fn classify_child_exit(_status: &portable_pty::ExitStatus) -> ChildEx
     ChildExitReason::Exited
 }
 
-pub(crate) fn detached_custom_command_process(command: &str) -> std::process::Command {
-    let mut process = detached_custom_command_process_platform(command);
-    configure_background_command(&mut process);
-    process
-}
-
-pub(crate) fn pane_custom_command_pty_builder(command: &str) -> portable_pty::CommandBuilder {
-    pane_custom_command_pty_builder_platform(command)
-}
-
 pub(crate) fn apply_pane_runtime_marker(command: &mut portable_pty::CommandBuilder) {
     apply_pane_runtime_marker_platform(command);
 }
 
 pub(crate) fn prepare_paste_text_for_pty(text: String) -> String {
     prepare_paste_text_for_pty_platform(text)
-}
-
-pub(crate) fn plugin_runtime_path(path: &std::path::Path) -> std::path::PathBuf {
-    plugin_runtime_path_platform(path)
-}
-
-#[cfg(not(windows))]
-fn plugin_runtime_path_platform(path: &std::path::Path) -> std::path::PathBuf {
-    path.to_path_buf()
 }
 
 #[cfg(not(windows))]
@@ -95,24 +68,21 @@ pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
 #[cfg(not(windows))]
 fn apply_pane_runtime_marker_platform(_command: &mut portable_pty::CommandBuilder) {}
 
+#[cfg(any(windows, test))]
 pub(crate) fn configure_background_command(command: &mut std::process::Command) {
     configure_background_command_platform(command);
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), test))]
 fn configure_background_command_platform(_command: &mut std::process::Command) {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlatformCapabilities {
-    pub(crate) live_handoff: bool,
-    pub(crate) direct_terminal_attach: bool,
     pub(crate) preserve_legacy_doubled_escape_input: bool,
 }
 
 pub(crate) const fn capabilities() -> PlatformCapabilities {
     PlatformCapabilities {
-        live_handoff: cfg!(unix),
-        direct_terminal_attach: cfg!(unix),
         preserve_legacy_doubled_escape_input: cfg!(target_os = "macos"),
     }
 }
@@ -185,6 +155,27 @@ pub(crate) fn watch_terminal_resize_signal() {
 #[cfg(not(unix))]
 pub(crate) fn watch_terminal_resize_signal() {}
 
+#[cfg(unix)]
+extern "C" fn disregard_signal(_signal: libc::c_int) {}
+
+/// Makes SIGINT harmless to this process. A no-op handler is used instead of
+/// SIG_IGN because exec resets handlers but inherits SIG_IGN, and the client
+/// may spawn a server whose agents must still be interruptible with Ctrl+C.
+#[cfg(unix)]
+pub(crate) fn disregard_interrupt_signal() {
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = disregard_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+    action.sa_flags = libc::SA_RESTART;
+    unsafe {
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+    }
+}
+
+/// Raw console mode reads Ctrl+C as input rather than a control event.
+#[cfg(not(unix))]
+pub(crate) fn disregard_interrupt_signal() {}
+
 /// Returns whether a terminal size change was signalled since the last call.
 #[cfg(unix)]
 pub(crate) fn take_terminal_resize_signal() -> bool {
@@ -210,6 +201,7 @@ pub struct ClipboardImage {
     pub extension: &'static str,
 }
 
+#[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum LimitedRead {
     Empty,
@@ -217,6 +209,7 @@ pub(crate) enum LimitedRead {
     Oversized,
 }
 
+#[cfg(unix)]
 pub(crate) fn read_limited_reader(
     mut reader: impl std::io::Read,
     max_bytes: usize,
@@ -245,7 +238,6 @@ pub(crate) fn read_limited_reader(
     let mut sentinel = [0_u8; 1];
     loop {
         return match reader.read(&mut sentinel) {
-            Ok(0) if bytes.is_empty() => Ok(LimitedRead::Empty),
             Ok(0) => Ok(LimitedRead::Complete(bytes)),
             Ok(_) => Ok(LimitedRead::Oversized),
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -254,26 +246,16 @@ pub(crate) fn read_limited_reader(
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct RemoteSshConfigPaths {
-    pub(crate) user_config: Option<std::path::PathBuf>,
-    pub(crate) system_config: Option<std::path::PathBuf>,
-    pub(crate) multiplexing: bool,
-}
-
 #[cfg(unix)]
 mod unix_common;
 #[cfg(unix)]
-pub(crate) use unix_common::{begin_cli_output, end_cli_output, RemoteBridgeWake};
+pub(crate) use unix_common::begin_cli_output;
 
 mod client_state;
 pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};
 
 #[cfg(not(unix))]
 pub(crate) fn begin_cli_output() {}
-
-#[cfg(not(unix))]
-pub(crate) fn end_cli_output() {}
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -396,55 +378,6 @@ pub(crate) fn parse_agent_env_hint(environ: &[u8]) -> Option<crate::detect::Agen
     None
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-#[derive(Debug)]
-pub(crate) struct InputSourceRestore;
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(crate) fn switch_to_ascii_input_source() -> Option<InputSourceRestore> {
-    None
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(crate) fn pump_input_source_runloop() {}
-
-/// Switches the host keyboard input source while prefix mode is active.
-///
-/// `App` drives this through a trait so the prefix-mode transitions can be
-/// tested with a fake, without touching the real macOS APIs or leaking a
-/// platform-specific restore type into `App`.
-pub(crate) trait PrefixInputSource {
-    /// Switch to an ASCII-capable input source for prefix commands. No-op if
-    /// the current source is already ASCII-capable, the platform is
-    /// unsupported, or the switch fails. Calling it again before `restore`
-    /// keeps the source saved by the first call.
-    fn switch_to_ascii(&mut self);
-
-    /// Restore whatever `switch_to_ascii` saved. No-op if nothing was switched.
-    fn restore(&mut self);
-}
-
-/// Production [`PrefixInputSource`] backed by the per-platform API.
-#[derive(Default)]
-pub(crate) struct RealPrefixInputSource {
-    restore: Option<InputSourceRestore>,
-}
-
-impl PrefixInputSource for RealPrefixInputSource {
-    fn switch_to_ascii(&mut self) {
-        if self.restore.is_none() {
-            // Drain pending input-source-change notifications so the read below is fresh (see
-            // `pump_input_source_runloop`); a no-op on non-macOS.
-            pump_input_source_runloop();
-            self.restore = switch_to_ascii_input_source();
-        }
-    }
-
-    fn restore(&mut self) {
-        let _ = self.restore.take();
-    }
-}
-
 #[cfg(all(test, any(unix, windows)))]
 #[test]
 fn child_exit_classification_only_checkpoints_interruptions() {
@@ -459,8 +392,6 @@ fn child_exit_classification_only_checkpoints_interruptions() {
     let status = portable_pty::ExitStatus::with_signal("Terminated: 15");
     assert_eq!(classify_child_exit(&status), ChildExitReason::Interrupted);
     assert!(classify_child_exit(&status).requires_session_checkpoint());
-    #[cfg(unix)]
-    assert!(ChildExitReason::Handoff.requires_session_checkpoint());
     assert!(!ChildExitReason::WaitFailed.requires_session_checkpoint());
 }
 
@@ -489,29 +420,6 @@ mod tests {
         for program in ["vim", "nvim", "cargo", "test-runner", "opencode"] {
             assert!(!is_pane_shell_process_name(program), "{program}");
         }
-    }
-
-    #[test]
-    fn detached_custom_command_preserves_unix_login_shell_flag() {
-        let cmd = detached_custom_command_process("echo hello");
-        assert_eq!(cmd.get_program(), std::ffi::OsStr::new("/bin/sh"));
-        assert_eq!(
-            cmd.get_args().collect::<Vec<_>>(),
-            [
-                std::ffi::OsStr::new("-lc"),
-                std::ffi::OsStr::new("echo hello")
-            ]
-        );
-    }
-
-    #[test]
-    fn pane_custom_command_builder_preserves_unix_shell_flag() {
-        let expected: Vec<std::ffi::OsString> =
-            vec!["/bin/sh".into(), "-c".into(), "echo hello".into()];
-        assert_eq!(
-            pane_custom_command_pty_builder("echo hello").get_argv(),
-            &expected
-        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

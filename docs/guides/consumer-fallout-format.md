@@ -57,7 +57,7 @@ With `--output`, stdout is bounded JSON with `kind=plan-consumer-fallout-summary
 - at most `limit_per_task` unresolved items per task, ordered with `direct-reference-and-same-name-test` first and then by a stable chain ordering;
 - each item includes only `relation`, `chain`, and `resolution`; detailed evidence is read from the artifact only for the relevant task.
 
-`omitted_unresolved_count > 0` is not automatically a finding. It authorizes only targeted reading of the relevant task bucket when the bounded summary shows a real fallout risk.
+`omitted_unresolved_count > 0` is not automatically a finding. The reviewer reads the artifact in a targeted way, by task bucket, only when the current task's summary shows a real fallout risk, and must not fall back to pasting the whole artifact.
 
 ## Reviewer disposition
 

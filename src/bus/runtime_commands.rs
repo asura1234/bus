@@ -1,5 +1,6 @@
 //! Worker commands, owned launch operations and terminal navigation.
 use super::*;
+use crate::bus::orchestrator::{self, OrchestratorSpec};
 
 impl Worker {
     pub(super) fn command(
@@ -8,9 +9,11 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let mut state = self.state.clone();
+        let queued = matches!(command, BusCommand::SubmitQueued(_));
         let result = match command {
             BusCommand::CreateRoom(name) => {
                 let id = state.create_room(&name).map_err(|e| e.to_string())?;
+                self.apply_new_room_sound(&mut state, id);
                 self.save(state)?;
                 let _ = events.send(BusEvent::RoomCreated(id));
                 return Ok(());
@@ -25,18 +28,29 @@ impl Worker {
                 Ok(())
             }
             BusCommand::MarkRoomSeen(id) => state.mark_room_seen(id),
+            BusCommand::SetRoomSound(id, on) => {
+                state.set_room_sound(id, on).map_err(|e| e.to_string())?;
+                self.record_master_sound(&state, id)?;
+                Ok(())
+            }
+            BusCommand::SetRoomSoundName(id, name) => {
+                state
+                    .set_room_sound_name(id, name)
+                    .map_err(|e| e.to_string())?;
+                self.record_master_sound(&state, id)?;
+                Ok(())
+            }
+            BusCommand::SetAllRoomsSound(on) => {
+                self.set_all_rooms_sound(Some(on), None, events)?;
+                return Ok(());
+            }
+            BusCommand::SetAllRoomsSoundName(name) => {
+                self.set_all_rooms_sound(None, Some(name), events)?;
+                return Ok(());
+            }
             BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),
             BusCommand::SetDraftText(id, text) => state.set_draft_text(id, &text),
             BusCommand::SetRecipients(id, recipients) => state.set_draft_recipients(id, recipients),
-            BusCommand::Quote(room, agent) => {
-                let text = state
-                    .room(room)
-                    .and_then(|room| room.latest_replies.get(&agent))
-                    .ok_or("No reply to quote")?
-                    .text
-                    .clone();
-                state.quote_reply(room, agent, &text)
-            }
             BusCommand::AttachFile(room, path) => {
                 let home = std::env::home_dir().ok_or("Home directory unavailable")?;
                 let path = crate::bus::files::validate_attachment(&path, &home)
@@ -44,22 +58,14 @@ impl Worker {
                 state.attach_file(room, path)
             }
             BusCommand::RemoveFile(room, path) => state.remove_file(room, &path),
-            BusCommand::Submit(room) => {
-                let requests = state
-                    .submit_draft(room, crate::bus::io::now_ms())
-                    .map_err(|e| e.to_string())?;
-                if let Some(message_id) = requests
-                    .first()
-                    .and_then(|request| state.request(*request))
-                    .map(|request| request.prompt.id.0)
-                {
-                    state.orchestrator_state_mut().record_fact(
-                        room,
-                        crate::bus::orchestrator::JournalFact::HumanMessage {
-                            message_id: crate::bus::orchestrator::RoomMessageId(message_id),
-                        },
-                    );
+            BusCommand::Submit(room) | BusCommand::SubmitQueued(room) => {
+                let now = crate::bus::io::now_ms();
+                let requests = if queued {
+                    state.submit_draft_queued(room, now)
+                } else {
+                    state.submit_draft(room, now)
                 }
+                .map_err(|e| e.to_string())?;
                 self.save(state)?;
                 for id in requests {
                     super::super::diagnostics::request(
@@ -89,29 +95,6 @@ impl Worker {
                     state.set_agent_error(id,Some("Awaiting matching provider session-start hook. Trust all Bus hooks, then restart/resume normally.".into()))
                 }
             }
-            BusCommand::ConfirmRoomBriefProposal(command) => {
-                let room_id = command.room_id;
-                let receipt = state
-                    .confirm_room_brief_proposal(command)
-                    .map_err(|error| error.to_string())?;
-                state.orchestrator_state_mut().record_fact(
-                    room_id,
-                    crate::bus::orchestrator::JournalFact::RoomBriefConfirmed {
-                        confirmation_id: receipt.confirmation_id,
-                    },
-                );
-                if state == self.state {
-                    return Ok(());
-                }
-                self.save(state)?;
-                return Ok(());
-            }
-            BusCommand::CreateDeveloperWorkflowApproval(command) => {
-                return self.create_developer_workflow_approval(command);
-            }
-            BusCommand::MessageOrchestrator(message) => {
-                return self.message_orchestrator(message);
-            }
             BusCommand::Suggestions {
                 query_id,
                 input,
@@ -123,7 +106,10 @@ impl Worker {
                 });
                 return Ok(());
             }
-            BusCommand::AddAgent(input) => return self.add_agent(input, events),
+            BusCommand::AddAgent(input) => return self.add_agent(input, None, events),
+            BusCommand::AddOrchestrator(input, spec) => {
+                return self.add_agent(input, Some(spec), events)
+            }
             BusCommand::FocusTerminal(id) => {
                 let agent = state.agent(id).ok_or("Unknown agent")?;
                 let target = agent
@@ -168,12 +154,9 @@ impl Worker {
         let mut state = self.state.clone();
         state.prepare_delete_room(id).map_err(|e| e.to_string())?;
         self.save(state)?;
-        let agents: Vec<_> = self
-            .state
-            .agents()
-            .filter(|agent| agent.room_id == id)
-            .map(|agent| agent.id)
-            .collect();
+        // The room's orchestrator in MASTER goes with it: it exists only for
+        // this room, so its terminal is stopped like a member's.
+        let agents = self.state.agents_deleted_with_room(id);
         let mut left_open = Vec::new();
         for agent in &agents {
             left_open.extend(self.stop_agent_terminal(*agent)?);
@@ -224,6 +207,8 @@ impl Worker {
             return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into()).map(|()| None);
         };
         let managed_name = format!("bus-r{}-a{}", agent.room_id.0, id.0);
+        let kind = launch::provider_kind(agent.provider);
+        let expected_session = identity.session_id.clone();
         let left_open = LeftOpenTerminal {
             agent_id: id,
             agent_name: agent.name.clone(),
@@ -234,9 +219,9 @@ impl Worker {
             schema::PaneCloseIfIdentityParams {
                 pane_id: pane.clone(),
                 expected_terminal_id: terminal.clone(),
-                expected_agent: launch::provider_kind(agent.provider).into(),
+                expected_agent: kind.into(),
                 expected_managed_name: managed_name.clone(),
-                expected_session_id: identity.session_id.clone(),
+                expected_session_id: expected_session.clone(),
             },
         ));
         match result {
@@ -269,6 +254,35 @@ impl Worker {
                             "Native terminal no longer carries the Bus managed name; left open");
                         return Ok(Some(left_open));
                     }
+                    if expected_session.as_deref().is_some_and(|expected| {
+                        self.owned_terminal_session_moved(&left_open, kind, &managed_name, expected)
+                    }) {
+                        // The provider session in this agent's own terminal
+                        // moved on, as after an agent clear the server did not
+                        // record or a chat resumed by hand. No retry can pass
+                        // the guard, and the session there may not be Bus's to
+                        // end, so the agent goes and the terminal stays open.
+                        tracing::info!(event = "bus.deletion.session_moved", agent_id = id.0,
+                            pane_id = %left_open.pane_id, terminal_id = %left_open.terminal_id,
+                            "Owned terminal now runs another provider session; left open");
+                        return Ok(Some(left_open));
+                    }
+                    if let Some(moved) = expected_session.as_deref().and_then(|expected| {
+                        self.restored_terminal_session_moved(
+                            &left_open,
+                            kind,
+                            &managed_name,
+                            expected,
+                        )
+                    }) {
+                        // After a restart the managed name moved to a restored
+                        // terminal that kept another provider session, so Bus
+                        // never rebound to it. Same reasoning as above.
+                        tracing::info!(event = "bus.deletion.session_moved", agent_id = id.0,
+                            pane_id = %moved.pane_id, terminal_id = %moved.terminal_id,
+                            "Restored terminal runs another provider session; left open");
+                        return Ok(Some(moved));
+                    }
                 }
                 let message = if matches!(
                     error.code.as_deref(),
@@ -285,6 +299,69 @@ impl Worker {
         }
     }
 
+    /// Whether the native server still shows this agent's own terminal, pane,
+    /// managed name and provider, with a provider session other than `expected`.
+    /// A failed lookup proves nothing.
+    fn owned_terminal_session_moved(
+        &mut self,
+        terminal: &LeftOpenTerminal,
+        kind: &str,
+        managed_name: &str,
+        expected: &str,
+    ) -> bool {
+        let Ok(ResponseResult::AgentInfo { agent: info }) =
+            self.transport
+                .request(Method::AgentGet(schema::AgentTarget {
+                    target: terminal.pane_id.clone(),
+                }))
+        else {
+            return false;
+        };
+        info.terminal_id == terminal.terminal_id
+            && info.pane_id == terminal.pane_id
+            && info.name.as_deref() == Some(managed_name)
+            && info.agent.as_deref() == Some(kind)
+            && info.agent_session.is_some_and(|session| {
+                session.source == format!("herdr:{kind}") && session.value != expected
+            })
+    }
+
+    /// The one native terminal that carries this agent's managed name and
+    /// provider when it is not the terminal Bus recorded and runs a provider
+    /// session other than `expected`. A failed lookup proves nothing.
+    fn restored_terminal_session_moved(
+        &mut self,
+        recorded: &LeftOpenTerminal,
+        kind: &str,
+        managed_name: &str,
+        expected: &str,
+    ) -> Option<LeftOpenTerminal> {
+        let Ok(ResponseResult::AgentList { agents }) = self
+            .transport
+            .request(Method::AgentList(schema::EmptyParams {}))
+        else {
+            return None;
+        };
+        let mut named = agents
+            .into_iter()
+            .filter(|info| info.name.as_deref() == Some(managed_name));
+        let info = named.next()?;
+        if named.next().is_some()
+            || info.terminal_id == recorded.terminal_id
+            || info.agent.as_deref() != Some(kind)
+            || !info.agent_session.as_ref().is_some_and(|session| {
+                session.source == format!("herdr:{kind}") && session.value != expected
+            })
+        {
+            return None;
+        }
+        Some(LeftOpenTerminal {
+            pane_id: info.pane_id,
+            terminal_id: info.terminal_id,
+            ..recorded.clone()
+        })
+    }
+
     /// `agent.list` includes every terminal carrying a managed name, even with
     /// no detected provider, so absence is a native fact. A failed lookup
     /// proves nothing and keeps deletion suspended.
@@ -299,27 +376,119 @@ impl Worker {
     fn add_agent(
         &mut self,
         input: AddAgent,
+        orchestrator: Option<OrchestratorSpec>,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
+        let orchestrates = orchestrator.as_ref().map(|spec| spec.room);
+        // Before anything else, so the CLI and the form get the same answer.
+        if orchestrator.is_some() {
+            orchestrator::check_new_orchestrator(input.provider)?;
+        }
         let cwd = launch::canonical_directory(&input.cwd)?;
-        if !input.consent_project_hooks {
-            if let Some(notice) = launch::setup_notice(input.provider, &cwd) {
-                let _ = events.send(BusEvent::SetupRequired { input, notice });
-                return Ok(());
+        // One provider session belongs to one Bus agent: bound by its hook, or
+        // reserved by a launch that adopted it and has not reported yet.
+        if let Some(session) = launch::adopted_session(input.provider, &input.extra_args)? {
+            if let Some(owner) = self.state.agents().find(|agent| {
+                let identity = &agent.runtime_identity;
+                identity.session_id.as_deref() == Some(session.as_str())
+                    || identity.launch_id.as_ref().is_some_and(|launch| {
+                        launch::reserved_session(&self.data_dir.join("callbacks").join(launch))
+                            .is_some_and(|reserved| reserved == session)
+                    })
+            }) {
+                return Err(format!(
+                    "Session {session} already belongs to Bus agent {}",
+                    owner.name
+                ));
             }
+        }
+        // Every MASTER agent is an orchestrator bound to one work room.
+        if orchestrates.is_none()
+            && self
+                .state
+                .room(input.room)
+                .is_some_and(|room| room.kind == RoomKind::Master)
+        {
+            return Err(MASTER_AGENT_NEEDS_ROOM.into());
         }
         let mut state = self.state.clone();
         let id = state
-            .create_agent(input.room, &input.name, input.provider, cwd, None)
+            .create_agent(input.room, &input.name, input.provider, cwd.clone(), None)
             .map_err(|e| e.to_string())?;
-        let prepared = launch::prepare(
+        // Validate the assignment before any consent prompt or launch side effect.
+        if let Some(room) = orchestrates {
+            state
+                .bind_orchestrator(id, room)
+                .map_err(|e| e.to_string())?;
+        }
+        if !input.consent_project_hooks {
+            if let Some(notice) = launch::setup_notice(input.provider, &cwd) {
+                let _ = events.send(BusEvent::SetupRequired {
+                    input,
+                    orchestrator,
+                    notice,
+                });
+                return Ok(());
+            }
+        }
+        let mut prepared = launch::prepare(
             &input,
             id,
             &self.data_dir,
             &std::env::current_exe().map_err(|e| e.to_string())?,
         )?;
+        let spool = self
+            .data_dir
+            .join("callbacks")
+            .join(&prepared.manifest.launch_id);
+        if let Some(spec) = &orchestrator {
+            let values = orchestrator::PromptValues {
+                room: orchestrates
+                    .and_then(|room| state.room(room))
+                    .map(|room| (room.name.clone(), room.id)),
+                agent: state.agent(id).map(|a| a.name.clone()).unwrap_or_default(),
+                docs: orchestrator::write_docs(&self.data_dir)?,
+            };
+            let template = spec
+                .system_prompt
+                .as_deref()
+                .unwrap_or(orchestrator::DEFAULT_PROMPT);
+            let text = orchestrator::fill(template, &values);
+            let adopted = prepared.adopted_session.is_some();
+            let path = orchestrator::write_prompt(&spool, &text)?;
+            match orchestrator::prompt_args(input.provider, &path, adopted)? {
+                Some(args) => prepared.args.extend(args),
+                // Queued until the agent is ready, like any room message.
+                None => {
+                    let master = input.room;
+                    state
+                        .submit_message_with(
+                            master,
+                            Draft {
+                                text: orchestrator::prompt_message(&text),
+                                files: Vec::new(),
+                                recipient_ids: [id].into_iter().collect(),
+                            },
+                            Author::Human,
+                            crate::bus::io::now_ms(),
+                            // The system prompt is the agent's first turn of its own.
+                            true,
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        // cursor-agent --resume fires no sessionStart; its first hook comes with
+        // the first prompt, which Bus types only into a bound session. The
+        // session Bus itself launched with binds it, and every later callback
+        // must still match it.
+        let session_id = prepared
+            .adopted_session
+            .clone()
+            .filter(|_| input.provider == Provider::Cursor);
         let identity = AgentRuntimeIdentity {
             launch_id: Some(prepared.manifest.launch_id),
+            session_id,
             ..Default::default()
         };
         state
@@ -370,7 +539,7 @@ impl Worker {
                 AgentRuntimeIdentity {
                     pane_id: Some(pane.clone()),
                     terminal_id: Some(terminal),
-                    ..identity
+                    ..identity.clone()
                 },
             )
             .map_err(|e| e.to_string())?;
@@ -381,12 +550,37 @@ impl Worker {
             .request(Method::AgentStart(schema::AgentStartParams {
                 name: format!("bus-r{}-a{}", input.room.0, id.0),
                 kind: launch::provider_kind(input.provider).into(),
-                pane_id: pane,
+                pane_id: pane.clone(),
                 args: prepared.args,
                 timeout_ms: None,
             }));
         match started {
-            Ok(ResponseResult::AgentStarted {..}) => { let _ = events.send(BusEvent::AgentAdded(id)); Ok(()) },
+            Ok(ResponseResult::AgentStarted { .. }) => {
+                let _ = events.send(BusEvent::AgentAdded(id));
+                let Some(session) = identity.session_id else {
+                    return Ok(());
+                };
+                // What a SessionStart hook would report, so the native layer's
+                // identity checks for dialogs and delivery accept this pane.
+                let kind = launch::provider_kind(input.provider);
+                match self.transport.request(Method::PaneReportAgentSession(
+                    schema::PaneReportAgentSessionParams {
+                        pane_id: pane,
+                        source: format!("herdr:{kind}"),
+                        agent: kind.into(),
+                        seq: None,
+                        agent_session_id: Some(session),
+                        agent_session_path: None,
+                        session_start_source: Some("resume".into()),
+                    },
+                )) {
+                    Ok(_) => Ok(()),
+                    Err(error) => self.agent_error(
+                        id,
+                        format!("Adopted session not reported to its terminal: {}", error.message),
+                    ),
+                }
+            }
             other => self.agent_error(id,format!("Agent start outcome requires inspection of its owned terminal; no automatic retry or deletion. {other:?}")),
         }
     }

@@ -1,5 +1,6 @@
 //! Room history is a projection of durable requests, not the latest-reply cache.
 use super::render::{display, provider, wrap, wrap_ranges, Action};
+use super::thumbnails::{Thumbnails, MAX_ROWS};
 use crate::bus::model::*;
 use markdown_ratatui::{DocumentRow, LayoutOptions, MarkdownView, Theme, ViewState};
 use ratatui::buffer::{Buffer, CellWidth};
@@ -25,13 +26,30 @@ pub(super) struct Line {
     pub tone: Tone,
     pub spans: Vec<(String, Tone)>,
     pub styles: Vec<(String, Style)>,
-    /// Durable Markdown source for a rendered agent-reply row. Every row of
-    /// one reply shares the same allocation so selection can copy the source
-    /// once instead of reconstructing it from the display projection.
-    pub raw_markdown: Option<(RequestId, Arc<str>)>,
+    /// Durable Markdown source for a rendered prompt or agent-reply row. Every
+    /// row of one message shares the same allocation so selection can copy the
+    /// source once instead of reconstructing it from the display projection.
+    pub raw_markdown: Option<(MarkdownSource, Arc<str>)>,
     /// Soft-wrapped continuation of the previous row, rejoined when copied.
     pub continued: bool,
+    /// Row `row` of an image thumbnail drawn over these blank cells.
+    pub thumbnail: Option<ThumbnailRow>,
     anchor: RowAnchor,
+}
+
+#[derive(Clone)]
+pub(super) struct ThumbnailRow {
+    pub path: Arc<std::path::Path>,
+    pub cols: u16,
+    pub rows: u16,
+    pub row: u16,
+}
+
+/// Identifies one rendered Markdown message in the room history.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum MarkdownSource {
+    Prompt(PromptId),
+    Reply(RequestId),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -47,6 +65,7 @@ enum RowKind {
     PromptHeader,
     PromptBody,
     File,
+    Thumbnail,
     ReplyHeader,
     ReplyBody,
     Quote,
@@ -64,16 +83,20 @@ impl RowAnchor {
     }
 }
 
+/// Inputs to a history layout: content signature, room, width, age-label
+/// minute, and thumbnail cell size.
+type LayoutKey = (u64, RoomId, u16, u64, Option<(u32, u32)>);
+
 #[derive(Default)]
 pub(super) struct History {
-    key: Option<(u64, RoomId, u16, u64)>,
+    key: Option<LayoutKey>,
     source: Option<(u64, RoomId)>,
     signature: u64,
     lines: Vec<Line>,
-    markdown: BTreeMap<RequestId, MarkdownReply>,
+    markdown: BTreeMap<MarkdownSource, MarkdownBlock>,
 }
 
-struct MarkdownReply {
+struct MarkdownBlock {
     source: Arc<str>,
     view: Option<MarkdownView>,
     width: Option<u16>,
@@ -106,28 +129,47 @@ impl History {
         width: u16,
         revision: u64,
         now: u64,
+        thumbnails: &mut Thumbnails,
     ) -> &[Line] {
         if self.source != Some((revision, room.id)) {
             self.signature = signature(state, room);
             self.source = Some((revision, room.id));
         }
-        let key = (self.signature, room.id, width, now / 60_000);
+        let key = (
+            self.signature,
+            room.id,
+            width,
+            now / 60_000,
+            thumbnails.layout_key(),
+        );
         if self.key == Some(key) {
             return &self.lines;
         }
-        // Prompts and room messages share one monotonic identity allocator, so that
-        // identity is the conversation order; timestamps are display-only.
         let mut exchanges = BTreeMap::new();
-        for request in state.requests().filter(|r| r.room_id == room.id) {
+        // Dialog notices to orchestrators are delivery-only, never history.
+        for request in state
+            .requests()
+            .filter(|r| r.room_id == room.id && !r.delivery_only())
+        {
             let prompt = &request.prompt;
             exchanges
-                .entry(prompt.id.0)
+                .entry((prompt.submitted_at_ms, prompt.id.0))
                 .or_insert_with(|| Exchange {
                     prompt,
                     requests: BTreeMap::new(),
                 })
                 .requests
                 .insert(request.agent_id, request);
+        }
+        // Bus notices for the Human read like messages addressed to nobody.
+        for prompt in &room.notices {
+            exchanges.insert(
+                (prompt.submitted_at_ms, prompt.id.0),
+                Exchange {
+                    prompt,
+                    requests: BTreeMap::new(),
+                },
+            );
         }
         // Retain compatibility with saved latest-only records.
         if let Some(prompt) = room.latest_prompt.as_ref().filter(|prompt| {
@@ -136,7 +178,7 @@ impl History {
                 .any(|exchange| exchange.prompt.id == prompt.id)
         }) {
             exchanges.insert(
-                prompt.id.0,
+                (prompt.submitted_at_ms, prompt.id.0),
                 Exchange {
                     prompt,
                     requests: BTreeMap::new(),
@@ -145,12 +187,8 @@ impl History {
         }
         let mut lines = Vec::new();
         let mut active_markdown = BTreeSet::new();
-        let mut messages = state.room_messages(room.id).peekable();
         for exchange in exchanges.into_values() {
             let prompt = exchange.prompt;
-            while let Some(record) = messages.next_if(|record| record.message_id.0 < prompt.id.0) {
-                push_room_message(&mut lines, state, record, width);
-            }
             let mut header = vec![
                 (
                     participant_label(state, &prompt.author),
@@ -169,6 +207,9 @@ impl History {
                 }
                 header.push((agent.name.clone(), Tone::Agent(agent.id)));
             }
+            if prompt.recipient_ids.is_empty() {
+                header.push(("You".into(), Tone::You));
+            }
             header.push((
                 format!("  {}", timestamp(prompt.submitted_at_ms, now)),
                 Tone::Muted,
@@ -179,14 +220,51 @@ impl History {
                 "",
                 RowAnchor::new(prompt.id, None, RowKind::PromptHeader),
             ));
-            push_body(
-                &mut lines,
-                &prompt.text,
-                width,
-                "",
-                RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+            let prompt_source = MarkdownSource::Prompt(prompt.id);
+            active_markdown.insert(prompt_source);
+            lines.extend(
+                self.markdown_block(prompt_source, &prompt.text)
+                    .lines(
+                        width,
+                        prompt_source,
+                        "",
+                        RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+                    )
+                    .iter()
+                    .cloned(),
             );
             for (index, path) in prompt.files.iter().enumerate() {
+                let file_anchor = RowAnchor {
+                    position: index,
+                    ..RowAnchor::new(prompt.id, None, RowKind::File)
+                };
+                // With an image protocol the picture stands in for the file:
+                // its rows open the file detail, and no name row follows. The
+                // name shows only where no picture can be drawn.
+                if let Some((cols, rows)) = thumbnails.size(path, width) {
+                    let shared: Arc<std::path::Path> = Arc::from(path.as_path());
+                    lines.extend((0..rows).map(|row| Line {
+                        text: String::new(),
+                        action: Some(Action::FileDetail(path.clone())),
+                        tone: Tone::Muted,
+                        spans: Vec::new(),
+                        styles: Vec::new(),
+                        thumbnail: Some(ThumbnailRow {
+                            path: Arc::clone(&shared),
+                            cols,
+                            rows,
+                            row,
+                        }),
+                        raw_markdown: None,
+                        continued: false,
+                        anchor: RowAnchor {
+                            kind: RowKind::Thumbnail,
+                            position: index * usize::from(MAX_ROWS) + usize::from(row),
+                            ..file_anchor
+                        },
+                    }));
+                    continue;
+                }
                 lines.push(Line {
                     text: format!(
                         "[{}]",
@@ -196,12 +274,10 @@ impl History {
                     tone: Tone::Muted,
                     spans: Vec::new(),
                     styles: Vec::new(),
+                    thumbnail: None,
                     raw_markdown: None,
                     continued: false,
-                    anchor: RowAnchor {
-                        position: index,
-                        ..RowAnchor::new(prompt.id, None, RowKind::File)
-                    },
+                    anchor: file_anchor,
                 });
             }
 
@@ -210,6 +286,13 @@ impl History {
                     continue;
                 };
                 let request = exchange.requests.get(agent_id).copied();
+                // A group's messages share one reply, shown under its newest one.
+                if let Some(request) = request {
+                    let members = state.group_members(request.group.unwrap_or(request.id));
+                    if members.last().is_some_and(|last| *last != request.id) {
+                        continue;
+                    }
+                }
                 let final_reply = request
                     .filter(|request| request.phase == RequestPhase::Completed)
                     .and_then(|request| request.pending_final.as_ref());
@@ -236,17 +319,11 @@ impl History {
                 ));
                 let reply_anchor = RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyBody);
                 if let Some(request) = quote {
-                    active_markdown.insert(request);
-                    let markdown = self
-                        .markdown
-                        .entry(request)
-                        .or_insert_with(|| MarkdownReply::new(text));
-                    if markdown.source.as_ref() != text {
-                        *markdown = MarkdownReply::new(text);
-                    }
+                    let source = MarkdownSource::Reply(request);
+                    active_markdown.insert(source);
                     lines.extend(
-                        markdown
-                            .lines(width, request, "    ", reply_anchor)
+                        self.markdown_block(source, text)
+                            .lines(width, source, "    ", reply_anchor)
                             .iter()
                             .cloned(),
                     );
@@ -256,6 +333,7 @@ impl History {
                         tone: Tone::Muted,
                         spans: Vec::new(),
                         styles: Vec::new(),
+                        thumbnail: None,
                         raw_markdown: None,
                         continued: false,
                         anchor: RowAnchor::new(prompt.id, Some(*agent_id), RowKind::Quote),
@@ -270,26 +348,41 @@ impl History {
                 tone: Tone::Text,
                 spans: Vec::new(),
                 styles: Vec::new(),
+                thumbnail: None,
                 raw_markdown: None,
                 continued: false,
                 anchor: RowAnchor::new(prompt.id, None, RowKind::Gap),
             });
         }
-        for record in messages {
-            push_room_message(&mut lines, state, record, width);
-        }
         self.markdown
-            .retain(|request, _| active_markdown.contains(request));
+            .retain(|source, _| active_markdown.contains(source));
         self.key = Some(key);
         self.lines = lines;
         &self.lines
     }
+
+    fn markdown_block(&mut self, key: MarkdownSource, text: &str) -> &mut MarkdownBlock {
+        let block = self
+            .markdown
+            .entry(key)
+            .or_insert_with(|| MarkdownBlock::new(key, text));
+        if block.source.as_ref() != text {
+            *block = MarkdownBlock::new(key, text);
+        }
+        block
+    }
 }
 
-impl MarkdownReply {
-    fn new(source: &str) -> Self {
+impl MarkdownBlock {
+    fn new(key: MarkdownSource, source: &str) -> Self {
         let raw: Arc<str> = Arc::from(source);
-        let view = match MarkdownView::new(source) {
+        // People type prompts like chat messages, so every newline they enter
+        // is a line break. Agent replies keep standard Markdown paragraphs.
+        let rendered = match key {
+            MarkdownSource::Prompt(_) => std::borrow::Cow::Owned(source.replace('\n', "  \n")),
+            MarkdownSource::Reply(_) => std::borrow::Cow::Borrowed(source),
+        };
+        let view = match MarkdownView::new(&rendered) {
             Ok(mut view) => {
                 view.set_options(LayoutOptions {
                     theme: Theme {
@@ -320,7 +413,7 @@ impl MarkdownReply {
     fn lines(
         &mut self,
         width: u16,
-        request: RequestId,
+        request: MarkdownSource,
         indent: &str,
         anchor: RowAnchor,
     ) -> &[Line] {
@@ -345,7 +438,7 @@ impl MarkdownReply {
 fn prepared_markdown_lines(
     view: &mut MarkdownView,
     width: u16,
-    request: RequestId,
+    request: MarkdownSource,
     source: &Arc<str>,
     indent: &str,
     anchor: RowAnchor,
@@ -397,7 +490,7 @@ fn line_from_buffer(
     buffer: &Buffer,
     row: u16,
     width: u16,
-    request: RequestId,
+    request: MarkdownSource,
     source: &Arc<str>,
     indent: &str,
     continued: bool,
@@ -452,6 +545,7 @@ fn line_from_buffer(
         tone: Tone::Text,
         spans: Vec::new(),
         styles,
+        thumbnail: None,
         raw_markdown: Some((request, Arc::clone(source))),
         continued,
         anchor,
@@ -461,7 +555,7 @@ fn line_from_buffer(
 fn literal_reply_lines(
     source: &Arc<str>,
     width: u16,
-    request: RequestId,
+    request: MarkdownSource,
     indent: &str,
     anchor: RowAnchor,
 ) -> Vec<Line> {
@@ -474,6 +568,7 @@ fn literal_reply_lines(
             tone: Tone::Text,
             spans: Vec::new(),
             styles: Vec::new(),
+            thumbnail: None,
             raw_markdown: Some((request, Arc::clone(source))),
             continued: index > 0 && rows[index - 1].end == row.start,
             anchor: RowAnchor {
@@ -494,6 +589,7 @@ fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor
         tone: Tone::Text,
         spans: Vec::new(),
         styles: Vec::new(),
+        thumbnail: None,
         raw_markdown: None,
         continued: index > 0 && rows[index - 1].end == row.start,
         anchor: RowAnchor {
@@ -539,6 +635,7 @@ fn wrap_header(
                 tone: Tone::Muted,
                 spans: line_spans,
                 styles: Vec::new(),
+                thumbnail: None,
                 raw_markdown: None,
                 continued: index > 0,
                 anchor: RowAnchor {
@@ -554,83 +651,35 @@ fn wrap_header(
 // identity/settlement metadata, not their potentially large text, when a
 // global poll/draft revision arrives. Only a changed room history, names,
 // width, or age label requires sorting and wrapping those immutable bodies.
-fn participant_label(
-    state: &BusState,
-    participant: &crate::bus::orchestrator::ParticipantId,
-) -> String {
-    super::orchestrator_ui::author_label(participant, |id| {
-        state
-            .agent(id)
-            .map(|agent| agent.name.clone())
-            .unwrap_or_else(|| "Agent".into())
-    })
-}
-
-fn participant_tone(participant: &crate::bus::orchestrator::ParticipantId) -> Tone {
+fn participant_label(state: &BusState, participant: &Author) -> String {
     match participant {
-        crate::bus::orchestrator::ParticipantId::Agent(id) => Tone::Agent(*id),
-        crate::bus::orchestrator::ParticipantId::Human => Tone::You,
-        crate::bus::orchestrator::ParticipantId::Orchestrator => Tone::Muted,
+        Author::Human => "You".into(),
+        Author::Bus => "Bus".into(),
+        Author::Agent(id) => state
+            .agent(*id)
+            .map(|agent| agent.name.clone())
+            .unwrap_or_else(|| "Agent".into()),
     }
 }
 
-/// A room message is not a Request: it has no reply slots, settlement or timestamp.
-fn push_room_message(
-    lines: &mut Vec<Line>,
-    state: &BusState,
-    record: &crate::bus::orchestrator::RoomMessageRecord,
-    width: u16,
-) {
-    use crate::bus::orchestrator::{ParticipantId, RoomRecipient};
-    let message = &record.message;
-    let recipient = match message.to {
-        RoomRecipient::Human => ParticipantId::Human,
-        RoomRecipient::Orchestrator => ParticipantId::Orchestrator,
-        RoomRecipient::Agent(id) => ParticipantId::Agent(id),
-    };
-    // Room messages share the prompt identity space, so the id is a unique row anchor.
-    let id = PromptId(record.message_id.0);
-    lines.extend(wrap_header(
-        vec![
-            (
-                participant_label(state, &message.author),
-                participant_tone(&message.author),
-            ),
-            (" → ".into(), Tone::Muted),
-            (
-                participant_label(state, &recipient),
-                participant_tone(&recipient),
-            ),
-        ],
-        width,
-        "",
-        RowAnchor::new(id, None, RowKind::PromptHeader),
-    ));
-    push_body(
-        lines,
-        &message.text,
-        width,
-        "",
-        RowAnchor::new(id, None, RowKind::PromptBody),
-    );
-    lines.push(Line {
-        text: String::new(),
-        action: None,
-        tone: Tone::Text,
-        spans: Vec::new(),
-        styles: Vec::new(),
-        raw_markdown: None,
-        continued: false,
-        anchor: RowAnchor::new(id, None, RowKind::Gap),
-    });
+fn participant_tone(participant: &Author) -> Tone {
+    match participant {
+        Author::Agent(id) => Tone::Agent(*id),
+        Author::Human => Tone::You,
+        Author::Bus => Tone::Muted,
+    }
 }
 
 fn signature(state: &BusState, room: &Room) -> u64 {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for request in state.requests().filter(|r| r.room_id == room.id) {
+    for request in state
+        .requests()
+        .filter(|r| r.room_id == room.id && !r.delivery_only())
+    {
         request.id.0.hash(&mut hash);
         request.prompt.id.0.hash(&mut hash);
         request.prompt.submitted_at_ms.hash(&mut hash);
+        request.group.map(|lead| lead.0).hash(&mut hash);
         if request.phase == RequestPhase::Completed {
             request
                 .pending_final
@@ -640,9 +689,7 @@ fn signature(state: &BusState, room: &Room) -> u64 {
         }
     }
     room.latest_prompt.as_ref().map(|p| p.id.0).hash(&mut hash);
-    for record in state.room_messages(room.id) {
-        record.message_id.0.hash(&mut hash);
-    }
+    room.notices.last().map(|p| p.id.0).hash(&mut hash);
     for reply in room.latest_replies.values() {
         (reply.request_id.0, reply.received_at_ms).hash(&mut hash);
     }
@@ -702,7 +749,14 @@ mod tests {
         }
         let mut history = History::default();
         let original = history
-            .lines(&state, state.room(room).unwrap(), 80, 1, 1000)
+            .lines(
+                &state,
+                state.room(room).unwrap(),
+                80,
+                1,
+                1000,
+                &mut Default::default(),
+            )
             .as_ptr();
         for revision in 2..=30 {
             state
@@ -713,14 +767,28 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 history
-                    .lines(&state, state.room(room).unwrap(), 80, revision, 1000)
+                    .lines(
+                        &state,
+                        state.room(room).unwrap(),
+                        80,
+                        revision,
+                        1000,
+                        &mut Default::default()
+                    )
                     .as_ptr(),
                 original
             );
         }
         state.rename_agent(agent, "renamed").unwrap();
         assert!(history
-            .lines(&state, state.room(room).unwrap(), 80, 31, 1000)
+            .lines(
+                &state,
+                state.room(room).unwrap(),
+                80,
+                31,
+                1000,
+                &mut Default::default()
+            )
             .iter()
             .any(|line| line.text.contains("renamed")));
     }

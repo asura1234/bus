@@ -148,11 +148,8 @@ fn unwrapped_text(rows: &[ScreenTextRow]) -> String {
     let mut lines = Vec::new();
     let mut current = String::new();
     for row in rows {
-        let text = row_text(row);
-        if row.soft_wrapped {
-            current.push_str(text.trim_end());
-        } else {
-            current.push_str(text.trim_end());
+        current.push_str(row_text(row).trim_end());
+        if !row.soft_wrapped {
             lines.push(std::mem::take(&mut current));
         }
     }

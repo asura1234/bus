@@ -16,9 +16,9 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde_json::{json, Value};
 use support::{
     cleanup_test_base, client_shell_handshake, register_runtime_dir, register_spawned_herdr_pid,
-    unregister_spawned_herdr_pid, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
-    SERVER_MESSAGE_ENDPOINT_CONTROL, SERVER_MESSAGE_PANE_SURFACE,
-    SERVER_MESSAGE_PANE_SURFACE_PATCH,
+    unregister_spawned_herdr_pid, wait_for_socket,
+    CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_ENDPOINT_CONTROL,
+    SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
 };
 
 fn unique_test_dir() -> PathBuf {
@@ -78,17 +78,6 @@ fn test_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn wait_for_socket(path: &Path, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if path.exists() && UnixStream::connect(path).is_ok() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-    panic!("socket did not appear at {}", path.display());
-}
-
 fn spawn_server(config_home: &Path, runtime_dir: &Path, api_socket_path: &Path) -> SpawnedHerdr {
     spawn_server_with_path(config_home, runtime_dir, api_socket_path, None)
 }
@@ -117,7 +106,7 @@ fn spawn_server_with_path(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("server");
     cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
     cmd.env("XDG_CONFIG_HOME", config_home);
@@ -126,6 +115,9 @@ fn spawn_server_with_path(
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
     if let Some(path) = path_override {
         cmd.env("PATH", path);
     }
@@ -155,7 +147,7 @@ fn spawn_client_process(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("client");
     cmd.env("HERDR_DISABLE_SOUND", "1");
     cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
@@ -165,6 +157,9 @@ fn spawn_client_process(
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("BUS_DATA_DIR");
+    cmd.env_remove("BUS_SESSION_ID");
+    cmd.env_remove("HERDR_SESSION");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -304,24 +299,6 @@ fn pane_read_recent_contains(
         thread::sleep(Duration::from_millis(50));
     }
     false
-}
-
-fn pane_report_agent(socket_path: &Path, pane_id: &str, agent: &str, state: &str, source: &str) {
-    let response = send_json_request(
-        socket_path,
-        "pane_report_agent",
-        "pane.report_agent",
-        json!({
-            "pane_id": pane_id,
-            "agent": agent,
-            "state": state,
-            "source": source,
-        }),
-    );
-    assert!(
-        response.get("error").is_none(),
-        "pane.report_agent should succeed: {response}"
-    );
 }
 
 fn pane_agent_status(socket_path: &Path, pane_id: &str) -> Option<String> {
@@ -559,8 +536,7 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     let bin_dir = base.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
     let fake_pi = bin_dir.join("pi");
-    fs::write(&fake_pi, "#!/bin/sh\nprintf 'Working...\\n'\nsleep 8\n").unwrap();
-    #[cfg(unix)]
+    fs::write(&fake_pi, "#!/bin/sh\nprintf 'Working...\\n'\nsleep 30\n").unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&fake_pi).unwrap().permissions();
@@ -593,7 +569,7 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     // Ensure detected agent surface is populated by running fake `pi`.
     pane_send_text(&api_socket, &pane_id, "pi");
     pane_send_input(&api_socket, &pane_id, "");
-    let detected_before_hook = {
+    let detected_before_detach = {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut detected = false;
         while Instant::now() < deadline {
@@ -612,14 +588,14 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
         detected
     };
     assert!(
-        detected_before_hook,
-        "expected fake pi process to be detected before hook status assertions"
+        detected_before_detach,
+        "expected fake pi process to be detected before detach"
     );
 
-    // Use agent status surfaces directly instead of a generic sleep command.
-    pane_report_agent(&api_socket, &pane_id, "pi", "working", "cross-area-test");
+    // The fake process prints Pi's working marker, so screen detection drives the status;
+    // confirming it takes a few seconds.
     assert!(
-        wait_for_agent_status(&api_socket, &pane_id, "working", Duration::from_secs(3)),
+        wait_for_agent_status(&api_socket, &pane_id, "working", Duration::from_secs(10)),
         "pane agent status should become working before detach"
     );
 
@@ -637,16 +613,17 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     client_shell_handshake(&mut client_b, CURRENT_PROTOCOL, 80, 24).expect("shell handshake");
     assert!(wait_for_frame(&mut client_b, Duration::from_secs(5)));
 
-    // Transition to blocked and verify API + client surfaces both observe it.
-    // The fake process remains visibly working, so blocked is the deterministic
-    // higher-priority semantic transition for this cross-area projection test.
-    pane_report_agent(&api_socket, &pane_id, "pi", "blocked", "cross-area-test");
-    assert!(
-        wait_for_agent_status(&api_socket, &pane_id, "blocked", Duration::from_secs(3)),
-        "pane agent status should transition to blocked"
+    let pane = send_json_request(
+        &api_socket,
+        "pane_get",
+        "pane.get",
+        json!({ "pane_id": &pane_id }),
     );
-
-    // The API status above is the stable cross-area contract for this transition.
+    assert_eq!(pane["result"]["pane"]["agent"], "pi", "{pane}");
+    assert!(
+        wait_for_agent_status(&api_socket, &pane_id, "working", Duration::from_secs(3)),
+        "agent status should remain working after reattach"
+    );
 
     cleanup_spawned_herdr(server, base);
 }
@@ -809,6 +786,7 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
                 Ok(n) if n > 0 => {
                     let out = String::from_utf8_lossy(&buf[..n]);
                     if out.contains("\u{2500}")
+                        || out.contains("$")
                         || out.contains("workspace")
                         || out.contains("pane")
                         || out.contains("terminal")

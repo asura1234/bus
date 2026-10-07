@@ -1,18 +1,15 @@
 [package]
-name = "herdr"
+name = "bus"
 version = "0.9.0"
 edition = "2021"
 build = "build.rs"
-description = "terminal workspace manager for AI coding agents"
+description = "coordinate selected AI coding agents in native terminal rooms (built on Herdr)"
 license = "Apache-2.0"
-repository = "https://github.com/herdrdev/herdr"
-homepage = "https://herdr.dev"
 keywords = ["terminal", "tui", "ai", "agents", "multiplexer"]
 categories = ["command-line-utilities"]
 include = [
     "src/**/*",
     "assets/sounds/*",
-    "distribution/install.ps1",
     "README.md",
     "LICENSE",
     "Cargo.toml",
@@ -26,6 +23,8 @@ clap = { version = "4.5", default-features = false, features = ["std", "help", "
 clap_complete = "4.5"
 crossterm = "0.29"
 ctrlc = { version = "3", features = ["termination"] }
+# Decodes chat attachments into Bus room-history thumbnails.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 interprocess = "2.4.2"
 jsonc-parser = { version = "0.33.1", default-features = false, features = ["cst", "serde_json"] }
 libc = "0.2"
@@ -34,7 +33,6 @@ portable-pty = "=0.9.0"
 png = "0.17"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 regex = "1"
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_ignored = "0.1.14"
 serde_json = "1"
@@ -49,11 +47,6 @@ schemars = { version = "1.2.1", features = ["derive"] }
 
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
-
-[build-dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 # UTF-16 SDDL input for interprocess security descriptors.

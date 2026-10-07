@@ -59,11 +59,7 @@ impl RenderProfiler {
             .durations
             .iter()
             .map(|(name, stats)| {
-                let avg_us = if stats.count == 0 {
-                    0
-                } else {
-                    stats.total_ns / u128::from(stats.count) / 1_000
-                };
+                let avg_us = stats.total_ns / u128::from(stats.count) / 1_000;
                 let max_us = stats.max_ns / 1_000;
                 format!(
                     "{name}=count:{} avg_us:{} max_us:{}",

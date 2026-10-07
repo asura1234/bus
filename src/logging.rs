@@ -66,7 +66,7 @@ pub(crate) fn init_file_logging_at(dir: PathBuf, file_name: &str) {
     let filter = if crate::bus::diagnostics::dev_enabled() {
         EnvFilter::new(crate::bus::diagnostics::DEV_FILTER)
     } else {
-        EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("herdr=info"))
+        EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("bus=info"))
     };
 
     let _ = tracing_subscriber::fmt()
@@ -75,14 +75,6 @@ pub(crate) fn init_file_logging_at(dir: PathBuf, file_name: &str) {
         .with_ansi(false)
         .with_target(true)
         .try_init();
-}
-
-pub(crate) fn help_log_paths_summary() -> String {
-    let dir = crate::session::data_dir();
-    format!(
-        "{} (plus herdr-client.log, herdr-server.log)",
-        dir.join("herdr.log").display()
-    )
 }
 
 pub(crate) fn startup(role: &'static str) {
@@ -159,9 +151,7 @@ fn is_routine_api_method(method: &str) -> bool {
             | "pane.list"
             | "workspace.list"
             | "tab.list"
-            | "pane.report_agent"
             | "pane.report_agent_session"
-            | "pane.report_metadata"
     )
 }
 
@@ -314,18 +304,6 @@ pub(crate) fn tab_focused(workspace_id: &str, tab_id: &str) {
     );
 }
 
-#[cfg(test)]
-pub(crate) fn tab_closed(workspace_id: &str, tab_id: &str) {
-    tracing::info!(
-        event = "tab.close",
-        subsystem = "tab",
-        outcome = "ok",
-        workspace_id,
-        tab_id,
-        "tab closed"
-    );
-}
-
 pub(crate) fn tab_renamed(workspace_id: &str, tab_id: &str) {
     tracing::info!(
         event = "tab.rename",
@@ -387,50 +365,6 @@ pub(crate) fn session_restored(workspaces: usize, outcome: &'static str) {
         outcome,
         workspaces,
         "session restore evaluated"
-    );
-}
-
-pub(crate) fn update_check_started() {
-    tracing::info!(
-        event = "update.check.start",
-        subsystem = "update",
-        outcome = "started",
-        "checking for updates"
-    );
-}
-
-pub(crate) fn update_check_failed(err: &str) {
-    tracing::warn!(
-        event = "update.check.complete",
-        subsystem = "update",
-        outcome = "error",
-        err,
-        "update check failed"
-    );
-}
-
-pub(crate) fn update_available(version: &str) {
-    tracing::info!(
-        event = "update.available",
-        subsystem = "update",
-        outcome = "ok",
-        version,
-        "update available"
-    );
-}
-
-pub(crate) fn integration_action(
-    action: &'static str,
-    target: &'static str,
-    outcome: &'static str,
-) {
-    tracing::info!(
-        event = "integration.action",
-        subsystem = "integration",
-        outcome,
-        action,
-        target,
-        "integration action finished"
     );
 }
 
@@ -538,7 +472,7 @@ impl RotatingFileState {
         if self.file.is_none() {
             self.open_current_file()?;
         }
-        if self.max_bytes == 0 || self.current_size.saturating_add(incoming_len) <= self.max_bytes {
+        if self.current_size.saturating_add(incoming_len) <= self.max_bytes {
             return Ok(());
         }
         self.rotate_files()?;

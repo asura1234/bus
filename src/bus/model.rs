@@ -18,6 +18,16 @@ id_type!(AgentId);
 id_type!(PromptId);
 id_type!(RequestId);
 
+/// Who wrote a prompt. Saved JSON is `"human"`, `"bus"` or `{"agent":N}`.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Author {
+    Human,
+    Agent(AgentId),
+    /// Bus itself, such as a notice that an agent waits on a dialog.
+    Bus,
+}
+
 /// Unique recipients in the order the sender selected them.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -157,20 +167,16 @@ pub(crate) struct Draft {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Prompt {
     pub(crate) id: PromptId,
-    #[serde(default = "human_participant")]
-    pub(crate) author: crate::bus::orchestrator::ParticipantId,
-    #[serde(default)]
-    pub(crate) work_id: Option<crate::bus::orchestrator::WorkId>,
+    #[serde(default = "human_author")]
+    pub(crate) author: Author,
     pub(crate) text: String,
     pub(crate) files: Vec<PathBuf>,
     pub(crate) recipient_ids: AgentRecipients,
     pub(crate) submitted_at_ms: u64,
-    #[serde(default)]
-    pub(crate) trusted_assignment_frame: Option<String>,
 }
 
-fn human_participant() -> crate::bus::orchestrator::ParticipantId {
-    crate::bus::orchestrator::ParticipantId::Human
+fn human_author() -> Author {
+    Author::Human
 }
 
 impl Prompt {
@@ -189,28 +195,16 @@ impl Prompt {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        let untrusted = match (text.is_empty(), quoted_files.is_empty()) {
+        match (text.is_empty(), quoted_files.is_empty()) {
             (false, false) => format!("{text}\n{quoted_files}"),
             (false, true) => text,
             (true, false) => quoted_files,
             (true, true) => String::new(),
-        };
-        match &self.trusted_assignment_frame {
-            Some(frame) => super::trusted_assignment::render_payload(frame, &untrusted),
-            None => untrusted,
         }
     }
 
     fn matches_callback_payload(&self, payload: &str) -> bool {
-        fn normalize(value: &str) -> String {
-            value
-                .replace("\r\n", "\n")
-                .replace('\r', "\n")
-                .trim_end_matches(|character: char| character.is_ascii_whitespace())
-                .to_owned()
-        }
-
-        normalize(payload) == normalize(&self.rendered_payload())
+        payload_matches(payload, &self.rendered_payload())
     }
 }
 
@@ -230,51 +224,51 @@ pub(crate) struct Room {
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
+    /// Agent messages to the Human (`post_to_human`); they have no recipients.
+    /// Bus is not an agent and never posts here: notices older versions saved
+    /// as "Bus" are dropped on load.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_notices"
+    )]
+    pub(crate) notices: Vec<Prompt>,
     pub(crate) latest_replies: BTreeMap<AgentId, Reply>,
     #[serde(default)]
     pub(crate) deletion_pending: bool,
     #[serde(default)]
-    pub(crate) brief: RoomBrief,
+    pub(crate) kind: RoomKind,
+    /// The Human's per-room sound notification choice. Unset rooms follow their
+    /// kind: MASTER rings, work rooms stay silent. Read it with `sound_enabled`.
+    #[serde(default)]
+    pub(crate) sound: Option<bool>,
+    /// The system sound this room rings with, by name; None is Bus's own ding.
+    #[serde(default)]
+    pub(crate) sound_name: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct RoomBrief {
-    pub(crate) goal: String,
-    pub(crate) non_goals: String,
-    pub(crate) revision: u64,
-    pub(crate) approved_revision: u64,
-    pub(crate) locked: bool,
-}
-
-impl RoomBrief {
-    pub(crate) fn proposal_digest(&self) -> String {
-        let mut canonical = b"ROOM_BRIEF_PROPOSAL_V1\0".to_vec();
-        canonical.extend_from_slice(&self.revision.to_be_bytes());
-        for field in [&self.goal, &self.non_goals] {
-            canonical.extend_from_slice(&(field.len() as u64).to_be_bytes());
-            canonical.extend_from_slice(field.as_bytes());
-        }
-        crate::bus::io::digest(&canonical)
+impl Room {
+    pub(crate) fn sound_enabled(&self) -> bool {
+        self.sound.unwrap_or(self.kind == RoomKind::Master)
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ParticipantAssignmentFacts {
-    pub(crate) room_id: RoomId,
-    pub(crate) work_id: Option<u64>,
-    pub(crate) message_id: u64,
-    pub(crate) request_id: RequestId,
-    pub(crate) author: crate::bus::orchestrator::ParticipantId,
-    pub(crate) agent_id: AgentId,
-    pub(crate) recipient_incarnation: u64,
-    pub(crate) provider_launch_id: String,
-    pub(crate) brief_revision: u64,
-    pub(crate) approved_revision: u64,
-    pub(crate) locked: bool,
-    pub(crate) goal: String,
-    pub(crate) non_goals: String,
-    pub(crate) content_bundle_digest: String,
+/// A session's rooms are units of work plus exactly one MASTER room, where the
+/// orchestrator agents of those rooms live and talk to the Human.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RoomKind {
+    #[default]
+    Work,
+    Master,
 }
+
+pub(crate) const MASTER_ROOM_NAME: &str = "MASTER";
+/// The `send --to` selector for a message to the Human; no agent may take it.
+pub(crate) const HUMAN_RECIPIENT: &str = "human";
+/// Never produced by the ID allocator, which starts at 1, so adding MASTER to a
+/// saved session neither collides with nor renumbers anything.
+const MASTER_ROOM_ID: RoomId = RoomId(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct Agent {
@@ -293,6 +287,26 @@ pub(crate) struct Agent {
     pub(crate) details_disclosed: bool,
     pub(crate) status: RuntimeStatus,
     pub(crate) status_revision: u64,
+    /// The status revision at which the agent was last seen Working or
+    /// Blocked, or a provider turn event on its Bus request arrived (see
+    /// `accept_callback`). `send --async` compares it with a request's submission
+    /// revision to tell that the agent worked on the message and then went
+    /// idle, without relying on reply capture.
+    #[serde(default)]
+    pub(crate) busy_revision: u64,
+    /// A numbered choice dialog is visible; answer it with `agent choose`.
+    #[serde(default)]
+    pub(crate) dialog: bool,
+    /// What Bus last reported this agent waiting on: a dialog `id`, or
+    /// `blocked` for a blocked screen without a readable dialog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dialog_notice: Option<String>,
+    /// The reported dialog was answered through Bus, so its closing is expected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dialog_answered: bool,
+    /// 通过 Bus 选定的选项号，关闭通知要写明是哪一项。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dialog_answer: Option<u32>,
     pub(crate) actionable_error: Option<String>,
     pub(crate) current_request: Option<RequestId>,
     #[serde(default)]
@@ -301,6 +315,26 @@ pub(crate) struct Agent {
     pub(crate) session_binding_invalidated: bool,
     #[serde(default)]
     pub(crate) deletion_pending: bool,
+    /// Set only on MASTER agents: the work room this agent orchestrates, bound
+    /// at creation for the agent's whole life (its system prompt names it).
+    /// `None` only for a saved orchestrator whose room failed the load checks
+    /// in `ensure_master_room`; Bus never creates one.
+    #[serde(default)]
+    pub(crate) orchestrates: Option<RoomId>,
+    #[serde(default)]
+    pub(crate) compactions: Compactions,
+    /// `agent clear` reset the provider context: the next callback that names a
+    /// different provider session rebinds this agent to it instead of being rejected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) session_reset_pending: bool,
+}
+
+/// Context compactions reported by the provider's SessionStart hook
+/// (`source: "compact"`). Cursor sends no such hook, so it stays at zero.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct Compactions {
+    pub(crate) count: u32,
+    pub(crate) last_at_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -330,6 +364,128 @@ pub(crate) struct Request {
     pub(crate) uncertain_outcome: bool,
     pub(crate) pending_final: Option<PendingFinal>,
     pub(crate) completed_at_ms: Option<u64>,
+    /// Sent with `--queue`: waits for an idle agent and gets its own turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) queue_only: bool,
+    /// The lead request of the group this one joined, by being typed into the
+    /// lead's running turn or coalesced into its prompt. The group shares the
+    /// lead's final reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) group: Option<RequestId>,
+    /// Typed into a running turn; its submit hook may arrive or not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) steered: bool,
+    /// The exact text Bus typed for a coalesced group, when it differs from
+    /// this prompt alone. Submit hooks are matched against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) submitted_payload: Option<String>,
+    /// When a turn the agent ran on its own finished while this request, typed
+    /// but never seen starting, waited. The agent has moved on since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) foreign_turn_settled_at_ms: Option<u64>,
+}
+
+impl Request {
+    /// A Bus-authored request is a dialog notice for a room's orchestrator. It is
+    /// delivered to that agent like any message but is noise for the Human, who
+    /// watches the agent's terminal instead: it never shows in room history,
+    /// previews, unread counts or rings.
+    pub(crate) fn delivery_only(&self) -> bool {
+        self.prompt.author == Author::Bus
+    }
+
+    pub(crate) fn matches_callback_payload(&self, payload: &str) -> bool {
+        match &self.submitted_payload {
+            Some(typed) => payload_matches(payload, typed),
+            None => self.prompt.matches_callback_payload(payload),
+        }
+    }
+
+    fn settled(&self) -> bool {
+        matches!(
+            self.phase,
+            RequestPhase::Completed | RequestPhase::Abandoned
+        )
+    }
+}
+
+/// How long a steered group waits after its final reply for the submit hook
+/// of typed input that the provider may still run as a turn of its own.
+pub(crate) const STEERING_SETTLE_MS: u64 = 5_000;
+
+/// How long an agent stays idle after finishing a turn of its own before Bus
+/// gives up on a request it typed but never saw start. A queued prompt starts
+/// within milliseconds of the turn before it ending.
+pub(crate) const UNBOUND_SETTLE_MS: u64 = 5_000;
+
+/// Local wall-clock `HH:MM` of a millisecond timestamp, for coalesced prompts.
+fn clock(at_ms: u64) -> String {
+    i64::try_from(at_ms / 1000)
+        .ok()
+        .and_then(crate::platform::local_datetime_at)
+        .map(|local| format!("{:02}:{:02}", local.hour(), local.minute()))
+        .unwrap_or_else(|| "--:--".into())
+}
+
+/// Whether a provider's submit hook reports the prompt Bus typed as `typed`.
+///
+/// Claude Code (2.1.291) turns each typed line that is one quoted image path
+/// into an image attachment: its hook reports one `[Image #N]` placeholder per
+/// image first (N counts the session's images), then the remaining lines with
+/// blank ones dropped. Only that exact shape matches besides the typed text.
+fn payload_matches(payload: &str, typed: &str) -> bool {
+    let payload = normalized_payload(payload);
+    let typed = normalized_payload(typed);
+    if payload == typed {
+        return true;
+    }
+    let (length, images) = crate::bus::callbacks::claude_image_placeholders(&payload);
+    let mut lifted = 0;
+    let remaining = typed
+        .split('\n')
+        .filter(|line| {
+            let image = is_quoted_image_path(line);
+            lifted += usize::from(image);
+            !image && !line.trim().is_empty()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    images > 0 && images == lifted && payload[length..] == remaining
+}
+
+/// Whether `line` is exactly one path quoted the way `Prompt::rendered_payload`
+/// quotes attachments, naming an image Claude Code attaches.
+fn is_quoted_image_path(line: &str) -> bool {
+    let Some(path) = line
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return false;
+    };
+    let mut escaped = false;
+    for character in path.chars() {
+        match (escaped, character) {
+            (false, '\\') => escaped = true,
+            (false, '"') => return false,
+            _ => escaped = false,
+        }
+    }
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["png", "jpg", "jpeg", "gif", "webp"]
+                .iter()
+                .any(|image| extension.eq_ignore_ascii_case(image))
+        })
+}
+
+fn normalized_payload(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end_matches(|character: char| character.is_ascii_whitespace())
+        .to_owned()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -409,12 +565,16 @@ pub(crate) enum CallbackRejection {
     WrongPrompt,
     UnboundFinal,
     DuplicateFinal,
+    /// The callback belongs to a provider turn Bus did not start.
+    UnrelatedTurn,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CallbackDisposition {
     AcceptedBinding,
     AcceptedContinuation,
+    /// Input Bus typed into the running turn reached the provider.
+    AcceptedSteering,
     AcceptedProgress,
     AcceptedPendingSettlement,
     AcceptedCompleted,
@@ -436,11 +596,56 @@ pub(crate) enum ModelError {
     LaunchIdentityMismatch,
     DeletionPending,
     AgentNotIdle,
+    MasterRoomFixed,
+    MasterRoomHasNoNotes,
+    ReservedRoomName,
+    ReservedAgentName,
+    OrchestratorOutsideMaster(AgentId),
+    NotOrchestratable(RoomId),
+    RoomAlreadyOrchestrated { room: RoomId, agent: AgentId },
+    OrchestratorAlreadyBound(AgentId),
 }
 
 impl std::fmt::Display for ModelError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "Bus model operation failed: {self:?}")
+        match self {
+            Self::MasterRoomFixed => {
+                write!(formatter, "The MASTER room cannot be renamed or deleted")
+            }
+            Self::MasterRoomHasNoNotes => write!(formatter, "The MASTER room has no notes"),
+            Self::ReservedRoomName => write!(
+                formatter,
+                "The name {MASTER_ROOM_NAME} is reserved for the master room"
+            ),
+            Self::ReservedAgentName => write!(
+                formatter,
+                "The name {HUMAN_RECIPIENT} is reserved for messages to the human"
+            ),
+            Self::OrchestratorOutsideMaster(agent) => write!(
+                formatter,
+                "Agent {} is not in the MASTER room; only MASTER agents orchestrate rooms",
+                agent.0
+            ),
+            Self::NotOrchestratable(room) => write!(
+                formatter,
+                "Room {} cannot be orchestrated; choose an existing work room",
+                room.0
+            ),
+            Self::RoomAlreadyOrchestrated { room, agent } => write!(
+                formatter,
+                "Room {} already has orchestrator agent {}; a work room has at most one orchestrator",
+                room.0, agent.0
+            ),
+            Self::OrchestratorAlreadyBound(agent) => write!(
+                formatter,
+                "Agent {} already orchestrates a room; an orchestrator keeps its room for life",
+                agent.0
+            ),
+            Self::EmptyPrompt => write!(formatter, "The message has no text or files"),
+            Self::NoRecipients => write!(formatter, "Choose at least one recipient"),
+            Self::DeletionPending => write!(formatter, "That room or agent is being deleted"),
+            _ => write!(formatter, "Bus model operation failed: {self:?}"),
+        }
     }
 }
 
@@ -457,14 +662,24 @@ pub(crate) struct BusState {
     queues: BTreeMap<AgentId, Vec<RequestId>>,
     consumed_callback_ids: BTreeSet<String>,
     consumed_provider_turns: BTreeSet<String>,
-    visible_room: Option<RoomId>,
-    /// Room-process facts share the Bus document and therefore the Worker writer.
+    /// Provider turns the agent started on its own (a task notification, or the
+    /// user typing in its terminal). Their later hooks are activity, never a
+    /// reply or an error for the request Bus is waiting on.
     #[serde(default)]
-    orchestrator: crate::bus::orchestrator::OrchestratorState,
-    /// Recomputed by the Worker from confined repository files; never persisted as a second SOT.
-    #[serde(skip)]
-    workflow_promotion_reviews:
-        BTreeMap<RoomId, Vec<crate::bus::workflow_drafts::WorkflowPromotionReview>>,
+    unrelated_provider_turns: BTreeSet<String>,
+    visible_room: Option<RoomId>,
+    /// Dialog fingerprints already spent on an answer; each is single-use.
+    #[serde(default)]
+    consumed_dialog_fingerprints: BTreeSet<String>,
+}
+
+fn deserialize_notices<'de, D>(deserializer: D) -> Result<Vec<Prompt>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut notices = Vec::<Prompt>::deserialize(deserializer)?;
+    notices.retain(|notice| notice.author != Author::Bus);
+    Ok(notices)
 }
 
 fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, Agent>, D::Error>
@@ -528,96 +743,18 @@ impl BusState {
             queues: BTreeMap::new(),
             consumed_callback_ids: BTreeSet::new(),
             consumed_provider_turns: BTreeSet::new(),
+            unrelated_provider_turns: BTreeSet::new(),
             visible_room: None,
-            orchestrator: crate::bus::orchestrator::OrchestratorState::default(),
-            workflow_promotion_reviews: BTreeMap::new(),
+            consumed_dialog_fingerprints: BTreeSet::new(),
         }
     }
 
-    pub(crate) fn orchestrator_state(&self) -> &crate::bus::orchestrator::OrchestratorState {
-        &self.orchestrator
+    pub(crate) fn dialog_fingerprint_consumed(&self, fingerprint: &str) -> bool {
+        self.consumed_dialog_fingerprints.contains(fingerprint)
     }
 
-    pub(crate) fn orchestrator_state_mut(
-        &mut self,
-    ) -> &mut crate::bus::orchestrator::OrchestratorState {
-        &mut self.orchestrator
-    }
-
-    pub(crate) fn room_brief_proposal(&self, room: RoomId) -> Option<(u64, String)> {
-        let brief = &self.rooms.get(&room)?.brief;
-        (!brief.locked && brief.revision > 0 && !brief.goal.trim().is_empty())
-            .then(|| (brief.revision, brief.proposal_digest()))
-    }
-
-    pub(crate) fn room_brief_confirmation(
-        &self,
-        room: RoomId,
-    ) -> Option<&crate::bus::orchestrator::RoomBriefConfirmationReceipt> {
-        self.orchestrator.room_brief_confirmation(room)
-    }
-
-    pub(crate) fn workflow_promotion_reviews(
-        &self,
-        room: RoomId,
-    ) -> &[crate::bus::workflow_drafts::WorkflowPromotionReview] {
-        self.workflow_promotion_reviews
-            .get(&room)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    /// Returns whether the Worker-published review projection changed.
-    pub(crate) fn set_workflow_promotion_reviews(
-        &mut self,
-        reviews: BTreeMap<RoomId, Vec<crate::bus::workflow_drafts::WorkflowPromotionReview>>,
-    ) -> bool {
-        let changed = self.workflow_promotion_reviews != reviews;
-        self.workflow_promotion_reviews = reviews;
-        changed
-    }
-
-    pub(crate) fn developer_workflow_approvals(
-        &self,
-        room: RoomId,
-    ) -> Vec<&crate::bus::workflow_drafts::DeveloperWorkflowApproval> {
-        self.orchestrator
-            .workflow_drafts()
-            .approvals()
-            .filter(|approval| approval.room_id == room)
-            .collect()
-    }
-
-    pub(crate) fn room_messages(
-        &self,
-        room: RoomId,
-    ) -> impl Iterator<Item = &crate::bus::orchestrator::RoomMessageRecord> {
-        self.orchestrator.room_messages(room)
-    }
-
-    /// Records a room message that is not a coding-agent Request.
-    pub(crate) fn record_room_message(
-        &mut self,
-        room: RoomId,
-        message: crate::bus::orchestrator::RoomMessage,
-    ) -> Result<crate::bus::orchestrator::RoomMessageId, ModelError> {
-        let room_state = self.rooms.get(&room).ok_or(ModelError::UnknownRoom(room))?;
-        if room_state.deletion_pending {
-            return Err(ModelError::DeletionPending);
-        }
-        if message.text.trim().is_empty() {
-            return Err(ModelError::EmptyPrompt);
-        }
-        // Prompts and room messages share one identity space, so a HumanMessage wake
-        // for one can never deduplicate against the other.
-        let message_id = crate::bus::orchestrator::RoomMessageId(self.allocate_id());
-        self.orchestrator
-            .record_room_message(crate::bus::orchestrator::RoomMessageRecord {
-                room_id: room,
-                message_id,
-                message,
-            });
-        Ok(message_id)
+    pub(crate) fn consume_dialog_fingerprint(&mut self, fingerprint: String) {
+        self.consumed_dialog_fingerprints.insert(fingerprint);
     }
 
     fn allocate_id(&mut self) -> u64 {
@@ -627,31 +764,187 @@ impl BusState {
     }
 
     pub(crate) fn create_room(&mut self, name: &str) -> Result<RoomId, ModelError> {
-        let name = normalized_name(name)?;
+        let name = work_room_name(name)?;
         let id = RoomId(self.allocate_id());
         self.rooms.insert(
             id,
             Room {
                 id,
                 name,
+                notices: Vec::new(),
                 notes: String::new(),
                 draft: Draft::default(),
                 unread_count: 0,
                 latest_prompt: None,
                 latest_replies: BTreeMap::new(),
                 deletion_pending: false,
-                brief: RoomBrief::default(),
+                kind: RoomKind::Work,
+                sound: None,
+                sound_name: None,
             },
         );
         Ok(id)
     }
 
-    pub(crate) fn rename_room(&mut self, id: RoomId, name: &str) -> Result<(), ModelError> {
-        let name = normalized_name(name)?;
+    /// Gives a session its MASTER room if it lacks one, and drops orchestrator
+    /// assignments that no longer satisfy the MASTER invariants.
+    pub(crate) fn ensure_master_room(&mut self) -> RoomId {
+        // Sessions saved before MASTER accepted any name; keep its name unique.
+        let clashing: Vec<_> = self
+            .rooms
+            .values()
+            .filter(|room| {
+                room.kind == RoomKind::Work && room.name.eq_ignore_ascii_case(MASTER_ROOM_NAME)
+            })
+            .map(|room| room.id)
+            .collect();
+        for id in clashing {
+            let name = (1..)
+                .map(|n| match n {
+                    1 => "Master (old)".to_owned(),
+                    n => format!("Master (old {n})"),
+                })
+                .find(|name| self.rooms.values().all(|room| &room.name != name))
+                .expect("an unused name exists");
+            if let Some(room) = self.rooms.get_mut(&id) {
+                room.name = name;
+            }
+        }
+        let master = match self.master_room() {
+            Some(room) => room.id,
+            None => {
+                self.rooms.insert(
+                    MASTER_ROOM_ID,
+                    Room {
+                        id: MASTER_ROOM_ID,
+                        name: MASTER_ROOM_NAME.into(),
+                        notices: Vec::new(),
+                        notes: String::new(),
+                        draft: Draft::default(),
+                        unread_count: 0,
+                        latest_prompt: None,
+                        latest_replies: BTreeMap::new(),
+                        deletion_pending: false,
+                        kind: RoomKind::Master,
+                        sound: None,
+                        sound_name: None,
+                    },
+                );
+                MASTER_ROOM_ID
+            }
+        };
+        let mut claimed = BTreeSet::new();
+        for agent in self.agents.values_mut() {
+            let valid = agent.orchestrates.is_some_and(|room| {
+                agent.room_id == master
+                    && self
+                        .rooms
+                        .get(&room)
+                        .is_some_and(|room| room.kind == RoomKind::Work)
+                    && claimed.insert(room)
+            });
+            if !valid {
+                agent.orchestrates = None;
+            }
+        }
+        master
+    }
+
+    /// Whether the session holds anything beyond its MASTER room.
+    pub(crate) fn has_work(&self) -> bool {
+        !self.agents.is_empty() || self.rooms.values().any(|room| room.kind == RoomKind::Work)
+    }
+
+    pub(crate) fn master_room(&self) -> Option<&Room> {
+        self.rooms
+            .values()
+            .find(|room| room.kind == RoomKind::Master)
+    }
+
+    /// The MASTER agent orchestrating `room`, if any.
+    pub(crate) fn orchestrator_of(&self, room: RoomId) -> Option<&Agent> {
+        self.agents
+            .values()
+            .find(|agent| agent.orchestrates == Some(room))
+    }
+
+    /// Binds a new MASTER agent to the work room it orchestrates. The room is
+    /// fixed in the agent's system prompt at launch, so it is bound once, at
+    /// creation, and never moves.
+    pub(crate) fn bind_orchestrator(
+        &mut self,
+        id: AgentId,
+        room: RoomId,
+    ) -> Result<(), ModelError> {
+        let agent = self.agents.get(&id).ok_or(ModelError::UnknownAgent(id))?;
+        if self
+            .rooms
+            .get(&agent.room_id)
+            .is_none_or(|home| home.kind != RoomKind::Master)
+        {
+            return Err(ModelError::OrchestratorOutsideMaster(id));
+        }
+        if agent.orchestrates.is_some() {
+            return Err(ModelError::OrchestratorAlreadyBound(id));
+        }
+        if self
+            .rooms
+            .get(&room)
+            .is_none_or(|target| target.kind != RoomKind::Work || target.deletion_pending)
+        {
+            return Err(ModelError::NotOrchestratable(room));
+        }
+        if let Some(other) = self.orchestrator_of(room) {
+            return Err(ModelError::RoomAlreadyOrchestrated {
+                room,
+                agent: other.id,
+            });
+        }
+        self.agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .orchestrates = Some(room);
+        Ok(())
+    }
+
+    /// The agents a room's deletion removes: its members and its orchestrator,
+    /// which exists only for that room.
+    pub(crate) fn agents_deleted_with_room(&self, id: RoomId) -> Vec<AgentId> {
+        self.agents
+            .values()
+            .filter(|agent| agent.room_id == id || agent.orchestrates == Some(id))
+            .map(|agent| agent.id)
+            .collect()
+    }
+
+    pub(crate) fn set_room_sound(&mut self, id: RoomId, on: bool) -> Result<(), ModelError> {
         self.rooms
             .get_mut(&id)
             .ok_or(ModelError::UnknownRoom(id))?
-            .name = name;
+            .sound = Some(on);
+        Ok(())
+    }
+
+    /// `name` is a system sound name, or None for Bus's own ding.
+    pub(crate) fn set_room_sound_name(
+        &mut self,
+        id: RoomId,
+        name: Option<String>,
+    ) -> Result<(), ModelError> {
+        self.rooms
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownRoom(id))?
+            .sound_name = name;
+        Ok(())
+    }
+
+    pub(crate) fn rename_room(&mut self, id: RoomId, name: &str) -> Result<(), ModelError> {
+        let name = work_room_name(name)?;
+        let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
+        if room.kind == RoomKind::Master {
+            return Err(ModelError::MasterRoomFixed);
+        }
+        room.name = name;
         Ok(())
     }
 
@@ -668,7 +961,7 @@ impl BusState {
             Some(room) if room.deletion_pending => return Err(ModelError::DeletionPending),
             Some(_) => {}
         }
-        let name = normalized_name(name)?;
+        let name = agent_name(name)?;
         let neighbors = || {
             self.agents
                 .values()
@@ -694,19 +987,38 @@ impl BusState {
                 details_disclosed: false,
                 status: RuntimeStatus::Launching,
                 status_revision: 0,
+                busy_revision: 0,
+                dialog: false,
+                dialog_notice: None,
+                dialog_answered: false,
+                dialog_answer: None,
                 actionable_error: None,
                 current_request: None,
                 hook_setup_confirmed: false,
                 session_binding_invalidated: false,
                 deletion_pending: false,
+                orchestrates: None,
+                compactions: Compactions::default(),
+                session_reset_pending: false,
             },
         );
         self.queues.insert(id, Vec::new());
         Ok(id)
     }
 
+    pub(crate) fn record_compaction(&mut self, id: AgentId, at_ms: u64) -> Result<(), ModelError> {
+        let compactions = &mut self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .compactions;
+        compactions.count = compactions.count.saturating_add(1);
+        compactions.last_at_ms = Some(at_ms);
+        Ok(())
+    }
+
     pub(crate) fn rename_agent(&mut self, id: AgentId, name: &str) -> Result<(), ModelError> {
-        let name = normalized_name(name)?;
+        let name = agent_name(name)?;
         self.agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?
@@ -728,17 +1040,12 @@ impl BusState {
     }
 
     pub(crate) fn prepare_delete_room(&mut self, id: RoomId) -> Result<(), ModelError> {
-        self.rooms
-            .get_mut(&id)
-            .ok_or(ModelError::UnknownRoom(id))?
-            .deletion_pending = true;
-        let agents: Vec<_> = self
-            .agents
-            .values()
-            .filter(|agent| agent.room_id == id)
-            .map(|agent| agent.id)
-            .collect();
-        for agent in agents {
+        let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
+        if room.kind == RoomKind::Master {
+            return Err(ModelError::MasterRoomFixed);
+        }
+        room.deletion_pending = true;
+        for agent in self.agents_deleted_with_room(id) {
             self.prepare_delete_agent(agent)?;
         }
         Ok(())
@@ -758,22 +1065,20 @@ impl BusState {
     }
 
     pub(crate) fn delete_room(&mut self, id: RoomId) -> Result<(), ModelError> {
-        if !self.rooms.contains_key(&id) {
-            return Err(ModelError::UnknownRoom(id));
+        match self.rooms.get(&id) {
+            None => return Err(ModelError::UnknownRoom(id)),
+            Some(room) if room.kind == RoomKind::Master => return Err(ModelError::MasterRoomFixed),
+            Some(_) => {}
         }
-        let agents: Vec<_> = self
-            .agents
-            .values()
-            .filter(|agent| agent.room_id == id)
-            .map(|agent| agent.id)
-            .collect();
-        for agent in agents {
+        for agent in self.agents_deleted_with_room(id) {
             self.delete_agent(agent)?;
         }
         self.rooms.remove(&id);
         self.requests.retain(|_, request| request.room_id != id);
+        // Match the UI, which falls back to the first room (MASTER) at once,
+        // so `state` never shows a gap between the delete and the next view.
         if self.visible_room == Some(id) {
-            self.visible_room = None;
+            self.visible_room = self.rooms.keys().next().copied();
         }
         Ok(())
     }
@@ -799,6 +1104,42 @@ impl BusState {
             return Err(ModelError::InvalidTransition);
         }
         agent.hook_setup_confirmed = true;
+        Ok(())
+    }
+
+    /// Marks the agent's provider context as reset by `agent clear`.
+    pub(crate) fn begin_session_reset(&mut self, id: AgentId) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?
+            .session_reset_pending = true;
+        Ok(())
+    }
+
+    /// Binds a reset agent to the provider session its fresh context reported.
+    /// A fresh context starts with no compactions.
+    pub(crate) fn rebind_reset_session(
+        &mut self,
+        id: AgentId,
+        session: String,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        let previous = agent.runtime_identity.session_id.replace(session.clone());
+        agent.session_reset_pending = false;
+        agent.compactions = Compactions::default();
+        // A message already sent into the fresh context was recorded under the
+        // old session; its callbacks now carry the new one.
+        if let Some(request) = agent
+            .current_request
+            .and_then(|request| self.requests.get_mut(&request))
+        {
+            if previous.is_some() && request.provider_session_id == previous {
+                request.provider_session_id = Some(session);
+            }
+        }
         Ok(())
     }
 
@@ -848,56 +1189,6 @@ impl BusState {
         self.requests.values()
     }
 
-    pub(crate) fn work_settlement(
-        &self,
-        request_id: RequestId,
-    ) -> Option<crate::bus::orchestrator::WorkSettlement> {
-        use crate::bus::orchestrator::{
-            CallbackLineage, ParticipantId, ProviderRequestSettlement, RoomMessageId,
-            WorkSettlement,
-        };
-
-        let request = self.requests.get(&request_id)?;
-        self.agents.get(&request.agent_id)?;
-        let provider_request_settlement = match request.phase {
-            RequestPhase::Queued => ProviderRequestSettlement::Queued,
-            RequestPhase::Submitting => ProviderRequestSettlement::Submitting,
-            RequestPhase::Active => ProviderRequestSettlement::Active,
-            RequestPhase::Completed => ProviderRequestSettlement::Completed,
-            RequestPhase::Abandoned => ProviderRequestSettlement::Abandoned,
-        };
-        let queue_position = self.queues.get(&request.agent_id).and_then(|queue| {
-            queue
-                .iter()
-                .position(|queued| *queued == request_id)
-                .map(|position| position as u64 + 1)
-        });
-        let has_final_reply = self
-            .rooms
-            .get(&request.room_id)
-            .and_then(|room| room.latest_replies.get(&request.agent_id))
-            .is_some_and(|reply| reply.request_id == request_id);
-        Some(WorkSettlement {
-            room_id: request.room_id,
-            work_id: request.prompt.work_id,
-            participant: ParticipantId::Agent(request.agent_id),
-            message_id: RoomMessageId(request.prompt.id.0),
-            request_id,
-            operation_id: None,
-            semantic_revision: self.orchestrator_state().wake_revision(request.room_id),
-            provider_request_settlement,
-            callback_lineage: CallbackLineage {
-                provider_session: request.provider_session_id.clone(),
-                provider_turn: request.provider_turn_id.clone(),
-                provider_prompt: request.provider_prompt_id.clone(),
-                trusted_start_bound: request.trusted_start_bound,
-            },
-            has_final_reply,
-            queue_position,
-            uncertain: request.uncertain_outcome,
-        })
-    }
-
     pub(crate) fn update_agent_runtime_metadata(
         &mut self,
         id: AgentId,
@@ -926,10 +1217,13 @@ impl BusState {
     }
 
     pub(crate) fn set_room_notes(&mut self, id: RoomId, notes: &str) -> Result<(), ModelError> {
-        self.rooms
-            .get_mut(&id)
-            .ok_or(ModelError::UnknownRoom(id))?
-            .notes = notes.to_owned();
+        let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
+        // Notes are a work room's status board; MASTER is where the human talks to
+        // orchestrators and has no board of its own.
+        if room.kind == RoomKind::Master {
+            return Err(ModelError::MasterRoomHasNoNotes);
+        }
+        room.notes = notes.to_owned();
         Ok(())
     }
 
@@ -968,35 +1262,6 @@ impl BusState {
         Ok(())
     }
 
-    pub(crate) fn quote_reply(
-        &mut self,
-        room: RoomId,
-        agent: AgentId,
-        text: &str,
-    ) -> Result<(), ModelError> {
-        let agent = self
-            .agents
-            .get(&agent)
-            .ok_or(ModelError::UnknownAgent(agent))?;
-        if agent.room_id != room {
-            return Err(ModelError::AgentOutsideRoom(agent.id));
-        }
-        let draft = &mut self
-            .rooms
-            .get_mut(&room)
-            .ok_or(ModelError::UnknownRoom(room))?
-            .draft;
-        if !draft.text.is_empty() && !draft.text.ends_with('\n') {
-            draft.text.push('\n');
-        }
-        let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-        draft.text.push_str(&agent.name);
-        draft.text.push_str(": \"");
-        draft.text.push_str(&escaped);
-        draft.text.push_str("\"\n");
-        Ok(())
-    }
-
     pub(crate) fn attach_file(&mut self, room: RoomId, path: PathBuf) -> Result<(), ModelError> {
         let files = &mut self
             .rooms
@@ -1025,28 +1290,25 @@ impl BusState {
     }
 
     /// Queue an automation prompt without changing the room's human-owned draft.
-    pub(crate) fn submit_message(
-        &mut self,
-        room: RoomId,
-        draft: Draft,
-        now_ms: u64,
-    ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_message_from(
-            room,
-            draft,
-            crate::bus::orchestrator::ParticipantId::Human,
-            None,
-            now_ms,
-        )
-    }
-
     pub(crate) fn submit_message_from(
         &mut self,
         room: RoomId,
         draft: Draft,
-        author: crate::bus::orchestrator::ParticipantId,
-        work_id: Option<crate::bus::orchestrator::WorkId>,
+        author: Author,
         now_ms: u64,
+    ) -> Result<Vec<RequestId>, ModelError> {
+        self.submit_message_with(room, draft, author, now_ms, false)
+    }
+
+    /// `queue_only` (`send --queue`) waits for an idle agent instead of
+    /// steering a running turn, and is never coalesced with other messages.
+    pub(crate) fn submit_message_with(
+        &mut self,
+        room: RoomId,
+        draft: Draft,
+        author: Author,
+        now_ms: u64,
+        queue_only: bool,
     ) -> Result<Vec<RequestId>, ModelError> {
         let original = self
             .rooms
@@ -1058,7 +1320,7 @@ impl BusState {
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
             .draft = draft;
-        let result = self.submit_draft_from(room, author, work_id, now_ms);
+        let result = self.submit_draft_from(room, author, now_ms, queue_only);
         self.rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?
@@ -1071,20 +1333,24 @@ impl BusState {
         room: RoomId,
         now_ms: u64,
     ) -> Result<Vec<RequestId>, ModelError> {
-        self.submit_draft_from(
-            room,
-            crate::bus::orchestrator::ParticipantId::Human,
-            None,
-            now_ms,
-        )
+        self.submit_draft_from(room, Author::Human, now_ms, false)
+    }
+
+    /// Sends the Human's draft to wait for each idle agent and its own turn.
+    pub(crate) fn submit_draft_queued(
+        &mut self,
+        room: RoomId,
+        now_ms: u64,
+    ) -> Result<Vec<RequestId>, ModelError> {
+        self.submit_draft_from(room, Author::Human, now_ms, true)
     }
 
     fn submit_draft_from(
         &mut self,
         room: RoomId,
-        author: crate::bus::orchestrator::ParticipantId,
-        work_id: Option<crate::bus::orchestrator::WorkId>,
+        author: Author,
         now_ms: u64,
+        queue_only: bool,
     ) -> Result<Vec<RequestId>, ModelError> {
         let room_state = self.rooms.get(&room).ok_or(ModelError::UnknownRoom(room))?;
         if room_state.deletion_pending {
@@ -1102,7 +1368,9 @@ impl BusState {
                 .agents
                 .get(agent_id)
                 .ok_or(ModelError::UnknownAgent(*agent_id))?;
-            if agent.room_id != room {
+            // A room's orchestrator lives in MASTER but takes messages from
+            // the room it orchestrates, such as a worker saying it is blocked.
+            if agent.room_id != room && agent.orchestrates != Some(room) {
                 return Err(ModelError::AgentOutsideRoom(*agent_id));
             }
             if agent.deletion_pending {
@@ -1113,12 +1381,10 @@ impl BusState {
         let prompt = Prompt {
             id: PromptId(self.allocate_id()),
             author,
-            work_id,
             text: draft.text,
             files: draft.files,
             recipient_ids: draft.recipient_ids,
             submitted_at_ms: now_ms,
-            trusted_assignment_frame: None,
         };
         let mut request_ids = Vec::with_capacity(prompt.recipient_ids.len());
         for agent_id in prompt.recipient_ids.iter().copied() {
@@ -1141,6 +1407,11 @@ impl BusState {
                     uncertain_outcome: false,
                     pending_final: None,
                     completed_at_ms: None,
+                    queue_only,
+                    group: None,
+                    steered: false,
+                    submitted_payload: None,
+                    foreign_turn_settled_at_ms: None,
                 },
             );
             self.queues.entry(agent_id).or_default().push(request_id);
@@ -1150,165 +1421,17 @@ impl BusState {
             .rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?;
-        room_state.latest_prompt = Some(prompt);
+        // Bus dialog notices are delivery-only (see `Request::delivery_only`).
+        if prompt.author != Author::Bus {
+            // An agent's message is news for the Human, like a reply; their own is not.
+            if prompt.author != Author::Human && self.visible_room != Some(room) {
+                room_state.unread_count = room_state.unread_count.saturating_add(1);
+            }
+            room_state.latest_prompt = Some(prompt);
+        }
         room_state.draft.text.clear();
         room_state.draft.files.clear();
         Ok(request_ids)
-    }
-
-    /// Stores the next unconfirmed proposal; only Human confirmation locks a Room Brief.
-    pub(crate) fn propose_room_brief(
-        &mut self,
-        room: RoomId,
-        expected_revision: u64,
-        goal: String,
-        non_goals: String,
-    ) -> Result<u64, ModelError> {
-        let brief = &mut self
-            .rooms
-            .get_mut(&room)
-            .ok_or(ModelError::UnknownRoom(room))?
-            .brief;
-        if brief.locked || brief.revision != expected_revision {
-            return Err(ModelError::InvalidTransition);
-        }
-        if goal.trim().is_empty() || non_goals.trim().is_empty() {
-            return Err(ModelError::EmptyPrompt);
-        }
-        let revision = expected_revision
-            .checked_add(1)
-            .ok_or(ModelError::InvalidTransition)?;
-        brief.goal = goal;
-        brief.non_goals = non_goals;
-        brief.revision = revision;
-        Ok(revision)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_room_brief(
-        &mut self,
-        room: RoomId,
-        brief: RoomBrief,
-    ) -> Result<(), ModelError> {
-        if brief.locked
-            && (brief.revision == 0
-                || brief.revision != brief.approved_revision
-                || brief.goal.trim().is_empty())
-        {
-            return Err(ModelError::InvalidTransition);
-        }
-        let room = self
-            .rooms
-            .get_mut(&room)
-            .ok_or(ModelError::UnknownRoom(room))?;
-        if room.brief.locked && room.brief != brief {
-            return Err(ModelError::InvalidTransition);
-        }
-        room.brief = brief;
-        Ok(())
-    }
-
-    pub(crate) fn confirm_room_brief_proposal(
-        &mut self,
-        command: crate::bus::orchestrator::ConfirmRoomBriefProposal,
-    ) -> Result<crate::bus::orchestrator::RoomBriefConfirmationReceipt, ModelError> {
-        if command.expected_developer != crate::bus::orchestrator::ParticipantId::Human {
-            return Err(ModelError::InvalidTransition);
-        }
-        let brief = &self
-            .rooms
-            .get(&command.room_id)
-            .ok_or(ModelError::UnknownRoom(command.room_id))?
-            .brief;
-        let current_digest = brief.proposal_digest();
-        if let Some(receipt) = self.orchestrator.room_brief_confirmation(command.room_id) {
-            if receipt.developer == command.expected_developer
-                && receipt.approved_revision == command.expected_proposal_revision
-                && receipt.proposal_digest == command.expected_proposal_digest
-                && brief.locked
-                && brief.approved_revision == receipt.approved_revision
-                && current_digest == receipt.proposal_digest
-            {
-                return Ok(receipt.clone());
-            }
-            return Err(ModelError::InvalidTransition);
-        }
-        if brief.locked
-            || brief.revision == 0
-            || brief.goal.trim().is_empty()
-            || brief.revision != command.expected_proposal_revision
-            || current_digest != command.expected_proposal_digest
-        {
-            return Err(ModelError::InvalidTransition);
-        }
-        let room = self
-            .rooms
-            .get_mut(&command.room_id)
-            .expect("room was verified above");
-        room.brief.approved_revision = room.brief.revision;
-        room.brief.locked = true;
-        // Only the first exact confirmation activates grants; replays returned above.
-        self.orchestrator
-            .activate_orchestrator_baseline(command.room_id);
-        Ok(self.orchestrator.insert_room_brief_confirmation(
-            command.room_id,
-            command.expected_developer,
-            command.expected_proposal_revision,
-            command.expected_proposal_digest,
-        ))
-    }
-
-    pub(crate) fn bind_trusted_assignment(
-        &mut self,
-        request: RequestId,
-        frame: String,
-    ) -> Result<(), ModelError> {
-        let request = self
-            .requests
-            .get_mut(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        if request.phase != RequestPhase::Queued
-            || request.prompt.trusted_assignment_frame.is_some()
-        {
-            return Err(ModelError::InvalidTransition);
-        }
-        request.prompt.trusted_assignment_frame = Some(frame);
-        Ok(())
-    }
-
-    pub(crate) fn assignment_facts(
-        &self,
-        request: RequestId,
-        launch_id: &str,
-        content_bundle_digest: &str,
-    ) -> Result<Option<ParticipantAssignmentFacts>, ModelError> {
-        let request = self
-            .requests
-            .get(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        let room = self
-            .rooms
-            .get(&request.room_id)
-            .ok_or(ModelError::UnknownRoom(request.room_id))?;
-        if !room.brief.locked {
-            return Ok(None);
-        }
-        Ok(Some(ParticipantAssignmentFacts {
-            room_id: request.room_id,
-            work_id: None,
-            message_id: request.prompt.id.0,
-            request_id: request.id,
-            author: request.prompt.author.clone(),
-            agent_id: request.agent_id,
-            recipient_incarnation: 1,
-            provider_launch_id: launch_id.into(),
-            brief_revision: room.brief.revision,
-            approved_revision: room.brief.approved_revision,
-            locked: room.brief.locked,
-            goal: room.brief.goal.clone(),
-            non_goals: room.brief.non_goals.clone(),
-            content_bundle_digest: content_bundle_digest.into(),
-        }))
     }
 
     pub(crate) fn begin_submission(
@@ -1369,6 +1492,7 @@ impl BusState {
         request_state.expected_launch_id = Some(launch_id.to_owned());
         request_state.submission_boundary = Some(callback_boundary);
         request_state.submission_status_revision = submission_status_revision;
+        request_state.foreign_turn_settled_at_ms = None;
         Ok(())
     }
 
@@ -1397,7 +1521,17 @@ impl BusState {
                 request_state.phase = RequestPhase::Queued;
                 request_state.expected_launch_id = None;
                 request_state.submission_boundary = None;
-                self.queues.entry(agent_id).or_default().insert(0, request);
+                request_state.submitted_payload = None;
+                // Coalesced members go back behind their lead, in order.
+                let members = self.group_members(request);
+                for member in &members {
+                    if let Some(member) = self.requests.get_mut(member) {
+                        member.phase = RequestPhase::Queued;
+                        member.group = None;
+                    }
+                }
+                let queue = self.queues.entry(agent_id).or_default();
+                queue.splice(0..0, std::iter::once(request).chain(members));
                 let agent = self
                     .agents
                     .get_mut(&agent_id)
@@ -1425,6 +1559,96 @@ impl BusState {
         Ok(())
     }
 
+    pub(crate) fn observe_dialog(
+        &mut self,
+        agent: AgentId,
+        dialog: bool,
+    ) -> Result<(), ModelError> {
+        self.agents
+            .get_mut(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?
+            .dialog = dialog;
+        Ok(())
+    }
+
+    /// Records what Bus reported the agent waiting on, or `None` once it cleared.
+    pub(crate) fn set_dialog_notice(
+        &mut self,
+        agent: AgentId,
+        notice: Option<String>,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?;
+        agent.dialog_notice = notice;
+        agent.dialog_answered = false;
+        agent.dialog_answer = None;
+        Ok(())
+    }
+
+    pub(crate) fn mark_dialog_answered(
+        &mut self,
+        agent: AgentId,
+        option: u32,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&agent)
+            .ok_or(ModelError::UnknownAgent(agent))?;
+        agent.dialog_answered = true;
+        agent.dialog_answer = Some(option);
+        Ok(())
+    }
+
+    /// Posts an agent's message to the Human in `room`, delivered to no agent.
+    /// Orchestrators report this way when no Human message is open, so the
+    /// report reaches the room's history instead of only their terminal.
+    pub(crate) fn post_to_human(
+        &mut self,
+        room: RoomId,
+        author: AgentId,
+        text: String,
+        files: Vec<PathBuf>,
+        now_ms: u64,
+    ) -> Result<PromptId, ModelError> {
+        if text.trim().is_empty() && files.is_empty() {
+            return Err(ModelError::EmptyPrompt);
+        }
+        let agent = self
+            .agents
+            .get(&author)
+            .ok_or(ModelError::UnknownAgent(author))?;
+        if agent.room_id != room {
+            return Err(ModelError::AgentOutsideRoom(author));
+        }
+        if agent.deletion_pending {
+            return Err(ModelError::DeletionPending);
+        }
+        let id = PromptId(self.allocate_id());
+        let visible = self.visible_room == Some(room);
+        let room = self
+            .rooms
+            .get_mut(&room)
+            .ok_or(ModelError::UnknownRoom(room))?;
+        let prompt = Prompt {
+            id,
+            author: Author::Agent(author),
+            text,
+            files,
+            recipient_ids: AgentRecipients::default(),
+            submitted_at_ms: now_ms,
+        };
+        // The latest prompt is what rings and what the composer recalls, as
+        // for an agent's `send --as` to other agents.
+        room.latest_prompt = Some(prompt.clone());
+        room.notices.push(prompt);
+        if !visible {
+            room.unread_count = room.unread_count.saturating_add(1);
+        }
+        Ok(id)
+    }
+
     pub(crate) fn observe_status(
         &mut self,
         agent: AgentId,
@@ -1439,13 +1663,115 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent))?;
         agent_state.status = status;
         agent_state.status_revision = revision;
+        if matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked) {
+            agent_state.busy_revision = revision;
+        }
         if status == RuntimeStatus::Idle {
             self.complete_pending_final(agent, now_ms)?;
+            let settled_idle = self.unbound_request(agent).is_some_and(|request| {
+                request
+                    .foreign_turn_settled_at_ms
+                    .is_some_and(|at| now_ms >= at.saturating_add(UNBOUND_SETTLE_MS))
+            });
+            if settled_idle {
+                self.release_unbound_request(agent, now_ms);
+            }
         }
         Ok(())
     }
 
+    /// Whether `request`'s agent took the message and finished its turn: the
+    /// agent was seen Working or Blocked, or its provider reported the turn,
+    /// after Bus submitted the message, and has been seen Idle since. A captured reply also counts. Status
+    /// transitions decide it, not reply capture, which can miss a reply.
+    pub(crate) fn turn_ended(&self, request: &Request) -> bool {
+        if request.phase == RequestPhase::Completed {
+            return true;
+        }
+        // Submitting counts too: an uncertain submit stays Submitting until a
+        // hook binds it, while the agent may already be working on it.
+        if !matches!(
+            request.phase,
+            RequestPhase::Submitting | RequestPhase::Active
+        ) {
+            return false;
+        }
+        self.agents.get(&request.agent_id).is_some_and(|agent| {
+            agent.busy_revision > request.submission_status_revision
+                && agent.status == RuntimeStatus::Idle
+                && agent.status_revision > agent.busy_revision
+        })
+    }
+
+    /// The agent's current request when Bus typed it but never saw it start:
+    /// typed, never bound by a submit hook, and with no reply yet.
+    fn unbound_request(&self, agent: AgentId) -> Option<&Request> {
+        let request = self
+            .requests
+            .get(&self.agents.get(&agent)?.current_request?)?;
+        // An uncertain submit outcome stays Submitting until a hook binds it.
+        (matches!(
+            request.phase,
+            RequestPhase::Active | RequestPhase::Submitting
+        ) && !request.steered
+            && !request.trusted_start_bound
+            && request.pending_final.is_none())
+        .then_some(request)
+    }
+
+    /// Releases the agent's queue from a request it never started as a turn of
+    /// its own, once the agent proved it moved on: it finished a turn of its
+    /// own and then started another, began a new provider session, or went
+    /// idle. The typed text may have joined the agent's own turn, so its reply,
+    /// if any, is in the terminal. Bus says nothing: it never authors a message,
+    /// and a waiting sender sees the request `abandoned`.
+    pub(crate) fn release_unbound_request(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+    ) -> Option<RequestId> {
+        let request = self.unbound_request(agent)?.id;
+        self.abandon_current_request(request, now_ms).ok()?;
+        tracing::info!(
+            event = "bus.message.recovered",
+            request_id = request.0,
+            agent_id = agent.0,
+            reason = "never_started",
+            "Unstarted request released"
+        );
+        Some(request)
+    }
+
     pub(crate) fn accept_callback(&mut self, callback: ProviderCallback) -> CallbackDisposition {
+        let agent = callback.agent_id;
+        let disposition = self.accept_callback_unrecorded(callback);
+        // A provider turn event on a Bus request proves the agent was busy
+        // with it, even when the turn started and ended between two status
+        // polls that only ever saw Idle. Recording the edge here lets
+        // `turn_ended` (and so `send --async`) finish on the next Idle poll.
+        if matches!(
+            disposition,
+            CallbackDisposition::AcceptedBinding
+                | CallbackDisposition::AcceptedContinuation
+                | CallbackDisposition::AcceptedSteering
+                | CallbackDisposition::AcceptedProgress
+                | CallbackDisposition::AcceptedPendingSettlement
+        ) {
+            self.record_busy_edge(agent);
+        }
+        disposition
+    }
+
+    /// Marks `agent` busy at a fresh status revision, as a Working poll would.
+    fn record_busy_edge(&mut self, agent: AgentId) {
+        let revision = self.next_status_revision;
+        self.next_status_revision = self.next_status_revision.saturating_add(1);
+        if let Some(agent) = self.agents.get_mut(&agent) {
+            agent.busy_revision = revision;
+        }
+    }
+
+    fn accept_callback_unrecorded(&mut self, callback: ProviderCallback) -> CallbackDisposition {
         if !self
             .consumed_callback_ids
             .insert(callback.callback_id.clone())
@@ -1458,7 +1784,77 @@ impl BusState {
         if agent.deletion_pending {
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         }
+        let turn_key = provider_turn_key(
+            &callback.launch_id,
+            callback.provider_session_id.as_deref(),
+            callback.provider_turn_id.as_deref(),
+        );
+        if let Some(key) = turn_key
+            .as_ref()
+            .filter(|key| self.unrelated_provider_turns.contains(*key))
+        {
+            // Text Bus typed while the agent ran a turn of its own can join
+            // that turn: its submit hook then names that turn, which carries
+            // the reply.
+            let absorbed = matches!(callback.kind, CallbackEventKind::PromptStarted)
+                && self
+                    .unbound_request(callback.agent_id)
+                    .is_some_and(|request| {
+                        request.expected_launch_id.as_deref() == Some(callback.launch_id.as_str())
+                            && request
+                                .submission_boundary
+                                .is_some_and(|boundary| callback.sequence > boundary)
+                            && callback
+                                .prompt_payload
+                                .as_deref()
+                                .is_some_and(|payload| request.matches_callback_payload(payload))
+                    });
+            if !absorbed {
+                if matches!(
+                    callback.kind,
+                    CallbackEventKind::Final { .. } | CallbackEventKind::Error { .. }
+                ) {
+                    self.unrelated_provider_turns.remove(key);
+                    self.note_foreign_turn_settled(&callback);
+                }
+                return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
+            }
+            self.unrelated_provider_turns.remove(key);
+            return self.accept_callback_for_request(callback, turn_key);
+        }
+        self.accept_callback_for_request(callback, turn_key)
+    }
+
+    /// Records that a turn the agent ran on its own finished after Bus typed
+    /// its unbound current request.
+    fn note_foreign_turn_settled(&mut self, callback: &ProviderCallback) {
+        let Some(request) = self.unbound_request(callback.agent_id).map(|r| r.id) else {
+            return;
+        };
+        if let Some(request) = self.requests.get_mut(&request).filter(|request| {
+            request.expected_launch_id.as_deref() == Some(callback.launch_id.as_str())
+                && request
+                    .submission_boundary
+                    .is_some_and(|boundary| callback.sequence > boundary)
+        }) {
+            request
+                .foreign_turn_settled_at_ms
+                .get_or_insert(callback.occurred_at_ms);
+        }
+    }
+
+    fn accept_callback_for_request(
+        &mut self,
+        callback: ProviderCallback,
+        turn_key: Option<String>,
+    ) -> CallbackDisposition {
+        let Some(agent) = self.agents.get(&callback.agent_id) else {
+            return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+        };
         let Some(request_id) = agent.current_request else {
+            if matches!(callback.kind, CallbackEventKind::PromptStarted) {
+                self.unrelated_provider_turns.extend(turn_key);
+            }
             return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
         };
         let Some(request) = self.requests.get(&request_id) else {
@@ -1480,8 +1876,44 @@ impl BusState {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongSession);
             }
         }
+        // Input Bus typed into this turn binds where the provider reports it:
+        // in the running turn, or in a turn of its own that then carries the
+        // group's reply. It is never an unrelated turn or an agent error.
+        if let (CallbackEventKind::PromptStarted, Some(payload), true) = (
+            &callback.kind,
+            callback.prompt_payload.as_deref(),
+            request.trusted_start_bound,
+        ) {
+            let steered = self.group_members(request_id).into_iter().find(|member| {
+                self.requests.get(member).is_some_and(|m| {
+                    m.steered && !m.settled() && m.matches_callback_payload(payload)
+                })
+            });
+            if let Some(member) = steered {
+                if let Some(member) = self.requests.get_mut(&member) {
+                    member.trusted_start_bound = true;
+                    member.uncertain_outcome = false;
+                    member.provider_session_id = callback.provider_session_id.clone();
+                    member.provider_turn_id = callback.provider_turn_id.clone();
+                }
+                if let Some(lead) = self.requests.get_mut(&request_id) {
+                    if callback.provider_turn_id.is_some()
+                        && callback.provider_turn_id != lead.provider_turn_id
+                    {
+                        lead.provider_turn_id = callback.provider_turn_id;
+                        lead.provider_prompt_id = callback.provider_prompt_id;
+                        lead.pending_final = None;
+                    }
+                }
+                return CallbackDisposition::AcceptedSteering;
+            }
+        }
+        // A turn that wakes after the request paused for background work carries
+        // the real reply. Once the request holds a final reply, a new turn is the
+        // agent's own activity and must not replace or discard that reply.
         let continuation = matches!(callback.kind, CallbackEventKind::PromptStarted)
             && request.trusted_start_bound
+            && request.pending_final.is_none()
             && request.provider_session_id.is_some()
             && callback.provider_session_id == request.provider_session_id
             && request.provider_turn_id.is_some()
@@ -1490,7 +1922,24 @@ impl BusState {
             && callback
                 .prompt_payload
                 .as_deref()
-                .is_some_and(|payload| !request.prompt.matches_callback_payload(payload));
+                .is_some_and(|payload| !request.matches_callback_payload(payload));
+        if matches!(callback.kind, CallbackEventKind::PromptStarted)
+            && !continuation
+            && callback.provider_turn_id.is_some()
+            && callback.provider_turn_id != request.provider_turn_id
+            && callback
+                .prompt_payload
+                .as_deref()
+                .is_some_and(|payload| !request.matches_callback_payload(payload))
+        {
+            // A new turn of its own after one already finished: the typed
+            // request is not coming, so the queue moves on.
+            if !request.trusted_start_bound && request.foreign_turn_settled_at_ms.is_some() {
+                self.release_unbound_request(callback.agent_id, callback.occurred_at_ms);
+            }
+            self.unrelated_provider_turns.extend(turn_key);
+            return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
+        }
         if let Some(expected) = request.provider_turn_id.as_deref() {
             if !continuation && callback.provider_turn_id.as_deref() != Some(expected) {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongTurn);
@@ -1510,7 +1959,7 @@ impl BusState {
             && callback
                 .prompt_payload
                 .as_deref()
-                .is_some_and(|payload| !request.prompt.matches_callback_payload(payload))
+                .is_some_and(|payload| !request.matches_callback_payload(payload))
         {
             return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
         }
@@ -1524,7 +1973,7 @@ impl BusState {
                     && !callback
                         .prompt_payload
                         .as_deref()
-                        .is_some_and(|payload| request.prompt.matches_callback_payload(payload))
+                        .is_some_and(|payload| request.matches_callback_payload(payload))
                 {
                     return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
                 }
@@ -1570,11 +2019,6 @@ impl BusState {
                 if request.pending_final.is_some() {
                     return CallbackDisposition::Rejected(CallbackRejection::DuplicateFinal);
                 }
-                let turn_key = provider_turn_key(
-                    &callback.launch_id,
-                    callback.provider_session_id.as_deref(),
-                    callback.provider_turn_id.as_deref(),
-                );
                 if turn_key
                     .as_ref()
                     .is_some_and(|key| self.consumed_provider_turns.contains(key))
@@ -1593,7 +2037,8 @@ impl BusState {
                 });
                 if settled_after_submission {
                     match self.complete_pending_final(callback.agent_id, callback.occurred_at_ms) {
-                        Ok(()) => CallbackDisposition::AcceptedCompleted,
+                        Ok(true) => CallbackDisposition::AcceptedCompleted,
+                        Ok(false) => CallbackDisposition::AcceptedPendingSettlement,
                         Err(_) => CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest),
                     }
                 } else {
@@ -1607,6 +2052,189 @@ impl BusState {
                 CallbackDisposition::AcceptedError
             }
         }
+    }
+
+    /// Whether the callback belongs to a turn the agent started on its own.
+    pub(crate) fn is_unrelated_turn(&self, callback: &ProviderCallback) -> bool {
+        provider_turn_key(
+            &callback.launch_id,
+            callback.provider_session_id.as_deref(),
+            callback.provider_turn_id.as_deref(),
+        )
+        .is_some_and(|key| self.unrelated_provider_turns.contains(&key))
+    }
+
+    /// The request a message may steer into: the agent's current request while
+    /// its turn visibly runs, bound by its submit hook, with no final reply yet.
+    /// Returns the first queued request and that lead, unless the queued one
+    /// asked to wait (`--queue`).
+    pub(crate) fn next_steering(&self, agent: AgentId) -> Option<(RequestId, RequestId)> {
+        let agent_state = self.agents.get(&agent)?;
+        if agent_state.status != RuntimeStatus::Working
+            || agent_state.dialog
+            || agent_state.deletion_pending
+        {
+            return None;
+        }
+        let lead = self.requests.get(&agent_state.current_request?)?;
+        if lead.phase != RequestPhase::Active
+            || !lead.trusted_start_bound
+            || lead.pending_final.is_some()
+        {
+            return None;
+        }
+        let first = *self.queues.get(&agent)?.first()?;
+        (!self.requests.get(&first)?.queue_only).then_some((first, lead.id))
+    }
+
+    /// Moves `request` from the queue into `lead`'s group before Bus types it
+    /// into the running turn. The lead then settles only on an idle status
+    /// observed after this, so the turn the typing extends is not cut short.
+    pub(crate) fn begin_steering(
+        &mut self,
+        request: RequestId,
+        lead: RequestId,
+    ) -> Result<(), ModelError> {
+        let agent_id = self
+            .requests
+            .get(&request)
+            .ok_or(ModelError::UnknownRequest(request))?
+            .agent_id;
+        let agent = self
+            .agents
+            .get(&agent_id)
+            .ok_or(ModelError::UnknownAgent(agent_id))?;
+        if agent.current_request != Some(lead)
+            || self.queues.get(&agent_id).and_then(|queue| queue.first()) != Some(&request)
+        {
+            return Err(ModelError::InvalidTransition);
+        }
+        let status_revision = agent.status_revision;
+        let launch = self
+            .requests
+            .get(&lead)
+            .ok_or(ModelError::UnknownRequest(lead))?
+            .expected_launch_id
+            .clone();
+        if let Some(queue) = self.queues.get_mut(&agent_id) {
+            queue.remove(0);
+        }
+        let request_state = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        request_state.phase = RequestPhase::Submitting;
+        request_state.expected_launch_id = launch;
+        request_state.group = Some(lead);
+        request_state.steered = true;
+        if let Some(lead) = self.requests.get_mut(&lead) {
+            lead.submission_status_revision = status_revision;
+        }
+        Ok(())
+    }
+
+    /// Records the native outcome of typing a steering message. A definite
+    /// rejection (the agent stopped working) returns it to the queue front.
+    pub(crate) fn record_steering(
+        &mut self,
+        request: RequestId,
+        outcome: SubmissionOutcome,
+    ) -> Result<(), ModelError> {
+        let request_state = self
+            .requests
+            .get_mut(&request)
+            .ok_or(ModelError::UnknownRequest(request))?;
+        if request_state.phase != RequestPhase::Submitting || !request_state.steered {
+            return Err(ModelError::InvalidTransition);
+        }
+        match outcome {
+            SubmissionOutcome::Confirmed { .. } => request_state.phase = RequestPhase::Active,
+            SubmissionOutcome::Uncertain { .. } => {
+                request_state.phase = RequestPhase::Active;
+                request_state.uncertain_outcome = true;
+            }
+            SubmissionOutcome::DefinitelyRejected { .. } => {
+                request_state.phase = RequestPhase::Queued;
+                request_state.expected_launch_id = None;
+                request_state.group = None;
+                request_state.steered = false;
+                let agent_id = request_state.agent_id;
+                self.queues.entry(agent_id).or_default().insert(0, request);
+            }
+        }
+        Ok(())
+    }
+
+    /// Joins the queued messages that piled up while the agent could not take
+    /// them into `lead`'s prompt: consecutive ones from the queue front, up to
+    /// the first sent with `--queue`. Returns the text to type, each part
+    /// marked with its sender and time, or `None` when `lead` goes alone.
+    pub(crate) fn coalesce_queue(&mut self, lead: RequestId) -> Option<String> {
+        let agent_id = self.requests.get(&lead)?.agent_id;
+        let queue = self.queues.get(&agent_id)?;
+        if queue.first() != Some(&lead) || self.requests.get(&lead)?.queue_only {
+            return None;
+        }
+        let members: Vec<RequestId> = queue[1..]
+            .iter()
+            .copied()
+            .take_while(|id| self.requests.get(id).is_some_and(|r| !r.queue_only))
+            .collect();
+        if members.is_empty() {
+            return None;
+        }
+        let parts: Vec<RequestId> = std::iter::once(lead)
+            .chain(members.iter().copied())
+            .collect();
+        let count = parts.len();
+        let text = parts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, id)| {
+                let prompt = &self.requests.get(id)?.prompt;
+                Some(format!(
+                    "[{}/{count} from {} at {}]\n{}",
+                    index + 1,
+                    self.sender_name(&prompt.author),
+                    clock(prompt.submitted_at_ms),
+                    prompt.rendered_payload()
+                ))
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if let Some(queue) = self.queues.get_mut(&agent_id) {
+            queue.retain(|id| !members.contains(id));
+        }
+        for member in members {
+            if let Some(request) = self.requests.get_mut(&member) {
+                request.phase = RequestPhase::Active;
+                request.group = Some(lead);
+            }
+        }
+        if let Some(request) = self.requests.get_mut(&lead) {
+            request.submitted_payload = Some(text.clone());
+        }
+        Some(text)
+    }
+
+    fn sender_name(&self, author: &Author) -> String {
+        match author {
+            Author::Human => "the human".into(),
+            Author::Bus => "Bus".into(),
+            Author::Agent(id) => self
+                .agents
+                .get(id)
+                .map_or_else(|| "an agent".into(), |agent| agent.name.clone()),
+        }
+    }
+
+    /// The requests that joined `lead`'s group, oldest first.
+    pub(crate) fn group_members(&self, lead: RequestId) -> Vec<RequestId> {
+        self.requests
+            .values()
+            .filter(|request| request.group == Some(lead))
+            .map(|request| request.id)
+            .collect()
     }
 
     pub(crate) fn next_queued_request(&self, agent: AgentId) -> Option<RequestId> {
@@ -1643,13 +2271,29 @@ impl BusState {
         if agent.status != RuntimeStatus::Idle {
             return Err(ModelError::AgentNotIdle);
         }
+        self.abandon_current_request(request, recovered_at_ms)
+    }
+
+    /// Abandons `request`, its agent's current one, with its group, and frees the agent.
+    fn abandon_current_request(
+        &mut self,
+        request: RequestId,
+        recovered_at_ms: u64,
+    ) -> Result<(), ModelError> {
         let request_state = self
             .requests
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
+        let agent_id = request_state.agent_id;
         request_state.phase = RequestPhase::Abandoned;
         request_state.pending_final = None;
         request_state.completed_at_ms = Some(recovered_at_ms);
+        for member in self.group_members(request) {
+            if let Some(member) = self.requests.get_mut(&member).filter(|m| !m.settled()) {
+                member.phase = RequestPhase::Abandoned;
+                member.completed_at_ms = Some(recovered_at_ms);
+            }
+        }
         let agent = self
             .agents
             .get_mut(&agent_id)
@@ -1669,6 +2313,10 @@ impl BusState {
         Ok(())
     }
 
+    pub(crate) fn visible_room(&self) -> Option<RoomId> {
+        self.visible_room
+    }
+
     pub(crate) fn leave_room_view(&mut self) {
         self.visible_room = None;
     }
@@ -1681,27 +2329,43 @@ impl BusState {
         Ok(())
     }
 
+    /// Settles the agent's current request, and every request in its group,
+    /// with its pending final reply. Returns whether it settled: a group with
+    /// typed input whose submit hook has not arrived waits a few seconds, in
+    /// case the provider runs that input as a turn of its own.
     fn complete_pending_final(
         &mut self,
         agent_id: AgentId,
         completed_at_ms: u64,
-    ) -> Result<(), ModelError> {
+    ) -> Result<bool, ModelError> {
         let request_id = self
             .agents
             .get(&agent_id)
             .ok_or(ModelError::UnknownAgent(agent_id))?
             .current_request;
         let Some(request_id) = request_id else {
-            return Ok(());
+            return Ok(false);
         };
         let request = self
             .requests
             .get(&request_id)
             .ok_or(ModelError::UnknownRequest(request_id))?;
         let Some(pending) = request.pending_final.clone() else {
-            return Ok(());
+            return Ok(false);
         };
+        let members = self.group_members(request_id);
+        let unseen_steering = members.iter().any(|member| {
+            self.requests
+                .get(member)
+                .is_some_and(|m| m.steered && !m.trusted_start_bound && !m.settled())
+        });
+        if unseen_steering
+            && completed_at_ms < pending.received_at_ms.saturating_add(STEERING_SETTLE_MS)
+        {
+            return Ok(false);
+        }
         let room_id = request.room_id;
+        let delivery_only = request.delivery_only();
         let turn_key = provider_turn_key(
             request.expected_launch_id.as_deref().unwrap_or_default(),
             pending.provider_session_id.as_deref(),
@@ -1710,16 +2374,26 @@ impl BusState {
         let reply = Reply {
             request_id,
             agent_id,
-            text: pending.text,
+            text: pending.text.clone(),
             received_at_ms: pending.received_at_ms,
         };
         let room = self
             .rooms
             .get_mut(&room_id)
             .ok_or(ModelError::UnknownRoom(room_id))?;
-        room.latest_replies.insert(agent_id, reply);
-        if self.visible_room != Some(room_id) {
-            room.unread_count = room.unread_count.saturating_add(1);
+        // The reply to a delivery-only dialog notice is as hidden as the notice.
+        if !delivery_only {
+            room.latest_replies.insert(agent_id, reply);
+            if self.visible_room != Some(room_id) {
+                room.unread_count = room.unread_count.saturating_add(1);
+            }
+        }
+        for member in members {
+            if let Some(member) = self.requests.get_mut(&member).filter(|m| !m.settled()) {
+                member.phase = RequestPhase::Completed;
+                member.completed_at_ms = Some(completed_at_ms);
+                member.pending_final = Some(pending.clone());
+            }
         }
         let request = self
             .requests
@@ -1736,8 +2410,24 @@ impl BusState {
             .ok_or(ModelError::UnknownAgent(agent_id))?;
         agent.current_request = None;
         agent.actionable_error = None;
-        Ok(())
+        Ok(true)
     }
+}
+
+fn work_room_name(name: &str) -> Result<String, ModelError> {
+    let name = normalized_name(name)?;
+    if name.eq_ignore_ascii_case(MASTER_ROOM_NAME) {
+        return Err(ModelError::ReservedRoomName);
+    }
+    Ok(name)
+}
+
+fn agent_name(name: &str) -> Result<String, ModelError> {
+    let name = normalized_name(name)?;
+    if name.eq_ignore_ascii_case(HUMAN_RECIPIENT) {
+        return Err(ModelError::ReservedAgentName);
+    }
+    Ok(name)
 }
 
 fn normalized_name(name: &str) -> Result<String, ModelError> {
@@ -1768,6 +2458,248 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    fn master_agent(state: &mut BusState, name: &str) -> AgentId {
+        let master = state.ensure_master_room();
+        state
+            .create_agent(master, name, Provider::ClaudeCode, "/repo".into(), None)
+            .expect("master agent")
+    }
+
+    #[test]
+    fn master_room_is_added_once_without_consuming_ids() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        assert_eq!(state.ensure_master_room(), master);
+        let masters = state
+            .rooms()
+            .filter(|room| room.kind == RoomKind::Master)
+            .collect::<Vec<_>>();
+        assert_eq!(masters.len(), 1);
+        assert_eq!(masters[0].name, MASTER_ROOM_NAME);
+        // Seeding the first work room still sees a pristine session.
+        assert!(state.is_pristine());
+        assert!(!state.has_work());
+        let work = state.create_room("work").unwrap();
+        assert_eq!(work, RoomId(1));
+        assert_eq!(state.rooms().next().map(|room| room.id), Some(master));
+        assert!(state.has_work());
+    }
+
+    #[test]
+    fn sound_rings_by_default_only_in_master_until_the_human_chooses() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        assert!(state.room(master).unwrap().sound_enabled());
+        assert!(!state.room(work).unwrap().sound_enabled());
+
+        state.set_room_sound(master, false).unwrap();
+        state.set_room_sound(work, true).unwrap();
+        assert!(!state.room(master).unwrap().sound_enabled());
+        assert!(state.room(work).unwrap().sound_enabled());
+        assert_eq!(
+            state.set_room_sound(RoomId(999), true),
+            Err(ModelError::UnknownRoom(RoomId(999)))
+        );
+
+        // A MASTER room saved before the sound field existed still rings.
+        let mut document = serde_json::to_value(&state).unwrap();
+        let rooms = document["rooms"].as_object_mut().unwrap();
+        rooms.get_mut(&master.0.to_string()).unwrap()["sound"] = serde_json::Value::Null;
+        rooms
+            .get_mut(&work.0.to_string())
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("sound");
+        let loaded: BusState = serde_json::from_value(document).unwrap();
+        assert!(loaded.room(master).unwrap().sound_enabled());
+        assert!(!loaded.room(work).unwrap().sound_enabled());
+    }
+
+    #[test]
+    fn room_sound_names_persist_and_old_sessions_load_with_the_default() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        state
+            .set_room_sound_name(work, Some("Glass".into()))
+            .unwrap();
+        assert_eq!(
+            state.set_room_sound_name(RoomId(999), None),
+            Err(ModelError::UnknownRoom(RoomId(999)))
+        );
+        let mut document = serde_json::to_value(&state).unwrap();
+        let loaded: BusState = serde_json::from_value(document.clone()).unwrap();
+        assert_eq!(
+            loaded.room(work).unwrap().sound_name.as_deref(),
+            Some("Glass")
+        );
+        assert_eq!(loaded.room(master).unwrap().sound_name, None);
+
+        // Sessions saved before sound names existed play Bus's own ding.
+        document["rooms"][work.0.to_string()]
+            .as_object_mut()
+            .unwrap()
+            .remove("sound_name");
+        let loaded: BusState = serde_json::from_value(document).unwrap();
+        assert_eq!(loaded.room(work).unwrap().sound_name, None);
+    }
+
+    #[test]
+    fn master_room_has_no_notes_and_work_rooms_keep_theirs() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let work = state.create_room("work").unwrap();
+        assert_eq!(
+            state.set_room_notes(master, "status"),
+            Err(ModelError::MasterRoomHasNoNotes)
+        );
+        assert_eq!(state.room(master).unwrap().notes, "");
+        state.set_room_notes(work, "status").unwrap();
+        assert_eq!(state.room(work).unwrap().notes, "status");
+    }
+
+    #[test]
+    fn master_room_cannot_be_renamed_or_deleted_and_its_name_is_reserved() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        assert_eq!(
+            state.rename_room(master, "other"),
+            Err(ModelError::MasterRoomFixed)
+        );
+        assert_eq!(
+            state.prepare_delete_room(master),
+            Err(ModelError::MasterRoomFixed)
+        );
+        assert_eq!(state.delete_room(master), Err(ModelError::MasterRoomFixed));
+        assert!(!state.room(master).unwrap().deletion_pending);
+        for name in ["MASTER", "master", " Master "] {
+            assert_eq!(state.create_room(name), Err(ModelError::ReservedRoomName));
+        }
+        let work = state.create_room("work").unwrap();
+        assert_eq!(
+            state.rename_room(work, "master"),
+            Err(ModelError::ReservedRoomName)
+        );
+        assert_eq!(
+            ModelError::MasterRoomFixed.to_string(),
+            "The MASTER room cannot be renamed or deleted"
+        );
+    }
+
+    #[test]
+    fn each_work_room_has_at_most_one_orchestrator_bound_for_life() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let pr = state.create_room("pr-123").unwrap();
+        let other = state.create_room("pr-456").unwrap();
+        let first = master_agent(&mut state, "claude-orch");
+        let second = master_agent(&mut state, "codex-orch");
+
+        state.bind_orchestrator(first, pr).unwrap();
+        assert_eq!(state.orchestrator_of(pr).map(|agent| agent.id), Some(first));
+        let taken = state.bind_orchestrator(second, pr);
+        assert_eq!(
+            taken,
+            Err(ModelError::RoomAlreadyOrchestrated {
+                room: pr,
+                agent: first
+            })
+        );
+        assert!(taken
+            .unwrap_err()
+            .to_string()
+            .contains("at most one orchestrator"));
+        // A bound orchestrator never moves, not even to its own room again.
+        for room in [other, pr] {
+            assert_eq!(
+                state.bind_orchestrator(first, room),
+                Err(ModelError::OrchestratorAlreadyBound(first))
+            );
+        }
+        assert_eq!(state.agent(first).unwrap().orchestrates, Some(pr));
+
+        assert_eq!(
+            state.bind_orchestrator(second, master),
+            Err(ModelError::NotOrchestratable(master))
+        );
+        assert_eq!(
+            state.bind_orchestrator(second, RoomId(999)),
+            Err(ModelError::NotOrchestratable(RoomId(999)))
+        );
+        state.prepare_delete_room(other).unwrap();
+        assert_eq!(
+            state.bind_orchestrator(second, other),
+            Err(ModelError::NotOrchestratable(other))
+        );
+    }
+
+    #[test]
+    fn only_master_agents_orchestrate_rooms() {
+        let mut state = BusState::new();
+        state.ensure_master_room();
+        let pr = state.create_room("pr-123").unwrap();
+        let worker = state
+            .create_agent(pr, "builder", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        assert_eq!(
+            state.bind_orchestrator(worker, pr),
+            Err(ModelError::OrchestratorOutsideMaster(worker))
+        );
+        assert_eq!(state.agent(worker).unwrap().orchestrates, None);
+    }
+
+    #[test]
+    fn deleting_a_room_deletes_its_orchestrator_too() {
+        let mut state = BusState::new();
+        state.ensure_master_room();
+        let pr = state.create_room("pr-123").unwrap();
+        let other = state.create_room("pr-456").unwrap();
+        let orchestrator = master_agent(&mut state, "claude-orch");
+        state.bind_orchestrator(orchestrator, pr).unwrap();
+        let bystander = master_agent(&mut state, "codex-orch");
+        state.bind_orchestrator(bystander, other).unwrap();
+        let worker = state
+            .create_agent(pr, "builder", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        assert_eq!(state.agents_deleted_with_room(pr), [orchestrator, worker]);
+
+        state.prepare_delete_room(pr).unwrap();
+        assert!(state.agent(orchestrator).unwrap().deletion_pending);
+        assert!(!state.agent(bystander).unwrap().deletion_pending);
+        state.delete_room(pr).unwrap();
+
+        assert!(state.agent(orchestrator).is_none());
+        assert!(state.agent(worker).is_none());
+        assert_eq!(state.agent(bystander).unwrap().orchestrates, Some(other));
+    }
+
+    #[test]
+    fn ensure_master_room_drops_assignments_that_break_the_invariants() {
+        let mut state = BusState::new();
+        let master = state.ensure_master_room();
+        let pr = state.create_room("pr-123").unwrap();
+        let first = master_agent(&mut state, "first");
+        let second = master_agent(&mut state, "second");
+        let outsider = state
+            .create_agent(pr, "builder", Provider::Codex, "/repo".into(), None)
+            .unwrap();
+        // Hand-edited or corrupt saved state can carry assignments the API refuses.
+        state.agents.get_mut(&first).unwrap().orchestrates = Some(pr);
+        state.agents.get_mut(&second).unwrap().orchestrates = Some(pr);
+        state.agents.get_mut(&outsider).unwrap().orchestrates = Some(pr);
+        let lost = master_agent(&mut state, "lost");
+        state.agents.get_mut(&lost).unwrap().orchestrates = Some(master);
+
+        state.ensure_master_room();
+
+        assert_eq!(state.agent(first).unwrap().orchestrates, Some(pr));
+        assert_eq!(state.agent(second).unwrap().orchestrates, None);
+        assert_eq!(state.agent(outsider).unwrap().orchestrates, None);
+        assert_eq!(state.agent(lost).unwrap().orchestrates, None);
+    }
 
     fn serialized_agent_color(state: &BusState, id: AgentId) -> [u8; 3] {
         let document = serde_json::to_value(state).expect("serialize state");
@@ -2019,7 +2951,9 @@ mod tests {
         state.select_room(room).unwrap();
         state.delete_room(room).unwrap();
         assert!(state.agent(other).is_none());
-        assert_eq!(state.visible_room, None);
+        let fallback = state.rooms().next().map(|room| room.id);
+        assert!(fallback.is_some());
+        assert_eq!(state.visible_room, fallback);
         assert!(state.room(unrelated_room).is_some());
         let new_room = state.create_room("new").unwrap();
         assert!(new_room.0 > unrelated_room.0);
@@ -2072,7 +3006,8 @@ mod tests {
         state.submit_draft(room, 10).expect("submit")[0]
     }
 
-    fn start_request(state: &mut BusState, request: RequestId, launch_id: &str, boundary: u64) {
+    /// Types `request` and records the submission, with no provider turn start yet.
+    fn submit_request(state: &mut BusState, request: RequestId, launch_id: &str, boundary: u64) {
         state
             .begin_submission(request, launch_id, boundary)
             .expect("begin submission");
@@ -2085,6 +3020,10 @@ mod tests {
                 },
             )
             .expect("record submission");
+    }
+
+    fn start_request(state: &mut BusState, request: RequestId, launch_id: &str, boundary: u64) {
+        submit_request(state, request, launch_id, boundary);
         let request_state = state.request(request).expect("request");
         let agent_id = request_state.agent_id;
         let prompt_payload = request_state.prompt.rendered_payload();
@@ -2335,6 +3274,103 @@ mod tests {
     }
 
     #[test]
+    fn claude_attached_image_binds_its_trusted_start() {
+        // Shapes captured from Claude Code 2.1.291: a pasted line that is one
+        // quoted image path becomes an `[Image #N]` attachment (N counts the
+        // session's images), reported first, and blank lines are dropped; a
+        // long remainder keeps its paste framing.
+        let short = "Reply with just: pong\n\n\nsecond para  \n\nthird";
+        let long = "for orchestrator agents in MASTER I just need \nso it should look like\n\n\
+                    bus orchestrator Idle x\n"
+            .repeat(4);
+        let cases = [
+            (short, "[Image #1]Reply with just: pong\nsecond para  \nthird".to_owned()),
+            (
+                long.as_str(),
+                format!(
+                    "[Image #17]\n\n<pasted_content id=\"8f5d\">\n{}\n</pasted_content id=\"8f5d\">\n",
+                    long.trim_end().replace("\n\n", "\n")
+                ),
+            ),
+            ("", "[Image #3]".to_owned()),
+        ];
+        for (n, (text, hook_prompt)) in cases.into_iter().enumerate() {
+            let (mut state, room, _, claude) = state_with_room_and_agents();
+            if !text.is_empty() {
+                state.set_draft_text(room, text).expect("draft text");
+            }
+            state
+                .attach_file(room, PathBuf::from("/tmp/bus/paste-e8d63c50.png"))
+                .expect("attach");
+            state
+                .set_draft_recipients(room, [claude])
+                .expect("recipients");
+            let request = state.submit_draft(room, 10).expect("submit")[0];
+            state
+                .begin_submission(request, "launch-claude", 15)
+                .expect("begin");
+            let hook = serde_json::json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "claude-session",
+                "prompt_id": "claude-prompt",
+                "prompt": hook_prompt,
+            });
+            let crate::bus::callbacks::Parsed::Started {
+                session,
+                turn,
+                prompt,
+            } = crate::bus::callbacks::parse(Provider::ClaudeCode, &hook).expect("parse")
+            else {
+                panic!("UserPromptSubmit must parse as a start");
+            };
+            let start = |id: &str, prompt: String| ProviderCallback {
+                callback_id: id.into(),
+                sequence: 16,
+                occurred_at_ms: 16,
+                agent_id: claude,
+                launch_id: "launch-claude".into(),
+                provider_session_id: Some(session.clone()),
+                provider_turn_id: Some(format!("{turn}-{id}")),
+                provider_prompt_id: Some(format!("{turn}-{id}")),
+                prompt_payload: Some(prompt),
+                kind: CallbackEventKind::PromptStarted,
+            };
+            // Different text, or more images than the request attached, is another turn.
+            for (wrong, payload) in [
+                ("text", format!("{prompt} extra")),
+                ("images", format!("[Image #9]{prompt}")),
+            ] {
+                assert_ne!(
+                    state.accept_callback(start(wrong, payload)),
+                    CallbackDisposition::AcceptedBinding,
+                    "case {n}: {wrong}"
+                );
+            }
+            assert_eq!(
+                state.accept_callback(start("image-start", prompt)),
+                CallbackDisposition::AcceptedBinding,
+                "case {n}"
+            );
+            assert!(state.request(request).expect("request").trusted_start_bound);
+        }
+    }
+
+    #[test]
+    fn claude_image_placeholders_only_stand_for_lone_image_path_lines() {
+        let typed = "Look\n\n\"/tmp/a.png\"";
+        assert!(payload_matches("[Image #2]Look", typed));
+        assert!(payload_matches("Look\n\n\"/tmp/a.png\"", typed));
+        // Two paths on one line, or a non-image file, stay as typed.
+        assert!(!payload_matches(
+            "[Image #1]Look",
+            "Look\n\"/tmp/a.png\" \"/tmp/b.png\""
+        ));
+        assert!(!payload_matches("[Image #1]Look", "Look\n\"/tmp/a.diff\""));
+        assert!(!payload_matches("[Image #1]", "Look\n\"/tmp/a.png\""));
+        assert!(!payload_matches("[Image #x]Look", typed));
+    }
+
+    #[test]
     fn room_notes_drafts_and_names_are_room_local_and_ids_survive_renames() {
         let (mut state, first, agent, _) = state_with_room_and_agents();
         let second = state.create_room("second").expect("second room");
@@ -2360,30 +3396,6 @@ mod tests {
             "second draft"
         );
         assert!(state.agent(agent).expect("agent").details_disclosed);
-    }
-
-    #[test]
-    fn quote_escapes_quotes_and_backslashes_preserves_newlines_and_routing() {
-        let (mut state, room, codex, claude) = state_with_room_and_agents();
-        state
-            .set_draft_text(room, "existing\n")
-            .expect("existing draft");
-        state
-            .set_draft_recipients(room, [claude])
-            .expect("recipient");
-        state
-            .quote_reply(room, codex, "line 1 with @reviewer\n\"quoted\" \\ path")
-            .expect("quote");
-
-        let draft = &state.room(room).expect("room").draft;
-        assert_eq!(
-            draft.text,
-            "existing\nbuilder: \"line 1 with @reviewer\n\\\"quoted\\\" \\\\ path\"\n"
-        );
-        assert_eq!(
-            draft.recipient_ids.iter().copied().collect::<Vec<_>>(),
-            [claude]
-        );
     }
 
     #[test]
@@ -2464,6 +3476,79 @@ mod tests {
                 .files,
             prompt.files
         );
+    }
+
+    #[test]
+    fn turn_ended_needs_work_after_submission_then_idle_and_ignores_reply_capture() {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        state
+            .observe_status(agent, RuntimeStatus::Working, 1)
+            .unwrap();
+        state.observe_status(agent, RuntimeStatus::Idle, 2).unwrap();
+        let first = submit_text(&mut state, room, agent, "first");
+        let second = submit_text(&mut state, room, agent, "second");
+        let ended = |state: &BusState, id| state.turn_ended(state.request(id).unwrap());
+        assert!(!ended(&state, first), "queued");
+
+        // Typed, but no turn start reported: only status polls tell work here.
+        submit_request(&mut state, first, "launch-codex", 5);
+        // Work seen before the submission does not count, nor idle without work.
+        state.observe_status(agent, RuntimeStatus::Idle, 3).unwrap();
+        assert!(!ended(&state, first));
+        state
+            .observe_status(agent, RuntimeStatus::Working, 4)
+            .unwrap();
+        assert!(!ended(&state, first));
+        // A blocked agent is not idle.
+        state
+            .observe_status(agent, RuntimeStatus::Blocked, 5)
+            .unwrap();
+        assert!(!ended(&state, first));
+        state.observe_status(agent, RuntimeStatus::Idle, 6).unwrap();
+        // No reply was captured, yet the turn ended.
+        assert_eq!(state.request(first).unwrap().phase, RequestPhase::Active);
+        assert!(ended(&state, first));
+        assert!(!ended(&state, second), "the next message is still queued");
+
+        state.requests.get_mut(&first).unwrap().phase = RequestPhase::Completed;
+        assert!(ended(&state, first), "a captured reply counts too");
+        state.requests.get_mut(&first).unwrap().phase = RequestPhase::Abandoned;
+        assert!(!ended(&state, first));
+    }
+
+    #[test]
+    fn a_turn_between_two_idle_polls_still_ends_through_its_provider_start() {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+        let request = submit_text(&mut state, room, agent, "quick task");
+        submit_request(&mut state, request, "launch-codex", 5);
+        // The whole turn runs between two polls: every poll sees Idle, and
+        // the reply is never captured. Only the provider's turn start says
+        // the agent took the message.
+        state.observe_status(agent, RuntimeStatus::Idle, 2).unwrap();
+        assert_eq!(
+            state.accept_callback(ProviderCallback {
+                callback_id: "fast-start".into(),
+                sequence: 12,
+                occurred_at_ms: 12,
+                agent_id: agent,
+                launch_id: "launch-codex".into(),
+                provider_session_id: Some("provider-session".into()),
+                provider_turn_id: Some("turn-1".into()),
+                provider_prompt_id: None,
+                prompt_payload: Some("quick task".into()),
+                kind: CallbackEventKind::PromptStarted,
+            }),
+            CallbackDisposition::AcceptedBinding
+        );
+        let ended = |state: &BusState| state.turn_ended(state.request(request).unwrap());
+        // Idle seen before the start event does not end the turn.
+        assert!(!ended(&state));
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 13)
+            .unwrap();
+        assert_eq!(state.request(request).unwrap().phase, RequestPhase::Active);
+        assert!(ended(&state));
     }
 
     #[test]

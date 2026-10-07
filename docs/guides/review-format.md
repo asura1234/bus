@@ -1,21 +1,21 @@
 # Review Artifact Format
 
-This document is the shared format source of truth for plan reviews, PR code reviews, and task acceptance reviews. Final artifacts are agent-anonymous. Findings state verifiable facts and never carry severity or disposition labels.
+This document is the shared format source of truth for `review.md`, covering the plan review and PR code review modes. Final artifacts must be agent-anonymous; findings state only verifiable facts and carry no severity or disposition label.
 
 ## Shared output discipline
 
-- The chat response is the `review.md` content after file-only bookkeeping is removed. Do not add greetings, an overall assessment, or a follow-up question.
-- After writing `review.md`, every mode must run `python3 cli_extensions/review_artifact.py render-response`. The script validates the complete artifact, condenses the Round 2+ reconciliation table into its existing summary sentence, removes `本轮探索区域`, and generates the only valid `chat-response.md`. Return that file verbatim.
-- An empty section contains only `无。`.
-- An unresolved prior-round finding keeps its original source number in the reconciliation table and is restated completely, using current evidence, under `新问题与建议`. Never reopen the same root cause under a new title.
-- In Round 2+, when the preceding round had no findings, keep only the fixed reconciliation table header and separator and use exactly `> 总结：前轮无待核销 finding。`. When the table has data rows, that empty summary is forbidden. This rule is shared by plan, PR, and task modes.
-- Reconciliation states are fixed: `satisfactory` means the root cause is resolved; `rejected` means the author rejected it with sound evidence; `withdrawn` means the reviewer withdrew a false positive; `partially-addressed` means changes were made but the root cause remains; `not-addressed` means it was not handled and no valid reason was supplied; `disputed` means the author rejected it without sufficient evidence and developer adjudication is needed. The final three remain open.
-- A finding is organized as location, observation, evidence, impact, and optional remediation. PR findings also name a code-review dimension. Task findings do not reuse the PR nine-dimension vocabulary.
-- Findings must not contain disposition or severity labels such as `阻断`, `建议采纳`, `critical`, `high`, `medium`, or `low`. Severity influences only the mode's single final verdict.
+- The chat response equals `review.md` with the file-only bookkeeping removed; do not add greetings, an overall assessment, or a follow-up question before or after it.
+- After writing `review.md`, both modes must run `python3 cli_extensions/review_artifact.py render-response`; the script fully validates the artifact, condenses the Round 2+ reconciliation table into its existing summary sentence, deletes `本轮探索区域`, and generates the only `chat-response.md`. The chat response equals that file verbatim and is no longer converted by hand by the agent.
+- A section with no content contains only `无。`, without any account of how candidate issues were ruled out.
+- An unresolved prior-round item keeps its original source number in the reconciliation table and is restated in full, with current evidence, under this round's `新问题与建议`; the same root cause must not be reopened under a new title.
+- In Round 2+, when the prior round had no finding, the reconciliation table keeps only the fixed header and separator, and the summary must be exactly `> 总结：前轮无待核销 finding。`; when the table has data rows, that fixed empty summary must not be used. This rule is the same for the plan and PR modes.
+- Reconciliation state semantics are fixed: `satisfactory` = the root cause is resolved; `rejected` = the author rejected it with evidence and the reasoning holds; `withdrawn` = the reviewer withdrew a false positive; `partially-addressed` = changed but the root cause remains; `not-addressed` = not handled and no valid reason; `disputed` = the author rejected it but the reasoning is insufficient, awaiting developer adjudication. The last three remain open.
+- A finding is structured as location / observation / evidence / impact / optional remediation. A PR finding additionally names a code-review dimension.
+- Disposition or severity labels such as `阻断`, `建议采纳`, `critical`, `high`, `medium`, `low` must not be written on a finding. Severity is used only for the mode's final verdict.
 
 ## Fixed actionable sections
 
-All three artifact modes contain these headings exactly once and in this order so author-side tooling can extract them deterministically:
+Artifacts of both modes must contain exactly the following two headings, in template order, so author-side tooling can extract them deterministically:
 
 ```markdown
 ## 新问题与建议
@@ -23,11 +23,14 @@ All three artifact modes contain these headings exactly once and in this order s
 ## 同步清单（CONSISTENCY drift，非阻塞）
 ```
 
-`新问题与建议` contains only SUBSTANTIVE findings that can change the delivered result. With no findings, its body is exactly `无。`. `同步清单` normally contains non-blocking wording, naming, comment, or documentation drift. PR review additionally permits dimension 6 out-of-goal `XS`/`S` code slices. With no drift, its body is exactly `无。`. These sections cannot be renamed, merged, reordered, or omitted.
+`新问题与建议` holds only SUBSTANTIVE findings that change the delivered result; with no finding, its body must be exactly `无。`.
+`同步清单` normally holds only wording, naming, comment, or documentation drift that does not change the delivered result; PR code review additionally allows dimension 6
+`XS` / `S` out-of-goal code slices as scope drift. With no drift, its body must be exactly `无。`. These two sections must not be renamed, merged,
+reordered, or omitted.
 
 ## Plan-review round format
 
-Write the artifact to `temp/review-plan/<branch_slug>/<plan_basename>/<reviewer>/round-NN/review.md`. The reviewer is read-only over the plan. Archived decisions are consistency inputs and are not re-decided in a review round.
+The artifact is written to `temp/review-plan/<branch_slug>/<plan_basename>/<reviewer>/round-NN/review.md`. The reviewer is read-only over the plan; archived decisions serve only as the consistency baseline and are not re-evaluated within a round.
 
 ```markdown
 # Review Round <N> — 计划审查
@@ -39,9 +42,8 @@ Write the artifact to `temp/review-plan/<branch_slug>/<plan_basename>/<reviewer>
 
 ## 前轮问题核销
 
-<!-- Round 1 writes `无。`. From Round 2 onward, the file retains the complete table;
-     the chat response keeps only the summary below. If the prior round had no
-     finding, follow the shared empty-ledger rule. -->
+<!-- Round 1 writes `无。`. From Round 2 onward the file keeps the complete table; the chat response keeps only the summary sentence below.
+     If the prior round had no finding, follow the shared empty-ledger rule in "Shared output discipline". -->
 
 | # | 来源 | 问题 | 核销状态 | 证据 / 去向 |
 |---|------|------|----------|-------------|
@@ -55,19 +57,18 @@ Write the artifact to `temp/review-plan/<branch_slug>/<plan_basename>/<reviewer>
 - **位置**：<plan section / exact location>
 - **观察**：<fact>
 - **证据**：<plan text / source / cross-reference, each with path:line>
-- **影响**：<what happens to the implementing agent if left unresolved>
+- **影响**：<what happens to the executing agent if left unresolved>
 - **可能的修复 / 选项**（可选）：<direct replacement text or options>
 
 <!-- With no SUBSTANTIVE finding, write only `无。`. -->
 
 ## 同步清单（CONSISTENCY drift，非阻塞）
 
-- <location → location: wording that no longer expresses the same intent> | 无。
+- <location → location: a point where wording for the same intent is out of sync, one per line> | 无。
 
 ## 本轮探索区域
 
-<!-- File-only bookkeeping; omitted from chat. Round 2+ records only prior-finding
-     reconciliation and direct consequences of the current delta. -->
+<!-- File-only bookkeeping; not part of the chat response. Round 2+ records only prior-round reconciliation and direct consequences of this round's diff. -->
 
 - Read 的源码文件：<paths>
 - 交叉核对的测试场景：<scenarios>
@@ -81,11 +82,11 @@ Write the artifact to `temp/review-plan/<branch_slug>/<plan_basename>/<reviewer>
 - **收敛趋势**：<only the count and scope trend of `新问题与建议`; Round 1 uses `首轮`>
 ```
 
-The plan verdict is fixed: `Ready` requires an empty current `新问题与建议` section and root-cause closure of every prior SUBSTANTIVE finding. Any new or unresolved SUBSTANTIVE finding yields `Needs Refinement`. Only a multi-purpose plan, fundamentally wrong architecture, or a plan that cannot be repaired locally yields `Abandon`. The consistency list neither blocks nor triggers another round.
+Fixed criteria for the plan verdict: it is 可执行 (Ready) when this round's `新问题与建议` is empty and every prior SUBSTANTIVE finding has been closed at the root cause; it is 需要完善 (Needs Refinement) when any unresolved or new SUBSTANTIVE finding exists; it is 废弃 (Abandon) only for a multi-purpose plan, a fundamentally wrong architecture, or one that cannot be salvaged locally. The consistency list does not block and does not trigger another round on its own.
 
 ## PR code-review round format
 
-Write the artifact to `temp/review-pr/<branch>/<reviewer>/round-NN/review.md`. The reviewer is read-only over production code; only probe tests may be written and they remain uncommitted. With a related plan, record its goal verbatim. Without one, record the branch-level locked goal verbatim.
+The artifact is written to `temp/review-pr/<branch>/<reviewer>/round-NN/review.md`. The reviewer is read-only over production code, with write access limited to test files (probe tests stay in the working tree and are not committed; see code-review-guide "Verification boundary"); with a related plan, record its goal verbatim; without a plan, record the branch-level locked goal verbatim.
 
 ```markdown
 # Review Round <N> — 代码审查
@@ -100,8 +101,8 @@ Write the artifact to `temp/review-pr/<branch>/<reviewer>/round-NN/review.md`. T
 
 ## 前轮问题核销
 
-<!-- Round 1 writes `无。`. From Round 2 onward, retain the complete table in the
-     file; chat keeps only the summary. Follow the shared empty-ledger rule. -->
+<!-- Round 1 writes `无。`. From Round 2 onward the file keeps the complete table; the chat response keeps only the summary sentence below.
+     If the prior round had no finding, follow the shared empty-ledger rule in "Shared output discipline". -->
 
 | # | 来源 | 问题 | 核销状态 | 证据 / 去向 |
 |---|------|------|----------|-------------|
@@ -115,20 +116,19 @@ Write the artifact to `temp/review-pr/<branch>/<reviewer>/round-NN/review.md`. T
 - **位置**：<path:line>
 - **维度**：<one code-review-guide dimension>
 - **观察**：<fact>
-- **证据**：<code / mechanism / cross-reference, each with path:line>; findings in dimensions 2, 3, or 7 begin with either `已证明：<test @ relative test path> — <failed assertion>` or `未证明`; other dimensions have no proof-status label
-- **影响**：<runtime consequence; use conditional language for `未证明`>
+- **证据**：<code / mechanism / cross-reference, each with path:line>; a finding in dimension 2 / 3 / 7 marks its proof status as the first item — `已证明：<test name @ test file relative path> — <failed assertion>` or `未证明`; other dimensions carry no mark
+- **影响**：<what happens at execution or runtime if left unresolved; write it conditionally when marked `未证明`>
 - **可能的修复**（可选）：<direct patch or design; a bug finding includes reproduction, fix, and regression test>
 
 <!-- With no SUBSTANTIVE finding, write only `无。`. -->
 
 ## 同步清单（CONSISTENCY drift，非阻塞）
 
-- <path:line: naming/comment/documentation drift; a dimension 6 XS/S slice also states its out-of-goal purpose, size, and locked-goal evidence> | 无。
+- <path:line: naming / comment / documentation drift; a dimension 6 XS/S slice also states its out-of-goal purpose, size, and evidence of how it differs from the locked goal; one per line> | 无。
 
 ## 本轮探索区域
 
-<!-- File-only bookkeeping; omitted from chat. Round 2+ records only prior-finding
-     reconciliation and direct consequences of the current delta. -->
+<!-- File-only bookkeeping; not part of the chat response. Round 2+ records only prior-round reconciliation and direct consequences of this round's delta. -->
 
 - Read 的源码文件：<paths>
 - 运行的测试：<commands and results | 无>
@@ -141,71 +141,4 @@ Write the artifact to `temp/review-pr/<branch>/<reviewer>/round-NN/review.md`. T
 - **收敛趋势**：<only the count and scope trend of `新问题与建议`; Round 1 uses `首轮`>
 ```
 
-The PR verdict meaning is defined only by `code-review-guide.md`; this template fixes the legal enum and output structure without creating another readiness rule.
-
-## Task-acceptance round format
-
-Write the artifact to the `--output` path under `temp/review-task/<full-plan-slug>/task-<id>-<name>/round-NN/review.md`. The full plan slug derives from the complete repository-relative plan path without its extension. Task review verifies only that task's completion, plan adherence, file isolation, direct contracts, and gate evidence; it is not final PR review.
-
-```markdown
-# Review Round <N> — 任务验收
-
-**计划**：<plans/xxx.md>
-**任务**：任务<id>：<unique plan task name>
-**实际触及文件**：<N> files；canonical list: <SCOPE_INPUTS>#files
-**Task report**：<generation-NN/report.md>
-**GATE_EVIDENCE_HASH**：<review_round.py output hash>
-**SCOPE_HASH**：<review_round.py output hash>
-**输出 lane**：<temp/review-task/.../round-NN/review.md>
-**日期**：<YYYY-MM-DD>
-
-## 前轮问题核销
-
-<!-- Round 1 writes `无。`. From Round 2 onward reconcile only findings from this
-     task lane. Follow the shared empty-ledger rule. -->
-
-| # | 来源 | 问题 | 核销状态 | 证据 / 去向 |
-|---|------|------|----------|-------------|
-| 1 | R<round>-<index> | <summary> | satisfactory / rejected / withdrawn / partially-addressed / not-addressed / disputed | <task delta / path:line / author rationale; open items say `见新问题 N`> |
-
-> 总结：<group source identifiers by reconciliation state; point open items to the corresponding new finding>。
-
-## 任务契约对照
-
-- **目标与约束**：<status and evidence>
-- **拥有文件与实际触及文件**：<all inside owner | out-of-scope paths and evidence>
-- **produces / consumes**：<direct upstream/downstream contract status | 无>
-- **验收闸门**：<verification of exact command/workspace/exit/test count/coverage/log hash>
-- **计划偏差**：<plan statement / actual result / reason | 无>
-
-## 新问题与建议
-
-### <number. title><!-- append `(承 R<round>-<index>)` when carrying a prior finding -->
-- **位置**：<task field / actual path:line / gate evidence>
-- **观察**：<fact>
-- **证据**：<task contract / code / test output / direct dependency, with path or command>
-- **影响**：<why this task cannot be accepted independently>
-- **可能的修复 / 选项**（可选）：<owner-local correction; explain when the task graph must reopen>
-
-<!-- With no SUBSTANTIVE finding, write only `无。`. -->
-
-## 同步清单（CONSISTENCY drift，非阻塞）
-
-- <task-contract or owner-document wording drift> | 无。
-
-## 验收证据
-
-- 实际触及文件：<N> files；已按 SCOPE_HASH 核对 <SCOPE_INPUTS>#files
-- Task report / gate logs：<report path, evidence hash, commands, and results>
-- Reviewer 窄复现：<not run | exact command and reason/result>
-- 读取的直接上游产物：<path or contract | 无>
-
-## 任务就绪状态
-
-- **判定**：Ready | Needs Refinement | Plan Repair Required
-- **修复原因**：无 | upstream-contract | owner-graph-contract | developer-decision
-- **上游任务**：无 | 任务 N
-- **收敛趋势**：<only the count and scope trend of `新问题与建议`; Round 1 uses `首轮`>
-```
-
-Task verdicts are fixed: `Ready` requires the goal, constraints, owner, direct contracts, and gate evidence to hold, with no current finding and all prior SUBSTANTIVE findings closed at root cause. Owner-local repairs yield `Needs Refinement`. A broken upstream contract, incomplete owner/dependency/task contract, or required developer decision yields `Plan Repair Required` with the structured reason. Only `upstream-contract` may name an upstream task. Consistency drift does not block or trigger another round.
+The PR verdict semantics are defined in one place, [code-review-guide "Three verdicts"](code-review-guide.md#three-verdicts); this template only fixes the legal enum and output structure and sets no separate Ready criterion.

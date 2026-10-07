@@ -1,217 +1,165 @@
 ---
 name: pr
-description: Feature-branch PR workflow. Land relevant uncommitted work, rebase onto origin/master, immediately create or refresh an English Draft PR, converge repository gates, synchronize documentation, and publish a deterministically validated final body. Dead-code cleanup is opt-in through --delete-dead-code. Use when asked to open, create, submit, update, or generate a PR description.
+description: Feature-branch PR workflow. Land uncommitted work, rebase onto origin/master, then create or refresh an English Draft PR and its body. It does not run gates or dead-code cleanup; the orchestrator sequences gate-and-fix and delete-dead-code itself and may hand their results to pr as optional --verification input. Use when the user asks to "open a PR", "create a PR", "submit a PR", "update a PR", or "generate a PR description".
 ---
 
 # PR
 
 ```text
-INPUT $ARGUMENTS = [--plan <plan-file>]... [--delete-dead-code]
-plans = every plan path supplied by the developer for this invocation, in argument order; never infer plans from diff, commits, or historical state.
+INPUT $ARGUMENTS = [--plan <plan-file>]... [--verification <file>]
+plans = every plan path the developer supplied this time, in order of appearance; never guess from diff, commits, or historical state.
+verification = optional Markdown file of `- [x] ` lines, each naming verification actually executed and the commit it proves
+  (for example a gate-and-fix PASS artifact with its Head); supplied by the caller, never produced here.
 
-RULES
-- Code narrative uses only the current repository, feature branch, and actual changes as facts. Plans lock goal and non-goals only.
-- Prior create-plan, execute-plan, review-plan, or review-pr invocation is not required.
-- Do not inspect or infer another skill's private control state, callbacks, or temporary artifacts. The sole cross-skill handoff is `.locked-goal` and `.locked-non-goals`, written and returned by pr_goal_context.py.
-- PR title and narrative content are English. Canonical fixed headings and machine tokens remain byte-compatible with references/pr-template.md. Both the initial Draft and final body must pass pr_format_check.py with the matching phase.
-- Every commit and push is delegated to commit-and-push. Every rebase is delegated to rebase-origin-main. Do not duplicate their Git protocols.
+-- Rules
+- Code narrative takes only the current repository, current feature branch, and actual changes as its source of truth; plans lock only goal and non-goals.
+- Prior review-plan or review-pr invocation is not required.
+- This skill never runs or requires `gate-and-fix` or `delete-dead-code`, or their artifacts. The orchestrator
+  sequences them; their results reach the body only through `--verification`.
+- Do not read or guess another skill's private control state, callbacks, or temporary artifacts; the only cross-skill
+  handoff is `temp/review-pr/<branch>/.locked-goal` and `temp/review-pr/<branch>/.locked-non-goals`, written and returned by `pr_goal_context.py`.
+- PR title and narrative are English; fixed headings and machine tokens stay byte-compatible with the format SOT
+  `references/pr-template.md`. Every published body must pass `pr_format_check.py`; never skip it.
+- Every commit and push must be delegated to `commit-and-push`; every rebase must be delegated to `rebase-origin-main`; never duplicate their Git protocols.
 
 ========== PREFLIGHT ==========
 
-repo = git rev-parse --show-toplevel
-branch = git branch --show-current
+repo = `git rev-parse --show-toplevel`
+branch = `git branch --show-current`
 
-IF repo missing:
+IF repo missing
   ERROR "The current directory is not a Git repository."
-IF branch empty OR branch IN {main, master}:
+IF branch empty OR branch IN {main, master}
   ERROR "A PR cannot be created from detached HEAD or main/master."
+IF verification given AND the file is missing or contains a line that is not a `- [x] ` item:
+  ERROR "The supplied verification must contain only `- [x] ` lines."
 
 Run:
   git status --short
   git fetch origin
-Assert origin/master resolves.
+Assert `origin/master` resolves.
 
 working_changed = tracked + untracked files in the current worktree
-committed_changed = git diff --name-only origin/master...HEAD
-ahead = git rev-list --count origin/master..HEAD
+committed_changed = `git diff --name-only origin/master...HEAD`
+ahead = `git rev-list --count origin/master..HEAD`
 
-IF working_changed empty AND committed_changed empty AND ahead == 0:
+IF working_changed empty AND committed_changed empty AND ahead == 0
   ERROR "The current branch has no work to commit or publish relative to origin/master."
 
-Inspect the complete current diff, untracked files, and commits. Confirm they express one coherent PR purpose. Never silently discard, stash, rewrite, or absorb unrelated developer changes.
+Inspect the complete current diff, untracked files, and commits. Confirm they describe one coherent
+PR purpose. Do not silently discard, stash, rewrite, or absorb unrelated developer changes.
 
 ========== LAND UNCOMMITTED WORK (ONLY IF DIRTY) ==========
 
-IF the worktree has uncommitted changes belonging to this PR:
-  invoke commit-and-push;
-  it preserves unrelated dirty files, splits commits by single purpose, and pushes the explicit same-name refspec.
+IF the worktree has uncommitted changes belonging to this PR
+  Invoke `commit-and-push`.
+  It must preserve unrelated dirty files, split commits by single purpose, and push with the
+  explicit same-name refspec required by the repository Git safety rules.
 
   Assert:
     - every intended PR file is committed;
     - unrelated pre-existing dirty files remain untouched and uncommitted;
-    - the remote feature branch contains local HEAD.
-ELSE:
-  skip directly to rebase. Do not invoke commit-and-push merely to report no work.
+    - remote branch contains the local HEAD.
 
-This stage exists only to make rebase possible. Unrelated dirty files remain uncommitted. If they block rebase, report the blocker instead of absorbing them.
+ELSE
+  Skip this stage entirely and go straight to the rebase. A clean worktree needs no commit, and
+  invoking `commit-and-push` just to have it report "nothing to do" is noise.
 
-gate-and-fix later requires a clean worktree to bind its artifact to one committed tree. If unrelated dirty files remain, STOP before readiness convergence and report them as excluded.
+This stage exists only to make the next one possible: `rebase-origin-main` requires a clean
+worktree. Unrelated pre-existing dirty files that are NOT part of this PR stay uncommitted — if
+they block the rebase, that is a blocking report, never a reason to absorb them into the PR.
 
-========== REBASE ==========
+========== REBASE (ONLY IF NEEDED) ==========
 
-Invoke rebase-origin-main with the Bus adapter base `origin/master`.
-It owns conflict triage, dependency/submodule resynchronization when applicable, and force-with-lease push. This skill does not run rebase itself. If it reports dropped shared infrastructure, carry that text verbatim into PR verification/risk notes.
+IF `git merge-base --is-ancestor origin/master HEAD` fails:
+  Invoke `rebase-origin-main` with the Bus adapter base `origin/master`.
+  It owns conflict triage, dependency/submodule resync when applicable, and force-with-lease push; this skill never runs rebase itself.
+  If it reports a non-empty `dropped_shared_infra`, it must be written verbatim into the PR description's `## 其他说明`; never omit it.
+Never describe or publish a pre-rebase tree.
 
-Rebase precedes readiness gates. Gates must prove the merged result; pre-rebase gates prove the wrong tree and rerunning them later duplicates expensive work.
+baseline = `git rev-parse origin/master`; head = `git rev-parse HEAD`.
+Assert the remote branch tip is exactly `head`.
+copy_diff = `git diff <baseline>...<head>`; copy_commits = `git log <baseline>..<head> --oneline`.
 
-baseline = git rev-parse origin/master
-draft_head = git rev-parse HEAD
-Assert the remote branch tip equals draft_head.
-draft_diff = git diff <baseline>...<draft_head>
-draft_commits = git log <baseline>..<draft_head> --oneline
+IF verification given AND any line names a commit other than `head`:
+  STOP and report the stale evidence; never publish verification that does not prove `head`.
 
 ========== LOCK PR INTENT ==========
 
-Read(docs/guides/orchestrated-room-brief.md) completely, then run:
-  python3 cli_extensions/room_assignment_context.py [--frame "<frame>"] \
-    --output "<ignored-temp-assignment-context>"
-IF exit != 0:
-  STOP and return stdout verbatim as blocker evidence.
-ORIGIN = ASSIGNMENT_ORIGIN
-
-IF ORIGIN == verified:
-  Run:
-    python3 skills/pr/scripts/pr_goal_context.py \
-      --branch "<branch>" --output "<ignored-temp-goal-context>" \
-      --assignment-context "<ignored-temp-assignment-context>" \
-      [--plan "<path>" ... in supplied order]
-  Supplied plans must match the verified Room Brief exactly; the script fails closed otherwise.
-ELSE IF ORIGIN == NotInBusRoom AND plans nonempty:
-  Run:
-    python3 skills/pr/scripts/pr_goal_context.py \
-      --branch "<branch>" --output "<ignored-temp-goal-context>" \
-      [--plan "<path>" ... in supplied order]
+IF plans nonempty:
+  Run `python3 skills/pr/scripts/pr_goal_context.py --branch "<branch>" --output
+  "<ignored-temp-goal-context>"`, appending `--plan "<path>"` once per plan in original order.
 ELSE:
-  derive one goal from draft_diff / draft_commits;
-  include only evidence-backed intentional exclusions as non-goals, otherwise use `无`;
-  write ignored temporary goal and non-goal files, then Run:
-    python3 skills/pr/scripts/pr_goal_context.py \
-      --branch "<branch>" --output "<ignored-temp-goal-context>" \
-      --goal-file "<goal-file>" --non-goal-file "<non-goal-file>"
+  Write a single goal from copy_diff / copy_commits; write only evidence-backed intentional exclusions as non-goals, otherwise write `无`.
+  Write the two into ignored temp goal/non-goal files respectively, then Run:
+    python3 skills/pr/scripts/pr_goal_context.py --branch "<branch>" \
+      --output "<ignored-temp-goal-context>" --goal-file "<goal-file>" \
+      --non-goal-file "<non-goal-file>"
+IF command fails: STOP; never hand-parse plans or create the lock yourself.
+Capture `GOAL_CONTEXT_FILE`, `LOCKED_GOAL_FILE`, and `LOCKED_NON_GOALS_FILE`; Read(GOAL_CONTEXT_FILE) completely.
+The two sections of that context, `.locked-goal`, and `.locked-non-goals` are locked by the script and must not be rewritten afterwards.
 
-IF the command fails:
-  STOP. Do not hand-parse plans or create the lock manually.
+========== WRITE BODY ==========
 
-Capture GOAL_CONTEXT_FILE, LOCKED_GOAL_FILE, and LOCKED_NON_GOALS_FILE.
-Read(GOAL_CONTEXT_FILE) completely.
-The generated goal/non-goal sections and both locks are immutable for the rest of this run.
+Read(references/pr-template.md)
+Write the English title and narrative under one hard constraint: **the narrative may come only from the
+immutable `copy_diff` / `copy_commits`; goal and non-goals come only from GOAL_CONTEXT_FILE.** Never re-derive
+from the live worktree, live `HEAD`, or the mutable `origin/master`.
 
-========== PUBLISH DRAFT OR CAPTURE EXISTING READY PR ==========
+Fill every template section:
+- Insert the full `## 目标` and `## 非目标` sections of GOAL_CONTEXT_FILE verbatim; never add source labels,
+  summaries, translations, or separators. Same-named sections from multiple plans were already appended by the renderer in input order.
+- `## 自测 / Agent 测`: IF verification given, insert its `- [x] ` lines verbatim and set phase = final.
+  ELSE write one `- [ ] ` item stating that readiness verification was not provided to `pr`, and set phase = draft.
+  Never claim gates, E2E, review, or manual verification that the caller did not supply.
+- When the diff touches delivery, callbacks or launch, note in `## 其他说明` that `just e2e` (live model usage)
+  is pending unless the supplied verification already records it.
 
-Read(references/pr-template.md) completely.
-Derive the initial English title and non-intent narrative only from immutable draft_diff / draft_commits. Take goal and non-goals only from GOAL_CONTEXT_FILE. Fill every template section. Documentation synchronization uses pending unchecked items; testing retains the pending readiness gate; notes say this is the post-rebase snapshot and selected cleanup/gates/docs remain pending. Never mark unperformed work passed.
+Write `body_file` under ignored `temp/`, then run:
 
-Write draft_body_file under ignored temp, then Run:
-
-  python3 skills/pr/scripts/pr_format_check.py --phase draft \
-    --template skills/pr/references/pr-template.md --title "<draft-title>" \
-    --body-file "<draft-body-file>" --goal-context-file "<GOAL_CONTEXT_FILE>" \
+  python3 skills/pr/scripts/pr_format_check.py --phase <phase> \
+    --template skills/pr/references/pr-template.md --title "<title>" \
+    --body-file "<body-file>" --goal-context-file "<GOAL_CONTEXT_FILE>" \
     --locked-goal-file "<LOCKED_GOAL_FILE>"
 
-IF validation fails:
-  repair and rerun; never publish an invalid Draft.
+IF the check fails: fix and rerun; do not publish an unvalidated body.
 
-existing = gh pr list --head <branch> --state open --json number,title,url,isDraft
-STOP if more than one PR exists.
-created_as_draft = false
+========== PUBLISH ==========
 
-IF existing Draft PR:
-  gh pr edit <number> --title "<draft-title>" --body-file <draft-body-file>
-ELSE IF existing ready PR:
-  capture it but preserve title, body, and ready status until finalization
+existing = `gh pr list --head <branch> --state open --json number,title,url,isDraft`
+STOP if it contains more than one PR. `created_as_draft = false`.
+IF existing PR found (Draft or ready):
+  `gh pr edit <number> --title "<title>" --body-file <body-file>`; never change its draft/ready status.
 ELSE:
-  gh pr create --draft --head <branch> --base master --title "<draft-title>" --body-file <draft-body-file>
-  created_as_draft = true
+  `gh pr create --draft --head <branch> --base master --title "<title>" --body-file <body-file>`;
+  `created_as_draft = true`.
 
-Capture PR number and URL. A PR created here remains Draft; never run gh pr ready. Draft create/edit occurs before dead-code cleanup, gate-and-fix, or update-docs. An existing ready PR is captured now and edited only during finalization. If a later stage blocks, preserve current Draft/ready state and report its URL plus the blocker. This PR request authorizes only create/edit and final edit, never approve, merge, close, or delete.
+Capture PR number/URL. A PR created here stays draft; never run `gh pr ready`.
+The explicit PR request authorizes only this create/edit; never approve, merge, close, or delete
+anything without separate authorization.
 
-========== DEAD CODE (OPT-IN) ==========
+Then read back and verify the published state — `gh pr edit` can silently fail or truncate,
+and this is the only check that proves what is actually on GitHub:
+  published = `gh pr view <number> --json title,body,headRefOid,state,baseRefName,isDraft`
+Bind returned fields as `published_title`, `published_body`, `published_head`, `published_state`,
+`published_base`, and `published_is_draft`; write `published_body` byte-exact to ignored `temp/` as
+`published_body_file`, and rerun `pr_format_check.py --phase <phase>` against it with `published_title`.
 
-IF --delete-dead-code absent:
-  skip and record that fact in final notes.
-ELSE:
-  invoke delete-dead-code --base <baseline>;
-  it owns scope derivation, fan-out, scope verification, and landing through commit-and-push;
-  carry its LIKELY / KEPT items into the final PR body;
-  if blocked or out-of-scope changes appear, STOP and report instead of gating an unverified deletion tree.
-
-========== READINESS CONVERGENCE ==========
-
-Invoke gate-and-fix --base <baseline>.
-It owns the complete concurrent gate/remediation/commit-and-push loop and the E2E prohibition. Capture its final PASS artifact and Head as gated_head. Movement of origin/master after baseline does not trigger another rebase.
-
-copy_diff = git diff <baseline>...<gated_head>
-copy_commits = git log <baseline>..<gated_head> --oneline
-
-========== FINAL FAN-OUT ==========
-
-In the same turn, dispatch two subagents with disjoint ownership:
-
-1. Documentation owner: invoke update-docs --base <baseline>. It is the only tracked-worktree writer, preserves the finalized audit path, and performs no Git or GitHub mutation.
-2. PR finalizer: remain repository-read-only and derive the final English title and non-intent narrative only from immutable copy_diff / copy_commits. Goal and non-goals come only from GOAL_CONTEXT_FILE.
-
-   Exclude the later update-docs-only delta and commit from title, size, summary, and change list. It may write the body only under ignored temp, stays available for the finalized audit, and owns final pr_format_check plus gh pr edit for the captured PR.
-
-The finalizer must not read live worktree files, live HEAD, or mutable origin/master as narrative authority. The documentation owner stops on overlapping active ownership. Neither subagent commits or pushes.
-
-Wait for the documentation owner. Preserve its audit path and run git diff --check. If docs fail, return exact failures to that owner; it fixes only owned files, invalidates the old audit, and reruns update-docs to create a replacement audit. Repeat until clean. Assert every worktree change is an audit target or required agent-instruction symlink. Any other delta blocks. Capture normalized path/status as docs_delta.
-
-Send the finalized audit path and diff-check result to the waiting PR finalizer. It fills every template section:
-
-- Insert the goal and non-goal sections from GOAL_CONTEXT_FILE verbatim, without labels, summaries, translations, or separators.
-- Populate the documentation section by running the canonical docs audit renderer against the latest audit and inserting stdout verbatim.
-- Populate testing only with the final PASS gate-and-fix artifact and Head, the finalized documentation audit plus git diff --check, and other verification actually run in this invocation. Every item is checked. Put unperformed E2E, review, or manual verification in notes as pending.
-
-Write final_body_file under temp, then Run:
-
-  python3 skills/pr/scripts/pr_format_check.py --phase final \
-    --template skills/pr/references/pr-template.md --title "<final-title>" \
-    --body-file "<final-body-file>" --goal-context-file "<GOAL_CONTEXT_FILE>" \
-    --locked-goal-file "<LOCKED_GOAL_FILE>"
-
-IF validation fails:
-  repair and rerun; never replace the Draft with an invalid final body.
-
-Assert remote feature branch tip is gated_head, then edit title/body without changing Draft status. Report PR_FINALIZED and remain available.
-
-========== LAND FINAL DOCUMENTATION ==========
-
-IF update-docs changed documentation:
-  invoke commit-and-push once.
-
-final_head = git rev-parse HEAD
-final_status = git status --short
-branch = git branch --show-current
-
-Assert the worktree is clean, remote feature branch contains final_head, and every gated_head..final_head path/status equals docs_delta. Do not regenerate the narrative from this docs-only commit.
-
-Send final_head to the waiting PR finalizer. It reads the published PR state and writes published body byte-exact under ignored temp, then reruns final pr_format_check.
-
-IF published title/body differs from intended content or fails validation:
-  repair with gh pr edit and re-verify.
-
-Require published head == final_head, state == OPEN, base == master, and a PR created here remains Draft. Otherwise STOP with observed fields.
+IF `published_title` or `published_body` differs from the intended title/body or fails the check
+  Fix via `gh pr edit` and re-verify; do not report success with a non-conforming PR.
+Require `published_head == head`, `published_state == OPEN`, `published_base == master`, and, for a
+PR created this run, `published_is_draft == true`; otherwise STOP with the observed fields.
+Assert the worktree has no change this skill made.
 
 ========== RETURN ==========
 
 Report:
-  - PR title and URL
-  - publication status and Draft behavior
-  - final HEAD
-  - commits created or updated
-  - final PASS gate artifact with Base/Head and finalized docs audit plus git diff --check
-  - GOAL_CONTEXT_FILE, LOCKED_GOAL_FILE, and LOCKED_NON_GOALS_FILE for review-pr
-  - pr_format_check result on the published PR
-  - pending manual verification
-  - unrelated dirty files explicitly excluded
+  - PR title and URL;
+  - whether the PR was created as a Draft or an existing PR was refreshed (its draft/ready status unchanged);
+  - head (the commit the body describes) and commits created or updated;
+  - the phase used, and whether optional `--verification` was supplied or absent;
+  - `GOAL_CONTEXT_FILE`, plus `LOCKED_GOAL_FILE` and `LOCKED_NON_GOALS_FILE` for `review-pr` to consume;
+  - pr_format_check result on the published PR;
+  - verification still pending (gates, E2E, manual) for the orchestrator to sequence;
+  - unrelated dirty files explicitly excluded from the PR.
 ```

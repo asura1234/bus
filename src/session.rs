@@ -17,15 +17,6 @@ const MIN_SOCKET_TIMEOUT: Duration = Duration::from_millis(1);
 
 static EXPLICIT_SESSION_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct SessionInfo {
-    pub name: String,
-    pub default: bool,
-    pub running: bool,
-    pub socket_path: String,
-    pub session_dir: String,
-}
-
 pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
     let mut cleaned = Vec::with_capacity(args.len());
     if let Some(program) = args.first() {
@@ -100,49 +91,33 @@ pub fn active_name() -> Option<String> {
         .filter(|name| validate_name(name).is_ok())
 }
 
+/// Reopens this Bus session: a local session by its ID, an explicit
+/// `BUS_DATA_DIR` root by launching Bus again with the same environment.
 pub fn local_attach_command() -> String {
-    match active_name() {
-        Some(name) => format!("herdr session attach {name}"),
-        None => "herdr".to_string(),
+    attach_command_for(std::env::var("BUS_SESSION_ID").ok().as_deref())
+}
+
+fn attach_command_for(session_id: Option<&str>) -> String {
+    match session_id {
+        Some(id) if !id.is_empty() => format!("bus resume {id}"),
+        _ => "bus".to_string(),
     }
 }
 
+/// `bus stop` targets `BUS_DATA_DIR`, else the last opened local session,
+/// which opening this session has just recorded.
 pub fn local_stop_command() -> String {
-    stop_command_for(active_name().as_deref())
+    "bus stop".to_string()
 }
 
-pub fn stop_command_for(name: Option<&str>) -> String {
-    match name {
-        Some(name) => format!("herdr session stop {name}"),
-        None => "herdr server stop".to_string(),
-    }
-}
-
-pub fn restart_after_update_guidance(stop_command: &str, attach_command: Option<&str>) -> String {
-    let restart = match attach_command {
-        Some(command) => format!("Run `{stop_command}`, then run `{command}` again."),
-        None => format!("Run `{stop_command}`, then restart Herdr with the same socket override."),
-    };
+pub fn restart_after_update_guidance(stop_command: &str, attach_command: &str) -> String {
     format!(
-        "Stop the old server to use the new version.\nStopping exits pane processes.\n{restart}"
+        "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `{stop_command}`, then run `{attach_command}` again."
     )
 }
 
 pub fn active_restart_after_update_guidance() -> String {
-    if !explicit_session_requested() {
-        if let Ok(socket_path) = std::env::var(crate::api::SOCKET_PATH_ENV_VAR) {
-            return restart_after_update_guidance(
-                &format!(
-                    "{}={} herdr server stop",
-                    crate::api::SOCKET_PATH_ENV_VAR,
-                    socket_path
-                ),
-                None,
-            );
-        }
-    }
-
-    restart_after_update_guidance(&local_stop_command(), Some(&local_attach_command()))
+    restart_after_update_guidance(&local_stop_command(), &local_attach_command())
 }
 
 pub fn explicit_session_requested() -> bool {
@@ -184,55 +159,6 @@ pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
     data_dir_for(name).join("herdr-client.sock")
 }
 
-pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
-    let mut sessions = vec![session_info(None)];
-    let sessions_dir = crate::config::config_dir().join("sessions");
-    let entries = match std::fs::read_dir(&sessions_dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(sessions),
-        Err(err) => return Err(err),
-    };
-
-    let mut names = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
-        };
-        if name != DEFAULT_SESSION_NAME && validate_name(&name).is_ok() {
-            names.push(name);
-        }
-    }
-    names.sort();
-    sessions.extend(names.iter().map(|name| session_info(Some(name))));
-    Ok(sessions)
-}
-
-pub fn session_info(name: Option<&str>) -> SessionInfo {
-    let default = name.is_none();
-    let display_name = name.unwrap_or(DEFAULT_SESSION_NAME).to_string();
-    let socket_path = api_socket_path_for(name);
-    let session_dir = data_dir_for(name);
-    SessionInfo {
-        name: display_name,
-        default,
-        running: is_running_at(&socket_path),
-        socket_path: socket_path.display().to_string(),
-        session_dir: session_dir.display().to_string(),
-    }
-}
-
-pub fn parse_target_name(name: &str) -> Result<Option<String>, String> {
-    normalize_name(name)
-}
-
-pub fn stop_session(name: Option<&str>) -> Result<SessionInfo, String> {
-    stop_session_with_timeout(name, STOP_WAIT_TIMEOUT)
-}
-
 pub(crate) fn stop_active_server() -> Result<(), String> {
     let socket_path = active_api_socket_path();
     let client_socket_path = crate::server::socket_paths::client_socket_path();
@@ -242,19 +168,6 @@ pub(crate) fn stop_active_server() -> Result<(), String> {
         STOP_WAIT_TIMEOUT,
         "server",
     )
-}
-
-fn stop_session_with_timeout(name: Option<&str>, timeout: Duration) -> Result<SessionInfo, String> {
-    let socket_path = api_socket_path_for(name);
-    let client_socket_path = client_socket_path_for(name);
-    let label = format!("session {}", name.unwrap_or(DEFAULT_SESSION_NAME));
-    stop_socket_with_timeout(
-        socket_path.clone(),
-        vec![socket_path, client_socket_path],
-        timeout,
-        &label,
-    )?;
-    Ok(session_info(name))
 }
 
 fn stop_socket_with_timeout(
@@ -294,26 +207,6 @@ fn stop_socket_with_timeout(
         ));
     }
     Ok(())
-}
-
-pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
-    if name == DEFAULT_SESSION_NAME {
-        return Err("deleting the default session is not supported".to_string());
-    }
-    validate_name(name)?;
-    let socket_path = api_socket_path_for(Some(name));
-    if is_running_at(&socket_path) {
-        return Err(format!(
-            "session {name} is running; stop it before deleting"
-        ));
-    }
-    let info = session_info(Some(name));
-    let dir = data_dir_for(Some(name));
-    match std::fs::remove_dir_all(&dir) {
-        Ok(()) => Ok(info),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(info),
-        Err(err) => Err(err.to_string()),
-    }
 }
 
 fn send_stop_request(
@@ -469,11 +362,10 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::config::test_config_env_lock()
     }
 
     #[cfg(unix)]
@@ -566,55 +458,6 @@ mod tests {
             None
         );
         assert!(handle.join().unwrap().contains("server.stop"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn stop_session_times_out_when_socket_stays_open_without_response() {
-        let _guard = env_lock().lock().unwrap();
-        let config_home = PathBuf::from(format!("/tmp/hs-stop-open-{}", std::process::id()));
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
-        let session_name = "silent";
-        let socket_path = api_socket_path_for(Some(session_name));
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
-        let _ = std::fs::remove_file(&socket_path);
-        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let keep_running_for_thread = keep_running.clone();
-        let handle = std::thread::spawn(move || {
-            let mut held_streams = Vec::new();
-            while keep_running_for_thread.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        if let Ok(reader_stream) = stream.try_clone() {
-                            let mut request = String::new();
-                            match BufReader::new(reader_stream).read_line(&mut request) {
-                                Ok(0) => continue,
-                                Ok(_) if request.contains("server.stop") => {
-                                    held_streams.push(stream)
-                                }
-                                Ok(_) => {}
-                                Err(_) => continue,
-                            }
-                        }
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        let err = stop_session_with_timeout(Some(session_name), Duration::from_millis(75))
-            .expect_err("silent session should fail after timeout");
-
-        assert!(err.contains("did not stop"), "{err}");
-        keep_running.store(false, Ordering::Relaxed);
-        handle.join().unwrap();
-        let _ = std::fs::remove_dir_all(&config_home);
-        std::env::remove_var("XDG_CONFIG_HOME");
     }
 
     #[test]
@@ -749,6 +592,7 @@ mod tests {
     #[test]
     fn configure_from_args_maps_default_session_name_to_default_path() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home =
             std::env::temp_dir().join(format!("herdr-session-default-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
@@ -802,6 +646,7 @@ mod tests {
     #[test]
     fn env_default_session_name_uses_default_path() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home =
             std::env::temp_dir().join(format!("herdr-env-session-default-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
@@ -832,72 +677,26 @@ mod tests {
     }
 
     #[test]
-    fn local_attach_command_uses_default_launch_for_default_session() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::remove_var(SESSION_ENV_VAR);
-
-        assert_eq!(local_attach_command(), "herdr");
-    }
-
-    #[test]
-    fn local_attach_command_uses_session_attach_for_named_session() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::set_var(SESSION_ENV_VAR, "work");
-
-        assert_eq!(local_attach_command(), "herdr session attach work");
-
-        std::env::remove_var(SESSION_ENV_VAR);
-    }
-
-    #[test]
-    fn local_stop_command_uses_server_stop_for_default_session() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::remove_var(SESSION_ENV_VAR);
-
-        assert_eq!(local_stop_command(), "herdr server stop");
-
-        std::env::remove_var(SESSION_ENV_VAR);
-    }
-
-    #[test]
-    fn local_stop_command_uses_session_stop_for_named_session() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::set_var(SESSION_ENV_VAR, "work");
-
-        assert_eq!(local_stop_command(), "herdr session stop work");
-
-        std::env::remove_var(SESSION_ENV_VAR);
+    fn local_attach_command_resumes_the_local_session_or_relaunches_an_explicit_root() {
+        assert_eq!(
+            attach_command_for(Some("0123456789abcdef")),
+            "bus resume 0123456789abcdef"
+        );
+        assert_eq!(attach_command_for(None), "bus");
     }
 
     #[test]
     fn restart_after_update_guidance_names_stop_and_attach_commands() {
         assert_eq!(
-            restart_after_update_guidance(
-                "herdr session stop work",
-                Some("herdr session attach work")
-            ),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `herdr session stop work`, then run `herdr session attach work` again."
+            restart_after_update_guidance("bus stop", "bus resume 0123456789abcdef"),
+            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `bus stop`, then run `bus resume 0123456789abcdef` again."
         );
-    }
-
-    #[test]
-    fn active_restart_after_update_guidance_respects_socket_override() {
-        let _guard = env_lock().lock().unwrap();
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/custom-herdr.sock");
-        std::env::remove_var(SESSION_ENV_VAR);
-        clear_explicit_session_for_test();
-
-        assert_eq!(
-            active_restart_after_update_guidance(),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `HERDR_SOCKET_PATH=/tmp/custom-herdr.sock herdr server stop`, then restart Herdr with the same socket override."
-        );
-
-        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
     }
 
     #[test]
     fn explicit_session_socket_ignores_inherited_socket_override() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home =
             std::env::temp_dir().join(format!("herdr-session-precedence-{}", std::process::id()));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
@@ -962,99 +761,11 @@ mod tests {
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn stop_session_fails_when_socket_remains_reachable_after_timeout() {
-        let _guard = env_lock().lock().unwrap();
-        let config_home = PathBuf::from(format!("/tmp/hs-stop-{}", std::process::id()));
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
-        let session_name = "slow";
-        let socket_path = api_socket_path_for(Some(session_name));
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
-        let _ = std::fs::remove_file(&socket_path);
-        let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let keep_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let keep_running_for_thread = keep_running.clone();
-        let handle = std::thread::spawn(move || {
-            while keep_running_for_thread.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        if let Ok(reader_stream) = stream.try_clone() {
-                            let mut request = String::new();
-                            match BufReader::new(reader_stream).read_line(&mut request) {
-                                Ok(0) => continue,
-                                Ok(_) if request.trim().is_empty() => continue,
-                                Ok(_) => {}
-                                Err(_) => continue,
-                            }
-                        }
-                        let _ = stream.write_all(b"{\"id\":\"cli:session:stop\",\"result\":{}}\n");
-                        let _ = stream.flush();
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-
-        let err = stop_session_with_timeout(Some(session_name), Duration::from_millis(75))
-            .expect_err("still-running session should fail");
-
-        assert!(err.contains("did not stop"), "{err}");
-        assert!(
-            err.contains(socket_path.to_string_lossy().as_ref()),
-            "{err}"
-        );
-        keep_running.store(false, Ordering::Relaxed);
-        handle.join().unwrap();
-        let _ = std::fs::remove_dir_all(&config_home);
-        std::env::remove_var("XDG_CONFIG_HOME");
-    }
-
     #[test]
     fn invalid_names_are_rejected() {
         let _guard = env_lock().lock().unwrap();
         assert!(validate_name("../prod").is_err());
         assert!(validate_name("").is_err());
         assert!(validate_name("work session").is_err());
-    }
-
-    #[test]
-    fn parse_default_target_name_maps_to_default_session() {
-        assert_eq!(parse_target_name(DEFAULT_SESSION_NAME).unwrap(), None);
-        assert_eq!(parse_target_name("work").unwrap(), Some("work".to_string()));
-    }
-
-    #[test]
-    fn delete_default_session_is_rejected() {
-        assert!(delete_session(DEFAULT_SESSION_NAME).is_err());
-    }
-
-    #[test]
-    fn list_sessions_skips_reserved_default_directory() {
-        let _guard = env_lock().lock().unwrap();
-        let config_home =
-            std::env::temp_dir().join(format!("herdr-session-list-{}", std::process::id()));
-        let sessions_dir = config_home
-            .join(crate::config::app_dir_name())
-            .join("sessions");
-        std::fs::create_dir_all(sessions_dir.join(DEFAULT_SESSION_NAME)).unwrap();
-        std::fs::create_dir_all(sessions_dir.join("work")).unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", &config_home);
-        std::env::remove_var(SESSION_ENV_VAR);
-        clear_explicit_session_for_test();
-
-        let sessions = list_sessions().unwrap();
-        let names: Vec<_> = sessions
-            .iter()
-            .map(|session| session.name.as_str())
-            .collect();
-
-        assert_eq!(names, vec![DEFAULT_SESSION_NAME, "work"]);
-        std::fs::remove_dir_all(&config_home).unwrap();
-        std::env::remove_var("XDG_CONFIG_HOME");
     }
 }

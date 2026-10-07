@@ -521,20 +521,13 @@ impl AgentOscStateTracker {
         self.terminal_title.as_deref()
     }
 
-    #[cfg(unix)]
-    pub(super) fn seed_terminal_title(&mut self, title: Option<String>) {
-        self.terminal_title = title;
-    }
-
     /// Returns the latest retained OSC title, or `""` if none has been seen or
     /// the last title was an empty clear.
-    #[allow(dead_code)] // used by terminal.rs; full call chain wired in Stage C
     pub(super) fn latest_title(&self) -> &str {
         self.latest_title.as_deref().unwrap_or("")
     }
 
     /// Returns the latest retained OSC 9 progress payload, or `""` if none.
-    #[allow(dead_code)] // used by terminal.rs; full call chain wired in Stage C
     pub(super) fn latest_progress(&self) -> &str {
         self.latest_progress.as_deref().unwrap_or("")
     }
@@ -1044,17 +1037,6 @@ mod tests {
 
         assert_eq!(tracker.latest_title(), "");
         assert_eq!(tracker.terminal_title(), Some("✳ 修复🙂标题"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn handoff_seed_does_not_restore_agent_detection_evidence() {
-        let mut tracker = AgentOscStateTracker::default();
-
-        tracker.seed_terminal_title(Some("✳ restored title".into()));
-
-        assert_eq!(tracker.terminal_title(), Some("✳ restored title"));
-        assert_eq!(tracker.latest_title(), "");
     }
 
     #[test]

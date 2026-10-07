@@ -48,8 +48,6 @@ pub(crate) fn final_sync_output_end(bytes: &[u8]) -> Option<usize> {
 pub(crate) struct EncodedBlit {
     /// Terminal escape bytes ready to write to the host terminal.
     pub(crate) bytes: Vec<u8>,
-    /// Whether this frame was encoded as a full redraw.
-    pub(crate) full: bool,
     next_last_visible_cursor: Option<(u16, u16)>,
     next_last_cursor_shape: u8,
 }
@@ -90,7 +88,13 @@ impl BlitEncoder {
         let full = repaint
             || prev.is_none()
             || prev.is_some_and(|p| p.width != frame.width || p.height != frame.height);
-        let clear_before_full_redraw = previous_frame.is_none();
+        // Clear before the first frame and after a size change: a full redraw
+        // only writes the new frame's cells, and some terminals (Terminal.app)
+        // keep text pushed past the right edge by a narrower window and show it
+        // again later. A same-size forced repaint overwrites every visible cell
+        // without the flash of a clear.
+        let clear_before_full_redraw =
+            previous_frame.is_none_or(|p| p.width != frame.width || p.height != frame.height);
         let prof_stats =
             crate::render_prof::enabled().then(|| compute_prof_blit_stats(frame, prev, full));
         let prof_started = crate::render_prof::timer();
@@ -121,20 +125,31 @@ impl BlitEncoder {
         }
         EncodedBlit {
             bytes,
-            full,
             next_last_visible_cursor,
             next_last_cursor_shape,
         }
+    }
+
+    /// Whether encoding `frame` next clears the screen first: the first frame
+    /// and any size change do.
+    pub(crate) fn clears_before(&self, frame: &FrameData) -> bool {
+        self.last_frame
+            .as_ref()
+            .is_none_or(|last| last.width != frame.width || last.height != frame.height)
+    }
+
+    /// Forgets the presented frame, so the next one clears the screen and
+    /// redraws every cell. A host resize can leave cells the encoder never
+    /// drew (Terminal.app keeps text beyond a narrowed edge), even when the
+    /// window ends up the size of the last frame.
+    pub(crate) fn invalidate(&mut self) {
+        self.last_frame = None;
     }
 
     pub(crate) fn commit(&mut self, frame: FrameData, encoded: EncodedBlit) {
         self.last_visible_cursor = encoded.next_last_visible_cursor;
         self.last_cursor_shape = encoded.next_last_cursor_shape;
         self.last_frame = Some(frame);
-    }
-
-    pub(crate) fn is_current(&self, frame: &FrameData) -> bool {
-        self.last_frame.as_ref() == Some(frame)
     }
 
     pub(crate) fn encode_patch(
@@ -162,7 +177,6 @@ impl BlitEncoder {
         );
         Some(EncodedBlit {
             bytes,
-            full: false,
             next_last_visible_cursor,
             next_last_cursor_shape,
         })
@@ -268,14 +282,6 @@ fn compute_prof_blit_stats(
             changed_runs: changed_cells,
         };
     };
-    if prev.width != frame.width || prev.height != frame.height {
-        let changed_cells = frame.cells.iter().filter(|cell| !cell.skip).count() as u64;
-        return ProfBlitStats {
-            scanned_cells: frame.cells.len() as u64,
-            changed_cells,
-            changed_runs: changed_cells,
-        };
-    }
 
     let sanitized_hyperlinks = sanitized_frame_hyperlinks(frame);
     let prev_sanitized_hyperlinks = sanitized_frame_hyperlinks(prev);
@@ -1718,19 +1724,97 @@ mod tests {
     }
 
     #[test]
-    fn encoder_size_change_repaints_without_clearing() {
-        let prev = make_frame(2, 2, vec![make_cell("A", 0, 0, 0); 4]);
-        let curr = make_frame(3, 2, vec![make_cell("B", 0, 0, 0); 6]);
+    fn encoder_size_change_clears_cells_outside_the_new_frame() {
+        let prev = make_frame(3, 2, vec![make_cell("A", 0, 0, 0); 6]);
+        let curr = make_frame(2, 2, vec![make_cell("B", 0, 0, 0); 4]);
         let mut encoder = BlitEncoder::new();
+        let mut terminal = crate::ghostty::Terminal::new(3, 2, 0).unwrap();
         let initial = encoder.encode(&prev, false);
+        terminal.write(&initial.bytes);
         encoder.commit(prev, initial);
 
+        // The host grid is still three columns wide; the frame is two.
         let encoded = encoder.encode(&curr, false);
-        assert!(encoded.full);
+        terminal.write(&encoded.bytes);
         let output = String::from_utf8(encoded.bytes).unwrap();
+        assert!(output.contains("\x1b[2J"));
+        assert!(output.bytes().filter(|byte| *byte == b'B').count() >= 4);
+        for row in 0..2 {
+            let (_, graphemes) = terminal.screen_cell(2, row).unwrap();
+            assert!(
+                graphemes.iter().all(|code| *code == u32::from(' ')),
+                "row {row} keeps a cell from the wider frame: {graphemes:?}"
+            );
+        }
+    }
 
-        assert!(!output.contains("\x1b[2J"));
-        assert!(output.bytes().filter(|byte| *byte == b'B').count() >= 6);
+    /// Replays a host terminal that, like Terminal.app, keeps cells beyond a
+    /// narrowed window: the emulator grid stays at the widest size, and text
+    /// the host revealed is written into it directly.
+    fn host_text(terminal: &crate::ghostty::Terminal, width: u16, rows: u32) -> Vec<String> {
+        (0..rows)
+            .map(|row| {
+                (0..width)
+                    .map(|col| {
+                        let (_, graphemes) = terminal.screen_cell(col, row).unwrap();
+                        graphemes
+                            .first()
+                            .and_then(|code| char::from_u32(*code))
+                            .unwrap_or(' ')
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn present_resized(
+        encoder: &mut BlitEncoder,
+        terminal: &mut crate::ghostty::Terminal,
+        frame: FrameData,
+    ) {
+        // What the client does for every resize event.
+        encoder.invalidate();
+        let encoded = encoder.encode(&frame, true);
+        assert!(String::from_utf8_lossy(&encoded.bytes).contains("\x1b[2J"));
+        terminal.write(&encoded.bytes);
+        encoder.commit(frame, encoded);
+    }
+
+    #[test]
+    fn every_resize_clears_cells_the_host_kept_beyond_the_frame() {
+        let mut encoder = BlitEncoder::new();
+        let mut terminal = crate::ghostty::Terminal::new(6, 2, 0).unwrap();
+        let wide = make_frame(6, 2, vec![make_cell("W", 0, 0, 0); 12]);
+        let initial = encoder.encode(&wide, false);
+        terminal.write(&initial.bytes);
+        encoder.commit(wide, initial);
+
+        // Wider, then narrower: the wide frame's right cells must go.
+        present_resized(
+            &mut encoder,
+            &mut terminal,
+            make_frame(4, 2, vec![make_cell("n", 0, 0, 0); 8]),
+        );
+        assert_eq!(host_text(&terminal, 6, 2), ["nnnn  ", "nnnn  "]);
+
+        // Narrower, then wider: the host reveals old text it kept at the
+        // right edge; the wider frame covers it.
+        terminal.write(b"\x1b[1;5Hru\x1b[2;5Hfi");
+        present_resized(
+            &mut encoder,
+            &mut terminal,
+            make_frame(6, 2, vec![make_cell(" ", 0, 0, 0); 12]),
+        );
+        assert_eq!(host_text(&terminal, 6, 2), ["      ", "      "]);
+
+        // A drag that ends at the frame's own size still clears.
+        terminal.write(b"\x1b[1;5Hll\x1b[2;5Hom");
+        present_resized(
+            &mut encoder,
+            &mut terminal,
+            make_frame(6, 2, vec![make_cell(" ", 0, 0, 0); 12]),
+        );
+        assert_eq!(host_text(&terminal, 6, 2), ["      ", "      "]);
     }
 
     #[test]
@@ -1741,7 +1825,6 @@ mod tests {
         encoder.commit(frame.clone(), initial);
 
         let encoded = encoder.encode(&frame, true);
-        assert!(encoded.full);
         let output = String::from_utf8(encoded.bytes).unwrap();
 
         assert!(!output.contains("\x1b[2J"));
@@ -1794,7 +1877,7 @@ mod tests {
             .expect("valid retained patch");
         assert_eq!(patch.bytes, full_diff.bytes);
         assert!(encoder.commit_patch(&rows, cursor, patch));
-        assert!(encoder.is_current(&expected));
+        assert_eq!(encoder.last_frame.as_ref(), Some(&expected));
     }
 
     #[test]
@@ -1908,7 +1991,7 @@ mod tests {
             .expect("valid drawn cursor patch");
         assert_eq!(patch.bytes, full_diff.bytes);
         assert!(encoder.commit_patch(&drawn_rows, cursor, patch));
-        assert!(encoder.is_current(&expected));
+        assert_eq!(encoder.last_frame.as_ref(), Some(&expected));
     }
 
     #[test]

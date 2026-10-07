@@ -6,7 +6,3 @@ pub(crate) fn command(program: impl AsRef<OsStr>) -> Command {
     crate::platform::configure_background_command(&mut command);
     command
 }
-
-pub(crate) fn curl_command() -> Command {
-    command("curl")
-}

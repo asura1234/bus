@@ -128,14 +128,6 @@ impl Drop for EnvVarsRemovedGuard {
 }
 
 #[test]
-fn remote_client_uses_extended_handshake_timeout() {
-    let _guard = env_lock().lock().unwrap();
-    let _remote = EnvVarGuard::set(crate::remote::REMOTE_KEYBINDINGS_ENV_VAR, "local");
-
-    assert_eq!(handshake_read_timeout(), REMOTE_HANDSHAKE_READ_TIMEOUT);
-}
-
-#[test]
 fn host_cursor_policy_auto_uses_platform_default() {
     assert_eq!(
         should_draw_host_cursor(crate::config::HostCursorModeConfig::Auto),
@@ -154,148 +146,6 @@ fn host_cursor_policy_native_and_drawn_override_auto_detection() {
     assert!(should_draw_host_cursor(
         crate::config::HostCursorModeConfig::Drawn
     ));
-}
-
-#[test]
-fn image_bridge_follows_the_selected_remote_endpoint() {
-    let remote = crate::client::endpoint::ClientEndpointId::Ssh(
-        crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
-    );
-
-    assert!(endpoint_accepts_local_images(false, &remote, true));
-    assert!(endpoint_accepts_local_images(
-        true,
-        &crate::client::endpoint::ClientEndpointId::Local,
-        true,
-    ));
-    assert!(!endpoint_accepts_local_images(
-        false,
-        &crate::client::endpoint::ClientEndpointId::Local,
-        true,
-    ));
-    assert!(!endpoint_accepts_local_images(false, &remote, false));
-}
-
-#[cfg(unix)]
-#[test]
-fn clipboard_image_paste_bridge_triggers_on_configured_key_and_empty_paste() {
-    let ctrl_v = crate::config::parse_key_combo("ctrl+v").unwrap();
-    assert!(should_bridge_clipboard_image_paste(
-        &[0x16],
-        true,
-        Some(ctrl_v)
-    ));
-    assert!(should_bridge_clipboard_image_paste(
-        b"\x1b[118;5u",
-        true,
-        Some(ctrl_v)
-    ));
-    assert!(should_bridge_clipboard_image_paste(
-        b"\x1b[200~\x1b[201~",
-        true,
-        None
-    ));
-    assert!(!should_bridge_clipboard_image_paste(
-        b"\x1b[200~\x1b[201~",
-        false,
-        Some(ctrl_v)
-    ));
-    assert!(!should_bridge_clipboard_image_paste(
-        &[0x16],
-        false,
-        Some(ctrl_v)
-    ));
-    assert!(!should_bridge_clipboard_image_paste(
-        b"\x1b[200~text\x1b[201~",
-        true,
-        Some(ctrl_v)
-    ));
-    assert!(!should_bridge_clipboard_image_paste(&[0x16], true, None));
-    assert!(!should_bridge_clipboard_image_paste(
-        b"v",
-        true,
-        Some(ctrl_v)
-    ));
-}
-
-struct TempImageFile {
-    path: std::path::PathBuf,
-}
-
-impl TempImageFile {
-    fn new(extension: &str, bytes: &[u8]) -> Self {
-        Self::with_name_fragment("test", extension, bytes)
-    }
-
-    fn with_name_fragment(name_fragment: &str, extension: &str, bytes: &[u8]) -> Self {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "herdr-client-drop-{name_fragment}-{}-{nanos}.{extension}",
-            std::process::id()
-        ));
-        std::fs::write(&path, bytes).unwrap();
-        Self { path }
-    }
-}
-
-impl Drop for TempImageFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-#[cfg(unix)]
-#[test]
-fn remote_image_file_drop_bridge_reads_bracketed_absolute_image_path() {
-    let file = TempImageFile::new("PNG", b"image-bytes");
-    let input = format!("\x1b[200~{}\x1b[201~", file.path.display());
-
-    let image = read_image_file_from_terminal_drop(input.as_bytes(), true).unwrap();
-
-    assert_eq!(image.extension, "png");
-    assert_eq!(image.bytes, b"image-bytes");
-}
-
-#[cfg(unix)]
-#[test]
-fn remote_image_file_drop_bridge_reads_plain_quoted_path_with_newline() {
-    let file = TempImageFile::new("jpeg", b"jpeg-bytes");
-    let input = format!("'{}'\n", file.path.display());
-
-    let image = read_image_file_from_terminal_drop(input.as_bytes(), true).unwrap();
-
-    assert_eq!(image.extension, "jpg");
-    assert_eq!(image.bytes, b"jpeg-bytes");
-}
-
-#[cfg(unix)]
-#[test]
-fn remote_image_file_drop_bridge_unescapes_spaces_in_paths() {
-    let file = TempImageFile::with_name_fragment("space test", "png", b"image-bytes");
-    let escaped_path = file.path.display().to_string().replace(' ', "\\ ");
-
-    let image = read_image_file_from_terminal_drop(escaped_path.as_bytes(), true).unwrap();
-
-    assert_eq!(image.extension, "png");
-    assert_eq!(image.bytes, b"image-bytes");
-}
-
-#[cfg(unix)]
-#[test]
-fn remote_image_file_drop_bridge_ignores_non_remote_and_non_image_input() {
-    let file = TempImageFile::new("png", b"image-bytes");
-    let path = file.path.display().to_string();
-
-    assert!(read_image_file_from_terminal_drop(path.as_bytes(), false).is_none());
-    assert!(read_image_file_from_terminal_drop(b"relative.png\n", true).is_none());
-    assert!(read_image_file_from_terminal_drop(b"/tmp/file.txt\n", true).is_none());
-    assert!(read_image_file_from_terminal_drop(
-        format!("{}\nextra", file.path.display()).as_bytes(),
-        true
-    )
-    .is_none());
 }
 
 #[test]
@@ -397,15 +247,6 @@ fn write_host_color_scheme_report_mode_emits_mode_sequences() {
 }
 
 #[test]
-fn color_scheme_change_event_requests_host_theme_query() {
-    let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[?997;1n");
-
-    assert!(crate::raw_input::events_require_host_terminal_theme_query(
-        &events
-    ));
-}
-
-#[test]
 fn host_terminal_theme_query_is_disabled_on_windows() {
     assert_eq!(should_query_host_terminal_theme(), !cfg!(windows));
 }
@@ -451,12 +292,8 @@ fn reported_cell_size_is_taken_from_host_cell_size_events() {
 }
 
 #[test]
-fn color_scheme_reports_are_enabled_only_for_full_clients() {
-    assert_eq!(
-        should_enable_host_color_scheme_reports(true),
-        !cfg!(windows)
-    );
-    assert!(!should_enable_host_color_scheme_reports(false));
+fn color_scheme_reports_follow_the_host_theme_query() {
+    assert_eq!(should_enable_host_color_scheme_reports(), !cfg!(windows));
 }
 
 #[test]
@@ -467,10 +304,7 @@ fn terminal_restore_postlude_restores_visible_default_cursor() {
 }
 
 #[test]
-fn direct_attach_mouse_capture_combines_local_preference_with_child_demand() {
-    assert!(effective_mouse_capture(false, true));
-    assert!(effective_mouse_capture(true, false));
-    assert!(!effective_mouse_capture(false, false));
+fn sgr_pixel_mouse_requires_exact_geometry() {
     assert!(effective_sgr_pixel_mouse(true, true, true));
     assert!(!effective_sgr_pixel_mouse(true, true, false));
 }
@@ -543,59 +377,21 @@ fn client_error_display_server_shutdown_no_reason() {
 }
 
 #[test]
-fn client_error_display_detached_default_session_reattach_hint() {
+fn client_error_display_detached_suggests_the_bus_reattach_command() {
     let _guard = env_lock().lock().unwrap();
-    let _env = EnvVarsRemovedGuard::new(&[
-        crate::remote::REATTACH_COMMAND_ENV_VAR,
-        crate::session::SESSION_ENV_VAR,
-    ]);
     let err = ClientError::ServerShutdown {
         reason: Some("detached".into()),
     };
+    // The `bus resume ID` form is covered in session tests without touching
+    // BUS_SESSION_ID, which Bus settings tests read concurrently.
+    let _env = EnvVarsRemovedGuard::new(&["BUS_SESSION_ID"]);
     let msg = err.to_string();
-    assert!(
-        msg.contains("Run `herdr` to reattach"),
-        "should suggest default reattach command: {msg}"
-    );
-}
-
-#[test]
-fn client_error_display_detached_named_session_reattach_hint() {
-    let _guard = env_lock().lock().unwrap();
-    let _remote_env = EnvVarsRemovedGuard::new(&[crate::remote::REATTACH_COMMAND_ENV_VAR]);
-    let _session_env = EnvVarGuard::set(crate::session::SESSION_ENV_VAR, "work");
-    let err = ClientError::ServerShutdown {
-        reason: Some("detached".into()),
-    };
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Run `herdr session attach work` to reattach"),
-        "should suggest named session reattach command: {msg}"
-    );
-}
-
-#[test]
-fn client_error_display_detached_remote_reattach_hint_takes_precedence() {
-    let _guard = env_lock().lock().unwrap();
-    let _remote_env = EnvVarGuard::set(
-        crate::remote::REATTACH_COMMAND_ENV_VAR,
-        "herdr --remote host --session work",
-    );
-    let _session_env = EnvVarGuard::set(crate::session::SESSION_ENV_VAR, "work");
-    let err = ClientError::ServerShutdown {
-        reason: Some("detached".into()),
-    };
-    let msg = err.to_string();
-    assert!(
-        msg.contains("Run `herdr --remote host --session work` to reattach"),
-        "should prefer remote reattach command: {msg}"
-    );
+    assert!(msg.contains("Run `bus` to reattach"), "{msg}");
 }
 
 #[test]
 fn client_error_display_connection_lost() {
     let _guard = env_lock().lock().unwrap();
-    let _env = EnvVarsRemovedGuard::new(&[crate::remote::REATTACH_COMMAND_ENV_VAR]);
     let err = ClientError::ConnectionLost(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
     let msg = err.to_string();
     assert!(
@@ -605,52 +401,10 @@ fn client_error_display_connection_lost() {
 }
 
 #[test]
-fn client_error_display_remote_connection_lost_has_reattach_hint() {
-    let _guard = env_lock().lock().unwrap();
-    let _remote_env = EnvVarGuard::set(
-        crate::remote::REATTACH_COMMAND_ENV_VAR,
-        "herdr --remote host --session work",
-    );
-    let err = ClientError::ConnectionLost(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
-    let msg = err.to_string();
-    assert!(
-        msg.contains("lost connection to remote Herdr"),
-        "should mention remote connection loss: {msg}"
-    );
-    assert!(
-        msg.contains("panes may still be running"),
-        "should explain possible persistence: {msg}"
-    );
-    assert!(
-        msg.contains("Run `herdr --remote host --session work` to reattach"),
-        "should show remote reattach command: {msg}"
-    );
-}
-
-#[test]
-fn sound_from_notify_message_maps_done() {
-    assert_eq!(
-        sound_from_notify_message("agent done"),
-        Some(crate::sound::Sound::Done)
-    );
-}
-
-#[test]
-fn sound_from_notify_message_maps_attention() {
-    assert_eq!(
-        sound_from_notify_message("agent attention"),
-        Some(crate::sound::Sound::Request)
-    );
-}
-
-#[test]
-fn sound_from_notify_message_rejects_unknown_payloads() {
-    assert_eq!(sound_from_notify_message("toast"), None);
-}
-
-#[test]
 fn reload_local_client_config_refreshes_local_client_presentation_state() {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    // BUS_DATA_DIR outranks HERDR_CONFIG_PATH, and agents run inside Bus inherit it.
+    let _bus = EnvVarsRemovedGuard::new(&["BUS_DATA_DIR"]);
     let path = std::env::temp_dir().join(format!(
         "herdr-client-config-reload-{}-{}.toml",
         std::process::id(),
@@ -669,14 +423,12 @@ fn reload_local_client_config_refreshes_local_client_presentation_state() {
     let mut sound_config = crate::config::SoundConfig::default();
     let mut redraw_on_focus_gained = true;
     let mut draw_host_cursor = false;
-    let mut remote_image_paste_key = None;
     let mut mouse_capture = true;
 
     reload_local_client_config(
         &mut sound_config,
         &mut redraw_on_focus_gained,
         &mut draw_host_cursor,
-        &mut remote_image_paste_key,
         &mut mouse_capture,
     );
 
@@ -689,6 +441,8 @@ fn reload_local_client_config_refreshes_local_client_presentation_state() {
 #[test]
 fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    // BUS_DATA_DIR outranks HERDR_CONFIG_PATH, and agents run inside Bus inherit it.
+    let _bus = EnvVarsRemovedGuard::new(&["BUS_DATA_DIR"]);
     let path = std::env::temp_dir().join(format!(
         "herdr-client-invalid-ui-reload-{}-{}.toml",
         std::process::id(),
@@ -703,14 +457,12 @@ fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
     let mut sound_config = crate::config::SoundConfig::default();
     let mut redraw_on_focus_gained = false;
     let mut draw_host_cursor = true;
-    let mut remote_image_paste_key = None;
     let mut mouse_capture = false;
 
     reload_local_client_config(
         &mut sound_config,
         &mut redraw_on_focus_gained,
         &mut draw_host_cursor,
-        &mut remote_image_paste_key,
         &mut mouse_capture,
     );
 
@@ -721,15 +473,25 @@ fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
 }
 
 #[test]
+fn pane_bells_reach_the_host_terminal_only_without_bus() {
+    let mut plain = Vec::new();
+    forward_terminal_bells(&mut plain, 2, false).unwrap();
+    assert_eq!(plain, b"\x07\x07");
+
+    // Bus rooms' sound settings are the only source of Bus sounds.
+    let mut bus = Vec::new();
+    forward_terminal_bells(&mut bus, 2, true).unwrap();
+    assert!(bus.is_empty());
+}
+
+#[test]
 fn toast_notify_from_server_is_emitted_even_when_attach_config_was_off() {
-    let sound_config = crate::config::SoundConfig::default();
     let mut emitted = None;
 
     handle_notify_with_notifiers(
         NotifyKind::Toast,
         "pi finished",
         Some("workspace 1"),
-        &sound_config,
         |title, body| {
             emitted = Some((title.to_string(), body.map(str::to_string)));
             Ok(true)
@@ -745,14 +507,12 @@ fn toast_notify_from_server_is_emitted_even_when_attach_config_was_off() {
 
 #[test]
 fn system_toast_notify_from_server_uses_system_notifier() {
-    let sound_config = crate::config::SoundConfig::default();
     let mut emitted = None;
 
     handle_notify_with_notifiers(
         NotifyKind::SystemToast,
         "pi finished",
         Some("workspace 1"),
-        &sound_config,
         |_, _| Ok(false),
         |title, body| {
             emitted = Some((title.to_string(), body.map(str::to_string)));
@@ -768,14 +528,12 @@ fn system_toast_notify_from_server_uses_system_notifier() {
 
 #[test]
 fn system_toast_notify_preserves_colon_in_title() {
-    let sound_config = crate::config::SoundConfig::default();
     let mut emitted = None;
 
     handle_notify_with_notifiers(
         NotifyKind::SystemToast,
         "build: failed",
         Some("api workspace"),
-        &sound_config,
         |_, _| Ok(false),
         |title, body| {
             emitted = Some((title.to_string(), body.map(str::to_string)));
@@ -808,69 +566,6 @@ fn ioctl_cell_size_accepts_fractional_terminal_geometry() {
 #[test]
 fn decode_clipboard_payload_rejects_invalid_base64() {
     assert_eq!(decode_clipboard_payload("not-base64!!!"), None);
-}
-
-#[test]
-fn terminal_control_input_command_accepts_text() {
-    let action =
-        terminal_control_command_from_json(r#"{"type":"terminal.input","text":"hello"}"#).unwrap();
-    let ClientMessage::Input { data } = action else {
-        panic!("expected input command");
-    };
-    assert_eq!(data, b"hello");
-}
-
-#[test]
-fn terminal_control_input_command_accepts_base64_bytes() {
-    let action =
-        terminal_control_command_from_json(r#"{"type":"terminal.input","bytes":"G1tB"}"#).unwrap();
-    let ClientMessage::Input { data } = action else {
-        panic!("expected input command");
-    };
-    assert_eq!(data, b"\x1b[A");
-}
-
-#[test]
-fn terminal_control_resize_command_maps_to_client_resize() {
-    let action = terminal_control_command_from_json(
-        r#"{"type":"terminal.resize","cols":100,"rows":30,"cell_width_px":8,"cell_height_px":16}"#,
-    )
-    .unwrap();
-    let ClientMessage::Resize {
-        cols,
-        rows,
-        cell_width_px,
-        cell_height_px,
-        pixel_mouse,
-    } = action
-    else {
-        panic!("expected resize command");
-    };
-    assert_eq!(
-        (cols, rows, cell_width_px, cell_height_px),
-        (100, 30, 8, 16)
-    );
-    assert!(!pixel_mouse);
-}
-
-#[test]
-fn terminal_control_scroll_command_maps_to_attach_scroll() {
-    let action = terminal_control_command_from_json(
-        r#"{"type":"terminal.scroll","direction":"up","lines":3}"#,
-    )
-    .unwrap();
-    let ClientMessage::AttachScroll {
-        source,
-        direction,
-        lines,
-        ..
-    } = action
-    else {
-        panic!("expected scroll command");
-    };
-    assert_eq!(source, AttachScrollSource::Wheel);
-    assert_eq!(direction, AttachScrollDirection::Up);
-    assert_eq!(lines, 3);
 }
 
 #[test]

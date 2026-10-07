@@ -19,32 +19,14 @@ use crate::terminal_theme::{
 };
 
 const ESC: u8 = 0x1b;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub(crate) const RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS: i32 = 10;
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 pub(crate) const MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS: i32 = 150;
 pub(crate) const GHOSTTY_COLOR_SCHEME_DARK_REPORT: &[u8] = b"\x1b[?997;1n";
 pub(crate) const GHOSTTY_COLOR_SCHEME_LIGHT_REPORT: &[u8] = b"\x1b[?997;2n";
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
-
-/// Returns the UTF-8 payload when `data` is exactly one complete bracketed paste.
-pub(crate) fn complete_text_bracketed_paste(data: &[u8]) -> Option<&str> {
-    if !data.starts_with(BRACKETED_PASTE_START) {
-        return None;
-    }
-    let end = find_subsequence(data, BRACKETED_PASTE_END)?;
-    if end + BRACKETED_PASTE_END.len() != data.len() {
-        return None;
-    }
-    std::str::from_utf8(&data[BRACKETED_PASTE_START.len()..end]).ok()
-}
-
-/// Client transport uses this to distinguish recoverable oversized interactive
-/// pastes from generic oversized input, which remains a protocol violation.
-pub(crate) fn is_complete_text_bracketed_paste(data: &[u8]) -> bool {
-    complete_text_bracketed_paste(data).is_some()
-}
 
 #[derive(Debug)]
 pub enum RawInputEvent {
@@ -202,18 +184,17 @@ impl RawInputByteFramer {
         !self.buffer.is_empty()
     }
 
-    #[cfg(any(not(windows), test))]
+    #[cfg(unix)]
     pub(crate) fn has_pending_lone_escape(&self) -> bool {
         self.buffer.as_slice() == [ESC]
     }
 
-    #[cfg(any(unix, test))]
+    #[cfg(unix)]
     pub(crate) fn has_pending_incomplete_mouse_sequence(&self) -> bool {
         starts_with_incomplete_sgr_mouse_sequence(&self.buffer)
             || starts_with_incomplete_default_mouse_sequence(&self.buffer)
     }
 
-    #[cfg(any(windows, test))]
     pub(crate) fn has_pending_bracketed_paste(&self) -> bool {
         self.buffer.starts_with(BRACKETED_PASTE_START)
             && find_subsequence(&self.buffer, BRACKETED_PASTE_END).is_none()
@@ -223,18 +204,19 @@ impl RawInputByteFramer {
         let mut chunks = self.drain_available_chunks();
 
         if let Some(family) = self.discard_until {
-            if family == ControlStringFamily::HostReplyCsi {
-                return chunks;
-            }
-            if family == ControlStringFamily::OrphanedSgrMouseTail {
-                self.buffer.clear();
-                self.discard_until = None;
-                self.discarded_tail_bytes = 0;
-                return chunks;
-            }
-
             let keep_split_st = self.buffer.last() == Some(&ESC);
-            let keep_discarding = plausible_control_string_tail(family, &self.buffer);
+            let keep_discarding = match family {
+                ControlStringFamily::HostReplyCsi => return chunks,
+                ControlStringFamily::OrphanedSgrMouseTail => {
+                    self.buffer.clear();
+                    self.discard_until = None;
+                    self.discarded_tail_bytes = 0;
+                    return chunks;
+                }
+                ControlStringFamily::Osc => plausible_osc_tail(&self.buffer),
+                ControlStringFamily::StTerminated => keep_split_st,
+            };
+
             self.discarded_tail_bytes = self.discarded_tail_bytes.saturating_add(self.buffer.len());
             self.buffer.clear();
             if keep_discarding && self.discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES {
@@ -278,9 +260,7 @@ impl RawInputByteFramer {
             return chunks;
         }
 
-        if self.buffer.starts_with(BRACKETED_PASTE_START)
-            && find_subsequence(&self.buffer, BRACKETED_PASTE_END).is_none()
-        {
+        if self.has_pending_bracketed_paste() {
             tracing::trace!(
                 len = self.buffer.len(),
                 "waiting for bracketed paste terminator"
@@ -488,60 +468,28 @@ impl RawInputByteFramer {
 
 const MAX_DISCARDED_CONTROL_TAIL_BYTES: usize = 128;
 
-fn plausible_control_string_tail(family: ControlStringFamily, buffer: &[u8]) -> bool {
-    match family {
-        ControlStringFamily::Osc => buffer.iter().all(|byte| {
-            byte.is_ascii_digit()
-                || matches!(
-                    *byte,
-                    b';' | b':'
-                        | b'/'
-                        | b'#'
-                        | b'?'
-                        | b'.'
-                        | b'_'
-                        | b'-'
-                        | b'+'
-                        | b'r'
-                        | b'g'
-                        | b'b'
-                        | b'R'
-                        | b'G'
-                        | b'B'
-                        | ESC
-                )
-        }),
-        ControlStringFamily::StTerminated => buffer.last() == Some(&ESC),
-        ControlStringFamily::HostReplyCsi => false,
-        ControlStringFamily::OrphanedSgrMouseTail => buffer
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || matches!(*byte, b';' | b'M' | b'm')),
-    }
-}
-
-#[cfg(any(unix, test))]
-pub(crate) fn events_require_host_surface_redraw(
-    events: &[RawInputEvent],
-    redraw_on_focus_gained: bool,
-) -> bool {
-    redraw_on_focus_gained
-        && events
-            .iter()
-            .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
-}
-
-#[cfg(any(not(windows), test))]
-pub(crate) fn events_require_host_terminal_appearance_query(events: &[RawInputEvent]) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
-}
-
-#[cfg(any(not(windows), test))]
-pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent]) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event, RawInputEvent::HostColorSchemeChanged(_)))
+fn plausible_osc_tail(buffer: &[u8]) -> bool {
+    buffer.iter().all(|byte| {
+        byte.is_ascii_digit()
+            || matches!(
+                *byte,
+                b';' | b':'
+                    | b'/'
+                    | b'#'
+                    | b'?'
+                    | b'.'
+                    | b'_'
+                    | b'-'
+                    | b'+'
+                    | b'r'
+                    | b'g'
+                    | b'b'
+                    | b'R'
+                    | b'G'
+                    | b'B'
+                    | ESC
+            )
+    })
 }
 
 fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
@@ -615,8 +563,8 @@ fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
         return Some((RawInputEvent::Unsupported, seq_len));
     }
 
-    let consumed = first_complete_utf8_char_len(buffer)?;
-    let text = std::str::from_utf8(&buffer[..consumed]).ok()?;
+    let text = first_complete_utf8_char(buffer)?;
+    let consumed = text.len();
     let key = parse_terminal_key_sequence(text)?
         .with_text_commit()
         .with_vt_bytes(buffer[..consumed].to_vec());
@@ -631,15 +579,9 @@ enum ControlStringFamily {
     OrphanedSgrMouseTail,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ControlString {
-    Complete {
-        len: usize,
-        family: ControlStringFamily,
-    },
-    Incomplete {
-        family: ControlStringFamily,
-    },
+    Complete { len: usize },
+    Incomplete { family: ControlStringFamily },
 }
 
 fn parse_host_color_scheme_report(buffer: &[u8]) -> Option<HostAppearance> {
@@ -711,20 +653,19 @@ fn control_string(buffer: &[u8]) -> Option<ControlString> {
     };
 
     Some(match control_string_terminator_for_family(buffer, family) {
-        Some(len) => ControlString::Complete { len, family },
+        Some(len) => ControlString::Complete { len },
         None => ControlString::Incomplete { family },
     })
 }
 
-fn first_complete_utf8_char_len(buffer: &[u8]) -> Option<usize> {
+fn first_complete_utf8_char(buffer: &[u8]) -> Option<&str> {
     let width = utf8_char_width(*buffer.first()?)?;
 
     if buffer.len() < width {
         return None;
     }
 
-    std::str::from_utf8(&buffer[..width]).ok()?;
-    Some(width)
+    std::str::from_utf8(&buffer[..width]).ok()
 }
 
 fn starts_with_incomplete_utf8_char(buffer: &[u8]) -> bool {
@@ -788,7 +729,7 @@ fn complete_escape_sequence_len(buffer: &[u8]) -> Option<usize> {
 
     if let Some(control) = control_string(buffer) {
         return match control {
-            ControlString::Complete { len, .. } => Some(len),
+            ControlString::Complete { len } => Some(len),
             ControlString::Incomplete { .. } => None,
         };
     }
@@ -812,7 +753,7 @@ fn starts_with_incomplete_sgr_mouse_sequence(buffer: &[u8]) -> bool {
             .all(|byte| byte.is_ascii_digit() || *byte == b';')
 }
 
-#[cfg(any(unix, test))]
+#[cfg(unix)]
 fn starts_with_incomplete_default_mouse_sequence(buffer: &[u8]) -> bool {
     buffer.starts_with(b"\x1b[M") && buffer.len() < 6
 }
@@ -915,7 +856,7 @@ fn discard_orphaned_sgr_mouse_tail(buffer: &mut Vec<u8>, discarded_tail_bytes: &
 }
 
 fn osc_string_terminator(buffer: &[u8]) -> Option<usize> {
-    let st = find_subsequence(buffer, b"\x1b\\").map(|idx| idx + 2);
+    let st = st_string_terminator(buffer);
     let bel = buffer
         .iter()
         .position(|byte| *byte == b'\x07')
@@ -1137,22 +1078,6 @@ mod tests {
     }
 
     #[test]
-    fn complete_text_bracketed_paste_requires_one_exact_utf8_sequence() {
-        assert_eq!(
-            complete_text_bracketed_paste(b"\x1b[200~hello\x1b[201~"),
-            Some("hello")
-        );
-        assert!(!is_complete_text_bracketed_paste(b"\x1b[200~hello"));
-        assert!(!is_complete_text_bracketed_paste(
-            b"\x1b[200~hello\x1b[201~rest"
-        ));
-        assert!(!is_complete_text_bracketed_paste(
-            b"\x1b[200~one\x1b[201~\x1b[200~two\x1b[201~"
-        ));
-        assert!(!is_complete_text_bracketed_paste(b"\x1b[200~\xff\x1b[201~"));
-    }
-
-    #[test]
     fn parses_sgr_mouse() {
         let (RawInputEvent::Mouse(mouse), consumed) = extract_one_event(b"\x1b[<0;20;10M").unwrap()
         else {
@@ -1305,30 +1230,6 @@ mod tests {
     }
 
     #[test]
-    fn outer_focus_gained_requests_host_surface_redraw() {
-        let events = parse_raw_input_bytes_sync(b"\x1b[I");
-        assert!(events_require_host_surface_redraw(&events, true));
-        assert!(!events_require_host_surface_redraw(&events, false));
-
-        let events = parse_raw_input_bytes_sync(b"\x1b[O");
-        assert!(!events_require_host_surface_redraw(&events, true));
-    }
-
-    #[test]
-    fn outer_focus_gained_requests_host_appearance_query() {
-        let gained = parse_raw_input_bytes_sync(b"\x1b[I");
-        let lost = parse_raw_input_bytes_sync(b"\x1b[O");
-        let scheme_report = parse_raw_input_bytes_sync(b"\x1b[?997;1n");
-
-        assert!(events_require_host_terminal_appearance_query(&gained));
-        assert!(!events_require_host_terminal_appearance_query(&lost));
-        assert!(!events_require_host_terminal_appearance_query(
-            &scheme_report
-        ));
-        assert!(events_require_host_terminal_theme_query(&scheme_report));
-    }
-
-    #[test]
     fn parses_ghostty_color_scheme_reports() {
         for bytes in [
             GHOSTTY_COLOR_SCHEME_DARK_REPORT,
@@ -1340,7 +1241,6 @@ mod tests {
                 events[0],
                 RawInputEvent::HostColorSchemeChanged(HostAppearance::Dark | HostAppearance::Light)
             ));
-            assert!(events_require_host_terminal_theme_query(&events));
         }
     }
 
@@ -1354,7 +1254,6 @@ mod tests {
             let events = parse_raw_input_bytes_sync(bytes);
             assert_eq!(events.len(), 1, "bytes: {bytes:?}");
             assert!(matches!(events[0], RawInputEvent::Unsupported));
-            assert!(!events_require_host_terminal_theme_query(&events));
         }
     }
 
@@ -1536,20 +1435,6 @@ mod tests {
     }
 
     #[test]
-    fn flushes_lone_escape_after_timeout() {
-        let mut framer = RawInputFramer::default();
-        assert!(framer.push(&[ESC]).is_empty());
-
-        let events = framer.flush_timeout();
-        assert_eq!(events.len(), 1);
-        assert_raw_key(
-            events.into_iter().next().unwrap(),
-            KeyCode::Esc,
-            KeyModifiers::empty(),
-        );
-    }
-
-    #[test]
     fn parses_raw_ctrl_b() {
         let (RawInputEvent::Key(key), consumed) = extract_one_event(b"\x02").unwrap() else {
             panic!("expected key");
@@ -1606,9 +1491,6 @@ mod tests {
                     parse_fixture_modifiers(columns[4]),
                 );
             } else {
-                if columns.len() == 5 {
-                    columns.push("");
-                }
                 let (bytes_hex, code, modifiers) = match columns.len() {
                     6 => {
                         if columns[1].chars().all(|ch| ch.is_ascii_hexdigit()) {

@@ -23,7 +23,7 @@ pub(crate) fn resolve_new_terminal_cwd(
         NewTerminalCwdConfig::Current => {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
         }
-        NewTerminalCwdConfig::Path(path) => crate::worktree::expand_tilde_path(path),
+        NewTerminalCwdConfig::Path(path) => crate::home_path::expand_tilde_path(path),
     }
 }
 
@@ -327,7 +327,6 @@ impl App {
             && ws
                 .focused_pane_id()
                 .is_some_and(|focused| focused == pane_id);
-        let presentation = terminal.effective_presentation();
         Some(crate::api::schema::PaneInfo {
             pane_id: self.public_pane_id(ws_idx, pane_id)?,
             terminal_id: terminal.id.to_string(),
@@ -342,13 +341,13 @@ impl App {
                 .map(|cwd| cwd.display().to_string()),
             label: terminal.manual_label.clone(),
             agent: terminal.effective_agent_label().map(str::to_string),
-            title: presentation.title,
+            title: None,
             terminal_title: terminal.terminal_title.clone(),
             terminal_title_stripped: terminal.terminal_title_stripped(),
-            display_agent: presentation.display_agent,
+            display_agent: None,
             agent_status: pane_agent_status(terminal.state, pane.seen),
-            state_labels: presentation.state_labels,
-            tokens: terminal.metadata_tokens.values(),
+            state_labels: Default::default(),
+            tokens: Default::default(),
             agent_session: terminal_agent_session_info(terminal),
             scroll,
             revision: terminal.revision,
@@ -389,16 +388,7 @@ impl App {
                 crate::workspace::public_tab_id_for_number(&ws.id, ws.active_tab + 1)
             }),
             agent_status: pane_agent_status(agg_state, seen),
-            tokens: ws.metadata_tokens.values(),
-            worktree: ws
-                .worktree_space()
-                .map(|space| crate::api::schema::WorkspaceWorktreeInfo {
-                    repo_key: space.key.clone(),
-                    repo_name: space.label.clone(),
-                    repo_root: space.repo_root.display().to_string(),
-                    checkout_path: space.checkout_path.display().to_string(),
-                    is_linked_worktree: space.is_linked_worktree,
-                }),
+            tokens: Default::default(),
         }
     }
 }
@@ -406,17 +396,6 @@ impl App {
 fn terminal_agent_session_info(
     terminal: &crate::terminal::TerminalState,
 ) -> Option<crate::api::schema::AgentSessionInfo> {
-    if let Some(authority) = terminal.hook_authority.as_ref() {
-        if let Some(session_ref) = authority.session_ref.as_ref() {
-            return Some(crate::api::schema::AgentSessionInfo {
-                source: authority.source.clone(),
-                agent: authority.agent_label.clone(),
-                kind: session_ref.kind,
-                value: session_ref.value.clone(),
-            });
-        }
-    }
-
     terminal
         .persisted_agent_session
         .as_ref()

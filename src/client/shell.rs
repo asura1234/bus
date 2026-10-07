@@ -1,141 +1,60 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 mod actions;
-mod agent_sidebar;
-mod aggregate_navigation;
 mod bus;
 mod composition;
 mod config;
-mod context_menu;
-mod copy_mode;
 mod endpoint_agent_state;
-mod endpoint_agents;
-mod endpoint_navigation;
-mod endpoint_notices;
-mod endpoint_sidebar;
 mod endpoints;
-pub(super) use endpoints::*;
-mod global_menu;
 mod graphics;
 mod input;
-mod input_source;
-mod mobile;
 mod mouse;
-mod notification_policy;
-mod notifications;
-mod overlay_input;
-mod preferences;
 mod render;
-mod scroll;
-mod settings;
 mod state;
 mod surface_patch;
-mod worktrees;
 
-pub(in crate::client::shell) use render::sidebar;
 pub(crate) use state::*;
 #[cfg(test)]
 pub(super) use surface_patch::apply_composed_surface_patch;
 pub(super) use surface_patch::{ClientComposedSurfacePatch, ClientPaneSurfacePatchOutcome};
 
-use crossterm::event::KeyCode;
 #[cfg(test)]
 use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
-use unicode_width::UnicodeWidthStr;
+use ratatui::style::Style;
 
-use super::endpoint::{ClientEndpointId, ClientEndpointStatus, SavedSshEndpoint};
 use crate::app::state::Palette;
-use crate::config::{
-    Config, LiveKeybindConfig, SidebarCollapsedModeConfig, SpacesSidebarConfig,
-    TabBarPositionConfig,
-};
+use crate::config::Config;
 use crate::protocol::{
-    ClientMessage, ClientMousePosition, ClientPaneInputEvent, ClientShellSnapshot, ClientShellTab,
-    ClientShellWorkspace, ClientSurfaceSize, FrameData, PaneSurfaceFrame, SemanticNotification,
-    SemanticNotificationKind, SemanticNotificationSound,
+    ClientMessage, ClientMousePosition, ClientPaneInputEvent, ClientShellSnapshot,
+    ClientSurfaceSize, FrameData, PaneSurfaceFrame,
 };
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
-
-fn delete_overlay_word(rename: &mut ClientRenameOverlay) {
-    if rename.replace_on_type {
-        rename.input.clear();
-        rename.replace_on_type = false;
-        return;
-    }
-    while rename.input.chars().last().is_some_and(char::is_whitespace) {
-        rename.input.pop();
-    }
-    let Some(word) = rename
-        .input
-        .chars()
-        .last()
-        .map(|character| character.is_alphanumeric() || character == '_')
-    else {
-        return;
-    };
-    while rename.input.chars().last().is_some_and(|character| {
-        !character.is_whitespace() && (character.is_alphanumeric() || character == '_') == word
-    }) {
-        rename.input.pop();
-    }
-}
-
-fn target_event_message(target: ClientInputTarget, event: ClientPaneInputEvent) -> ClientMessage {
-    match target {
-        ClientInputTarget::Pane(pane_id) => ClientMessage::ClientShellPaneInput {
-            pane_id,
-            events: vec![event],
-        },
-        ClientInputTarget::Popup(terminal_id) => ClientMessage::ClientShellPopupInput {
-            terminal_id,
-            events: vec![event],
-        },
-    }
-}
+#[cfg(test)]
+use crossterm::event::KeyCode;
 
 fn push_target_event(
     target: ClientInputTarget,
     event: ClientPaneInputEvent,
     outcome: &mut ClientShellInput,
 ) {
-    match target {
-        ClientInputTarget::Pane(pane_id) => {
-            if let Some(ClientMessage::ClientShellPaneInput {
-                pane_id: pending_pane,
-                events,
-            }) = outcome.requests.last_mut()
-            {
-                if *pending_pane == pane_id {
-                    events.push(event);
-                    return;
-                }
-            }
-            outcome.requests.push(target_event_message(
-                ClientInputTarget::Pane(pane_id),
-                event,
-            ));
-        }
-        ClientInputTarget::Popup(terminal_id) => {
-            if let Some(ClientMessage::ClientShellPopupInput {
-                terminal_id: pending_terminal,
-                events,
-            }) = outcome.requests.last_mut()
-            {
-                if *pending_terminal == terminal_id {
-                    events.push(event);
-                    return;
-                }
-            }
-            outcome.requests.push(target_event_message(
-                ClientInputTarget::Popup(terminal_id),
-                event,
-            ));
+    let ClientInputTarget::Pane(pane_id) = target;
+    if let Some(ClientMessage::ClientShellPaneInput {
+        pane_id: pending_pane,
+        events,
+    }) = outcome.requests.last_mut()
+    {
+        if *pending_pane == pane_id {
+            events.push(event);
+            return;
         }
     }
+    outcome.requests.push(ClientMessage::ClientShellPaneInput {
+        pane_id,
+        events: vec![event],
+    });
 }
 
 fn contains(rect: Rect, point: (u16, u16)) -> bool {
@@ -192,77 +111,6 @@ fn pane_surface_topology_signature(surface: &PaneSurfaceFrame) -> u64 {
     hash
 }
 
-fn status_icon(
-    status: crate::api::schema::AgentStatus,
-    style: crate::config::StatusIndicatorStyle,
-) -> &'static str {
-    use crate::api::schema::AgentStatus;
-    use crate::config::StatusIndicatorStyle;
-    match (style, status) {
-        (
-            StatusIndicatorStyle::Dots,
-            AgentStatus::Working | AgentStatus::Blocked | AgentStatus::Done,
-        ) => "●",
-        (StatusIndicatorStyle::Dots, AgentStatus::Idle) => "○",
-        (StatusIndicatorStyle::Dots, AgentStatus::Unknown) => "·",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Blocked) => "×",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Working) => "◐",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Done) => "✓",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Idle) => "○",
-        (StatusIndicatorStyle::Symbols, AgentStatus::Unknown) => "·",
-    }
-}
-
-fn sidebar_agent_status_word(status: crate::api::schema::AgentStatus) -> Option<&'static str> {
-    use crate::api::schema::AgentStatus;
-
-    match status {
-        AgentStatus::Working => Some("Working"),
-        AgentStatus::Blocked => Some("Blocked"),
-        AgentStatus::Idle | AgentStatus::Done | AgentStatus::Unknown => None,
-    }
-}
-
-fn sidebar_agent_status_styles(
-    status: crate::api::schema::AgentStatus,
-    animation_phase: u8,
-    palette: &Palette,
-) -> Vec<Style> {
-    use crate::api::schema::AgentStatus;
-
-    let Some(word) = sidebar_agent_status_word(status) else {
-        return Vec::new();
-    };
-    let length = word.chars().count();
-    let wave_head = usize::from(animation_phase) % length;
-    word.chars()
-        .enumerate()
-        .map(|(index, _)| {
-            let modifier = match status {
-                AgentStatus::Working if index == wave_head => Modifier::BOLD,
-                AgentStatus::Working if index.abs_diff(wave_head) == 1 => Modifier::empty(),
-                AgentStatus::Working => Modifier::DIM,
-                AgentStatus::Blocked => match animation_phase % 6 {
-                    0 | 5 => Modifier::DIM,
-                    2 | 3 => Modifier::BOLD,
-                    _ => Modifier::empty(),
-                },
-                AgentStatus::Idle | AgentStatus::Done | AgentStatus::Unknown => Modifier::empty(),
-            };
-            let color = if status == AgentStatus::Working {
-                palette.green
-            } else {
-                palette.red
-            };
-            Style::default().fg(color).add_modifier(modifier)
-        })
-        .collect()
-}
-
-fn status_dot(status: crate::api::schema::AgentStatus) -> &'static str {
-    status_icon(status, crate::config::StatusIndicatorStyle::Dots)
-}
-
 fn status_priority(status: crate::api::schema::AgentStatus) -> u8 {
     use crate::api::schema::AgentStatus;
     match status {
@@ -271,38 +119,6 @@ fn status_priority(status: crate::api::schema::AgentStatus) -> u8 {
         AgentStatus::Working => 2,
         AgentStatus::Idle => 1,
         AgentStatus::Unknown => 0,
-    }
-}
-
-fn status_text(status: crate::api::schema::AgentStatus) -> &'static str {
-    use crate::api::schema::AgentStatus;
-    match status {
-        AgentStatus::Working => "working",
-        AgentStatus::Blocked => "blocked",
-        AgentStatus::Done => "done",
-        AgentStatus::Idle => "idle",
-        AgentStatus::Unknown => "unknown",
-    }
-}
-
-fn status_color(
-    status: crate::api::schema::AgentStatus,
-    palette: &Palette,
-) -> ratatui::style::Color {
-    use crate::api::schema::AgentStatus;
-    match status {
-        AgentStatus::Working => palette.yellow,
-        AgentStatus::Blocked => palette.red,
-        AgentStatus::Done => palette.teal,
-        AgentStatus::Idle => palette.green,
-        AgentStatus::Unknown => palette.overlay0,
-    }
-}
-
-fn panel_contrast_fg(palette: &Palette) -> ratatui::style::Color {
-    match palette.panel_bg {
-        ratatui::style::Color::Reset => palette.surface_dim,
-        color => color,
     }
 }
 

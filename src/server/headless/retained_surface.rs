@@ -159,9 +159,6 @@ fn retained_cursor(
 ) -> Option<protocol::CursorState> {
     let pane = panes.iter().find(|pane| pane.focused)?;
     let (workspace_index, pane_id) = app.parse_pane_id(&pane.pane_id)?;
-    if !app.state.pane_exposes_host_cursor(workspace_index, pane_id) {
-        return None;
-    }
     let runtime = app.state.runtime_for_pane_in_workspace(
         &app.terminal_runtimes,
         workspace_index,
@@ -236,7 +233,6 @@ impl HeadlessServer {
 
         if pty_sources.is_empty()
             || self.app.full_redraw_pending
-            || self.app.state.popup_pane.is_some()
             || self.app.state.reveal_hidden_cursor_for_cjk_ime
         {
             fallback!("unsafe_state");
@@ -275,7 +271,6 @@ impl HeadlessServer {
                 || surface.projection_revision != client.shell_projection_revision
                 || surface.frame.width != *cols
                 || surface.frame.height != *rows
-                || surface.popup.is_some()
                 || !surface.graphics.assets.is_empty()
                 || !surface.frame.graphics.is_empty()
             {
@@ -361,8 +356,7 @@ impl HeadlessServer {
             let mut changed_panes = Vec::with_capacity(collected.len());
             let mut patch_rows = Vec::new();
             let mut metadata_changed = false;
-            let mut refresh_graphics = !surface.graphics.placements.is_empty()
-                || !surface.graphics.retained_assets.is_empty();
+            let mut refresh_graphics = !surface.graphics.placements.is_empty();
             for collected_pane in &collected {
                 let Some(pane) = surface
                     .panes
@@ -433,7 +427,6 @@ impl HeadlessServer {
                         target,
                         client.cell_size,
                         &client.shell_graphics_delivery,
-                        client_id,
                     )
                 else {
                     fallback!("graphics_geometry");
@@ -480,11 +473,7 @@ impl HeadlessServer {
             let Some(client) = self.clients.get_mut(&client_id) else {
                 continue;
             };
-            let Some(writer) = client.writer.as_ref().cloned() else {
-                client.defer_full_render();
-                deferred += 1;
-                continue;
-            };
+            let writer = client.writer.clone();
             // The published row patch cannot carry images. Reuse the retained text/layout
             // in a graphics-capable surface message rather than invoking the full renderer.
             let prepared = if graphics_delivery.is_some() {

@@ -36,6 +36,13 @@ fn saved_history(ui: &mut BusUi, room: RoomId, agent: AgentId, count: usize) -> 
     requests
 }
 
+fn is_reply(line: &history::Line) -> bool {
+    matches!(
+        line.raw_markdown,
+        Some((history::MarkdownSource::Reply(_), _))
+    )
+}
+
 fn saved_exchange(
     ui: &mut BusUi,
     room: RoomId,
@@ -62,7 +69,7 @@ fn saved_exchange(
 }
 
 #[test]
-fn agent_reply_markdown_is_rendered_while_prompt_stays_literal() {
+fn prompt_and_agent_reply_markdown_are_rendered() {
     use ratatui::{buffer::Buffer, layout::Rect, style::Modifier};
 
     let (mut ui, room, agent) = fixture();
@@ -70,7 +77,7 @@ fn agent_reply_markdown_is_rendered_while_prompt_stays_literal() {
         &mut ui,
         room,
         agent,
-        "**literal prompt**",
+        "**rendered prompt**\nsecond `line`",
         "# Heading\n\n- **bold** and `code`",
     );
     ui.compute_view(100, 40);
@@ -80,12 +87,24 @@ fn agent_reply_markdown_is_rendered_while_prompt_stays_literal() {
         .map(|y| (0..100).map(|x| buffer[(x, y)].symbol()).collect())
         .collect();
 
+    assert!(!screen
+        .iter()
+        .any(|line| line.contains("**rendered prompt**")));
+    let prompt_row = screen
+        .iter()
+        .position(|line| line.contains("rendered prompt"))
+        .expect("rendered prompt");
     assert!(
-        screen
-            .iter()
-            .any(|line| line.contains("**literal prompt**")),
-        "user-authored prompts stay literal"
+        screen[prompt_row + 1].contains("second line"),
+        "a typed newline stays a line break: {:?}",
+        &screen[prompt_row..prompt_row + 2]
     );
+    let prompt_x = unicode_width::UnicodeWidthStr::width(
+        &screen[prompt_row][..screen[prompt_row].find("rendered prompt").unwrap()],
+    ) as u16;
+    assert!(buffer[(prompt_x, prompt_row as u16)]
+        .modifier
+        .contains(Modifier::BOLD));
     assert!(!screen.iter().any(|line| line.contains("# Heading")));
     assert!(!screen.iter().any(|line| line.contains("**bold**")));
     assert!(!screen.iter().any(|line| line.contains("`code`")));
@@ -187,8 +206,8 @@ fn selection_stopping_before_markdown_keeps_the_selected_line_end_in_both_direct
         .history
         .cached()
         .iter()
-        .position(|line| line.raw_markdown.is_some())
-        .expect("first Markdown row");
+        .position(is_reply)
+        .expect("first Markdown reply row");
     let prompt_start = selection::Point {
         line: prompt,
         offset: 0,
@@ -241,20 +260,34 @@ fn markdown_reply_rendering_is_reused_when_only_timestamp_age_changes() {
     let snapshot = Arc::clone(&ui.snapshot);
     let room = snapshot.state.room(room).expect("room");
 
-    ui.history
-        .lines(&snapshot.state, room, 80, snapshot.revision, 1_000);
+    ui.history.lines(
+        &snapshot.state,
+        room,
+        80,
+        snapshot.revision,
+        1_000,
+        &mut Default::default(),
+    );
     let first = ui
         .history
         .cached()
         .iter()
+        .filter(|line| is_reply(line))
         .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
         .expect("rendered reply source");
-    ui.history
-        .lines(&snapshot.state, room, 80, snapshot.revision, 61_000);
+    ui.history.lines(
+        &snapshot.state,
+        room,
+        80,
+        snapshot.revision,
+        61_000,
+        &mut Default::default(),
+    );
     let second = ui
         .history
         .cached()
         .iter()
+        .filter(|line| is_reply(line))
         .find_map(|line| line.raw_markdown.as_ref().map(|(_, raw)| Arc::clone(raw)))
         .expect("rendered reply source after timestamp refresh");
 
@@ -280,9 +313,16 @@ fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
     let room = snapshot.state.room(room).expect("room");
     let rendered: Vec<_> = ui
         .history
-        .lines(&snapshot.state, room, 12, snapshot.revision, 1_000)
+        .lines(
+            &snapshot.state,
+            room,
+            12,
+            snapshot.revision,
+            1_000,
+            &mut Default::default(),
+        )
         .iter()
-        .filter(|line| line.raw_markdown.is_some())
+        .filter(|line| is_reply(line))
         .collect();
     let text = rendered
         .iter()
@@ -361,6 +401,7 @@ fn pending_replies_reserve_indented_slots_in_recipient_order() {
         100,
         snapshot.revision,
         2_000,
+        &mut Default::default(),
     );
     assert!(lines[0].text.starts_with("You → cursor1, author, claude1"));
     let slot_headers = lines
@@ -464,6 +505,7 @@ fn late_replies_stay_with_their_prompt_and_never_reorder_recipient_slots() {
             100,
             snapshot.revision,
             6_000,
+            &mut Default::default(),
         )
         .iter()
         .map(|line| line.text.as_str())
@@ -837,4 +879,535 @@ fn history_recipient_colors_survive_wrapping_without_coloring_message_text() {
             .collect();
         assert_eq!(cells, expected, "rendered history colors at {cols} columns");
     }
+}
+
+fn exchange_with_files(ui: &mut BusUi, room: RoomId, agent: AgentId, files: &[std::path::PathBuf]) {
+    saved_exchange(ui, room, agent, "see attached", "ok");
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut json = serde_json::to_value(&snapshot.state).unwrap();
+    for (_, record) in json["requests"].as_object_mut().unwrap() {
+        record["prompt"]["files"] = serde_json::json!(files);
+    }
+    snapshot.state = serde_json::from_value(json).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+}
+
+fn thumbnail_dir(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "bus-history-thumbnails-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
+}
+
+fn png(dir: &std::path::Path, name: &str, size: (u32, u32)) -> std::path::PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(name);
+    image::RgbaImage::new(size.0, size.1).save(&path).unwrap();
+    path
+}
+
+const CELL: crate::kitty_graphics::HostCellSize = crate::kitty_graphics::HostCellSize {
+    width_px: 10,
+    height_px: 20,
+};
+
+#[test]
+fn image_attachments_draw_as_thumbnails_instead_of_their_name() {
+    let dir = thumbnail_dir("rows");
+    let image = png(&dir, "shot.png", (200, 80));
+    let notes = dir.join("notes.md");
+    std::fs::write(&notes, "# notes").unwrap();
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[image.clone(), notes]);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+
+    let lines = ui.history.cached();
+    assert!(
+        !lines.iter().any(|line| line.text == "[shot.png]"),
+        "the picture replaces the name placeholder"
+    );
+    let first = lines
+        .iter()
+        .position(|line| line.thumbnail.is_some())
+        .expect("thumbnail rows");
+    let thumbnail: Vec<_> = lines[first..first + 4]
+        .iter()
+        .filter_map(|line| line.thumbnail.as_ref())
+        .collect();
+    assert_eq!(thumbnail.len(), 4, "80 px tall in 20 px cells");
+    assert!(thumbnail
+        .iter()
+        .enumerate()
+        .all(|(row, slot)| slot.row == row as u16 && (slot.cols, slot.rows) == (20, 4)));
+    assert!(lines[first..first + 4]
+        .iter()
+        .all(|line| line.text.is_empty()
+            && line.action == Some(render::Action::FileDetail(image.clone()))));
+    assert!(lines.iter().any(|line| line.text == "[notes.md]"));
+    assert_eq!(
+        lines.iter().filter(|line| line.thumbnail.is_some()).count(),
+        4,
+        "non-image files get no thumbnail"
+    );
+
+    let text = ui.view.history_text;
+    assert_eq!(ui.view.thumbnails.len(), 1);
+    let placement = &ui.view.thumbnails[0];
+    assert_eq!(
+        (placement.x, placement.cols, placement.rows),
+        (text.x, 20, 4)
+    );
+    assert_eq!(placement.y, text.y + (first - ui.main_scroll) as u16);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn image_attachments_fall_back_to_their_name_without_kitty_or_the_file() {
+    let dir = thumbnail_dir("fallback");
+    let image = png(&dir, "shot.png", (200, 80));
+    let missing = dir.join("gone.jpg");
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[image, missing]);
+
+    ui.compute_view(100, 40);
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .all(|line| line.thumbnail.is_none()));
+    assert!(ui.view.thumbnails.is_empty());
+    assert!(ui
+        .history
+        .cached()
+        .iter()
+        .any(|line| line.text == "[shot.png]"));
+
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+    let lines = ui.history.cached();
+    assert!(lines.iter().any(|line| line.text == "[gone.jpg]"));
+    assert_eq!(
+        lines.iter().filter(|line| line.thumbnail.is_some()).count(),
+        4,
+        "only the readable image gets rows"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn thumbnails_show_only_when_wholly_visible_and_uncovered() {
+    let dir = thumbnail_dir("visible");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[image]);
+    saved_history(&mut ui, room, agent, 30);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.history_follow_tail = false;
+    ui.compute_view(100, 40);
+    assert_eq!(ui.view.thumbnails.len(), 1);
+
+    let first = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.thumbnail.is_some())
+        .unwrap();
+    // Scroll so the thumbnail's top row is just above the viewport.
+    ui.main_scroll = first + 1;
+    ui.compute_view(100, 40);
+    assert_eq!(ui.main_scroll, first + 1);
+    assert!(
+        ui.view.thumbnails.is_empty(),
+        "a partly scrolled thumbnail is not drawn"
+    );
+
+    ui.main_scroll = 0;
+    ui.form = Some(forms::Form::Help { scroll: 0 });
+    ui.compute_view(100, 40);
+    assert!(ui.view.thumbnails.is_empty(), "forms cover the history");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn recipient_picker_hides_history_thumbnails_that_cover_its_rows() {
+    let dir = thumbnail_dir("recipient-picker");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    for index in 0..10 {
+        snapshot
+            .state
+            .create_agent(
+                room,
+                &format!("reviewer-{index}"),
+                Provider::Codex,
+                "/project".into(),
+                None,
+            )
+            .unwrap();
+    }
+    ui.receive_snapshot(Arc::new(snapshot));
+    exchange_with_files(&mut ui, room, agent, &[image]);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 30);
+    assert_eq!(ui.view.thumbnails.len(), 1);
+    let original = ui.view.thumbnails[0].clone();
+    assert!(!ui.thumbnail_graphics().is_empty());
+
+    ui.action(render::Action::Recipients);
+    ui.compute_view(100, 30);
+    let original_rect =
+        ratatui::layout::Rect::new(original.x, original.y, original.cols, original.rows);
+    assert!(
+        ui.view
+            .hits
+            .iter()
+            .any(|hit| matches!(hit.action, render::Action::Recipient(_))
+                && hit.rect.intersects(original_rect)),
+        "the recipient picker must cover the prior thumbnail in this fixture"
+    );
+    let retained = ui.view.thumbnails.iter().any(|thumbnail| {
+        let rect =
+            ratatui::layout::Rect::new(thumbnail.x, thumbnail.y, thumbnail.cols, thumbnail.rows);
+        ui.view.hits.iter().any(|hit| {
+            matches!(hit.action, render::Action::Recipient(_)) && hit.rect.intersects(rect)
+        })
+    });
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        !retained,
+        "Kitty images draw over text and must not obscure recipient choices"
+    );
+}
+
+#[test]
+fn file_detail_popup_hides_history_thumbnails_it_covers() {
+    let dir = thumbnail_dir("detail-popup");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[image]);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 30);
+    assert_eq!(ui.view.thumbnails.len(), 1);
+
+    // A path long enough to wrap over every history row above the composer.
+    ui.detail_path = Some(format!("/{}", "deep/".repeat(200)));
+    ui.compute_view(100, 30);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        ui.view.thumbnails.is_empty(),
+        "the file detail popup covers the thumbnail rows"
+    );
+}
+
+#[test]
+fn a_steered_group_shows_its_messages_stacked_with_one_reply() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let mut ids = Vec::new();
+    for (text, at) in [
+        ("write the parser", 1_000),
+        ("use streaming instead", 2_000),
+    ] {
+        snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+        snapshot.state.set_draft_text(room, text).unwrap();
+        ids.push(snapshot.state.submit_draft(room, at).unwrap()[0]);
+    }
+    let mut json = serde_json::to_value(&snapshot.state).unwrap();
+    for id in &ids {
+        let record = &mut json["requests"][id.0.to_string()];
+        record["phase"] = "completed".into();
+        record["completed_at_ms"] = 3_000.into();
+        record["pending_final"] = serde_json::json!({
+            "callback_id": "final", "text": "streaming parser written",
+            "received_at_ms": 3_000, "provider_session_id": "s", "provider_turn_id": "t"
+        });
+    }
+    json["requests"][ids[1].0.to_string()]["group"] = ids[0].0.into();
+    json["requests"][ids[1].0.to_string()]["steered"] = true.into();
+    snapshot.state = serde_json::from_value(json).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+
+    let snapshot = ui.snapshot.clone();
+    let lines = ui.history.lines(
+        &snapshot.state,
+        snapshot.state.room(room).unwrap(),
+        100,
+        snapshot.revision,
+        4_000,
+        &mut Default::default(),
+    );
+    let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
+    let position = |needle: &str| texts.iter().position(|text| text.contains(needle));
+    assert_eq!(
+        texts
+            .iter()
+            .filter(|text| text.contains("streaming parser written"))
+            .count(),
+        1
+    );
+    assert!(position("write the parser") < position("use streaming instead"));
+    assert!(position("use streaming instead") < position("streaming parser written"));
+}
+
+#[test]
+fn option_enter_sends_the_draft_to_wait_for_each_agents_own_turn() {
+    let (mut ui, room, agent) = fixture();
+    ui.room = Some(room);
+    ui.receive_snapshot(ui.snapshot.clone());
+    let local = ui.locals.get_mut(&room).unwrap();
+    local.recipients.insert(agent);
+    local.text.insert("after you finish");
+    key(&mut ui, KeyCode::Enter, KeyModifiers::ALT);
+    ui.settle();
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::SubmitQueued(id) if id == room)));
+    assert!(!ui.send_queued);
+
+    let local = ui.locals.get_mut(&room).unwrap();
+    local.text.insert("now");
+    ui.pending.clear();
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    ui.settle();
+    assert!(ui
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::Submit(id) if id == room)));
+}
+
+#[test]
+fn iterm2_draws_the_picture_at_its_reserved_rows() {
+    let dir = thumbnail_dir("iterm2");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.graphics = Some(super::thumbnails::Protocol::Iterm2);
+    ui.thumbnails
+        .set_protocol(super::thumbnails::Protocol::Iterm2);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+
+    // The picture's rows open the file; no name placeholder is drawn.
+    let lines = ui.history.cached();
+    assert!(!lines.iter().any(|line| line.text == "[shot.png]"));
+    let rows: Vec<_> = lines
+        .iter()
+        .filter(|line| line.thumbnail.is_some())
+        .collect();
+    assert_eq!(rows.len(), 4);
+    assert!(rows
+        .iter()
+        .all(|line| line.action == Some(render::Action::FileDetail(image.clone()))));
+
+    let placement = ui.view.thumbnails[0].clone();
+    ui.full_repaint = false;
+    let graphics = String::from_utf8(ui.thumbnail_graphics()).unwrap();
+    assert!(
+        graphics.contains(&format!(
+            "\x1b[{};{}H\x1b]1337;File=inline=1;",
+            placement.y + 1,
+            placement.x + 1
+        )),
+        "{graphics:?}"
+    );
+    assert!(graphics.contains(";width=20;height=4;"));
+    assert!(!ui.full_repaint, "first draw needs no repaint");
+    ui.graphics_presented(false);
+    assert!(ui.thumbnail_graphics().is_empty(), "unchanged frame");
+
+    // Switching screens repaints every cell, so the image is drawn again.
+    ui.full_repaint = true;
+    assert!(!ui.thumbnail_graphics().is_empty());
+    ui.graphics_presented(false);
+
+    // A cover hides it: the client repaints to erase the image cells.
+    ui.full_repaint = false;
+    ui.view.thumbnails.clear();
+    assert!(ui.thumbnail_graphics().is_empty());
+    assert!(ui.full_repaint);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn without_an_image_protocol_the_name_row_is_still_clickable() {
+    // Terminal.app: no protocol, so no cell size and no reserved rows.
+    let dir = thumbnail_dir("terminal-app");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.compute_view(100, 40);
+    let lines = ui.history.cached();
+    let caption = lines
+        .iter()
+        .find(|line| line.text == "[shot.png]")
+        .expect("image name row");
+    assert_eq!(caption.action, Some(render::Action::FileDetail(image)));
+    assert!(lines.iter().all(|line| line.thumbnail.is_none()));
+    assert!(ui.thumbnail_graphics().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn images_saved_before_a_restart_draw_after_dropped_or_cleared_frames() {
+    // A fresh client (as after `resume`) opens history that already holds an
+    // image; its first frames can be dropped while presentation is frozen.
+    let dir = thumbnail_dir("resume");
+    let image = png(&dir, "earlier.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.graphics = Some(super::thumbnails::Protocol::Kitty);
+    ui.thumbnails
+        .set_protocol(super::thumbnails::Protocol::Kitty);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+    let draws = |graphics: &[u8]| {
+        let text = String::from_utf8_lossy(graphics);
+        (text.contains("a=t,"), text.contains("a=p,"))
+    };
+
+    // The first frame is composed but never written.
+    assert_eq!(draws(&ui.thumbnail_graphics()), (true, true));
+    ui.compute_view(100, 40);
+    assert_eq!(
+        draws(&ui.thumbnail_graphics()),
+        (true, true),
+        "a dropped frame is sent again: upload and placement"
+    );
+
+    // Once the client confirms the write, nothing is resent.
+    ui.graphics_presented(false);
+    ui.compute_view(100, 40);
+    assert!(ui.thumbnail_graphics().is_empty());
+    ui.graphics_presented(false);
+
+    // A screen clear (first frame, resize) wipes placements: draw again.
+    ui.graphics_presented(true);
+    assert!(ui.thumbnails.stale(), "the next tick recomposes");
+    ui.compute_view(100, 40);
+    assert_eq!(draws(&ui.thumbnail_graphics()), (true, true));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_notice_on_the_status_line_does_not_hide_history_images() {
+    // Resuming against a running server shows a dev-log notice on the status
+    // line until it is cleared; images above it must still draw.
+    let dir = thumbnail_dir("notice");
+    let image = png(&dir, "earlier.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.graphics = Some(super::thumbnails::Protocol::Kitty);
+    ui.thumbnails
+        .set_protocol(super::thumbnails::Protocol::Kitty);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.error = Some(
+        "Dev logs enabled for this client. An existing server keeps its original log level; \
+         restart it when safe for full server logs. Agents were not restarted."
+            .into(),
+    );
+    ui.compute_view(100, 40);
+
+    assert_eq!(ui.view.thumbnails.len(), 1, "the image stays placed");
+    let placement = ui.view.thumbnails[0].clone();
+    assert!(
+        placement.y + placement.rows <= ui.view.history.y + ui.view.history.height,
+        "the image sits inside the history, clear of the status line"
+    );
+    let graphics = String::from_utf8(ui.thumbnail_graphics()).unwrap();
+    assert!(
+        graphics.contains("a=t,") && graphics.contains("a=p,"),
+        "{graphics}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn dialog_notices_to_an_agent_never_show_in_room_history() {
+    let (mut ui, room, agent) = fixture();
+    ui.open_room(room);
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "Codex wants to run: rm -rf build".into(),
+                files: Vec::new(),
+                recipient_ids: [agent].into(),
+            },
+            Author::Bus,
+            1000,
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(!screen.contains("wants to run"), "{screen}");
+    assert!(!screen.contains("Bus"), "{screen}");
+}
+
+#[test]
+fn two_images_in_one_message_render_in_order_with_distinct_placements() {
+    let dir = thumbnail_dir("two");
+    let first = png(&dir, "first.png", (200, 80));
+    let second = png(&dir, "second.png", (100, 60));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, &[first.clone(), second.clone()]);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+
+    // Both images get their own rows, in message order, before the reply.
+    let lines = ui.history.cached();
+    let owner = |line: &history::Line| line.thumbnail.as_ref().map(|t| t.path.to_path_buf());
+    let order: Vec<_> = lines.iter().filter_map(owner).collect();
+    assert_eq!(
+        order,
+        [vec![first.clone(); 4], vec![second.clone(); 3]].concat()
+    );
+    let reply = lines
+        .iter()
+        .position(|line| line.text.starts_with("    author"))
+        .unwrap();
+    assert!(
+        lines
+            .iter()
+            .rposition(|line| line.thumbnail.is_some())
+            .unwrap()
+            < reply
+    );
+
+    // Each one is placed, with a placement id no other thumbnail shares.
+    let placed: Vec<_> = ui
+        .view
+        .thumbnails
+        .iter()
+        .map(|p| p.path.to_path_buf())
+        .collect();
+    assert_eq!(placed, [first, second]);
+    let graphics = String::from_utf8(ui.thumbnail_graphics()).unwrap();
+    let ids: Vec<&str> = graphics
+        .split("\x1b_G")
+        .filter(|command| command.starts_with("a=p,"))
+        .map(|command| {
+            command
+                .split(',')
+                .find(|key| key.starts_with("p="))
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(ids.len(), 2, "{graphics:?}");
+    assert_ne!(
+        ids[0], ids[1],
+        "a shared placement id lets one image replace the other"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

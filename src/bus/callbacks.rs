@@ -30,7 +30,11 @@ pub(crate) struct Record {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Parsed {
-    Session(String),
+    /// `source` is the provider's start reason, e.g. `startup`, `resume` or `compact`.
+    Session {
+        session: String,
+        source: Option<String>,
+    },
     Started {
         session: String,
         turn: String,
@@ -65,7 +69,7 @@ pub(crate) enum Parsed {
 impl Parsed {
     pub(crate) fn kind(&self) -> &'static str {
         match self {
-            Self::Session(_) => "session",
+            Self::Session { .. } => "session",
             Self::Started { .. } => "started",
             Self::Final { .. } => "final",
             Self::BackgroundPending { .. } => "background_pending",
@@ -160,10 +164,14 @@ fn claude_stop_with_live_background_work_is_progress_not_a_final_reply() {
 /// `\n\n<pasted_content id="ID">\n{text}\n</pasted_content id="ID">\n` rather
 /// than the text it submits to the model. Bus submits each request as one paste
 /// with nothing typed around it, so only a prompt that is exactly one such block
-/// is unwrapped; anything else is kept verbatim and must match exactly.
+/// is unwrapped; anything else is kept verbatim and must match exactly. The
+/// `[Image #N]` placeholders Claude puts first for an attached image (see
+/// `model::payload_matches`) are kept in front of the unwrapped text.
 fn unwrap_claude_paste(prompt: String) -> String {
+    let placeholders = claude_image_placeholders(&prompt).0;
+    let (images, body) = prompt.split_at(placeholders);
     let unwrapped = (|| {
-        let framed = prompt.trim_matches(|c: char| c.is_ascii_whitespace());
+        let framed = body.trim_matches(|c: char| c.is_ascii_whitespace());
         let rest = framed.strip_prefix("<pasted_content id=\"")?;
         let (id, rest) = rest.split_once("\">\n")?;
         if id.is_empty() || id.contains(['"', '<', '>', '\n']) {
@@ -172,7 +180,25 @@ fn unwrap_claude_paste(prompt: String) -> String {
         rest.strip_suffix(&format!("\n</pasted_content id=\"{id}\">"))
             .map(str::to_owned)
     })();
-    unwrapped.unwrap_or(prompt)
+    match unwrapped {
+        Some(text) => format!("{images}{text}"),
+        None => prompt,
+    }
+}
+
+/// The byte length and count of the `[Image #N]` placeholders that start a
+/// Claude Code prompt.
+pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {
+    let (mut length, mut count) = (0, 0);
+    while let Some(digits) = prompt[length..].strip_prefix("[Image #") {
+        let Some(end) = digits.find(']') else { break };
+        if end == 0 || !digits[..end].bytes().all(|b| b.is_ascii_digit()) {
+            break;
+        }
+        length += "[Image #".len() + end + 1;
+        count += 1;
+    }
+    (length, count)
 }
 
 /// Whether a Claude `Stop` pauses for background work that will wake the turn
@@ -220,7 +246,13 @@ pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String>
         },
     )?;
     if (!cursor && event == "SessionStart") || (cursor && event == "sessionStart") {
-        return Ok(Parsed::Session(session));
+        return Ok(Parsed::Session {
+            session,
+            source: value
+                .get("source")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        });
     }
     let turn = field(
         value,
@@ -278,11 +310,6 @@ pub(crate) fn parse(provider: Provider, value: &Value) -> Result<Parsed, String>
         },
         _ => Err(format!("Unsupported Bus hook event {event}")),
     }
-}
-
-#[cfg(test)]
-fn validate_provider_event(provider: Provider, value: &Value) -> Result<(), String> {
-    parse(provider, value).map(|_| ())
 }
 
 pub(crate) fn initialize(dir: &Path, manifest: &Manifest) -> io::Result<()> {
@@ -384,6 +411,12 @@ pub(crate) fn dispatch(args: &[String]) -> Option<io::Result<()>> {
     if args.get(1).map(String::as_str) != Some("--bus-callback") {
         return None;
     }
+    if args.get(2).map(String::as_str) == Some("claude-statusline") {
+        if args.len() == 3 {
+            super::usage::claude_statusline::run();
+        }
+        return Some(Ok(()));
+    }
     // Hooks run in short-lived processes before ordinary CLI initialization.
     // Serialize their rotating log writers separately from the callback spool.
     // A diagnostic failure must never prevent the callback itself being saved.
@@ -445,12 +478,12 @@ mod tests {
 
     #[test]
     fn codex_requires_real_turn_binding_and_rejects_notify() {
-        assert!(validate_provider_event(
+        assert!(parse(
             Provider::Codex,
             &json!({"hook_event_name":"UserPromptSubmit","session_id":"s","prompt":"same","transcript_path":"/tmp/interactive.jsonl"})
         )
         .is_err());
-        assert!(validate_provider_event(
+        assert!(parse(
             Provider::Codex,
             &json!({"type":"agent-turn-complete","turn-id":"old","input-messages":["same"]})
         )
@@ -494,12 +527,12 @@ mod tests {
 
     #[test]
     fn claude_requires_prompt_id_and_cursor_generation() {
-        assert!(validate_provider_event(
+        assert!(parse(
             Provider::ClaudeCode,
             &json!({"hook_event_name":"UserPromptSubmit","session_id":"s","prompt":"p"})
         )
         .is_err());
-        assert!(validate_provider_event(
+        assert!(parse(
             Provider::Cursor,
             &json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"s","prompt":"p"})
         )
@@ -543,7 +576,21 @@ mod tests {
                 &json!({"hook_event_name":"sessionStart","conversation_id":"s"})
             )
             .unwrap(),
-            Parsed::Session("s".into())
+            Parsed::Session {
+                session: "s".into(),
+                source: None
+            }
+        );
+        assert_eq!(
+            parse(
+                Provider::Codex,
+                &json!({"hook_event_name":"SessionStart","session_id":"s","source":"compact","transcript_path":"/tmp/r.jsonl"})
+            )
+            .unwrap(),
+            Parsed::Session {
+                session: "s".into(),
+                source: Some("compact".into())
+            }
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

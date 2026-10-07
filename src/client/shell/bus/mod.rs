@@ -4,18 +4,69 @@ mod forms;
 mod help;
 mod history;
 mod input;
-mod orchestrator_ui;
 mod recipients;
 mod render;
+mod ring;
 mod selection;
 mod state;
 #[cfg(test)]
 mod tests;
+mod thumbnails;
 pub(super) use render::layout;
 pub(super) use state::*;
 
 impl super::ClientShellState {
-    pub(crate) fn start_bus(&mut self) -> Result<(), String> {
+    /// `enabled` is whether this client presents graphics at all; the host
+    /// terminal must also be one known to draw images (Kitty or iTerm2).
+    pub(crate) fn set_bus_kitty_graphics(&mut self, enabled: bool) {
+        if let Some(bus) = self.bus.as_mut() {
+            bus.graphics = enabled
+                .then(|| thumbnails::host_graphics_protocol(|key| std::env::var(key).ok()))
+                .flatten();
+            if let Some(protocol) = bus.graphics {
+                bus.thumbnails.set_protocol(protocol);
+            }
+        }
+    }
+
+    /// The client wrote a frame, clearing the screen first when `cleared`.
+    pub(crate) fn bus_frame_presented(&mut self, cleared: bool) {
+        if let Some(bus) = self.bus.as_mut() {
+            bus.graphics_presented(cleared);
+        }
+    }
+
+    /// The client repainted every cell without drawing Bus graphics in that
+    /// frame, which erases iTerm2 images; draw them again.
+    pub(crate) fn bus_graphics_erased(&mut self) {
+        if let Some(bus) = self.bus.as_mut() {
+            bus.thumbnails.invalidate();
+        }
+    }
+
+    pub(crate) fn has_bus(&self) -> bool {
+        self.bus.is_some()
+    }
+
+    /// Whether the Bus view switched screens since the last call, so the
+    /// client should repaint every cell instead of only the changed ones.
+    pub(crate) fn take_bus_full_repaint(&mut self) -> bool {
+        self.bus
+            .as_mut()
+            .is_some_and(|bus| std::mem::take(&mut bus.full_repaint))
+    }
+
+    pub(super) fn compute_bus_view(&mut self, cols: u16, rows: u16) {
+        let cell = self.graphics_cell_size;
+        if let Some(bus) = self.bus.as_mut() {
+            bus.thumbnails.set_cell(bus.graphics.map(|_| cell));
+            bus.compute_view(cols, rows);
+        }
+    }
+
+    /// `sound` is the user's `[ui.sound]`, used only for custom sound paths; Bus
+    /// rooms decide on their own whether to ring.
+    pub(crate) fn start_bus(&mut self, sound: &crate::config::SoundConfig) -> Result<(), String> {
         let Some(root) = crate::bus::entry::data_dir() else {
             return Ok(());
         };
@@ -28,6 +79,8 @@ impl super::ClientShellState {
         let snapshot = handle.snapshot().ok_or("Bus initial state unavailable")?;
         let mut bus = BusUi::new(snapshot);
         bus.handle = Some(handle);
+        // Only the client that owns the coordinator plays room sounds, so each rings once.
+        bus.sound_config = Some(sound.clone());
         bus.settings_path = crate::bus::settings::path();
         if let Some(path) = &bus.settings_path {
             match crate::bus::settings::load(path) {
@@ -37,7 +90,8 @@ impl super::ClientShellState {
         }
         if let Some(room) = bus.room {
             bus.open_room(room);
-        } else if bus.seed_first_room {
+        }
+        if bus.seed_first_room {
             bus.queue(
                 crate::bus::runtime::BusCommand::CreateRoom("bus".into()),
                 Effect::None,
@@ -52,7 +106,6 @@ impl super::ClientShellState {
                 crate::bus::diagnostics::EXISTING_SERVER_NOTICE
             );
         }
-        self.overlay = None;
         self.bus = Some(bus);
         Ok(())
     }

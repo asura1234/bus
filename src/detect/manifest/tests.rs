@@ -1,18 +1,54 @@
 use super::*;
 
-fn remote_manifest(version: &str, state: &str, contains: &str) -> String {
-    format!(
-        r#"
-id = "codex"
-version = "{version}"
-min_engine_version = 1
-updated_at = "2026-06-10T12:00:00Z"
+#[derive(Debug, PartialEq, Eq)]
+struct MatchedRule {
+    id: String,
+}
 
-[[rules]]
-id = "test"
-state = "{state}"
-contains = ["{contains}"]
-"#
+#[derive(Debug)]
+struct Detected {
+    detection: AgentDetection,
+    matched_rule: Option<MatchedRule>,
+}
+
+impl std::ops::Deref for Detected {
+    type Target = AgentDetection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.detection
+    }
+}
+
+fn detect_input(agent: Agent, input: DetectionInput<'_>) -> Detected {
+    let detection = detect_with_osc(agent, input);
+    let matched_rule = load_manifest(agent).and_then(|loaded| {
+        matched_manifest_rule(input, &loaded).map(|rule| MatchedRule {
+            id: rule.id.clone(),
+        })
+    });
+    Detected {
+        detection,
+        matched_rule,
+    }
+}
+
+fn detect_loaded(input: DetectionInput<'_>, loaded: &LoadedManifest) -> Detected {
+    Detected {
+        detection: evaluate_loaded_manifest(input, loaded),
+        matched_rule: matched_manifest_rule(input, loaded).map(|rule| MatchedRule {
+            id: rule.id.clone(),
+        }),
+    }
+}
+
+fn detect_screen(agent: Agent, screen: &str) -> Detected {
+    detect_input(
+        agent,
+        DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        },
     )
 }
 
@@ -41,6 +77,7 @@ id = "codex"
 
 fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let bus = crate::config::test_without_bus_env(&_guard);
     let old_config = std::env::var_os("XDG_CONFIG_HOME");
     let old_state = std::env::var_os("XDG_STATE_HOME");
     let base = std::env::temp_dir().join(format!(
@@ -62,41 +99,29 @@ fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
         Some(value) => std::env::set_var("XDG_STATE_HOME", value),
         None => std::env::remove_var("XDG_STATE_HOME"),
     }
+    drop(bus);
     reload_manifests();
     let _ = std::fs::remove_dir_all(&base);
     result
 }
 
-fn write_remote_codex(content: &str) {
-    let path = crate::detect::manifest_update::remote_manifest_path(Agent::Codex);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, content).unwrap();
-    reload_manifests();
-}
-
-fn write_remote_codex_without_reload(content: &str) {
-    let path = crate::detect::manifest_update::remote_manifest_path(Agent::Codex);
+fn write_local_codex_without_reload(content: &str) {
+    let path = override_path(Agent::Codex).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, content).unwrap();
 }
 
 fn write_local_codex(content: &str) {
-    let path = override_path(Agent::Codex).unwrap();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, content).unwrap();
+    write_local_codex_without_reload(content);
     reload_manifests();
 }
 
 #[test]
 fn known_agent_no_match_defaults_to_idle_fallback() {
-    let explain = explain(Agent::Codex, "ordinary prompt text");
+    let result = detect_screen(Agent::Codex, "ordinary prompt text");
 
-    assert_eq!(explain.state, AgentState::Idle);
-    assert!(!explain.visible_idle);
-    assert_eq!(
-        explain.fallback_reason.as_deref(),
-        Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
-    );
+    assert_eq!(result.state, AgentState::Idle);
+    assert!(!result.visible_idle);
 }
 
 #[test]
@@ -130,21 +155,21 @@ line_regex = ["^exact line$"]
 "#,
         ));
 
-        let high = explain(Agent::Codex, "match win");
+        let high = detect_screen(Agent::Codex, "match win");
         assert_eq!(high.state, AgentState::Working);
         assert_eq!(
             high.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("high_nested_gates")
         );
 
-        let not_gate = explain(Agent::Codex, "match win blocked");
+        let not_gate = detect_screen(Agent::Codex, "match win blocked");
         assert_eq!(not_gate.state, AgentState::Idle);
         assert_eq!(
             not_gate.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("low_contains")
         );
 
-        let line = explain(Agent::Codex, "before\nexact line\nafter");
+        let line = detect_screen(Agent::Codex, "before\nexact line\nafter");
         assert_eq!(line.state, AgentState::Blocked);
         assert_eq!(
             line.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -154,134 +179,91 @@ line_regex = ["^exact line$"]
 }
 
 #[test]
-fn remote_manifest_loads_between_local_override_and_bundled() {
-    with_manifest_dirs("remote-source", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
+fn equal_priority_rules_keep_the_first_matching_rule() {
+    let manifest = parse_manifest(&rules_manifest(
+        r#"
+[[rules]]
+id = "first"
+state = "working"
+priority = 10
+visible_working = true
+contains = ["match"]
 
-        let explain = explain(Agent::Codex, "remote-ready");
+[[rules]]
+id = "second"
+state = "blocked"
+priority = 10
+visible_blocker = true
+contains = ["match"]
+"#,
+    ))
+    .unwrap();
+    let loaded = loaded_manifest(manifest).unwrap();
+    let result = detect_loaded(
+        DetectionInput {
+            screen: "match",
+            osc_title: "",
+            osc_progress: "",
+        },
+        &loaded,
+    );
 
-        assert_eq!(explain.state, AgentState::Blocked);
-        assert!(matches!(
-            explain.source,
-            Some(ManifestSource::Remote { .. })
-        ));
-        assert_eq!(explain.manifest_version.as_deref(), Some("9999.01.01.1"));
-        assert_eq!(
-            explain.cached_remote_version.as_deref(),
-            Some("9999.01.01.1")
-        );
+    assert_eq!(result.state, AgentState::Working);
+    assert!(result.visible_working);
+    assert!(!result.visible_blocker);
+    assert_eq!(result.matched_rule.unwrap().id, "first");
+}
+
+#[test]
+fn local_override_replaces_bundled_manifest() {
+    with_manifest_dirs("local-source", || {
+        write_local_codex(&local_manifest("blocked", "local-ready"));
+
+        let result = detect_screen(Agent::Codex, "local-ready");
+
+        assert_eq!(result.state, AgentState::Blocked);
     });
 }
 
 #[test]
-fn fallback_explain_preserves_active_manifest_version() {
-    with_manifest_dirs("fallback-version", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
-
-        let explain = explain(Agent::Codex, "ordinary prompt text");
-
-        assert_eq!(explain.state, AgentState::Idle);
-        assert_eq!(
-            explain.fallback_reason.as_deref(),
-            Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
-        );
-        assert_eq!(explain.manifest_version.as_deref(), Some("9999.01.01.1"));
-        assert!(matches!(
-            explain.source,
-            Some(ManifestSource::Remote { .. })
-        ));
-    });
-}
-
-#[test]
-fn older_cached_remote_manifest_does_not_shadow_newer_bundled_manifest() {
-    with_manifest_dirs("older-remote-bundled-fallback", || {
-        write_remote_codex(&remote_manifest("2026.06.10.0", "blocked", "remote-ready"));
-
-        let explain = explain(Agent::Codex, "remote-ready");
-
-        assert_eq!(explain.state, AgentState::Idle);
-        assert!(matches!(explain.source, Some(ManifestSource::Bundled)));
-        assert_eq!(
-            explain.cached_remote_version.as_deref(),
-            Some("2026.06.10.0")
-        );
-        assert!(explain
-            .warning
-            .as_deref()
-            .is_some_and(|warning| warning.contains("older than bundled")));
-    });
-}
-
-#[test]
-fn local_override_shadows_cached_remote_manifest() {
-    with_manifest_dirs("local-shadows-remote", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
-        write_local_codex(&local_manifest("idle", "local-ready"));
-
-        let explain = explain(Agent::Codex, "local-ready");
-
-        assert_eq!(explain.state, AgentState::Idle);
-        assert!(matches!(explain.source, Some(ManifestSource::Override(_))));
-        assert!(explain.local_override_shadowing_remote);
-        assert_eq!(
-            explain.cached_remote_version.as_deref(),
-            Some("9999.01.01.1")
-        );
-    });
-}
-
-#[test]
-fn invalid_local_override_falls_back_to_cached_remote_manifest() {
-    with_manifest_dirs("invalid-local-remote-fallback", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
+fn invalid_local_override_falls_back_to_bundled_manifest() {
+    with_manifest_dirs("invalid-local-bundled-fallback", || {
         write_local_codex("id = ");
-
-        let explain = explain(Agent::Codex, "remote-ready");
-
-        assert_eq!(explain.state, AgentState::Blocked);
-        assert!(matches!(
-            explain.source,
-            Some(ManifestSource::Remote { .. })
-        ));
-        assert!(explain.warning.is_some());
+        let result = detect_input(
+            Agent::Codex,
+            DetectionInput {
+                screen: "",
+                osc_title: "⠋ project",
+                osc_progress: "",
+            },
+        );
+        assert_eq!(result.state, AgentState::Working);
+        assert!(result.visible_working);
+        assert_eq!(result.matched_rule.unwrap().id, "osc_title_working");
     });
 }
 
 #[test]
 fn detection_uses_cached_manifest_until_explicit_reload() {
     with_manifest_dirs("cache-boundary", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "cached-ready"));
+        write_local_codex(&local_manifest("blocked", "cached-ready"));
 
-        let cached = explain(Agent::Codex, "cached-ready");
+        let cached = detect_screen(Agent::Codex, "cached-ready");
         assert_eq!(cached.state, AgentState::Blocked);
-        assert!(matches!(cached.source, Some(ManifestSource::Remote { .. })));
         assert_eq!(
             cached.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("test")
         );
 
-        write_remote_codex_without_reload(&remote_manifest("9999.01.01.2", "working", "new-ready"));
+        write_local_codex_without_reload(&local_manifest("working", "new-ready"));
 
-        let unchanged = explain(Agent::Codex, "new-ready");
+        let unchanged = detect_screen(Agent::Codex, "new-ready");
         assert_eq!(unchanged.state, AgentState::Idle);
-        assert_eq!(
-            unchanged.fallback_reason.as_deref(),
-            Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
-        );
-        assert_eq!(
-            unchanged.cached_remote_version.as_deref(),
-            Some("9999.01.01.1")
-        );
 
         reload_manifests();
 
-        let reloaded = explain(Agent::Codex, "new-ready");
+        let reloaded = detect_screen(Agent::Codex, "new-ready");
         assert_eq!(reloaded.state, AgentState::Working);
-        assert_eq!(
-            reloaded.cached_remote_version.as_deref(),
-            Some("9999.01.01.2")
-        );
         assert_eq!(
             reloaded.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("test")
@@ -302,14 +284,14 @@ fn all_bundled_manifests_parse_and_validate() {
 
 #[test]
 fn devin_manifest_detects_idle_working_and_blocked_states() {
-    let idle = explain(
+    let idle = detect_screen(
         Agent::Devin,
         "─────────────────────────────────────────────────────\n❭ Ask Devin to build features, fix bugs, or work on\n  your code\n─────────────────────────────────────────────────────\nSWE-1.6               Context: 16k / 200k tokens (7%)",
     );
     assert_eq!(idle.state, AgentState::Idle);
     assert!(idle.visible_idle);
 
-    let live_footer_idle = explain(
+    let live_footer_idle = detect_screen(
         Agent::Devin,
         "Done.\n\n────────────────────────────────────────────────── (bypass permissions on) ─\n❭\n────────────────────────────────────────────────────────────────────────────\nClaude Opus 4.6 Thinking                                    Context: 38k / 200k tokens (18%)",
     );
@@ -323,7 +305,7 @@ fn devin_manifest_detects_idle_working_and_blocked_states() {
     );
     assert!(live_footer_idle.visible_idle);
 
-    let welcome_footer_idle = explain(
+    let welcome_footer_idle = detect_screen(
         Agent::Devin,
         "⠀⠀⠀⠀⠀⣴⣾⣶⡄⠀⠀⠀⠀\n⠀⣴⣾⣶⡾⠛⠿⠟⠃⣴⣾⣶⡄  Devin CLI\n⠀⠛⠿⠟⠃⣴⣾⣶⡾⠛⠿⠟⠃  v2026.5.26-8\n⠀⣤⣶⣦⡄⠻⢿⠿⢷⣤⣶⣦⡄\n⠀⠻⢿⠿⢷⣤⣶⣦⡄⠻⢿⠿⠃  Hybrid\n⠀⠀⠀⠀⠀⠻⢿⠿⠃⠀⠀⠀⠀\n\n───────────────────────────\n❭ Ask Devin to build\n  features, fix bugs, or\n  work on your code\n───────────────────────────\nClaude Opus Looking for\n4.6 Thinkingplan mode? /\n            plan",
     );
@@ -337,21 +319,21 @@ fn devin_manifest_detects_idle_working_and_blocked_states() {
     );
     assert!(welcome_footer_idle.visible_idle);
 
-    let working = explain(
+    let working = detect_screen(
         Agent::Devin,
         "◔ Reading shell 91b655\n  │ Timeout: 35s\n\n⠀⡆ Running tools · 27s (esc to interrupt)\n─────────────────────────────────────────────────────\n❭ Guide Devin while it works",
     );
     assert_eq!(working.state, AgentState::Working);
     assert!(working.visible_working);
 
-    let trust_prompt = explain(
+    let trust_prompt = detect_screen(
         Agent::Devin,
         "Do you trust the authors of this directory?\nFor security, devin should not be run in directories\nwith untrusted content.\n❭ 1 Yes, trust /private/tmp/devin-hook-probe\n· 2 No, exit",
     );
     assert_eq!(trust_prompt.state, AgentState::Blocked);
     assert!(trust_prompt.visible_blocker);
 
-    let permission_prompt = explain(
+    let permission_prompt = detect_screen(
         Agent::Devin,
         "⏺ Running command\n  └ $ sleep 30\n\n❭ 1 Yes  (Approve once)\n· 2 Yes, allow `sleep` commands\n· 3 Yes, always allow `sleep` commands\n· 4 No\n↑↓ select · ↵ confirm · esc cancel",
     );
@@ -361,35 +343,35 @@ fn devin_manifest_detects_idle_working_and_blocked_states() {
 
 #[test]
 fn muse_manifest_requires_complete_live_controls() {
-    let working = explain(
+    let working = detect_screen(
         Agent::Muse,
         "⟩ hello\n\n◆ Working (0s · esc to interrupt)\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
     );
     assert_eq!(working.state, AgentState::Working);
     assert!(working.visible_working);
 
-    let picker = explain(
+    let picker = detect_screen(
         Agent::Muse,
         "Which option should I use?\n\n› 1. Alpha\n  2. Beta\n\nEnter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
     );
     assert_eq!(picker.state, AgentState::Blocked);
     assert!(picker.visible_blocker);
 
-    let command_approval = explain(
+    let command_approval = detect_screen(
         Agent::Muse,
         "Would you like to run the following command?\n\n$ printf muse-safe-probe\n\n› 1. Allow this stage once (y)\n  2. Always allow in this workspace: printf muse-safe-probe ... (p)\n  3. Abort the entire command (esc)\n────────────────\ngpt-5.4 · minimal · /workspace",
     );
     assert_eq!(command_approval.state, AgentState::Blocked);
     assert!(command_approval.visible_blocker);
 
-    let network_approval = explain(
+    let network_approval = detect_screen(
         Agent::Muse,
         "network: example.com:443 https\nrequested by:\n$ curl -fsS https://example.com\n\n› 1. Yes, proceed (y)\n  2. Yes, don't ask again this session (p)  example.com:443 (https)\n  3. No, and tell Muse Code what to do differently (esc)\n────────────────\ngpt-5.4 · minimal · /workspace",
     );
     assert_eq!(network_approval.state, AgentState::Blocked);
     assert!(network_approval.visible_blocker);
 
-    let menu = explain(
+    let menu = detect_screen(
         Agent::Muse,
         "Theme\n\n⟩ Default (active)\n  Dynamic\n\n↑↓ move · enter save · esc go back",
     );
@@ -397,7 +379,7 @@ fn muse_manifest_requires_complete_live_controls() {
     assert!(menu.skip_state_update);
     assert!(!menu.visible_blocker);
 
-    let ordinary_reply = explain(
+    let ordinary_reply = detect_screen(
         Agent::Muse,
         "⟩ say the phrase\n\n◆ Yes, proceed\n\n────────────────\n⟩\n────────────────\ngpt-5.4 · minimal · /workspace",
     );
@@ -641,13 +623,13 @@ contains = ["active"]
 // the bundled Claude and Codex manifests.
 // ---------------------------------------------------------------------------
 
-fn osc_explain(
+fn detect_screen_with_osc(
     agent: Agent,
     screen: &str,
     osc_title: &str,
     osc_progress: &str,
-) -> DetectionExplain {
-    explain_with_input(
+) -> Detected {
+    detect_input(
         agent,
         DetectionInput {
             screen,
@@ -670,7 +652,7 @@ fn claude_idle_prompt_with_background_shell_is_idle() {
         "────────────────────────────────────────────────────────────────\n",
         "  ⏵⏵ auto mode on · 1 shell · ← for agents                     /rc\n",
     );
-    let result = osc_explain(Agent::Claude, screen, "", "");
+    let result = detect_screen_with_osc(Agent::Claude, screen, "", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
@@ -683,7 +665,7 @@ fn claude_idle_prompt_with_background_shell_is_idle() {
 
 #[test]
 fn claude_background_shell_without_foreground_evidence_is_idle_fallback() {
-    let result = osc_explain(
+    let result = detect_screen_with_osc(
         Agent::Claude,
         "  ⏵⏵ auto mode on · 1 shell · ← for agents\n",
         "",
@@ -692,10 +674,6 @@ fn claude_background_shell_without_foreground_evidence_is_idle_fallback() {
 
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(result.matched_rule, None);
-    assert_eq!(
-        result.fallback_reason.as_deref(),
-        Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
-    );
     assert!(!result.visible_working);
 }
 
@@ -707,7 +685,7 @@ fn claude_live_turn_with_background_shell_remains_working() {
         "────────────────────────────────────────────────────────────────\n",
         "  ⏵⏵ auto mode on · 1 shell · esc to interrupt\n",
     );
-    let result = osc_explain(Agent::Claude, screen, "", "");
+    let result = detect_screen_with_osc(Agent::Claude, screen, "", "");
 
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
@@ -727,7 +705,7 @@ fn claude_blocker_with_background_shell_remains_blocked() {
         "Esc to cancel · Tab to amend · ctrl+e to explain\n",
         "  ⏵⏵ auto mode on · 1 shell · ← for agents\n",
     );
-    let result = osc_explain(Agent::Claude, screen, "", "");
+    let result = detect_screen_with_osc(Agent::Claude, screen, "", "");
 
     assert_eq!(result.state, AgentState::Blocked);
     assert_eq!(
@@ -770,7 +748,7 @@ fn claude_bash_prompt_with_dont_ask_again_option_matches_bash_rule() {
         " Esc to cancel · Tab to amend · ctrl+e to explain
 ",
     );
-    let result = osc_explain(Agent::Claude, screen, "", "");
+    let result = detect_screen_with_osc(Agent::Claude, screen, "", "");
 
     assert_eq!(result.state, AgentState::Blocked);
     assert_eq!(
@@ -827,7 +805,7 @@ fn claude_permission_prompt_matches_at_every_cursor_position() {
                 ),
                 options.join("\n"),
             );
-            let result = osc_explain(Agent::Claude, &screen, "", "");
+            let result = detect_screen_with_osc(Agent::Claude, &screen, "", "");
 
             assert_eq!(
                 result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -843,7 +821,7 @@ fn claude_permission_prompt_matches_at_every_cursor_position() {
 #[test]
 fn claude_osc_title_braille_prefix_is_working() {
     // "⠂" is U+2802, in the braille block U+2800-U+28FF
-    let result = osc_explain(Agent::Claude, "", "⠂ project", "");
+    let result = detect_screen_with_osc(Agent::Claude, "", "⠂ project", "");
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -856,7 +834,7 @@ fn claude_osc_title_braille_prefix_is_working() {
 fn claude_osc_title_half_circle_frames_are_working() {
     for frame in ['◐', '◓', '◑', '◒'] {
         let title = format!("{frame} Initial conversation with Claude");
-        let result = osc_explain(Agent::Claude, "", &title, "");
+        let result = detect_screen_with_osc(Agent::Claude, "", &title, "");
         assert_eq!(result.state, AgentState::Working, "frame {frame}");
         assert_eq!(
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -870,7 +848,7 @@ fn claude_osc_title_half_circle_frames_are_working() {
 #[test]
 fn claude_osc_title_static_prefix_is_idle() {
     // "✳" is U+2733, static prefix when Claude is not working
-    let result = osc_explain(Agent::Claude, "", "✳ Claude Code", "");
+    let result = detect_screen_with_osc(Agent::Claude, "", "✳ Claude Code", "");
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -884,12 +862,8 @@ fn claude_osc_progress_4_3_alone_does_not_force_working() {
     // Claude leaves progress stuck at 4;3 while waiting for permission, so
     // 4;3 must not be a working signal on its own. With no other evidence it
     // falls back to idle; blocked screen rules can win when present.
-    let result = osc_explain(Agent::Claude, "", "", "4;3;");
+    let result = detect_screen_with_osc(Agent::Claude, "", "", "4;3;");
     assert_eq!(result.state, AgentState::Idle);
-    assert_eq!(
-        result.fallback_reason.as_deref(),
-        Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
-    );
     assert!(!result.visible_working);
 }
 
@@ -899,14 +873,14 @@ fn claude_blocker_screen_outranks_stale_osc_progress() {
     // blocked form on screen must win because no rule treats 4;3 as working.
     let blocker_screen =
         "──────────\n  1. Yes\n  2. No\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n";
-    let result = osc_explain(Agent::Claude, blocker_screen, "✳ Task title", "4;3;");
+    let result = detect_screen_with_osc(Agent::Claude, blocker_screen, "✳ Task title", "4;3;");
     assert_eq!(result.state, AgentState::Blocked);
     assert!(result.visible_blocker);
 }
 
 #[test]
 fn claude_osc_progress_4_0_is_idle() {
-    let result = osc_explain(Agent::Claude, "", "", "4;0;");
+    let result = detect_screen_with_osc(Agent::Claude, "", "", "4;0;");
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -922,7 +896,7 @@ fn claude_blocker_screen_outranks_osc_idle_title() {
         bash command: rm -rf /tmp/test\n\
         ❯ 1. Yes\n   2. No\n\n\
         Esc to cancel · Tab to amend · ctrl+e to explain\n";
-    let result = osc_explain(Agent::Claude, blocker_screen, "✳ Claude Code", "");
+    let result = detect_screen_with_osc(Agent::Claude, blocker_screen, "✳ Claude Code", "");
     assert_eq!(result.state, AgentState::Blocked);
     assert!(result.visible_blocker);
 }
@@ -939,7 +913,7 @@ fn claude_mcp_elicitation_is_blocked() {
         "MCP server \"my-server\" requests your input\n\nserver-supplied message\n\n\u{276f} Accept    Decline\n\nEsc to cancel \u{b7} \u{2191}/\u{2193} to navigate\n",
     ] {
         let result = with_manifest_dirs("claude-mcp-elicitation", || {
-            osc_explain(Agent::Claude, screen, "\u{2733} Claude Code", "")
+            detect_screen_with_osc(Agent::Claude, screen, "\u{2733} Claude Code", "")
         });
         assert_eq!(result.state, AgentState::Blocked, "{result:#?}");
         assert!(result.visible_blocker, "{result:#?}");
@@ -954,12 +928,8 @@ fn claude_mcp_elicitation_is_blocked() {
 #[test]
 fn claude_empty_osc_empty_screen_is_idle_fallback() {
     // No OSC data, no matching screen rule → fallback idle (unchanged V3 behavior)
-    let result = osc_explain(Agent::Claude, "", "", "");
+    let result = detect_screen_with_osc(Agent::Claude, "", "", "");
     assert_eq!(result.state, AgentState::Idle);
-    assert_eq!(
-        result.fallback_reason.as_deref(),
-        Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
-    );
     assert!(!result.visible_idle);
 }
 
@@ -968,7 +938,7 @@ fn claude_empty_osc_empty_screen_is_idle_fallback() {
 #[test]
 fn codex_osc_title_braille_spinner_is_working() {
     // "⠋" is U+280B, in the braille block
-    let result = osc_explain(Agent::Codex, "", "⠋ llm-proxy", "");
+    let result = detect_screen_with_osc(Agent::Codex, "", "⠋ llm-proxy", "");
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -979,7 +949,7 @@ fn codex_osc_title_braille_spinner_is_working() {
 
 #[test]
 fn codex_osc_title_action_required_is_blocked() {
-    let result = osc_explain(Agent::Codex, "", "[ . ] Action Required | llm-proxy", "");
+    let result = detect_screen_with_osc(Agent::Codex, "", "[ . ] Action Required | llm-proxy", "");
     assert_eq!(result.state, AgentState::Blocked);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -990,7 +960,7 @@ fn codex_osc_title_action_required_is_blocked() {
 
 #[test]
 fn codex_osc_title_plain_is_idle() {
-    let result = osc_explain(Agent::Codex, "", "llm-proxy", "");
+    let result = detect_screen_with_osc(Agent::Codex, "", "llm-proxy", "");
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -1014,7 +984,7 @@ fn codex_trust_directory_requires_live_chooser() {
     // The live bottom buffer can retain the shell launch title above the chooser.
     for prefix in ["", "codex\n~/work/bus\n\n✗ codex\n"] {
         let live = format!("{prefix}{screen}");
-        let result = osc_explain(Agent::Codex, &live, "project", "");
+        let result = detect_screen_with_osc(Agent::Codex, &live, "project", "");
         assert_eq!(result.state, AgentState::Blocked, "prefix: {prefix:?}");
         assert_eq!(
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -1029,7 +999,7 @@ fn codex_trust_directory_requires_live_chooser() {
         screen.replace("2. No, quit\n", ""),
         screen.replace("Press enter to continue\n", ""),
     ] {
-        let result = osc_explain(Agent::Codex, &inactive, "project", "");
+        let result = detect_screen_with_osc(Agent::Codex, &inactive, "project", "");
         assert_eq!(result.state, AgentState::Idle);
         assert!(!result.visible_blocker);
     }
@@ -1037,7 +1007,7 @@ fn codex_trust_directory_requires_live_chooser() {
     let transcript = "› > You are in C:\\Users\\user\\project\n\n\
         Do you trust the contents of this\n\
         directory? Working with untrusted contents comes with higher risk.\n";
-    let result = osc_explain(Agent::Codex, transcript, "project", "");
+    let result = detect_screen_with_osc(Agent::Codex, transcript, "project", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_ne!(
@@ -1065,7 +1035,7 @@ fn codex_startup_update_requires_complete_live_chooser() {
         Press enter to continue\n";
 
     for screen in [chooser, wrapped] {
-        let result = osc_explain(Agent::Codex, screen, "project", "");
+        let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
         assert_eq!(result.state, AgentState::Blocked);
         assert_eq!(
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -1078,7 +1048,7 @@ fn codex_startup_update_requires_complete_live_chooser() {
         chooser.replace("Update now", "Install"),
         format!("{wrapped}\n› Ask Codex to do anything\n"),
     ] {
-        let result = osc_explain(Agent::Codex, &screen, "project", "");
+        let result = detect_screen_with_osc(Agent::Codex, &screen, "project", "");
         assert_eq!(result.state, AgentState::Idle);
         assert_ne!(
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -1093,7 +1063,7 @@ fn codex_background_terminal_screen_does_not_override_osc_idle() {
     // Background terminal tasks can be long-lived helpers such as dev servers.
     // They should not make Codex look busy once the foreground turn is idle.
     let screen = "background terminal running · /ps to view · /stop to close\n";
-    let result = osc_explain(Agent::Codex, screen, "llm-proxy", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "llm-proxy", "");
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -1108,7 +1078,7 @@ fn codex_screen_working_fallback_handles_static_osc_title() {
         ◦ Working (1m 16s • esc to interrupt) · 1 background…\n\n\
         › Use /skills to list available skills\n\n\
         gpt-5.6-sol default · /work\n";
-    let result = osc_explain(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
@@ -1123,7 +1093,7 @@ fn codex_osc_working_remains_preferred_over_screen_fallback() {
     let screen = "• Working (4s • esc to interrupt)\n\n\
         › Use /skills to list available skills\n\n\
         gpt-5.6-sol default · /work\n";
-    let result = osc_explain(Agent::Codex, screen, "⠸ project", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "⠸ project", "");
 
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
@@ -1138,7 +1108,7 @@ fn codex_screen_blocker_outranks_working_fallback() {
     let screen = "• Working (4s • esc to interrupt)\n\
         › 1. Yes, proceed\n\
         Press enter to confirm or esc to cancel\n";
-    let result = osc_explain(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Blocked);
     assert_eq!(
@@ -1151,7 +1121,7 @@ fn codex_screen_blocker_outranks_working_fallback() {
 
 #[test]
 fn codex_weak_blocker_without_current_prompt_is_blocked() {
-    let result = osc_explain(
+    let result = detect_screen_with_osc(
         Agent::Codex,
         "do you want to continue? [y/n]\n",
         "project",
@@ -1170,7 +1140,7 @@ fn codex_current_prompt_keeps_weak_text_from_overriding_working_fallback() {
     let screen = "• Working (4s • esc to interrupt)\n\
         do you want to continue? [y/n]\n\
         › Use /skills to list available skills\n";
-    let result = osc_explain(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
@@ -1185,7 +1155,7 @@ fn codex_weak_blocker_ignores_finished_response_above_current_prompt() {
     let screen = "• The `wt rm` transcript now shows [y/N] / esc, matching the real prompt.\n\n\
         ─ Worked for 4m 59s ─\n\n\
         › Ask Codex to do anything\n";
-    let result = osc_explain(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
@@ -1199,7 +1169,7 @@ fn codex_weak_blocker_ignores_wrapped_current_prompt_text() {
     let screen = "› Explain why this prompt wraps before quoting the confirmation text\n\
           [y/N] / esc and whether the docs should include it\n\n\
           gpt-5.6-sol default · /work\n";
-    let result = osc_explain(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
@@ -1213,7 +1183,7 @@ fn codex_transcript_viewer_outranks_working_fallback() {
     let screen = "• Working (4s • esc to interrupt)\n\
         › transcript\n\
         ↑/↓ to scroll · pgup/pgdn to move · home/end to jump · q to quit · esc to edit prev\n";
-    let result = osc_explain(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Unknown);
     assert_eq!(
@@ -1239,7 +1209,7 @@ fn codex_screen_working_fallback_ignores_stale_and_prompt_text() {
     ];
 
     for screen in screens {
-        let result = osc_explain(Agent::Codex, screen, "project", "");
+        let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
         assert_eq!(result.state, AgentState::Idle);
         assert_eq!(
             result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -1255,7 +1225,7 @@ fn codex_screen_working_fallback_ignores_interrupted_short_terminal() {
     let screen = "◦ Working (1m 16s • esc to interrupt)\n\
         ■ Conversation interrupted\n\
         ›\n";
-    let result = osc_explain(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
@@ -1271,7 +1241,7 @@ fn codex_osc_working_beats_weak_blocker_screen() {
     // A stale [y/n] on screen triggers weak_blocker at priority 600, but an
     // active braille spinner in the OSC title is priority 1050 — OSC wins.
     let screen = "do you want to continue? [y/n]\n";
-    let result = osc_explain(Agent::Codex, screen, "⠋ llm-proxy", "");
+    let result = detect_screen_with_osc(Agent::Codex, screen, "⠋ llm-proxy", "");
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -1291,29 +1261,21 @@ const CURSOR_QUESTION_CONTROLS: &str = concat!(
     " └────────────────────────────────────────────────────────────────────────────────┘\n",
 );
 
-fn cursor_question_explain(screen: &str) -> DetectionExplain {
-    let loaded = bundled_loaded_manifest(
-        Agent::Cursor,
-        bundled_manifest(Agent::Cursor).unwrap(),
-        None,
-        None,
-        false,
-    );
-    evaluate_loaded_manifest(
-        Agent::Cursor,
+fn cursor_question_detection(screen: &str) -> Detected {
+    let loaded = bundled_loaded_manifest(Agent::Cursor, bundled_manifest(Agent::Cursor).unwrap());
+    detect_loaded(
         DetectionInput {
             screen,
             osc_title: "",
             osc_progress: "",
         },
-        loaded,
-        false,
+        &loaded,
     )
 }
 
 #[test]
 fn cursor_native_question_controls_are_a_visible_blocker() {
-    let result = cursor_question_explain(CURSOR_QUESTION_CONTROLS);
+    let result = cursor_question_detection(CURSOR_QUESTION_CONTROLS);
     assert_eq!(result.state, AgentState::Blocked);
     assert!(result.visible_blocker);
     assert!(!result.visible_working);
@@ -1333,7 +1295,7 @@ fn cursor_question_blocker_requires_both_options_and_navigation_controls() {
             .to_owned(),
     ];
     for screen in screens {
-        let result = cursor_question_explain(&screen);
+        let result = cursor_question_detection(&screen);
         assert_eq!(result.state, AgentState::Idle, "{screen}");
         assert!(!result.visible_blocker, "{screen}");
     }
@@ -1346,7 +1308,7 @@ fn cursor_previous_question_does_not_block_current_prompt_or_working_turn() {
         ("\n ctrl+c to stop\n", AgentState::Working),
     ] {
         let screen = format!("{CURSOR_QUESTION_CONTROLS}{suffix}");
-        let result = cursor_question_explain(&screen);
+        let result = cursor_question_detection(&screen);
         assert_eq!(result.state, expected, "{screen}");
         assert!(!result.visible_blocker, "{screen}");
     }
@@ -1385,23 +1347,15 @@ const CODEX_HOOKS_TRUSTED_TABLE: &str = concat!(
     "  Press enter to view hooks; esc to close\n",
 );
 
-fn codex_hooks_explain(screen: &str) -> DetectionExplain {
-    let loaded = bundled_loaded_manifest(
-        Agent::Codex,
-        bundled_manifest(Agent::Codex).unwrap(),
-        None,
-        None,
-        false,
-    );
-    evaluate_loaded_manifest(
-        Agent::Codex,
+fn codex_hooks_detection(screen: &str) -> Detected {
+    let loaded = bundled_loaded_manifest(Agent::Codex, bundled_manifest(Agent::Codex).unwrap());
+    detect_loaded(
         DetectionInput {
             screen,
             osc_title: "bus",
             osc_progress: "",
         },
-        loaded,
-        false,
+        &loaded,
     )
 }
 
@@ -1411,7 +1365,7 @@ fn codex_hooks_startup_chooser_blocks_at_every_selected_option() {
         let screen = CODEX_HOOKS_STARTUP
             .replace("› 1.", "  1.")
             .replace(&format!("  {selected}."), &format!("› {selected}."));
-        let result = codex_hooks_explain(&format!("codex\n~/work/bus\n✗ codex\n{screen}"));
+        let result = codex_hooks_detection(&format!("codex\n~/work/bus\n✗ codex\n{screen}"));
         assert_eq!(result.state, AgentState::Blocked, "selected={selected}");
         assert!(result.visible_blocker, "selected={selected}");
         assert_eq!(
@@ -1428,7 +1382,7 @@ fn codex_hooks_table_with_live_controls_blocks_without_a_pending_count_gate() {
         CODEX_HOOKS_TABLE.replace("  ⚠ 3 hooks need review before they can run.\n", ""),
         CODEX_HOOKS_TRUSTED_TABLE.to_owned(),
     ] {
-        let result = codex_hooks_explain(&screen);
+        let result = codex_hooks_detection(&screen);
         assert_eq!(result.state, AgentState::Blocked);
         assert!(result.visible_blocker);
         assert_eq!(
@@ -1446,11 +1400,11 @@ fn codex_hooks_blockers_require_live_controls_and_ignore_previous_menus() {
         CODEX_HOOKS_TRUSTED_TABLE,
     ] {
         let inactive = format!("{screen}\n› Ask Codex to do anything\n");
-        let result = codex_hooks_explain(&inactive);
+        let result = codex_hooks_detection(&inactive);
         assert_eq!(result.state, AgentState::Idle);
         assert!(!result.visible_blocker);
         let working = format!("{screen}\n• Working (4s • esc to interrupt)\n");
-        let result = codex_hooks_explain(&working);
+        let result = codex_hooks_detection(&working);
         assert_eq!(result.state, AgentState::Working);
         assert!(!result.visible_blocker);
     }
@@ -1466,7 +1420,7 @@ fn codex_hooks_blockers_require_live_controls_and_ignore_previous_menus() {
         CODEX_HOOKS_TRUSTED_TABLE.replace("Press enter to view hooks; esc to close", ""),
         "› Explain Hooks need review and Press enter to confirm or esc to go back\n".into(),
     ] {
-        let result = codex_hooks_explain(&screen);
+        let result = codex_hooks_detection(&screen);
         assert_eq!(result.state, AgentState::Idle, "{screen}");
         assert!(!result.visible_blocker, "{screen}");
     }

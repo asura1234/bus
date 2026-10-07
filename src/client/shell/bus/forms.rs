@@ -2,6 +2,7 @@ use super::editor::Editor;
 use crate::bus::{
     launch::{AddAgent, PathSuggestion, SetupNotice},
     model::*,
+    orchestrator::{self, OrchestratorSpec, PromptValues},
 };
 
 #[derive(Clone, Debug)]
@@ -18,10 +19,15 @@ pub(super) enum Form {
         cwd: Editor,
         args: Box<Editor>,
         field: usize,
+        /// Present only when adding a MASTER agent: the work room it will orchestrate.
+        orchestrates: Option<Orchestrates>,
+        /// Present only when adding a MASTER agent: its system prompt.
+        prompt: Option<Box<PromptField>>,
     },
     Files(Editor),
     Consent {
         input: AddAgent,
+        orchestrator: Option<OrchestratorSpec>,
         notice: SetupNotice,
     },
 }
@@ -35,11 +41,13 @@ impl Form {
                 cwd,
                 args,
                 field,
+                prompt,
                 ..
-            } => match field {
+            } => match *field {
                 0 => Some(name),
                 2 => Some(cwd),
                 3 => Some(args),
+                PROMPT_FIELD => prompt.as_mut().map(|prompt| &mut prompt.editor),
                 _ => None,
             },
             _ => None,
@@ -50,6 +58,100 @@ impl Form {
             Self::Files(editor) => Some((editor.text.clone(), false)),
             Self::Agent { cwd, field: 2, .. } => Some((cwd.text.clone(), true)),
             _ => None,
+        }
+    }
+}
+
+/// The providers the Add agent form offers, in order. A MASTER agent is an
+/// orchestrator, and Codex cannot be one (`orchestrator::check_new_orchestrator`).
+pub(super) fn provider_choices(orchestrator: bool) -> &'static [Provider] {
+    if orchestrator {
+        &[Provider::ClaudeCode, Provider::Cursor]
+    } else {
+        &[Provider::Codex, Provider::ClaudeCode, Provider::Cursor]
+    }
+}
+
+/// The MASTER agent form's room choice; `None` only while no work room is free,
+/// and then the form refuses to add the agent.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct Orchestrates(pub Option<RoomId>);
+
+/// The field index of the MASTER-only Orchestrates choice.
+pub(super) const ORCHESTRATES_FIELD: usize = 4;
+/// The field index of the MASTER-only multi-line system prompt.
+pub(super) const PROMPT_FIELD: usize = 5;
+
+/// A MASTER agent's system prompt and the text Bus last filled in, so a
+/// change of room or name re-fills it only until the human edits it.
+#[derive(Clone, Debug)]
+pub(super) struct PromptField {
+    pub editor: Editor,
+    pub filled: String,
+}
+
+impl Form {
+    /// How many fields Tab cycles through in the agent form.
+    pub fn agent_field_count(&self) -> usize {
+        match self {
+            Self::Agent {
+                orchestrates: Some(_),
+                ..
+            } => PROMPT_FIELD + 1,
+            _ => ORCHESTRATES_FIELD,
+        }
+    }
+
+    /// Fills the default orchestrator prompt for the form's name and `room`,
+    /// unless the human has edited the prompt since Bus last filled it.
+    pub fn refill_prompt(&mut self, room: Option<(String, RoomId)>, docs: &std::path::Path) {
+        let Self::Agent {
+            name,
+            prompt: Some(prompt),
+            ..
+        } = self
+        else {
+            return;
+        };
+        if prompt.editor.text != prompt.filled {
+            return;
+        }
+        let text = orchestrator::fill(
+            orchestrator::DEFAULT_PROMPT,
+            &PromptValues {
+                room,
+                agent: name.text.trim().to_owned(),
+                docs: docs.to_path_buf(),
+            },
+        );
+        if text != prompt.filled {
+            prompt.editor = Editor::new(text.clone());
+            prompt.editor.cursor = 0;
+            prompt.filled = text;
+        }
+    }
+}
+
+impl super::BusUi {
+    /// Re-fills an open MASTER agent form's prompt for its current room and name.
+    pub(super) fn refill_orchestrator_prompt(&mut self) {
+        let Some(Form::Agent {
+            orchestrates: Some(choice),
+            ..
+        }) = &self.form
+        else {
+            return;
+        };
+        let room = choice
+            .0
+            .and_then(|room| self.snapshot.state.room(room))
+            .map(|room| (room.name.clone(), room.id));
+        let docs = crate::bus::entry::data_dir().map_or_else(
+            || std::path::PathBuf::from("<BUS_DATA_DIR>/docs"),
+            |data| orchestrator::docs_dir(&data),
+        );
+        if let Some(form) = &mut self.form {
+            form.refill_prompt(room, &docs);
         }
     }
 }

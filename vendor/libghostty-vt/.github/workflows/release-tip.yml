@@ -80,8 +80,6 @@ jobs:
               - '!HACKING.md'
               - '!PACKAGING.md'
               - '!AI_POLICY.md'
-              - '!AGENTS.md'
-              - '!CLAUDE.md'
               - '!Doxyfile'
               - '!DoxygenLayout.xml'
               - '!LICENSE'

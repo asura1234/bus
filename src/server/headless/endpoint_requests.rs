@@ -5,7 +5,7 @@ impl HeadlessServer {
         &mut self,
         client_id: u64,
         boot_id: String,
-        mut request: Box<api::schema::Request>,
+        mut request: api::schema::Request,
     ) -> bool {
         let Some(client) = self.clients.get(&client_id) else {
             return false;
@@ -100,30 +100,15 @@ impl HeadlessServer {
         }
         if let Some(client) = self.clients.get_mut(&client_id) {
             client.shell_endpoint_command_in_flight = true;
-            // A later source restore has a new projection revision. Keep this request's lease
-            // so a delayed worktree response cannot focus a pane after endpoint switching.
             client.shell_endpoint_command_surface_revision = Some(client.shell_projection_revision);
-            let deferred_worktree = matches!(
-                &request.method,
-                api::schema::Method::WorktreeCreate(_) | api::schema::Method::WorktreeRemove(_)
-            );
-            let deferred_navigation = matches!(
-                &request.method,
-                api::schema::Method::WorktreeCreate(params) if params.focus
-            );
-            client.shell_deferred_navigation_request_id =
-                deferred_worktree.then(|| api_request_id.clone());
-            client.shell_deferred_navigation_response = deferred_navigation.then(Vec::new);
         }
         let foreground_changed = self.promote_client_to_foreground(client_id);
         foreground_changed
             | self.handle_client_shell_api_request(
                 client_id,
                 api::ApiRequestMessage {
-                    request: *request,
+                    request,
                     respond_to,
-                    response_write_complete: None,
-                    stream_active: None,
                 },
             )
     }

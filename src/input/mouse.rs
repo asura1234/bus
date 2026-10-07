@@ -20,6 +20,7 @@ pub(crate) struct HostPixels {
 }
 
 impl HostGeometry {
+    #[cfg(any(unix, test))]
     pub(crate) fn new(cols: u16, rows: u16, width_px: u32, height_px: u32) -> Option<Self> {
         (cols > 0 && rows > 0 && width_px > 0 && height_px > 0).then_some(Self {
             cols,

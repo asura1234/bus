@@ -22,8 +22,6 @@ use crate::ipc::{
     socket_file_identity, LocalStream, LocalStreamRead, SocketFileIdentity,
 };
 
-mod pane_graphics_stream;
-
 const SOCKET_PERMISSION_MODE: u32 = 0o600;
 pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub(super) const APP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -61,24 +59,23 @@ pub(crate) fn start_server_with_stop_control(
     event_hub: EventHub,
     server_stop: Arc<AtomicBool>,
 ) -> std::io::Result<ServerHandle> {
-    start_server_inner(api_tx, event_hub, default_capabilities(), Some(server_stop))
+    start_server_inner(api_tx, event_hub, default_capabilities(), server_stop)
 }
 
-fn default_capabilities() -> Option<ServerCapabilities> {
-    Some(ServerCapabilities {
-        live_handoff: crate::platform::capabilities().live_handoff,
+fn default_capabilities() -> ServerCapabilities {
+    ServerCapabilities {
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
         surface_interest: true,
         health_check: true,
-    })
+    }
 }
 
 fn start_server_inner(
     api_tx: ApiRequestSender,
     event_hub: EventHub,
-    capabilities: Option<ServerCapabilities>,
-    server_stop: Option<Arc<AtomicBool>>,
+    capabilities: ServerCapabilities,
+    server_stop: Arc<AtomicBool>,
 ) -> std::io::Result<ServerHandle> {
     let path = socket_path();
     prepare_socket_path(&path)?;
@@ -97,7 +94,7 @@ fn start_server_inner(
                     let api_tx = api_tx.clone();
                     let event_hub = event_hub.clone();
                     let capabilities = capabilities.clone();
-                    let server_stop = server_stop.clone();
+                    let server_stop = Arc::clone(&server_stop);
                     let connection_running = Arc::clone(&listener_running);
                     std::thread::spawn(move || {
                         if let Err(err) = handle_connection_with_stop(
@@ -106,7 +103,7 @@ fn start_server_inner(
                             &event_hub,
                             &connection_running,
                             capabilities,
-                            server_stop.as_ref(),
+                            &server_stop,
                         ) {
                             warn!(err = %err, "api connection failed");
                         }
@@ -148,9 +145,15 @@ fn handle_connection(
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
-    capabilities: Option<ServerCapabilities>,
 ) -> std::io::Result<()> {
-    handle_connection_with_stop(stream, api_tx, event_hub, running, capabilities, None)
+    handle_connection_with_stop(
+        stream,
+        api_tx,
+        event_hub,
+        running,
+        default_capabilities(),
+        &Arc::new(AtomicBool::new(false)),
+    )
 }
 
 fn handle_connection_with_stop(
@@ -158,8 +161,8 @@ fn handle_connection_with_stop(
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
-    capabilities: Option<ServerCapabilities>,
-    server_stop: Option<&Arc<AtomicBool>>,
+    capabilities: ServerCapabilities,
+    server_stop: &Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     if let Err(err) = stream.set_send_timeout(Some(STREAM_WRITE_TIMEOUT)) {
         debug!(err = %err, "api connection write timeout unavailable");
@@ -197,22 +200,6 @@ fn handle_connection_with_stop(
     crate::logging::api_request_started(&request_id, method, changes_ui);
 
     match request.method {
-        Method::PaneGraphicsStream(params) => {
-            let result =
-                pane_graphics_stream::serve(stream, request_id.clone(), params, api_tx, running);
-            match &result {
-                Ok(()) => crate::logging::api_request_completed(
-                    &request_id,
-                    method,
-                    "stream_closed",
-                    changes_ui,
-                ),
-                Err(err) => {
-                    crate::logging::api_request_failed(&request_id, method, &err.to_string())
-                }
-            }
-            result
-        }
         Method::EventsSubscribe(params) => {
             let result = stream_subscriptions(
                 stream,
@@ -274,7 +261,6 @@ fn handle_connection_with_stop(
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
         method_body => {
-            let (response_write_tx, response_write_rx) = std::sync::mpsc::channel();
             let response = handle_request(
                 Request {
                     id: request_id.clone(),
@@ -283,10 +269,8 @@ fn handle_connection_with_stop(
                 api_tx,
                 capabilities,
                 server_stop,
-                Some(response_write_rx),
             );
             let result = write_text_line_allow_disconnect(&mut stream, &response);
-            let _ = response_write_tx.send(());
             match &result {
                 Ok(()) => crate::logging::api_request_completed(
                     &request_id,
@@ -335,9 +319,8 @@ fn finish_wait_response(
 fn handle_request(
     request: Request,
     api_tx: &ApiRequestSender,
-    capabilities: Option<ServerCapabilities>,
-    server_stop: Option<&Arc<AtomicBool>>,
-    response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
+    capabilities: ServerCapabilities,
+    server_stop: &Arc<AtomicBool>,
 ) -> String {
     if matches!(&request.method, Method::Ping(_)) {
         return serde_json::to_string(&SuccessResponse {
@@ -345,7 +328,7 @@ fn handle_request(
             result: ResponseResult::Pong {
                 version: crate::build_info::version(),
                 protocol: crate::protocol::PROTOCOL_VERSION,
-                capabilities,
+                capabilities: Some(capabilities),
             },
         })
         .unwrap_or_else(|_| {
@@ -363,15 +346,13 @@ fn handle_request(
     }
 
     if matches!(&request.method, Method::ServerStop(_)) {
-        if let Some(server_stop) = server_stop {
-            server_stop.store(true, Ordering::Release);
-            return serde_json::to_string(&SuccessResponse {
-                id: request.id,
-                result: ResponseResult::Ok {},
-            })
-            .unwrap_or_else(|_| "{}".to_string());
-        }
-    } else if server_stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+        server_stop.store(true, Ordering::Release);
+        return serde_json::to_string(&SuccessResponse {
+            id: request.id,
+            result: ResponseResult::Ok {},
+        })
+        .unwrap_or_else(|_| "{}".to_string());
+    } else if server_stop.load(Ordering::Acquire) {
         return error_response_json(
             request.id,
             "server_unavailable",
@@ -379,21 +360,15 @@ fn handle_request(
         );
     }
 
-    dispatch_to_app(request, api_tx, None, response_write_complete, None, None)
+    dispatch_to_app(request, api_tx, None, None)
 }
 
 pub(crate) fn api_method_name(method: &Method) -> &'static str {
     match method {
         Method::Ping(_) => "ping",
         Method::ServerStop(_) => "server.stop",
-        Method::ServerLiveHandoff(_) => "server.live_handoff",
         Method::ServerReloadConfig(_) => "server.reload_config",
-        Method::ServerAgentManifests(_) => "server.agent_manifests",
-        Method::ServerReloadAgentManifests(_) => "server.reload_agent_manifests",
         Method::NotificationShow(_) => "notification.show",
-        Method::ProductAnnouncementDismiss(_) => "product_announcement.dismiss",
-        Method::ReleaseNotesDismiss(_) => "release_notes.dismiss",
-        Method::CommandInvoke(_) => "command.invoke",
         Method::ClientWindowTitleSet(_) => "client.window_title.set",
         Method::ClientWindowTitleClear(_) => "client.window_title.clear",
         Method::ClientShellSurfaceSet(_) => "client_shell.surface.set",
@@ -404,30 +379,21 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::WorkspaceFocus(_) => "workspace.focus",
         Method::WorkspaceRename(_) => "workspace.rename",
         Method::WorkspaceMove(_) => "workspace.move",
-        Method::WorkspaceMoveBlock(_) => "workspace.move_block",
-        Method::WorkspaceReportMetadata(_) => "workspace.report_metadata",
         Method::WorkspaceClose(_) => "workspace.close",
-        Method::WorktreeList(_) => "worktree.list",
-        Method::WorktreeCreate(_) => "worktree.create",
-        Method::WorktreeOpen(_) => "worktree.open",
-        Method::WorktreeRemove(_) => "worktree.remove",
         Method::TabCreate(_) => "tab.create",
         Method::TabList(_) => "tab.list",
         Method::TabGet(_) => "tab.get",
         Method::TabFocus(_) => "tab.focus",
         Method::TabRename(_) => "tab.rename",
-        Method::TabMove(_) => "tab.move",
         Method::TabClose(_) => "tab.close",
         Method::AgentList(_) => "agent.list",
         Method::AgentGet(_) => "agent.get",
         Method::AgentRead(_) => "agent.read",
-        Method::AgentPermissionObserve(_) => "agent.permission.observe",
-        Method::AgentApproveOnce(_) => "agent.approve_once",
-        Method::AgentExplain(_) => "agent.explain",
+        Method::AgentDialogObserve(_) => "agent.dialog.observe",
+        Method::AgentDialogChoose(_) => "agent.dialog.choose",
+        Method::AgentDialogAnswer(_) => "agent.dialog.answer",
         Method::AgentSendKeys(_) => "agent.send_keys",
         Method::AgentRename(_) => "agent.rename",
-        Method::AgentViewSet(_) => "agent.view.set",
-        Method::AgentViewClear(_) => "agent.view.clear",
         Method::AgentFocus(_) => "agent.focus",
         Method::AgentStart(_) => "agent.start",
         Method::AgentPrompt(_) => "agent.prompt",
@@ -436,19 +402,12 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::AgentWait(_) => "agent.wait",
         Method::PaneSplit(_) => "pane.split",
         Method::PaneSwap(_) => "pane.swap",
-        Method::PaneMove(_) => "pane.move",
         Method::PaneZoom(_) => "pane.zoom",
         Method::PaneLayout(_) => "pane.layout",
-        Method::PaneProcessInfo(_) => "pane.process_info",
-        Method::LayoutExport(_) => "layout.export",
-        Method::LayoutApply(_) => "layout.apply",
         Method::LayoutSetSplitRatio(_) => "layout.set_split_ratio",
-        Method::PaneNeighbor(_) => "pane.neighbor",
-        Method::PaneEdges(_) => "pane.edges",
         Method::PaneFocusDirection(_) => "pane.focus_direction",
         Method::PaneResize(_) => "pane.resize",
         Method::PaneScroll(_) => "pane.scroll",
-        Method::PaneEditScrollback(_) => "pane.edit_scrollback",
         Method::PaneSelectionRead(_) => "pane.selection.read",
         Method::PaneCopyMotion(_) => "pane.copy_motion",
         Method::PaneCopySearch(_) => "pane.copy_search",
@@ -463,39 +422,12 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PaneSendKeys(_) => "pane.send_keys",
         Method::PaneSendInput(_) => "pane.send_input",
         Method::PaneRead(_) => "pane.read",
-        Method::PaneGraphicsSet(_) => "pane.graphics.set",
-        Method::PaneGraphicsClear(_) => "pane.graphics.clear",
-        Method::PaneGraphicsInfo(_) => "pane.graphics.info",
-        Method::PaneGraphicsStream(_) => "pane.graphics.stream",
-        Method::PaneGraphicsStreamSet(_) => "pane.graphics.stream.set",
-        Method::PaneGraphicsStreamDirect(_) => "pane.graphics.stream.direct",
-        Method::PaneGraphicsStreamOpen(_) => "pane.graphics.stream.open",
-        Method::PaneGraphicsStreamClose(_) => "pane.graphics.stream.close",
-        Method::PaneReportAgent(_) => "pane.report_agent",
         Method::PaneReportAgentSession(_) => "pane.report_agent_session",
-        Method::PaneReportMetadata(_) => "pane.report_metadata",
-        Method::PaneClearAgentAuthority(_) => "pane.clear_agent_authority",
-        Method::PaneReleaseAgent(_) => "pane.release_agent",
         Method::PaneClose(_) => "pane.close",
         Method::PaneCloseIfIdentity(_) => "pane.close_if_identity",
-        Method::PopupClose(_) => "popup.close",
         Method::EventsSubscribe(_) => "events.subscribe",
         Method::EventsWait(_) => "events.wait",
         Method::PaneWaitForOutput(_) => "pane.wait_for_output",
-        Method::IntegrationList(_) => "integration.list",
-        Method::IntegrationInstall(_) => "integration.install",
-        Method::IntegrationUninstall(_) => "integration.uninstall",
-        Method::PluginLink(_) => "plugin.link",
-        Method::PluginList(_) => "plugin.list",
-        Method::PluginUnlink(_) => "plugin.unlink",
-        Method::PluginEnable(_) => "plugin.enable",
-        Method::PluginDisable(_) => "plugin.disable",
-        Method::PluginActionList(_) => "plugin.action.list",
-        Method::PluginActionInvoke(_) => "plugin.action.invoke",
-        Method::PluginLogList(_) => "plugin.log.list",
-        Method::PluginPaneOpen(_) => "plugin.pane.open",
-        Method::PluginPaneFocus(_) => "plugin.pane.focus",
-        Method::PluginPaneClose(_) => "plugin.pane.close",
     }
 }
 
@@ -602,7 +534,6 @@ mod windows_tests {
                 &api_tx,
                 &EventHub::default(),
                 &Arc::new(AtomicBool::new(true)),
-                None,
             );
             done_tx.send(result).unwrap();
         });
@@ -814,7 +745,7 @@ pub(super) fn dispatch_to_app_with_timeout(
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
 ) -> String {
-    dispatch_to_app(request, api_tx, timeout, None, None, None)
+    dispatch_to_app(request, api_tx, timeout, None)
 }
 
 pub(super) fn dispatch_to_app_with_caller_timeout(
@@ -826,33 +757,7 @@ pub(super) fn dispatch_to_app_with_caller_timeout(
         request,
         api_tx,
         timeout,
-        None,
-        None,
         Some(("timeout", "timed out waiting for agent status")),
-    )
-}
-
-pub(super) fn dispatch_stream_open(
-    request: Request,
-    api_tx: &ApiRequestSender,
-    timeout: Duration,
-    active: Arc<AtomicBool>,
-) -> String {
-    dispatch_to_app(request, api_tx, Some(timeout), None, Some(active), None)
-}
-
-pub(super) fn dispatch_stream_frame(
-    request: Request,
-    api_tx: &ApiRequestSender,
-    active: Arc<AtomicBool>,
-) -> String {
-    dispatch_to_app(
-        request,
-        api_tx,
-        Some(crate::app::pane_graphics::DIRECT_OUTER_TIMEOUT),
-        None,
-        Some(active),
-        None,
     )
 }
 
@@ -860,22 +765,14 @@ fn dispatch_to_app(
     request: Request,
     api_tx: &ApiRequestSender,
     timeout: Option<Duration>,
-    response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
-    stream_active: Option<Arc<AtomicBool>>,
     timeout_response: Option<(&str, &str)>,
 ) -> String {
     let request_id = request.id.clone();
-    let request_active = stream_active.clone();
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     if let Err(err) = api_tx.send(ApiRequestMessage {
         request,
         respond_to,
-        response_write_complete,
-        stream_active,
     }) {
-        if let Some(active) = request_active {
-            active.store(false, Ordering::Release);
-        }
         return error_response_json(
             request_id,
             "server_unavailable",
@@ -905,9 +802,6 @@ fn dispatch_to_app(
     match response {
         Ok(response) => response,
         Err(err) => {
-            if let Some(active) = request_active {
-                active.store(false, Ordering::Release);
-            }
             if err.kind() == std::io::ErrorKind::TimedOut {
                 if let Some((code, message)) = timeout_response {
                     return error_response_json(request_id, code, message.into());
@@ -964,12 +858,11 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
     use tokio::sync::mpsc;
 
     fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+        crate::config::test_config_env_lock()
     }
 
     fn unique_test_path(name: &str) -> PathBuf {
@@ -1070,6 +963,7 @@ mod tests {
     #[test]
     fn socket_path_defaults_to_config_dir_even_when_xdg_runtime_dir_is_set() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home = unique_test_path("socket-default-config-home");
         let runtime_dir = unique_test_path("socket-default-runtime");
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
@@ -1090,6 +984,7 @@ mod tests {
     #[test]
     fn socket_path_uses_named_session_dir() {
         let _guard = env_lock().lock().unwrap();
+        let _bus = crate::config::test_without_bus_env(&_guard);
         let config_home = unique_test_path("socket-named-config-home");
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
@@ -1146,17 +1041,8 @@ mod tests {
                 method: Method::Ping(crate::api::schema::PingParams::default()),
             },
             &tx,
-            Some(ServerCapabilities {
-                live_handoff: true,
-                detached_server_daemon: true,
-                endpoint_protocol_generation: Some(
-                    crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
-                ),
-                surface_interest: true,
-                health_check: true,
-            }),
-            None,
-            None,
+            default_capabilities(),
+            &Arc::new(AtomicBool::new(false)),
         );
 
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -1174,9 +1060,8 @@ mod tests {
                 method: Method::ServerStop(crate::api::schema::EmptyParams::default()),
             },
             &tx,
-            None,
-            Some(&stop),
-            None,
+            default_capabilities(),
+            &stop,
         );
 
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -1190,9 +1075,8 @@ mod tests {
                 method: Method::WorkspaceList(crate::api::schema::EmptyParams::default()),
             },
             &tx,
-            None,
-            Some(&stop),
-            None,
+            default_capabilities(),
+            &stop,
         );
         let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
         assert_eq!(rejected["error"]["code"], "server_unavailable");
@@ -1208,8 +1092,14 @@ mod tests {
         };
 
         let request_for_thread = request.clone();
-        let thread =
-            std::thread::spawn(move || handle_request(request_for_thread, &tx, None, None, None));
+        let thread = std::thread::spawn(move || {
+            handle_request(
+                request_for_thread,
+                &tx,
+                default_capabilities(),
+                &Arc::new(AtomicBool::new(false)),
+            )
+        });
 
         let msg = rx.blocking_recv().unwrap();
         assert_eq!(msg.request.id, "req_2");
@@ -1229,45 +1119,6 @@ mod tests {
     }
 
     #[test]
-    fn dispatched_request_reports_response_write_completion() {
-        let (api_tx, mut api_rx) = mpsc::unbounded_channel();
-        let (mut client, server, _path) = local_stream_pair("write-ack");
-        client
-            .write_all(br#"{"id":"req_write","method":"workspace.list","params":{}}"#)
-            .unwrap();
-        client.write_all(b"\n").unwrap();
-        client.flush().unwrap();
-
-        let running = Arc::new(AtomicBool::new(true));
-        let server_running = Arc::clone(&running);
-        let event_hub = EventHub::default();
-        let server_thread = std::thread::spawn(move || {
-            handle_connection(server, &api_tx, &event_hub, &server_running, None)
-        });
-
-        let msg = api_rx.blocking_recv().unwrap();
-        let response_write_complete = msg
-            .response_write_complete
-            .expect("socket-dispatched requests include write completion");
-        msg.respond_to
-            .send(
-                serde_json::to_string(&SuccessResponse {
-                    id: msg.request.id,
-                    result: ResponseResult::Ok {},
-                })
-                .unwrap(),
-            )
-            .unwrap();
-
-        response_write_complete
-            .recv_timeout(Duration::from_secs(1))
-            .expect("response write completion");
-        let response: SuccessResponse = serde_json::from_str(&read_line(&mut client)).unwrap();
-        assert_eq!(response.id, "req_write");
-        server_thread.join().unwrap().unwrap();
-    }
-
-    #[test]
     fn events_wait_agent_status_returns_initial_match() {
         let (api_tx, responder) =
             spawn_pane_get_responder(crate::api::schema::AgentStatus::Blocked);
@@ -1281,7 +1132,7 @@ mod tests {
 
         let running = Arc::new(AtomicBool::new(true));
         let event_hub = EventHub::default();
-        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+        handle_connection(server, &api_tx, &event_hub, &running).unwrap();
 
         let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
         assert_eq!(response["id"], "wait_1");
@@ -1308,7 +1159,7 @@ mod tests {
 
         let running = Arc::new(AtomicBool::new(true));
         let event_hub = EventHub::default();
-        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+        handle_connection(server, &api_tx, &event_hub, &running).unwrap();
 
         let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
         assert_eq!(response["id"], "wait_2");
@@ -1369,7 +1220,7 @@ mod tests {
         client.flush().unwrap();
 
         let running = Arc::new(AtomicBool::new(true));
-        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+        handle_connection(server, &api_tx, &event_hub, &running).unwrap();
 
         let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
         assert_eq!(response["id"], "wait_close");
@@ -1432,7 +1283,7 @@ mod tests {
         let event_hub = EventHub::default();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let server_thread = std::thread::spawn(move || {
-            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
+            let result = handle_connection(server, &api_tx, &event_hub, &server_running);
             done_tx.send(result).unwrap();
         });
 
@@ -1464,7 +1315,7 @@ mod tests {
         let event_hub = EventHub::default();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let server_thread = std::thread::spawn(move || {
-            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
+            let result = handle_connection(server, &api_tx, &event_hub, &server_running);
             done_tx.send(result).unwrap();
         });
 
@@ -1496,7 +1347,7 @@ mod tests {
         let event_hub = EventHub::default();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let server_thread = std::thread::spawn(move || {
-            let result = handle_connection(server, &api_tx, &event_hub, &server_running, None);
+            let result = handle_connection(server, &api_tx, &event_hub, &server_running);
             done_tx.send(result).unwrap();
         });
 
@@ -1509,41 +1360,5 @@ mod tests {
         let result = done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(result.is_ok());
         server_thread.join().unwrap();
-    }
-}
-
-#[cfg(test)]
-mod pane_graphics_request_tests {
-    use super::*;
-    use base64::Engine as _;
-
-    #[test]
-    fn maximum_public_graphics_request_fits_initial_json_line() {
-        let request = Request {
-            id: "graphics-max".into(),
-            method: Method::PaneGraphicsSet(crate::api::schema::PaneGraphicsSetParams {
-                pane_id: "pane_1".into(),
-                layer_id: None,
-                z_index: 0,
-                owner: String::new(),
-                format: crate::api::schema::PaneGraphicsFormat::Png,
-                image_width: 1,
-                image_height: 1,
-                data_base64: base64::engine::general_purpose::STANDARD
-                    .encode(vec![1_u8; crate::api::schema::PANE_GRAPHICS_SET_MAX_BYTES]),
-                data: None,
-                placement: crate::api::schema::PaneGraphicsPlacementParams::default(),
-            }),
-        };
-        let encoded = serde_json::to_vec(&request).unwrap();
-
-        assert!(encoded.len() < MAX_INITIAL_REQUEST_BYTES);
-    }
-
-    #[test]
-    fn duplicate_method_cannot_be_reinterpreted_as_graphics_stream() {
-        let encoded = r#"{"id":"duplicate","method":"ping","method":"pane.graphics.stream","params":{"pane_id":"pane_1"}}"#;
-
-        assert!(serde_json::from_str::<Request>(encoded).is_err());
     }
 }

@@ -1,8 +1,9 @@
 use super::*;
 use crate::api::schema::AgentStatus;
+use crate::protocol::ClientShellWorkspace;
 use crate::protocol::{
-    ClientShellAgent, ClientShellPane, ClientShellTab, ClientShellWorktree, PaneSurfacePane,
-    PaneSurfaceSplit, PaneSurfaceSplitDirection, SurfaceRect,
+    ClientShellPane, ClientShellTab, PaneSurfacePane, PaneSurfaceSplit, PaneSurfaceSplitDirection,
+    SurfaceRect,
 };
 use crossterm::event::MouseEvent;
 
@@ -11,19 +12,9 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
         boot_id: "boot-1".into(),
         revision: 1,
         config_diagnostic: None,
-        product_announcement: None,
-        update_available: None,
-        update_install_command: "herdr update".into(),
-        server_keybindings_toml: None,
-        latest_release_notes_available: false,
-        integration_updates_available: false,
-        worktree_directory: "/tmp/herdr-worktrees".into(),
-        release_notes: None,
         focused_workspace_id: Some("ws_1".into()),
         focused_tab_id: Some("tab_1".into()),
         focused_pane_id: Some("pane_1".into()),
-        tab_bar_right: Vec::new(),
-        tab_bar_right_separator: " ".into(),
         agent_view_label: None,
         agent_order: Vec::new(),
         workspaces: vec![ClientShellWorkspace {
@@ -33,10 +24,7 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
             number: 1,
             label: "client-shell".into(),
             custom_label: false,
-            branch: Some("main".into()),
-            git_ahead_behind: None,
             tokens: Vec::new(),
-            worktree: None,
             focused: true,
             agent_status: AgentStatus::Idle,
         }],
@@ -61,29 +49,6 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
             right_click_passthrough: false,
         }],
         agents: Vec::new(),
-        commands: Vec::new(),
-    }
-}
-
-fn worktree_list_result(open_workspace_id: Option<&str>) -> crate::api::schema::ResponseResult {
-    crate::api::schema::ResponseResult::WorktreeList {
-        source: crate::api::schema::WorktreeSourceInfo {
-            repo_key: "repo-key".into(),
-            repo_name: "repo".into(),
-            repo_root: "/repo".into(),
-            source_checkout_path: "/repo".into(),
-            source_workspace_id: Some("ws_1".into()),
-        },
-        worktrees: vec![crate::api::schema::WorktreeInfo {
-            path: "/repo-feature".into(),
-            branch: Some("feature".into()),
-            is_bare: false,
-            is_detached: false,
-            is_prunable: false,
-            is_linked_worktree: true,
-            open_workspace_id: open_workspace_id.map(str::to_owned),
-            label: "repo".into(),
-        }],
     }
 }
 
@@ -128,7 +93,6 @@ pub(super) fn surface() -> PaneSurfaceFrame {
             pixel_height: 0,
         }],
         splits: Vec::new(),
-        popup: None,
         graphics: crate::protocol::SurfaceGraphicsScene::default(),
     }
 }
@@ -167,56 +131,10 @@ fn pane_scroll_result(
     }
 }
 
-fn copy_search_result(
-    matches: Vec<crate::api::schema::PaneTextRange>,
-    current: Option<u32>,
-) -> crate::api::schema::ResponseResult {
-    let total = matches.len() as u64;
-    crate::api::schema::ResponseResult::PaneCopySearch {
-        pane_id: "pane_1".into(),
-        content_revision: 0,
-        matches,
-        total,
-        current,
-        current_global: current.map(u64::from),
-    }
-}
-
-fn surface_with_popup() -> PaneSurfaceFrame {
-    let mut surface = surface();
-    let popup_buffer = Buffer::with_lines(["popup-live", "", ""]);
-    surface.popup = Some(Box::new(crate::protocol::ClientShellPopupSurface {
-        terminal_id: "terminal-popup".into(),
-        title: "popup title".into(),
-        width: Some(crate::protocol::ClientShellPopupSize::Cells(12)),
-        height: Some(crate::protocol::ClientShellPopupSize::Cells(5)),
-        frame: FrameData::from_ratatui_buffer_with_hyperlinks(
-            &popup_buffer,
-            Some(crate::protocol::CursorState {
-                x: 2,
-                y: 1,
-                visible: true,
-                shape: 1,
-            }),
-            &[],
-        ),
-        mouse_reporting: true,
-        sgr_pixel_mouse: false,
-        pixel_width: 0,
-        pixel_height: 0,
-    }));
-    surface
-}
-
-mod agents_worktrees_notifications;
-mod chrome_context;
-mod copy;
 mod endpoint_requests;
-mod endpoints;
+mod focus_projection;
 #[path = "input.rs"]
 mod input_domain;
-mod keybindings_settings;
-mod mobile;
 mod mouse_selection;
-mod popup_focus_projection;
-mod startup_overlays;
+mod selection_copy;
+mod startup_diagnostics;

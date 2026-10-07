@@ -1,120 +1,176 @@
-use std::fmt;
+use std::io;
+use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
+use crate::protocol::ClientMessage;
 
-mod activation;
-mod catalog;
-mod control;
-mod health;
-mod message_policy;
-mod registry;
-mod supervisor;
 mod writer;
 
-pub(crate) use activation::*;
-pub(crate) use catalog::*;
-pub(crate) use control::*;
-pub(crate) use message_policy::*;
-pub(crate) use registry::*;
-pub(crate) use supervisor::*;
 pub(crate) use writer::NativeEndpointTransport;
 
-const PROFILE_ID_BYTES: usize = 16;
+const EXIT_FLUSH_GRACE: Duration = Duration::from_millis(250);
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub(crate) struct ProfileId(String);
+pub(crate) trait EndpointTransport: Send {
+    fn send(&mut self, message: &ClientMessage) -> io::Result<()>;
 
-impl ProfileId {
-    pub(crate) fn parse(value: impl Into<String>) -> Result<Self, String> {
-        let value = value.into();
-        if value.len() != PROFILE_ID_BYTES * 2
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    fn disconnect(&mut self) {}
+
+    fn flush(&mut self, _deadline: Instant) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn take_error(&mut self) -> Option<io::Error> {
+        None
+    }
+}
+
+/// The client's one connection to its local server. A failed send or a lost reader drops the
+/// transport and keeps the first error for the event loop, which then ends the client.
+pub(crate) struct ServerConnection {
+    transport: Option<Box<dyn EndpointTransport>>,
+    failure: Option<io::Error>,
+}
+
+impl ServerConnection {
+    pub(crate) fn new(transport: impl EndpointTransport + 'static) -> Self {
+        Self {
+            transport: Some(Box::new(transport)),
+            failure: None,
+        }
+    }
+
+    pub(crate) fn is_connected(&self) -> bool {
+        self.transport.is_some()
+    }
+
+    pub(crate) fn send(&mut self, message: &ClientMessage) -> io::Result<()> {
+        let result = match self.transport.as_mut() {
+            Some(transport) => transport.send(message),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "server connection is closed",
+            )),
+        };
+        if let Err(error) = &result {
+            self.fail(io::Error::new(error.kind(), error.to_string()));
+        }
+        result
+    }
+
+    pub(crate) fn fail(&mut self, error: io::Error) {
+        if let Some(mut transport) = self.transport.take() {
+            transport.disconnect();
+            self.failure = Some(error);
+        }
+    }
+
+    pub(crate) fn take_failure(&mut self) -> Option<io::Error> {
+        if let Some(error) = self
+            .transport
+            .as_mut()
+            .and_then(|transport| transport.take_error())
         {
-            return Err("endpoint profile id must be 32 lowercase hexadecimal characters".into());
+            self.fail(error);
         }
-        Ok(Self(value))
-    }
-
-    pub(crate) fn generate() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-        let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let digest = Sha256::digest(format!("{}:{now}:{sequence}", std::process::id()).as_bytes());
-        Self(
-            digest[..PROFILE_ID_BYTES]
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect(),
-        )
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
+        self.failure.take()
     }
 }
 
-impl fmt::Display for ProfileId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+impl Drop for ServerConnection {
+    fn drop(&mut self) {
+        let Some(mut transport) = self.transport.take() else {
+            return;
+        };
+        let _ = transport.send(&ClientMessage::Detach);
+        let _ = transport.flush(Instant::now() + EXIT_FLUSH_GRACE);
+        transport.disconnect();
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum ClientEndpointId {
-    Local,
-    Ssh(ProfileId),
+pub(crate) enum EndpointControlMessage {
+    Snapshot(Box<crate::protocol::ClientShellSnapshot>),
+    Ignored,
 }
 
-impl ClientEndpointId {
-    pub(crate) fn is_local(&self) -> bool {
-        matches!(self, Self::Local)
+pub(crate) fn decode_endpoint_control(
+    kind: &str,
+    data: &str,
+) -> Result<EndpointControlMessage, String> {
+    if kind == crate::protocol::endpoint::ENDPOINT_SNAPSHOT_KIND {
+        let snapshot = serde_json::from_str(data)
+            .map_err(|error| format!("invalid endpoint snapshot: {error}"))?;
+        return Ok(EndpointControlMessage::Snapshot(Box::new(snapshot)));
     }
-
-    pub(crate) fn storage_key(&self) -> String {
-        match self {
-            Self::Local => "local".into(),
-            Self::Ssh(profile_id) => format!("ssh:{profile_id}"),
-        }
+    if kind.starts_with("shell.snapshot.") {
+        return Err(format!(
+            "unsupported mandatory endpoint snapshot codec {kind:?}"
+        ));
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ClientEndpointStatus {
-    Connecting,
-    Online,
-    Reconnecting,
-    Attention,
-    Disabled,
+    Ok(EndpointControlMessage::Ignored)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
 
-    #[test]
-    fn profile_ids_are_opaque_and_stable_when_parsed() {
-        let first = ProfileId::generate();
-        let second = ProfileId::generate();
-        assert_ne!(first, second);
-        assert_eq!(ProfileId::parse(first.to_string()).unwrap(), first);
-        assert_eq!(first.as_str().len(), 32);
+    struct FakeTransport {
+        sent: Arc<Mutex<Vec<ClientMessage>>>,
+        fail: bool,
+    }
+
+    impl EndpointTransport for FakeTransport {
+        fn send(&mut self, message: &ClientMessage) -> io::Result<()> {
+            if self.fail {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "fake failure"));
+            }
+            self.sent.lock().unwrap().push(message.clone());
+            Ok(())
+        }
     }
 
     #[test]
-    fn endpoint_storage_keys_do_not_contain_ssh_targets() {
-        let profile = ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap();
+    fn a_failed_send_closes_the_connection_and_reports_once() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let mut connection = ServerConnection::new(FakeTransport {
+            sent: sent.clone(),
+            fail: true,
+        });
+        assert!(connection.send(&ClientMessage::Detach).is_err());
+        assert!(!connection.is_connected());
         assert_eq!(
-            ClientEndpointId::Ssh(profile).storage_key(),
-            "ssh:0123456789abcdef0123456789abcdef"
+            connection.take_failure().map(|error| error.kind()),
+            Some(io::ErrorKind::BrokenPipe)
+        );
+        assert!(connection.take_failure().is_none());
+        assert!(sent.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dropping_the_connection_sends_detach() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        drop(ServerConnection::new(FakeTransport {
+            sent: sent.clone(),
+            fail: false,
+        }));
+        assert_eq!(*sent.lock().unwrap(), vec![ClientMessage::Detach]);
+    }
+
+    #[test]
+    fn unknown_optional_controls_are_ignored() {
+        assert!(matches!(
+            decode_endpoint_control("future.optional", "not json").unwrap(),
+            EndpointControlMessage::Ignored
+        ));
+    }
+
+    #[test]
+    fn unknown_snapshot_codecs_are_rejected() {
+        assert_eq!(
+            decode_endpoint_control("shell.snapshot.v2", "{}")
+                .err()
+                .as_deref(),
+            Some("unsupported mandatory endpoint snapshot codec \"shell.snapshot.v2\"")
         );
     }
 }

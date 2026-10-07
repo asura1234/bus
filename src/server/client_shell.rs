@@ -61,16 +61,7 @@ pub(super) fn snapshot(
                 number: workspace.number,
                 label: workspace.label,
                 custom_label: state.custom_name.is_some(),
-                branch: state.branch(),
-                git_ahead_behind: state.git_ahead_behind(),
                 tokens,
-                worktree: workspace
-                    .worktree
-                    .map(|worktree| protocol::ClientShellWorktree {
-                        key: worktree.repo_key,
-                        label: worktree.repo_name,
-                        is_linked_worktree: worktree.is_linked_worktree,
-                    }),
                 agent_status: workspace.agent_status,
             }
         })
@@ -154,92 +145,24 @@ pub(super) fn snapshot(
         })
         .collect();
 
-    let agent_view_label = app
-        .state
-        .agent_view_override
-        .as_ref()
-        .map(|view| view.label.clone().unwrap_or_else(|| "filtered".to_owned()));
     let agent_order = crate::ui::agent_panel_entries_from(&app.state, &app.terminal_runtimes)
         .into_iter()
         .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
         .collect();
 
-    let zoomed = focused_tab_id
-        .as_deref()
-        .and_then(|tab_id| app.parse_tab_id(tab_id))
-        .and_then(|(workspace_index, tab_index)| {
-            app.state
-                .workspaces
-                .get(workspace_index)?
-                .tabs
-                .get(tab_index)
-        })
-        .is_some_and(|tab| tab.zoomed);
-    let tab_bar_right = app
-        .state
-        .tab_bar_right
-        .iter()
-        .filter_map(|segment| match segment {
-            crate::app::state::TabBarStatusSegment::Zoom if zoomed => {
-                Some(protocol::ClientShellTabStatusSegment {
-                    text: "ZOOM".to_owned(),
-                    accent: true,
-                })
-            }
-            crate::app::state::TabBarStatusSegment::Text(Some(text)) if !text.is_empty() => {
-                Some(protocol::ClientShellTabStatusSegment {
-                    text: text.clone(),
-                    accent: false,
-                })
-            }
-            crate::app::state::TabBarStatusSegment::Zoom
-            | crate::app::state::TabBarStatusSegment::Text(_) => None,
-        })
-        .collect();
-
-    let product_announcement = app.state.product_announcement.as_ref().map(|announcement| {
-        protocol::ClientShellProductAnnouncement {
-            version: announcement.version.clone(),
-            id: announcement.id.clone(),
-            title: announcement.title.clone(),
-            body: announcement.body.clone(),
-            preview: announcement.preview,
-        }
-    });
-    let release_notes =
-        app.state
-            .latest_release_notes
-            .as_ref()
-            .map(|notes| protocol::ClientShellReleaseNotes {
-                version: notes.version.clone(),
-                body: notes.body.clone(),
-                preview: notes.preview,
-            });
-
     protocol::ClientShellSnapshot {
         boot_id: boot_id.to_owned(),
         revision,
         config_diagnostic: config_diagnostic.map(str::to_owned),
-        product_announcement,
-        update_available: app.state.update_available.clone(),
-        update_install_command: app.state.update_install_command.clone(),
-        server_keybindings_toml: app.client_shell_keybindings_profile().map(str::to_owned),
-        latest_release_notes_available: app.state.latest_release_notes_available,
-        integration_updates_available: app.state.integration_updates_available(),
-        worktree_directory: app.state.worktree_directory.to_string_lossy().into_owned(),
-        release_notes,
         focused_workspace_id,
         focused_tab_id,
         focused_pane_id,
-        tab_bar_right,
-        tab_bar_right_separator: app.state.tab_bar_right_separator.clone(),
-        agent_view_label,
+        agent_view_label: None,
         agent_order,
         workspaces,
         tabs,
         panes,
         agents,
-        commands: app.client_shell_command_manifest(),
     }
 }
 
@@ -247,7 +170,6 @@ pub(super) struct RenderedPaneSurface {
     pub(super) frame: FrameData,
     pub(super) panes: Vec<protocol::PaneSurfacePane>,
     pub(super) splits: Vec<protocol::PaneSurfaceSplit>,
-    pub(super) popup: Option<Box<protocol::ClientShellPopupSurface>>,
     pub(super) graphics: protocol::SurfaceGraphicsScene,
     pub(super) graphics_delivery: crate::kitty_graphics::surface::DeliveryCache,
 }
@@ -257,10 +179,8 @@ pub(super) fn render_pane_surface(
     target: Option<crate::ui::TabSurfaceTarget>,
     area: Rect,
     resize_panes: bool,
-    show_popup: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
     graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
-    client_id: u64,
 ) -> RenderedPaneSurface {
     let content_revisions_before = target
         .and_then(|target| {
@@ -385,102 +305,20 @@ pub(super) fn render_pane_surface(
             })
         })
         .collect();
-    let popup = show_popup
-        .then(|| render_popup_surface(app, area, resize_panes, cell_size))
-        .flatten();
     let (graphics, next_graphics_delivery) = crate::server::client_shell_graphics::collect(
         app,
         &layout.pane_infos,
         &layout.split_borders,
-        popup.as_deref(),
         target,
         cell_size,
         graphics_delivery,
-        client_id,
     );
     RenderedPaneSurface {
         frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
         panes,
         splits,
-        popup,
         graphics,
         graphics_delivery: next_graphics_delivery,
-    }
-}
-
-fn render_popup_surface(
-    app: &app::App,
-    area: Rect,
-    resize_runtime: bool,
-    cell_size: crate::kitty_graphics::HostCellSize,
-) -> Option<Box<protocol::ClientShellPopupSurface>> {
-    let popup = app.state.popup_pane.as_ref()?;
-    let geometry = if resize_runtime {
-        resize_popup_runtime(app, area, cell_size)?
-    } else {
-        crate::popup_size::resolve_popup_geometry(popup.width, popup.height, area)?
-    };
-    let runtime = app.terminal_runtimes.get(&popup.terminal_id)?;
-    let content_area = Rect::new(0, 0, geometry.inner.width, geometry.inner.height);
-    let (buffer, cursor) =
-        crate::server::render_stream::render_terminal_virtual(runtime, content_area);
-    let hyperlinks = runtime.visible_hyperlinks(content_area);
-    let title = app
-        .state
-        .terminals
-        .get(&popup.terminal_id)
-        .and_then(|terminal| terminal.manual_label.clone())
-        .unwrap_or_else(|| "popup".to_owned());
-    let (pixel_width, pixel_height) = if cell_size.is_known() {
-        (
-            u32::from(content_area.width) * cell_size.width_px,
-            u32::from(content_area.height) * cell_size.height_px,
-        )
-    } else {
-        (0, 0)
-    };
-    Some(Box::new(protocol::ClientShellPopupSurface {
-        terminal_id: popup.terminal_id.to_string(),
-        title,
-        width: popup.width.map(client_popup_size),
-        height: popup.height.map(client_popup_size),
-        frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
-        mouse_reporting: runtime.mouse_reporting_enabled(),
-        sgr_pixel_mouse: runtime.sgr_pixel_mouse_enabled(),
-        pixel_width,
-        pixel_height,
-    }))
-}
-
-pub(super) fn resize_popup_runtime(
-    app: &app::App,
-    area: Rect,
-    cell_size: crate::kitty_graphics::HostCellSize,
-) -> Option<crate::popup_size::PopupResolvedGeometry> {
-    let popup = app.state.popup_pane.as_ref()?;
-    let geometry = crate::popup_size::resolve_popup_geometry(popup.width, popup.height, area)?;
-    let runtime = app.terminal_runtimes.get(&popup.terminal_id)?;
-    if !app
-        .state
-        .direct_attach_resize_locks
-        .contains(&popup.terminal_id)
-    {
-        runtime.resize(
-            geometry.inner.height,
-            geometry.inner.width,
-            cell_size.width_px,
-            cell_size.height_px,
-        );
-    }
-    Some(geometry)
-}
-
-fn client_popup_size(size: crate::popup_size::PopupSize) -> protocol::ClientShellPopupSize {
-    match size {
-        crate::popup_size::PopupSize::Cells(cells) => protocol::ClientShellPopupSize::Cells(cells),
-        crate::popup_size::PopupSize::Percent(percent) => {
-            protocol::ClientShellPopupSize::Percent(percent)
-        }
     }
 }
 
@@ -542,69 +380,6 @@ fn split_hit_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn snapshot_projects_cached_release_and_update_facts() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = crate::app::App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        app.state.integration_recommendations.clear();
-        app.state.update_available = Some("0.8.3".into());
-        app.state.update_install_command = "herdr update".into();
-        app.state.latest_release_notes_available = true;
-        app.state.latest_release_notes = Some(crate::release_notes::ReleaseNotes {
-            version: "0.8.3".into(),
-            body: "### Changed\n- Client shell".into(),
-            preview: true,
-        });
-
-        let snapshot = snapshot(&app, "boot", 7, None, None);
-
-        assert_eq!(snapshot.update_available.as_deref(), Some("0.8.3"));
-        assert_eq!(snapshot.update_install_command, "herdr update");
-        assert!(snapshot.latest_release_notes_available);
-        assert!(!snapshot.integration_updates_available);
-        assert_eq!(
-            snapshot.release_notes.as_ref().map(|notes| (
-                notes.version.as_str(),
-                notes.body.as_str(),
-                notes.preview
-            )),
-            Some(("0.8.3", "### Changed\n- Client shell", true))
-        );
-    }
-
-    #[test]
-    fn snapshot_badges_only_outdated_integrations() {
-        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = crate::app::App::new(
-            &crate::config::Config::default(),
-            crate::app::AppPolicy::TEST,
-            None,
-            api_rx,
-            crate::api::EventHub::default(),
-        );
-        app.state.integration_recommendations =
-            vec![crate::integration::IntegrationRecommendation {
-                target: crate::api::schema::IntegrationTarget::Claude,
-                label: "claude",
-                command: "claude",
-                available: true,
-                path: std::path::PathBuf::from("claude-hook"),
-                state: crate::integration::IntegrationStatusKind::NotInstalled,
-            }];
-
-        assert!(!snapshot(&app, "boot", 1, None, None).integration_updates_available);
-
-        app.state.integration_recommendations[0].state =
-            crate::integration::IntegrationStatusKind::Outdated;
-        assert!(snapshot(&app, "boot", 2, None, None).integration_updates_available);
-    }
 
     #[test]
     fn split_hits_follow_released_border_and_gap_geometry() {

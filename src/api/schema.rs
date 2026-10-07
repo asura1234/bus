@@ -1,32 +1,24 @@
 use serde::{Deserialize, Serialize};
 
 pub mod agents;
-pub mod commands;
 pub mod common;
 pub mod events;
-pub mod integrations;
 pub mod panes;
-pub mod plugins;
 pub mod response;
 pub mod server;
 pub mod session;
 pub mod tabs;
 pub mod workspaces;
-pub mod worktrees;
 
 pub use agents::*;
-pub use commands::*;
 pub use common::*;
 pub use events::*;
-pub use integrations::*;
 pub use panes::*;
-pub use plugins::*;
 pub use response::*;
 pub use server::*;
 pub use session::*;
 pub use tabs::*;
 pub use workspaces::*;
-pub use worktrees::*;
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -49,22 +41,10 @@ pub enum Method {
     Ping(PingParams),
     #[serde(rename = "server.stop")]
     ServerStop(EmptyParams),
-    #[serde(rename = "server.live_handoff")]
-    ServerLiveHandoff(ServerLiveHandoffParams),
     #[serde(rename = "server.reload_config")]
     ServerReloadConfig(EmptyParams),
-    #[serde(rename = "server.agent_manifests")]
-    ServerAgentManifests(EmptyParams),
-    #[serde(rename = "server.reload_agent_manifests")]
-    ServerReloadAgentManifests(EmptyParams),
     #[serde(rename = "notification.show")]
     NotificationShow(NotificationShowParams),
-    #[serde(rename = "product_announcement.dismiss")]
-    ProductAnnouncementDismiss(ProductAnnouncementDismissParams),
-    #[serde(rename = "release_notes.dismiss")]
-    ReleaseNotesDismiss(ReleaseNotesDismissParams),
-    #[serde(rename = "command.invoke")]
-    CommandInvoke(CommandInvokeParams),
     #[serde(rename = "client.window_title.set")]
     ClientWindowTitleSet(ClientWindowTitleSetParams),
     #[serde(rename = "client.window_title.clear")]
@@ -85,20 +65,8 @@ pub enum Method {
     WorkspaceRename(WorkspaceRenameParams),
     #[serde(rename = "workspace.move")]
     WorkspaceMove(WorkspaceMoveParams),
-    #[serde(rename = "workspace.move_block")]
-    WorkspaceMoveBlock(WorkspaceMoveBlockParams),
-    #[serde(rename = "workspace.report_metadata")]
-    WorkspaceReportMetadata(WorkspaceReportMetadataParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
-    #[serde(rename = "worktree.list")]
-    WorktreeList(WorktreeListParams),
-    #[serde(rename = "worktree.create")]
-    WorktreeCreate(WorktreeCreateParams),
-    #[serde(rename = "worktree.open")]
-    WorktreeOpen(WorktreeOpenParams),
-    #[serde(rename = "worktree.remove")]
-    WorktreeRemove(WorktreeRemoveParams),
     #[serde(rename = "tab.create")]
     TabCreate(TabCreateParams),
     #[serde(rename = "tab.list")]
@@ -109,8 +77,6 @@ pub enum Method {
     TabFocus(TabTarget),
     #[serde(rename = "tab.rename")]
     TabRename(TabRenameParams),
-    #[serde(rename = "tab.move")]
-    TabMove(TabMoveParams),
     #[serde(rename = "tab.close")]
     TabClose(TabTarget),
     #[serde(rename = "agent.list")]
@@ -119,20 +85,16 @@ pub enum Method {
     AgentGet(AgentTarget),
     #[serde(rename = "agent.read")]
     AgentRead(AgentReadParams),
-    #[serde(rename = "agent.permission.observe")]
-    AgentPermissionObserve(AgentTarget),
-    #[serde(rename = "agent.approve_once")]
-    AgentApproveOnce(AgentApproveOnceParams),
-    #[serde(rename = "agent.explain")]
-    AgentExplain(AgentTarget),
+    #[serde(rename = "agent.dialog.observe")]
+    AgentDialogObserve(AgentTarget),
+    #[serde(rename = "agent.dialog.choose")]
+    AgentDialogChoose(AgentDialogChooseParams),
+    #[serde(rename = "agent.dialog.answer")]
+    AgentDialogAnswer(AgentDialogAnswerParams),
     #[serde(rename = "agent.send_keys")]
     AgentSendKeys(AgentSendKeysParams),
     #[serde(rename = "agent.rename")]
     AgentRename(AgentRenameParams),
-    #[serde(rename = "agent.view.set")]
-    AgentViewSet(AgentViewSetParams),
-    #[serde(rename = "agent.view.clear")]
-    AgentViewClear(AgentViewClearParams),
     #[serde(rename = "agent.focus")]
     AgentFocus(AgentTarget),
     #[serde(rename = "agent.start")]
@@ -149,32 +111,18 @@ pub enum Method {
     PaneSplit(PaneSplitParams),
     #[serde(rename = "pane.swap")]
     PaneSwap(PaneSwapParams),
-    #[serde(rename = "pane.move")]
-    PaneMove(PaneMoveParams),
     #[serde(rename = "pane.zoom")]
     PaneZoom(PaneZoomParams),
     #[serde(rename = "pane.layout")]
     PaneLayout(PaneLayoutParams),
-    #[serde(rename = "pane.process_info")]
-    PaneProcessInfo(PaneProcessInfoParams),
-    #[serde(rename = "layout.export")]
-    LayoutExport(LayoutExportParams),
-    #[serde(rename = "layout.apply")]
-    LayoutApply(LayoutApplyParams),
     #[serde(rename = "layout.set_split_ratio")]
     LayoutSetSplitRatio(LayoutSetSplitRatioParams),
-    #[serde(rename = "pane.neighbor")]
-    PaneNeighbor(PaneNeighborParams),
-    #[serde(rename = "pane.edges")]
-    PaneEdges(PaneEdgesParams),
     #[serde(rename = "pane.focus_direction")]
     PaneFocusDirection(PaneFocusDirectionParams),
     #[serde(rename = "pane.resize")]
     PaneResize(PaneResizeParams),
     #[serde(rename = "pane.scroll")]
     PaneScroll(PaneScrollParams),
-    #[serde(rename = "pane.edit_scrollback")]
-    PaneEditScrollback(PaneTarget),
     #[serde(rename = "pane.selection.read")]
     PaneSelectionRead(PaneSelectionReadParams),
     #[serde(rename = "pane.copy_motion")]
@@ -203,75 +151,16 @@ pub enum Method {
     PaneSendInput(PaneSendInputParams),
     #[serde(rename = "pane.read")]
     PaneRead(PaneReadParams),
-    #[serde(rename = "pane.graphics.set")]
-    PaneGraphicsSet(PaneGraphicsSetParams),
-    #[serde(rename = "pane.graphics.clear")]
-    PaneGraphicsClear(PaneGraphicsClearParams),
-    #[serde(rename = "pane.graphics.info")]
-    PaneGraphicsInfo(PaneTarget),
-    #[serde(rename = "pane.graphics.stream")]
-    #[schemars(skip)]
-    PaneGraphicsStream(PaneGraphicsStreamParams),
-    #[serde(skip)]
-    #[schemars(skip)]
-    PaneGraphicsStreamSet(PaneGraphicsSetParams),
-    #[serde(skip)]
-    #[schemars(skip)]
-    PaneGraphicsStreamDirect(PaneGraphicsDirectParams),
-    #[serde(skip)]
-    #[schemars(skip)]
-    PaneGraphicsStreamOpen(PaneGraphicsStreamParams),
-    #[serde(skip)]
-    #[schemars(skip)]
-    PaneGraphicsStreamClose(PaneGraphicsStreamParams),
-    #[serde(rename = "pane.report_agent")]
-    PaneReportAgent(PaneReportAgentParams),
     #[serde(rename = "pane.report_agent_session")]
     PaneReportAgentSession(PaneReportAgentSessionParams),
-    #[serde(rename = "pane.report_metadata")]
-    PaneReportMetadata(PaneReportMetadataParams),
-    #[serde(rename = "pane.clear_agent_authority")]
-    PaneClearAgentAuthority(PaneClearAgentAuthorityParams),
-    #[serde(rename = "pane.release_agent")]
-    PaneReleaseAgent(PaneReleaseAgentParams),
     #[serde(rename = "pane.close")]
     PaneClose(PaneTarget),
-    #[serde(rename = "popup.close")]
-    PopupClose(EmptyParams),
     #[serde(rename = "events.subscribe")]
     EventsSubscribe(EventsSubscribeParams),
     #[serde(rename = "events.wait")]
     EventsWait(EventsWaitParams),
     #[serde(rename = "pane.wait_for_output")]
     PaneWaitForOutput(PaneWaitForOutputParams),
-    #[serde(rename = "integration.list")]
-    IntegrationList(EmptyParams),
-    #[serde(rename = "integration.install")]
-    IntegrationInstall(IntegrationInstallParams),
-    #[serde(rename = "integration.uninstall")]
-    IntegrationUninstall(IntegrationUninstallParams),
-    #[serde(rename = "plugin.link")]
-    PluginLink(PluginLinkParams),
-    #[serde(rename = "plugin.list")]
-    PluginList(PluginListParams),
-    #[serde(rename = "plugin.unlink")]
-    PluginUnlink(PluginUnlinkParams),
-    #[serde(rename = "plugin.enable")]
-    PluginEnable(PluginSetEnabledParams),
-    #[serde(rename = "plugin.disable")]
-    PluginDisable(PluginSetEnabledParams),
-    #[serde(rename = "plugin.action.list")]
-    PluginActionList(PluginActionListParams),
-    #[serde(rename = "plugin.action.invoke")]
-    PluginActionInvoke(PluginActionInvokeParams),
-    #[serde(rename = "plugin.log.list")]
-    PluginLogList(PluginLogListParams),
-    #[serde(rename = "plugin.pane.open")]
-    PluginPaneOpen(PluginPaneOpenParams),
-    #[serde(rename = "plugin.pane.focus")]
-    PluginPaneFocus(PluginPaneFocusParams),
-    #[serde(rename = "plugin.pane.close")]
-    PluginPaneClose(PluginPaneCloseParams),
     /// Close only an exact owned terminal/session, or acknowledge that it is absent.
     #[serde(rename = "pane.close_if_identity")]
     PaneCloseIfIdentity(PaneCloseIfIdentityParams),

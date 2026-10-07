@@ -41,11 +41,7 @@ fn resolve_write_target(path: &Path) -> std::io::Result<PathBuf> {
     Ok(current)
 }
 
-pub(super) fn save_to_path(path: &Path, snapshot: &SessionSnapshot) -> std::io::Result<()> {
-    save_json_to_path(path, snapshot)
-}
-
-fn save_json_to_path<T: serde::Serialize>(path: &Path, snapshot: &T) -> std::io::Result<()> {
+pub(super) fn save_to_path<T: serde::Serialize>(path: &Path, snapshot: &T) -> std::io::Result<()> {
     let target = resolve_write_target(path)?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
@@ -68,7 +64,7 @@ pub(super) fn save_to_paths(
 ) -> std::io::Result<()> {
     save_to_path(session_path, snapshot)?;
     if let Some(history) = history {
-        save_json_to_path(history_path, history)?;
+        save_to_path(history_path, history)?;
     } else {
         clear_path(history_path)?;
     }
@@ -204,9 +200,6 @@ mod tests {
             workspaces: vec![],
             active: None,
             selected: 0,
-            sidebar_width: Some(26),
-            sidebar_section_split: Some(0.5),
-            collapsed_space_keys: std::collections::HashSet::new(),
         }
     }
 

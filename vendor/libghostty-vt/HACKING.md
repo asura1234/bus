@@ -77,11 +77,6 @@ sudo xcode-select --switch /Applications/Xcode.app
 
 ## AI and Agents
 
-If you're using AI assistance with Ghostty, Ghostty provides an
-[AGENTS.md file](https://github.com/ghostty-org/ghostty/blob/main/AGENTS.md)
-read by most of the popular AI agents to help produce higher quality
-results.
-
 We also provide commands in `.agents/commands` that have some vetted
 prompts for common tasks that have been shown to produce good results.
 We provide these to help reduce the amount of time a contributor has to

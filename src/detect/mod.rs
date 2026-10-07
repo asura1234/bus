@@ -3,8 +3,12 @@
 //! Each pane's live bottom-of-buffer text is read periodically and matched
 //! against known agent output patterns to determine state.
 
+pub(crate) mod dialog;
 pub mod manifest;
-pub mod manifest_update;
+
+#[cfg(test)]
+#[path = "codex_activity_tests.rs"]
+mod codex_activity_tests;
 
 /// The detected state of a terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +71,7 @@ pub enum Agent {
 }
 
 impl Agent {
+    #[cfg(test)]
     pub const ALL: [Self; 23] = [
         Self::Pi,
         Self::Claude,
@@ -270,19 +275,6 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
     best.map(|(_, agent, name)| (agent, name))
 }
 
-/// Detect the state of an agent from the live terminal tail snapshot.
-/// If `agent` is `None`, returns `Unknown`.
-#[cfg(test)]
-pub fn detect_state(agent: Option<Agent>, screen_content: &str) -> AgentState {
-    detect_agent(agent, screen_content).state
-}
-
-/// Detect state and whether a visible blocker is present on the current screen.
-#[allow(dead_code)] // shim for existing callers; detect_agent_with_osc is the real path
-pub fn detect_agent(agent: Option<Agent>, screen_content: &str) -> AgentDetection {
-    detect_agent_with_osc(agent, screen_content, "", "")
-}
-
 /// Detect state using screen content plus OSC title/progress strings.
 pub fn detect_agent_with_osc(
     agent: Option<Agent>,
@@ -311,18 +303,6 @@ pub fn detect_agent_with_osc(
 
 pub fn should_skip_state_update(agent: Option<Agent>, screen_content: &str) -> bool {
     agent.is_some_and(|agent| manifest::should_skip_state_update(agent, screen_content))
-}
-
-pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> bool {
-    matches!(
-        (source, agent_label),
-        ("herdr:pi", "pi")
-            | ("herdr:omp", "omp")
-            | ("herdr:mastracode", "mastracode")
-            | ("herdr:opencode", "opencode")
-            | ("herdr:kilo", "kilo")
-            | ("herdr:kimi", "kimi")
-    )
 }
 
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
@@ -758,7 +738,7 @@ mod tests {
 
     #[test]
     fn moved_agent_detection_routes_through_production_dispatch() {
-        let detection = detect_agent(Some(Agent::Pi), "Working...");
+        let detection = detect_agent_with_osc(Some(Agent::Pi), "Working...", "", "");
 
         assert_eq!(detection.state, AgentState::Working);
         assert!(detection.visible_working);
@@ -902,22 +882,12 @@ mod tests {
     }
 
     #[test]
-    fn mastracode_is_hook_authority_without_screen_manifest() {
-        assert!(full_lifecycle_hook_authority(
-            "herdr:mastracode",
-            "mastracode"
-        ));
-        assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
-    }
-
-    #[test]
     fn session_identity_integrations_leave_state_to_screen_detection() {
         for (source, label, agent) in [
             ("herdr:hermes", "hermes", Agent::Hermes),
             ("herdr:qwen", "qwen", Agent::Qwen),
             ("herdr:antigravity_cli", "agy", Agent::Antigravity),
         ] {
-            assert!(!full_lifecycle_hook_authority(source, label));
             assert!(session_identity_only_integration(source, label));
             assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&agent));
         }
@@ -1472,7 +1442,10 @@ mod tests {
 
     #[test]
     fn no_agent_returns_unknown() {
-        assert_eq!(detect_state(None, "anything"), AgentState::Unknown);
+        assert_eq!(
+            detect_agent_with_osc(None, "anything", "", "").state,
+            AgentState::Unknown
+        );
     }
 
     // ---- Process identification (real PTY) ----

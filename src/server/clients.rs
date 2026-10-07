@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use crate::protocol::{
     ClientKeyCode, ClientKeyKind, ClientMouseButton, ClientMouseKind, ClientPaneInputEvent,
-    RenderEncoding,
 };
 use crate::server::client_transport::ClientWriter;
 use crate::server::render_stream::ClientRenderState;
@@ -11,9 +10,6 @@ use crate::server::render_stream::ClientRenderState;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ClientConnectionMode {
     ClientShell,
-    TerminalPending,
-    TerminalAttach { terminal_id: String },
-    TerminalObserve { terminal_id: String },
 }
 
 pub(crate) type RenderTarget = (
@@ -27,7 +23,6 @@ pub(crate) type RenderTarget = (
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClientShellInputTarget {
     Pane(String),
-    Popup(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -131,7 +126,7 @@ impl ClientShellLocation {
 
 /// A connected client tracked by the server.
 pub(crate) struct ClientConnection {
-    /// Whether this connection owns the Herdr shell or one direct terminal stream.
+    /// The client-owned shell connection mode.
     pub(crate) mode: ClientConnectionMode,
     /// The client's terminal size after clamping.
     pub(crate) terminal_size: (u16, u16),
@@ -167,8 +162,6 @@ pub(crate) struct ClientConnection {
     pub(crate) host_mouse_capture_active: Option<bool>,
     /// Last SGR pixel provenance mode sent to this client.
     pub(crate) host_sgr_pixels_active: Option<bool>,
-    /// Last keyboard protocol state sent to a directly attached terminal client.
-    pub(crate) host_keyboard_protocol_active: Option<(u16, u8)>,
     /// Presses forwarded by this shell that need release on abrupt teardown.
     shell_held_inputs: HashMap<ClientShellPressId, ClientShellHeldInput>,
     /// Temporary files staged from this client's local clipboard image pastes.
@@ -185,12 +178,10 @@ pub(crate) struct ClientConnection {
     /// only if this exact presentation lease is still active when its response arrives.
     pub(crate) shell_endpoint_command_surface_revision: Option<u64>,
     /// Request id and buffered response for a deferred worktree-created navigation.
-    pub(crate) shell_deferred_navigation_request_id: Option<String>,
-    pub(crate) shell_deferred_navigation_response: Option<Vec<u8>>,
     /// Whether this shell uses the endpoint-owned keymap rather than a client-owned keymap.
     pub(crate) shell_uses_endpoint_keybindings: bool,
     /// Channels for sending framed ServerMessage data to the client writer thread.
-    pub(crate) writer: Option<ClientWriter>,
+    pub(crate) writer: ClientWriter,
 }
 
 impl ClientConnection {
@@ -199,15 +190,13 @@ impl ClientConnection {
         terminal_size: (u16, u16),
         cell_size: crate::kitty_graphics::HostCellSize,
         last_activity: u64,
-        render_encoding: RenderEncoding,
-        writer: Option<ClientWriter>,
+        writer: ClientWriter,
     ) -> Self {
         Self::new_with_mode(
             ClientConnectionMode::ClientShell,
             terminal_size,
             cell_size,
             last_activity,
-            render_encoding,
             writer,
         )
     }
@@ -217,15 +206,14 @@ impl ClientConnection {
         terminal_size: (u16, u16),
         cell_size: crate::kitty_graphics::HostCellSize,
         last_activity: u64,
-        render_encoding: RenderEncoding,
-        writer: Option<ClientWriter>,
+        writer: ClientWriter,
     ) -> Self {
         Self {
             mode,
             terminal_size,
             cell_size,
             last_activity,
-            render_state: ClientRenderState::new(render_encoding),
+            render_state: ClientRenderState::default(),
             shell_graphics_delivery: crate::kitty_graphics::surface::DeliveryCache::default(),
             direct_graphics: false,
             pixel_mouse: false,
@@ -239,7 +227,6 @@ impl ClientConnection {
             shell_mouse_capture: false,
             host_mouse_capture_active: None,
             host_sgr_pixels_active: None,
-            host_keyboard_protocol_active: None,
             shell_held_inputs: HashMap::new(),
             staged_clipboard_files: Vec::new(),
             shell_location: None,
@@ -247,8 +234,6 @@ impl ClientConnection {
             shell_projection_revision: 0,
             shell_endpoint_command_in_flight: false,
             shell_endpoint_command_surface_revision: None,
-            shell_deferred_navigation_request_id: None,
-            shell_deferred_navigation_response: None,
             shell_uses_endpoint_keybindings: false,
             writer,
         }
@@ -472,39 +457,12 @@ pub(crate) fn latest_shell_client(clients: &HashMap<u64, ClientConnection>) -> O
         .map(|(&client_id, _)| client_id)
 }
 
-pub(crate) fn terminal_stream_client_ids(
-    clients: &HashMap<u64, ClientConnection>,
-    terminal_id: &str,
-) -> Vec<u64> {
-    clients
-        .iter()
-        .filter_map(|(&client_id, client)| match &client.mode {
-            ClientConnectionMode::TerminalAttach {
-                terminal_id: attached,
-            }
-            | ClientConnectionMode::TerminalObserve {
-                terminal_id: attached,
-            } if attached == terminal_id => Some(client_id),
-            _ => None,
-        })
-        .collect()
-}
-
 pub(crate) fn render_targets(
     clients: &HashMap<u64, ClientConnection>,
     foreground_client_id: Option<u64>,
 ) -> Vec<RenderTarget> {
     let mut targets: Vec<RenderTarget> = clients
         .iter()
-        .filter(|(_, client)| {
-            client.writer.is_some()
-                && (client.is_shell_client()
-                    || matches!(
-                        client.mode,
-                        ClientConnectionMode::TerminalAttach { .. }
-                            | ClientConnectionMode::TerminalObserve { .. }
-                    ))
-        })
         .map(|(&client_id, client)| {
             (
                 client_id,
@@ -529,9 +487,17 @@ mod tests {
             (80, 24),
             crate::kitty_graphics::HostCellSize::default(),
             1,
-            crate::protocol::RenderEncoding::SemanticFrame,
-            None,
+            unread_test_writer(),
         )
+    }
+
+    /// A writer for a client whose output the test never reads; its channels
+    /// stay open so sends succeed as they do for a live client.
+    fn unread_test_writer() -> crate::server::client_transport::ClientWriter {
+        let (control_tx, control_rx) = std::sync::mpsc::channel();
+        let (render_tx, render_rx) = std::sync::mpsc::sync_channel(1);
+        std::mem::forget((control_rx, render_rx));
+        crate::server::client_transport::ClientWriter::test_channel(control_tx, render_tx)
     }
 
     #[test]

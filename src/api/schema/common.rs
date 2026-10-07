@@ -1,16 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-pub(super) fn metadata_token_patch_schema(
-    _generator: &mut schemars::SchemaGenerator,
-) -> schemars::Schema {
-    schemars::json_schema!({
-        "type": "object",
-        "maxProperties": 16,
-        "propertyNames": { "pattern": "^[A-Za-z0-9_-]{1,32}$" },
-        "additionalProperties": { "type": ["string", "null"] }
-    })
-}
-
 pub(super) fn metadata_token_values_schema(
     _generator: &mut schemars::SchemaGenerator,
 ) -> schemars::Schema {
@@ -33,17 +22,6 @@ pub struct WorkspaceTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneTarget {
     pub pane_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ProductAnnouncementDismissParams {
-    pub version: String,
-    pub id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct ReleaseNotesDismissParams {
-    pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -144,15 +122,6 @@ pub enum ClientWindowTitleReason {
     Set,
     Cleared,
     NoForegroundClient,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PaneAgentState {
-    Idle,
-    Working,
-    Blocked,
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

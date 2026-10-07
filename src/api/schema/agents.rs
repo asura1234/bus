@@ -22,124 +22,108 @@ pub struct AgentSendKeysParams {
     pub keys: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum ApprovedPermissionResponse {
-    AllowOnce,
+/// One numbered option of a choice dialog on an agent's screen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentDialogOption {
+    pub number: u32,
+    pub label: String,
+    pub selected: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
-pub enum SafePermissionAction {
-    ReadOnlyInspection,
+pub enum AgentDialogKind {
+    #[default]
+    Choice,
+    Question,
+}
+
+/// A choice dialog or a focused free-text question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentDialog {
+    #[serde(default)]
+    pub kind: AgentDialogKind,
+    /// The question or title above the options.
+    pub text: String,
+    pub options: Vec<AgentDialogOption>,
+    /// The key hint below the options, such as `Esc to cancel`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    /// Identifies the question and options, whichever option is selected.
+    pub id: String,
+    /// Identifies this exact dialog, including its selected option.
+    pub digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PermissionEligibility {
-    Allowlisted {
-        action: SafePermissionAction,
-        root: String,
-    },
-    Unknown,
-    Risky,
+pub struct AgentDialogObservation {
+    pub terminal_id: String,
+    pub pane_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub content_revision: u64,
+    /// `None` when no choice dialog is visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog: Option<AgentDialog>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AgentApproveOnceParams {
+pub struct AgentDialogChooseParams {
     pub target: String,
     pub expected_terminal_id: String,
     pub expected_pane_id: String,
-    pub expected_session_id: String,
-    pub expected_content_revision: u64,
-    pub expected_prompt_digest: String,
-    pub response: ApprovedPermissionResponse,
+    /// Checked when set; a launching agent has no bound session yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_session_id: Option<String>,
+    pub expected_dialog_digest: String,
+    pub option: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentPermissionObservation {
-    pub terminal_id: String,
-    pub pane_id: String,
-    pub session_id: String,
-    pub content_revision: u64,
-    pub prompt_digest: String,
-    pub prompt_text: String,
-    pub eligibility: PermissionEligibility,
-    pub allowed_responses: Vec<ApprovedPermissionResponse>,
+#[serde(deny_unknown_fields)]
+pub struct AgentDialogAnswerParams {
+    pub target: String,
+    pub expected_terminal_id: String,
+    pub expected_pane_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_session_id: Option<String>,
+    pub expected_dialog_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub skip: bool,
+}
+
+impl AgentDialogAnswerParams {
+    pub(crate) fn validate_answer(text: Option<&str>, skip: bool) -> Result<(), &'static str> {
+        if skip == text.is_some() {
+            return Err("Provide exactly one of text or skip");
+        }
+        if text.is_some_and(|text| text.trim().is_empty()) {
+            return Err("Answer text must not be blank");
+        }
+        if text.is_some_and(|text| {
+            text.chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t')
+        }) {
+            return Err("Answer text contains terminal control characters");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentApproveOnceResult {
+pub struct AgentDialogChooseResult {
     pub written: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    pub observation: AgentPermissionObservation,
-}
-
-pub(crate) fn safe_permission_command(surface: &str) -> Option<&str> {
-    const PREFIXES: &[&str] = &[
-        "Allow read-only command: ",
-        "Approve read-only command: ",
-        "Permission requested for read-only command: ",
-    ];
-    let command = surface
-        .lines()
-        .rev()
-        .find_map(|line| {
-            PREFIXES
-                .iter()
-                .find_map(|prefix| line.trim().strip_prefix(prefix))
-        })?
-        .trim();
-    if command.is_empty()
-        || command.contains([';', '|', '&', '`', '>', '<', '\n', '\r', '\\', '\'', '"'])
-        || command.contains("$(")
-    {
-        return None;
-    }
-    let words = command.split_ascii_whitespace().collect::<Vec<_>>();
-    let safe = match words.as_slice() {
-        ["pwd"] | ["pwd", "-L"] | ["pwd", "-P"] => true,
-        ["ls", rest @ ..] => rest.iter().all(|word| !matches!(*word, "--color=always")),
-        ["cat", rest @ ..] => !rest.is_empty() && rest.iter().all(|word| *word != "-"),
-        ["rg", rest @ ..] => {
-            !rest.is_empty()
-                && !rest.iter().any(|word| {
-                    matches!(*word, "--pre" | "--pre-glob" | "--hostname-bin")
-                        || word.starts_with("--pre=")
-                        || word.starts_with("--hostname-bin=")
-                })
-        }
-        ["sed", "-n", program, files @ ..] => {
-            !files.is_empty()
-                && program.ends_with('p')
-                && program[..program.len().saturating_sub(1)]
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b',' | b'$'))
-        }
-        ["git", "status", rest @ ..] => rest.iter().all(|word| {
-            matches!(
-                *word,
-                "--short" | "--branch" | "--porcelain" | "--porcelain=v1" | "--porcelain=v2"
-            ) || word.starts_with("--untracked-files=")
-                || *word == "--"
-                || !word.starts_with('-')
-        }),
-        ["git", "diff", rest @ ..] => {
-            rest.contains(&"--no-ext-diff")
-                && !rest.iter().any(|word| {
-                    *word == "--ext-diff" || *word == "--output" || word.starts_with("--output=")
-                })
-        }
-        _ => false,
-    };
-    safe.then_some(command)
-}
-
-pub(crate) fn permission_prompt_digest(surface: &str) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(surface.as_bytes()))
+    /// The keys sent, such as `["down", "enter"]`; empty when nothing was sent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
+    pub observation: AgentDialogObservation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -167,120 +151,6 @@ pub struct AgentRenameParams {
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentViewSetParams {
-    pub source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filter: Option<AgentViewFilter>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sort: Vec<AgentViewSort>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct AgentViewClearParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "op", rename_all = "snake_case")]
-pub enum AgentViewFilter {
-    All {
-        filters: Vec<AgentViewFilter>,
-    },
-    Any {
-        filters: Vec<AgentViewFilter>,
-    },
-    Not {
-        filter: Box<AgentViewFilter>,
-    },
-    Eq {
-        field: AgentViewField,
-        value: AgentViewValue,
-    },
-    In {
-        field: AgentViewField,
-        values: Vec<AgentViewValue>,
-    },
-    Exists {
-        field: AgentViewField,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
-pub enum AgentViewField {
-    Builtin(AgentViewBuiltinField),
-    Token { token: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentViewBuiltinField {
-    Status,
-    WorkspaceId,
-    TabId,
-    PaneId,
-    Agent,
-    Seen,
-    StateChangeSeq,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
-pub enum AgentViewValue {
-    String(String),
-    Bool(bool),
-    Number(u64),
-    Context { context: AgentViewContext },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentViewContext {
-    CurrentWorkspaceId,
-    CurrentTabId,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentViewSort {
-    pub field: AgentViewSortField,
-    #[serde(default)]
-    pub order: AgentViewSortOrder,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
-pub enum AgentViewSortField {
-    Builtin(AgentViewBuiltinSortField),
-    Token { token: String },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentViewBuiltinSortField {
-    WorkspaceOrder,
-    TabOrder,
-    PaneOrder,
-    Attention,
-    Status,
-    Agent,
-    Seen,
-    StateChangeSeq,
-}
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentViewSortOrder {
-    #[default]
-    Asc,
-    Desc,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -312,6 +182,11 @@ pub struct AgentPromptIfIdleParams {
     pub expected_pane_id: String,
     pub expected_agent: String,
     pub expected_session_id: String,
+    /// Also type into a working agent, as a person types while it works, so
+    /// the provider takes the text into its running turn. A blocked agent is
+    /// still refused.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub steer: bool,
 }
 
 /// First interactive Codex turn: its SessionStart hook is deferred until input.
@@ -343,6 +218,9 @@ pub struct AgentInfo {
     pub agent_status: AgentStatus,
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub screen_detection_skipped: bool,
+    /// The `id` of the numbered choice dialog waiting for an answer, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog_id: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub state_labels: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

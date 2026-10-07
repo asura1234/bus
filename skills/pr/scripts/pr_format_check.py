@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""pr skill 的机械层：校验 PR 标题与正文是否符合 references/pr-template.md。
+"""Mechanical layer of the pr skill: check that the PR title and body conform to references/pr-template.md.
 
-模板是唯一格式事实源：标题类型枚举取自模板的 `**类型**：` 行，正文必备 section 取自模板
-`# PR 描述` 之后的全部 H2 标题。本脚本只证明结构与勾选状态，不判断内容质量。
+The template is the sole format source of truth: the title type enum comes from the template's
+`**类型**：` line, and the required body sections come from every H2 heading after the template's
+`# PR 描述`. This script proves only structure and checkbox state; it does not judge content quality.
 
-校验规则（全部 fail-closed）：
-- 标题形如 `[类型] 简短描述`，类型属于模板枚举，描述非空且无首尾空白。
-- 正文 H2 section 与模板完全一致（同集合、同顺序），且每节非空。
-- `draft` 阶段允许「文档同步」与「自测 / Agent 测」保留 `- [ ]` pending 项；其他 section
-  仍禁止未勾选项，且「文档同步」只能包含 pending 项。
-- `final` 阶段的「自测 / Agent 测」至少一个 checkbox 且全部为 `- [x]`；全文禁止
-  未勾选项；「文档同步」的每个条目都必须是 renderer 输出形态的 `- [x] `。
-- 全文（代码块外）不允许 HTML 注释或模板占位符残留。
-- `摘要` 必须含合法的 `- **大小**：` 档位。
-- `目标` / `非目标` 必须逐字等于机械生成的 context，review-pr lock 必须等于目标。
+Rules (all fail-closed):
+- The title has the shape `[类型] 简短描述`, the type belongs to the template enum, and the
+  description is non-empty with no leading/trailing whitespace.
+- Body H2 sections match the template (same order), and every section is non-empty.
+- The `draft` phase lets `自测 / Agent 测` keep `- [ ]` pending items; other sections forbid unchecked items.
+- In the `final` phase, `自测 / Agent 测` has at least one checkbox and all are `- [x]`; the whole body
+  forbids unchecked items.
+- The whole body (outside code fences) allows no HTML comments or leftover template placeholders.
+- `摘要` must contain a valid `- **大小**：` size tier.
+- `目标` / `非目标` must equal the mechanically generated context verbatim, and the review-pr lock must equal the goal.
 """
 
 import argparse
@@ -26,14 +27,14 @@ from pr_goal_context import parse_context, split_h2_sections
 
 
 SELF_TEST_SECTION = "自测 / Agent 测"
-DOCS_SYNC_SECTION = "文档同步"
 SUMMARY_SECTION = "摘要"
 GOAL_SECTION = "目标"
 NON_GOAL_SECTION = "非目标"
 PHASES = ("draft", "final")
 SIZE_PATTERN = re.compile(r"^- \*\*大小\*\*：`(XS|S|M|L|XL)`", re.MULTILINE)
-# 占位符从模板正文里派生，不写死清单：写死的那份只覆盖当时想到的几个，模板后来新增的
-# 占位符会静默漏过，而门禁的全部意义就是挡住模板残留。
+# Placeholders are derived from the template body, not hard-coded: a hard-coded list covers only the
+# few thought of at the time, placeholders added to the template later slip through silently, and the
+# whole point of the gate is to block template residue.
 _PLACEHOLDER_PATTERN = re.compile(r"\[([^\[\]\n]+)\]")
 _CHECKBOX_PREFIX = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*")
 
@@ -51,13 +52,15 @@ def _lines_outside_fences(text: str) -> list[str]:
 
 
 def _derive_body_placeholders(description_text: str) -> list[str]:
-    """从模板正文提取占位符（形如 `[…]` 的待填槽位）。
+    """Extract placeholders (slots to fill, shaped like `[…]`) from the template body.
 
-    只取 `# PR 描述` 之后的部分：标题小节里的 `[feat]`、`[类型]` 是**标题**格式示例，
-    正文完全可能正当地提到它们（比如讨论该用哪个类型），拿它们卡正文会误伤。
+    Only the part after `# PR 描述` is used: `[feat]` and `[类型]` in the title section are **title**
+    format examples, and the body may legitimately mention them (for example when discussing which
+    type to use), so gating the body on them would cause false positives.
 
-    逐行排除三类不是槽位的方括号：代码块内的行、`>` 说明块与 HTML 注释（都是给 AI 的
-    指令，不进最终 PR）、以及 `- [x]` checkbox 前缀和 `[文字](链接)` 形式的 Markdown 链接。
+    Three kinds of brackets that are not slots are excluded line by line: lines inside code fences,
+    `>` instruction blocks and HTML comments (both are instructions to the AI and never reach the final
+    PR), and the `- [x]` checkbox prefix plus Markdown links of the form `[text](link)`.
     """
     placeholders: list[str] = []
     for line in _lines_outside_fences(description_text):
@@ -77,13 +80,9 @@ def _derive_body_placeholders(description_text: str) -> list[str]:
 
 
 def parse_template(template_text: str) -> tuple[list[str], list[str], list[str]]:
-    """从模板提取 (标题类型枚举, 正文必备 H2 section 列表, 正文占位符列表)。"""
+    """Extract (title type enum, required body H2 section list, body placeholder list) from the template."""
     type_line = next(
-        (
-            line
-            for line in template_text.splitlines()
-            if line.startswith("**类型**：")
-        ),
+        (line for line in template_text.splitlines() if line.startswith("**类型**：")),
         None,
     )
     if type_line is None:
@@ -139,8 +138,9 @@ def check_body(
     problems: list[str] = []
     body_lines = _lines_outside_fences(body)
 
-    # 只扫代码块外：未勾选 checkbox 与 HTML 注释都按同一口径豁免围栏内容，占位符若改扫
-    # 原始 body，一份正当引用了模板片段的 PR 会被判成残留。
+    # Scan only outside code fences: unchecked checkboxes and HTML comments exempt fenced content by
+    # the same rule; if placeholders scanned the raw body, a PR that legitimately quotes a template
+    # fragment would be flagged as residue.
     outside_fences = "\n".join(body_lines)
     for token in placeholders:
         if token in outside_fences:
@@ -150,10 +150,11 @@ def check_body(
 
     sections = split_h2_sections(body)
     section_titles = [title for title, _content in sections]
-    if section_titles != list(required_sections):
+    expected_sections = list(required_sections)
+    if section_titles != expected_sections:
         problems.append(
             "body: H2 sections must exactly match the template order: "
-            + " → ".join(required_sections)
+            + " → ".join(expected_sections)
             + f"; found: {' → '.join(section_titles) if section_titles else '(none)'}"
         )
         return problems
@@ -166,7 +167,9 @@ def check_body(
     for title, content in sections:
         content_lines = _lines_outside_fences(content)
         checked = [line for line in content_lines if line.lstrip().startswith("- [x] ")]
-        unchecked = [line for line in content_lines if line.lstrip().startswith("- [ ] ")]
+        unchecked = [
+            line for line in content_lines if line.lstrip().startswith("- [ ] ")
+        ]
         if title == SELF_TEST_SECTION:
             if phase == "final" and not checked:
                 problems.append(
@@ -176,27 +179,15 @@ def check_body(
                 problems.append(
                     f"body: section `{SELF_TEST_SECTION}` needs at least one pending item"
                 )
-        if unchecked and (phase == "final" or title not in {SELF_TEST_SECTION, DOCS_SYNC_SECTION}):
+        if unchecked and (phase == "final" or title != SELF_TEST_SECTION):
             problems.append(
                 f"body: section `{title}` contains unchecked boxes; "
                 "remove items that were not performed"
             )
-        if title == DOCS_SYNC_SECTION:
-            for line in content_lines:
-                expected_prefix = "- [ ] " if phase == "draft" else "- [x] "
-                if line.strip() and not line.startswith(expected_prefix):
-                    if phase == "final":
-                        problems.append(
-                            f"body: section `{DOCS_SYNC_SECTION}` must contain only renderer "
-                            f"`- [x] ` lines; found: {line.strip()!r}"
-                        )
-                    else:
-                        problems.append(
-                            f"body: section `{DOCS_SYNC_SECTION}` must contain only "
-                            f"`- [ ] ` lines in draft phase; found: {line.strip()!r}"
-                        )
-                    break
-        if title == SUMMARY_SECTION and SIZE_PATTERN.search("\n".join(content_lines)) is None:
+        if (
+            title == SUMMARY_SECTION
+            and SIZE_PATTERN.search("\n".join(content_lines)) is None
+        ):
             problems.append(
                 "body: section `摘要` must contain `- **大小**：` with one of "
                 "`XS|S|M|L|XL`"
@@ -210,16 +201,23 @@ def check_goal_contract(body: str, goal_context: str, locked_goal: str) -> list[
         expected_goal, expected_non_goal = parse_context(goal_context)
         body_sections = dict(split_h2_sections(body))
         body_goal, body_non_goal = parse_context(
-            "## 目标\n" + body_sections[GOAL_SECTION] + "## 非目标\n" + body_sections[NON_GOAL_SECTION]
+            "## 目标\n"
+            + body_sections[GOAL_SECTION]
+            + "## 非目标\n"
+            + body_sections[NON_GOAL_SECTION]
         )
     except (KeyError, ValueError) as error:
         return [f"body: invalid goal context: {error}"]
     if body_goal != expected_goal:
         problems.append("body: section `目标` must exactly equal the prepared context")
     if body_non_goal != expected_non_goal:
-        problems.append("body: section `非目标` must exactly equal the prepared context")
+        problems.append(
+            "body: section `非目标` must exactly equal the prepared context"
+        )
     if locked_goal != f"{expected_goal}\n":
-        problems.append("locked goal: file must exactly equal the prepared `目标` plus one newline")
+        problems.append(
+            "locked goal: file must exactly equal the prepared `目标` plus one newline"
+        )
     return problems
 
 

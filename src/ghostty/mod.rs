@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 #[allow(
     dead_code,
     non_camel_case_types,
@@ -18,7 +16,6 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::mem;
-use std::ops::RangeInclusive;
 use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
@@ -86,12 +83,6 @@ pub struct RowSelection {
     pub end_x: u16,
 }
 
-impl RowSelection {
-    pub fn range(self) -> RangeInclusive<u16> {
-        self.start_x..=self.end_x
-    }
-}
-
 impl Dirty {
     fn from_raw(value: ffi::GhosttyRenderStateDirty) -> Self {
         match value {
@@ -146,13 +137,6 @@ pub const MOD_CTRL: u16 = ffi::GHOSTTY_MODS_CTRL as u16;
 pub const MOD_ALT: u16 = ffi::GHOSTTY_MODS_ALT as u16;
 pub const MOD_SUPER: u16 = ffi::GHOSTTY_MODS_SUPER as u16;
 
-pub const KEY_ENTER: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ENTER;
-pub const KEY_UP: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_UP;
-pub const KEY_DOWN: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_DOWN;
-pub const KEY_LEFT: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_LEFT;
-pub const KEY_RIGHT: u32 = ffi::GhosttyKey_GHOSTTY_KEY_ARROW_RIGHT;
-pub const KEY_A: u32 = ffi::GhosttyKey_GHOSTTY_KEY_A;
-
 pub const MOUSE_ACTION_PRESS: ffi::GhosttyMouseAction =
     ffi::GhosttyMouseAction_GHOSTTY_MOUSE_ACTION_PRESS;
 pub const MOUSE_ACTION_RELEASE: ffi::GhosttyMouseAction =
@@ -180,12 +164,11 @@ pub const MOUSE_FORMAT_SGR_PIXELS: ffi::GhosttyMouseFormat =
 
 pub const MODE_APPLICATION_CURSOR_KEYS: u16 = 1;
 pub const MODE_FOCUS_EVENT: u16 = 1004;
-pub const MODE_MOUSE_UTF8: u16 = 1005;
-pub const MODE_MOUSE_SGR: u16 = 1006;
 pub const MODE_MOUSE_ALTERNATE_SCROLL: u16 = 1007;
 pub const MODE_MOUSE_SGR_PIXELS: u16 = 1016;
 pub const MODE_BRACKETED_PASTE: u16 = 2004;
 pub const MODE_SYNCHRONIZED_OUTPUT: u16 = 2026;
+#[cfg(test)]
 pub const MODE_GRAPHEME_CLUSTER: u16 = 2027;
 pub const MODE_COLOR_SCHEME_REPORT: u16 = 2031;
 // These are documented in vendor/libghostty-vt/include/ghostty/vt/terminal.h,
@@ -574,13 +557,7 @@ unsafe fn capture_clipboard_write(
         return ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA;
     }
 
-    let required_size = std::mem::offset_of!(ffi::GhosttyClipboardWrite, contents_len)
-        + std::mem::size_of::<usize>();
-    // SAFETY: size is the leading field of the live request.
-    if unsafe { (*write).size } < required_size {
-        return ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA;
-    }
-    // SAFETY: the size check covers every field accessed below.
+    // SAFETY: the statically linked libghostty-vt constructs the full request struct.
     let request = unsafe { &*write };
     if request.location != ffi::GhosttyClipboardLocation_GHOSTTY_CLIPBOARD_LOCATION_STANDARD {
         return ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED;
@@ -754,14 +731,6 @@ pub fn unicode_codepoint_width(codepoint: u32) -> u8 {
     unsafe { ffi::ghostty_unicode_codepoint_width(codepoint) }
 }
 
-pub fn unicode_grapheme_width(codepoints: &[u32]) -> (usize, u8) {
-    let mut width = 0u8;
-    let consumed = unsafe {
-        ffi::ghostty_unicode_grapheme_width(codepoints.as_ptr(), codepoints.len(), &mut width)
-    };
-    (consumed, width)
-}
-
 pub fn encode_focus(event: FocusEvent) -> Result<Vec<u8>, Error> {
     let mut required = 0usize;
     // SAFETY: null buffer + out len is the documented way to query required size.
@@ -788,6 +757,7 @@ pub fn encode_focus(event: FocusEvent) -> Result<Vec<u8>, Error> {
 
 pub struct Terminal {
     raw: ffi::GhosttyTerminal,
+    #[cfg(windows)]
     max_scrollback: usize,
     #[cfg(windows)]
     tracked_row: ffi::GhosttyTrackedGridRef,
@@ -811,6 +781,7 @@ impl Terminal {
 
         let mut terminal = Self {
             raw,
+            #[cfg(windows)]
             max_scrollback,
             #[cfg(windows)]
             tracked_row: ptr::null_mut(),
@@ -1058,6 +1029,7 @@ impl Terminal {
         Ok(out)
     }
 
+    #[cfg(test)]
     pub fn mode_set(&mut self, mode: u16, value: bool) -> Result<(), Error> {
         unsafe { ffi::ghostty_terminal_mode_set(self.raw, mode, value).into_result() }
     }
@@ -1077,10 +1049,6 @@ impl Terminal {
 
     pub fn mouse_tracking_enabled(&self) -> Result<bool, Error> {
         self.get_bool(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_MOUSE_TRACKING)
-    }
-
-    pub fn modify_other_keys_enabled(&self) -> Result<bool, Error> {
-        self.get_bool(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_MODIFY_OTHER_KEYS)
     }
 
     pub fn active_screen(&self) -> Result<ActiveScreen, Error> {
@@ -1104,10 +1072,12 @@ impl Terminal {
         self.get_usize(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_TOTAL_ROWS)
     }
 
+    #[cfg(test)]
     pub fn scrollback_rows(&self) -> Result<usize, Error> {
         self.get_usize(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS)
     }
 
+    #[cfg(windows)]
     pub fn max_scrollback(&self) -> usize {
         self.max_scrollback
     }
@@ -1218,22 +1188,6 @@ impl Terminal {
         Ok(grid_ref)
     }
 
-    pub fn read_text_viewport(
-        &self,
-        start: (u16, u32),
-        end: (u16, u32),
-        rectangle: bool,
-    ) -> Result<String, Error> {
-        self.read_formatted_selection(
-            ghostty_viewport_point(start.0, start.1),
-            ghostty_viewport_point(end.0, end.1),
-            rectangle,
-            FormatterFormat::Plain,
-            true,
-            true,
-        )
-    }
-
     pub fn read_ansi_viewport(
         &self,
         start: (u16, u32),
@@ -1246,7 +1200,6 @@ impl Terminal {
             rectangle,
             FormatterFormat::Vt,
             false,
-            true,
         )
     }
 
@@ -1261,7 +1214,6 @@ impl Terminal {
             ghostty_screen_point(end.0, end.1),
             rectangle,
             FormatterFormat::Plain,
-            true,
             true,
         )
     }
@@ -1279,66 +1231,7 @@ impl Terminal {
             rectangle,
             FormatterFormat::Vt,
             unwrap,
-            true,
         )
-    }
-
-    pub fn keyboard_state_ansi(&self) -> Result<String, Error> {
-        self.format_keyboard_state_ansi(false)
-    }
-
-    pub fn kitty_keyboard_state_ansi(&self) -> Result<String, Error> {
-        self.format_keyboard_state_ansi(true)
-    }
-
-    fn format_keyboard_state_ansi(&self, kitty_keyboard: bool) -> Result<String, Error> {
-        let mut formatter: ffi::GhosttyFormatter = ptr::null_mut();
-        let options = ffi::GhosttyFormatterTerminalOptions {
-            size: mem::size_of::<ffi::GhosttyFormatterTerminalOptions>(),
-            emit: FormatterFormat::Vt.as_raw(),
-            unwrap: false,
-            trim: false,
-            extra: ffi::GhosttyFormatterTerminalExtra {
-                size: mem::size_of::<ffi::GhosttyFormatterTerminalExtra>(),
-                keyboard: true,
-                screen: ffi::GhosttyFormatterScreenExtra {
-                    size: mem::size_of::<ffi::GhosttyFormatterScreenExtra>(),
-                    kitty_keyboard,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            selection: ptr::null(),
-        };
-        unsafe {
-            ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.raw, options)
-                .into_result()?;
-        }
-
-        let mut out_ptr = ptr::null_mut();
-        let mut out_len = 0usize;
-        let result = unsafe {
-            ffi::ghostty_formatter_format_alloc(formatter, ptr::null(), &mut out_ptr, &mut out_len)
-        };
-        unsafe {
-            ffi::ghostty_formatter_free(formatter);
-        }
-        result.into_result()?;
-
-        let text = if out_len == 0 {
-            String::new()
-        } else {
-            let bytes = unsafe { slice::from_raw_parts(out_ptr.cast_const(), out_len) };
-            String::from_utf8_lossy(bytes).into_owned()
-        };
-
-        if !out_ptr.is_null() {
-            unsafe {
-                ffi::ghostty_free(ptr::null(), out_ptr, out_len);
-            }
-        }
-
-        Ok(text)
     }
 
     fn read_formatted_selection(
@@ -1348,7 +1241,6 @@ impl Terminal {
         rectangle: bool,
         format: FormatterFormat,
         unwrap: bool,
-        trim: bool,
     ) -> Result<String, Error> {
         let mut start_ref = ffi::GhosttyGridRef {
             size: mem::size_of::<ffi::GhosttyGridRef>(),
@@ -1374,7 +1266,7 @@ impl Terminal {
             size: mem::size_of::<ffi::GhosttyFormatterTerminalOptions>(),
             emit: format.as_raw(),
             unwrap,
-            trim,
+            trim: true,
             extra: ffi::GhosttyFormatterTerminalExtra {
                 size: mem::size_of::<ffi::GhosttyFormatterTerminalExtra>(),
                 screen: ffi::GhosttyFormatterScreenExtra {
@@ -1567,10 +1459,6 @@ impl Terminal {
         Ok(generation != 0 && self.kitty_empty_generation.get() != Some(generation))
     }
 
-    pub fn kitty_image_placements(&self) -> Result<Vec<KittyImagePlacement>, Error> {
-        self.kitty_image_placements_with_data_filter(|_| true)
-    }
-
     pub fn kitty_image_placements_with_data_filter<F>(
         &self,
         mut needs_data: F,
@@ -1590,18 +1478,8 @@ impl Terminal {
             return Ok(Vec::new());
         }
 
-        let mut iterator: ffi::GhosttyKittyGraphicsPlacementIterator = ptr::null_mut();
-        unsafe {
-            ffi::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iterator)
-                .into_result()?;
-            ffi::ghostty_kitty_graphics_get(
-                graphics,
-                ffi::GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
-                (&mut iterator as *mut ffi::GhosttyKittyGraphicsPlacementIterator).cast(),
-            )
-            .into_result()?;
-        }
-        let _guard = KittyPlacementIteratorGuard { raw: iterator };
+        let guard = KittyPlacementIteratorGuard::new(graphics)?;
+        let iterator = guard.raw;
 
         let mut placements = Vec::new();
         let mut storage_has_placements = false;
@@ -1929,6 +1807,23 @@ struct KittyPlacementIteratorGuard {
     raw: ffi::GhosttyKittyGraphicsPlacementIterator,
 }
 
+impl KittyPlacementIteratorGuard {
+    fn new(graphics: ffi::GhosttyKittyGraphics) -> Result<Self, Error> {
+        let mut iterator: ffi::GhosttyKittyGraphicsPlacementIterator = ptr::null_mut();
+        unsafe {
+            ffi::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iterator)
+                .into_result()?;
+            ffi::ghostty_kitty_graphics_get(
+                graphics,
+                ffi::GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
+                (&mut iterator as *mut ffi::GhosttyKittyGraphicsPlacementIterator).cast(),
+            )
+            .into_result()?;
+        }
+        Ok(Self { raw: iterator })
+    }
+}
+
 impl Drop for KittyPlacementIteratorGuard {
     fn drop(&mut self) {
         unsafe { ffi::ghostty_kitty_graphics_placement_iterator_free(self.raw) }
@@ -2067,18 +1962,8 @@ fn kitty_placement_bool(
 fn kitty_virtual_placement_specs(
     graphics: ffi::GhosttyKittyGraphics,
 ) -> Result<Vec<KittyVirtualPlacementSpec>, Error> {
-    let mut iterator: ffi::GhosttyKittyGraphicsPlacementIterator = ptr::null_mut();
-    unsafe {
-        ffi::ghostty_kitty_graphics_placement_iterator_new(ptr::null(), &mut iterator)
-            .into_result()?;
-        ffi::ghostty_kitty_graphics_get(
-            graphics,
-            ffi::GhosttyKittyGraphicsData_GHOSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR,
-            (&mut iterator as *mut ffi::GhosttyKittyGraphicsPlacementIterator).cast(),
-        )
-        .into_result()?;
-    }
-    let _guard = KittyPlacementIteratorGuard { raw: iterator };
+    let guard = KittyPlacementIteratorGuard::new(graphics)?;
+    let iterator = guard.raw;
 
     let mut specs = Vec::new();
     while unsafe { ffi::ghostty_kitty_graphics_placement_next(iterator) } {
@@ -2477,10 +2362,12 @@ impl RenderState {
         unsafe { ffi::ghostty_render_state_update(self.raw, terminal.raw()).into_result() }
     }
 
+    #[cfg(test)]
     pub fn cols(&self) -> Result<u16, Error> {
         self.get_u16(ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_COLS)
     }
 
+    #[cfg(test)]
     pub fn rows(&self) -> Result<u16, Error> {
         self.get_u16(ffi::GhosttyRenderStateData_GHOSTTY_RENDER_STATE_DATA_ROWS)
     }
@@ -3011,10 +2898,6 @@ impl<'a> RowCellIter<'a> {
         unsafe { ffi::ghostty_render_state_row_cells_next(self.cells.raw) }
     }
 
-    pub fn select(&mut self, x: u16) -> Result<(), Error> {
-        unsafe { ffi::ghostty_render_state_row_cells_select(self.cells.raw, x).into_result() }
-    }
-
     fn raw_cell(&self) -> Result<ffi::GhosttyCell, Error> {
         let mut raw = ffi::GhosttyCell::default();
         unsafe {
@@ -3112,22 +2995,6 @@ impl<'a> RowCellIter<'a> {
             .into_result()?;
         }
         Ok(has_hyperlink)
-    }
-
-    pub fn style(&self) -> Result<CellStyle, Error> {
-        let mut style = ffi::GhosttyStyle {
-            size: mem::size_of::<ffi::GhosttyStyle>(),
-            ..Default::default()
-        };
-        unsafe {
-            ffi::ghostty_render_state_row_cells_get(
-                self.cells.raw,
-                ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_STYLE,
-                (&mut style as *mut ffi::GhosttyStyle).cast(),
-            )
-            .into_result()?;
-        }
-        Ok(style.into())
     }
 
     pub fn content_bg_color(&self) -> Result<Option<CellColor>, Error> {
@@ -3459,43 +3326,76 @@ mod tests {
 
         assert_eq!(terminal.kitty_graphics_generation().unwrap(), 0);
         assert!(!terminal.kitty_graphics_may_have_placements().unwrap());
-        assert!(terminal.kitty_image_placements().unwrap().is_empty());
+        assert!(terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap()
+            .is_empty());
 
         terminal.write(b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;////////\x1b\\");
         let transmitted = terminal.kitty_graphics_generation().unwrap();
         assert_ne!(transmitted, 0);
         assert!(terminal.kitty_graphics_may_have_placements().unwrap());
-        assert!(terminal.kitty_image_placements().unwrap().is_empty());
+        assert!(terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap()
+            .is_empty());
         assert_eq!(terminal.kitty_empty_generation.get(), Some(transmitted));
         assert!(!terminal.kitty_graphics_may_have_placements().unwrap());
 
         terminal.write(b"plain text");
         assert_eq!(terminal.kitty_graphics_generation().unwrap(), transmitted);
-        assert!(terminal.kitty_image_placements().unwrap().is_empty());
+        assert!(terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap()
+            .is_empty());
 
         terminal.write(b"\x1b_Ga=p,i=1,p=1,c=1,r=1;\x1b\\");
         let placed = terminal.kitty_graphics_generation().unwrap();
         assert_ne!(placed, transmitted);
         assert!(terminal.kitty_graphics_may_have_placements().unwrap());
-        assert_eq!(terminal.kitty_image_placements().unwrap().len(), 1);
+        assert_eq!(
+            terminal
+                .kitty_image_placements_with_data_filter(|_| true)
+                .unwrap()
+                .len(),
+            1
+        );
 
         terminal.resize(10, 5, 12, 24).unwrap();
         assert_eq!(terminal.kitty_graphics_generation().unwrap(), placed);
-        assert_eq!(terminal.kitty_image_placements().unwrap().len(), 1);
+        assert_eq!(
+            terminal
+                .kitty_image_placements_with_data_filter(|_| true)
+                .unwrap()
+                .len(),
+            1
+        );
 
         write_numbered_lines(&mut terminal, 20);
         assert_eq!(terminal.kitty_graphics_generation().unwrap(), placed);
-        assert!(terminal.kitty_image_placements().unwrap().is_empty());
+        assert!(terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap()
+            .is_empty());
         assert_ne!(terminal.kitty_empty_generation.get(), Some(placed));
         assert!(terminal.kitty_graphics_may_have_placements().unwrap());
         terminal.scroll_viewport_row(0);
-        assert_eq!(terminal.kitty_image_placements().unwrap().len(), 1);
+        assert_eq!(
+            terminal
+                .kitty_image_placements_with_data_filter(|_| true)
+                .unwrap()
+                .len(),
+            1
+        );
 
         terminal.write(b"\x1b_Ga=d,d=A\x1b\\");
         let deleted = terminal.kitty_graphics_generation().unwrap();
         assert_ne!(deleted, placed);
         assert!(terminal.kitty_graphics_may_have_placements().unwrap());
-        assert!(terminal.kitty_image_placements().unwrap().is_empty());
+        assert!(terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap()
+            .is_empty());
         assert_eq!(terminal.kitty_empty_generation.get(), Some(deleted));
         assert!(!terminal.kitty_graphics_may_have_placements().unwrap());
     }
@@ -3525,7 +3425,9 @@ mod tests {
         terminal.resize(10, 5, 8, 16).unwrap();
         terminal.write(b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=10,r=5,q=2;/wAA/w==\x1b\\");
 
-        let placements = terminal.kitty_image_placements().unwrap();
+        let placements = terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap();
         assert_eq!(placements.len(), 1);
         assert_eq!(placements[0].image_id, 7);
         assert_eq!(placements[0].placement_id, 3);
@@ -3575,7 +3477,9 @@ mod tests {
         terminal.write(command.as_bytes());
         terminal.write(b"\x1b_Ga=p,U=1,i=9,c=10,r=5\x1b\\");
 
-        let placements = terminal.kitty_image_placements().unwrap();
+        let placements = terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap();
         assert_eq!(placements.len(), 1);
         assert_eq!(placements[0].image_id, 9);
         assert_eq!(placements[0].placement_id, 4);
@@ -3604,17 +3508,23 @@ mod tests {
         terminal.enable_kitty_graphics().unwrap();
         terminal.resize(10, 5, 8, 16).unwrap();
         let mut upload = Vec::new();
-        crate::kitty_graphics::encode_kitty_regular_file(
-            &mut upload,
-            &[],
-            "a=t,f=32,s=1,v=1,i=10,q=0",
-            path.to_str().unwrap(),
+        let payload = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(path.to_str().unwrap().as_bytes())
+        };
+        upload.extend_from_slice(
+            format!("\x1b_Ga=t,f=32,s=1,v=1,i=10,q=0,t=f;{payload}\x1b\\").as_bytes(),
         );
         terminal.write(&upload);
-        assert!(terminal.kitty_image_placements().unwrap().is_empty());
+        assert!(terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap()
+            .is_empty());
 
         terminal.write(b"\x1b_Ga=p,i=10,p=5,c=10,r=5,C=1,q=2\x1b\\");
-        let placements = terminal.kitty_image_placements().unwrap();
+        let placements = terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap();
         assert_eq!(placements.len(), 1);
         assert_eq!(placements[0].image_id, 10);
         assert_eq!(placements[0].placement_id, 5);
@@ -3635,7 +3545,9 @@ mod tests {
         terminal.write(b"\x1b_Gq=2,a=p,U=1,i=1193046,c=2,r=1\x1b\\");
         terminal.write("\x1b[2;3H\x1b[38;2;18;52;86m\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}\x1b[0m".as_bytes());
 
-        let placements = terminal.kitty_image_placements().unwrap();
+        let placements = terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap();
         assert_eq!(placements.len(), 1);
         assert_eq!(placements[0].image_id, 1193046);
         assert_ne!(placements[0].placement_id, 0);
@@ -3650,35 +3562,11 @@ mod tests {
     }
 
     #[test]
-    fn unicode_width_helpers_match_terminal_layout_rules() {
+    fn unicode_codepoint_width_matches_terminal_layout_rules() {
         assert_eq!(unicode_codepoint_width('A' as u32), 1);
         assert_eq!(unicode_codepoint_width('\u{301}' as u32), 0);
         assert_eq!(unicode_codepoint_width('界' as u32), 2);
         assert_eq!(unicode_codepoint_width(0x11_0000), 1);
-
-        let cases: &[(&[u32], usize, u8)] = &[
-            (&[], 0, 0),
-            (&['e' as u32, '\u{301}' as u32], 2, 1),
-            (&['⚠' as u32, '\u{fe0f}' as u32], 2, 2),
-            (&['⚠' as u32, '\u{fe0e}' as u32], 2, 1),
-            (&['🇧' as u32, '🇷' as u32], 2, 2),
-            (&['👍' as u32, '🏽' as u32], 2, 2),
-            (
-                &[
-                    '👨' as u32,
-                    '\u{200d}' as u32,
-                    '👩' as u32,
-                    '\u{200d}' as u32,
-                    '👧' as u32,
-                ],
-                5,
-                2,
-            ),
-            (&[0x11_0000, 'A' as u32], 1, 1),
-        ];
-        for &(codepoints, consumed, width) in cases {
-            assert_eq!(unicode_grapheme_width(codepoints), (consumed, width));
-        }
     }
 
     #[test]
@@ -3718,7 +3606,7 @@ mod tests {
         key_encoder.set_from_terminal(&terminal);
         let mut key_event = KeyEvent::new().unwrap();
         key_event.set_action(ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS);
-        key_event.set_key(KEY_A);
+        key_event.set_key(ffi::GhosttyKey_GHOSTTY_KEY_A);
         key_event.set_mods(MOD_CTRL | MOD_SHIFT);
         key_event.set_utf8("A");
         key_event.set_unshifted_codepoint('a' as u32);
@@ -3737,22 +3625,11 @@ mod tests {
     }
 
     #[test]
-    fn modify_other_keys_query_tracks_mode_two() {
-        let mut terminal = Terminal::new(80, 24, 0).unwrap();
-
-        assert!(!terminal.modify_other_keys_enabled().unwrap());
-        terminal.write(b"\x1b[>4;2m");
-        assert!(terminal.modify_other_keys_enabled().unwrap());
-        terminal.write(b"\x1b[>4;0m");
-        assert!(!terminal.modify_other_keys_enabled().unwrap());
-    }
-
-    #[test]
-    fn terminal_read_text_viewport_unwraps_soft_wrapped_selection() {
+    fn terminal_read_text_screen_unwraps_soft_wrapped_selection() {
         let mut terminal = Terminal::new(5, 3, 0).unwrap();
         terminal.write("1ABCD2EFGH3IJKL".as_bytes());
 
-        let text = terminal.read_text_viewport((0, 1), (2, 2), false).unwrap();
+        let text = terminal.read_text_screen((0, 1), (2, 2), false).unwrap();
         assert_eq!(text, "2EFGH3IJ");
     }
 
@@ -3769,17 +3646,17 @@ mod tests {
     }
 
     #[test]
-    fn terminal_read_text_viewport_handles_wide_chars() {
+    fn terminal_read_text_screen_handles_wide_chars() {
         let mut terminal = Terminal::new(5, 3, 0).unwrap();
         terminal.write("1A⚡".as_bytes());
 
-        let full = terminal.read_text_viewport((0, 0), (3, 0), false).unwrap();
+        let full = terminal.read_text_screen((0, 0), (3, 0), false).unwrap();
         assert_eq!(full, "1A⚡");
 
-        let through_wide_head = terminal.read_text_viewport((0, 0), (2, 0), false).unwrap();
+        let through_wide_head = terminal.read_text_screen((0, 0), (2, 0), false).unwrap();
         assert_eq!(through_wide_head, "1A⚡");
 
-        let wide_only = terminal.read_text_viewport((3, 0), (3, 0), false).unwrap();
+        let wide_only = terminal.read_text_screen((3, 0), (3, 0), false).unwrap();
         assert_eq!(wide_only, "⚡");
     }
 
@@ -3855,7 +3732,7 @@ mod tests {
         terminal.scroll_viewport_delta(-100_000);
         assert_eq!(terminal.scrollbar().unwrap().offset, 0);
         assert!(terminal
-            .read_text_viewport((0, 0), (19, 0), false)
+            .read_text_screen((0, 0), (19, 0), false)
             .unwrap()
             .starts_with("FIRST 🇧🇷"));
         assert_eq!(
@@ -3869,7 +3746,7 @@ mod tests {
         assert_eq!(metrics.offset, 0);
         assert_eq!(metrics.len, 5);
         assert!(terminal
-            .read_text_viewport((0, 0), (9, 0), false)
+            .read_text_screen((0, 0), (9, 0), false)
             .unwrap()
             .starts_with("FIRST 🇧🇷"));
         assert_eq!(
@@ -3886,7 +3763,7 @@ mod tests {
         terminal.write(b"primary");
         assert_eq!(terminal.active_screen().unwrap(), ActiveScreen::Primary);
         assert_eq!(
-            terminal.read_text_viewport((0, 0), (6, 0), false).unwrap(),
+            terminal.read_text_screen((0, 0), (6, 0), false).unwrap(),
             "primary"
         );
 
@@ -3899,14 +3776,14 @@ mod tests {
         terminal.write(b"\x1b[?1049h\x1b[HALT");
         assert_eq!(terminal.active_screen().unwrap(), ActiveScreen::Alternate);
         assert_eq!(
-            terminal.read_text_viewport((0, 0), (2, 0), false).unwrap(),
+            terminal.read_text_screen((0, 0), (2, 0), false).unwrap(),
             "ALT"
         );
 
         terminal.write(b"\x1b[?1049l");
         assert_eq!(terminal.active_screen().unwrap(), ActiveScreen::Primary);
         assert_eq!(
-            terminal.read_text_viewport((0, 0), (6, 0), false).unwrap(),
+            terminal.read_text_screen((0, 0), (6, 0), false).unwrap(),
             "primary"
         );
     }
@@ -4076,10 +3953,9 @@ mod tests {
     fn invoke_clipboard_callback(
         terminal: &mut Terminal,
         contents: &[ffi::GhosttyClipboardContent],
-        size: usize,
     ) -> ffi::GhosttyClipboardWriteResult {
         let request = ffi::GhosttyClipboardWrite {
-            size,
+            size: std::mem::size_of::<ffi::GhosttyClipboardWrite>(),
             location: ffi::GhosttyClipboardLocation_GHOSTTY_CLIPBOARD_LOCATION_STANDARD,
             contents: contents.as_ptr(),
             contents_len: contents.len(),
@@ -4097,38 +3973,30 @@ mod tests {
     #[test]
     fn clipboard_callback_ignores_clear_and_rejects_unsupported_writes() {
         let mut terminal = Terminal::new(10, 5, 0).unwrap();
-        let full_size = std::mem::size_of::<ffi::GhosttyClipboardWrite>();
         let success = ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
         let unsupported =
             ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED;
         let invalid = ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA;
 
-        assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[], full_size),
-            success
-        );
+        assert_eq!(invoke_clipboard_callback(&mut terminal, &[]), success);
         assert!(terminal.take_clipboard_writes().is_empty());
 
         let empty = test_clipboard_content(b"text/plain", b"");
         assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[empty], full_size),
+            invoke_clipboard_callback(&mut terminal, &[empty]),
             unsupported
         );
         let text = test_clipboard_content(b"text/plain", b"text");
         let image = test_clipboard_content(b"image/png", b"image");
         assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[text, image], full_size),
+            invoke_clipboard_callback(&mut terminal, &[text, image]),
             unsupported
         );
 
         let oversized = vec![b'x'; MAX_CLIPBOARD_BYTES + 1];
         let oversized = test_clipboard_content(b"text/plain", &oversized);
         assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[oversized], full_size),
-            invalid
-        );
-        assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[text], full_size - 1),
+            invoke_clipboard_callback(&mut terminal, &[oversized]),
             invalid
         );
         assert!(terminal.take_clipboard_writes().is_empty());

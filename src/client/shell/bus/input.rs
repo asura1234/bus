@@ -1,10 +1,12 @@
 use super::*;
 use super::{
     editor::Editor,
-    forms::{Form, Rename, RenameTarget},
-    render::Action,
+    forms::{
+        Form, Orchestrates, PromptField, Rename, RenameTarget, ORCHESTRATES_FIELD, PROMPT_FIELD,
+    },
+    render::{Action, SoundTarget},
 };
-use crate::bus::{launch::AddAgent, model::*, runtime::BusCommand};
+use crate::bus::{launch::AddAgent, model::*, orchestrator::OrchestratorSpec, runtime::BusCommand};
 use crate::{client::shell::ClientShellInput, raw_input::RawInputEvent};
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
@@ -16,15 +18,20 @@ impl BusUi {
         outcome: &mut ClientShellInput,
     ) -> bool {
         if let RawInputEvent::Key(key) = event {
-            let quit = (matches!(key.code, KeyCode::Char('c' | 'C'))
-                && key.modifiers == KeyModifiers::CONTROL)
-                || (matches!(key.code, KeyCode::Char('q' | 'Q'))
-                    && key.modifiers.contains(KeyModifiers::CONTROL));
-            if quit && key.kind != KeyEventKind::Release {
-                if matches!(key.code, KeyCode::Char('c' | 'C')) && self.clear_composer() {
+            // Ctrl+C never quits Bus. A focused agent terminal receives it
+            // unchanged below so the human can interrupt the agent; the room
+            // composer clears its draft; everywhere else it does nothing.
+            let interrupt = matches!(key.code, KeyCode::Char('c' | 'C'))
+                && key.modifiers == KeyModifiers::CONTROL;
+            if interrupt && !self.terminal_has_focus() {
+                if key.kind != KeyEventKind::Release && self.clear_composer() {
                     outcome.repaint = true;
-                    return true;
                 }
+                return true;
+            }
+            let quit = matches!(key.code, KeyCode::Char('q' | 'Q'))
+                && key.modifiers.contains(KeyModifiers::CONTROL);
+            if quit && key.kind != KeyEventKind::Release {
                 if key.modifiers.contains(KeyModifiers::SHIFT) && self.force_exit_available {
                     outcome.detach = true;
                 } else {
@@ -124,6 +131,17 @@ impl BusUi {
                     outcome.repaint = true;
                     return true;
                 }
+                if matches!(self.form, Some(Form::Settings))
+                    && mouse.column >= self.view.sidebar.right()
+                {
+                    self.settings_scroll = if mouse.kind == MouseEventKind::ScrollDown {
+                        (self.settings_scroll + 3).min(self.view.settings_max_scroll)
+                    } else {
+                        self.settings_scroll.saturating_sub(3)
+                    };
+                    outcome.repaint = true;
+                    return true;
+                }
                 if self.terminal.is_none()
                     && self.form.is_none()
                     && self
@@ -138,6 +156,17 @@ impl BusUi {
                     } else {
                         self.recipient_scroll.saturating_sub(3)
                     };
+                    outcome.repaint = true;
+                    return true;
+                }
+                if self.terminal.is_none()
+                    && self.form.is_none()
+                    && self
+                        .view
+                        .notes_box
+                        .contains((mouse.column, mouse.row).into())
+                {
+                    self.scroll_notes(mouse.kind == MouseEventKind::ScrollDown, 1);
                     outcome.repaint = true;
                     return true;
                 }
@@ -211,6 +240,7 @@ impl BusUi {
                         });
                     if let (Some(room), Some(paths)) = (self.room, paths) {
                         for path in paths {
+                            let path = self.keep_temporary_image(room, path);
                             self.queue(BusCommand::AttachFile(room, path), Effect::Files(room));
                         }
                     } else {
@@ -273,6 +303,13 @@ impl BusUi {
         true
     }
 
+    /// An agent terminal is open with no Bus overlay taking its keys.
+    fn terminal_has_focus(&self) -> bool {
+        self.terminal.is_some()
+            && self.deletion.is_none()
+            && self.form.is_none()
+            && self.rename.is_none()
+    }
     pub fn terminal_ready(&self, pane: Option<&str>) -> bool {
         self.terminal.is_some()
             && self.deletion.is_none()
@@ -294,6 +331,130 @@ impl BusUi {
             } else {
                 offset.min(maximum).saturating_sub(lines)
             });
+        }
+    }
+    /// MASTER has no notes: they are a work room's status board, and MASTER is
+    /// where the human talks to orchestrators.
+    fn room_has_notes(&self) -> bool {
+        self.room
+            .and_then(|id| self.snapshot.state.room(id))
+            .is_some_and(|room| room.kind != RoomKind::Master)
+    }
+
+    /// Starting to edit the notes brings their caret back into view.
+    fn reveal_notes_caret(&mut self) {
+        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
+            local.notes_scroll = None;
+        }
+    }
+    fn scroll_notes(&mut self, forward: bool, lines: usize) {
+        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
+            let offset = local.notes_scroll.unwrap_or(self.view.notes_scroll);
+            let maximum = self
+                .view
+                .notes_rows
+                .saturating_sub(usize::from(self.view.notes.height));
+            local.notes_scroll = Some(if forward {
+                offset.saturating_add(lines).min(maximum)
+            } else {
+                offset.min(maximum).saturating_sub(lines)
+            });
+        }
+    }
+    fn toggle_sound(&mut self, target: SoundTarget) {
+        match target {
+            SoundTarget::Room(room) => {
+                if let Some(enabled) = self
+                    .snapshot
+                    .state
+                    .room(room)
+                    .map(|room| room.sound_enabled())
+                {
+                    self.queue(BusCommand::SetRoomSound(room, !enabled), Effect::None);
+                }
+            }
+            SoundTarget::AllRooms => {
+                // Like a tri-state checkbox: only all-on turns off; off or
+                // mixed turns every room on.
+                let enabled = self.all_rooms_sound().0 != Some(true);
+                // Shown at once when there are no rooms; the coordinator's
+                // saved copy and the rooms' snapshot follow.
+                self.settings.room_sound.enabled = enabled;
+                self.queue(BusCommand::SetAllRoomsSound(enabled), Effect::None);
+            }
+        }
+    }
+    /// Moves a sound row to the next or previous sound (Default first, then
+    /// the system sounds) and plays it as a preview.
+    pub(super) fn cycle_sound(&mut self, target: SoundTarget, forward: bool) {
+        let current = match target {
+            SoundTarget::Room(room) => match self.snapshot.state.room(room) {
+                Some(room) => room.sound_name.clone(),
+                None => return,
+            },
+            // Mixed sounds cycle from Default.
+            SoundTarget::AllRooms => self.all_rooms_sound().1.flatten(),
+        };
+        let mut choices: Vec<Option<String>> = vec![None];
+        choices.extend(self.system_sounds.iter().flatten().cloned().map(Some));
+        let index = choices
+            .iter()
+            .position(|choice| match (choice, &current) {
+                (Some(choice), Some(current)) => choice.eq_ignore_ascii_case(current),
+                (choice, current) => choice.is_none() && current.is_none(),
+            })
+            .unwrap_or(0);
+        let next = if forward {
+            (index + 1) % choices.len()
+        } else {
+            (index + choices.len() - 1) % choices.len()
+        };
+        let choice = choices.swap_remove(next);
+        if let Some(config) = &self.sound_config {
+            crate::sound::play_named(choice.as_deref(), config);
+        }
+        let command = match target {
+            SoundTarget::Room(room) => BusCommand::SetRoomSoundName(room, choice),
+            SoundTarget::AllRooms => {
+                self.settings.room_sound.name = choice.clone();
+                BusCommand::SetAllRoomsSoundName(choice)
+            }
+        };
+        self.queue(command, Effect::None);
+    }
+    /// A sound name as Settings shows it, noting one no longer installed.
+    pub(super) fn sound_label(&self, name: Option<&str>) -> String {
+        match name {
+            None => crate::sound::DEFAULT_SOUND_NAME.into(),
+            Some(name)
+                if self.system_sounds.as_ref().is_some_and(|sounds| {
+                    !sounds.iter().any(|sound| sound.eq_ignore_ascii_case(name))
+                }) =>
+            {
+                format!("{name} (missing)")
+            }
+            Some(name) => name.to_owned(),
+        }
+    }
+    /// Keeps the keyboard-focused sound row inside the scrolled Settings list.
+    fn reveal_settings_field(&mut self) {
+        let lines = self.sound_settings_lines();
+        let Some(line) = lines.iter().position(|line| {
+            matches!(line, super::render::SoundSettingsLine::Sound { field, .. } if *field == self.settings_field)
+        }) else {
+            self.settings_scroll = 0;
+            return;
+        };
+        // Bring a group heading into view along with its first row.
+        let line = match line.checked_sub(1).map(|above| &lines[above]) {
+            Some(super::render::SoundSettingsLine::Heading(_)) => line - 1,
+            _ => line,
+        };
+        let height = usize::from(self.view.settings_list.height.max(1));
+        if line < self.settings_scroll {
+            self.settings_scroll = line;
+        } else if line >= self.settings_scroll + height {
+            self.settings_scroll = line + 1 - height;
         }
     }
     fn scroll_help(&mut self, forward: bool, lines: usize) {
@@ -319,14 +480,9 @@ impl BusUi {
     }
     pub fn open_room(&mut self, room: RoomId) {
         self.clear_selection();
-        if let Some(index) = self
-            .snapshot
-            .state
-            .rooms()
-            .position(|r| r.id == room)
+        if let Some(row) = super::render::sidebar_room_row(&self.snapshot.state, room, Some(room))
             .filter(|_| self.view.sidebar_body.height > 0)
         {
-            let row = index + 3;
             let capacity = usize::from(self.view.sidebar_body.height.max(1));
             if row < self.sidebar_scroll {
                 self.sidebar_scroll = row;
@@ -375,7 +531,55 @@ impl BusUi {
         self.recipient_menu = false;
         self.text_changed(room);
     }
+    /// The work rooms a new orchestrator can take: each work room has at most one.
+    fn orchestratable_rooms(&self) -> Vec<RoomId> {
+        let state = &self.snapshot.state;
+        state
+            .rooms()
+            .filter(|room| {
+                room.kind == RoomKind::Work
+                    && !room.deletion_pending
+                    && state.orchestrator_of(room.id).is_none()
+            })
+            .map(|room| room.id)
+            .collect()
+    }
+    /// Steps the new orchestrator's room through the work rooms without one.
+    /// There is no "no room" choice: an orchestrator exists only for its room.
+    fn cycle_orchestrates(&mut self, forward: bool) {
+        let choices = self.orchestratable_rooms();
+        if let Some(Form::Agent {
+            orchestrates: Some(choice),
+            ..
+        }) = &mut self.form
+        {
+            choice.0 = match choice.0.and_then(|c| choices.iter().position(|r| *r == c)) {
+                _ if choices.is_empty() => None,
+                None => Some(choices[0]),
+                Some(index) => Some(
+                    choices[if forward {
+                        (index + 1) % choices.len()
+                    } else {
+                        (index + choices.len() - 1) % choices.len()
+                    }],
+                ),
+            };
+        }
+        self.refill_orchestrator_prompt();
+    }
+    pub(super) fn is_master_room(&self, room: RoomId) -> bool {
+        self.snapshot
+            .state
+            .room(room)
+            .is_some_and(|room| room.kind == RoomKind::Master)
+    }
     fn start_rename(&mut self, target: RenameTarget) {
+        if let RenameTarget::Room(id) = target {
+            if self.is_master_room(id) {
+                self.error = Some(ModelError::MasterRoomFixed.to_string());
+                return;
+            }
+        }
         let name = match target {
             RenameTarget::Room(id) => self.snapshot.state.room(id).map(|r| r.name.clone()),
             RenameTarget::Agent(id) => self.snapshot.state.agent(id).map(|a| a.name.clone()),
@@ -419,17 +623,41 @@ impl BusUi {
             Action::Room(room) => self.open_room(room),
             Action::Agent(agent) => self.open_terminal(agent),
             Action::NewRoom => self.open_form(Form::Room(Editor::default())),
-            Action::NewAgent => self.open_form(Form::Agent {
-                name: Editor::default(),
-                provider: None,
-                provider_cursor: Provider::Codex,
-                cwd: Editor::new("~/".into()),
-                args: Box::new(Editor::default()),
-                field: 0,
-            }),
+            Action::NewAgent => {
+                let master = self.room.is_some_and(|room| self.is_master_room(room));
+                self.open_form(Form::Agent {
+                    name: Editor::default(),
+                    provider: None,
+                    provider_cursor: forms::provider_choices(master)[0],
+                    cwd: Editor::new("~/".into()),
+                    args: Box::new(Editor::default()),
+                    field: 0,
+                    // Starts on the first work room without an orchestrator.
+                    orchestrates: master
+                        .then(|| Orchestrates(self.orchestratable_rooms().first().copied())),
+                    prompt: master.then(|| {
+                        Box::new(PromptField {
+                            editor: Editor::default(),
+                            filled: String::new(),
+                        })
+                    }),
+                });
+                self.refill_orchestrator_prompt();
+            }
+            Action::Orchestrates => {
+                if let Some(Form::Agent { field, .. }) = &mut self.form {
+                    *field = ORCHESTRATES_FIELD;
+                }
+                self.cycle_orchestrates(true);
+            }
             Action::Notes => {
-                self.notes_focus = true;
-                self.recipient_menu = false;
+                if self.room_has_notes() {
+                    if !self.notes_focus {
+                        self.reveal_notes_caret();
+                    }
+                    self.notes_focus = true;
+                    self.recipient_menu = false;
+                }
             }
             Action::Composer => {
                 self.notes_focus = false;
@@ -440,7 +668,6 @@ impl BusUi {
                 self.notes_focus = false;
             }
             Action::Recipient(id) => self.toggle_recipient(id),
-            Action::RecipientEntry(entry) => self.toggle_recipient_entry(entry),
             Action::Files => self.open_form(Form::Files(Editor::new("~/".into()))),
             Action::RemoveFile(path) => {
                 if let Some(room) = self.room {
@@ -464,9 +691,7 @@ impl BusUi {
             }
             Action::Quote(agent) => self.quote(agent),
             Action::Field(index) => {
-                if matches!(self.form, Some(Form::Settings)) {
-                    self.settings_field = index;
-                } else if let Some(Form::Agent { field, .. }) = &mut self.form {
+                if let Some(Form::Agent { field, .. }) = &mut self.form {
                     *field = index;
                 }
                 self.query_paths();
@@ -491,16 +716,38 @@ impl BusUi {
             }
             Action::Settings => {
                 self.settings_field = 0;
-                self.settings_key = Editor::default();
-                if self.credential_digest().is_some() {
-                    self.load_orchestrator_prompt();
+                self.settings_scroll = 0;
+                if self.system_sounds.is_none() {
+                    self.system_sounds = Some(
+                        crate::sound::system_sounds()
+                            .into_iter()
+                            .map(|sound| sound.name)
+                            .collect(),
+                    );
                 }
                 self.open_form(Form::Settings);
             }
+            Action::ToggleSound(target) => {
+                if let Some(index) = self
+                    .sound_settings_targets()
+                    .iter()
+                    .position(|t| *t == target)
+                {
+                    self.settings_field = index + 1;
+                }
+                self.toggle_sound(target);
+            }
+            Action::CycleSound(target, forward) => {
+                if let Some(index) = self
+                    .sound_settings_targets()
+                    .iter()
+                    .position(|t| *t == target)
+                {
+                    self.settings_field = index + 1;
+                }
+                self.cycle_sound(target, forward);
+            }
             Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
-            Action::ToggleOrchestrator => self.toggle_orchestrator_enabled(),
-            Action::ResetOrchestratorPrompt => self.reset_orchestrator_prompt(),
-            Action::Coordination(action) => self.dispatch_coordination(action),
             Action::Cancel => {
                 if let Some(room) = self.room {
                     self.open_room(room);
@@ -511,19 +758,17 @@ impl BusUi {
             Action::Add => self.add(),
         }
     }
-    pub(super) fn toggle_recipient(&mut self, id: Option<AgentId>) {
+    fn toggle_recipient(&mut self, id: Option<AgentId>) {
         let Some(room) = self.room else {
             return;
         };
-        let all: AgentRecipients = super::orchestrator_ui::all_coding_agents(
-            self.snapshot
-                .state
-                .agents()
-                .filter(|a| a.room_id == room)
-                .map(|a| a.id),
-        )
-        .into_iter()
-        .collect();
+        let all: AgentRecipients = self
+            .snapshot
+            .state
+            .agents()
+            .filter(|a| a.room_id == room)
+            .map(|a| a.id)
+            .collect();
         if let Some(local) = self.locals.get_mut(&room) {
             if let Some(id) = id {
                 if !local.recipients.remove(&id) {
@@ -545,17 +790,10 @@ impl BusUi {
             return;
         }
         if let Some(form) = &mut self.form {
-            if matches!(form, Form::Settings) {
-                match self.settings_field {
-                    2 => self.settings_key.insert(text),
-                    3 => self.settings_prompt.insert(text),
-                    _ => {}
-                }
-                return;
-            }
             if let Some(editor) = form.editor_mut() {
                 editor.insert(text);
             }
+            self.refill_orchestrator_prompt();
             self.query_paths();
             return;
         }
@@ -623,20 +861,15 @@ impl BusUi {
                 .filter(|a| Some(a.room_id) == self.room)
                 .map(|a| a.id)
                 .collect();
-            let entries = super::orchestrator_ui::recipient_entries(
-                self.settings.orchestrator.enabled,
-                ids.iter().copied(),
-            );
-            let last = entries.len().saturating_sub(1);
             match code {
                 KeyCode::Esc | KeyCode::Tab => self.recipient_menu = false,
                 KeyCode::Up => self.recipient_index = self.recipient_index.saturating_sub(1),
-                KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(last),
-                KeyCode::Enter | KeyCode::Char(' ') => {
-                    if let Some(entry) = entries.get(self.recipient_index).cloned() {
-                        self.toggle_recipient_entry(entry);
-                    }
-                }
+                KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(ids.len()),
+                KeyCode::Enter | KeyCode::Char(' ') => self.toggle_recipient(
+                    self.recipient_index
+                        .checked_sub(1)
+                        .and_then(|i| ids.get(i).copied()),
+                ),
                 _ => {}
             }
             return;
@@ -656,7 +889,14 @@ impl BusUi {
                     self.start_rename(RenameTarget::Room(id));
                 }
             }
-            (KeyCode::F(3), _) => self.notes_focus = !self.notes_focus,
+            (KeyCode::F(3), _) => {
+                if self.room_has_notes() {
+                    if !self.notes_focus {
+                        self.reveal_notes_caret();
+                    }
+                    self.notes_focus = !self.notes_focus;
+                }
+            }
             (KeyCode::Char('e' | 'E'), modifiers)
                 if modifiers.contains(KeyModifiers::CONTROL)
                     && modifiers.contains(KeyModifiers::SHIFT)
@@ -672,6 +912,12 @@ impl BusUi {
                         ComposerSize::Full
                     };
                 }
+            }
+            (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) if self.notes_focus => {
+                self.scroll_notes(
+                    code == KeyCode::PageDown,
+                    usize::from(self.view.notes.height.saturating_sub(1).max(1)),
+                );
             }
             (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) if !self.notes_focus => {
                 self.scroll_composer(
@@ -696,15 +942,9 @@ impl BusUi {
             }
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => self.action(Action::NewAgent),
             (KeyCode::Char('f'), KeyModifiers::CONTROL) => self.action(Action::Files),
-            (KeyCode::Char('@' | '+'), modifiers)
-                if !self.notes_focus && modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
-            {
-                self.action(if code == KeyCode::Char('@') {
-                    Action::Recipients
-                } else {
-                    Action::Files
-                });
-            }
+            // Pickers sit on Ctrl chords: every printable key, shifted symbols
+            // like @ and + included, must type into the composer.
+            (KeyCode::Char('p'), KeyModifiers::CONTROL) => self.action(Action::Recipients),
             (KeyCode::Char('j'), KeyModifiers::CONTROL) | (KeyCode::Enter, KeyModifiers::SHIFT) => {
                 self.insert("\n")
             }
@@ -716,6 +956,11 @@ impl BusUi {
             }
             (KeyCode::Enter, _) if self.notes_focus => self.insert("\n"),
             (KeyCode::Enter, _) if self.pending_line_continue => self.finish_line_continue(),
+            (KeyCode::Enter, KeyModifiers::ALT) => {
+                if let Some(room) = self.room {
+                    self.request_queued_send(room);
+                }
+            }
             (KeyCode::Enter, _) => {
                 if let Some(room) = self.room {
                     self.request_send(room);
@@ -735,7 +980,9 @@ impl BusUi {
             _ => {
                 if let Some(room) = self.room {
                     if let Some(local) = self.locals.get_mut(&room) {
-                        if !self.notes_focus {
+                        if self.notes_focus {
+                            local.notes_scroll = None;
+                        } else {
                             local.composer_scroll = None;
                         }
                         let editor = if self.notes_focus {
@@ -830,23 +1077,39 @@ impl BusUi {
         let Some(room) = self.room else {
             return;
         };
-        let path = std::env::temp_dir().join(format!(
-            "bus-paste-{}-{}.{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0),
-            image.extension
-        ));
-        if std::fs::write(&path, &image.bytes).is_err() {
-            self.error = Some("Could not write the clipboard image.".into());
+        let Some(root) = crate::bus::entry::data_dir() else {
+            self.error = Some("Could not save the clipboard image: no Bus data directory.".into());
             return;
-        }
+        };
+        let path = match save_pasted_image(&root, room, &image.bytes, image.extension) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(event = "bus.paste_image.write_failed", %error);
+                self.error = Some("Could not write the clipboard image.".into());
+                return;
+            }
+        };
         self.queue(
             BusCommand::AttachFile(room, path.display().to_string()),
             Effect::Files(room),
         );
+    }
+    /// A pasted image path in the OS temp folder (a macOS screenshot or a
+    /// terminal's image paste) vanishes once its app cleans up, and the message
+    /// would then lose the image. Bus keeps its own copy under the room's
+    /// attachments, as for a clipboard image; any other path is kept as given.
+    fn keep_temporary_image(&mut self, room: RoomId, path: String) -> String {
+        let Some(root) = crate::bus::entry::data_dir() else {
+            return path;
+        };
+        match copy_temporary_image(&root, room, std::path::Path::new(&path)) {
+            Ok(Some(copy)) => copy.display().to_string(),
+            Ok(None) => path,
+            Err(error) => {
+                tracing::warn!(event = "bus.paste_image.copy_failed", %error);
+                path
+            }
+        }
     }
     fn history_entries(&self, room: RoomId) -> Vec<String> {
         let mut entries = self
@@ -858,7 +1121,7 @@ impl BusUi {
             .snapshot
             .state
             .requests()
-            .filter(|request| request.room_id == room)
+            .filter(|request| request.room_id == room && !request.delivery_only())
         {
             if entries.last() != Some(&request.prompt.text) {
                 entries.push(request.prompt.text.clone());
@@ -1038,38 +1301,31 @@ impl BusUi {
             return;
         }
         if matches!(self.form, Some(Form::Settings)) {
-            let prompt_available = self.credential_digest().is_some();
-            if self.settings_field == 3 && prompt_available {
-                match (code, modifiers) {
-                    (KeyCode::Char('s' | 'S'), KeyModifiers::CONTROL) => {
-                        self.save_orchestrator_prompt()
-                    }
-                    (KeyCode::Enter, _) => self.settings_prompt.insert("\n"),
-                    (KeyCode::Tab, _) => self.settings_field = 4,
-                    (KeyCode::BackTab, _) => self.settings_field = 2,
-                    _ => {
-                        self.settings_prompt.key(code, modifiers);
-                    }
-                }
-                return;
-            }
-            let last_field = if prompt_available { 4 } else { 2 };
+            let targets = self.sound_settings_targets();
             match code {
                 KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
-                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(last_field),
+                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(targets.len()),
+                // Enter alone toggles (Space is deliberately inert in Settings).
                 KeyCode::Enter => match self.settings_field {
                     0 => self.toggle_color_blind_mode(),
-                    1 => self.toggle_orchestrator_enabled(),
-                    2 => self.save_orchestrator_key(),
-                    4 => self.reset_orchestrator_prompt(),
-                    _ => {}
+                    field => {
+                        if let Some(target) = targets.get(field - 1) {
+                            self.toggle_sound(*target);
+                        }
+                    }
                 },
-                _ => {
-                    if self.settings_field == 2 {
-                        self.settings_key.key(code, modifiers);
+                KeyCode::Left | KeyCode::Right => {
+                    if let Some(target) = self
+                        .settings_field
+                        .checked_sub(1)
+                        .and_then(|i| targets.get(i))
+                    {
+                        self.cycle_sound(*target, code == KeyCode::Right);
                     }
                 }
+                _ => {}
             }
+            self.reveal_settings_field();
             return;
         }
         if matches!(self.form, Some(Form::Help { .. })) {
@@ -1108,23 +1364,21 @@ impl BusUi {
                 provider,
                 provider_cursor,
                 field,
+                orchestrates,
                 ..
             }) = &mut self.form
             {
+                let choices = forms::provider_choices(orchestrates.is_some());
+                let index = choices
+                    .iter()
+                    .position(|choice| choice == provider_cursor)
+                    .unwrap_or(0);
                 match code {
                     KeyCode::Left | KeyCode::Up => {
-                        *provider_cursor = match provider_cursor {
-                            Provider::Codex => Provider::Cursor,
-                            Provider::ClaudeCode => Provider::Codex,
-                            Provider::Cursor => Provider::ClaudeCode,
-                        };
+                        *provider_cursor = choices[(index + choices.len() - 1) % choices.len()];
                     }
                     KeyCode::Right | KeyCode::Down => {
-                        *provider_cursor = match provider_cursor {
-                            Provider::Codex => Provider::ClaudeCode,
-                            Provider::ClaudeCode => Provider::Cursor,
-                            Provider::Cursor => Provider::Codex,
-                        };
+                        *provider_cursor = choices[(index + 1) % choices.len()];
                     }
                     KeyCode::Char(' ') | KeyCode::Enter => {
                         *provider = Some(*provider_cursor);
@@ -1134,6 +1388,36 @@ impl BusUi {
                 }
             }
             self.query_paths();
+            return;
+        }
+        if matches!(
+            self.form,
+            Some(Form::Agent {
+                field: ORCHESTRATES_FIELD,
+                ..
+            })
+        ) && matches!(
+            code,
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Char(' ')
+        ) {
+            self.cycle_orchestrates(matches!(
+                code,
+                KeyCode::Right | KeyCode::Down | KeyCode::Char(' ')
+            ));
+            return;
+        }
+        // The system prompt is multi-line: Enter adds a line, Ctrl+Enter adds the agent.
+        if code == KeyCode::Enter
+            && !modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(
+                self.form,
+                Some(Form::Agent {
+                    field: PROMPT_FIELD,
+                    ..
+                })
+            )
+        {
+            self.insert("\n");
             return;
         }
         if code == KeyCode::Enter && matches!(self.form, Some(Form::Agent { .. })) {
@@ -1149,11 +1433,12 @@ impl BusUi {
             return;
         }
         if code == KeyCode::Tab || code == KeyCode::BackTab || code == KeyCode::Enter {
+            let count = self.form.as_ref().map_or(0, Form::agent_field_count);
             if let Some(Form::Agent { field, .. }) = &mut self.form {
                 *field = if code == KeyCode::BackTab {
-                    (*field + 3) % 4
+                    (*field + count - 1) % count
                 } else {
-                    (*field + 1) % 4
+                    (*field + 1) % count
                 };
                 self.query_paths();
                 return;
@@ -1181,6 +1466,7 @@ impl BusUi {
                 editor.key(code, modifiers) || editor.cursor != before
             });
         if edited || !matches!(code, KeyCode::Char(_)) {
+            self.refill_orchestrator_prompt();
             self.query_paths();
         }
     }
@@ -1229,7 +1515,9 @@ impl BusUi {
         if self.pending.iter().any(|p| {
             matches!(
                 p.command,
-                BusCommand::AddAgent(_) | BusCommand::CreateRoom(_)
+                BusCommand::AddAgent(_)
+                    | BusCommand::AddOrchestrator(..)
+                    | BusCommand::CreateRoom(_)
             )
         }) {
             return;
@@ -1247,6 +1535,8 @@ impl BusUi {
                 provider,
                 cwd,
                 args,
+                orchestrates,
+                prompt,
                 ..
             } => {
                 let mut missing = Vec::new();
@@ -1270,19 +1560,50 @@ impl BusUi {
                     });
                     return;
                 }
+                if orchestrates.is_some_and(|choice| choice.0.is_none()) {
+                    self.error = Some(
+                        "Orchestrates room is required: create a work room without an orchestrator first."
+                            .into(),
+                    );
+                    return;
+                }
+                // The MASTER form never offers Codex; this keeps the form and
+                // the coordinator, which refuses it too, in step.
+                if let (Some(_), Some(provider)) = (orchestrates, provider) {
+                    if let Err(error) = crate::bus::orchestrator::check_new_orchestrator(provider) {
+                        self.error = Some(error);
+                        return;
+                    }
+                }
+                let system_prompt = prompt.map(|prompt| prompt.editor.text);
+                if system_prompt
+                    .as_ref()
+                    .is_some_and(|text| text.trim().is_empty())
+                {
+                    self.error = Some("System prompt is required.".into());
+                    return;
+                }
                 self.error = None;
                 if let Some(room) = self.room {
-                    self.queue(
-                        BusCommand::AddAgent(AddAgent {
-                            room,
-                            name: name.text,
-                            provider: provider.expect("validated provider"),
-                            cwd: cwd.text,
-                            extra_args: args.text,
-                            consent_project_hooks: false,
-                        }),
-                        Effect::None,
-                    );
+                    let input = AddAgent {
+                        room,
+                        name: name.text,
+                        provider: provider.expect("validated provider"),
+                        cwd: cwd.text,
+                        extra_args: args.text,
+                        consent_project_hooks: false,
+                    };
+                    let command = match orchestrates.and_then(|choice| choice.0) {
+                        Some(room) => BusCommand::AddOrchestrator(
+                            input,
+                            OrchestratorSpec {
+                                room,
+                                system_prompt,
+                            },
+                        ),
+                        None => BusCommand::AddAgent(input),
+                    };
+                    self.queue(command, Effect::None);
                 }
             }
             Form::Files(editor) => {
@@ -1294,10 +1615,73 @@ impl BusUi {
                     self.open_room(room);
                 }
             }
-            Form::Consent { mut input, .. } => {
+            Form::Consent {
+                mut input,
+                orchestrator,
+                ..
+            } => {
                 input.consent_project_hooks = true;
-                self.queue(BusCommand::AddAgent(input), Effect::None);
+                let command = match orchestrator {
+                    Some(spec) => BusCommand::AddOrchestrator(input, spec),
+                    None => BusCommand::AddAgent(input),
+                };
+                self.queue(command, Effect::None);
             }
         }
     }
+}
+
+/// Saves a pasted clipboard image where later readers can still open it: the
+/// Bus data directory outlives the session, unlike the system temp directory.
+/// Naming by content keeps repeated pastes of one image to a single file.
+/// Copies `path` into the room's attachments when it is an image in a
+/// temporary folder; `Ok(None)` leaves any other path as it is.
+pub(super) fn copy_temporary_image(
+    root: &std::path::Path,
+    room: RoomId,
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    if !super::thumbnails::is_image(path) {
+        return Ok(None);
+    }
+    let Ok(canonical) = path.canonicalize() else {
+        return Ok(None);
+    };
+    // Bus's own data dir can itself live in a temp folder (tests, isolated runs).
+    let owned = root
+        .canonicalize()
+        .is_ok_and(|root| canonical.starts_with(root));
+    let temporary = [std::env::temp_dir(), "/tmp".into()]
+        .into_iter()
+        .filter_map(|dir| dir.canonicalize().ok())
+        .any(|dir| canonical.starts_with(dir));
+    if owned || !temporary {
+        return Ok(None);
+    }
+    let extension = canonical
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("png")
+        .to_ascii_lowercase();
+    save_pasted_image(root, room, &std::fs::read(&canonical)?, &extension).map(Some)
+}
+
+pub(super) fn save_pasted_image(
+    root: &std::path::Path,
+    room: RoomId,
+    bytes: &[u8],
+    extension: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    use sha2::{Digest, Sha256};
+    let dir = root.join("attachments").join(format!("room-{}", room.0));
+    std::fs::create_dir_all(&dir)?;
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    let path = dir.join(format!("paste-{}.{extension}", &digest[..16]));
+    if !path.is_file() {
+        // Write beside the target and rename so readers never see a partial image.
+        let partial = dir.join(format!(".{}.partial-{}", &digest[..16], std::process::id()));
+        std::fs::write(&partial, bytes)?;
+        std::fs::rename(&partial, &path)?;
+    }
+    Ok(path)
 }

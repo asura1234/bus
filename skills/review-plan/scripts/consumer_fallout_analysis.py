@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""consumer fallout 的 module graph 索引与高置信摘要。"""
+"""Module-graph index and high-confidence summary for consumer fallout."""
 
 from __future__ import annotations
 
