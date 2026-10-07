@@ -398,10 +398,6 @@ mod ring_decisions {
             .unwrap();
         assert_eq!(ringing_room(&state, &reported), Some(master));
         assert!(!new_message_should_ring(&reported, &reported));
-        // Bus's own notices stay silent.
-        let mut noticed = state.clone();
-        noticed.post_notice(master, "dialog".into(), 1).unwrap();
-        assert!(!new_message_should_ring(&state, &noticed));
     }
 
     #[test]

@@ -31,6 +31,14 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   only: the orchestrator never resets its own context and is never replaced
   for compactions. *Why:* you carry the context, carry-over and situational
   awareness for the whole effort.
+- **On "Blocked, needs help to continue.", look at the worker's terminal.** A
+  worker blocked on a dialog, question, trust prompt or any other screen sends
+  you exactly that message, once, with no details; `bus wait` also stops with
+  `agent_waiting_on_dialog`. Inspect it with `bus agent dialog AGENT` (or `bus
+  agent read AGENT --source visible`) and handle it with `bus agent choose` or
+  `bus agent answer`, asking the human first for anything destructive or
+  outward-facing. *Why:* Bus is not an agent and sends no messages itself; the
+  worker's terminal is the source of truth.
 - **Use `worktree-new` only when it is a must.** By default all workers share
   one branch: give each worker its file boundaries and grant shared files one
   agent at a time. *Why:* one branch avoids merge work and keeps everyone on the

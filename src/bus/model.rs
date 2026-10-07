@@ -224,9 +224,14 @@ pub(crate) struct Room {
     pub(crate) draft: Draft,
     pub(crate) unread_count: u64,
     pub(crate) latest_prompt: Option<Prompt>,
-    /// Bus notices for the Human, such as an agent waiting on a dialog in a
-    /// room without an orchestrator. They have no recipients.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Agent messages to the Human (`post_to_human`); they have no recipients.
+    /// Bus is not an agent and never posts here: notices older versions saved
+    /// as "Bus" are dropped on load.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_notices"
+    )]
     pub(crate) notices: Vec<Prompt>,
     pub(crate) latest_replies: BTreeMap<AgentId, Reply>,
     #[serde(default)]
@@ -650,6 +655,15 @@ pub(crate) struct BusState {
     /// Dialog fingerprints already spent on an answer; each is single-use.
     #[serde(default)]
     consumed_dialog_fingerprints: BTreeSet<String>,
+}
+
+fn deserialize_notices<'de, D>(deserializer: D) -> Result<Vec<Prompt>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut notices = Vec::<Prompt>::deserialize(deserializer)?;
+    notices.retain(|notice| notice.author != Author::Bus);
+    Ok(notices)
 }
 
 fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, Agent>, D::Error>
@@ -1342,7 +1356,9 @@ impl BusState {
                 .agents
                 .get(agent_id)
                 .ok_or(ModelError::UnknownAgent(*agent_id))?;
-            if agent.room_id != room {
+            // A room's orchestrator lives in MASTER but takes messages from
+            // the room it orchestrates, such as a worker saying it is blocked.
+            if agent.room_id != room && agent.orchestrates != Some(room) {
                 return Err(ModelError::AgentOutsideRoom(*agent_id));
             }
             if agent.deletion_pending {
@@ -1573,16 +1589,6 @@ impl BusState {
         Ok(())
     }
 
-    /// Posts a Bus notice for the Human in `room`; it is delivered to no agent.
-    pub(crate) fn post_notice(
-        &mut self,
-        room: RoomId,
-        text: String,
-        now_ms: u64,
-    ) -> Result<PromptId, ModelError> {
-        self.push_notice(room, Author::Bus, text, Vec::new(), now_ms)
-    }
-
     /// Posts an agent's message to the Human in `room`, delivered to no agent.
     /// Orchestrators report this way when no Human message is open, so the
     /// report reaches the room's history instead of only their terminal.
@@ -1607,20 +1613,6 @@ impl BusState {
         if agent.deletion_pending {
             return Err(ModelError::DeletionPending);
         }
-        self.push_notice(room, Author::Agent(author), text, files, now_ms)
-    }
-
-    fn push_notice(
-        &mut self,
-        room: RoomId,
-        author: Author,
-        text: String,
-        files: Vec<PathBuf>,
-        now_ms: u64,
-    ) -> Result<PromptId, ModelError> {
-        // Only Bus's own notices are capped: they are routine noise, while
-        // agent messages to the Human are part of the room's record.
-        const KEPT_BUS_NOTICES: usize = 50;
         let id = PromptId(self.allocate_id());
         let visible = self.visible_room == Some(room);
         let room = self
@@ -1629,32 +1621,16 @@ impl BusState {
             .ok_or(ModelError::UnknownRoom(room))?;
         let prompt = Prompt {
             id,
-            author,
+            author: Author::Agent(author),
             text,
             files,
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: now_ms,
         };
-        if prompt.author != Author::Bus {
-            // The latest prompt is what rings and what the composer recalls,
-            // as for an agent's `send --as` to other agents.
-            room.latest_prompt = Some(prompt.clone());
-        }
+        // The latest prompt is what rings and what the composer recalls, as
+        // for an agent's `send --as` to other agents.
+        room.latest_prompt = Some(prompt.clone());
         room.notices.push(prompt);
-        let bus_notices = room
-            .notices
-            .iter()
-            .filter(|notice| notice.author == Author::Bus)
-            .count();
-        let mut excess = bus_notices.saturating_sub(KEPT_BUS_NOTICES);
-        room.notices.retain(|notice| {
-            if excess > 0 && notice.author == Author::Bus {
-                excess -= 1;
-                false
-            } else {
-                true
-            }
-        });
         if !visible {
             room.unread_count = room.unread_count.saturating_add(1);
         }
@@ -1709,17 +1685,14 @@ impl BusState {
     /// its own, once the agent proved it moved on: it finished a turn of its
     /// own and then started another, began a new provider session, or went
     /// idle. The typed text may have joined the agent's own turn, so its reply,
-    /// if any, is in the terminal; a Bus notice in the room says so.
+    /// if any, is in the terminal. Bus says nothing: it never authors a message,
+    /// and a waiting sender sees the request `abandoned`.
     pub(crate) fn release_unbound_request(
         &mut self,
         agent: AgentId,
         now_ms: u64,
     ) -> Option<RequestId> {
         let request = self.unbound_request(agent)?.id;
-        let (room, prompt) = {
-            let request = self.requests.get(&request)?;
-            (request.room_id, request.prompt.id)
-        };
         self.abandon_current_request(request, now_ms).ok()?;
         tracing::info!(
             event = "bus.message.recovered",
@@ -1727,19 +1700,6 @@ impl BusState {
             agent_id = agent.0,
             reason = "never_started",
             "Unstarted request released"
-        );
-        let name = self
-            .agents
-            .get(&agent)
-            .map(|a| a.name.clone())
-            .unwrap_or_default();
-        let _ = self.post_notice(
-            room,
-            format!(
-                "{name} never started message {} as a turn of its own and has moved on, so Bus stopped waiting for its reply and delivers the next messages. Any answer to it is in {name}'s terminal.",
-                prompt.0
-            ),
-            now_ms,
         );
         Some(request)
     }

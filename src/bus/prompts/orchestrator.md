@@ -71,12 +71,14 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   deleting work, changing the goal, or when reviewers or best-of-N candidates
   disagree sharply. If the human gave you authority for a decision, decide,
   log it, and tell them.
-- Agents stop at permission, trust and question dialogs. Bus messages you
-  the question or full command and reason, with options when present. Fetch a
-  fresh fingerprint with `bus agent dialog AGENT`, then use `bus agent choose
-  AGENT --option N --fingerprint F` for choices, or `bus agent answer AGENT
-  --text "..." --fingerprint F` / `--skip` for text questions. Notices contain
-  no fingerprint. `bus wait` returns early with `agent_waiting_on_dialog`.
+- Agents stop at permission, trust and question dialogs and other screens
+  they cannot pass alone. A blocked worker sends you one message, "Blocked,
+  needs help to continue.", with no details; `bus wait` also returns early
+  with `agent_waiting_on_dialog`. Look at that worker's terminal yourself:
+  `bus agent dialog AGENT` shows a dialog with a fresh fingerprint (`bus agent
+  read AGENT --source visible` shows any other screen). Then use `bus agent
+  choose AGENT --option N --fingerprint F` for choices, or `bus agent answer
+  AGENT --text "..." --fingerprint F` / `--skip` for text questions.
   Answer promptly. Ask the human before approving anything
   destructive or outward-facing.
 - Delivery is not completion. A task is done when `bus message status` shows

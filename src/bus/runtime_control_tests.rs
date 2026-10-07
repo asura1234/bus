@@ -2661,7 +2661,7 @@ fn agents_cannot_take_the_reserved_human_name() {
 }
 
 #[test]
-fn only_bus_notices_are_capped_so_reports_to_the_human_stay_in_history() {
+fn notices_older_versions_saved_as_bus_are_dropped_and_reports_to_the_human_kept() {
     let (mut worker, _room, _codex, dir) = fixture();
     let master = worker.state.master_room().unwrap().id;
     let orchestrator = worker
@@ -2672,16 +2672,16 @@ fn only_bus_notices_are_capped_so_reports_to_the_human_stay_in_history() {
         .state
         .post_to_human(master, orchestrator, "first report".into(), Vec::new(), 1)
         .unwrap();
-    for n in 0..60 {
-        worker
-            .state
-            .post_notice(master, format!("notice {n}"), 2 + n)
-            .unwrap();
-    }
-    let notices = &worker.state.room(master).unwrap().notices;
-    assert_eq!(notices.len(), 51);
+    let mut saved = serde_json::to_value(&worker.state).unwrap();
+    let notices = &mut saved["rooms"][master.0.to_string()]["notices"];
+    let mut legacy = notices[0].clone();
+    legacy["author"] = json!("bus");
+    legacy["text"] = json!("orch never started message 9");
+    notices.as_array_mut().unwrap().push(legacy);
+    let loaded: BusState = serde_json::from_value(saved).unwrap();
+    let notices = &loaded.room(master).unwrap().notices;
+    assert_eq!(notices.len(), 1, "Bus is not an agent and authors nothing");
     assert_eq!(notices[0].text, "first report");
-    assert_eq!(notices[1].text, "notice 10");
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

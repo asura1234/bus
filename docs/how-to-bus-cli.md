@@ -295,7 +295,8 @@ Verified live with each provider:
 | Cursor | Runs as the next generation once the current one ends; that generation's reply answers the group. |
 
 Bus does not type into an agent that waits on a dialog or a blocked screen;
-the message stays queued and the dialog notice tells you what the agent needs.
+the message stays queued, and the agent's "Blocked, needs help to continue."
+message tells you to look at its terminal.
 A message sent to an idle agent starts a new turn and group, as before. When
 messages piled up while the agent could not take them (it was launching,
 blocked, or finishing another turn), Bus sends them as one prompt, in order,
@@ -515,9 +516,9 @@ exact confirmed current request and does not choose what happens to queued work.
 Bus also releases a request on its own when the agent never started it as a
 turn. This happens when Bus typed the message while the agent ran a turn of its
 own, and then the agent finished that turn and either started another turn or
-stayed idle for five seconds. The request becomes `abandoned`, a Bus notice in
-the room says so, and the next queued message is delivered. Any answer the agent
-gave is in its terminal.
+stayed idle for five seconds. The request becomes `abandoned` (as `wait` and
+`message status` report; nothing is posted in any room), and the next queued
+message is delivered. Any answer the agent gave is in its terminal.
 
 The control CLI always emits raw JSON. Prompt and reply text returned by
 `wait`, `message status`, and `history` remains raw Markdown. The interactive
@@ -554,23 +555,17 @@ follows it, as in Claude Code's folder trust prompt (`❯ No, exit` above
 `Yes, I trust this folder`); its options are numbered from the top. `bus state`
 marks such an agent `dialog: true`.
 
-Bus tells someone without being asked. Once a dialog has been on screen for
-about a second, Bus sends the room's orchestrator a message in MASTER, delivered
-like any other message: the agent and room, the question or complete command
-(including every command line and its `Reason:`), and the numbered options
-with the selected one marked. Key hints such as `Press
-enter to confirm or esc to cancel` are left out. The answer line is `bus agent
-dialog AGENT`, then `bus agent choose AGENT --option N` for choices, or
-`bus agent answer AGENT --text "..."` / `bus agent answer AGENT --skip` for
-free-text questions; the fingerprint is
-not in the message, because `agent dialog` fetches a fresh one. Each dialog is
-reported once, a blocked screen without a readable dialog is reported with the
-`agent read` command to inspect it, and when that dialog closes Bus sends one
-line, `answered: option N` when Bus recorded the choice, otherwise `answered`.
-These messages reach only the orchestrator: they never appear in MASTER's or
-any room's history, `room history`, unread counts or rings, and the
-orchestrator's reply to them is hidden too. A room without an orchestrator gets
-no notice; the Human sees the dialog in the agent's terminal.
+Bus is not an agent and never sends a message as "Bus". Instead, once an
+agent has been blocked for about a second, on a dialog, a question, a trust
+prompt or any other screen it cannot pass alone, the blocked agent posts one
+message in its work room: `AGENT → ORCHESTRATOR: Blocked, needs help to
+continue.` when the room has an orchestrator, delivered and waking it like any
+agent message, or `AGENT → You: Blocked, needs help to continue.` when it has
+none. The text is the same for every blocker and carries no command, options or
+fingerprint: look at the agent's terminal with `bus agent dialog AGENT` (or
+`bus agent read AGENT --source visible`) and answer as below. It is posted once
+per blocked episode, not again while the agent stays blocked, and nothing
+follows when it is answered. An agent in MASTER posts none.
 
 `wait` stops early with the error code `agent_waiting_on_dialog` and the last
 status when a recipient that has not replied shows a dialog or a blocked
@@ -619,8 +614,7 @@ bus agent answer "$agent_id" --skip --fingerprint "$fingerprint"
 presses Enter after the short confirmation delay; `--skip` sends Codex's
 Ctrl+] or the other providers' Esc. Its result includes `keys`, `skipped`, and
 the same `outcome` values, with `input_changed` for a question whose text field
-changed while it remained open. The closing notice is `answered`, with no
-option number. A numbered choice cannot be answered as text.
+changed while it remained open. A numbered choice cannot be answered as text.
 
 Codex's expanded `Queued follow-up inputs` / `Type your answer` form is
 supported; its collapsed question banner remains a working state while the

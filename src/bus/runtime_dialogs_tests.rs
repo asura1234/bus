@@ -137,99 +137,49 @@ fn worker(
     (worker, agent, room, orchestrator, screen, dir)
 }
 
-/// Bus messages delivered to `agent`, oldest first.
-fn messages_to(worker: &Worker, agent: AgentId) -> Vec<String> {
-    let mut prompts: Vec<_> = worker
+/// Messages `author` sent in `room`: (recipients, text), oldest first. A
+/// message to the Human has no recipients.
+fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>, String)> {
+    let mut sent: BTreeMap<PromptId, (Vec<AgentId>, String)> = worker
         .state
         .requests()
-        .filter(|request| request.agent_id == agent && request.prompt.author == Author::Bus)
-        .map(|request| (request.prompt.id, request.prompt.text.clone()))
+        .filter(|request| request.room_id == room)
+        .map(|request| &request.prompt)
+        .chain(worker.state.room(room).unwrap().notices.iter())
+        .filter(|prompt| prompt.author == Author::Agent(author))
+        .map(|prompt| {
+            (
+                prompt.id,
+                (
+                    prompt.recipient_ids.iter().copied().collect(),
+                    prompt.text.clone(),
+                ),
+            )
+        })
         .collect();
-    prompts.sort();
-    prompts.into_iter().map(|(_, text)| text).collect()
+    std::mem::take(&mut sent).into_values().collect()
 }
 
-fn notices(worker: &Worker, room: RoomId) -> Vec<String> {
-    let room = worker.state.room(room).unwrap();
-    room.notices
-        .iter()
-        .map(|notice| notice.text.clone())
-        .collect()
-}
-
-#[test]
-fn notice_names_the_command_and_leaves_the_fingerprint_out() {
-    let observed = json!({
-        "dialog": {
-            "text": "Would you like to run the following command?\n\n$ printf muse-safe-probe",
-            "options": [
-                {"number": 1, "label": "Allow once", "selected": true},
-                {"number": 2, "label": "Abort", "selected": false}
-            ],
-            "hint": "Press enter to confirm or esc to cancel"
-        },
-        "fingerprint": "d1.eyJabc"
-    });
-    let notice = dialog_notice(AgentId(61), "Codex", "dev", &observed);
-    assert_eq!(
-        notice,
-        "Codex in dev (agent 61)\nCodex wants to run: printf muse-safe-probe\n1. Allow once (selected)\n2. Abort\n\nAnswer: bus agent dialog 61, then bus agent choose 61 --option N"
-    );
-}
-
-#[test]
-fn approval_notice_retains_every_command_line_and_the_reason() {
-    let observed = json!({"dialog":{
-        "text":"Would you like to run the following command?\n\nReason: Capture Claude's custom answer control\nin the isolated Bus.\n\n$ sed -n 1280,1344p src/app/api/agents.rs\nsed -n 385,402p src/bus/control_cli.rs\npython3 /private/tmp/bus-question-probe.py /private/tmp/bq cli ...",
-        "options":[], "hint":"Press enter to confirm or esc to cancel"
-    }, "fingerprint":"SECRET"});
-    let notice = dialog_notice(AgentId(61), "Codex", "dev", &observed);
-    assert!(notice.contains("Codex wants to run: sed -n 1280,1344p src/app/api/agents.rs\nsed -n 385,402p src/bus/control_cli.rs\npython3 /private/tmp/bus-question-probe.py /private/tmp/bq cli ..."), "{notice}");
-    assert!(
-        notice.contains("Reason: Capture Claude's custom answer control\nin the isolated Bus."),
-        "{notice}"
-    );
-    assert!(!notice.contains("SECRET"));
-    let commands = (0..16)
-        .map(|n| format!("printf command-{n}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let screen=format!("Would you like to run the following command?\n\nReason: Check every line in this native prompt\n\n$ {commands}\n\n› 1. Allow once\n  2. Abort\n\nPress enter to confirm or esc to cancel\n");
-    let parsed = crate::detect::dialog::parse(&screen).unwrap();
-    let observed = json!({"dialog":{"text":parsed.text,"options":[]}});
-    let notice = dialog_notice(AgentId(61), "Codex", "dev", &observed);
-    assert!(notice.contains(&commands), "{notice}");
-    assert!(
-        notice.contains("Reason: Check every line in this native prompt"),
-        "{notice}"
-    );
-}
-
-#[test]
-fn free_text_notice_retains_the_question_and_names_answer_without_a_fingerprint() {
-    let observed = json!({"dialog":{"kind":"question","text":"Which token?\nPlease give the complete value.","options":[],"hint":"enter submit ctrl+] skip shift+→ main prompt"},"fingerprint":"SECRET"});
-    let notice = dialog_notice(AgentId(61), "Codex", "dev", &observed);
-    assert_eq!(notice, "Codex in dev (agent 61)\nWhich token?\nPlease give the complete value.\n\nAnswer: bus agent dialog 61, then bus agent answer 61 --text \"...\" or bus agent answer 61 --skip");
-    assert!(!notice.contains("SECRET"));
-}
-
-#[test]
-fn the_same_blocked_notice_is_not_posted_again_after_a_flicker() {
-    let (mut worker, agent, _, orchestrator, screen, dir) = worker(true);
-    let orchestrator = orchestrator.unwrap();
-    screen.lock().unwrap().blocked = true;
-    polls(&mut worker, 3);
-    assert_eq!(messages_to(&worker, orchestrator).len(), 1);
-
-    screen.lock().unwrap().blocked = false;
-    polls(&mut worker, 3);
-    screen.lock().unwrap().blocked = true;
-    polls(&mut worker, 3);
-    let posted = messages_to(&worker, orchestrator);
-    assert_eq!(posted.len(), 1, "{posted:?}");
-    assert!(posted[0].contains(&format!("bus agent read {} --source visible", agent.0)));
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
+/// Bus is not an agent: it authors nothing, and MASTER never hears of a block.
+fn assert_bus_sent_nothing(worker: &Worker) {
+    assert!(worker
+        .state
+        .requests()
+        .all(|request| request.prompt.author != Author::Bus));
+    let master = worker.state.master_room().unwrap().id;
+    let master_room = worker.state.room(master).unwrap();
+    assert!(master_room.notices.is_empty(), "{:?}", master_room.notices);
+    assert!(master_room.latest_prompt.is_none());
+    assert!(worker
+        .state
+        .requests()
+        .all(|request| request.room_id != master));
+    for room in worker.state.rooms() {
+        assert!(room
+            .notices
+            .iter()
+            .all(|notice| notice.author != Author::Bus));
+    }
 }
 
 fn polls(worker: &mut Worker, count: usize) {
@@ -239,95 +189,50 @@ fn polls(worker: &mut Worker, count: usize) {
 }
 
 #[test]
-fn orchestrator_is_told_once_per_dialog_and_when_it_closes_on_its_own() {
+fn a_blocked_worker_tells_its_orchestrator_once_per_episode() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
     screen.lock().unwrap().dialog = true;
     worker.poll().unwrap();
     assert!(
-        messages_to(&worker, orchestrator).is_empty(),
+        sent_by(&worker, room, agent).is_empty(),
         "a single poll may be a redraw"
     );
     polls(&mut worker, 3);
-    let sent = messages_to(&worker, orchestrator);
-    assert_eq!(sent.len(), 1, "{sent:?}");
-    let notice = &sent[0];
-    let expected = format!(
-        "builder in work (agent {id})\nDo you want to proceed?\n1. Yes (selected)\n2. No\n\nAnswer: bus agent dialog {id}, then bus agent choose {id} --option N",
-        id = agent.0
+    let blocked = (vec![orchestrator], BLOCKED_MESSAGE.to_owned());
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        std::slice::from_ref(&blocked)
     );
-    assert_eq!(notice, &expected);
-    assert!(!notice.contains("fingerprint"), "{notice}");
-    assert!(!notice.contains("Esc to cancel"), "{notice}");
-    let master = worker.state.master_room().unwrap().id;
+    assert_eq!(BLOCKED_MESSAGE, "Blocked, needs help to continue.");
+    // It reaches the orchestrator like any message, queued for delivery.
     assert!(worker
         .state
         .requests()
-        .all(|request| request.room_id != master || request.agent_id == orchestrator));
+        .any(|request| request.agent_id == orchestrator && request.room_id == room));
     assert!(worker.state.agent(agent).unwrap().dialog);
-    assert!(notices(&worker, room).is_empty());
-    assert_no_dialog_history(&worker, master);
 
-    screen.lock().unwrap().dialog = false;
+    // Still blocked, now on a question and then a blocked screen: same episode.
+    screen.lock().unwrap().question = true;
     polls(&mut worker, 3);
-    let sent = messages_to(&worker, orchestrator);
-    assert_eq!(sent.len(), 2, "{sent:?}");
-    assert_eq!(sent[1], "answered");
-    assert_no_dialog_history(&worker, master);
+    screen.lock().unwrap().dialog = false;
+    screen.lock().unwrap().blocked = true;
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        std::slice::from_ref(&blocked)
+    );
+    assert_bus_sent_nothing(&worker);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn master_receives_a_text_question_and_a_generic_answer_notice() {
+fn answering_adds_no_echo_and_a_new_dialog_is_a_new_episode() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
     screen.lock().unwrap().dialog = true;
-    screen.lock().unwrap().question = true;
     polls(&mut worker, 3);
-    let sent = messages_to(&worker, orchestrator);
-    assert_eq!(sent.len(), 1);
-    assert!(sent[0].contains("What token should Bus use?"));
-    assert!(sent[0].contains(&format!("bus agent answer {} --text", agent.0)));
-    assert!(!sent[0].contains("fingerprint"));
-    assert!(notices(&worker, room).is_empty());
-    let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    assert_eq!(
-        worker
-            .answer_dialog(agent, Some("token"), false, &fingerprint)
-            .unwrap()["outcome"],
-        "closed"
-    );
-    polls(&mut worker, 3);
-    assert_eq!(messages_to(&worker, orchestrator)[1], "answered");
-    drop(worker);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// Dialog notices reach the orchestrator but never the Human's view of MASTER:
-/// no history entry, latest prompt, unread count or `room.history` message.
-fn assert_no_dialog_history(worker: &Worker, master: RoomId) {
-    let room = worker.state.room(master).unwrap();
-    assert!(room.latest_prompt.is_none(), "{:?}", room.latest_prompt);
-    assert_eq!(room.unread_count, 0);
-    assert!(room.notices.is_empty());
-    assert!(worker
-        .state
-        .requests()
-        .filter(|request| request.room_id == master)
-        .all(crate::bus::model::Request::delivery_only));
-}
-
-#[test]
-fn without_an_orchestrator_no_dialog_notice_is_posted_anywhere() {
-    let (mut worker, agent, room, _, screen, dir) = worker(false);
-    let master = worker.state.master_room().unwrap().id;
-    screen.lock().unwrap().dialog = true;
-    polls(&mut worker, 3);
-    assert!(worker.state.agent(agent).unwrap().dialog);
     let fingerprint = worker.observe_dialog(agent).unwrap()["fingerprint"]
         .as_str()
         .unwrap()
@@ -335,14 +240,74 @@ fn without_an_orchestrator_no_dialog_notice_is_posted_anywhere() {
     let chosen = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
     assert_eq!(chosen["outcome"], "closed");
     polls(&mut worker, 3);
+    let blocked = (vec![orchestrator], BLOCKED_MESSAGE.to_owned());
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        std::slice::from_ref(&blocked),
+        "no answered echo"
+    );
+
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent), [blocked.clone(), blocked]);
+    assert_bus_sent_nothing(&worker);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_same_blocked_screen_is_not_reported_again_after_a_flicker() {
+    let (mut worker, agent, room, _, screen, dir) = worker(true);
     screen.lock().unwrap().blocked = true;
-    polls(&mut worker, 2);
-    for room in [room, master] {
-        let shown = worker.state.room(room).unwrap();
-        assert!(shown.notices.is_empty(), "{:?}", shown.notices);
-        assert_eq!(shown.unread_count, 0);
-    }
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    screen.lock().unwrap().blocked = false;
+    polls(&mut worker, 3);
+    screen.lock().unwrap().blocked = true;
+    polls(&mut worker, 3);
+    assert_eq!(sent_by(&worker, room, agent).len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn without_an_orchestrator_the_blocked_worker_tells_the_human() {
+    let (mut worker, agent, room, _, screen, dir) = worker(false);
+    screen.lock().unwrap().dialog = true;
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+    );
+    // An agent's message to the Human is news: it counts as unread.
+    assert_eq!(worker.state.room(room).unwrap().unread_count, 1);
     assert_eq!(worker.state.requests().count(), 0);
+    assert_bus_sent_nothing(&worker);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_blocked_agent_in_master_posts_nothing() {
+    let (mut worker, _, _, orchestrator, _, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    worker
+        .notify_dialogs(vec![(orchestrator, Some("dialog-id".into()))])
+        .unwrap();
+    worker
+        .notify_dialogs(vec![(orchestrator, Some("dialog-id".into()))])
+        .unwrap();
+    assert_eq!(
+        worker
+            .state
+            .agent(orchestrator)
+            .unwrap()
+            .dialog_notice
+            .as_deref(),
+        Some("dialog-id")
+    );
+    assert_eq!(worker.state.requests().count(), 0);
+    assert_bus_sent_nothing(&worker);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -363,6 +328,33 @@ fn message_status_names_recipients_waiting_on_a_dialog() {
     let waiting = status(&mut worker);
     assert_eq!(waiting["waiting_on_dialog"], json!([agent.0]));
     assert_eq!(waiting["requests"][0]["dialog"], true);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn only_the_rooms_own_orchestrator_takes_messages_from_outside_its_room() {
+    let (mut worker, agent, room, orchestrator, _, dir) = worker(true);
+    let master = worker.state.master_room().unwrap().id;
+    let bystander = worker
+        .state
+        .create_agent(master, "other", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    let draft = |to: AgentId| Draft {
+        text: "hi".into(),
+        files: Vec::new(),
+        recipient_ids: [to].into(),
+    };
+    assert!(worker
+        .state
+        .submit_message_from(room, draft(orchestrator.unwrap()), Author::Agent(agent), 1)
+        .is_ok());
+    assert!(matches!(
+        worker
+            .state
+            .submit_message_from(room, draft(bystander), Author::Agent(agent), 1),
+        Err(ModelError::AgentOutsideRoom(id)) if id == bystander
+    ));
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

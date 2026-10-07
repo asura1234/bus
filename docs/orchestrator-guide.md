@@ -182,16 +182,17 @@ only for an unrelated task that should get a turn and a reply of its own.
 
 ## Unblock agents
 
-- **Dialogs:** agents stop at permission, trust and question dialogs. Bus
-  sends you a message for each one: who is waiting, what they want, and the
-  options with the selected one marked. Run `bus agent dialog AGENT` for a
-  fresh fingerprint, then `bus agent choose AGENT --option N --fingerprint F`.
-  For a free-text question, use `bus agent answer AGENT --text "..."
-  --fingerprint F`, or `--skip` instead of `--text`. Notices retain every
-  command line and its `Reason:`, and never include a fingerprint.
-  `bus wait` also stops early with `agent_waiting_on_dialog`. Decide, answer,
-  and check the reported `outcome`. When the dialog closes, the next line is
-  `answered: option N` if Bus recorded a numbered choice, otherwise `answered`.
+- **Dialogs:** agents stop at permission, trust and question dialogs and
+  other screens they cannot pass alone. The blocked worker sends you one
+  message, "Blocked, needs help to continue.", the same for every blocker and
+  once per episode; `bus wait` also stops early with
+  `agent_waiting_on_dialog`. Look at its terminal: `bus agent dialog AGENT`
+  shows the question or full command, the options and a fresh fingerprint
+  (`bus agent read AGENT --source visible` for any other screen). Then `bus
+  agent choose AGENT --option N --fingerprint F`, or for a free-text question
+  `bus agent answer AGENT --text "..." --fingerprint F` (`--skip` instead of
+  `--text`). Decide, answer, and check the reported `outcome`; nothing follows
+  when the dialog closes.
   Ask the human before approving anything destructive or outward-facing.
 - **Stuck requests:** check `bus message status`, `bus diagnostics` and
   `bus agent read` before `bus request recover`.

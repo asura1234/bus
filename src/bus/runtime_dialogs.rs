@@ -1,16 +1,22 @@
-//! Tells a room's orchestrator when an agent waits on a dialog.
+//! Lets a room know when one of its agents is blocked on something it cannot
+//! pass alone: a permission dialog, a question, a trust prompt or any other
+//! blocked screen. The blocked agent itself says so, once per episode.
 use super::*;
-use serde_json::Value;
 
 /// The notice key for a blocked screen without a readable dialog.
 pub(super) const BLOCKED: &str = "blocked";
 /// Polls a change must hold before Bus reports it, so a redraw never counts.
 const STEADY_POLLS: u8 = 2;
+/// The one text for every blocker. Bus is not an agent and adds no details:
+/// the orchestrator (or the Human) looks at the agent's terminal instead.
+pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
 
 impl Worker {
     /// `waits` holds, for each agent the poll saw, its dialog `id`, `BLOCKED`,
-    /// or `None` when it waits on nothing. Each distinct wait is reported once
-    /// and its end once, unless it ended because Bus answered it.
+    /// or `None` when it waits on nothing. A blocked episode starts when an
+    /// agent goes from waiting on nothing to waiting on anything; only that
+    /// start is reported. A later dialog in the same episode and the episode's
+    /// end add nothing.
     pub(super) fn notify_dialogs(
         &mut self,
         waits: Vec<(AgentId, Option<String>)>,
@@ -32,37 +38,15 @@ impl Worker {
             if !steady || agent.dialog_notice == wait || agent.deletion_pending {
                 continue;
             }
-            let name = agent.name.clone();
-            let room = self
-                .state
-                .room(agent.room_id)
-                .map_or_else(String::new, |room| room.name.clone());
-            let text = match wait.as_deref() {
-                Some(BLOCKED) => format!(
-                    "{name} (agent {}) in room {room} is blocked, but Bus cannot read a dialog on its screen. Inspect it with:\nbus agent read {} --source visible",
-                    id.0, id.0
-                ),
-                Some(_) => match self.observe_dialog(id) {
-                    Ok(observed) if !observed["dialog"].is_null() => {
-                        dialog_notice(id, &name, &room, &observed)
-                    }
-                    // Closed or changed since the poll; the next poll decides.
-                    Ok(_) => continue,
-                    Err(error) => {
-                        tracing::warn!(event = "bus.dialog.observe_failed", agent_id = id.0, %error,
-                            "Dialog notice deferred");
-                        continue;
-                    }
-                },
-                // 保留已发出的 blocked 标记，屏幕来回闪时不再把同一条通知发第二次。
-                None if agent.dialog_notice.as_deref() == Some(BLOCKED) => continue,
-                None => match agent.dialog_answer {
-                    Some(option) => format!("answered: option {option}"),
-                    None => "answered".to_owned(),
-                },
-            };
+            // 保留已发出的 blocked 标记，屏幕来回闪时不再把同一条通知发第二次。
+            if wait.is_none() && agent.dialog_notice.as_deref() == Some(BLOCKED) {
+                continue;
+            }
+            let starts = wait.is_some() && agent.dialog_notice.is_none();
             let mut state = self.state.clone();
-            post_dialog_notice(&mut state, id, text)?;
+            if starts {
+                post_blocked(&mut state, id)?;
+            }
             state
                 .set_dialog_notice(id, wait)
                 .map_err(|error| error.to_string())?;
@@ -74,127 +58,39 @@ impl Worker {
     }
 }
 
-fn dialog_notice(id: AgentId, name: &str, room: &str, observed: &Value) -> String {
-    let dialog = &observed["dialog"];
-    let mut text = format!("{}\n", who(name, room, id));
-    if let Some(question) = dialog["text"]
-        .as_str()
-        .filter(|text| !text.is_empty())
-        .map(|text| {
-            if dialog["kind"] == "question" {
-                text.to_owned()
-            } else {
-                wants_line(name, text)
-            }
-        })
-        .filter(|line| !line.is_empty())
+/// The blocked agent's own message in its work room: to the room's
+/// orchestrator, which delivers it like any agent message and wakes the
+/// orchestrator, or else to the Human. MASTER never gets one.
+fn post_blocked(state: &mut BusState, id: AgentId) -> Result<(), String> {
+    let agent = state.agent(id).ok_or("Unknown agent")?;
+    let room = agent.room_id;
+    if state
+        .room(room)
+        .is_none_or(|room| room.kind == RoomKind::Master)
     {
-        text.push_str(&question);
-        text.push('\n');
+        return Ok(());
     }
-    for option in dialog["options"].as_array().into_iter().flatten() {
-        text.push_str(&format!(
-            "{}. {}{}\n",
-            option["number"],
-            option["label"].as_str().unwrap_or_default(),
-            if option["selected"] == true {
-                " (selected)"
-            } else {
-                ""
-            }
-        ));
-    }
-    if dialog["kind"] == "question" {
-        text.push_str(&format!("\nAnswer: bus agent dialog {id}, then bus agent answer {id} --text \"...\" or bus agent answer {id} --skip", id = id.0));
-    } else {
-        text.push_str(&format!(
-            "\nAnswer: bus agent dialog {id}, then bus agent choose {id} --option N",
-            id = id.0
-        ));
-    }
-    text
-}
-
-fn who(name: &str, room: &str, id: AgentId) -> String {
-    if room.is_empty() {
-        format!("{name} (agent {})", id.0)
-    } else {
-        format!("{name} in {room} (agent {})", id.0)
-    }
-}
-
-/// The command and its reason, or the question. Never hide a later command line.
-fn wants_line(name: &str, text: &str) -> String {
-    let lines: Vec<&str> = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect();
-    if let Some(start) = lines.iter().position(|line| line.starts_with("$ ")) {
-        let command = lines[start..]
-            .iter()
-            .map(|line| line.strip_prefix("$ ").unwrap_or(line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let mut notice = format!("{name} wants to run: {command}");
-        if let Some(reason) = lines[..start]
-            .iter()
-            .position(|line| line.starts_with("Reason:"))
-        {
-            notice.push('\n');
-            notice.push_str(&lines[reason..start].join("\n"));
-        }
-        return notice;
-    }
-    let asks_to_run = lines.iter().any(|line| {
-        let lower = line.to_lowercase();
-        lower.contains("run the following command")
-            || lower.contains("bash command")
-            || lower.contains("requires approval")
-            || lower.contains("do you want to proceed")
-    });
-    if asks_to_run {
-        if let Some(command) = lines.iter().copied().find(|line| {
-            let lower = line.to_lowercase();
-            !line.ends_with('?')
-                && !lower.contains("command")
-                && !lower.contains("approval")
-                && !lower.contains("proceed")
-        }) {
-            return format!("{name} wants to run: {command}");
-        }
-    }
-    if let Some(question) = lines.iter().rev().find(|line| line.ends_with('?')) {
-        return (*question).to_owned();
-    }
-    lines.last().copied().unwrap_or_default().to_owned()
-}
-
-/// Delivers the notice to the room's orchestrator in MASTER, like any message.
-/// Dialog notices are noise for the Human, who watches the agent's terminal:
-/// the request is delivery-only (`Request::delivery_only`), and a room without
-/// an orchestrator gets no notice at all.
-fn post_dialog_notice(state: &mut BusState, id: AgentId, text: String) -> Result<(), String> {
-    let room = state.agent(id).ok_or("Unknown agent")?.room_id;
     let now = crate::bus::io::now_ms();
     let orchestrator = state
         .orchestrator_of(room)
         .filter(|orchestrator| orchestrator.id != id && !orchestrator.deletion_pending)
-        .map(|orchestrator| (orchestrator.id, orchestrator.room_id));
+        .map(|orchestrator| orchestrator.id);
     match orchestrator {
-        Some((orchestrator, master)) => state
+        Some(orchestrator) => state
             .submit_message_from(
-                master,
+                room,
                 Draft {
-                    text,
+                    text: BLOCKED_MESSAGE.to_owned(),
                     files: Vec::new(),
                     recipient_ids: [orchestrator].into(),
                 },
-                Author::Bus,
+                Author::Agent(id),
                 now,
             )
             .map(|_| ()),
-        None => Ok(()),
+        None => state
+            .post_to_human(room, id, BLOCKED_MESSAGE.to_owned(), Vec::new(), now)
+            .map(|_| ()),
     }
     .map_err(|error| error.to_string())
 }
