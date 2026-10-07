@@ -28,8 +28,6 @@ headless_cols = 132
 headless_rows = 41
 
 [ui]
-sidebar_start_collapsed = true
-sidebar_collapsed_mode = "hidden"
 hide_tab_bar_when_single_tab = true
 pane_scrollbars = false
 "#;
