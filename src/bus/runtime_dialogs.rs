@@ -12,11 +12,22 @@ const STEADY_POLLS: u8 = 2;
 pub(super) const BLOCKED_MESSAGE: &str = "Blocked, needs help to continue.";
 
 impl Worker {
+    /// A confirmed answer can close a dialog between status polls. Retire its
+    /// notice so the next form can start an episode even with identical text.
+    pub(super) fn finish_answered_dialog(&mut self, id: AgentId) -> Result<(), String> {
+        let mut state = self.state.clone();
+        state
+            .set_dialog_notice(id, None)
+            .map_err(|error| error.to_string())?;
+        self.save(state)?;
+        self.dialog_seen.remove(&id);
+        Ok(())
+    }
+
     /// `waits` holds, for each agent the poll saw, its dialog `id`, `BLOCKED`,
-    /// or `None` when it waits on nothing. A blocked episode starts when an
-    /// agent goes from waiting on nothing to waiting on anything; only that
-    /// start is reported. A later dialog in the same episode and the episode's
-    /// end add nothing.
+    /// or `None` when it waits on nothing. A new readable dialog starts another
+    /// episode even if the agent remains blocked; repeats and redraws of that
+    /// dialog add nothing.
     pub(super) fn notify_dialogs(
         &mut self,
         waits: Vec<(AgentId, Option<String>)>,
@@ -38,11 +49,18 @@ impl Worker {
             if !steady || agent.dialog_notice == wait || agent.deletion_pending {
                 continue;
             }
+            // An unreadable redraw cannot prove a new dialog. Keep the last
+            // reported id so the same dialog returning does not post again.
+            if wait.as_deref() == Some(BLOCKED) && agent.dialog_notice.is_some() {
+                continue;
+            }
             // 保留已发出的 blocked 标记，屏幕来回闪时不再把同一条通知发第二次。
             if wait.is_none() && agent.dialog_notice.as_deref() == Some(BLOCKED) {
                 continue;
             }
-            let starts = wait.is_some() && agent.dialog_notice.is_none();
+            // Native ids change with question/command text and options, but
+            // ignore selection redraws. A changed id needs another answer.
+            let starts = wait.is_some();
             let mut state = self.state.clone();
             if starts {
                 post_blocked(&mut state, id)?;
@@ -60,14 +78,12 @@ impl Worker {
 
 /// The blocked agent's own message in its work room: to the room's
 /// orchestrator, which delivers it like any agent message and wakes the
-/// orchestrator, or else to the Human. MASTER never gets one.
+/// orchestrator, or else to the Human. A blocked MASTER orchestrator tells
+/// the Human directly, since MASTER cannot itself be orchestrated.
 fn post_blocked(state: &mut BusState, id: AgentId) -> Result<(), String> {
     let agent = state.agent(id).ok_or("Unknown agent")?;
     let room = agent.room_id;
-    if state
-        .room(room)
-        .is_none_or(|room| room.kind == RoomKind::Master)
-    {
+    if state.room(room).is_none() {
         return Ok(());
     }
     let now = crate::bus::io::now_ms();

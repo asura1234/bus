@@ -1136,6 +1136,9 @@ impl Worker {
                 break;
             }
         }
+        if outcome == "closed" {
+            self.finish_answered_dialog(id)?;
+        }
         let mut result = json!({
             "agent_id": id,
             "keys": keys,
