@@ -230,13 +230,11 @@ impl HeadlessServer {
                 | Method::TabClose(_)
                 | Method::TabCreate(_)
                 | Method::TabFocus(_)
-                | Method::TabMove(_)
                 | Method::TabRename(_)
                 | Method::WorkspaceClose(_)
                 | Method::WorkspaceCreate(_)
                 | Method::WorkspaceFocus(_)
                 | Method::WorkspaceMove(_)
-                | Method::WorkspaceMoveBlock(_)
                 | Method::WorkspaceRename(_)
         )
     }

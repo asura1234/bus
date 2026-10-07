@@ -17,7 +17,7 @@ pub(crate) fn agent_panel_entries_from(
     app: &AppState,
     _terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> Vec<AgentPanelEntry> {
-    let mut entries = app
+    let mut entries: Vec<AgentPanelEntry> = app
         .workspaces
         .iter()
         .enumerate()

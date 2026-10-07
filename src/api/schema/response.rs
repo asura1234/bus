@@ -4,9 +4,8 @@ use super::agents::AgentInfo;
 use super::common::{ClientWindowTitleReason, NotificationShowReason};
 use super::events::EventEnvelope;
 use super::panes::{
-    LayoutDescription, PaneEdgesResult, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot,
-    PaneMoveResult, PaneNeighborResult, PaneProcessInfo, PaneReadResult, PaneResizeResult,
-    PaneSwapResult, PaneTextPoint, PaneTextRange, PaneZoomResult,
+    LayoutDescription, PaneFocusDirectionResult, PaneInfo, PaneLayoutSnapshot, PaneReadResult,
+    PaneResizeResult, PaneSwapResult, PaneTextPoint, PaneTextRange, PaneZoomResult,
 };
 use super::server::ServerCapabilities;
 use super::session::SessionSnapshot;
@@ -85,13 +84,6 @@ pub enum ResponseResult {
     AgentDialogChosen {
         choice: super::agents::AgentDialogChooseResult,
     },
-    AgentView {
-        active: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        source: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        label: Option<String>,
-    },
     PaneInfo {
         pane: PaneInfo,
     },
@@ -104,32 +96,14 @@ pub enum ResponseResult {
     PaneSwap {
         swap: PaneSwapResult,
     },
-    PaneMove {
-        move_result: PaneMoveResult,
-    },
     PaneZoom {
         zoom: PaneZoomResult,
     },
     PaneLayout {
         layout: PaneLayoutSnapshot,
     },
-    PaneProcessInfo {
-        process_info: PaneProcessInfo,
-    },
-    LayoutExport {
-        layout: LayoutDescription,
-    },
-    LayoutApply {
-        layout: LayoutDescription,
-    },
     LayoutSplitRatioSet {
         layout: LayoutDescription,
-    },
-    PaneNeighbor {
-        neighbor: PaneNeighborResult,
-    },
-    PaneEdges {
-        edges: PaneEdgesResult,
     },
     PaneFocusDirection {
         focus: PaneFocusDirectionResult,
@@ -158,9 +132,6 @@ pub enum ResponseResult {
         current: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_global: Option<u64>,
-    },
-    AgentExplain {
-        explain: serde_json::Value,
     },
     SubscriptionStarted {},
     WaitMatched {

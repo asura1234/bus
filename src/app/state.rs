@@ -729,7 +729,6 @@ pub struct AgentNotificationDelivery {
     pub kind: ToastKind,
     pub toast: Option<ToastNotification>,
     pub client_notification: Option<ToastNotification>,
-    pub sound: Option<crate::sound::Sound>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -772,8 +771,6 @@ pub struct AppState {
     /// Virtual terminal size (columns, rows) used when no client is attached.
     pub(crate) headless_size: (u16, u16),
     pub agent_panel_sort: AgentPanelSort,
-    /// Transient session-wide projection override for the built-in Agents view.
-    pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub next_agent_state_change_seq: u64,
     pub confirm_close: bool,
     pub pane_borders: crate::config::PaneBordersConfig,
@@ -937,7 +934,6 @@ impl AppState {
                 crate::config::DEFAULT_HEADLESS_ROWS,
             ),
             agent_panel_sort: AgentPanelSort::Spaces,
-            agent_view_override: None,
             next_agent_state_change_seq: 0,
             confirm_close: true,
             pane_borders: crate::config::PaneBordersConfig::Auto,

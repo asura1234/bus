@@ -1,8 +1,8 @@
-use super::manifest::{explain_with_input, DetectionInput};
-use super::{Agent, AgentState};
+use super::manifest::{detect_with_osc, DetectionInput};
+use super::{Agent, AgentDetection, AgentState};
 
-fn explain(screen: &str, osc_title: &str) -> super::manifest::DetectionExplain {
-    explain_with_input(
+fn codex_detection(screen: &str, osc_title: &str) -> AgentDetection {
+    detect_with_osc(
         Agent::Codex,
         DetectionInput {
             screen,
@@ -36,13 +36,8 @@ fn working_codex_with_a_stale_question_banner_is_not_blocked() {
         let screen = format!(
             "{activity}\n\n• Queued follow-up inputs\n  ? 1 question\n{hint}\n\n› Ask Codex to do anything\n"
         );
-        let result = explain(&screen, "[ ! ] Action Required | bus");
+        let result = codex_detection(&screen, "[ ! ] Action Required | bus");
         assert_eq!(result.state, AgentState::Working, "{screen}");
-        assert_eq!(
-            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-            Some("activity_with_stale_question"),
-            "{screen}"
-        );
         assert!(result.visible_working, "{screen}");
         assert!(!result.visible_blocker, "{screen}");
     }
@@ -50,7 +45,7 @@ fn working_codex_with_a_stale_question_banner_is_not_blocked() {
 
 #[test]
 fn live_screen_waiting_on_a_background_terminal_stays_working() {
-    let result = explain(STALE_QUESTION, "[ . ] Action Required | bus");
+    let result = codex_detection(STALE_QUESTION, "[ . ] Action Required | bus");
     assert_eq!(result.state, AgentState::Working);
     assert!(!result.visible_blocker);
 }
@@ -69,13 +64,8 @@ fn codex_background_activity_with_a_collapsed_question_remains_working() {
         screen.to_owned(),
         screen.replace("/stop to close", "/stop\n  to close"),
     ] {
-        let result = explain(&screen, "[ ! ] Action Required | bus");
+        let result = codex_detection(&screen, "[ ! ] Action Required | bus");
         assert_eq!(result.state, AgentState::Working, "{screen}");
-        assert_eq!(
-            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-            Some("activity_with_stale_question"),
-            "{screen}"
-        );
         assert!(result.visible_working, "{screen}");
         assert!(!result.visible_blocker, "{screen}");
         assert!(crate::detect::dialog::parse(&screen).is_none(), "{screen}");
@@ -92,7 +82,7 @@ fn a_live_permission_dialog_still_blocks_beside_the_stale_banner() {
         "Press enter to confirm or esc to cancel\n",
         "› 1. Yes, proceed\n",
     );
-    let result = explain(screen, "[ ! ] Action Required | bus");
+    let result = codex_detection(screen, "[ ! ] Action Required | bus");
     assert_eq!(result.state, AgentState::Blocked);
     assert!(result.visible_blocker);
 }
@@ -104,9 +94,8 @@ fn expanded_codex_text_question_blocks_while_collapsed_questions_stay_working() 
         "enter submit   ⌃] skip   ⇧→ main prompt",
     ] {
         let screen = format!("• Working (17s • esc to interrupt)\n• Queued follow-up inputs\nWhat token should Bus use?\nType your answer\n{footer}\n");
-        let result = explain(&screen, "[ ! ] Action Required | bus");
+        let result = codex_detection(&screen, "[ ! ] Action Required | bus");
         assert_eq!(result.state, AgentState::Blocked, "{screen}");
         assert!(result.visible_blocker);
-        assert_eq!(result.matched_rule.unwrap().id, "expanded_text_question");
     }
 }

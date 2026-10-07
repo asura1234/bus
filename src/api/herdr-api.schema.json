@@ -5082,46 +5082,6 @@
           ],
           "type": "string"
         },
-        "PaneDirection": {
-          "enum": [
-            "left",
-            "right",
-            "up",
-            "down"
-          ],
-          "type": "string"
-        },
-        "PaneEdgesResult": {
-          "properties": {
-            "down": {
-              "type": "boolean"
-            },
-            "layout": {
-              "$ref": "#/schemas/success_response/$defs/PaneLayoutSnapshot"
-            },
-            "left": {
-              "type": "boolean"
-            },
-            "pane_id": {
-              "type": "string"
-            },
-            "right": {
-              "type": "boolean"
-            },
-            "up": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "pane_id",
-            "left",
-            "right",
-            "up",
-            "down",
-            "layout"
-          ],
-          "type": "object"
-        },
         "PaneFocusDirectionReason": {
           "enum": [
             "no_neighbor"
@@ -5400,208 +5360,6 @@
             "direction",
             "ratio",
             "rect"
-          ],
-          "type": "object"
-        },
-        "PaneMoveReason": {
-          "enum": [
-            "same_tab",
-            "zoomed_tab"
-          ],
-          "type": "string"
-        },
-        "PaneMoveResult": {
-          "properties": {
-            "changed": {
-              "type": "boolean"
-            },
-            "closed_tab_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "closed_workspace_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "created_tab": {
-              "anyOf": [
-                {
-                  "$ref": "#/schemas/success_response/$defs/TabInfo"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "created_workspace": {
-              "anyOf": [
-                {
-                  "$ref": "#/schemas/success_response/$defs/WorkspaceInfo"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "focused_pane_id": {
-              "type": "string"
-            },
-            "pane": {
-              "$ref": "#/schemas/success_response/$defs/PaneInfo"
-            },
-            "previous_pane_id": {
-              "type": "string"
-            },
-            "previous_tab_id": {
-              "type": "string"
-            },
-            "previous_workspace_id": {
-              "type": "string"
-            },
-            "reason": {
-              "anyOf": [
-                {
-                  "$ref": "#/schemas/success_response/$defs/PaneMoveReason"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "source_layout": {
-              "anyOf": [
-                {
-                  "$ref": "#/schemas/success_response/$defs/PaneLayoutSnapshot"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "target_layout": {
-              "$ref": "#/schemas/success_response/$defs/PaneLayoutSnapshot"
-            }
-          },
-          "required": [
-            "changed",
-            "previous_pane_id",
-            "previous_workspace_id",
-            "previous_tab_id",
-            "pane",
-            "target_layout",
-            "focused_pane_id"
-          ],
-          "type": "object"
-        },
-        "PaneNeighborResult": {
-          "properties": {
-            "direction": {
-              "$ref": "#/schemas/success_response/$defs/PaneDirection"
-            },
-            "layout": {
-              "$ref": "#/schemas/success_response/$defs/PaneLayoutSnapshot"
-            },
-            "neighbor_pane_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "pane_id": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "pane_id",
-            "direction",
-            "layout"
-          ],
-          "type": "object"
-        },
-        "PaneProcessInfo": {
-          "properties": {
-            "foreground_process_group_id": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "foreground_processes": {
-              "items": {
-                "$ref": "#/schemas/success_response/$defs/PaneProcessInfoProcess"
-              },
-              "type": "array"
-            },
-            "pane_id": {
-              "type": "string"
-            },
-            "shell_pid": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "tty": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "pane_id"
-          ],
-          "type": "object"
-        },
-        "PaneProcessInfoProcess": {
-          "properties": {
-            "argv": {
-              "items": {
-                "type": "string"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "argv0": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "cmdline": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "cwd": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "name": {
-              "type": "string"
-            },
-            "pid": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            }
-          },
-          "required": [
-            "pid",
-            "name"
           ],
           "type": "object"
         },
@@ -6181,34 +5939,6 @@
             },
             {
               "properties": {
-                "active": {
-                  "type": "boolean"
-                },
-                "label": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "source": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "type": {
-                  "const": "agent_view",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "active"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
                 "pane": {
                   "$ref": "#/schemas/success_response/$defs/PaneInfo"
                 },
@@ -6276,22 +6006,6 @@
             },
             {
               "properties": {
-                "move_result": {
-                  "$ref": "#/schemas/success_response/$defs/PaneMoveResult"
-                },
-                "type": {
-                  "const": "pane_move",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "move_result"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
                 "type": {
                   "const": "pane_zoom",
                   "type": "string"
@@ -6324,54 +6038,6 @@
             },
             {
               "properties": {
-                "process_info": {
-                  "$ref": "#/schemas/success_response/$defs/PaneProcessInfo"
-                },
-                "type": {
-                  "const": "pane_process_info",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "process_info"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "layout": {
-                  "$ref": "#/schemas/success_response/$defs/LayoutDescription"
-                },
-                "type": {
-                  "const": "layout_export",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "layout"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "layout": {
-                  "$ref": "#/schemas/success_response/$defs/LayoutDescription"
-                },
-                "type": {
-                  "const": "layout_apply",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "layout"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
                 "layout": {
                   "$ref": "#/schemas/success_response/$defs/LayoutDescription"
                 },
@@ -6383,38 +6049,6 @@
               "required": [
                 "type",
                 "layout"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "neighbor": {
-                  "$ref": "#/schemas/success_response/$defs/PaneNeighborResult"
-                },
-                "type": {
-                  "const": "pane_neighbor",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "neighbor"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "edges": {
-                  "$ref": "#/schemas/success_response/$defs/PaneEdgesResult"
-                },
-                "type": {
-                  "const": "pane_edges",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "edges"
               ],
               "type": "object"
             },
@@ -6560,20 +6194,6 @@
                 "content_revision",
                 "matches",
                 "total"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "explain": true,
-                "type": {
-                  "const": "agent_explain",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "explain"
               ],
               "type": "object"
             },

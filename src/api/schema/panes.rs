@@ -352,33 +352,6 @@ pub struct PaneScrollInfo {
     pub viewport_rows: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneProcessInfo {
-    pub pane_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell_pid: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub foreground_process_group_id: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tty: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub foreground_processes: Vec<PaneProcessInfoProcess>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneProcessInfoProcess {
-    pub pid: u32,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub argv0: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub argv: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cmdline: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneSwapResult {
     pub changed: bool,
@@ -398,36 +371,6 @@ pub enum PaneSwapReason {
     SamePane,
     NotFound,
     CrossTab,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneMoveResult {
-    pub changed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<PaneMoveReason>,
-    pub previous_pane_id: String,
-    pub previous_workspace_id: String,
-    pub previous_tab_id: String,
-    pub pane: Box<PaneInfo>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_layout: Option<Box<PaneLayoutSnapshot>>,
-    pub target_layout: Box<PaneLayoutSnapshot>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_workspace: Option<super::WorkspaceInfo>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_tab: Option<super::TabInfo>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub closed_workspace_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub closed_tab_id: Option<String>,
-    pub focused_pane_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PaneMoveReason {
-    SameTab,
-    ZoomedTab,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -483,25 +426,6 @@ pub struct PaneLayoutSplit {
     pub direction: SplitDirection,
     pub ratio: f32,
     pub rect: PaneLayoutRect,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneNeighborResult {
-    pub pane_id: String,
-    pub direction: PaneDirection,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub neighbor_pane_id: Option<String>,
-    pub layout: PaneLayoutSnapshot,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PaneEdgesResult {
-    pub pane_id: String,
-    pub left: bool,
-    pub right: bool,
-    pub up: bool,
-    pub down: bool,
-    pub layout: PaneLayoutSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

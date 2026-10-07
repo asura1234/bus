@@ -145,11 +145,6 @@ pub(super) fn snapshot(
         })
         .collect();
 
-    let agent_view_label = app
-        .state
-        .agent_view_override
-        .as_ref()
-        .map(|view| view.label.clone().unwrap_or_else(|| "filtered".to_owned()));
     let agent_order = crate::ui::agent_panel_entries_from(&app.state, &app.terminal_runtimes)
         .into_iter()
         .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
@@ -162,7 +157,7 @@ pub(super) fn snapshot(
         focused_workspace_id,
         focused_tab_id,
         focused_pane_id,
-        agent_view_label,
+        agent_view_label: None,
         agent_order,
         workspaces,
         tabs,
