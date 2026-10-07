@@ -11,6 +11,9 @@ use crate::{agent_resume::AgentResumePlan, terminal::TerminalState};
 pub(crate) struct LaunchExtras {
     pub(crate) env: Vec<(String, String)>,
     pub(crate) args: Vec<String>,
+    /// The conversation Bus bound through its hooks, when the terminal saved
+    /// another one; the terminal resumes and reports this one instead.
+    pub(crate) session: Option<crate::agent_resume::PersistedAgentSession>,
 }
 
 pub(crate) fn for_native_resume(
@@ -100,20 +103,57 @@ fn load(
         .load()
         .map_err(|_| "Bus resume state is unreadable")?
         .ok_or("Bus resume state is missing")?;
-    let mut candidates = state.agents().filter(|agent| {
+    let owns = |agent: &&super::model::Agent, value: &str| {
         super::launch::provider_kind(agent.provider) == session.agent
-            && agent.runtime_identity.session_id.as_deref()
-                == Some(session.session_ref.value.as_str())
-    });
-    let agent = candidates
-        .next()
-        .ok_or("Bus resume has no matching saved owner")?;
-    if candidates.next().is_some()
-        || terminal.agent_name.as_deref()
-            != Some(format!("bus-r{}-a{}", agent.room_id.0, agent.id.0).as_str())
-    {
-        return Err("Bus resume ownership is ambiguous or mismatched".into());
-    }
+            && agent.runtime_identity.session_id.as_deref() == Some(value)
+    };
+    let mut candidates = state
+        .agents()
+        .filter(|agent| owns(agent, &session.session_ref.value));
+    let mut corrected = None;
+    let agent = match candidates.next() {
+        Some(agent) => {
+            if candidates.next().is_some()
+                || terminal.agent_name.as_deref()
+                    != Some(format!("bus-r{}-a{}", agent.room_id.0, agent.id.0).as_str())
+            {
+                return Err("Bus resume ownership is ambiguous or mismatched".into());
+            }
+            agent
+        }
+        // The terminal kept a conversation Bus moved away from, as an older
+        // server did for a Cursor new chat after `agent clear`. The agent
+        // this terminal was launched for, by name and provider, resumes the
+        // conversation its own hooks bound, never one another agent owns.
+        None => {
+            let mut named = state.agents().filter(|agent| {
+                super::launch::provider_kind(agent.provider) == session.agent
+                    && terminal.agent_name.as_deref()
+                        == Some(format!("bus-r{}-a{}", agent.room_id.0, agent.id.0).as_str())
+            });
+            let agent = named
+                .next()
+                .ok_or("Bus resume has no matching saved owner")?;
+            let bound = agent
+                .runtime_identity
+                .session_id
+                .as_deref()
+                .ok_or("Bus resume has no matching saved owner")?;
+            if named.next().is_some()
+                || state.agents().filter(|other| owns(other, bound)).count() != 1
+            {
+                return Err("Bus resume ownership is ambiguous or mismatched".into());
+            }
+            let session_ref = crate::agent_resume::AgentSessionRef::id(bound)
+                .ok_or("Bus resume session is not a provider session ID")?;
+            corrected = Some(crate::agent_resume::PersistedAgentSession {
+                source: session.source.clone(),
+                agent: session.agent.clone(),
+                session_ref,
+            });
+            agent
+        }
+    };
     if agent.deletion_pending
         || state
             .room(agent.room_id)
@@ -157,7 +197,17 @@ fn load(
         Provider::Codex => project.join(".codex/hooks.json"),
         Provider::Cursor => project.join(".cursor/hooks.json"),
     };
-    validate_hooks(&hook_path, agent.provider, binary)?;
+    if validate_hooks(&hook_path, agent.provider, binary).is_err() {
+        // Another Bus executable rewrote the owned hooks in place, as any Bus
+        // launching an agent in this project does. Without them this resume
+        // could never report a turn, so take them back the same way.
+        super::launch::rebind_owned_hooks(&hook_path, agent.provider, binary).map_err(|_| {
+            "Bus resume hooks are missing or changed; existing configuration was kept"
+        })?;
+        validate_hooks(&hook_path, agent.provider, binary)?;
+        tracing::info!(event = "bus.resume.hooks_rebound", agent_id = agent.id.0,
+            path = %hook_path.display(), "Bus hooks moved back to this executable for resume");
+    }
     let env = vec![
         ("BUS_LAUNCH_ID".into(), launch.into()),
         (
@@ -178,7 +228,11 @@ fn load(
         agent.provider,
         &spool,
     )?);
-    Ok(LaunchExtras { env, args })
+    Ok(LaunchExtras {
+        env,
+        args,
+        session: corrected,
+    })
 }
 
 fn read_json(path: &Path) -> Result<serde_json::Value, String> {
@@ -527,8 +581,9 @@ mod tests {
 
     #[test]
     fn bus_resume_rejects_unattested_or_suspended_ownership() {
+        // A different saved session alone is not rejected: Bus resumes the
+        // one its hooks bound (see the test above).
         for field in [
-            "session",
             "name",
             "provider",
             "plan",
@@ -543,9 +598,6 @@ mod tests {
             let mut value = serde_json::to_value(&fixture.state).unwrap();
             let key = fixture.agent.0.to_string();
             match field {
-                "session" => {
-                    value["agents"][&key]["runtime_identity"]["session_id"] = json!("other")
-                }
                 "name" => fixture.terminal.set_agent_name("bus-r999-a2".into()),
                 "provider" => value["agents"][&key]["provider"] = json!("cursor"),
                 "plan" => fixture
@@ -575,6 +627,65 @@ mod tests {
             fixture.save();
             assert!(fixture.load().is_err(), "{field}");
         }
+    }
+
+    #[test]
+    fn bus_resume_follows_the_conversation_bus_bound_when_the_terminal_kept_another() {
+        let mut fixture = Fixture::new(Provider::Cursor);
+        let mut value = serde_json::to_value(&fixture.state).unwrap();
+        let key = fixture.agent.0.to_string();
+        value["agents"][&key]["runtime_identity"]["session_id"] = json!("new-chat");
+        fixture.state = serde_json::from_value(value).unwrap();
+        fixture.save();
+        let extras = fixture.load().unwrap();
+        assert_eq!(extras.env, fixture.expected_env());
+        let session = extras.session.unwrap();
+        assert_eq!(session.session_ref.value, "new-chat");
+        assert_eq!(session.agent, "cursor");
+
+        // Another agent's conversation, or another agent's terminal, is never taken.
+        let mut value = serde_json::to_value(&fixture.state).unwrap();
+        let mut other = value["agents"][&key].clone();
+        other["id"] = json!(99);
+        value["agents"]["99"] = other;
+        fixture.state = serde_json::from_value(value).unwrap();
+        fixture.save();
+        assert!(fixture.load().is_err());
+        let fixture = Fixture::new(Provider::Cursor);
+        let mut value = serde_json::to_value(&fixture.state).unwrap();
+        value["agents"][fixture.agent.0.to_string()]["runtime_identity"]["session_id"] =
+            json!("new-chat");
+        let mut fixture = fixture;
+        fixture.state = serde_json::from_value(value).unwrap();
+        fixture.save();
+        fixture.terminal.set_agent_name("bus-r1-a77".into());
+        assert!(fixture.load().is_err());
+    }
+
+    #[test]
+    fn bus_resume_takes_back_hooks_another_bus_executable_rewrote() {
+        for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
+            let fixture = Fixture::new(provider);
+            let other = fixture.root.join("throwaway/bus");
+            crate::bus::launch::install_hooks(&fixture.hook_path(), provider, &other).unwrap();
+            let before = std::fs::read_to_string(fixture.hook_path()).unwrap();
+            assert!(before.contains("throwaway"), "{before}");
+            let extras = fixture
+                .load()
+                .unwrap_or_else(|error| panic!("{provider:?}: {error}"));
+            assert_eq!(extras.env, fixture.expected_env());
+            let after = std::fs::read_to_string(fixture.hook_path()).unwrap();
+            assert!(!after.contains("throwaway"), "{after}");
+            assert!(validate_hooks(&fixture.hook_path(), provider, &fixture.binary).is_ok());
+        }
+        // A hook the user removed stays removed, and resume stays suspended.
+        let fixture = Fixture::new(Provider::Codex);
+        std::fs::write(fixture.hook_path(), br#"{"hooks":{}}"#).unwrap();
+        assert!(fixture.load().is_err());
+        assert_eq!(
+            std::fs::read(fixture.hook_path()).unwrap(),
+            br#"{"hooks":{}}"#
+        );
     }
 
     #[test]

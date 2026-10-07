@@ -305,6 +305,22 @@ impl Worker {
                             "Owned terminal now runs another provider session; left open");
                         return Ok(Some(left_open));
                     }
+                    if let Some(moved) = expected_session.as_deref().and_then(|expected| {
+                        self.restored_terminal_session_moved(
+                            &left_open,
+                            kind,
+                            &managed_name,
+                            expected,
+                        )
+                    }) {
+                        // After a restart the managed name moved to a restored
+                        // terminal that kept another provider session, so Bus
+                        // never rebound to it. Same reasoning as above.
+                        tracing::info!(event = "bus.deletion.session_moved", agent_id = id.0,
+                            pane_id = %moved.pane_id, terminal_id = %moved.terminal_id,
+                            "Restored terminal runs another provider session; left open");
+                        return Ok(Some(moved));
+                    }
                 }
                 let message = if matches!(
                     error.code.as_deref(),
@@ -346,6 +362,42 @@ impl Worker {
             && info.agent_session.is_some_and(|session| {
                 session.source == format!("herdr:{kind}") && session.value != expected
             })
+    }
+
+    /// The one native terminal that carries this agent's managed name and
+    /// provider when it is not the terminal Bus recorded and runs a provider
+    /// session other than `expected`. A failed lookup proves nothing.
+    fn restored_terminal_session_moved(
+        &mut self,
+        recorded: &LeftOpenTerminal,
+        kind: &str,
+        managed_name: &str,
+        expected: &str,
+    ) -> Option<LeftOpenTerminal> {
+        let Ok(ResponseResult::AgentList { agents }) = self
+            .transport
+            .request(Method::AgentList(schema::EmptyParams {}))
+        else {
+            return None;
+        };
+        let mut named = agents
+            .into_iter()
+            .filter(|info| info.name.as_deref() == Some(managed_name));
+        let info = named.next()?;
+        if named.next().is_some()
+            || info.terminal_id == recorded.terminal_id
+            || info.agent.as_deref() != Some(kind)
+            || !info.agent_session.as_ref().is_some_and(|session| {
+                session.source == format!("herdr:{kind}") && session.value != expected
+            })
+        {
+            return None;
+        }
+        Some(LeftOpenTerminal {
+            pane_id: info.pane_id,
+            terminal_id: info.terminal_id,
+            ..recorded.clone()
+        })
     }
 
     /// `agent.list` includes every terminal carrying a managed name, even with

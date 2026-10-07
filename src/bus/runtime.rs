@@ -132,6 +132,10 @@ pub(crate) struct BusHandle {
 
 pub(crate) const DEFAULT_SESSION: &str = "bus";
 
+/// How long Bus holds delivery after an agent begins a turn of its own,
+/// unless that turn's Stop arrives first.
+const OWN_TURN_GRACE: Duration = Duration::from_secs(10);
+
 impl BusHandle {
     #[cfg(test)]
     pub(crate) fn test_channel(
@@ -207,9 +211,16 @@ struct Worker {
     /// Each agent's latest dialog wait and how many polls it has held.
     dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
     delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
+    /// When each agent last began a turn of its own that has not settled.
+    own_turns: BTreeMap<AgentId, std::time::Instant>,
     dev_enabled: bool,
-    dev_receipts: BTreeMap<String, (super::control::Request, super::control::Response)>,
+    /// Mutation receipts by request ID, so a retried request replays its
+    /// response instead of running twice. Oldest first in `dev_receipt_order`.
+    dev_receipts: BTreeMap<String, dev_control::DevReceipt>,
+    dev_receipt_order: std::collections::VecDeque<String>,
     dev_receipt_bytes: usize,
+    /// How long a receipt is kept before it may be evicted to make room.
+    dev_receipt_retention: Duration,
     /// Provider allowance for dev `state`; in memory only, never persisted.
     usage: super::usage::Usage,
     /// The UI's settings file; set only for a real launch so tests never touch it.
@@ -251,9 +262,12 @@ impl Worker {
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
+            own_turns: BTreeMap::new(),
             dev_enabled: false,
             dev_receipts: BTreeMap::new(),
+            dev_receipt_order: std::collections::VecDeque::new(),
             dev_receipt_bytes: 0,
+            dev_receipt_retention: dev_control::DEV_RECEIPT_RETENTION,
             usage: super::usage::Usage::default(),
             settings_path: None,
             sound_dirs: None,
@@ -613,6 +627,16 @@ impl Worker {
                 if agent.hook_setup_confirmed && !agent.session_binding_invalidated {
                     self.steer(&agent, request, lead)?;
                 }
+                continue;
+            }
+            // The native status lags a turn the agent just began on its own (a
+            // task notification, say); text typed then joins that turn and is
+            // never seen starting. Its Stop, or the status catching up, ends this.
+            if self
+                .own_turns
+                .get(&agent.id)
+                .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE)
+            {
                 continue;
             }
             if agent.status != RuntimeStatus::Idle

@@ -406,7 +406,24 @@ impl Worker {
                     );
                     continue;
                 }
+                let started = matches!(callback.kind, CallbackEventKind::PromptStarted);
                 let disposition = state.accept_callback(callback);
+                // A turn the agent began on its own keeps it busy even while the
+                // native status still reads idle; settling it clears that.
+                match (&disposition, started) {
+                    (
+                        CallbackDisposition::Rejected(
+                            CallbackRejection::UnrelatedTurn | CallbackRejection::NoActiveRequest,
+                        ),
+                        true,
+                    ) => {
+                        self.own_turns.insert(id, std::time::Instant::now());
+                    }
+                    (_, false) => {
+                        self.own_turns.remove(&id);
+                    }
+                    _ => {}
+                }
                 tracing::info!(event = "bus.callback.correlated", disposition = ?disposition,
                     "Provider callback correlation result");
                 if disposition == CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn) {

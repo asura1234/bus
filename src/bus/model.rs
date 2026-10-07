@@ -367,6 +367,10 @@ pub(crate) struct Request {
     /// this prompt alone. Submit hooks are matched against it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) submitted_payload: Option<String>,
+    /// When a turn the agent ran on its own finished while this request, typed
+    /// but never seen starting, waited. The agent has moved on since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) foreign_turn_settled_at_ms: Option<u64>,
 }
 
 impl Request {
@@ -388,6 +392,11 @@ impl Request {
 /// How long a steered group waits after its final reply for the submit hook
 /// of typed input that the provider may still run as a turn of its own.
 pub(crate) const STEERING_SETTLE_MS: u64 = 5_000;
+
+/// How long an agent stays idle after finishing a turn of its own before Bus
+/// gives up on a request it typed but never saw start. A queued prompt starts
+/// within milliseconds of the turn before it ending.
+pub(crate) const UNBOUND_SETTLE_MS: u64 = 5_000;
 
 /// Local wall-clock `HH:MM` of a millisecond timestamp, for coalesced prompts.
 fn clock(at_ms: u64) -> String {
@@ -1400,6 +1409,7 @@ impl BusState {
                     group: None,
                     steered: false,
                     submitted_payload: None,
+                    foreign_turn_settled_at_ms: None,
                 },
             );
             self.queues.entry(agent_id).or_default().push(request_id);
@@ -1477,6 +1487,7 @@ impl BusState {
         request_state.expected_launch_id = Some(launch_id.to_owned());
         request_state.submission_boundary = Some(callback_boundary);
         request_state.submission_status_revision = submission_status_revision;
+        request_state.foreign_turn_settled_at_ms = None;
         Ok(())
     }
 
@@ -1631,8 +1642,71 @@ impl BusState {
         agent_state.status_revision = revision;
         if status == RuntimeStatus::Idle {
             self.complete_pending_final(agent, now_ms)?;
+            let settled_idle = self.unbound_request(agent).is_some_and(|request| {
+                request
+                    .foreign_turn_settled_at_ms
+                    .is_some_and(|at| now_ms >= at.saturating_add(UNBOUND_SETTLE_MS))
+            });
+            if settled_idle {
+                self.release_unbound_request(agent, now_ms);
+            }
         }
         Ok(())
+    }
+
+    /// The agent's current request when Bus typed it but never saw it start:
+    /// typed, never bound by a submit hook, and with no reply yet.
+    fn unbound_request(&self, agent: AgentId) -> Option<&Request> {
+        let request = self
+            .requests
+            .get(&self.agents.get(&agent)?.current_request?)?;
+        // An uncertain submit outcome stays Submitting until a hook binds it.
+        (matches!(
+            request.phase,
+            RequestPhase::Active | RequestPhase::Submitting
+        ) && !request.steered
+            && !request.trusted_start_bound
+            && request.pending_final.is_none())
+        .then_some(request)
+    }
+
+    /// Releases the agent's queue from a request it never started as a turn of
+    /// its own, once the agent proved it moved on: it finished a turn of its
+    /// own and then started another, began a new provider session, or went
+    /// idle. The typed text may have joined the agent's own turn, so its reply,
+    /// if any, is in the terminal; a Bus notice in the room says so.
+    pub(crate) fn release_unbound_request(
+        &mut self,
+        agent: AgentId,
+        now_ms: u64,
+    ) -> Option<RequestId> {
+        let request = self.unbound_request(agent)?.id;
+        let (room, prompt) = {
+            let request = self.requests.get(&request)?;
+            (request.room_id, request.prompt.id)
+        };
+        self.abandon_current_request(request, now_ms).ok()?;
+        tracing::info!(
+            event = "bus.message.recovered",
+            request_id = request.0,
+            agent_id = agent.0,
+            reason = "never_started",
+            "Unstarted request released"
+        );
+        let name = self
+            .agents
+            .get(&agent)
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        let _ = self.post_notice(
+            room,
+            format!(
+                "{name} never started message {} as a turn of its own and has moved on, so Bus stopped waiting for its reply and delivers the next messages. Any answer to it is in {name}'s terminal.",
+                prompt.0
+            ),
+            now_ms,
+        );
+        Some(request)
     }
 
     pub(crate) fn accept_callback(&mut self, callback: ProviderCallback) -> CallbackDisposition {
@@ -1657,14 +1731,64 @@ impl BusState {
             .as_ref()
             .filter(|key| self.unrelated_provider_turns.contains(*key))
         {
-            if matches!(
-                callback.kind,
-                CallbackEventKind::Final { .. } | CallbackEventKind::Error { .. }
-            ) {
-                self.unrelated_provider_turns.remove(key);
+            // Text Bus typed while the agent ran a turn of its own can join
+            // that turn: its submit hook then names that turn, which carries
+            // the reply.
+            let absorbed = matches!(callback.kind, CallbackEventKind::PromptStarted)
+                && self
+                    .unbound_request(callback.agent_id)
+                    .is_some_and(|request| {
+                        request.expected_launch_id.as_deref() == Some(callback.launch_id.as_str())
+                            && request
+                                .submission_boundary
+                                .is_some_and(|boundary| callback.sequence > boundary)
+                            && callback
+                                .prompt_payload
+                                .as_deref()
+                                .is_some_and(|payload| request.matches_callback_payload(payload))
+                    });
+            if !absorbed {
+                if matches!(
+                    callback.kind,
+                    CallbackEventKind::Final { .. } | CallbackEventKind::Error { .. }
+                ) {
+                    self.unrelated_provider_turns.remove(key);
+                    self.note_foreign_turn_settled(&callback);
+                }
+                return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
             }
-            return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
+            self.unrelated_provider_turns.remove(key);
+            return self.accept_callback_for_request(callback, turn_key);
         }
+        self.accept_callback_for_request(callback, turn_key)
+    }
+
+    /// Records that a turn the agent ran on its own finished after Bus typed
+    /// its unbound current request.
+    fn note_foreign_turn_settled(&mut self, callback: &ProviderCallback) {
+        let Some(request) = self.unbound_request(callback.agent_id).map(|r| r.id) else {
+            return;
+        };
+        if let Some(request) = self.requests.get_mut(&request).filter(|request| {
+            request.expected_launch_id.as_deref() == Some(callback.launch_id.as_str())
+                && request
+                    .submission_boundary
+                    .is_some_and(|boundary| callback.sequence > boundary)
+        }) {
+            request
+                .foreign_turn_settled_at_ms
+                .get_or_insert(callback.occurred_at_ms);
+        }
+    }
+
+    fn accept_callback_for_request(
+        &mut self,
+        callback: ProviderCallback,
+        turn_key: Option<String>,
+    ) -> CallbackDisposition {
+        let Some(agent) = self.agents.get(&callback.agent_id) else {
+            return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+        };
         let Some(request_id) = agent.current_request else {
             if matches!(callback.kind, CallbackEventKind::PromptStarted) {
                 self.unrelated_provider_turns.extend(turn_key);
@@ -1746,6 +1870,11 @@ impl BusState {
                 .as_deref()
                 .is_some_and(|payload| !request.matches_callback_payload(payload))
         {
+            // A new turn of its own after one already finished: the typed
+            // request is not coming, so the queue moves on.
+            if !request.trusted_start_bound && request.foreign_turn_settled_at_ms.is_some() {
+                self.release_unbound_request(callback.agent_id, callback.occurred_at_ms);
+            }
             self.unrelated_provider_turns.extend(turn_key);
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }
@@ -2081,10 +2210,20 @@ impl BusState {
         if agent.status != RuntimeStatus::Idle {
             return Err(ModelError::AgentNotIdle);
         }
+        self.abandon_current_request(request, recovered_at_ms)
+    }
+
+    /// Abandons `request`, its agent's current one, with its group, and frees the agent.
+    fn abandon_current_request(
+        &mut self,
+        request: RequestId,
+        recovered_at_ms: u64,
+    ) -> Result<(), ModelError> {
         let request_state = self
             .requests
             .get_mut(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
+        let agent_id = request_state.agent_id;
         request_state.phase = RequestPhase::Abandoned;
         request_state.pending_final = None;
         request_state.completed_at_ms = Some(recovered_at_ms);

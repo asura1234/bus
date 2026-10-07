@@ -400,8 +400,38 @@ fn merge_hooks(mut document: Value, provider: Provider, binary: &Path) -> Result
     Ok(document)
 }
 
+/// Moves this provider's Bus hooks in `path` to `binary` when every hook event
+/// already holds a Bus-owned entry, as one that another Bus executable (a
+/// rebuilt, moved or throwaway binary) rewrote in place. A missing file or a
+/// missing event is the user's choice and is never recreated here.
+pub(crate) fn rebind_owned_hooks(
+    path: &Path,
+    provider: Provider,
+    binary: &Path,
+) -> Result<(), String> {
+    let document: Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let owned = hook_entries(provider, binary).iter().all(|(event, _)| {
+        document["hooks"][*event]
+            .as_array()
+            .is_some_and(|group| group.iter().any(|entry| is_owned_entry(entry, provider)))
+    });
+    if !owned {
+        return Err("Bus hooks are missing; existing configuration was kept".into());
+    }
+    install_hooks(path, provider, binary)
+}
+
 pub(crate) fn install_hooks(path: &Path, provider: Provider, binary: &Path) -> Result<(), String> {
     let parent = path.parent().ok_or("Missing hook config parent")?;
+    // A test binary written into a real project's hooks silently captures the
+    // callbacks of every live agent there; tests must use a temporary project.
+    #[cfg(test)]
+    assert!(
+        is_temporary(path),
+        "tests must not install hooks outside the temp directory: {}",
+        path.display()
+    );
     super::io::private_dir(parent).map_err(|e| e.to_string())?;
     let _lease = super::io::lock(&parent.join(".bus-hooks.lock")).map_err(|e| e.to_string())?;
     let previous = match std::fs::read(path) {
@@ -427,6 +457,13 @@ pub(crate) fn install_hooks(path: &Path, provider: Provider, binary: &Path) -> R
         &serde_json::to_vec_pretty(&merged).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+fn is_temporary(path: &Path) -> bool {
+    let temp = std::env::temp_dir();
+    let canonical = temp.canonicalize().unwrap_or_else(|_| temp.clone());
+    path.starts_with(&temp) || path.starts_with(&canonical)
 }
 
 pub(crate) fn prepare(

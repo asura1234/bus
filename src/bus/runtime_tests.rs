@@ -481,7 +481,12 @@ fn delete_failure_suspends_while_native_ownership_is_unproven(
     worker.submit_ready().unwrap();
     assert_eq!(
         *calls.lock().unwrap(),
-        vec!["pane.close_if_identity", "agent.list", "agent.get"]
+        vec![
+            "pane.close_if_identity",
+            "agent.list",
+            "agent.get",
+            "agent.list"
+        ]
     );
     drop(worker);
     let fake = FakeTransport {
@@ -495,7 +500,7 @@ fn delete_failure_suspends_while_native_ownership_is_unproven(
         .observe_status(agent, RuntimeStatus::Idle, 10)
         .unwrap();
     recovered.submit_ready().unwrap();
-    assert_eq!(calls.lock().unwrap().len(), 3);
+    assert_eq!(calls.lock().unwrap().len(), 4);
     recovered
         .command(BusCommand::DeleteAgent(agent), &events)
         .unwrap();
@@ -1669,6 +1674,10 @@ fn late_old_identical_codex_final_cannot_bind_and_provider_error_holds_queue() {
         .unwrap();
     let request = queue(&mut worker, room, agent, "same");
     let next = queue(&mut worker, room, agent, "next");
+    // Delivery holds while that turn of its own runs, until the grace ends.
+    worker.submit_ready().unwrap();
+    assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
+    worker.own_turns.clear();
     worker.submit_ready().unwrap();
     record(
         &dir,
@@ -2621,8 +2630,319 @@ fn delete_keeps_an_agent_whose_terminal_carries_another_managed_name() {
     assert!(worker.state.agent(agent).unwrap().deletion_pending);
     assert_eq!(
         *calls.lock().unwrap(),
-        vec!["pane.close_if_identity", "agent.list", "agent.get"]
+        vec![
+            "pane.close_if_identity",
+            "agent.list",
+            "agent.get",
+            "agent.list"
+        ]
     );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn claude(event: &str, turn: &str, extra: serde_json::Value) -> serde_json::Value {
+    let mut value = json!({"hook_event_name":event,"session_id":"session","prompt_id":turn});
+    value
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    value
+}
+
+fn consume(worker: &mut Worker, agent: AgentId, dir: &Path) {
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+}
+
+#[test]
+fn text_typed_into_a_turn_the_agent_began_itself_binds_to_that_turn() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    // A task notification starts a turn while the native status still reads idle.
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude(
+            "UserPromptSubmit",
+            "own",
+            json!({"prompt":"<task-notification>"}),
+        ),
+    );
+    consume(&mut worker, agent, &dir);
+    let request = queue(&mut worker, room, agent, "Answer the dialog");
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        None,
+        "Bus must not type into a turn the agent just began"
+    );
+    // Had it typed anyway, the provider reports the text inside that turn.
+    worker.own_turns.clear();
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(request)
+    );
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude(
+            "UserPromptSubmit",
+            "own",
+            json!({"prompt":"Answer the dialog"}),
+        ),
+    );
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude("Stop", "own", json!({"last_assistant_message":"Answered"})),
+    );
+    consume(&mut worker, agent, &dir);
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms())
+        .unwrap();
+    let settled = worker.state.request(request).unwrap();
+    assert_eq!(settled.phase, RequestPhase::Completed);
+    assert_eq!(settled.pending_final.as_ref().unwrap().text, "Answered");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Bus typed a request; the agent ran turns of its own and never started it.
+fn unstarted(worker: &mut Worker, agent: AgentId, room: RoomId, dir: &Path) -> RequestId {
+    let request = queue(worker, room, agent, "Lost prompt");
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(request)
+    );
+    record(
+        dir,
+        Provider::ClaudeCode,
+        claude(
+            "UserPromptSubmit",
+            "own-1",
+            json!({"prompt":"<task-notification>"}),
+        ),
+    );
+    record(
+        dir,
+        Provider::ClaudeCode,
+        claude(
+            "Stop",
+            "own-1",
+            json!({"last_assistant_message":"Own work"}),
+        ),
+    );
+    consume(worker, agent, dir);
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(request)
+    );
+    request
+}
+
+#[test]
+fn an_unstarted_request_is_released_when_the_agent_begins_another_turn_of_its_own() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = unstarted(&mut worker, agent, room, &dir);
+    let next = queue(&mut worker, room, agent, "Human message");
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude(
+            "UserPromptSubmit",
+            "own-2",
+            json!({"prompt":"typed in terminal"}),
+        ),
+    );
+    consume(&mut worker, agent, &dir);
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
+    assert!(worker
+        .state
+        .room(room)
+        .unwrap()
+        .notices
+        .iter()
+        .any(|notice| notice.text.contains("never started message")));
+    // The queue moves on once that turn settles.
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude("Stop", "own-2", json!({"last_assistant_message":"done"})),
+    );
+    consume(&mut worker, agent, &dir);
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(next)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn an_unstarted_request_is_released_once_the_agent_stays_idle() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = unstarted(&mut worker, agent, room, &dir);
+    let settled = worker
+        .state
+        .request(request)
+        .unwrap()
+        .foreign_turn_settled_at_ms
+        .unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, settled + 1)
+        .unwrap();
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(request),
+        "a queued prompt starts right after the turn before it; wait for it"
+    );
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, settled + UNBOUND_SETTLE_MS)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
+    );
+    assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_session_start_alone_never_releases_an_unstarted_request() {
+    // Claude reports SessionStart `resume` ahead of a task-notification turn,
+    // and Codex its first `startup` with the prompt itself.
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = queue(&mut worker, room, agent, "Before the hook");
+    worker.submit_ready().unwrap();
+    for source in ["startup", "resume", "clear"] {
+        record(
+            &dir,
+            Provider::ClaudeCode,
+            json!({"hook_event_name":"SessionStart","session_id":"session","source":source}),
+        );
+    }
+    consume(&mut worker, agent, &dir);
+    assert_eq!(
+        worker.state.agent(agent).unwrap().current_request,
+        Some(request)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_started_request_is_never_released_by_the_agents_own_turns() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let request = queue(&mut worker, room, agent, "Real work");
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        claude("UserPromptSubmit", "bus", json!({"prompt":"Real work"})),
+    );
+    consume(&mut worker, agent, &dir);
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"SessionStart","session_id":"session","source":"resume"}),
+    );
+    consume(&mut worker, agent, &dir);
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, io::now_ms() + UNBOUND_SETTLE_MS)
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Regression: after a restart the agent's managed name moved to a restored
+/// terminal that kept another Cursor chat, Bus never rebound to it, and every
+/// deletion failed with "The terminal session changed".
+#[test]
+fn delete_leaves_open_a_restored_terminal_whose_provider_session_moved() {
+    let mut restored = native_info("w1:p7", "cursor", "moved");
+    restored.terminal_id = "restored".into();
+    let restored_list = || {
+        Ok(ResponseResult::AgentList {
+            agents: vec![restored.clone()],
+        })
+    };
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::Cursor,
+        vec![
+            identity_changed(),
+            restored_list(),
+            Err(TransportError {
+                message: "pane not found".into(),
+                code: Some("pane_not_found".into()),
+                definitely_rejected: true,
+            }),
+            restored_list(),
+        ],
+    );
+    let request = queue(&mut worker, room, agent, "stuck");
+    let (events, received) = mpsc::channel();
+    worker
+        .command(BusCommand::DeleteAgent(agent), &events)
+        .unwrap();
+    assert!(worker.state.agent(agent).is_none());
+    assert!(worker.state.request(request).is_none());
+    assert_eq!(
+        *calls.lock().unwrap(),
+        vec![
+            "pane.close_if_identity",
+            "agent.list",
+            "agent.get",
+            "agent.list"
+        ]
+    );
+    assert!(received.try_iter().any(|event| matches!(
+        event,
+        BusEvent::TerminalsLeftOpen(terminals)
+            if terminals[0].pane_id == "w1:p7" && terminals[0].terminal_id == "restored"
+    )));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn delete_keeps_an_agent_whose_restored_terminal_runs_its_own_session() {
+    let mut restored = native_info("w1:p7", "cursor", "session");
+    restored.terminal_id = "restored".into();
+    let restored_list = || {
+        Ok(ResponseResult::AgentList {
+            agents: vec![restored.clone()],
+        })
+    };
+    let (mut worker, agent, _room, dir, _) = fixture(
+        Provider::Cursor,
+        vec![
+            identity_changed(),
+            restored_list(),
+            Err(TransportError {
+                message: "pane not found".into(),
+                code: Some("pane_not_found".into()),
+                definitely_rejected: true,
+            }),
+            restored_list(),
+        ],
+    );
+    let (events, _) = mpsc::channel();
+    assert!(worker
+        .command(BusCommand::DeleteAgent(agent), &events)
+        .is_err());
+    assert!(worker.state.agent(agent).is_some());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

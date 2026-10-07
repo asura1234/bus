@@ -32,6 +32,19 @@ struct DialogFingerprintClaims {
 const DIALOG_SETTLE_POLLS: u32 = 20;
 const DIALOG_SETTLE_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Receipts younger than this are never evicted, so a retry within it replays.
+pub(super) const DEV_RECEIPT_RETENTION: Duration = Duration::from_secs(10 * 60);
+/// At most this many receipts are kept inside the retention window.
+const DEV_RECEIPT_LIMIT: usize = 1024;
+
+/// A committed mutation's response, replayed for a retry with the same ID.
+pub(super) struct DevReceipt {
+    request: ControlRequest,
+    response: Response,
+    at: std::time::Instant,
+    bytes: usize,
+}
+
 impl Worker {
     #[cfg(test)]
     fn dev_response(&mut self, request: &ControlRequest) -> Response {
@@ -57,9 +70,11 @@ impl Worker {
                 "Request ID must contain 1–128 bytes",
             );
         }
-        if let Some((prior, response)) = self.dev_receipts.get(&request.id) {
-            return if prior.method == request.method && prior.params == request.params {
-                response.clone()
+        if let Some(receipt) = self.dev_receipts.get(&request.id) {
+            return if receipt.request.method == request.method
+                && receipt.request.params == request.params
+            {
+                receipt.response.clone()
             } else {
                 Response::failure(
                     &request.id,
@@ -143,12 +158,17 @@ impl Worker {
                 "Fix Bus storage and restart before making changes",
             );
         }
-        // Never silently evict mutation receipts: an old retry must not launch or send twice.
+        // A receipt lets a retry replay its response instead of launching or
+        // sending twice. Retries come within seconds, so receipts older than
+        // the retention window make room; younger ones are never evicted.
         let reserve = serde_json::to_vec(request)
             .map_or(usize::MAX, |v| v.len())
             .saturating_add(4096);
+        if mutation {
+            self.evict_expired_dev_receipts();
+        }
         if mutation
-            && (self.dev_receipts.len() >= 256
+            && (self.dev_receipts.len() >= DEV_RECEIPT_LIMIT
                 || self.dev_receipt_bytes.saturating_add(reserve) > 8 * 1024 * 1024)
         {
             return Response::failure(
@@ -178,10 +198,33 @@ impl Worker {
         );
         if mutation {
             self.dev_receipt_bytes = self.dev_receipt_bytes.saturating_add(reserve);
-            self.dev_receipts
-                .insert(request.id.clone(), (request.clone(), response.clone()));
+            self.dev_receipt_order.push_back(request.id.clone());
+            self.dev_receipts.insert(
+                request.id.clone(),
+                DevReceipt {
+                    request: request.clone(),
+                    response: response.clone(),
+                    at: std::time::Instant::now(),
+                    bytes: reserve,
+                },
+            );
         }
         response
+    }
+
+    fn evict_expired_dev_receipts(&mut self) {
+        while let Some(id) = self.dev_receipt_order.front() {
+            let Some(receipt) = self.dev_receipts.get(id) else {
+                self.dev_receipt_order.pop_front();
+                continue;
+            };
+            if receipt.at.elapsed() < self.dev_receipt_retention {
+                break;
+            }
+            self.dev_receipt_bytes = self.dev_receipt_bytes.saturating_sub(receipt.bytes);
+            self.dev_receipts.remove(id);
+            self.dev_receipt_order.pop_front();
+        }
     }
 
     fn dev_execute(

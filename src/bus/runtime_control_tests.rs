@@ -2279,13 +2279,13 @@ fn an_adopted_cursor_session_is_bound_at_launch() {
             }
         }
     }
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("temp")
-        .join(format!(
-            "bus-cursor-adoption-{}-{}",
-            std::process::id(),
-            crate::bus::io::now_ns()
-        ));
+    // Outside any git checkout: Cursor hooks go to the project root, and a test
+    // binary written into this repository's hooks would capture live agents.
+    let dir = std::env::temp_dir().join(format!(
+        "bus-cursor-adoption-{}-{}",
+        std::process::id(),
+        crate::bus::io::now_ns()
+    ));
     crate::bus::io::private_dir(&dir).unwrap();
     let reported = std::sync::Arc::default();
     let transport = Launches {
@@ -2368,13 +2368,11 @@ fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
             }
         }
     }
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("temp")
-        .join(format!(
-            "bus-adoption-reservation-{}-{}",
-            std::process::id(),
-            crate::bus::io::now_ns()
-        ));
+    let dir = std::env::temp_dir().join(format!(
+        "bus-adoption-reservation-{}-{}",
+        std::process::id(),
+        crate::bus::io::now_ns()
+    ));
     crate::bus::io::private_dir(&dir).unwrap();
     let mut worker = Worker::open(dir.clone(), Box::new(SuccessfulLaunches { tabs: 0 })).unwrap();
     worker.dev_enabled = true;
@@ -2521,6 +2519,34 @@ fn agent_clear_refuses_an_agent_that_is_not_idle_or_still_has_messages() {
         "{queued:?}"
     );
     assert!(!worker.state.agent(agent).unwrap().session_reset_pending);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_long_session_of_mutations_never_hits_a_permanent_receipt_limit() {
+    let (mut worker, _room, _agent, dir) = fixture();
+    // Retries within the retention window replay; older receipts make room.
+    worker.dev_receipt_retention = Duration::ZERO;
+    for index in 0..1100 {
+        let seen = call(
+            &mut worker,
+            &format!("seen-{index}"),
+            "room.seen",
+            json!({"room":"test"}),
+        );
+        assert!(seen.ok, "{index}: {seen:?}");
+    }
+    assert!(worker.dev_receipts.len() <= 1);
+
+    worker.dev_receipt_retention = Duration::from_secs(600);
+    let first = call(&mut worker, "kept", "room.seen", json!({"room":"test"}));
+    assert!(first.ok, "{first:?}");
+    let conflict = call(&mut worker, "kept", "room.seen", json!({"room":"other"}));
+    assert!(
+        error_message(&conflict).contains("already used"),
+        "{conflict:?}"
+    );
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -43,6 +43,13 @@ socket requires.
 Use `bus --paths` to inspect Bus data, log, callback, configuration, and state
 locations without starting a session.
 
+On resume, Bus relaunches each agent into the conversation its own hooks last
+bound, even when the terminal saved an older one. Codex and Cursor read their
+Bus hooks from the project's `.codex/hooks.json` and `.cursor/hooks.json`, and
+any Bus that adds an agent in the same project moves those hooks to its own
+executable. Resume moves them back to the resuming Bus. It never recreates hooks
+that were removed: that agent stays suspended until you add it again.
+
 ## Target the intended running session
 
 Without an override, a control command targets the last opened local session.
@@ -479,6 +486,13 @@ bus request recover "$request_id" --confirm
 
 The generic form is `request recover REQUEST_ID --confirm`. It abandons only the
 exact confirmed current request and does not choose what happens to queued work.
+
+Bus also releases a request on its own when the agent never started it as a
+turn. This happens when Bus typed the message while the agent ran a turn of its
+own, and then the agent finished that turn and either started another turn or
+stayed idle for five seconds. The request becomes `abandoned`, a Bus notice in
+the room says so, and the next queued message is delivered. Any answer the agent
+gave is in its terminal.
 
 The control CLI always emits raw JSON. Prompt and reply text returned by
 `wait`, `message status`, and `history` remains raw Markdown. The interactive

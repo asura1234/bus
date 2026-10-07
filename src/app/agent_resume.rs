@@ -240,6 +240,25 @@ impl App {
                 return true;
             }
         };
+        let plan = match &extras.session {
+            Some(session) => {
+                let Some(plan) = crate::agent_resume::plan(
+                    &session.source,
+                    &session.agent,
+                    &session.session_ref,
+                ) else {
+                    return false;
+                };
+                tracing::info!(event = "bus.resume.session_corrected", pane = pane_id.raw(),
+                    terminal = %terminal_id, session = %session.session_ref.value,
+                    "Resuming the conversation Bus bound instead of the terminal's stale one");
+                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                    terminal.set_persisted_agent_session(session.clone());
+                }
+                plan
+            }
+            None => plan,
+        };
         let mut argv = plan.argv;
         argv.extend(extras.args);
         let resume_command = shell_command_from_argv(&argv);
