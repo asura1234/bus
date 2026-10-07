@@ -16,8 +16,7 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
 - `skills/`: agent workflow skills; `.agents/skills` and `.claude/skills` link here
   - `AGENTS.md` (with its `CLAUDE.md` link), `skill-architecture.md`: the shared skill contract
   - one folder per skill: `SKILL.md`, `guide.md`, `references/` and the skill's own `scripts/` (quality lanes, review lanes, PR signals,
-    ledgers and plan checks stay with the skill that runs them); the 800-line limit applies here too, for example
-    `address-review-comments/scripts/tests/test_review_lane_{cli,github,rounds}.py`
+    ledgers and plan checks stay with the skill that runs them)
 - `cli_extensions/`: shared Python for the review skills (artifact parser and renderer, round and lane ownership)
 - `docs/`: repo-development docs
   - `bus-architecture.md`: this document
@@ -48,9 +47,10 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
 ## 2. `src/` layout
 
 Nine components, listed in reading order. The dependency rule is graph 3a, not this order; `main.rs` is the composition root above all
-of them. Every handwritten file, tests included, has at most 800 lines, with no exemptions (generated bindings are not handwritten).
-Files are split by ownership, not by helper, and each module keeps its tests in a sibling `tests/` folder with one file per area, so
-production code and tests are counted separately.
+of them. Every handwritten non-test file has at most 800 lines (generated bindings are not handwritten). Test files are exempt by
+path pattern, not by a per-file list: Rust `tests/` folders, `*_tests.rs`, `tests.rs` and files under `*/tests/`, and Python
+`test_*.py` and `*/tests/*`. An inline `#[cfg(test)]` module counts toward its production file, so tests live in a sibling test file.
+Files are split by ownership, not by helper, and each module keeps its tests in a sibling `tests/` folder with one file per area.
 
 - `main.rs`: argv dispatch to `cli`, the hidden `server` and `client` entries, and the `--bus-callback` hook entry
 - `utils/`: shared basics; a leaf that imports no other component
