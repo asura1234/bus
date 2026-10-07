@@ -20,14 +20,15 @@ coverage:
 
 # Run repository maintenance contract tests
 maintenance-test:
-    {{python}} -m unittest scripts.test_bus_dev_acceptance scripts.test_package_windows_conpty scripts.test_sanitize_review_severity scripts.test_skill_migration_contract scripts.test_review_artifact scripts.test_review_artifact_write scripts.test_review_round_common scripts.test_review_prologue_entrypoints scripts.test_review_pr_round scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
+    {{python}} -m unittest tools.tests.test_acceptance_existing_instance tools.tests.test_sanitize_review_severity scripts.test_skill_migration_contract tools.tests.test_review_artifact tools.tests.test_review_artifact_write tools.tests.test_review_round_common tools.tests.test_review_prologue_entrypoints tools.tests.test_review_pr_round tools.tests.test_vendor_libghostty_vt tools.tests.test_vendor_portable_pty
+    {{python}} -m pytest packaging/windows/tests/test_package_conpty.py
     {{python}} skills/pr/scripts/test_pr_format_check.py
     {{python}} skills/review-pr/scripts/test_review_round.py
     {{python}} skills/split-pr/scripts/tests/test_split_plan.py
 
 # Live message round trips with real Claude Code, Codex and Cursor; spends model usage (e.g. `just e2e --providers claude`)
 e2e *args:
-    {{python}} scripts/bus_e2e.py --allow-live-models {{args}}
+    {{python}} tools/acceptance/e2e.py --allow-live-models {{args}}
 
 # Run one nextest filter, e.g. `just test-one codex_stale_working`
 test-one filter:
@@ -57,7 +58,7 @@ check: ci windows-lint
 [script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 [windows]
 check:
-    & .\scripts\windows_check.ps1 -Mode check
+    & .\tools\windows\check.ps1 -Mode check
 
 # Install repo-local git hooks
 install-hooks:
@@ -77,4 +78,4 @@ bench-render-scale:
 
 # Build the vendored libghostty-vt source dist
 build-libghostty-vt:
-    scripts/build_vendored_libghostty_vt.sh
+    tools/vendor/build_libghostty_vt.sh

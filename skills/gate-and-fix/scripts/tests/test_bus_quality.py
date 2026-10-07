@@ -326,12 +326,19 @@ class BusQualityTest(unittest.TestCase):
 
         for line in recipe.splitlines():
             command = shlex.split(line)
-            for arg in command[3:] if "unittest" in command else command[1:]:
+            args = (
+                command[3:]
+                if command[1:3] in (["-m", "unittest"], ["-m", "pytest"])
+                else command[1:]
+            )
+            for arg in args:
                 path = (
-                    arg.replace(".", "/") + ".py" if arg.startswith("scripts.") else arg
+                    arg.replace(".", "/") + ".py"
+                    if arg.startswith(("scripts.", "tools."))
+                    else arg
                 )
                 self.assertIn(path, files)
-        self.assertIn("scripts/test_bus_live_integration.py", files)
+        self.assertIn("tools/tests/test_acceptance_live_ui.py", files)
         self.assertIn("skills/gate-and-fix/scripts/tests/test_bus_quality.py", files)
 
     def test_optional_nextest_has_a_real_cargo_fallback(self):
