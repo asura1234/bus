@@ -2,8 +2,8 @@
 //!
 //! Choices that are not tied to one room live here, so a change made in any
 //! Bus is what every Bus launched afterwards starts with: color blind mode,
-//! MASTER's sound (every session has MASTER), and the sound a new work room
-//! starts with. A room's own sound stays in its session. Running Bus
+//! MASTER's sound (every session has MASTER), and the last All rooms sound,
+//! which a new work room starts with. A room's own sound stays in its session. Running Bus
 //! instances read this file at launch and when they create a room; they do
 //! not follow another instance's changes live.
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,8 @@ pub(crate) struct BusSettings {
     pub(crate) color_blind_mode: bool,
     /// MASTER's sound in every session; it rings by default.
     pub(crate) master_sound: SoundPref,
-    /// What each new work room starts with.
+    /// The last All rooms choice: set on every work room at once, and what
+    /// each new work room starts with.
     pub(crate) room_sound: SoundPref,
 }
 

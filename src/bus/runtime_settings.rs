@@ -1,5 +1,5 @@
 //! Global settings the coordinator applies to its session: MASTER's sound and
-//! the sound each new work room starts with (see `bus::settings`).
+//! the All rooms sound, which new work rooms start with (see `bus::settings`).
 use super::*;
 use crate::bus::settings::{self, BusSettings, SoundPref};
 
@@ -21,7 +21,7 @@ impl Worker {
         self.save(state)
     }
 
-    /// A new work room starts with the global new-room sound.
+    /// A new work room starts with the global All rooms sound.
     pub(super) fn apply_new_room_sound(&self, state: &mut BusState, room: RoomId) {
         let Some(path) = &self.settings_path else {
             return;
@@ -47,17 +47,45 @@ impl Worker {
         settings::update(path, |settings| settings.master_sound = pref).map(|_| ())
     }
 
-    /// Changes the global new-room sound and tells the UI.
-    pub(super) fn update_new_room_sound(
-        &self,
-        change: impl FnOnce(&mut SoundPref),
+    /// The All rooms sound: sets the changed part (on/off, the sound, or both)
+    /// on every work room, and saves it as what new rooms start with. A room's
+    /// other part stays, so a room can still differ afterwards.
+    pub(super) fn set_all_rooms_sound(
+        &mut self,
+        enabled: Option<bool>,
+        name: Option<Option<String>>,
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<BusSettings, String> {
+        // Checked first so a missing settings file changes no room.
         let path = self
             .settings_path
-            .as_ref()
+            .clone()
             .ok_or("Bus settings location unavailable")?;
-        let saved = settings::update(path, |settings| change(&mut settings.room_sound))?;
+        let mut state = self.state.clone();
+        let rooms: Vec<RoomId> = state
+            .rooms()
+            .filter(|room| room.kind == RoomKind::Work)
+            .map(|room| room.id)
+            .collect();
+        for room in rooms {
+            if let Some(on) = enabled {
+                state.set_room_sound(room, on).map_err(|e| e.to_string())?;
+            }
+            if let Some(name) = &name {
+                state
+                    .set_room_sound_name(room, name.clone())
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        self.save(state)?;
+        let saved = settings::update(&path, |settings| {
+            if let Some(on) = enabled {
+                settings.room_sound.enabled = on;
+            }
+            if let Some(name) = name {
+                settings.room_sound.name = name;
+            }
+        })?;
         let _ = events.send(BusEvent::SettingsChanged(saved.clone()));
         Ok(saved)
     }

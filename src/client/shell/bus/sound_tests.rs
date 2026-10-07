@@ -56,12 +56,12 @@ fn settings_lists_master_sound_above_every_work_room() {
     let master_group = below("MASTER");
     let master = position("[x] # MASTER");
     let rooms_group = below("ROOMS");
-    let new_rooms = position("[ ] New rooms");
+    let all_rooms = position("[ ] All rooms");
     let first = position("[ ] # room-0");
     let second = position("[ ] # room-1");
     assert!(position("Color blind mode") < heading);
     assert!(heading < master_group && master_group < master, "{rows:#?}");
-    assert!(master < rooms_group && rooms_group < new_rooms && new_rooms < first);
+    assert!(master < rooms_group && rooms_group < all_rooms && all_rooms < first);
     assert!(first < second);
 }
 
@@ -73,7 +73,7 @@ fn settings_keyboard_and_mouse_toggle_room_sound() {
     // Field 0 is still color blind mode.
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
-    // The new-room default row sits between MASTER and the rooms.
+    // The All rooms row sits between MASTER and the rooms.
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Char(' '), KeyModifiers::NONE);
@@ -92,36 +92,27 @@ fn settings_keyboard_and_mouse_toggle_room_sound() {
 }
 
 #[test]
-fn settings_new_rooms_row_sets_the_global_default_for_rooms_created_later() {
+fn settings_all_rooms_row_sets_the_default_while_there_are_no_rooms() {
     let (mut ui, _, _) = sound_fixture(0);
     ui.system_sounds = Some(vec!["Glass".into()]);
     ui.action(render::Action::Settings);
     let rows = settings_rows(&mut ui, 40);
-    let new_rooms = rows
+    let all_rooms = rows
         .iter()
-        .position(|row| row.contains("[ ] New rooms") && row.ends_with("‹ Default ›"))
+        .position(|row| row.contains("[ ] All rooms") && row.ends_with("‹ Default ›"))
         .unwrap_or_else(|| panic!("{rows:#?}"));
-    assert!(rows[new_rooms + 1].contains("No rooms yet"), "{rows:#?}");
+    assert!(rows[all_rooms + 1].contains("No rooms yet"), "{rows:#?}");
+    assert!(!rows.iter().any(|row| row.contains("New rooms")));
 
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
-    let queued: Vec<_> = ui
-        .pending
-        .iter()
-        .filter_map(|p| match &p.command {
-            BusCommand::SetNewRoomSound(on) => Some(format!("on {on}")),
-            BusCommand::SetNewRoomSoundName(name) => Some(format!("name {name:?}")),
-            BusCommand::SetRoomSound(..) | BusCommand::SetRoomSoundName(..) => Some("room".into()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(queued, ["on true", "name Some(\"Glass\")"]);
+    assert_eq!(queued_all_rooms(&ui), ["on true", "name Some(\"Glass\")"]);
     let rows = settings_rows(&mut ui, 40);
     assert!(
         rows.iter()
-            .any(|row| row.contains("[x] New rooms") && row.ends_with("‹ Glass ›")),
+            .any(|row| row.contains("[x] All rooms") && row.ends_with("‹ Glass ›")),
         "{rows:#?}"
     );
 
@@ -135,8 +126,74 @@ fn settings_new_rooms_row_sets_the_global_default_for_rooms_created_later() {
     let rows = settings_rows(&mut ui, 40);
     assert!(
         rows.iter()
-            .any(|row| row.contains("[ ] New rooms") && row.ends_with("‹ Default ›")),
+            .any(|row| row.contains("[ ] All rooms") && row.ends_with("‹ Default ›")),
         "{rows:#?}"
+    );
+}
+
+fn queued_all_rooms(ui: &BusUi) -> Vec<String> {
+    ui.pending
+        .iter()
+        .filter_map(|p| match &p.command {
+            BusCommand::SetAllRoomsSound(on) => Some(format!("on {on}")),
+            BusCommand::SetAllRoomsSoundName(name) => Some(format!("name {name:?}")),
+            BusCommand::SetRoomSound(..) | BusCommand::SetRoomSoundName(..) => Some("room".into()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn settings_all_rooms_row_shows_mixed_rooms_and_sets_every_room() {
+    let (mut ui, _, rooms) = sound_fixture(2);
+    ui.system_sounds = Some(vec!["Blow".into(), "Glass".into()]);
+    ui.action(render::Action::Settings);
+    let all_rooms_row = |ui: &mut BusUi| {
+        settings_rows(ui, 40)
+            .into_iter()
+            .find(|row| row.contains("All rooms"))
+            .expect("All rooms row")
+    };
+    // One room differs: the row is mixed, and toggling turns every room on.
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_room_sound(rooms[0], true).unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    with_sound_name(&mut ui, rooms[1], "Blow");
+    let row = all_rooms_row(&mut ui);
+    assert!(
+        row.contains("[-] All rooms") && row.ends_with("‹ Mixed ›"),
+        "{row}"
+    );
+    ui.action(render::Action::ToggleSound(render::SoundTarget::AllRooms));
+    // Mixed sounds cycle from Default to the first system sound.
+    ui.action(render::Action::CycleSound(
+        render::SoundTarget::AllRooms,
+        true,
+    ));
+    assert_eq!(queued_all_rooms(&ui), ["on true", "name Some(\"Blow\")"]);
+
+    // Once every room matches, the row shows their shared choice and a
+    // further toggle turns them all off.
+    let mut snapshot = (*ui.snapshot).clone();
+    for room in &rooms {
+        snapshot.state.set_room_sound(*room, true).unwrap();
+        snapshot
+            .state
+            .set_room_sound_name(*room, Some("Blow".into()))
+            .unwrap();
+    }
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    let row = all_rooms_row(&mut ui);
+    assert!(
+        row.contains("[x] All rooms") && row.ends_with("‹ Blow ›"),
+        "{row}"
+    );
+    ui.action(render::Action::ToggleSound(render::SoundTarget::AllRooms));
+    assert_eq!(
+        queued_all_rooms(&ui).last().map(String::as_str),
+        Some("on false")
     );
 }
 

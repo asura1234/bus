@@ -78,7 +78,8 @@ room seen clears a room's unread count without changing the visible Bus view.
 room sound turns that room's new-message sound on or off; MASTER starts on, work rooms off.
 room sound --sound picks a system sound by name (Default is Bus's own ding); sounds lists them.
 settings shows the settings every Bus shares: color blind mode, MASTER's sound (room sound
-master changes it) and room_sound, which settings room-sound sets for rooms created later.
+master changes it) and room_sound, the All rooms sound: settings room-sound sets it on every
+work room at once and saves it for rooms created later.
 Bus launches and room creation read them; state shows each room's effective sound.
 state includes each agent's compactions and per-provider usage (5-hour and weekly used %).
 Claude usage comes from its status line; Codex usage is read after each turn.

@@ -36,10 +36,10 @@ pub(crate) enum BusCommand {
     SetRoomSound(RoomId, bool),
     /// A system sound name, or None for Bus's own ding.
     SetRoomSoundName(RoomId, Option<String>),
-    /// The global sound new work rooms start with.
-    SetNewRoomSound(bool),
-    /// A system sound name, or None for Bus's own ding.
-    SetNewRoomSoundName(Option<String>),
+    /// Every work room's sound on or off, also what new work rooms start with.
+    SetAllRoomsSound(bool),
+    /// Every work room's sound name (None is Bus's own ding), also saved for new rooms.
+    SetAllRoomsSoundName(Option<String>),
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),
     DeleteAgent(AgentId),

@@ -40,12 +40,12 @@ impl Worker {
                 self.record_master_sound(&state, id)?;
                 Ok(())
             }
-            BusCommand::SetNewRoomSound(on) => {
-                self.update_new_room_sound(|pref| pref.enabled = on, events)?;
+            BusCommand::SetAllRoomsSound(on) => {
+                self.set_all_rooms_sound(Some(on), None, events)?;
                 return Ok(());
             }
-            BusCommand::SetNewRoomSoundName(name) => {
-                self.update_new_room_sound(|pref| pref.name = name, events)?;
+            BusCommand::SetAllRoomsSoundName(name) => {
+                self.set_all_rooms_sound(None, Some(name), events)?;
                 return Ok(());
             }
             BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),

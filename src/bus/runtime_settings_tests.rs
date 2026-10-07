@@ -70,7 +70,7 @@ fn call(worker: &mut Worker, id: &str, method: &str, params: Value) -> ControlRe
 }
 
 #[test]
-fn master_and_new_room_sounds_carry_into_every_later_session() {
+fn master_and_all_rooms_sounds_carry_into_every_later_session() {
     let root = root("carry");
     let mut first = session(&root, "first");
     // Defaults until someone chooses: MASTER rings with the ding, rooms stay silent.
@@ -83,8 +83,8 @@ fn master_and_new_room_sounds_carry_into_every_later_session() {
     for command in [
         BusCommand::SetRoomSound(id, false),
         BusCommand::SetRoomSoundName(id, Some("Blow".into())),
-        BusCommand::SetNewRoomSound(true),
-        BusCommand::SetNewRoomSoundName(Some("Glass".into())),
+        BusCommand::SetAllRoomsSound(true),
+        BusCommand::SetAllRoomsSoundName(Some("Glass".into())),
     ] {
         first.command(command, &events).unwrap();
     }
@@ -100,11 +100,14 @@ fn master_and_new_room_sounds_carry_into_every_later_session() {
         name: Some("Glass".into()),
     };
     assert_eq!(changed.last(), Some(&glass), "the UI shows the new default");
-    // A room's own choice is not global; existing rooms keep theirs.
+    // All rooms sets existing rooms too; MASTER is not a work room.
+    assert_eq!(sound(&first, earlier), (true, Some("Glass".into())));
+    assert_eq!(sound(&first, id), (false, Some("Blow".into())));
+    // A room's own choice afterwards stays its own and is not global.
     first
-        .command(BusCommand::SetRoomSound(earlier, true), &events)
+        .command(BusCommand::SetRoomSound(earlier, false), &events)
         .unwrap();
-    assert_eq!(sound(&first, earlier), (true, None));
+    assert_eq!(sound(&first, earlier), (false, Some("Glass".into())));
     let later = create_room(&mut first, "later");
     assert_eq!(sound(&first, later), (true, Some("Glass".into())));
 
@@ -177,6 +180,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
         json!({"on": true, "sound": "Nope"}),
     );
     assert!(!unknown.ok);
+    let existing = create_room(&mut worker, "existing");
     let set = call(
         &mut worker,
         "r1",
@@ -188,6 +192,8 @@ fn dev_settings_show_and_set_the_global_sounds() {
         set.result["room_sound"],
         json!({"enabled": true, "name": "Glass"})
     );
+    // It is the All rooms sound, so rooms that already exist take it too.
+    assert_eq!(sound(&worker, existing), (true, Some("Glass".into())));
     // Without --sound the name stays; Default is Bus's own ding.
     call(
         &mut worker,

@@ -373,11 +373,14 @@ impl BusUi {
                     self.queue(BusCommand::SetRoomSound(room, !enabled), Effect::None);
                 }
             }
-            SoundTarget::NewRooms => {
-                // Shown at once; the coordinator's saved copy follows.
-                let enabled = !self.settings.room_sound.enabled;
+            SoundTarget::AllRooms => {
+                // Like a tri-state checkbox: only all-on turns off; off or
+                // mixed turns every room on.
+                let enabled = self.all_rooms_sound().0 != Some(true);
+                // Shown at once when there are no rooms; the coordinator's
+                // saved copy and the rooms' snapshot follow.
                 self.settings.room_sound.enabled = enabled;
-                self.queue(BusCommand::SetNewRoomSound(enabled), Effect::None);
+                self.queue(BusCommand::SetAllRoomsSound(enabled), Effect::None);
             }
         }
     }
@@ -389,7 +392,8 @@ impl BusUi {
                 Some(room) => room.sound_name.clone(),
                 None => return,
             },
-            SoundTarget::NewRooms => self.settings.room_sound.name.clone(),
+            // Mixed sounds cycle from Default.
+            SoundTarget::AllRooms => self.all_rooms_sound().1.flatten(),
         };
         let mut choices: Vec<Option<String>> = vec![None];
         choices.extend(self.system_sounds.iter().flatten().cloned().map(Some));
@@ -411,9 +415,9 @@ impl BusUi {
         }
         let command = match target {
             SoundTarget::Room(room) => BusCommand::SetRoomSoundName(room, choice),
-            SoundTarget::NewRooms => {
+            SoundTarget::AllRooms => {
                 self.settings.room_sound.name = choice.clone();
-                BusCommand::SetNewRoomSoundName(choice)
+                BusCommand::SetAllRoomsSoundName(choice)
             }
         };
         self.queue(command, Effect::None);

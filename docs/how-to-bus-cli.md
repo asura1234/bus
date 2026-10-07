@@ -446,11 +446,14 @@ match case-insensitively, and an unknown name changes nothing. Without
 `name` and `path` (`null` for `Default`). `state` reports each room's `sound`
 and `sound_name`.
 
-New work rooms start with the shared new-room sound, off with `Default` until
-changed. Settings shows it as the `New rooms` row at the top of ROOMS; the CLI
-sets it with `settings room-sound (--on | --off) [--sound NAME]`, which takes
-names as `room sound` does and keeps the sound without `--sound`. Changing it
-leaves existing rooms as they are:
+The `All rooms` row at the top of ROOMS in Settings sets every work room at
+once: toggling it turns every room on or off, and changing its sound gives
+every room that sound, leaving the other half of each room's choice alone. It
+is also what new work rooms start with (`room_sound`, off with `Default` until
+changed). Each room's own row below can still differ; while the rooms differ,
+`All rooms` shows `[-]` or the sound `Mixed`, and toggling it turns every room
+on. The CLI sets it with `settings room-sound (--on | --off) [--sound NAME]`,
+which takes names as `room sound` does and keeps the sound without `--sound`:
 
 ```sh
 bus settings room-sound --on --sound Glass
@@ -741,8 +744,8 @@ The generic forms are `agent details AGENT (--on | --off)` and
 ### Shared settings
 
 Settings that are not tied to one room are shared by every Bus session:
-color-blind mode, MASTER's sound (`master_sound`) and the sound new work rooms
-start with (`room_sound`). They live in `settings.json` beside the session
+color-blind mode, MASTER's sound (`master_sound`) and the last `All rooms` sound,
+which new work rooms start with (`room_sound`). They live in `settings.json` beside the session
 registry (`~/.local/share/bus/settings.json`). A change made in any Bus, from
 the UI or the CLI, is what every Bus launched or resumed afterwards starts with:
 at launch MASTER takes `master_sound`, and each room created later takes

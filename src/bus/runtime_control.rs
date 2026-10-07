@@ -326,15 +326,7 @@ impl Worker {
                     .ok_or("Sound must be on or off")?;
                 let name = self.sound_choice(p)?;
                 let events = events.ok_or("Bus UI event channel unavailable")?;
-                let saved = self.update_new_room_sound(
-                    |pref| {
-                        pref.enabled = on;
-                        if let Some(name) = name {
-                            pref.name = name;
-                        }
-                    },
-                    events,
-                )?;
+                let saved = self.set_all_rooms_sound(Some(on), name, events)?;
                 Ok(json!({"updated":true,"room_sound":saved.room_sound}))
             }
             "bus.quit" => {

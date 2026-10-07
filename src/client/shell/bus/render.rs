@@ -522,11 +522,11 @@ fn animated_status_colors(word: &str, phase: u8) -> Option<Vec<Color>> {
     }
 }
 /// What a Settings sound row sets: a room's sound (MASTER's is global), or
-/// the global sound new work rooms start with.
+/// every work room at once, which is also what new work rooms start with.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SoundTarget {
     Room(RoomId),
-    NewRooms,
+    AllRooms,
 }
 
 /// One row of the Settings form's sound-notification list.
@@ -552,7 +552,7 @@ impl BusUi {
             .map(|room| SoundTarget::Room(room.id));
         master
             .into_iter()
-            .chain(std::iter::once(SoundTarget::NewRooms))
+            .chain(std::iter::once(SoundTarget::AllRooms))
             .chain(work)
             .collect()
     }
@@ -589,26 +589,52 @@ impl BusUi {
         lines
     }
 
-    /// A Settings sound row's checkbox label, whether it is on, and its sound.
-    pub(super) fn sound_row(&self, target: SoundTarget) -> Option<(String, bool, String)> {
+    /// A Settings sound row's checkbox label, whether it is on (None when the
+    /// rooms under All rooms differ), and its sound.
+    pub(super) fn sound_row(&self, target: SoundTarget) -> Option<(String, Option<bool>, String)> {
         match target {
             SoundTarget::Room(room) => {
                 let room = self.snapshot.state.room(room)?;
                 Some((
                     format!("# {}", room.name),
-                    room.sound_enabled(),
+                    Some(room.sound_enabled()),
                     self.sound_label(room.sound_name.as_deref()),
                 ))
             }
-            SoundTarget::NewRooms => {
-                let pref = &self.settings.room_sound;
-                Some((
-                    "New rooms".into(),
-                    pref.enabled,
-                    self.sound_label(pref.name.as_deref()),
-                ))
+            SoundTarget::AllRooms => {
+                let (enabled, name) = self.all_rooms_sound();
+                let sound = match name {
+                    Some(name) => self.sound_label(name.as_deref()),
+                    None => "Mixed".into(),
+                };
+                Some(("All rooms".into(), enabled, sound))
             }
         }
+    }
+
+    /// The work rooms' shared on/off state and sound, each None when the rooms
+    /// differ. Without work rooms it is the saved default new rooms get.
+    pub(super) fn all_rooms_sound(&self) -> (Option<bool>, Option<Option<String>>) {
+        let mut rooms = self
+            .snapshot
+            .state
+            .rooms()
+            .filter(|room| room.kind == RoomKind::Work && !room.deletion_pending)
+            .map(|room| (room.sound_enabled(), room.sound_name.clone()));
+        let Some((enabled, name)) = rooms.next() else {
+            let pref = &self.settings.room_sound;
+            return (Some(pref.enabled), Some(pref.name.clone()));
+        };
+        let (mut enabled, mut name) = (Some(enabled), Some(name));
+        for (other_enabled, other_name) in rooms {
+            if enabled != Some(other_enabled) {
+                enabled = None;
+            }
+            if name.as_ref() != Some(&other_name) {
+                name = None;
+            }
+        }
+        (enabled, name)
     }
 }
 
@@ -1783,7 +1809,15 @@ impl BusUi {
                             let choice_x = x + width.saturating_sub(choice_width);
                             view.row(
                                 Rect::new(x, rect.y, width.saturating_sub(choice_width + 1), 1),
-                                format!("[{}] {label}", if enabled { "x" } else { " " }),
+                                format!(
+                                    "[{}] {label}",
+                                    match enabled {
+                                        Some(true) => "x",
+                                        Some(false) => " ",
+                                        // All rooms while the rooms differ.
+                                        None => "-",
+                                    }
+                                ),
                                 Some(Action::ToggleSound(*target)),
                                 selected,
                                 false,
