@@ -244,7 +244,7 @@ bus wait --message "$message_id" --timeout 600
 To record the message as written by a room agent instead of the human, add
 `--as AGENT`. The author must be an agent in the same room, or the room's MASTER
 orchestrator, and cannot also be a recipient; `--to all` skips it. The generic form is
-`send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue]`. A MASTER
+`send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue] [--async]`. A MASTER
 agent reports to the human with `--to human` (see Report to the human in
 MASTER).
 
@@ -252,6 +252,31 @@ MASTER).
 started or replied. `wait` polls every 200 milliseconds until every recipient
 has replied or the timeout expires. Its timeout can be 1–600 seconds and
 defaults to 60 seconds.
+
+### Send and follow a task with `--async`
+
+`send --async` sends as usual, prints the send receipt (with `message_id`)
+first, then blocks with no time limit until every recipient has worked on the
+message and gone idle again, and prints the final `message status` as a second
+JSON line:
+
+```sh
+bus send --room "$room_id" --as "$me" --to "$agent_id" --async \
+  --text "Implement the parser and report what you changed."
+```
+
+It follows agent status, not reply capture: a recipient's turn has ended
+(`turn_ended: true` in `message status`) once Bus saw it Working or Blocked
+after the message was submitted and then Idle. A captured reply also counts.
+A blocked recipient, for example one waiting on a dialog, is not idle, so the
+command keeps waiting until someone answers it. It exits non-zero, with the
+reason on stderr, only if the send fails or Bus abandons a recipient's request.
+`--async` cannot be combined with `--to human`.
+
+Orchestrators run it as a background tool call (Claude Code: Bash with
+`run_in_background`; Cursor: a background shell with timeout 0), so their CLI
+wakes them when it exits; then they read the reply in the room with
+`bus history --room ROOM`.
 
 For non-blocking inspection, read the same state once:
 
