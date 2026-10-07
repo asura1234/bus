@@ -10,12 +10,19 @@ from unittest import mock
 
 from scripts.vendor_libghostty_vt import (
     ensure_dist_archive,
+    main,
     parse_archive_root,
     require_clean_checkout,
 )
 
 
 class VendorLibghosttyVtTests(unittest.TestCase):
+    def test_source_repo_is_required(self) -> None:
+        with mock.patch("sys.argv", ["vendor_libghostty_vt.py"]):
+            with self.assertRaises(SystemExit) as raised:
+                main()
+        self.assertEqual(raised.exception.code, 2)
+
     def test_parse_archive_root_returns_single_top_level_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             archive = Path(temp_dir) / "libghostty-vt.tar.gz"

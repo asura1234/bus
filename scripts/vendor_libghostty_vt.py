@@ -90,7 +90,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Vendor the pinned libghostty-vt source dist into herdr")
     parser.add_argument(
         "--source-repo",
-        default="/home/can/Projects/ghostty",
+        required=True,
         help="Path to a local ghostty checkout",
     )
     parser.add_argument(
