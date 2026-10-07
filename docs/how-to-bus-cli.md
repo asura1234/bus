@@ -201,6 +201,26 @@ orchestrate. Assigning a second orchestrator to the same room fails until the
 first is unassigned. Deleting a work room leaves its orchestrator in MASTER,
 unassigned.
 
+### Report to the human in MASTER
+
+An orchestrator's final reply to a human message lands in MASTER by itself.
+Anything it reports on its own initiative, such as a result after a background
+task or a worker's reply, a question, or a "waiting on you" ask, appears only
+in its terminal unless it posts it to MASTER chat:
+
+```sh
+bus send --room master --as claude-orch --to human \
+  --text "Gate passed. Please restart Bus and run the smoke test."
+```
+
+The message shows in MASTER history as written by that agent, addressed to
+you; it counts as unread and rings like a reply. It goes to no agent, so it
+has no requests and nothing to `wait` on: `send` returns its `message_id`
+with `"request_ids": []` and `"stage": "posted"`. `--file PATH` attaches files
+as for any send. `--to human` needs `--as` naming an agent in MASTER, works
+only with `--room master`, cannot be combined with agent recipients or
+`--queue`, and no agent may be named `human`.
+
 ## Send work and wait for the reply
 
 Send a task to one agent and retain the returned message ID:
@@ -218,7 +238,9 @@ bus wait --message "$message_id" --timeout 600
 To record the message as written by a room agent instead of the human, add
 `--as AGENT`. The author must be an agent in the same room, or the room's MASTER
 orchestrator, and cannot also be a recipient; `--to all` skips it. The generic form is
-`send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue]`.
+`send --room ROOM --to AGENT,AGENT --text TEXT [--file PATH ...] [--as AGENT] [--queue]`. A MASTER
+agent reports to the human with `--to human` (see Report to the human in
+MASTER).
 
 `send` confirms that the message was durably queued. It does not mean the agent
 started or replied. `wait` polls every 200 milliseconds until every recipient

@@ -3,6 +3,12 @@
 These rules are binding for every Bus orchestrator. Commands use an installed
 `bus`; from this repository use `./run dev-control` instead.
 
+- **Post every report to the human in MASTER.** Status, results, questions
+  and "waiting on you" asks you start yourself (after a background task or a
+  worker's reply, not in answer to a human message) go to MASTER chat with
+  `bus send --room master --as YOUR_NAME --to human --text "..."`. Terminal-only
+  output does not count. *Why:* the human reads MASTER, not your terminal; only
+  your final reply to a human message reaches MASTER by itself.
 - **Delegate everything; write no code.** Send every task to an agent in your
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the human.

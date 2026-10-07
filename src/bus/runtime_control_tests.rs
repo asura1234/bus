@@ -2561,3 +2561,127 @@ fn a_long_session_of_mutations_never_hits_a_permanent_receipt_limit() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dev_send_to_human_posts_an_orchestrator_report_in_master_history() {
+    let (mut worker, room, _codex, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    let orchestrator = worker
+        .state
+        .create_agent(
+            master,
+            "claude-orch",
+            Provider::ClaudeCode,
+            dir.clone(),
+            None,
+        )
+        .unwrap();
+    worker
+        .state
+        .set_agent_orchestrates(orchestrator, Some(room))
+        .unwrap();
+    assert_ne!(worker.state.visible_room(), Some(master));
+
+    let sent = call(
+        &mut worker,
+        "report",
+        "message.send",
+        json!({"room":"master","to":["human"],"text":"gate passed; please restart","as":"claude-orch"}),
+    );
+    assert!(sent.ok, "{sent:?}");
+    let result = &sent.result;
+    assert_eq!(result["stage"], "posted");
+    assert_eq!(result["request_ids"], json!([]));
+    // No agent receives it, so it creates no request.
+    assert_eq!(worker.state.requests().count(), 0);
+    let master_room = worker.state.room(master).unwrap();
+    let report = master_room.notices.last().unwrap();
+    assert_eq!(report.author, Author::Agent(orchestrator));
+    assert_eq!(report.text, "gate passed; please restart");
+    assert!(report.recipient_ids.is_empty());
+    assert_eq!(result["message_id"], json!(report.id));
+    // The latest prompt is what rings and counts as unread, like a reply.
+    assert_eq!(master_room.latest_prompt.as_ref(), Some(report));
+    assert_eq!(master_room.unread_count, 1);
+
+    for (id, params, expected) in [
+        (
+            "no-author",
+            json!({"room":"master","to":["human"],"text":"x"}),
+            "requires --as",
+        ),
+        (
+            "work-room",
+            json!({"room":"test","to":["human"],"text":"x","as":"claude-orch"}),
+            "only in the MASTER room",
+        ),
+        (
+            "mixed",
+            json!({"room":"master","to":["human","claude-orch"],"text":"x","as":"claude-orch"}),
+            "cannot be combined",
+        ),
+        (
+            "queued",
+            json!({"room":"master","to":["human"],"text":"x","as":"claude-orch","queue":true}),
+            "--queue",
+        ),
+        (
+            "empty",
+            json!({"room":"master","to":["human"],"text":"  ","as":"claude-orch"}),
+            "",
+        ),
+    ] {
+        let rejected = call(&mut worker, id, "message.send", params);
+        assert!(!rejected.ok, "{id}: {rejected:?}");
+        assert!(
+            error_message(&rejected).contains(expected),
+            "{id}: {rejected:?}"
+        );
+    }
+    assert_eq!(worker.state.room(master).unwrap().notices.len(), 1);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn agents_cannot_take_the_reserved_human_name() {
+    let (mut worker, room, codex, dir) = fixture();
+    assert_eq!(
+        worker
+            .state
+            .create_agent(room, "Human", Provider::Codex, "/repo".into(), None),
+        Err(ModelError::ReservedAgentName)
+    );
+    assert_eq!(
+        worker.state.rename_agent(codex, " human "),
+        Err(ModelError::ReservedAgentName)
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn only_bus_notices_are_capped_so_reports_to_the_human_stay_in_history() {
+    let (mut worker, _room, _codex, dir) = fixture();
+    let master = worker.state.master_room().unwrap().id;
+    let orchestrator = worker
+        .state
+        .create_agent(master, "orch", Provider::ClaudeCode, dir.clone(), None)
+        .unwrap();
+    worker
+        .state
+        .post_to_human(master, orchestrator, "first report".into(), Vec::new(), 1)
+        .unwrap();
+    for n in 0..60 {
+        worker
+            .state
+            .post_notice(master, format!("notice {n}"), 2 + n)
+            .unwrap();
+    }
+    let notices = &worker.state.room(master).unwrap().notices;
+    assert_eq!(notices.len(), 51);
+    assert_eq!(notices[0].text, "first report");
+    assert_eq!(notices[1].text, "notice 10");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

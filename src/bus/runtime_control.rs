@@ -660,6 +660,13 @@ impl Worker {
             .iter()
             .map(|v| v.as_str().ok_or("Recipient must be a name or ID"))
             .collect::<Result<Vec<_>, _>>()?;
+        let files = attachment_files(p)?;
+        let to_human = selectors
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(crate::bus::model::HUMAN_RECIPIENT));
+        if to_human {
+            return self.dev_send_to_human(p, room, author, selectors.len(), files);
+        }
         let recipients: AgentRecipients = if selectors == ["all"] {
             // An agent's broadcast goes to everyone else in the room.
             let recipients: AgentRecipients = self
@@ -686,20 +693,6 @@ impl Worker {
             }
             recipients
         };
-        let mut files = Vec::new();
-        if let Some(value) = p.get("files") {
-            let home = std::env::home_dir().ok_or("Home directory unavailable")?;
-            for item in value.as_array().ok_or("Files must be an array")? {
-                let path = crate::bus::files::validate_attachment(
-                    item.as_str().ok_or("File must be a path")?,
-                    &home,
-                )
-                .map_err(|e| e.to_string())?;
-                if !files.contains(&path) {
-                    files.push(path);
-                }
-            }
-        }
         let mut state = self.state.clone();
         let ids = state
             .submit_message_with(
@@ -724,6 +717,42 @@ impl Worker {
             crate::bus::diagnostics::request(&self.state, *id, "bus.message.queued", "persisted");
         }
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
+    }
+
+    /// `send --to human`: an agent's message to the Human in MASTER. It is
+    /// delivered to no agent, so it has no requests and nothing to wait for.
+    fn dev_send_to_human(
+        &mut self,
+        p: &Value,
+        room: RoomId,
+        author: Option<AgentId>,
+        selector_count: usize,
+        files: Vec<PathBuf>,
+    ) -> Result<Value, String> {
+        if selector_count != 1 {
+            return Err("--to human cannot be combined with agent recipients".into());
+        }
+        let author =
+            author.ok_or("--to human requires --as AGENT: the human cannot message themselves")?;
+        // Reports belong where the Human reads them all: one MASTER chat.
+        if self.state.room(room).map(|r| r.kind) != Some(RoomKind::Master) {
+            return Err("--to human posts only in the MASTER room; use --room master".into());
+        }
+        if p.get("queue").and_then(Value::as_bool).unwrap_or(false) {
+            return Err("--queue does not apply to --to human".into());
+        }
+        let mut state = self.state.clone();
+        let message = state
+            .post_to_human(
+                room,
+                author,
+                optional_text(p, "text")?.unwrap_or_default().into(),
+                files,
+                crate::bus::io::now_ms(),
+            )
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
+        Ok(json!({"message_id":message,"request_ids":[],"stage":"posted"}))
     }
 
     pub(super) fn dev_message(&self, message: PromptId) -> Result<Value, String> {
@@ -1157,6 +1186,25 @@ fn decode_dialog_fingerprint(value: &str) -> Result<DialogFingerprintClaims, Str
         return Err(malformed());
     }
     serde_json::from_slice(&payload).map_err(|_| malformed())
+}
+
+/// The validated, deduplicated `files` of a send.
+fn attachment_files(p: &Value) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    if let Some(value) = p.get("files") {
+        let home = std::env::home_dir().ok_or("Home directory unavailable")?;
+        for item in value.as_array().ok_or("Files must be an array")? {
+            let path = crate::bus::files::validate_attachment(
+                item.as_str().ok_or("File must be a path")?,
+                &home,
+            )
+            .map_err(|e| e.to_string())?;
+            if !files.contains(&path) {
+                files.push(path);
+            }
+        }
+    }
+    Ok(files)
 }
 
 fn required<'a>(p: &'a Value, field: &str) -> Result<&'a str, String> {

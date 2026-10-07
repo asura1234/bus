@@ -259,6 +259,8 @@ pub(crate) enum RoomKind {
 }
 
 pub(crate) const MASTER_ROOM_NAME: &str = "MASTER";
+/// The `send --to` selector for a message to the Human; no agent may take it.
+pub(crate) const HUMAN_RECIPIENT: &str = "human";
 /// Never produced by the ID allocator, which starts at 1, so adding MASTER to a
 /// saved session neither collides with nor renumbers anything.
 const MASTER_ROOM_ID: RoomId = RoomId(0);
@@ -582,6 +584,7 @@ pub(crate) enum ModelError {
     MasterRoomFixed,
     MasterRoomHasNoNotes,
     ReservedRoomName,
+    ReservedAgentName,
     OrchestratorOutsideMaster(AgentId),
     NotOrchestratable(RoomId),
     RoomAlreadyOrchestrated { room: RoomId, agent: AgentId },
@@ -597,6 +600,10 @@ impl std::fmt::Display for ModelError {
             Self::ReservedRoomName => write!(
                 formatter,
                 "The name {MASTER_ROOM_NAME} is reserved for the master room"
+            ),
+            Self::ReservedAgentName => write!(
+                formatter,
+                "The name {HUMAN_RECIPIENT} is reserved for messages to the human"
             ),
             Self::OrchestratorOutsideMaster(agent) => write!(
                 formatter,
@@ -911,7 +918,7 @@ impl BusState {
             Some(room) if room.deletion_pending => return Err(ModelError::DeletionPending),
             Some(_) => {}
         }
-        let name = normalized_name(name)?;
+        let name = agent_name(name)?;
         let neighbors = || {
             self.agents
                 .values()
@@ -967,7 +974,7 @@ impl BusState {
     }
 
     pub(crate) fn rename_agent(&mut self, id: AgentId, name: &str) -> Result<(), ModelError> {
-        let name = normalized_name(name)?;
+        let name = agent_name(name)?;
         self.agents
             .get_mut(&id)
             .ok_or(ModelError::UnknownAgent(id))?
@@ -1573,23 +1580,81 @@ impl BusState {
         text: String,
         now_ms: u64,
     ) -> Result<PromptId, ModelError> {
-        const KEPT_NOTICES: usize = 50;
+        self.push_notice(room, Author::Bus, text, Vec::new(), now_ms)
+    }
+
+    /// Posts an agent's message to the Human in `room`, delivered to no agent.
+    /// Orchestrators report this way when no Human message is open, so the
+    /// report reaches the room's history instead of only their terminal.
+    pub(crate) fn post_to_human(
+        &mut self,
+        room: RoomId,
+        author: AgentId,
+        text: String,
+        files: Vec<PathBuf>,
+        now_ms: u64,
+    ) -> Result<PromptId, ModelError> {
+        if text.trim().is_empty() && files.is_empty() {
+            return Err(ModelError::EmptyPrompt);
+        }
+        let agent = self
+            .agents
+            .get(&author)
+            .ok_or(ModelError::UnknownAgent(author))?;
+        if agent.room_id != room {
+            return Err(ModelError::AgentOutsideRoom(author));
+        }
+        if agent.deletion_pending {
+            return Err(ModelError::DeletionPending);
+        }
+        self.push_notice(room, Author::Agent(author), text, files, now_ms)
+    }
+
+    fn push_notice(
+        &mut self,
+        room: RoomId,
+        author: Author,
+        text: String,
+        files: Vec<PathBuf>,
+        now_ms: u64,
+    ) -> Result<PromptId, ModelError> {
+        // Only Bus's own notices are capped: they are routine noise, while
+        // agent messages to the Human are part of the room's record.
+        const KEPT_BUS_NOTICES: usize = 50;
         let id = PromptId(self.allocate_id());
         let visible = self.visible_room == Some(room);
         let room = self
             .rooms
             .get_mut(&room)
             .ok_or(ModelError::UnknownRoom(room))?;
-        room.notices.push(Prompt {
+        let prompt = Prompt {
             id,
-            author: Author::Bus,
+            author,
             text,
-            files: Vec::new(),
+            files,
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: now_ms,
+        };
+        if prompt.author != Author::Bus {
+            // The latest prompt is what rings and what the composer recalls,
+            // as for an agent's `send --as` to other agents.
+            room.latest_prompt = Some(prompt.clone());
+        }
+        room.notices.push(prompt);
+        let bus_notices = room
+            .notices
+            .iter()
+            .filter(|notice| notice.author == Author::Bus)
+            .count();
+        let mut excess = bus_notices.saturating_sub(KEPT_BUS_NOTICES);
+        room.notices.retain(|notice| {
+            if excess > 0 && notice.author == Author::Bus {
+                excess -= 1;
+                false
+            } else {
+                true
+            }
         });
-        let excess = room.notices.len().saturating_sub(KEPT_NOTICES);
-        room.notices.drain(..excess);
         if !visible {
             room.unread_count = room.unread_count.saturating_add(1);
         }
@@ -2326,6 +2391,14 @@ fn work_room_name(name: &str) -> Result<String, ModelError> {
     let name = normalized_name(name)?;
     if name.eq_ignore_ascii_case(MASTER_ROOM_NAME) {
         return Err(ModelError::ReservedRoomName);
+    }
+    Ok(name)
+}
+
+fn agent_name(name: &str) -> Result<String, ModelError> {
+    let name = normalized_name(name)?;
+    if name.eq_ignore_ascii_case(HUMAN_RECIPIENT) {
+        return Err(ModelError::ReservedAgentName);
     }
     Ok(name)
 }

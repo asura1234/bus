@@ -333,6 +333,21 @@ mod ring_decisions {
     }
 
     #[test]
+    fn an_orchestrator_message_to_the_human_rings_like_a_reply() {
+        let (state, master, _, orchestrator, _) = rooms_with_agents();
+        let mut reported = state.clone();
+        reported
+            .post_to_human(master, orchestrator, "gate passed".into(), Vec::new(), 1)
+            .unwrap();
+        assert_eq!(ringing_room(&state, &reported), Some(master));
+        assert!(!new_message_should_ring(&reported, &reported));
+        // Bus's own notices stay silent.
+        let mut noticed = state.clone();
+        noticed.post_notice(master, "dialog".into(), 1).unwrap();
+        assert!(!new_message_should_ring(&state, &noticed));
+    }
+
+    #[test]
     fn agent_authored_messages_ring_and_the_humans_own_never_do() {
         let (mut state, _, work, orchestrator, worker) = rooms_with_agents();
         state.set_room_sound(work, true).unwrap();
