@@ -4,6 +4,19 @@ use std::io::{Read, Seek, SeekFrom};
 
 const MAX_TRANSCRIPT_TAIL: u64 = 2 * 1024 * 1024;
 const PENDING: &str = "Awaiting Cursor's completed transcript to identify its final reply. The callback and request were kept; no prompt will be retried.";
+/// 工具调用前的说明在转录里以这个标记结尾，回复钩子却把它删掉。
+/// 留着的话累积文本对不上钩子，回复永远匹配不到。
+const REDACTION_MARKER: &str = "[REDACTED]";
+
+/// 转录正文里钩子实际会带上的部分。
+fn hook_visible(text: &str) -> &str {
+    match text.strip_suffix(REDACTION_MARKER) {
+        Some(rest) if rest.is_empty() || rest.ends_with("\n\n") => {
+            rest.strip_suffix("\n\n").unwrap_or(rest)
+        }
+        _ => text,
+    }
+}
 
 pub(crate) fn final_text(value: &Value) -> Result<String, String> {
     let text = super::field(value, "text")?;
@@ -68,6 +81,7 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
                     .iter()
                     .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
                     .filter_map(|part| part.get("text").and_then(Value::as_str))
+                    .map(hook_visible)
                     .collect::<String>();
                 // An assistant message containing a tool call is commentary.
                 let final_text = (!text.trim().is_empty()
@@ -99,6 +113,15 @@ fn matching_completed_message(transcript: &str, hook_text: &str) -> Option<Strin
             direct_last = None;
         }
     }
+    // stop 已报完成才会来这里。这份 jsonl 经常不写 turn_ended，回复停在
+    // 最后一条 assistant 上；不在结尾结算的话请求会一直停在 delivered。
+    observe_candidates(
+        &candidates,
+        direct_last.as_deref(),
+        hook_text,
+        &mut matched,
+        &mut ambiguous,
+    );
     (!ambiguous).then_some(matched).flatten()
 }
 
@@ -150,18 +173,54 @@ mod tests {
         }
     }
 
+    /// 消息 1422：后续问题接在同一段对话里，说明文字被标成 [REDACTED]，
+    /// 而且这份 jsonl 没有 turn_ended。钩子文本不含标记。
+    #[test]
+    fn cursor_final_reply_matches_redacted_commentary_without_turn_ended() {
+        let transcript = concat!(
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"research\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I'll check.\"},{\"type\":\"tool_use\",\"name\":\"Shell\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"First answer.\"}]}}\n",
+            "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"also search the web\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"I'll search the docs.\\n\\n[REDACTED]\"},{\"type\":\"tool_use\",\"name\":\"CallDynamicTool\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Grep\"}]}}\n",
+            "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Second answer.\"}]}}\n",
+        );
+        assert_eq!(
+            matching_completed_message(transcript, "I'll search the docs.Second answer.")
+                .as_deref(),
+            Some("Second answer.")
+        );
+        assert_eq!(
+            matching_completed_message(transcript, "I'll check.First answer.").as_deref(),
+            Some("First answer.")
+        );
+        assert_eq!(hook_visible("x\n\n[REDACTED]"), "x");
+        assert_eq!(hook_visible("[REDACTED]"), "");
+        assert_eq!(hook_visible("see [REDACTED]"), "see [REDACTED]");
+    }
+
     #[test]
     fn cursor_final_reply_waits_for_completed_matching_turn() {
         assert!(matching_completed_message(TURN, "unrelated response").is_none());
         for incomplete in [
             TURN.replace("\"status\":\"success\"", "\"status\":\"error\""),
-            TURN.lines().take(3).collect::<Vec<_>>().join("\n"),
+            TURN.lines().take(2).collect::<Vec<_>>().join("\n"),
             format!("{TURN}{{\"role\":\"assistant\""),
         ] {
             assert!(
                 matching_completed_message(&incomplete, "Question first.final answer").is_none()
             );
         }
+        // 终稿已经在文件里、只是没有 turn_ended 时也要结算。
+        assert_eq!(
+            matching_completed_message(
+                &TURN.lines().take(3).collect::<Vec<_>>().join("\n"),
+                "Question first.final answer"
+            )
+            .as_deref(),
+            Some("final answer")
+        );
     }
 
     #[test]
