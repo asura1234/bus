@@ -702,11 +702,12 @@ pub(super) fn room_label(room: &Room, width: usize) -> String {
 }
 
 /// The MASTER line under an agent's provider: the room it orchestrates, or
-/// `#unassigned` for a saved orchestrator whose room failed the load checks.
+/// `# unassigned` for a saved orchestrator whose room failed the load checks.
+/// Written like the ROOMS list, `# name`.
 pub(super) fn orchestrated_room_label(state: &BusState, agent: &Agent) -> String {
     match agent.orchestrates.and_then(|room| state.room(room)) {
-        Some(room) => format!("#{}", room.name),
-        None => "#unassigned".into(),
+        Some(room) => format!("# {}", room.name),
+        None => "# unassigned".into(),
     }
 }
 

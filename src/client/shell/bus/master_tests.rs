@@ -125,7 +125,12 @@ fn master_sidebar_lists_its_agents_before_rooms() {
     );
     assert!(rows[5].starts_with("claude-orch"), "{rows:?}");
     assert_eq!(rows[6], "Claude Code", "{rows:?}");
-    assert_eq!(rows[7], "#pr-123", "{rows:?}");
+    assert_eq!(rows[7], "# pr-123", "{rows:?}");
+    // The card names its room exactly as the ROOMS list below does.
+    assert!(
+        rows[10..].iter().any(|row| row.starts_with("# pr-123 ")),
+        "{rows:?}"
+    );
     assert_eq!(rows[8], "", "{rows:?}");
     assert!(rows[9].starts_with('─'), "{rows:?}");
     assert!(
@@ -177,7 +182,7 @@ fn master_agents_show_three_lines_without_an_expand_control() {
     let rows = sidebar_rows(&mut ui);
     assert!(rows[5].starts_with("claude-orch"), "{rows:?}");
     assert_eq!(rows[6], "Claude Code", "{rows:?}");
-    assert_eq!(rows[7], "#pr-123", "{rows:?}");
+    assert_eq!(rows[7], "# pr-123", "{rows:?}");
     // Even disclosed, no branch or cwd lines follow before the divider.
     assert_eq!(rows[8], "", "{rows:?}");
     assert!(rows[9].starts_with('─'), "{rows:?}");
@@ -534,7 +539,7 @@ fn unassigned_master_agents_show_unassigned_and_work_agents_keep_their_detail_ac
     ui.open_room(master);
     let rows = sidebar_rows(&mut ui);
     // Only saved state can hold one: Bus never creates an unassigned orchestrator.
-    assert!(rows.iter().any(|row| row == "#unassigned"), "{rows:?}");
+    assert!(rows.iter().any(|row| row == "# unassigned"), "{rows:?}");
     assert!(ui
         .view
         .hits
