@@ -58,12 +58,8 @@ fn fast_path_blocker(
     state: &ClientShellState,
     patch: &crate::protocol::PaneSurfacePatch,
 ) -> Option<&'static str> {
-    if state.endpoint_error.is_some() {
-        Some("client_surface_patch.fallback.endpoint_error")
-    } else if state.config_diagnostic.is_some() {
+    if state.config_diagnostic.is_some() {
         Some("client_surface_patch.fallback.config_diagnostic")
-    } else if state.visible_endpoint_notice.is_some() {
-        Some("client_surface_patch.fallback.endpoint_notice")
     } else if state.copy_feedback.is_some() {
         Some("client_surface_patch.fallback.copy_feedback")
     } else if state.selection.is_some() {

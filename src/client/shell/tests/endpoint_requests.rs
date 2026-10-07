@@ -45,6 +45,21 @@ fn enqueue(
 }
 
 #[test]
+fn requests_before_the_first_snapshot_do_not_queue_actions() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut outcome = ClientShellInput::default();
+    state.push_endpoint_method(
+        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
+            workspace_id: "ws_1".into(),
+        }),
+        &mut outcome,
+    );
+    assert!(outcome.actions.is_empty());
+    assert!(state.pending_requests.is_empty());
+    assert!(!outcome.repaint);
+}
+
+#[test]
 fn queued_requests_run_one_at_a_time_in_order() {
     use crate::client::endpoint::ServerConnection;
     use crate::client::endpoint_commands::EndpointCommands;

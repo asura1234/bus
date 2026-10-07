@@ -1,11 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 mod actions;
 mod bus;
 mod composition;
 mod config;
 mod endpoint_agent_state;
-mod endpoint_notices;
 mod endpoints;
 mod graphics;
 mod input;
@@ -23,7 +22,7 @@ pub(super) use surface_patch::{ClientComposedSurfacePatch, ClientPaneSurfacePatc
 use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 
 use crate::app::state::Palette;
 use crate::config::Config;

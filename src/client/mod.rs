@@ -691,15 +691,7 @@ async fn run_client_loop(
                     }
                     ServerMessage::SemanticNotification(_) => {}
                     ServerMessage::ClientShellError { message } => {
-                        if let Some(shell) = state.shell.as_mut() {
-                            if shell.receive_endpoint_error(message) {
-                                let frame =
-                                    shell.compose(state.reported_size.0, state.reported_size.1);
-                                if let Some(frame) = frame {
-                                    state.present_frame(frame);
-                                }
-                            }
-                        }
+                        warn!(%message, "server rejected client shell input");
                     }
                     ServerMessage::ClientShellEndpointResponseChunk {
                         boot_id,

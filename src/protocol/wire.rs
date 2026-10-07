@@ -1449,30 +1449,6 @@ fn read_exact_or_eof<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<(), Fram
 }
 
 // ---------------------------------------------------------------------------
-// Version negotiation
-// ---------------------------------------------------------------------------
-
-/// Result of checking a client's protocol version against the server's.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VersionCheck {
-    /// Versions are compatible. The server should reply with a successful Welcome.
-    Compatible,
-    /// Versions are incompatible. The server should reply with a Welcome error and close.
-    Incompatible(String),
-}
-
-/// Checks a client's protocol version: client and server must be the same build.
-pub fn check_client_version(client_version: u32) -> VersionCheck {
-    if client_version == PROTOCOL_VERSION {
-        VersionCheck::Compatible
-    } else {
-        VersionCheck::Incompatible(format!(
-            "client protocol {client_version} does not match server protocol {PROTOCOL_VERSION}; client and server must be the same Bus build"
-        ))
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2430,26 +2406,6 @@ mod tests {
         let mut chunked = ChunkedReader::new(full_buf, 7);
         let decoded: ClientMessage = read_message(&mut chunked, MAX_FRAME_SIZE).unwrap();
         assert_eq!(msg, decoded);
-    }
-
-    // ---- Version negotiation ----
-
-    #[test]
-    fn version_compatible() {
-        assert_eq!(
-            check_client_version(PROTOCOL_VERSION),
-            VersionCheck::Compatible
-        );
-    }
-
-    #[test]
-    fn version_mismatch_rejected_as_a_different_build() {
-        for version in [0, PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
-            let VersionCheck::Incompatible(msg) = check_client_version(version) else {
-                panic!("version {version} should be rejected");
-            };
-            assert!(msg.contains("same Bus build"), "{msg}");
-        }
     }
 
     // ---- Malformed/oversized input ----

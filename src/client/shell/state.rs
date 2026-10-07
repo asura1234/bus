@@ -180,27 +180,6 @@ pub(super) struct PendingEndpointRequest {
     pub(super) kind: PendingEndpointKind,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) enum ClientEndpointNoticeKind {
-    Rejected,
-    Timeout,
-    Unavailable,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) struct ClientEndpointNoticeKey {
-    pub(super) boot_id: String,
-    pub(super) kind: ClientEndpointNoticeKind,
-    pub(super) code: String,
-}
-
-pub(super) struct ClientVisibleEndpointNotice {
-    pub(super) key: ClientEndpointNoticeKey,
-    pub(super) title: String,
-    pub(super) body: String,
-    pub(super) deadline: std::time::Instant,
-}
-
 pub(crate) struct ClientShellEndpointError {
     pub code: Option<String>,
     pub message: String,
@@ -287,14 +266,11 @@ pub(crate) struct ClientShellState {
     pub(super) input_leases: ClientInputLeases,
     pub(super) next_request_id: u64,
     pub(super) pending_requests: HashMap<String, PendingEndpointRequest>,
-    pub(super) endpoint_notice_seen: HashSet<ClientEndpointNoticeKey>,
-    pub(super) visible_endpoint_notice: Option<ClientVisibleEndpointNotice>,
     pub(super) outer_focused: Option<bool>,
     pub(super) host_appearance: Option<crate::terminal_theme::HostAppearance>,
     pub(super) host_appearance_explicit: bool,
     pub(super) local_config_diagnostic: Option<String>,
     pub(super) config_diagnostic: Option<String>,
-    pub(super) endpoint_error: Option<String>,
 }
 
 impl ClientShellState {
@@ -336,14 +312,11 @@ impl ClientShellState {
             input_leases: ClientInputLeases::default(),
             next_request_id: 1,
             pending_requests: HashMap::new(),
-            endpoint_notice_seen: HashSet::new(),
-            visible_endpoint_notice: None,
             outer_focused: None,
             host_appearance: None,
             host_appearance_explicit: false,
             config_diagnostic: local_config_diagnostic.clone(),
             local_config_diagnostic,
-            endpoint_error: None,
         }
     }
 
@@ -377,9 +350,6 @@ impl ClientShellState {
         self.pane_scroll_in_flight.clear();
         self.pane_scroll_queued.clear();
         self.pane_scroll_targets.clear();
-        self.endpoint_notice_seen.clear();
-        self.visible_endpoint_notice = None;
-        self.endpoint_error = None;
         self.previous_pane_id = None;
         self.pane_mouse_gesture = None;
         self.url_click_consumes_until_up = false;
@@ -606,14 +576,6 @@ impl ClientShellState {
         {
             self.selection = None;
             self.selection_highlight_clear_deadline = None;
-            repaint = true;
-        }
-        if self
-            .visible_endpoint_notice
-            .as_ref()
-            .is_some_and(|visible| now >= visible.deadline)
-        {
-            self.visible_endpoint_notice = None;
             repaint = true;
         }
         repaint

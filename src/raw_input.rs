@@ -28,24 +28,6 @@ pub(crate) const GHOSTTY_COLOR_SCHEME_LIGHT_REPORT: &[u8] = b"\x1b[?997;2n";
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
-/// Returns the UTF-8 payload when `data` is exactly one complete bracketed paste.
-pub(crate) fn complete_text_bracketed_paste(data: &[u8]) -> Option<&str> {
-    if !data.starts_with(BRACKETED_PASTE_START) {
-        return None;
-    }
-    let end = find_subsequence(data, BRACKETED_PASTE_END)?;
-    if end + BRACKETED_PASTE_END.len() != data.len() {
-        return None;
-    }
-    std::str::from_utf8(&data[BRACKETED_PASTE_START.len()..end]).ok()
-}
-
-/// Client transport uses this to distinguish recoverable oversized interactive
-/// pastes from generic oversized input, which remains a protocol violation.
-pub(crate) fn is_complete_text_bracketed_paste(data: &[u8]) -> bool {
-    complete_text_bracketed_paste(data).is_some()
-}
-
 #[derive(Debug)]
 pub enum RawInputEvent {
     Key(TerminalKey),
@@ -508,31 +490,6 @@ fn plausible_osc_tail(buffer: &[u8]) -> bool {
                     | ESC
             )
     })
-}
-
-#[cfg(any(unix, test))]
-pub(crate) fn events_require_host_surface_redraw(
-    events: &[RawInputEvent],
-    redraw_on_focus_gained: bool,
-) -> bool {
-    redraw_on_focus_gained
-        && events
-            .iter()
-            .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
-}
-
-#[cfg(any(not(windows), test))]
-pub(crate) fn events_require_host_terminal_appearance_query(events: &[RawInputEvent]) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event, RawInputEvent::OuterFocusGained))
-}
-
-#[cfg(any(not(windows), test))]
-pub(crate) fn events_require_host_terminal_theme_query(events: &[RawInputEvent]) -> bool {
-    events
-        .iter()
-        .any(|event| matches!(event, RawInputEvent::HostColorSchemeChanged(_)))
 }
 
 fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
@@ -1121,22 +1078,6 @@ mod tests {
     }
 
     #[test]
-    fn complete_text_bracketed_paste_requires_one_exact_utf8_sequence() {
-        assert_eq!(
-            complete_text_bracketed_paste(b"\x1b[200~hello\x1b[201~"),
-            Some("hello")
-        );
-        assert!(!is_complete_text_bracketed_paste(b"\x1b[200~hello"));
-        assert!(!is_complete_text_bracketed_paste(
-            b"\x1b[200~hello\x1b[201~rest"
-        ));
-        assert!(!is_complete_text_bracketed_paste(
-            b"\x1b[200~one\x1b[201~\x1b[200~two\x1b[201~"
-        ));
-        assert!(!is_complete_text_bracketed_paste(b"\x1b[200~\xff\x1b[201~"));
-    }
-
-    #[test]
     fn parses_sgr_mouse() {
         let (RawInputEvent::Mouse(mouse), consumed) = extract_one_event(b"\x1b[<0;20;10M").unwrap()
         else {
@@ -1289,30 +1230,6 @@ mod tests {
     }
 
     #[test]
-    fn outer_focus_gained_requests_host_surface_redraw() {
-        let events = parse_raw_input_bytes_sync(b"\x1b[I");
-        assert!(events_require_host_surface_redraw(&events, true));
-        assert!(!events_require_host_surface_redraw(&events, false));
-
-        let events = parse_raw_input_bytes_sync(b"\x1b[O");
-        assert!(!events_require_host_surface_redraw(&events, true));
-    }
-
-    #[test]
-    fn outer_focus_gained_requests_host_appearance_query() {
-        let gained = parse_raw_input_bytes_sync(b"\x1b[I");
-        let lost = parse_raw_input_bytes_sync(b"\x1b[O");
-        let scheme_report = parse_raw_input_bytes_sync(b"\x1b[?997;1n");
-
-        assert!(events_require_host_terminal_appearance_query(&gained));
-        assert!(!events_require_host_terminal_appearance_query(&lost));
-        assert!(!events_require_host_terminal_appearance_query(
-            &scheme_report
-        ));
-        assert!(events_require_host_terminal_theme_query(&scheme_report));
-    }
-
-    #[test]
     fn parses_ghostty_color_scheme_reports() {
         for bytes in [
             GHOSTTY_COLOR_SCHEME_DARK_REPORT,
@@ -1324,7 +1241,6 @@ mod tests {
                 events[0],
                 RawInputEvent::HostColorSchemeChanged(HostAppearance::Dark | HostAppearance::Light)
             ));
-            assert!(events_require_host_terminal_theme_query(&events));
         }
     }
 
@@ -1338,7 +1254,6 @@ mod tests {
             let events = parse_raw_input_bytes_sync(bytes);
             assert_eq!(events.len(), 1, "bytes: {bytes:?}");
             assert!(matches!(events[0], RawInputEvent::Unsupported));
-            assert!(!events_require_host_terminal_theme_query(&events));
         }
     }
 

@@ -92,8 +92,7 @@ impl ClientShellState {
             Ok(_) => {
                 self.pane_scroll_queued.remove(&pane_id);
                 self.pane_scroll_targets.remove(&pane_id);
-                self.endpoint_error =
-                    Some("endpoint returned an unexpected pane-scroll result".to_owned());
+                tracing::warn!("endpoint returned an unexpected pane-scroll result");
                 true
             }
             Err(_) => {
@@ -496,14 +495,6 @@ impl ClientShellState {
                 );
                 return;
             }
-        }
-        if self.visible_endpoint_notice.is_some()
-            && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-            && super::contains(self.hits.notification_toast, point)
-        {
-            self.visible_endpoint_notice = None;
-            outcome.repaint = true;
-            return;
         }
         if mouse.kind == MouseEventKind::Drag(MouseButton::Left) {
             match self.chrome_drag.as_ref() {

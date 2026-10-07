@@ -48,8 +48,6 @@ pub(crate) fn final_sync_output_end(bytes: &[u8]) -> Option<usize> {
 pub(crate) struct EncodedBlit {
     /// Terminal escape bytes ready to write to the host terminal.
     pub(crate) bytes: Vec<u8>,
-    /// Whether this frame was encoded as a full redraw.
-    pub(crate) full: bool,
     next_last_visible_cursor: Option<(u16, u16)>,
     next_last_cursor_shape: u8,
 }
@@ -127,7 +125,6 @@ impl BlitEncoder {
         }
         EncodedBlit {
             bytes,
-            full,
             next_last_visible_cursor,
             next_last_cursor_shape,
         }
@@ -155,10 +152,6 @@ impl BlitEncoder {
         self.last_frame = Some(frame);
     }
 
-    pub(crate) fn is_current(&self, frame: &FrameData) -> bool {
-        self.last_frame.as_ref() == Some(frame)
-    }
-
     pub(crate) fn encode_patch(
         &self,
         rows: &[PaneSurfacePatchRow],
@@ -184,7 +177,6 @@ impl BlitEncoder {
         );
         Some(EncodedBlit {
             bytes,
-            full: false,
             next_last_visible_cursor,
             next_last_cursor_shape,
         })
@@ -1743,7 +1735,6 @@ mod tests {
 
         // The host grid is still three columns wide; the frame is two.
         let encoded = encoder.encode(&curr, false);
-        assert!(encoded.full);
         terminal.write(&encoded.bytes);
         let output = String::from_utf8(encoded.bytes).unwrap();
         assert!(output.contains("\x1b[2J"));
@@ -1784,7 +1775,6 @@ mod tests {
         // What the client does for every resize event.
         encoder.invalidate();
         let encoded = encoder.encode(&frame, true);
-        assert!(encoded.full);
         assert!(String::from_utf8_lossy(&encoded.bytes).contains("\x1b[2J"));
         terminal.write(&encoded.bytes);
         encoder.commit(frame, encoded);
@@ -1835,7 +1825,6 @@ mod tests {
         encoder.commit(frame.clone(), initial);
 
         let encoded = encoder.encode(&frame, true);
-        assert!(encoded.full);
         let output = String::from_utf8(encoded.bytes).unwrap();
 
         assert!(!output.contains("\x1b[2J"));
@@ -1888,7 +1877,7 @@ mod tests {
             .expect("valid retained patch");
         assert_eq!(patch.bytes, full_diff.bytes);
         assert!(encoder.commit_patch(&rows, cursor, patch));
-        assert!(encoder.is_current(&expected));
+        assert_eq!(encoder.last_frame.as_ref(), Some(&expected));
     }
 
     #[test]
@@ -2002,7 +1991,7 @@ mod tests {
             .expect("valid drawn cursor patch");
         assert_eq!(patch.bytes, full_diff.bytes);
         assert!(encoder.commit_patch(&drawn_rows, cursor, patch));
-        assert!(encoder.is_current(&expected));
+        assert_eq!(encoder.last_frame.as_ref(), Some(&expected));
     }
 
     #[test]

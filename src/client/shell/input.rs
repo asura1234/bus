@@ -129,9 +129,6 @@ impl ClientShellState {
 
     pub(super) fn handle_raw_events(&mut self, events: Vec<RawInputEvent>) -> ClientShellInput {
         let mut outcome = ClientShellInput::default();
-        if !events.is_empty() && self.endpoint_error.take().is_some() {
-            outcome.repaint = true;
-        }
         for event in events {
             let ready = self.bus_terminal_ready();
             if self

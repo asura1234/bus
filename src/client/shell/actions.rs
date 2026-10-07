@@ -91,48 +91,6 @@ impl ClientShellState {
         self.push_endpoint_method_with_kind(method, PendingEndpointKind::Generic, outcome);
     }
 
-    fn push_endpoint_notice(
-        &mut self,
-        kind: ClientEndpointNoticeKind,
-        code: impl Into<String>,
-        title: impl Into<String>,
-        body: impl Into<String>,
-    ) -> bool {
-        let key = ClientEndpointNoticeKey {
-            boot_id: self
-                .snapshot
-                .as_deref()
-                .map(|snapshot| snapshot.boot_id.clone())
-                .unwrap_or_else(|| "disconnected".to_owned()),
-            kind,
-            code: code.into(),
-        };
-        let body = body.into();
-        if kind == ClientEndpointNoticeKind::Rejected {
-            if self
-                .visible_endpoint_notice
-                .as_ref()
-                .is_some_and(|notice| notice.key == key && notice.body == body)
-            {
-                return false;
-            }
-        } else if !self.endpoint_notice_seen.insert(key.clone()) {
-            return false;
-        }
-        let duration_seconds = if kind == ClientEndpointNoticeKind::Rejected {
-            3
-        } else {
-            8
-        };
-        self.visible_endpoint_notice = Some(ClientVisibleEndpointNotice {
-            key,
-            title: title.into(),
-            body,
-            deadline: std::time::Instant::now() + std::time::Duration::from_secs(duration_seconds),
-        });
-        true
-    }
-
     pub(super) fn push_endpoint_method_with_kind(
         &mut self,
         method: crate::api::schema::Method,
@@ -140,7 +98,6 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) -> bool {
         let Some(snapshot) = self.snapshot.as_deref() else {
-            outcome.repaint |= self.receive_endpoint_unavailable("Server is not ready".into());
             return false;
         };
         let method_name = crate::api::api_method_name(&method).to_owned();
@@ -163,24 +120,6 @@ impl ClientShellState {
             }),
         });
         true
-    }
-
-    pub(crate) fn receive_endpoint_error(&mut self, message: String) -> bool {
-        self.push_endpoint_notice(
-            ClientEndpointNoticeKind::Rejected,
-            "paste_rejected",
-            "Paste rejected",
-            message,
-        )
-    }
-
-    pub(crate) fn receive_endpoint_unavailable(&mut self, message: String) -> bool {
-        self.push_endpoint_notice(
-            ClientEndpointNoticeKind::Unavailable,
-            message.clone(),
-            "Endpoint unavailable",
-            message,
-        )
     }
 
     pub(crate) fn cancel_endpoint_request(&mut self, request_id: &str) -> bool {
@@ -221,48 +160,13 @@ impl ClientShellState {
         {
             return (false, Vec::new());
         }
-        if result.is_ok() {
-            let timeout_key = ClientEndpointNoticeKey {
-                boot_id: boot_id.to_owned(),
-                kind: ClientEndpointNoticeKind::Timeout,
-                code: pending.method_name.clone(),
-            };
-            self.endpoint_notice_seen.remove(&timeout_key);
-        }
         if let Err(error) = &result {
-            let code = error.code.as_deref().unwrap_or("invalid_response");
-            if !matches!(
-                code,
-                "confirmation_required" | "stale_content" | "stale_target"
-            ) {
-                let (kind, notice_code, title, body) = match code {
-                    "endpoint_timeout" => (
-                        ClientEndpointNoticeKind::Timeout,
-                        pending.method_name.clone(),
-                        "Server timed out",
-                        format!("This server did not respond to {}.", pending.method_name),
-                    ),
-                    "endpoint_cancelled" => (
-                        ClientEndpointNoticeKind::Unavailable,
-                        "cancelled".to_owned(),
-                        "Action interrupted",
-                        error.message.clone(),
-                    ),
-                    "server_unavailable" => (
-                        ClientEndpointNoticeKind::Unavailable,
-                        "server".to_owned(),
-                        "Server unavailable",
-                        error.message.clone(),
-                    ),
-                    _ => (
-                        ClientEndpointNoticeKind::Rejected,
-                        format!("{}:{code}", pending.method_name),
-                        "Action rejected",
-                        error.message.clone(),
-                    ),
-                };
-                self.push_endpoint_notice(kind, notice_code, title, body);
-            }
+            tracing::warn!(
+                method = %pending.method_name,
+                code = ?error.code,
+                message = %error.message,
+                "server rejected client shell request"
+            );
         }
         match pending.kind {
             PendingEndpointKind::Generic => {}
@@ -286,8 +190,7 @@ impl ClientShellState {
                         (false, Vec::new())
                     }
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected selection result".to_owned());
+                        tracing::warn!("endpoint returned an unexpected selection result");
                         (true, Vec::new())
                     }
                     Err(_) => (true, Vec::new()),
@@ -316,9 +219,7 @@ impl ClientShellState {
                         return (false, Vec::new())
                     }
                     Ok(_) => {
-                        self.endpoint_error = Some(
-                            "endpoint returned an unexpected word-selection result".to_owned(),
-                        );
+                        tracing::warn!("endpoint returned an unexpected word-selection result");
                         return (true, Vec::new());
                     }
                     Err(_) => return (true, Vec::new()),
@@ -392,8 +293,7 @@ impl ClientShellState {
                         (false, replay_action(replay))
                     }
                     Ok(_) => {
-                        self.endpoint_error =
-                            Some("endpoint returned an unexpected link result".to_owned());
+                        tracing::warn!("endpoint returned an unexpected link result");
                         (true, replay_action(replay))
                     }
                     Err(error)

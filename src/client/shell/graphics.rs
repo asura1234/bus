@@ -13,9 +13,7 @@ impl ClientShellState {
     }
 
     pub(super) fn compose_graphics(&mut self, frame: &mut FrameData, layout: ClientShellLayout) {
-        let local_cover = self.endpoint_error.is_some()
-            || self.config_diagnostic.is_some()
-            || self.visible_endpoint_notice.is_some()
+        let local_cover = self.config_diagnostic.is_some()
             || self.copy_feedback.is_some()
             || self
                 .selection

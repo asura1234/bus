@@ -131,7 +131,6 @@ fn pane_scroll_result(
     }
 }
 
-mod endpoint_notices;
 mod endpoint_requests;
 mod focus_projection;
 #[path = "input.rs"]

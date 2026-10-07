@@ -247,15 +247,6 @@ fn write_host_color_scheme_report_mode_emits_mode_sequences() {
 }
 
 #[test]
-fn color_scheme_change_event_requests_host_theme_query() {
-    let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[?997;1n");
-
-    assert!(crate::raw_input::events_require_host_terminal_theme_query(
-        &events
-    ));
-}
-
-#[test]
 fn host_terminal_theme_query_is_disabled_on_windows() {
     assert_eq!(should_query_host_terminal_theme(), !cfg!(windows));
 }
