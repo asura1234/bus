@@ -35,7 +35,7 @@ test-one filter:
 
 # Enforce deterministic UI hot-path architecture boundaries
 ui-hot-path-architecture-test:
-    {{python}} -m unittest scripts.test_ui_hot_path_architecture
+    {{python}} -m pytest -q tools/tests/test_ui_hot_path.py tools/tests/test_import_boundaries.py
 
 # Run local Rust/Python lint checks
 lint:
