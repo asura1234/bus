@@ -91,6 +91,9 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     assert!(rules.contains("**Parallelism is king.**"));
     assert!(rules.contains("**Compartmentalize, within reason.**"));
     assert!(rules.contains("**Brief workers directly.**"));
+    assert!(
+        rules.contains("**Keep follow-ups in the running workflow file, not in your context.**")
+    );
     assert!(rules.contains("bus send --room ROOM --as YOUR_NAME --to AGENT --async"));
     let guide = std::fs::read_to_string(root.join("workflow-create.md")).unwrap();
     assert_eq!(guide, WORKFLOW_CREATE);

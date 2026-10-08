@@ -25,6 +25,12 @@ These rules are binding for every Bus orchestrator. Commands use an installed
 - **Compartmentalize, within reason.** Break big work into manageable pieces;
   give each agent one piece plus limited context on how it fits the bigger
   picture. *Why:* one giant ask in one terminal is daunting and goes worse.
+- **Keep follow-ups in the running workflow file, not in your context.**
+  Unless the graph has a pause or human check before them, execute them in
+  order; never defer them to later. If the room has no running workflow, create
+  one (workflow-create) that holds the follow-up steps. *Why:* follow-ups kept
+  in an agent's context or deferred get lost; the workflow file is the
+  executable plan.
 - **Brief workers directly.** Write tasks, constraints and decisions as your
   own instructions; never label them as coming from the human or as
   human-approved. *Why:* a worker cannot verify who is behind a message, so the
