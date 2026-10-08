@@ -3,6 +3,11 @@
 Status: decided. It describes the target folder and module layout of the repository. Bus is a prototype: it keeps no fallbacks and no
 backward compatibility with older saves, configs, peers or herdr-era names, and it has no CI.
 
+S10a checkpoint: production owners have split their large modules and moved local tests alongside their code. The VT and
+emulator facades retain their first slices; S10b finishes those splits. The enforced limit remains 3,000 physical lines with
+the existing named exemptions. Production counting and separate production/test Clippy commands are prepared but dormant;
+the 800-line cap and H14 lints activate together later. Python has no complexity lint policy.
+
 ## 1. Repository root
 
 - `src/`: the Bus terminal application (Rust), described in section 2
@@ -52,9 +57,9 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
 ## 2. `src/` layout
 
 Nine components, listed in reading order. The dependency rule is graph 3a, not this order; `main.rs` is the composition root above all
-of them. Production code has at most 800 handwritten lines per file (generated bindings are not handwritten) and keeps every
-complexity lint: clippy's `too_many_lines`, `type_complexity`, `cognitive_complexity`, `too_many_arguments` and the like, plus the
-Python complexity checks.
+of them. The final target is at most 800 handwritten production lines per file (generated bindings are not handwritten).
+S10a keeps the existing Clippy rules, including the argument threshold of 11. H14's selected production Rust lints and the
+function-length/cognitive thresholds of 100/25 are reserved for the final activation after the measured findings are fixed.
 
 Every test file in the repository, Rust or Python, is named `*_test.<ext>`: `*_test.rs` and `*_test.py`. Shared test helpers are
 test code and follow the same rule (`support_test.rs`). Data fixtures such as `.json` keep their names inside a test folder. A
@@ -65,7 +70,7 @@ A file is a test file, and so exempt from the 800-line cap and the complexity li
 (file level) or it sits inside a test directory: any folder named `tests`, at any depth, including the top-level `tests/`
 (directory level). Inline `#[cfg(test)]` modules in production files are exempt by their test scope and stay where they are; they
 are not moved out just for the cap. Both levels are patterns in the lint policy and the clippy and test-scope config, never a
-per-file list.
+per-file list in the final policy. Until S10b, the gate retains the physical counter and existing exemptions.
 
 An enforced lint check fails the gate when test code (a `#[test]` fn, or a pytest test function or file) is in none of those three
 places: a `*_test.*` file, a `tests` directory or an inline `#[cfg(test)]` module. Pytest (`python_files`) and the gate's Python
@@ -79,10 +84,12 @@ Files are split by ownership, not by helper.
     file and socket under `BUS_DATA_DIR`, including `bus.sock`)
   - `logging.rs` (takes its filter from `cli`), `log_events.rs`, `home_path.rs`, `url.rs` (safe web URL check)
   - `config/`: `mod.rs`, `load.rs` (TOML, live reload; an unknown key fails with a diagnostic), `session.rs`, `server.rs`,
-    `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `sound.rs` (ding paths), `ui/{theme,window_title,keys}.rs`, `tests/`
+    `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `interface.rs` (UI settings), `sound.rs` (ding paths),
+    `ui/{theme,window_title,keys}.rs`, section-owned `tests/`; `core.rs` retains the logical `model` namespace
   - `theme/`: `color.rs` (`RgbColor`, `TerminalTheme`, `HostAppearance`), `palette.rs`, `builtin.rs`, `resolve.rs`
-  - `text/`: `selection.rs` (`Selection`, `ScrollMetrics`), `hit_test.rs` (URL, word, quoted path), `copy_motion.rs`, `width.rs`
-  - `render/`: `signal.rs` (redraw requests), `prof.rs`, `widgets.rs` (highlight, popups, scrollbar math)
+  - `paths/`: `session_args.rs`, `socket.rs`; CLI guidance and stop operations live in `cli`, with existing path facades retained
+  - `text/`: `selection.rs` (`Selection`, `ScrollMetrics`), `hit_testing.rs` (URL, word, quoted path), `copy_motion.rs`, `width.rs`
+  - `render/`: `signal.rs` (redraw requests), `prof.rs`, `widgets.rs` (highlight and scrollbar math), `feedback.rs`, `diagnostic.rs`
 - `platform/`: the operating system
   - `mod.rs`: shared types (`ForegroundJob`, `Signal`, `ChildExitReason`, `ClipboardImage`) and the facade; returns raw process and
     environment facts and leaves their meaning to `agents`
@@ -138,16 +145,14 @@ Files are split by ownership, not by helper.
     `history.rs` (alt-screen scrollback merge)
   - `vt/`: safe wrapper over libghostty-vt
     - `mod.rs` (errors, re-exports), `ffi.rs` (generated bindings), `consts.rs`, `types.rs` (cells, colors, cursor, scrollbar)
-    - `callbacks.rs` (C trampolines, clipboard, PNG decode), `terminal.rs` (lifecycle, write, modes, reads, scrolling)
-    - `render.rs` (render state, row and cell iterators), `input.rs` (key, mouse, focus encoders), `kitty.rs` (image types and getters),
-      `kitty_placement.rs` (virtual placement geometry, placeholder tables)
+    - `callbacks.rs` (C trampolines, clipboard, PNG decode), `read.rs`, `read/rows.rs` (render state, row and cell iterators)
+    - `mod.rs` retains lifecycle, input/mode and Kitty operations until the final S10b split
     - `tests/{terminal_test,render_test,input_test,kitty_test}.rs`
-  - `pty/`: `spawn.rs`, `fd.rs` (wake pipe, poll, resize), `actor/{mod,unix,windows}.rs` (per-terminal I/O thread),
+  - `pty/`: `fd.rs` (wake pipe, poll, resize), `actor/{mod,unix,windows}.rs` (per-terminal I/O thread),
     `actor/submission.rs` (paced text, delay and Enter), `tests/{unix_actor_test,submission_test}.rs`
   - `emulator/`: PTY bytes into the VT, frames and text out
-    - `mod.rs` (core, locking, modes, scroll state), `write.rs` (PTY input, ordered replies, history seeding)
-    - `color_replies.rs` (OSC color queries from the host theme), `encode.rs` (keys and mouse)
-    - `render.rs` (ratatui render, dirty-row cell patches), `read.rs` (visible, recent and detection text and ANSI)
+    - `mod.rs` retains core/locking, modes, write/reply ordering, render and encoding until S10b;
+      `read.rs` holds visible, recent and detection text and ANSI
     - `text_motion.rs` (retained text, search, word and paragraph motion), `windows.rs`, `conpty_recent_cache.rs`
     - `controls/`: `osc/{default_colors,agent,cwd,scrollback_compat,debug,collector}.rs`, `osc/tests/`, `xtgettcap.rs`, `kitty_keyboard.rs`
       (kitty flags and the modifyOtherKeys 0/1/2 tracker),
@@ -156,7 +161,8 @@ Files are split by ownership, not by helper.
       a real VT)
   - `runtime/`: `TerminalRuntime`, the only handle to a live terminal
     - `mod.rs` (struct, I/O wiring, drop), `spawn.rs` (shell resolution, launch env, PTY spawn), `io.rs` (input, resize, scroll)
-    - `read.rs` (snapshots, render, cwd), `detection_task.rs` (agent probe loop), `detection_policy.rs` (debounce, publish rules)
+    - `read.rs` (snapshots, render, cwd, PTY callback), `detection_task.rs` (agent probe loop),
+      `detection_process.rs` (process observation), `detection_policy.rs` (debounce, publish rules)
     - `compression.rs` (idle scrollback), `shutdown.rs` (close and release), `dialog.rs` (answer agent dialogs)
     - `tests/{support_test,spawn_test,detection_test,compression_test,shutdown_test,io_test}.rs`
   - `state/`: `TerminalState`, the arbiter of effective agent state
@@ -187,7 +193,8 @@ Files are split by ownership, not by helper.
   - `orchestration.rs`: embed `orchestration/` and `workflows/`, write the docs into the Bus data root, and fill MASTER
     prompt placeholders; compiled-in copies are the only defaults in every build
 - `server/`: the `bus server` daemon
-  - `mod.rs` (`Server`, the main loop), `app.rs` (`App`, `AppState`, `AppSettings`), `startup.rs`, `shutdown.rs`, `config_reload.rs`
+  - `mod.rs` (wiring and stable server tests), `main_loop.rs` (`Server`), `app_loop.rs`, `app.rs` (`App`), `app_state.rs`,
+    `app_settings.rs`, `app_queries.rs`, `startup.rs`, `shutdown.rs`, `config_reload.rs`
   - `workspaces/`: workspaces, tabs and the split layout
     - `mod.rs` (`Workspace`), `tab.rs`, `pane.rs` (`PaneState`), `layout/{tree,geometry,nav,layout_test}.rs`,
     `agent_view.rs` (agent-panel entries and the agent-view filter)
@@ -212,7 +219,8 @@ Files are split by ownership, not by helper.
       reports)
     - `panes/tests/{layout_test,navigation_test,copy_test,io_test,session_test,close_test}.rs`
   - `clients/`: connected TUI clients
-    - `accept.rs`, `handshake.rs`, `read_loop.rs`, `writer.rs` (control and render lanes), `events.rs` (`ServerEvent` and its handling)
+    - `accept.rs`, `handshake.rs`, `read_loop.rs`, `writer.rs` (control and render lanes),
+      `events/{mod,connection,shell}.rs` (`ServerEvent` and its handling)
     - `connection.rs` (per-client record), `foreground.rs`, `input.rs`, `requests.rs` (client request allow-list and dispatch)
     - `focus.rs`, `geometry.rs`, `surface_lease.rs`, `clipboard_images.rs`,
       `tests/{handshake_test,read_loop_test,writer_test}.rs`
@@ -239,18 +247,24 @@ Files are split by ownership, not by helper.
   - `compositor/`: `mod.rs`, `compose.rs`, `patch.rs`, `hits.rs`, `config.rs`, `snapshot.rs`, `tests/`
   - `panes/`: `router.rs`, `keys.rs`, `input_lease.rs`, `mouse/{hit,selection,scroll,splits,forward}.rs`, `tests/`
   - `rooms/`: the room UI
-    - `mod.rs` (compositor hooks, coordinator start), `ui.rs`, `drafts.rs`, `toast.rs`, `ring.rs`, `help.rs`, `selection.rs`
+    - `mod.rs` (compositor hooks, coordinator start), `ui.rs` (snapshot/events and settlement),
+      `drafts.rs` (per-room editors and save/send intent), `toast.rs` (notices and expiry), `chat_search.rs`, `ring.rs`, `help.rs`, `selection.rs`
     - `widgets/{editor,recipients}.rs`, `dialogs/{forms,deletion}.rs`
     - `input/`: `mod.rs`, `composer.rs`, `history.rs`, `forms.rs`, `settings.rs`
     - `history/`: `mod.rs`, `exchange.rs`, `markdown.rs`
-    - `render/`: `view.rs`, `text.rs`, `sidebar.rs`, `layout.rs`, `room.rs`, `dialogs.rs`, `paint.rs`, `thumbnails.rs`
+    - `render/`: `mod.rs` (view model and hits), `view.rs`, `text.rs`, `sidebar.rs`, `layout.rs`, `room.rs`, `dialogs.rs`, `paint.rs`, `thumbnails.rs`
     - `tests/`: `support_test.rs` (fixtures, input drivers, screen capture), `deletion_test.rs`, `sidebar_test.rs`, `toasts_test.rs`,
       `composer_test.rs`, `forms_test.rs`, `layout_test.rs`, `native_shell_test.rs`, `attachments_test.rs`, `selection_test.rs`,
       `history_markdown_test.rs`, `history_slots_test.rs`, `history_scroll_test.rs`, `keys_test.rs`, `master_test.rs`, `sound_test.rs`,
-      `focus_test.rs`
+      `focus_test.rs`, `chat_search_test.rs`
 - `cli/`: the `bus` command
   - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
   - `control.rs` (control commands used by orchestrators and humans), `help.rs`, `tests/{parse_test,execute_test}.rs`
+
+Local test moves use literal includes where needed to retain their full S9b names. In particular, CLI stop/guidance tests keep
+`utils::paths::tests`, the runtime PTY setup case keeps `terminal::pty::spawn::unix::tests`, and graphics tests keep their Kitty
+parent. Shared writer, lease and room support implementations are instantiated once. Python acceptance helpers and raw-tty
+tools remain importable without launching live UI tests during collection.
 
 ## 3. Dependency graphs
 
