@@ -41,6 +41,32 @@ def test_legacy_sources_and_references_have_same_owners():
         assert boundaries.component(module + "::Item") == owner
 
 
+def test_s5_facades_keep_utils_and_server_ownership(tmp_path):
+    write_source(
+        tmp_path,
+        "src/protocol/api/client.rs",
+        """use crate::api::schema::Request;
+use crate::api::ApiRequestSender;
+use crate::api::EventHub;
+use crate::terminal::TerminalId;
+use crate::server::socket_paths;
+use crate::ui::render_config_diagnostic_buffer;
+use crate::session::active_api_socket_path;
+""",
+    )
+    _, refs = boundaries.scan(tmp_path)
+    assert [(ref.target, ref.forbidden) for ref in refs] == [
+        ("protocol", False),
+        ("server", True),
+        ("server", True),
+        ("utils", False),
+        ("utils", False),
+        ("utils", False),
+        ("utils", False),
+    ]
+    assert "metadata_tokens" not in boundaries.LEGACY_ROOTS
+
+
 def test_report_masks_comments_and_literals_but_checks_test_code(tmp_path):
     write_source(
         tmp_path,

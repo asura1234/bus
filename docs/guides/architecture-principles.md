@@ -87,7 +87,7 @@ Rust uses the module's existing production-time check mechanism.
 
 Externally expected failures — for example network, file, permission, or user-input errors — return failure per the contract and record the
 necessary context. Do not wrongly turn this kind of failure into a process crash, and do not catch an internal defect and keep running. Logs go
-through `tracing`, as configured in `src/logging.rs`.
+through `tracing`, as configured in `src/utils/logging.rs`.
 
 ### Boundaries of defensive fallback
 

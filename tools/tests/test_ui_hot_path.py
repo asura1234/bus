@@ -123,3 +123,22 @@ def test_fixture_check_reports_original_line_and_updated_globs(tmp_path, monkeyp
 
 def test_project_root_is_repository():
     assert hot_path.PROJECT_ROOT == Path(__file__).resolve().parents[2]
+
+
+def test_moved_render_and_socket_sources_keep_their_checks(tmp_path):
+    render_paths = (
+        "src/utils/render/widgets.rs",
+        "src/utils/render/status_popups.rs",
+        "src/utils/text/width.rs",
+    )
+    socket_path = "src/utils/socket_paths.rs"
+    for name in (*render_paths, socket_path):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fn draw() { runtime.input_state(); }\n", encoding="utf-8")
+    violations = hot_path.check(tmp_path)
+    assert len(violations) == 4
+    assert {line.split(":", 1)[0] for line in violations} == {
+        *render_paths,
+        socket_path,
+    }

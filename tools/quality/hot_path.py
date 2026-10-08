@@ -7,8 +7,19 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Stage integration updates these globs as their owners move/split Rust files.
 SOURCES = {
-    "hot_path": ("src/ui.rs", "src/ui/**/*.rs", "src/server/render_stream.rs"),
-    "app_server": ("src/app/**/*.rs", "src/server/**/*.rs"),
+    "hot_path": (
+        "src/ui.rs",
+        "src/ui/**/*.rs",
+        "src/server/render_stream.rs",
+        "src/utils/render/widgets.rs",
+        "src/utils/render/status_popups.rs",
+        "src/utils/text/width.rs",
+    ),
+    "app_server": (
+        "src/app/**/*.rs",
+        "src/server/**/*.rs",
+        "src/utils/socket_paths.rs",
+    ),
 }
 TEST_MODULE = re.compile(
     r"(?m)^[ \t]*#\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*"
