@@ -147,11 +147,32 @@ def test_legacy_edges_and_composition_shim(tmp_path):
 def test_shared_root_constants_are_not_unknown_components(tmp_path):
     write_source(
         tmp_path,
-        "src/pane.rs",
+        "src/terminal/runtime/mod.rs",
         "fn spawn() { cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE); }",
     )
     _, refs = boundaries.scan(tmp_path)
     assert [(ref.target, ref.forbidden) for ref in refs] == [("utils", False)] * 2
+
+
+def test_s6_facades_keep_agent_and_viewport_ownership(tmp_path):
+    write_source(
+        tmp_path,
+        "src/client/run.rs",
+        """use crate::terminal::title;
+use crate::terminal::stripped_terminal_title;
+use crate::pane_state::PaneState;
+use crate::pane::PaneState;
+use crate::terminal::runtime::PaneState;
+""",
+    )
+    _, refs = boundaries.scan(tmp_path)
+    assert [(ref.target, ref.forbidden) for ref in refs] == [
+        ("agents", False),
+        ("agents", False),
+        ("server", True),
+        ("server", True),
+        ("server", True),
+    ]
 
 
 def test_default_reports_and_enforce_fails(tmp_path, capsys):
