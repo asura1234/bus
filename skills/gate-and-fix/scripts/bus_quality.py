@@ -65,6 +65,43 @@ def is_test(path: Path) -> bool:
     return path.name.endswith("_test.py")
 
 
+def configured_test_scopes(policy: dict) -> dict | None:
+    """Final S10b keys activate consumers together; S10a retains legacy behavior."""
+    keys = ("test_files", "test_dirs")
+    if not any(key in policy for key in keys):
+        return None
+    if not all(key in policy for key in keys):
+        raise ValueError("test_files and test_dirs must activate together")
+    if any(not isinstance(policy[key], list) or
+           any(not isinstance(value, str) or not value for value in policy[key])
+           for key in keys):
+        raise ValueError("invalid test scope patterns")
+    return {key: tuple(policy[key]) for key in keys}
+
+
+def clippy_commands(policy: dict) -> tuple[tuple[str, ...], ...]:
+    """Check production before allowing selected lints while compiling tests."""
+    base = ("cargo", "clippy")
+    all_targets = (*base, "--all-targets", "--locked", "--", "-D", "warnings")
+    scopes = configured_test_scopes(policy)
+    selected = policy.get("production_clippy_lints", [])
+    if not isinstance(selected, list) or any(
+        not isinstance(lint, str) or not re.fullmatch(r"(?:clippy::)?[a-z_]+", lint)
+        for lint in selected
+    ):
+        raise ValueError("invalid production Clippy lint list")
+    if scopes is None:
+        if selected:
+            raise ValueError("production Clippy lints require final test scope keys")
+        return (all_targets,)
+    denied = tuple(arg for lint in selected for arg in ("-D", lint))
+    allowed = tuple(arg for lint in selected for arg in ("-A", lint))
+    return (
+        (*base, "--bin", "bus", "--locked", "--", "-D", "warnings", *denied),
+        (*all_targets, *allowed),
+    )
+
+
 def head() -> str:
     return subprocess.check_output(
         ("git", "rev-parse", "HEAD"), cwd=ROOT, text=True
@@ -126,6 +163,10 @@ def rust_test(
 
 def file_lengths() -> int:
     policy = tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))
+    scopes = configured_test_scopes(policy)
+    sys.path.insert(0, str(ROOT))
+    from tools.quality.scopes import is_test_path, production_line_count
+
     limit = policy["max_file_lines"]
     if not isinstance(limit, int) or limit <= 0:
         raise ValueError("invalid file-length limit")
@@ -137,7 +178,13 @@ def file_lengths() -> int:
         name = path.relative_to(ROOT).as_posix()
         if name in policy["generated_files"]:
             continue
-        lines = len(path.read_text(encoding="utf-8").splitlines())
+        source = path.read_text(encoding="utf-8")
+        lines = len(source.splitlines())
+        if scopes is not None:
+            if is_test_path(name, **scopes):
+                continue
+            if path.suffix == ".rs":
+                lines = production_line_count(source, name, **scopes)
         if lines > limit:
             if name in policy.get("file_length_exemptions", {}):
                 print(
@@ -158,7 +205,9 @@ def lint() -> int:
         raise ValueError("no Python source roots found")
     results = [
         run("cargo", "fmt", "--check"),
-        run("cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"),
+        *(run(*argv) for argv in clippy_commands(
+            tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))
+        )),
         run(
             sys.executable,
             "-m",
@@ -233,6 +282,9 @@ def rust_lines(report: Path) -> tuple[int, int]:
     # their high coverage must not inflate the production baseline.
     sys.path.insert(0, str(ROOT))
     from tools.quality.rust_source import mask_comments_and_literals
+    from tools.quality.scopes import is_test_path, rust_test_line_numbers
+
+    scopes = configured_test_scopes(tomllib.loads(LINT_POLICY.read_text(encoding="utf-8")))
 
     covered = total = 0
     excluded: set[int] = set()
@@ -246,8 +298,19 @@ def rust_lines(report: Path) -> tuple[int, int]:
                 RUST_EXCLUDE, path.as_posix()
             )
             excluded = set()
+            if scopes is not None and path.is_relative_to(ROOT / RUST_SOURCE_ROOT):
+                relative = path.relative_to(ROOT)
+                in_source = (
+                    relative.as_posix() not in GENERATED_RUST
+                    and "vendor" not in relative.parts and path.name != "build.rs"
+                    and not is_test_path(relative, **scopes)
+                )
             if in_source:
-                code = mask_comments_and_literals(path.read_text(encoding="utf-8"))
+                source = path.read_text(encoding="utf-8")
+                if scopes is not None:
+                    excluded.update(rust_test_line_numbers(source))
+                    continue
+                code = mask_comments_and_literals(source)
                 for match in LEGACY_TEST_MODULE.finditer(code):
                     depth, end = 0, match.end() - 1
                     while end < len(code):

@@ -5,6 +5,7 @@ from tools.quality.scopes import (
     production_code,
     production_line_count,
     rust_test_ranges,
+    rust_test_line_numbers,
 )
 
 import pytest
@@ -112,6 +113,15 @@ def test_path_defaults_can_be_supplied_from_the_eventual_policy():
     assert is_test_path("a/spec/case.rs", test_dirs=("spec",))
     assert is_test_path("a/case.spec.rs", test_files=("*.spec.rs",), test_dirs=())
     assert not is_test_path("a/tests/case.rs", test_files=(), test_dirs=())
+
+
+def test_production_counter_and_coverage_share_wholly_test_lines():
+    source = "fn before() {}\n#[cfg(all(test, unix))]\nmod cases {\n    fn helper() {}\n}\nfn after() {} #[cfg(test)] fn adjacent() {}\n"
+    assert rust_test_line_numbers(source) == frozenset({2, 3, 4, 5})
+    assert production_line_count(source) == 2
+    assert production_line_count(source, "cases.spec.rs", test_files=("*.spec.rs",)) == 0
+    assert production_line_count(source, "a/spec/case.rs", test_dirs=("spec",)) == 0
+    assert production_line_count(source, "a/tests/case.rs", test_dirs=()) == 2
 
 
 def test_match_arm_patterns_and_comparisons_do_not_hide_following_production():

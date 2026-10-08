@@ -12,17 +12,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SOURCES = {
     "hot_path": (
         "src/server/rendering/surface/**/*.rs",
-        "src/server/workspaces/agent_panel.rs",
+        "src/server/workspaces/agent_view.rs",
         "src/server/rendering/stream.rs",
         "src/utils/render/widgets.rs",
-        "src/utils/render/status_popups.rs",
+        "src/utils/render/feedback.rs",
+        "src/utils/render/diagnostic.rs",
         "src/utils/text/width.rs",
     ),
     "app_server": (
         "src/cli/launch.rs",
         "src/server/mod.rs",
         "src/server/**/*.rs",
-        "src/utils/socket_paths.rs",
+        "src/utils/paths/socket.rs",
     ),
 }
 INPUT_STATE_CALL = re.compile(r"(?:\.|::)input_state\b")

@@ -85,7 +85,7 @@ def test_globs_deduplicate_files_and_exclude_test_sources(tmp_path, monkeypatch)
         "src/server/rendering/surface/tests.rs",
         "src/server/rendering/surface/draw_tests.rs",
         "src/server/rendering/surface/tests/draw.rs",
-        "src/server/workspaces/agent_panel.rs",
+        "src/server/workspaces/agent_view.rs",
     ):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,13 +97,13 @@ def test_globs_deduplicate_files_and_exclude_test_sources(tmp_path, monkeypatch)
             "src/server/rendering/surface/mod.rs",
             "src/server/rendering/surface/**/*.rs",
             "src/server/rendering/surface/draw.rs",
-            "src/server/workspaces/agent_panel.rs",
+            "src/server/workspaces/agent_view.rs",
         ),
     )
     assert hot_path.source_paths("hot_path", tmp_path) == (
         tmp_path / "src/server/rendering/surface/draw.rs",
         tmp_path / "src/server/rendering/surface/mod.rs",
-        tmp_path / "src/server/workspaces/agent_panel.rs",
+        tmp_path / "src/server/workspaces/agent_view.rs",
     )
 
 
@@ -137,16 +137,17 @@ def test_project_root_is_repository():
 def test_moved_render_and_socket_sources_keep_their_checks(tmp_path):
     render_paths = (
         "src/utils/render/widgets.rs",
-        "src/utils/render/status_popups.rs",
+        "src/utils/render/feedback.rs",
+        "src/utils/render/diagnostic.rs",
         "src/utils/text/width.rs",
     )
-    socket_path = "src/utils/socket_paths.rs"
+    socket_path = "src/utils/paths/socket.rs"
     for name in (*render_paths, socket_path):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fn draw() { runtime.input_state(); }\n", encoding="utf-8")
     violations = hot_path.check(tmp_path)
-    assert len(violations) == 4
+    assert len(violations) == 5
     assert {line.split(":", 1)[0] for line in violations} == {
         *render_paths,
         socket_path,

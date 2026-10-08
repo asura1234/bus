@@ -13,6 +13,67 @@ import bus_quality as quality  # noqa: E402
 
 
 class BusQualityTest(unittest.TestCase):
+    def test_scope_keys_activate_together_and_leave_legacy_clippy_dormant(self):
+        self.assertIsNone(quality.configured_test_scopes({}))
+        self.assertEqual(quality.clippy_commands({}), ((
+            "cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings",
+        ),))
+        for policy in ({"test_files": []}, {"test_dirs": []},
+                       {"test_files": "*_test.*", "test_dirs": []},
+                       {"production_clippy_lints": ["clippy::unwrap_used"]}):
+            with self.subTest(policy=policy), self.assertRaises(ValueError):
+                quality.clippy_commands(policy)
+
+    def test_selected_production_lints_run_before_test_target_allowances(self):
+        policy = {"test_files": ["*_test.*"], "test_dirs": ["tests"],
+                  "production_clippy_lints": ["clippy::too_many_lines",
+                                               "clippy::cognitive_complexity"]}
+        production, tests = quality.clippy_commands(policy)
+        self.assertEqual(production[:6], ("cargo", "clippy", "--bin", "bus", "--locked", "--"))
+        self.assertEqual(tests[:5], ("cargo", "clippy", "--all-targets", "--locked", "--"))
+        self.assertNotIn("-A", production)
+        self.assertEqual(production[-4:], ("-D", "clippy::too_many_lines", "-D", "clippy::cognitive_complexity"))
+        self.assertEqual(tests[-4:], ("-A", "clippy::too_many_lines", "-A", "clippy::cognitive_complexity"))
+
+    def test_production_counting_waits_for_final_scope_keys(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "src/example.rs"
+            source.parent.mkdir()
+            source.write_text("// production\n\nfn product() {}\n#[cfg(all(test, unix))]\nmod tests {\nfn case() {}\n}\n")
+            test = root / "src/nested/tests/helpers.rs"
+            test.parent.mkdir(parents=True)
+            test.write_text("line\n" * 12)
+            python = root / "tools/example_test.py"
+            python.parent.mkdir()
+            python.write_text("line\n" * 12)
+            policy = root / "lint.toml"
+            legacy = "max_file_lines = 3\ngenerated_files = []\n"
+            with patch.object(quality, "ROOT", root), patch.object(quality, "LINT_POLICY", policy):
+                policy.write_text(legacy)
+                self.assertEqual(quality.file_lengths(), 1)
+                policy.write_text(legacy + 'test_files = ["*_test.*"]\ntest_dirs = ["tests"]\n')
+                self.assertEqual(quality.file_lengths(), 0)
+                source.write_text(source.read_text() + "fn missed() {}\n")
+                self.assertEqual(quality.file_lengths(), 1)
+
+    def test_final_coverage_scopes_exclude_combined_cfg_and_suffix_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "src/example.rs"
+            source.parent.mkdir()
+            source.write_text("fn missed() {}\n#[cfg(all(test, unix))]\nmod tests {\nfn case() {}\n}\nfn after() {}\n")
+            test = root / "src/helper_test.rs"
+            test.write_text("fn case() {}\n")
+            report = root / "report.lcov"
+            report.write_text(f"SF:{source}\nDA:1,0\nDA:4,1\nDA:6,0\nend_of_record\nSF:{test}\nDA:1,1\nend_of_record\n")
+            policy = root / "lint.toml"
+            with patch.object(quality, "ROOT", root), patch.object(quality, "LINT_POLICY", policy):
+                policy.write_text("generated_files = []\n")
+                self.assertEqual(quality.rust_lines(report), (2, 4))
+                policy.write_text('generated_files = []\ntest_files = ["*_test.*"]\ntest_dirs = ["tests"]\n')
+                self.assertEqual(quality.rust_lines(report), (0, 2))
+
     def test_unit_builds_cli_and_uses_it_instead_of_a_stale_binary(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -254,10 +254,8 @@ def production_code(source: str) -> str:
     return "".join(chars)
 
 
-def production_line_count(source: str, path: str | PurePath = "") -> int:
-    """Physical lines, including comments/blanks outside test-only item ranges."""
-    if is_test_path(path):
-        return 0
+def rust_test_line_numbers(source: str) -> frozenset[int]:
+    """One-based lines wholly in test scope; keep lines shared with production."""
     from bisect import bisect_right
 
     chars = list(source)
@@ -268,4 +266,12 @@ def production_line_count(source: str, path: str | PurePath = "") -> int:
         blank_non_newlines(chars, start, end)
     # A line shared with any neighboring production bytes still counts.
     lines = "".join(chars).splitlines()
-    return len(lines) - sum(not lines[line].strip() for line in covered if line < len(lines))
+    return frozenset(line + 1 for line in covered if line < len(lines) and not lines[line].strip())
+
+
+def production_line_count(source: str, path: str | PurePath = "", *,
+                          test_files=DEFAULT_TEST_FILES, test_dirs=DEFAULT_TEST_DIRS) -> int:
+    """Physical lines, including comments/blanks outside test-only item ranges."""
+    if is_test_path(path, test_files=test_files, test_dirs=test_dirs):
+        return 0
+    return len(source.splitlines()) - len(rust_test_line_numbers(source))
