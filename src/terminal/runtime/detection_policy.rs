@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::detect::{Agent, AgentDetection, AgentState};
+use crate::agents::{Agent, AgentDetection, AgentState};
 
 pub(super) const AGENT_PENDING_IDLE_RECHECK: std::time::Duration =
     std::time::Duration::from_millis(100);
@@ -292,9 +292,9 @@ pub(super) fn detection_update_for_publish_with_osc(
     osc_title: &str,
     osc_progress: &str,
     process_exited: bool,
-) -> Option<crate::detect::AgentDetection> {
+) -> Option<crate::agents::AgentDetection> {
     if process_exited {
-        return Some(crate::detect::AgentDetection {
+        return Some(crate::agents::AgentDetection {
             state: AgentState::Idle,
             skip_state_update: false,
             visible_idle: true,
@@ -303,7 +303,7 @@ pub(super) fn detection_update_for_publish_with_osc(
         });
     }
 
-    let detection = crate::detect::detect_agent_with_osc(agent, content, osc_title, osc_progress);
+    let detection = crate::agents::detect_agent_with_osc(agent, content, osc_title, osc_progress);
     (!detection.skip_state_update).then_some(detection)
 }
 

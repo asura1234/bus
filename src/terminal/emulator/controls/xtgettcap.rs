@@ -1,16 +1,16 @@
 use bytes::Bytes;
 
 #[derive(Debug, Default)]
-pub(super) struct XtgettcapQueryTracker {
+pub(in crate::terminal::emulator) struct XtgettcapQueryTracker {
     state: XtgettcapTrackerState,
     body: Vec<u8>,
     pending: Vec<XtgettcapResponse>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct XtgettcapResponse {
-    pub(super) end_offset: usize,
-    pub(super) bytes: Bytes,
+pub(in crate::terminal::emulator) struct XtgettcapResponse {
+    pub(in crate::terminal::emulator) end_offset: usize,
+    pub(in crate::terminal::emulator) bytes: Bytes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -31,7 +31,7 @@ enum XtgettcapTrackerState {
 }
 
 impl XtgettcapQueryTracker {
-    pub(super) fn observe(&mut self, bytes: &[u8]) {
+    pub(in crate::terminal::emulator) fn observe(&mut self, bytes: &[u8]) {
         for (index, &byte) in bytes.iter().enumerate() {
             match self.state {
                 XtgettcapTrackerState::Ground => {
@@ -151,7 +151,7 @@ impl XtgettcapQueryTracker {
         self.body.clear();
     }
 
-    pub(super) fn drain_pending(&mut self) -> Vec<XtgettcapResponse> {
+    pub(in crate::terminal::emulator) fn drain_pending(&mut self) -> Vec<XtgettcapResponse> {
         std::mem::take(&mut self.pending)
     }
 }

@@ -8,7 +8,10 @@ pub(crate) const HERDR_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
 pub(crate) const HERDR_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
-    cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
+    cmd.env(
+        crate::protocol::api::SOCKET_PATH_ENV_VAR,
+        crate::protocol::api::socket_path(),
+    );
     if let Ok(executable) = std::env::current_exe() {
         cmd.env("HERDR_BIN_PATH", executable);
     }

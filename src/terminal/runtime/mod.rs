@@ -16,23 +16,23 @@ use tokio::sync::watch;
 use tokio::sync::{mpsc, Notify};
 use tracing::{error, info, warn};
 
-use crate::detect::{Agent, AgentState};
-use crate::events::AppEvent;
+use crate::agents::{Agent, AgentState};
 use crate::layout::PaneId;
-use crate::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyIoActorHandle, PtyReadResult};
-use crate::render_signal::RenderSignal;
+use crate::terminal::events::AppEvent;
+use crate::terminal::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyIoActorHandle, PtyReadResult};
+use crate::utils::render::signal::RenderSignal;
 
-mod agent_detection;
-mod cursor;
+mod detection_policy;
 pub(crate) mod env;
-mod input;
-mod kitty_keyboard;
-mod osc;
-mod state;
-mod terminal;
-mod xtgettcap;
+mod handle;
 
-use self::agent_detection::{
+// Viewport state stays in its old file until S7; aliases avoid compiling it
+// or the emulator twice.
+use crate::pane_state as state;
+use crate::terminal::emulator as terminal;
+pub use handle::TerminalRuntime;
+
+use self::detection_policy::{
     decide_detection_screen_read, decide_screen_detection_publish,
     detection_update_for_publish_with_osc, mark_detection_content_changed,
     observe_detection_content_change, DetectionPublishDecision, DetectionScreenReadDecision,
@@ -337,7 +337,7 @@ fn foreground_member_cwd_different_from_shell(
     shell_pid: u32,
     shell_cwd: Option<&std::path::PathBuf>,
 ) -> Option<std::path::PathBuf> {
-    let job = crate::detect::foreground_job(shell_pid)?;
+    let job = crate::agents::foreground_job(shell_pid)?;
     for process in job.processes {
         if process.pid == shell_pid {
             continue;
@@ -584,7 +584,7 @@ fn identify_process_group_leader_in_job(
         process_group_id: job.process_group_id,
         processes: vec![leader.clone()],
     };
-    crate::detect::identify_agent_in_job(&leader_job)
+    crate::agents::identify_agent_in_job(&leader_job)
 }
 
 fn process_probe_result(
@@ -611,7 +611,7 @@ fn hinted_process_probe_result(
         job,
         pid,
         agent,
-        crate::detect::agent_label(agent).to_string(),
+        crate::agents::agent_label(agent).to_string(),
     ))
 }
 
@@ -626,7 +626,7 @@ fn probe_foreground_process_from_jobs(
         if let Some(hinted) = hinted_process_probe_result(job, pid, read_hint) {
             return hinted;
         }
-        if let Some((agent, process_name)) = crate::detect::identify_agent_in_job(job) {
+        if let Some((agent, process_name)) = crate::agents::identify_agent_in_job(job) {
             return process_probe_result(job, pid, agent, process_name);
         }
     }
@@ -638,7 +638,7 @@ fn probe_foreground_process_from_jobs(
                 job,
                 pid,
                 agent,
-                crate::detect::agent_label(agent).to_string(),
+                crate::agents::agent_label(agent).to_string(),
             );
         }
         if let Some((agent, process_name)) = identify_process_group_leader_in_job(job) {
@@ -649,11 +649,11 @@ fn probe_foreground_process_from_jobs(
                 job,
                 pid,
                 agent,
-                crate::detect::agent_label(agent).to_string(),
+                crate::agents::agent_label(agent).to_string(),
             );
         }
 
-        let identified = crate::detect::identify_agent_in_job(job);
+        let identified = crate::agents::identify_agent_in_job(job);
         return ProcessProbeResult {
             process_group_id: Some(job.process_group_id),
             foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
@@ -674,8 +674,8 @@ fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessPr
     probe_foreground_process_from_jobs(
         pid,
         foreground_pgid,
-        foreground_pgid.and_then(crate::detect::foreground_group_leader_job),
-        || crate::detect::foreground_job(pid),
+        foreground_pgid.and_then(crate::agents::foreground_group_leader_job),
+        || crate::agents::foreground_job(pid),
         crate::platform::process_agent_hint,
     )
 }
@@ -892,13 +892,13 @@ async fn run_terminal_compression_task(
                     continue 'schedule;
                 }
                 TerminalCompressionStep::Compressed(
-                    crate::ghostty::TerminalCompressionResult::Unsupported,
+                    crate::terminal::vt::TerminalCompressionResult::Unsupported,
                 ) => return,
                 TerminalCompressionStep::Compressed(
-                    crate::ghostty::TerminalCompressionResult::Pending,
+                    crate::terminal::vt::TerminalCompressionResult::Pending,
                 ) => tokio::time::sleep(TERMINAL_COMPRESSION_STEP).await,
                 TerminalCompressionStep::Compressed(
-                    crate::ghostty::TerminalCompressionResult::Complete,
+                    crate::terminal::vt::TerminalCompressionResult::Complete,
                 ) => {
                     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
                     completed_passes.fetch_add(1, Ordering::Release);
@@ -1199,11 +1199,11 @@ fn default_pane_shell() -> String {
 #[derive(Clone, Copy)]
 pub(crate) struct PaneShellConfig<'a> {
     pub(crate) default_shell: &'a str,
-    pub(crate) mode: crate::config::ShellModeConfig,
+    pub(crate) mode: crate::utils::config::ShellModeConfig,
 }
 
 impl<'a> PaneShellConfig<'a> {
-    pub(crate) fn new(default_shell: &'a str, mode: crate::config::ShellModeConfig) -> Self {
+    pub(crate) fn new(default_shell: &'a str, mode: crate::utils::config::ShellModeConfig) -> Self {
         Self {
             default_shell,
             mode,
@@ -1234,13 +1234,13 @@ impl ShellLaunchTarget {
 }
 
 fn shell_mode_uses_login_shell(
-    mode: crate::config::ShellModeConfig,
+    mode: crate::utils::config::ShellModeConfig,
     target: ShellLaunchTarget,
 ) -> bool {
     match mode {
-        crate::config::ShellModeConfig::Auto => target == ShellLaunchTarget::Macos,
-        crate::config::ShellModeConfig::Login => true,
-        crate::config::ShellModeConfig::NonLogin => false,
+        crate::utils::config::ShellModeConfig::Auto => target == ShellLaunchTarget::Macos,
+        crate::utils::config::ShellModeConfig::Login => true,
+        crate::utils::config::ShellModeConfig::NonLogin => false,
     }
 }
 
@@ -1438,13 +1438,13 @@ impl PaneRuntime {
         stopped
     }
 
-    pub fn apply_host_terminal_theme(&self, theme: crate::terminal_theme::TerminalTheme) {
+    pub fn apply_host_terminal_theme(&self, theme: crate::utils::theme::color::TerminalTheme) {
         self.terminal.apply_host_terminal_theme(theme);
     }
 
     pub fn apply_host_terminal_appearance(
         &self,
-        appearance: Option<crate::terminal_theme::HostAppearance>,
+        appearance: Option<crate::utils::theme::color::HostAppearance>,
     ) {
         self.io
             .write_terminal_response(|| self.terminal.apply_host_terminal_appearance(appearance));
@@ -1458,8 +1458,8 @@ impl PaneRuntime {
         cols: u16,
         cwd: std::path::PathBuf,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
         shell_config: PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
         events: mpsc::Sender<AppEvent>,
@@ -1491,8 +1491,8 @@ impl PaneRuntime {
         cols: u16,
         cwd: std::path::PathBuf,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
         shell_config: PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
         initial_history_ansi: Option<&str>,
@@ -1539,8 +1539,8 @@ impl PaneRuntime {
         launch_env: &PaneLaunchEnv,
         agent_detection: AgentDetection,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
@@ -1581,8 +1581,8 @@ impl PaneRuntime {
         launch_env: &PaneLaunchEnv,
         agent_detection: AgentDetection,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
@@ -1624,8 +1624,8 @@ impl PaneRuntime {
         rows: u16,
         cols: u16,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
@@ -1634,12 +1634,17 @@ impl PaneRuntime {
         initial_state: SpawnInitialState<'_>,
         agent_detection: AgentDetection,
     ) -> std::io::Result<Self> {
-        crate::logging::pane_spawn_started(pane_id.raw(), rows, cols, scrollback_limit_bytes);
+        crate::utils::logging::pane_spawn_started(
+            pane_id.raw(),
+            rows,
+            cols,
+            scrollback_limit_bytes,
+        );
 
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
-        let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
+        let mut terminal = crate::terminal::vt::Terminal::new(cols, rows, scrollback_limit_bytes)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
-        if crate::kitty_graphics::is_enabled() {
+        if crate::protocol::kitty::is_enabled() {
             terminal
                 .enable_kitty_graphics()
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -1658,7 +1663,7 @@ impl PaneRuntime {
         let kitty_keyboard_flags = Arc::new(AtomicU16::new(0));
         let content_write_lock = Arc::new(Mutex::new(()));
 
-        let spawned = crate::pty::backend::spawn_with_portable_pty(rows, cols, cmd)
+        let spawned = crate::terminal::pty::spawn::spawn_with_portable_pty(rows, cols, cmd)
             .inspect_err(|err| error!(pane = pane_id.raw(), err = %err, "{spawn_error_message}"))?;
 
         // --- Child watcher task ---
@@ -1675,18 +1680,18 @@ impl PaneRuntime {
             let mut child = spawned.child;
             if let Some(pid) = child.process_id() {
                 child_pid.store(pid, Ordering::Release);
-                crate::logging::pane_spawned(pane_id.raw(), pid);
+                crate::utils::logging::pane_spawned(pane_id.raw(), pid);
             }
             tokio::task::spawn_blocking(move || {
                 let exit_reason = match child.wait() {
                     Ok(status) => {
                         let exit_reason = crate::platform::classify_child_exit(&status);
                         let status_text = format!("{status:?}");
-                        crate::logging::pane_exited(pane_id.raw(), &status_text);
+                        crate::utils::logging::pane_exited(pane_id.raw(), &status_text);
                         exit_reason
                     }
                     Err(e) => {
-                        crate::logging::pane_exit_failed(pane_id.raw(), &e.to_string());
+                        crate::utils::logging::pane_exit_failed(pane_id.raw(), &e.to_string());
                         crate::platform::ChildExitReason::WaitFailed
                     }
                 };
@@ -1775,7 +1780,7 @@ impl PaneRuntime {
 
         // --- Detection task ---
         let detect_handle = if agent_detection == AgentDetection::Enabled {
-            use crate::detect;
+            use crate::agents as detect;
             use std::time::{Duration, Instant};
 
             const TICK_UNIDENTIFIED: Duration = Duration::from_millis(500);
@@ -2190,14 +2195,14 @@ impl PaneRuntime {
         &self,
         query: &str,
         case_sensitive: bool,
-        direction: crate::pane::TerminalSearchDirection,
-        cursor: crate::pane::TerminalTextPoint,
+        direction: crate::terminal::runtime::TerminalSearchDirection,
+        cursor: crate::terminal::runtime::TerminalTextPoint,
         previous: Option<(
-            crate::pane::TerminalTextPoint,
-            crate::pane::TerminalTextPoint,
+            crate::terminal::runtime::TerminalTextPoint,
+            crate::terminal::runtime::TerminalTextPoint,
         )>,
         limit: usize,
-    ) -> crate::pane::TerminalSearchWindow {
+    ) -> crate::terminal::runtime::TerminalSearchWindow {
         let result = self.terminal.search_text_window(
             query,
             case_sensitive,
@@ -2214,8 +2219,8 @@ impl PaneRuntime {
         &self,
         row: u32,
         col: u16,
-        motion: crate::pane::TerminalWordMotion,
-    ) -> Option<crate::pane::TerminalTextPoint> {
+        motion: crate::terminal::runtime::TerminalWordMotion,
+    ) -> Option<crate::terminal::runtime::TerminalTextPoint> {
         let result = self.terminal.word_motion_target(row, col, motion);
         self.compression.wake();
         result
@@ -2229,7 +2234,7 @@ impl PaneRuntime {
         &self,
         row: u32,
         direction: i8,
-    ) -> Option<crate::pane::TerminalTextPoint> {
+    ) -> Option<crate::terminal::runtime::TerminalTextPoint> {
         let result = self.terminal.paragraph_motion_target(row, direction);
         self.compression.wake();
         result
@@ -2362,7 +2367,10 @@ impl PaneRuntime {
         (!ansi.trim().is_empty()).then_some(ansi)
     }
 
-    pub fn extract_selection(&self, selection: &crate::selection::Selection) -> Option<String> {
+    pub fn extract_selection(
+        &self,
+        selection: &crate::utils::text::selection::Selection,
+    ) -> Option<String> {
         let result = self.terminal.extract_selection(selection);
         self.compression.wake();
         result
@@ -2391,16 +2399,16 @@ impl PaneRuntime {
     pub fn kitty_image_placements_with_data_filter<F>(
         &self,
         needs_data: F,
-    ) -> Vec<crate::ghostty::KittyImagePlacement>
+    ) -> Vec<crate::terminal::vt::KittyImagePlacement>
     where
-        F: FnMut(crate::ghostty::KittyImageDescriptor) -> bool,
+        F: FnMut(crate::terminal::vt::KittyImageDescriptor) -> bool,
     {
         self.terminal
             .kitty_image_placements_with_data_filter(needs_data)
     }
 
-    pub fn keyboard_protocol(&self) -> crate::input::KeyboardProtocol {
-        let fallback = crate::input::KeyboardProtocol::from_kitty_flags(
+    pub fn keyboard_protocol(&self) -> crate::protocol::keys::KeyboardProtocol {
+        let fallback = crate::protocol::keys::KeyboardProtocol::from_kitty_flags(
             self.kitty_keyboard_flags.load(Ordering::Relaxed),
         );
         self.terminal.keyboard_protocol(fallback)
@@ -2410,7 +2418,7 @@ impl PaneRuntime {
         self.terminal.modify_other_keys_level()
     }
 
-    pub fn encode_terminal_key(&self, key: crate::input::TerminalKey) -> Vec<u8> {
+    pub fn encode_terminal_key(&self, key: crate::protocol::keys::TerminalKey) -> Vec<u8> {
         self.terminal
             .encode_terminal_key(key, self.keyboard_protocol())
     }
@@ -2431,7 +2439,7 @@ impl PaneRuntime {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let Some(dialog) = crate::detect::dialog::parse(&self.terminal.visible_ansi())
+        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi())
             .filter(|dialog| dialog.digest() == expected_digest)
         else {
             return Ok(DialogChoice::Stale);
@@ -2481,12 +2489,15 @@ impl PaneRuntime {
         text: Option<String>,
         skip: bool,
     ) -> Result<DialogChoice, String> {
-        crate::api::schema::AgentDialogAnswerParams::validate_answer(text.as_deref(), skip)?;
+        crate::protocol::api::schema::AgentDialogAnswerParams::validate_answer(
+            text.as_deref(),
+            skip,
+        )?;
         let _content_write_guard = match self.content_write_lock.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let Some(dialog) = crate::detect::dialog::parse(&self.terminal.visible_ansi())
+        let Some(dialog) = crate::agents::dialog::parse(&self.terminal.visible_ansi())
             .filter(|dialog| dialog.digest() == expected_digest)
         else {
             return Ok(DialogChoice::Stale);
@@ -2562,12 +2573,12 @@ impl PaneRuntime {
         Bytes::from(payload)
     }
 
-    pub fn try_send_focus_event(&self, event: crate::ghostty::FocusEvent) -> bool {
+    pub fn try_send_focus_event(&self, event: crate::terminal::vt::FocusEvent) -> bool {
         if !self.focus_reporting_enabled() {
             return false;
         }
 
-        let Ok(bytes) = crate::ghostty::encode_focus(event) else {
+        let Ok(bytes) = crate::terminal::vt::encode_focus(event) else {
             return false;
         };
         if let Err(err) = self.try_send_bytes(Bytes::from(bytes)) {
@@ -2583,9 +2594,9 @@ impl PaneRuntime {
     pub(crate) fn screen_text_snapshot(
         &self,
     ) -> Option<(
-        crate::ghostty::ActiveScreen,
+        crate::terminal::vt::ActiveScreen,
         u16,
-        Vec<crate::ghostty::ScreenTextRow>,
+        Vec<crate::terminal::vt::ScreenTextRow>,
     )> {
         let result = self.terminal.screen_text_snapshot();
         self.compression.wake();
@@ -2595,7 +2606,7 @@ impl PaneRuntime {
     pub fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        position: crate::input::mouse::Position,
+        position: crate::protocol::keys::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         if !self.mouse_reporting_enabled() {
@@ -2607,7 +2618,7 @@ impl PaneRuntime {
     pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        position: crate::input::mouse::Position,
+        position: crate::protocol::keys::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         self.terminal.encode_mouse_motion(kind, position, modifiers)
@@ -2616,7 +2627,7 @@ impl PaneRuntime {
     pub(crate) fn encode_mouse_wheel(
         &self,
         kind: crossterm::event::MouseEventKind,
-        position: crate::input::mouse::Position,
+        position: crate::protocol::keys::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         if self.wheel_routing()? != WheelRouting::MouseReport {
@@ -2644,10 +2655,12 @@ impl PaneRuntime {
             crossterm::event::MouseEventKind::ScrollDown => crossterm::event::KeyCode::Down,
             _ => return None,
         };
-        Some(self.encode_terminal_key(crate::input::TerminalKey::new(
-            key,
-            crossterm::event::KeyModifiers::empty(),
-        )))
+        Some(
+            self.encode_terminal_key(crate::protocol::keys::TerminalKey::new(
+                key,
+                crossterm::event::KeyModifiers::empty(),
+            )),
+        )
     }
 
     /// Get the current working directory of the child shell process.
@@ -2762,7 +2775,7 @@ impl PaneRuntime {
         let (tx, rx) = mpsc::channel(channel_capacity);
         let (resize_tx, _resize_rx) = watch::channel((rows, cols, 0, 0));
         let mut terminal =
-            crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes).unwrap();
+            crate::terminal::vt::Terminal::new(cols, rows, scrollback_limit_bytes).unwrap();
         terminal.write(bytes);
         let pane_id = PaneId::from_raw(0);
         let terminal = Arc::new(PaneTerminal::new(
@@ -2993,7 +3006,7 @@ mod tests {
             &PaneLaunchEnv::default(),
             AgentDetection::Disabled,
             0,
-            crate::terminal_theme::TerminalTheme::default(),
+            crate::utils::theme::color::TerminalTheme::default(),
             None,
             events,
             Arc::new(Notify::new()),
@@ -3102,23 +3115,23 @@ mod tests {
     #[test]
     fn shell_mode_auto_uses_login_shell_only_on_macos() {
         assert!(shell_mode_uses_login_shell(
-            crate::config::ShellModeConfig::Auto,
+            crate::utils::config::ShellModeConfig::Auto,
             ShellLaunchTarget::Macos
         ));
         assert!(!shell_mode_uses_login_shell(
-            crate::config::ShellModeConfig::Auto,
+            crate::utils::config::ShellModeConfig::Auto,
             ShellLaunchTarget::OtherUnix
         ));
         assert!(!shell_mode_uses_login_shell(
-            crate::config::ShellModeConfig::Auto,
+            crate::utils::config::ShellModeConfig::Auto,
             ShellLaunchTarget::Windows
         ));
         assert!(shell_mode_uses_login_shell(
-            crate::config::ShellModeConfig::Login,
+            crate::utils::config::ShellModeConfig::Login,
             ShellLaunchTarget::OtherUnix
         ));
         assert!(!shell_mode_uses_login_shell(
-            crate::config::ShellModeConfig::NonLogin,
+            crate::utils::config::ShellModeConfig::NonLogin,
             ShellLaunchTarget::Macos
         ));
     }
@@ -3127,7 +3140,7 @@ mod tests {
     #[test]
     fn login_shell_builder_uses_default_prog_with_resolved_shell_env() {
         let cmd = pane_shell_command_builder_for_target(
-            PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::Login),
+            PaneShellConfig::new("/bin/sh", crate::utils::config::ShellModeConfig::Login),
             ShellLaunchTarget::OtherUnix,
         )
         .unwrap();
@@ -3142,7 +3155,7 @@ mod tests {
     #[test]
     fn auto_shell_builder_uses_login_shell_on_macos_target() {
         let cmd = pane_shell_command_builder_for_target(
-            PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::Auto),
+            PaneShellConfig::new("/bin/sh", crate::utils::config::ShellModeConfig::Auto),
             ShellLaunchTarget::Macos,
         )
         .unwrap();
@@ -3156,7 +3169,7 @@ mod tests {
     #[test]
     fn auto_shell_builder_keeps_direct_shell_on_non_macos_target() {
         let cmd = pane_shell_command_builder_for_target(
-            PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::Auto),
+            PaneShellConfig::new("/bin/sh", crate::utils::config::ShellModeConfig::Auto),
             ShellLaunchTarget::OtherUnix,
         )
         .unwrap();
@@ -3172,7 +3185,7 @@ mod tests {
             "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
         ] {
             let cmd = pane_shell_command_builder_for_target(
-                PaneShellConfig::new(shell, crate::config::ShellModeConfig::NonLogin),
+                PaneShellConfig::new(shell, crate::utils::config::ShellModeConfig::NonLogin),
                 ShellLaunchTarget::Windows,
             )
             .unwrap();
@@ -3225,7 +3238,7 @@ mod tests {
     #[test]
     fn windows_non_powershell_builder_launches_plain_shell() {
         let cmd = pane_shell_command_builder_for_target(
-            PaneShellConfig::new("cmd.exe", crate::config::ShellModeConfig::NonLogin),
+            PaneShellConfig::new("cmd.exe", crate::utils::config::ShellModeConfig::NonLogin),
             ShellLaunchTarget::Windows,
         )
         .unwrap();
@@ -3236,7 +3249,7 @@ mod tests {
     #[test]
     fn unix_powershell_builder_launches_plain_shell() {
         let cmd = pane_shell_command_builder_for_target(
-            PaneShellConfig::new("pwsh", crate::config::ShellModeConfig::NonLogin),
+            PaneShellConfig::new("pwsh", crate::utils::config::ShellModeConfig::NonLogin),
             ShellLaunchTarget::OtherUnix,
         )
         .unwrap();
@@ -3246,7 +3259,8 @@ mod tests {
 
     #[test]
     fn windows_powershell_pane_shell_predicate_requires_windows_and_non_login() {
-        let pwsh = PaneShellConfig::new("pwsh.exe", crate::config::ShellModeConfig::NonLogin);
+        let pwsh =
+            PaneShellConfig::new("pwsh.exe", crate::utils::config::ShellModeConfig::NonLogin);
         assert!(uses_windows_powershell_pane_shell_for_target(
             pwsh,
             ShellLaunchTarget::Windows
@@ -3260,11 +3274,11 @@ mod tests {
             ShellLaunchTarget::Macos
         ));
         assert!(!uses_windows_powershell_pane_shell_for_target(
-            PaneShellConfig::new("pwsh.exe", crate::config::ShellModeConfig::Login),
+            PaneShellConfig::new("pwsh.exe", crate::utils::config::ShellModeConfig::Login),
             ShellLaunchTarget::Windows
         ));
         assert!(!uses_windows_powershell_pane_shell_for_target(
-            PaneShellConfig::new("cmd.exe", crate::config::ShellModeConfig::NonLogin),
+            PaneShellConfig::new("cmd.exe", crate::utils::config::ShellModeConfig::NonLogin),
             ShellLaunchTarget::Windows
         ));
     }
@@ -3274,7 +3288,7 @@ mod tests {
         let err = pane_shell_command_builder_for_target(
             PaneShellConfig::new(
                 "/__herdr_missing_shell__",
-                crate::config::ShellModeConfig::Login,
+                crate::utils::config::ShellModeConfig::Login,
             ),
             ShellLaunchTarget::OtherUnix,
         )
@@ -3307,7 +3321,7 @@ mod tests {
         std::env::set_var("PATH", &bin);
 
         let cmd = pane_shell_command_builder_for_target(
-            PaneShellConfig::new("fake-shell", crate::config::ShellModeConfig::Login),
+            PaneShellConfig::new("fake-shell", crate::utils::config::ShellModeConfig::Login),
             ShellLaunchTarget::OtherUnix,
         )
         .unwrap();
@@ -3334,7 +3348,7 @@ mod tests {
     fn non_login_shell_builder_execs_resolved_shell_directly() {
         let cmd = pane_shell_command_builder(PaneShellConfig::new(
             "/bin/sh",
-            crate::config::ShellModeConfig::NonLogin,
+            crate::utils::config::ShellModeConfig::NonLogin,
         ))
         .unwrap();
         assert!(!cmd.is_default_prog());
@@ -3467,9 +3481,9 @@ mod tests {
     async fn focus_events_are_forwarded_when_enabled() {
         let (tx, mut rx) = mpsc::channel(4);
         let (resize_tx, _resize_rx) = watch::channel((80, 24, 0, 0));
-        let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let mut terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
         terminal
-            .mode_set(crate::ghostty::MODE_FOCUS_EVENT, true)
+            .mode_set(crate::terminal::vt::MODE_FOCUS_EVENT, true)
             .unwrap();
         let pane_id = PaneId::from_raw(0);
         let terminal = Arc::new(PaneTerminal::new(
@@ -3496,7 +3510,7 @@ mod tests {
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
         };
 
-        assert!(runtime.try_send_focus_event(crate::ghostty::FocusEvent::Gained));
+        assert!(runtime.try_send_focus_event(crate::terminal::vt::FocusEvent::Gained));
         assert_eq!(rx.recv().await.unwrap(), Bytes::from_static(b"\x1b[I"));
     }
 
@@ -3504,7 +3518,7 @@ mod tests {
     async fn focus_events_are_suppressed_when_disabled() {
         let (tx, mut rx) = mpsc::channel(4);
         let (resize_tx, _resize_rx) = watch::channel((80, 24, 0, 0));
-        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
         let pane_id = PaneId::from_raw(0);
         let terminal = Arc::new(PaneTerminal::new(
             GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
@@ -3530,7 +3544,7 @@ mod tests {
             detect_handle: Some(tokio::spawn(async {}).abort_handle()),
         };
 
-        assert!(!runtime.try_send_focus_event(crate::ghostty::FocusEvent::Gained));
+        assert!(!runtime.try_send_focus_event(crate::terminal::vt::FocusEvent::Gained));
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(10), rx.recv())
                 .await
@@ -3541,10 +3555,13 @@ mod tests {
     #[tokio::test]
     async fn subscribed_idle_child_receives_color_scheme_transition() {
         let (runtime, mut rx) = PaneRuntime::test_with_channel(80, 24);
-        runtime.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark));
+        runtime
+            .apply_host_terminal_appearance(Some(crate::utils::theme::color::HostAppearance::Dark));
         runtime.test_process_pty_bytes(b"\x1b[?2031h");
 
-        runtime.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Light));
+        runtime.apply_host_terminal_appearance(Some(
+            crate::utils::theme::color::HostAppearance::Light,
+        ));
 
         assert_eq!(rx.recv().await, Some(Bytes::from_static(b"\x1b[?997;2n")));
     }
@@ -4103,7 +4120,7 @@ mod tests {
             &PaneLaunchEnv::default(),
             AgentDetection::Disabled,
             0,
-            crate::terminal_theme::TerminalTheme::default(),
+            crate::utils::theme::color::TerminalTheme::default(),
             None,
             events,
             Arc::new(Notify::new()),

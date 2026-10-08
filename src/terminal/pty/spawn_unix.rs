@@ -2,7 +2,7 @@ use std::os::fd::{FromRawFd, OwnedFd};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 
-use crate::pty::fd;
+use crate::terminal::pty::fd;
 
 pub(crate) struct SpawnedPty {
     pub master_fd: OwnedFd,

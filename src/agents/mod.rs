@@ -5,9 +5,11 @@
 
 pub(crate) mod dialog;
 pub mod manifest;
+pub(crate) mod resume;
+pub(crate) mod title;
 
 #[cfg(test)]
-#[path = "codex_activity_tests.rs"]
+#[path = "tests/codex_activity.rs"]
 mod codex_activity_tests;
 
 /// The detected state of a terminal pane.

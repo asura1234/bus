@@ -234,7 +234,7 @@ mod tests {
 
     use super::*;
     use crate::layout::PaneId;
-    use crate::pane::terminal::GhosttyPaneTerminal;
+    use crate::terminal::emulator::GhosttyPaneTerminal;
 
     fn rendered_line(
         text: impl Into<String>,

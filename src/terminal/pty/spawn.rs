@@ -1,4 +1,5 @@
 #[cfg(unix)]
+#[path = "spawn_unix.rs"]
 mod unix;
 
 #[cfg(unix)]

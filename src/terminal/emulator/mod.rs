@@ -14,11 +14,14 @@ use unicode_width::UnicodeWidthStr;
 use crate::layout::PaneId;
 use crate::protocol::CellData;
 
-#[cfg(windows)]
-mod windows_recent_fallback;
+// Controls keep emulator-scoped visibility despite the extra module level.
+mod controls;
 
-use super::cursor::{CursorPositionSettleState, DecscusrTracker, CURSOR_POSITION_SETTLE};
-use super::{
+#[cfg(windows)]
+mod conpty_recent_cache;
+
+use self::controls::cursor::{CursorPositionSettleState, DecscusrTracker, CURSOR_POSITION_SETTLE};
+use self::controls::{
     input::{
         ghostty_key_event_from_terminal_key, ghostty_mouse_encoder_for_terminal,
         ghostty_mouse_event_from_button_kind, ghostty_mouse_event_from_motion_kind,
@@ -159,20 +162,21 @@ pub(crate) struct GhosttyPaneTerminal {
 pub(crate) struct GhosttyPaneCore {
     pub terminal: crate::ghostty::Terminal,
     #[cfg(windows)]
-    recent_fallback: windows_recent_fallback::Cache,
+    recent_fallback: conpty_recent_cache::Cache,
     pub render_state: crate::ghostty::RenderState,
     pub kitty_keyboard: KittyKeyboardTracker,
     pub initial_default_foreground: Option<crate::ghostty::RgbColor>,
     pub initial_default_background: Option<crate::ghostty::RgbColor>,
     pub host_terminal_theme: crate::terminal_theme::TerminalTheme,
     pub transient_default_color_owner_pgid: Option<u32>,
-    pub default_color_tracker: DefaultColorOscTracker,
-    pub default_color_event_tracker: DefaultColorEventTracker,
+    // Control tracker types stay internal to the emulator, as do these fields.
+    default_color_tracker: DefaultColorOscTracker,
+    default_color_event_tracker: DefaultColorEventTracker,
     pub child_default_foreground_changed: bool,
     pub child_default_background_changed: bool,
-    pub osc_debug_tracker: OscDebugTracker,
-    pub agent_osc_state: AgentOscStateTracker,
-    pub xtgettcap_query_tracker: XtgettcapQueryTracker,
+    osc_debug_tracker: OscDebugTracker,
+    agent_osc_state: AgentOscStateTracker,
+    xtgettcap_query_tracker: XtgettcapQueryTracker,
     decscusr_tracker: DecscusrTracker,
     cursor_settle_state: CursorPositionSettleState,
     windows_powershell_prompt_cwd_reporting: bool,
@@ -414,7 +418,7 @@ impl PaneTerminal {
         self.ghostty.alternate_screen_active()
     }
 
-    pub fn wheel_routing(&self) -> Option<crate::pane::WheelRouting> {
+    pub fn wheel_routing(&self) -> Option<crate::terminal::runtime::WheelRouting> {
         self.ghostty.wheel_routing()
     }
 
@@ -1100,7 +1104,7 @@ impl GhosttyPaneTerminal {
             core: Mutex::new(GhosttyPaneCore {
                 terminal,
                 #[cfg(windows)]
-                recent_fallback: windows_recent_fallback::Cache::default(),
+                recent_fallback: conpty_recent_cache::Cache::default(),
                 render_state,
                 kitty_keyboard: KittyKeyboardTracker::default(),
                 initial_default_foreground,
@@ -1358,7 +1362,7 @@ impl GhosttyPaneTerminal {
             .filter_map(|value| parse_reported_cwd(&value))
             .next_back();
         #[cfg(windows)]
-        windows_recent_fallback::update_after_write(&mut core);
+        conpty_recent_cache::update_after_write(&mut core);
         crate::render_prof::duration_since("pty.ghostty_write", write_started);
 
         let has_kitty_graphics_sequence = crate::kitty_graphics::is_enabled()
@@ -1498,7 +1502,7 @@ impl GhosttyPaneTerminal {
         core.kitty_keyboard.observe(ansi.as_bytes());
         core.terminal.write(ansi.as_bytes());
         #[cfg(windows)]
-        windows_recent_fallback::update(&mut core);
+        conpty_recent_cache::update(&mut core);
         if let Ok(mut key_encoder) = self.key_encoder.lock() {
             key_encoder.set_from_terminal(&core.terminal);
         }
@@ -1557,7 +1561,7 @@ impl GhosttyPaneTerminal {
             if core.recent_fallback.usable {
                 core.recent_fallback.needs_refresh = true;
                 core.terminal.scroll_viewport_bottom();
-                windows_recent_fallback::update(&mut core);
+                conpty_recent_cache::update(&mut core);
             }
             ghostty_set_scroll_offset_from_bottom(&mut core.terminal, offset_from_bottom);
             if offset_from_bottom > 0 {
@@ -1580,7 +1584,7 @@ impl GhosttyPaneTerminal {
     pub fn scroll_up(&self, lines: usize) {
         if let Ok(mut core) = self.core.lock() {
             #[cfg(windows)]
-            windows_recent_fallback::refresh_if_needed(&mut core);
+            conpty_recent_cache::refresh_if_needed(&mut core);
             core.terminal.scroll_viewport_delta(-(lines as isize));
         }
     }
@@ -1600,7 +1604,7 @@ impl GhosttyPaneTerminal {
     pub fn set_scroll_offset_from_bottom(&self, lines: usize) {
         if let Ok(mut core) = self.core.lock() {
             #[cfg(windows)]
-            windows_recent_fallback::refresh_if_needed(&mut core);
+            conpty_recent_cache::refresh_if_needed(&mut core);
             ghostty_set_scroll_offset_from_bottom(&mut core.terminal, lines);
         }
     }
@@ -1680,7 +1684,7 @@ impl GhosttyPaneTerminal {
         })
     }
 
-    pub fn wheel_routing(&self) -> Option<crate::pane::WheelRouting> {
+    pub fn wheel_routing(&self) -> Option<crate::terminal::runtime::WheelRouting> {
         let Ok(core) = self.core.lock() else {
             return None;
         };
@@ -1695,11 +1699,11 @@ impl GhosttyPaneTerminal {
             || core.terminal.mode_get(MODE_MOUSE_PRESS_RELEASE).ok()?
             || core.terminal.mode_get(MODE_MOUSE_X10).ok()?;
         Some(if mouse_reporting {
-            crate::pane::WheelRouting::MouseReport
+            crate::terminal::runtime::WheelRouting::MouseReport
         } else if alternate_screen && mouse_alternate_scroll {
-            crate::pane::WheelRouting::AlternateScroll
+            crate::terminal::runtime::WheelRouting::AlternateScroll
         } else {
-            crate::pane::WheelRouting::HostScroll
+            crate::terminal::runtime::WheelRouting::HostScroll
         })
     }
 
@@ -2583,8 +2587,8 @@ fn finish_recent_snapshot(
     let _ = unwrap;
     #[cfg(windows)]
     if text.trim().is_empty() {
-        windows_recent_fallback::refresh_if_needed(core);
-        let fallback = windows_recent_fallback::recent_text(core, lines, unwrap);
+        conpty_recent_cache::refresh_if_needed(core);
+        let fallback = conpty_recent_cache::recent_text(core, lines, unwrap);
         if !fallback.text.trim().is_empty() {
             return fallback;
         }

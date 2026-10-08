@@ -1,4 +1,4 @@
-pub(super) fn ghostty_key_event_from_terminal_key(
+pub(in crate::terminal::emulator) fn ghostty_key_event_from_terminal_key(
     key: &crate::input::TerminalKey,
 ) -> Option<crate::ghostty::KeyEvent> {
     let mut event = crate::ghostty::KeyEvent::new().ok()?;
@@ -37,11 +37,15 @@ pub(super) fn ghostty_key_event_from_terminal_key(
     Some(event)
 }
 
-pub(super) fn ghostty_prefers_herdr_text_encoding(key: &crate::input::TerminalKey) -> bool {
+pub(in crate::terminal::emulator) fn ghostty_prefers_herdr_text_encoding(
+    key: &crate::input::TerminalKey,
+) -> bool {
     matches!(key.code, crossterm::event::KeyCode::Char(_))
 }
 
-pub(super) fn ghostty_mods_from_key_modifiers(modifiers: crossterm::event::KeyModifiers) -> u16 {
+pub(in crate::terminal::emulator) fn ghostty_mods_from_key_modifiers(
+    modifiers: crossterm::event::KeyModifiers,
+) -> u16 {
     let mut ghostty_mods = 0u16;
     if modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
         ghostty_mods |= crate::ghostty::MOD_SHIFT;
@@ -58,7 +62,7 @@ pub(super) fn ghostty_mods_from_key_modifiers(modifiers: crossterm::event::KeyMo
     ghostty_mods
 }
 
-pub(super) fn ghostty_mouse_encoder_for_terminal(
+pub(in crate::terminal::emulator) fn ghostty_mouse_encoder_for_terminal(
     terminal: &crate::ghostty::Terminal,
     position: crate::input::mouse::Position,
 ) -> Option<crate::ghostty::MouseEncoder> {
@@ -91,7 +95,7 @@ pub(super) fn ghostty_mouse_encoder_for_terminal(
     Some(encoder)
 }
 
-pub(super) fn ghostty_mouse_position_for_terminal(
+pub(in crate::terminal::emulator) fn ghostty_mouse_position_for_terminal(
     position: crate::input::mouse::Position,
 ) -> Option<(f32, f32)> {
     match position {
@@ -100,7 +104,7 @@ pub(super) fn ghostty_mouse_position_for_terminal(
     }
 }
 
-pub(super) fn ghostty_mouse_event_from_button_kind(
+pub(in crate::terminal::emulator) fn ghostty_mouse_event_from_button_kind(
     kind: crossterm::event::MouseEventKind,
     column: u16,
     row: u16,
@@ -157,7 +161,7 @@ pub(super) fn ghostty_mouse_event_from_button_kind(
     Some(event)
 }
 
-pub(super) fn ghostty_mouse_event_from_motion_kind(
+pub(in crate::terminal::emulator) fn ghostty_mouse_event_from_motion_kind(
     kind: crossterm::event::MouseEventKind,
     column: u16,
     row: u16,
@@ -175,7 +179,7 @@ pub(super) fn ghostty_mouse_event_from_motion_kind(
     Some(event)
 }
 
-pub(super) fn ghostty_mouse_event_from_wheel_kind(
+pub(in crate::terminal::emulator) fn ghostty_mouse_event_from_wheel_kind(
     kind: crossterm::event::MouseEventKind,
     column: u16,
     row: u16,

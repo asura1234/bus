@@ -6,7 +6,7 @@
     clippy::all,
     rustdoc::all
 )]
-pub mod bindings;
+pub mod ffi;
 
 use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
@@ -20,8 +20,6 @@ use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
 use std::sync::{Mutex, Once, OnceLock};
-
-pub use bindings as ffi;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Error(ffi::GhosttyResult);
@@ -2057,7 +2055,7 @@ fn kitty_placeholder_diacritic_index(codepoint: u32) -> Option<u32> {
         // Reuse Ghostty's vendored table so Herdr decodes the same placeholder
         // row/column diacritics that libghostty accepts.
         let source =
-            include_str!("../../vendor/libghostty-vt/src/terminal/kitty/graphics_unicode.zig");
+            include_str!("../../../vendor/libghostty-vt/src/terminal/kitty/graphics_unicode.zig");
         let mut map = HashMap::new();
         let mut in_table = false;
         for line in source.lines() {

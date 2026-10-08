@@ -5,17 +5,17 @@ use tracing::info;
 
 use crate::layout::PaneId;
 
-use super::terminal::GhosttyPaneCore;
+use crate::terminal::emulator::GhosttyPaneCore;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DefaultColorQuery {
+pub(in crate::terminal::emulator) enum DefaultColorQuery {
     Foreground,
     Background,
     Cursor,
 }
 
 impl DefaultColorQuery {
-    pub(super) fn osc_number(self) -> u8 {
+    pub(in crate::terminal::emulator) fn osc_number(self) -> u8 {
         match self {
             Self::Foreground => 10,
             Self::Background => 11,
@@ -28,13 +28,13 @@ impl DefaultColorQuery {
 /// the terminator the query arrived with: clients that scan for one form drop a
 /// reply that ends with the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OscTerminator {
+pub(in crate::terminal::emulator) enum OscTerminator {
     Bel,
     St,
 }
 
 impl OscTerminator {
-    pub(super) fn as_bytes(self) -> &'static [u8] {
+    pub(in crate::terminal::emulator) fn as_bytes(self) -> &'static [u8] {
         match self {
             Self::Bel => b"\x07",
             Self::St => b"\x1b\\",
@@ -43,7 +43,7 @@ impl OscTerminator {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DefaultColorEvent {
+pub(in crate::terminal::emulator) enum DefaultColorEvent {
     Query(DefaultColorQuery),
     Set(DefaultColorQuery),
     Reset(DefaultColorQuery),
@@ -51,14 +51,14 @@ pub(super) enum DefaultColorEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct DefaultColorTrackedEvent {
-    pub(super) end_offset: usize,
-    pub(super) event: DefaultColorEvent,
-    pub(super) terminator: OscTerminator,
+pub(in crate::terminal::emulator) struct DefaultColorTrackedEvent {
+    pub(in crate::terminal::emulator) end_offset: usize,
+    pub(in crate::terminal::emulator) event: DefaultColorEvent,
+    pub(in crate::terminal::emulator) terminator: OscTerminator,
 }
 
 #[derive(Debug, Default)]
-pub(super) struct DefaultColorOscTracker {
+pub(in crate::terminal::emulator) struct DefaultColorOscTracker {
     state: DefaultColorOscTrackerState,
     body: Vec<u8>,
 }
@@ -81,7 +81,7 @@ fn is_ignored_string_intro(byte: u8) -> bool {
 }
 
 impl DefaultColorOscTracker {
-    pub(super) fn observe(&mut self, bytes: &[u8]) -> bool {
+    pub(in crate::terminal::emulator) fn observe(&mut self, bytes: &[u8]) -> bool {
         let mut saw_default_color_set = false;
 
         for &byte in bytes {
@@ -169,14 +169,14 @@ fn is_default_color_set_osc(body: &[u8]) -> bool {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct DefaultColorEventTracker {
+pub(in crate::terminal::emulator) struct DefaultColorEventTracker {
     state: DefaultColorOscTrackerState,
     body: Vec<u8>,
     pending: Vec<DefaultColorTrackedEvent>,
 }
 
 impl DefaultColorEventTracker {
-    pub(super) fn observe(&mut self, bytes: &[u8]) {
+    pub(in crate::terminal::emulator) fn observe(&mut self, bytes: &[u8]) {
         for (index, &byte) in bytes.iter().enumerate() {
             match self.state {
                 DefaultColorOscTrackerState::Ground => {
@@ -263,7 +263,7 @@ impl DefaultColorEventTracker {
         self.body.clear();
     }
 
-    pub(super) fn in_progress_event(&self) -> Option<DefaultColorEvent> {
+    pub(in crate::terminal::emulator) fn in_progress_event(&self) -> Option<DefaultColorEvent> {
         if !matches!(
             self.state,
             DefaultColorOscTrackerState::OscBody | DefaultColorOscTrackerState::OscEscape
@@ -274,7 +274,7 @@ impl DefaultColorEventTracker {
         (events.len() == 1).then(|| events.remove(0))
     }
 
-    pub(super) fn drain_pending(&mut self) -> Vec<DefaultColorTrackedEvent> {
+    pub(in crate::terminal::emulator) fn drain_pending(&mut self) -> Vec<DefaultColorTrackedEvent> {
         std::mem::take(&mut self.pending)
     }
 }
@@ -337,7 +337,7 @@ fn parse_default_color_set_events(body: &[u8]) -> Vec<DefaultColorEvent> {
         .collect()
 }
 
-pub(super) fn parse_reported_cwd(value: &[u8]) -> Option<PathBuf> {
+pub(in crate::terminal::emulator) fn parse_reported_cwd(value: &[u8]) -> Option<PathBuf> {
     let value = std::str::from_utf8(value).ok()?.trim();
     if value.starts_with("file://") {
         return parse_file_uri_cwd(value);
@@ -479,7 +479,7 @@ const AGENT_OSC_MAX_CHARS: usize = 256;
 /// - `latest_progress` — last OSC 9 payload (the part after `9;`), stored
 ///   as-is after sanitization. E.g. `"4;3;"` or `"4;0;"`.
 #[derive(Debug, Default)]
-pub(super) struct AgentOscStateTracker {
+pub(in crate::terminal::emulator) struct AgentOscStateTracker {
     collector: OscStreamCollector,
     latest_title: Option<String>,
     terminal_title: Option<String>,
@@ -487,7 +487,7 @@ pub(super) struct AgentOscStateTracker {
 }
 
 impl AgentOscStateTracker {
-    pub(super) fn observe(&mut self, bytes: &[u8]) -> bool {
+    pub(in crate::terminal::emulator) fn observe(&mut self, bytes: &[u8]) -> bool {
         let (collector, latest_title, terminal_title, latest_progress) = (
             &mut self.collector,
             &mut self.latest_title,
@@ -517,18 +517,18 @@ impl AgentOscStateTracker {
         terminal_title_changed
     }
 
-    pub(super) fn terminal_title(&self) -> Option<&str> {
+    pub(in crate::terminal::emulator) fn terminal_title(&self) -> Option<&str> {
         self.terminal_title.as_deref()
     }
 
     /// Returns the latest retained OSC title, or `""` if none has been seen or
     /// the last title was an empty clear.
-    pub(super) fn latest_title(&self) -> &str {
+    pub(in crate::terminal::emulator) fn latest_title(&self) -> &str {
         self.latest_title.as_deref().unwrap_or("")
     }
 
     /// Returns the latest retained OSC 9 progress payload, or `""` if none.
-    pub(super) fn latest_progress(&self) -> &str {
+    pub(in crate::terminal::emulator) fn latest_progress(&self) -> &str {
         self.latest_progress.as_deref().unwrap_or("")
     }
 
@@ -536,7 +536,7 @@ impl AgentOscStateTracker {
     /// inherit OSC evidence emitted by a previous process. The in-flight parse
     /// state is kept: a sequence spanning the agent change finalizes normally
     /// and is attributed to the new agent.
-    pub(super) fn clear_retained(&mut self) {
+    pub(in crate::terminal::emulator) fn clear_retained(&mut self) {
         self.latest_title = None;
         self.latest_progress = None;
     }
@@ -562,20 +562,20 @@ fn sanitize_agent_osc_string(payload: &[u8], max_chars: usize) -> String {
 /// debugging agent title/status behavior. This is intentionally passive:
 /// nothing here affects terminal rendering or detection state.
 #[derive(Debug)]
-pub(super) struct OscDebugTracker {
+pub(in crate::terminal::emulator) struct OscDebugTracker {
     enabled: bool,
     collector: OscStreamCollector,
     pending: Vec<OscDebugEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct OscDebugEvent {
-    pub(super) command: String,
-    pub(super) payload: String,
+pub(in crate::terminal::emulator) struct OscDebugEvent {
+    pub(in crate::terminal::emulator) command: String,
+    pub(in crate::terminal::emulator) payload: String,
 }
 
 impl OscDebugTracker {
-    pub(super) fn from_env() -> Self {
+    pub(in crate::terminal::emulator) fn from_env() -> Self {
         Self {
             enabled: osc_debug_enabled_from_env(),
             collector: OscStreamCollector::default(),
@@ -583,7 +583,7 @@ impl OscDebugTracker {
         }
     }
 
-    pub(super) fn observe(&mut self, bytes: &[u8]) {
+    pub(in crate::terminal::emulator) fn observe(&mut self, bytes: &[u8]) {
         if !self.enabled {
             return;
         }
@@ -595,7 +595,7 @@ impl OscDebugTracker {
         });
     }
 
-    pub(super) fn drain_pending(&mut self) -> Vec<OscDebugEvent> {
+    pub(in crate::terminal::emulator) fn drain_pending(&mut self) -> Vec<OscDebugEvent> {
         std::mem::take(&mut self.pending)
     }
 }
@@ -706,7 +706,9 @@ fn foreground_job_is_shell(job: &crate::platform::ForegroundJob, shell_pid: u32)
     job.processes.iter().any(|process| process.pid == shell_pid)
 }
 
-pub(super) fn current_transient_default_color_owner(shell_pid: u32) -> Option<u32> {
+pub(in crate::terminal::emulator) fn current_transient_default_color_owner(
+    shell_pid: u32,
+) -> Option<u32> {
     let job = crate::detect::foreground_job(shell_pid)?;
     (!foreground_job_is_shell(&job, shell_pid)).then_some(job.process_group_id)
 }
@@ -726,7 +728,7 @@ fn foreground_job_uses_droid_scrollback_compat(job: &crate::platform::Foreground
     })
 }
 
-pub(super) fn contains_scrollback_clear_sequence(bytes: &[u8]) -> bool {
+pub(in crate::terminal::emulator) fn contains_scrollback_clear_sequence(bytes: &[u8]) -> bool {
     bytes.windows(4).any(|window| window == b"\x1b[3J")
         || bytes.windows(5).any(|window| window == b"\x1b[?3J")
 }
@@ -755,7 +757,7 @@ fn strip_scrollback_clear_sequences<'a>(bytes: &'a [u8]) -> Cow<'a, [u8]> {
     Cow::Owned(filtered)
 }
 
-pub(super) fn maybe_filter_primary_screen_scrollback_clear<'a>(
+pub(in crate::terminal::emulator) fn maybe_filter_primary_screen_scrollback_clear<'a>(
     bytes: &'a [u8],
     alternate_screen: bool,
     foreground_job: Option<&crate::platform::ForegroundJob>,
@@ -774,7 +776,7 @@ pub(super) fn maybe_filter_primary_screen_scrollback_clear<'a>(
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn should_restore_host_terminal_theme(
+pub(in crate::terminal::emulator) fn should_restore_host_terminal_theme(
     owner_pgid: u32,
     shell_pid: u32,
     alternate_screen: bool,
@@ -793,7 +795,7 @@ pub(super) fn should_restore_host_terminal_theme(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(super) fn should_restore_host_terminal_theme(
+pub(in crate::terminal::emulator) fn should_restore_host_terminal_theme(
     owner_pgid: u32,
     shell_pid: u32,
     alternate_screen: bool,
@@ -811,14 +813,14 @@ pub(super) fn should_restore_host_terminal_theme(
         && foreground_job_is_shell(foreground_job, shell_pid)
 }
 
-pub(super) fn write_host_terminal_theme(
+pub(in crate::terminal::emulator) fn write_host_terminal_theme(
     terminal: &mut crate::ghostty::Terminal,
     theme: crate::terminal_theme::TerminalTheme,
 ) {
     write_host_terminal_theme_selective(terminal, theme, true, true);
 }
 
-pub(super) fn write_host_terminal_theme_selective(
+pub(in crate::terminal::emulator) fn write_host_terminal_theme_selective(
     terminal: &mut crate::ghostty::Terminal,
     theme: crate::terminal_theme::TerminalTheme,
     foreground: bool,
@@ -853,7 +855,7 @@ fn write_host_default_color(
     terminal.write(sequence.as_bytes());
 }
 
-pub(super) fn restore_host_terminal_theme_if_needed(
+pub(in crate::terminal::emulator) fn restore_host_terminal_theme_if_needed(
     core: &mut GhosttyPaneCore,
     pane_id: PaneId,
     shell_pid: u32,
@@ -888,12 +890,11 @@ mod tests {
 
     use super::*;
     use crate::layout::PaneId;
+    use crate::terminal::emulator::GhosttyPaneTerminal;
 
-    fn pane_default_theme(
-        pane: &super::super::GhosttyPaneTerminal,
-    ) -> crate::terminal_theme::TerminalTheme {
+    fn pane_default_theme(pane: &GhosttyPaneTerminal) -> crate::terminal_theme::TerminalTheme {
         let mut core = pane.core.lock().unwrap();
-        let super::super::terminal::GhosttyPaneCore {
+        let GhosttyPaneCore {
             terminal,
             render_state,
             ..
@@ -1508,7 +1509,7 @@ mod tests {
     fn restore_host_terminal_theme_reapplies_cached_colors() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
-        let pane = super::super::GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
         let pane_id = PaneId::from_raw(1);
         let shell_pid = 7;
         let host_theme = crate::terminal_theme::TerminalTheme {

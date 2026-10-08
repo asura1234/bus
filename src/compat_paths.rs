@@ -1,9 +1,14 @@
 // Temporary composition aliases for the staged module moves; removed in S12.
+pub(crate) use crate::agents as detect;
+pub(crate) use crate::agents::resume::catalog as agent_resume;
 #[cfg(any(windows, test))]
 pub(crate) use crate::platform::console_command as noninteractive_process;
 pub(crate) use crate::platform::{ipc, sound};
 pub(crate) use crate::protocol::keys::host as raw_input;
 pub(crate) use crate::protocol::kitty as kitty_graphics;
+pub(crate) use crate::terminal::events;
+pub(crate) use crate::terminal::runtime as pane;
+pub(crate) use crate::terminal::vt as ghostty;
 pub(crate) use crate::utils::config;
 pub(crate) use crate::utils::render::{prof as render_prof, signal as render_signal};
 pub(crate) use crate::utils::text::{copy_motion as copy_mode, selection};

@@ -3,20 +3,17 @@ use std::io;
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
 
-mod agent_resume;
+mod agents;
 mod app;
 mod bus;
 mod client;
 mod compat_paths;
-mod detect;
-mod events;
-mod ghostty;
 mod layout;
-mod pane;
+#[path = "pane/state.rs"]
+mod pane_state;
 mod persist;
 mod platform;
 mod protocol;
-mod pty;
 mod server;
 mod terminal;
 mod terminal_effects;
