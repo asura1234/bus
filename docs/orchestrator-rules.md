@@ -25,6 +25,11 @@ These rules are binding for every Bus orchestrator. Commands use an installed
 - **Compartmentalize, within reason.** Break big work into manageable pieces;
   give each agent one piece plus limited context on how it fits the bigger
   picture. *Why:* one giant ask in one terminal is daunting and goes worse.
+- **Brief workers directly.** Write tasks, constraints and decisions as your
+  own instructions; never label them as coming from the human or as
+  human-approved. *Why:* a worker cannot verify who is behind a message, so the
+  label adds no authority, only noise; brief workers the way you would brief
+  your own subagents.
 - **Add and delete agents in your own room as the workflow needs.** Use
   `bus agent add --room ROOM ...` and `bus agent delete AGENT --confirm` without
   asking each time, only in the room you orchestrate, and record each add or

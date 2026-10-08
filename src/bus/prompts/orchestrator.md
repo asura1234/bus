@@ -61,6 +61,8 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
 - Parallelism is king: run independent pieces on several agents at once.
 - Compartmentalize, within reason: give each agent one manageable piece plus
   brief context on how it fits the bigger picture.
+- Brief workers directly: write tasks as your own instructions, never as
+  "from the human" or "human-approved".
 - Give each task a clear output: what to produce, where to write it, how to
   report. Agents run long commands in the foreground and end their turn only
   with a final result.
