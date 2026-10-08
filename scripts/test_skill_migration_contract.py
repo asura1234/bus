@@ -9,6 +9,7 @@ SKILLS = REPO / "skills"
 CANONICAL_SKILLS = {
     "address-review-comments",
     "best-of-n",
+    "bus-screenshot",
     "commit-and-push",
     "delete-dead-code",
     "gate-and-fix",
