@@ -3,23 +3,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 mod session_args;
 pub use self::session_args::configure_from_args;
-pub use crate::cli::help::{active_restart_after_update_guidance, local_attach_command};
-#[cfg(test)]
-use crate::cli::help::{attach_command_for, restart_after_update_guidance};
-#[cfg(all(test, unix))]
-use crate::cli::stop::send_stop_request;
-pub(crate) use crate::cli::stop::stop_active_server;
-#[cfg(test)]
-use crate::cli::stop::{
-    socket_timeout_from_remaining, stop_request_error_allows_wait, stop_timeout_error_allows_wait,
-    MIN_SOCKET_TIMEOUT, STOP_WAIT_TIMEOUT,
-};
-#[cfg(all(test, unix))]
-use crate::ipc::LocalStream;
-#[cfg(test)]
-use std::time::Duration;
-#[cfg(all(test, unix))]
-use std::time::Instant;
 
 pub const SESSION_ENV_VAR: &str = "HERDR_SESSION";
 pub const DEFAULT_SESSION_NAME: &str = "default";
@@ -63,7 +46,7 @@ pub fn active_api_socket_path() -> PathBuf {
     if explicit_session_requested() {
         return api_socket_path_for(active_name().as_deref());
     }
-    if let Ok(path) = std::env::var(crate::api::SOCKET_PATH_ENV_VAR) {
+    if let Ok(path) = std::env::var(crate::utils::env::SOCKET_PATH_ENV_VAR) {
         return PathBuf::from(path);
     }
     api_socket_path_for(active_name().as_deref())
@@ -98,7 +81,5 @@ pub fn validate_name(name: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::io::{BufRead, BufReader};
     include!("paths/tests/paths_test.rs");
 }

@@ -323,7 +323,7 @@ impl BusState {
                 agent
                     .delivery_rejection
                     .clone()
-                    .or_else(|| crate::messaging::diagnostics::wait_reason(agent).map(Into::into))
+                    .or_else(|| agent.wait_reason().map(Into::into))
                     .unwrap_or_else(|| "not_submitted".into())
             }),
             RequestPhase::Submitting | RequestPhase::Active => {

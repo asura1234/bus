@@ -71,6 +71,55 @@ fn fill_replaces_every_placeholder() {
     assert!(unassigned.contains("Your room: none yet"), "{unassigned}");
 }
 
+#[test]
+fn compiled_default_rejects_unknown_or_unfinished_placeholders() {
+    assert!(supported_prompt_placeholders(DEFAULT_PROMPT));
+    assert!(supported_prompt_placeholders("Plain text with {braces}."));
+    assert!(supported_prompt_placeholders(
+        "{{DOCS}}{{ROOM_ID}}{{AGENT_NAME}}{{ROOM_NAME}}"
+    ));
+    for invalid in [
+        "{{UNKNOWN}}",
+        "{{ROOM_ID",
+        "{{",
+        "{{DOCS}} then {{MISSING}}",
+    ] {
+        assert!(!supported_prompt_placeholders(invalid), "{invalid}");
+    }
+}
+
+#[test]
+fn embedded_text_is_written_unchanged_at_arbitrary_output_locations() {
+    let data = temp_root("relocated-output");
+    let authored = DOCS
+        .iter()
+        .copied()
+        .chain([("workflow-create.md", WORKFLOW_CREATE)])
+        .collect::<Vec<_>>();
+    // No process-wide cwd mutation: these unrelated output trees exercise the
+    // compiled bytes without requiring a checkout beside either destination.
+    for destination in [
+        data.join("working-directory/session"),
+        data.join("installed/bin/session"),
+    ] {
+        let docs = write_docs(&destination).unwrap();
+        for (name, text) in &authored {
+            assert_eq!(
+                std::fs::read(docs.join(name)).unwrap(),
+                text.as_bytes(),
+                "{name}"
+            );
+        }
+        let prompt = fill(DEFAULT_PROMPT, &values(Some(("pr-123", 7)), &destination));
+        assert!(!prompt.contains("{{"));
+        let spool = destination.join("callbacks/launch");
+        private_dir(&spool).unwrap();
+        let path = write_prompt(&spool, &prompt).unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), prompt.as_bytes());
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {

@@ -19,9 +19,7 @@ pub(crate) mod api {
     pub use crate::protocol::api::{
         client, read_runtime_status_at, schema, socket_path, RuntimeStatus, SOCKET_PATH_ENV_VAR,
     };
-    pub(crate) use crate::server::api::{
-        api_method_name, request_changes_ui, start_server_with_stop_control,
-    };
+    pub(crate) use crate::server::api::{request_changes_ui, start_server_with_stop_control};
     pub use crate::server::api::{ApiRequestMessage, ApiRequestSender, EventHub, ServerHandle};
 }
 
@@ -47,5 +45,5 @@ pub(crate) use crate::server::workspaces::layout;
 pub(crate) use crate::server::workspaces::pane as pane_state;
 
 pub(crate) use crate::client::host_terminal::{
-    effects as terminal_effects, modes as terminal_modes, notify as terminal_notify,
+    effects as terminal_effects, modes as terminal_modes,
 };

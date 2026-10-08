@@ -1,8 +1,8 @@
 pub(crate) mod socket;
 pub(crate) mod streams;
 
+pub(crate) use socket::start_server_with_stop_control;
 pub use socket::ServerHandle;
-pub(crate) use socket::{api_method_name, start_server_with_stop_control};
 pub use streams::event_hub::EventHub;
 
 use tokio::sync::mpsc;

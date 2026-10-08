@@ -2,6 +2,37 @@ use super::*;
 use std::collections::HashMap;
 
 #[test]
+fn agent_session_kind_preserves_api_shape_and_schema_name() {
+    assert_eq!(
+        <AgentSessionRefKind as schemars::JsonSchema>::schema_name(),
+        "AgentSessionRefKind"
+    );
+    for (kind, spelling) in [
+        (AgentSessionRefKind::Id, "id"),
+        (AgentSessionRefKind::Path, "path"),
+    ] {
+        let session = AgentSessionInfo {
+            source: "herdr:codex:test".into(),
+            agent: "codex".into(),
+            kind,
+            value: "session-or-path".into(),
+        };
+        let value = serde_json::to_value(&session).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "source": "herdr:codex:test", "agent": "codex",
+                "kind": spelling, "value": "session-or-path",
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentSessionInfo>(value).unwrap(),
+            session
+        );
+    }
+}
+
+#[test]
 fn event_envelope_round_trips() {
     let events = [
         EventEnvelope {

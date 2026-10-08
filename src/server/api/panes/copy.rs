@@ -288,8 +288,14 @@ fn line_copy_motion_target(
     );
     let text = runtime.extract_selection(&selection)?;
     let col = match motion {
-        PaneCopyMotion::LineEnd => crate::copy_mode::last_character_col(&text).unwrap_or(0),
-        PaneCopyMotion::FirstNonBlank => crate::copy_mode::first_non_blank_col(&text).unwrap_or(0),
+        PaneCopyMotion::LineEnd => crate::copy_mode::last_character_col(&text, |ch| {
+            u16::from(crate::ghostty::unicode_codepoint_width(ch as u32))
+        })
+        .unwrap_or(0),
+        PaneCopyMotion::FirstNonBlank => crate::copy_mode::first_non_blank_col(&text, |ch| {
+            u16::from(crate::ghostty::unicode_codepoint_width(ch as u32))
+        })
+        .unwrap_or(0),
         _ => unreachable!(),
     };
     Some(crate::pane::TerminalTextPoint {

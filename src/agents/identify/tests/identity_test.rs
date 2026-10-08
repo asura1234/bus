@@ -381,7 +381,7 @@ fn identify_agent_in_job_ignores_herdr_powershell_shell_integration_argv() {
                 "powershell.exe",
                 "-NoExit",
                 "-Command",
-                crate::pane::WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND,
+                r"if ($null -eq $global:__HerdrOriginalPrompt) { $global:__HerdrOriginalPrompt = $function:prompt; function global:prompt { $out = @(& $global:__HerdrOriginalPrompt) -join ' '; $loc = $ExecutionContext.SessionState.Path.CurrentLocation; if ($loc.Provider.Name -eq 'FileSystem') { try { [Environment]::CurrentDirectory = $loc.ProviderPath } catch {}; $esc = [string][char]27; $out += $esc + ']9;9;' + $loc.ProviderPath + $esc + '\' }; $out } }",
             ],
         )],
     };
@@ -703,4 +703,30 @@ fn proc_stat_parsing_handles_spaces_in_comm() {
     let tpgid: i32 = fields[5].parse().expect("tpgid should be a number");
     // In CI/test environments without a terminal, tpgid is typically -1
     let _ = tpgid;
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn parse_agent_env_hint_accepts_known_agents() {
+    assert_eq!(
+        super::identify::parse_agent_env_hint(b"PATH=/bin\0HERDR_AGENT=claude\0TERM=xterm\0"),
+        Some(Agent::Claude)
+    );
+    assert_eq!(
+        super::identify::parse_agent_env_hint(b"HERDR_AGENT=codex"),
+        Some(Agent::Codex)
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn parse_agent_env_hint_ignores_missing_or_unknown_agents() {
+    assert_eq!(
+        super::identify::parse_agent_env_hint(b"PATH=/bin\0TERM=xterm\0"),
+        None
+    );
+    assert_eq!(
+        super::identify::parse_agent_env_hint(b"HERDR_AGENT=not-an-agent\0"),
+        None
+    );
 }

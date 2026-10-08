@@ -217,17 +217,15 @@ fn write_host_terminal_theme_query_emits_osc_queries() {
     assert_eq!(palette_query_progress.load(Ordering::Acquire), 0);
     assert_eq!(
         output,
-        crate::terminal_theme::host_terminal_theme_query_sequence(
+        crate::utils::theme::color::host_terminal_theme_query_sequence(
             crate::platform::should_query_host_terminal_palette(),
         )
         .as_bytes()
     );
-    assert!(
-        !output
-            .windows(crate::terminal_theme::HOST_COLOR_SCHEME_QUERY_SEQUENCE.len())
-            .any(|window| window
-                == crate::terminal_theme::HOST_COLOR_SCHEME_QUERY_SEQUENCE.as_bytes())
-    );
+    assert!(!output
+        .windows(crate::utils::theme::color::HOST_COLOR_SCHEME_QUERY_SEQUENCE.len())
+        .any(|window| window
+            == crate::utils::theme::color::HOST_COLOR_SCHEME_QUERY_SEQUENCE.as_bytes()));
 }
 
 #[test]
@@ -238,10 +236,10 @@ fn write_host_color_scheme_report_mode_emits_mode_sequences() {
 
     let mut expected = Vec::new();
     expected.extend_from_slice(
-        crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_ENABLE_SEQUENCE.as_bytes(),
+        crate::utils::theme::color::HOST_COLOR_SCHEME_REPORT_ENABLE_SEQUENCE.as_bytes(),
     );
     expected.extend_from_slice(
-        crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
+        crate::utils::theme::color::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
     );
     assert_eq!(output, expected);
 }
@@ -316,7 +314,7 @@ fn terminal_restore_postlude_disables_color_scheme_reports_when_enabled() {
 
     let mut expected = Vec::new();
     expected.extend_from_slice(
-        crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
+        crate::utils::theme::color::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
     );
     expected.extend_from_slice(b"\x1b[?25h\x1b[0 q");
     assert_eq!(output, expected);
@@ -386,7 +384,7 @@ fn client_error_display_detached_suggests_the_bus_reattach_command() {
     // BUS_SESSION_ID, which Bus settings tests read concurrently.
     let _env = EnvVarsRemovedGuard::new(&["BUS_SESSION_ID"]);
     let msg = err.to_string();
-    assert!(msg.contains("Run `bus` to reattach"), "{msg}");
+    assert_eq!(msg, "detached from server\nRun `bus` to reattach");
 }
 
 #[test]

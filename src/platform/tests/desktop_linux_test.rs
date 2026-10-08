@@ -318,7 +318,7 @@ fn read_clipboard_image_rejects_xclip_text_served_for_image_target() {
         std::env::set_var("PATH", test_path);
     }
 
-    let result = read_clipboard_image();
+    let result = read_clipboard_image(16 * 1024 * 1024);
 
     unsafe {
         match old_path {
@@ -374,7 +374,7 @@ fn read_clipboard_image_rejects_wayland_xclip_fallback_text_for_image_target() {
         std::env::set_var("PATH", test_path);
     }
 
-    let result = read_clipboard_image();
+    let result = read_clipboard_image(16 * 1024 * 1024);
 
     unsafe {
         match old_path {
@@ -395,7 +395,8 @@ fn read_validated_clipboard_image_accepts_real_png_payload() {
         read_validated_clipboard_image(
             "sh",
             &["-c", "printf '\\211PNG\\r\\n\\032\\nrest-of-image'"],
-            "png"
+            "png",
+            16 * 1024 * 1024,
         ),
         Some(ClipboardImage {
             bytes: b"\x89PNG\r\n\x1a\nrest-of-image".to_vec(),
@@ -414,7 +415,7 @@ fn read_wsl_clipboard_image_accepts_png_from_windows_command() {
                 .arg("-c")
                 .arg("printf '\\211PNG\\r\\n\\032\\nrest-of-image'");
             command
-        }),
+        }, 16 * 1024 * 1024),
         Some(ClipboardImage {
             bytes: b"\x89PNG\r\n\x1a\nrest-of-image".to_vec(),
             extension: "png",

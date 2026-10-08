@@ -1,9 +1,23 @@
-use crate::app::state::Palette;
+use crate::utils::theme::Palette;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
 };
+pub(crate) mod selection;
+
+/// Leaf presentation facts shared by terminal, server and client scrollbar rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollMetrics {
+    pub offset_from_bottom: usize,
+    pub max_offset_from_bottom: usize,
+    pub viewport_rows: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyFeedback {
+    pub message: String,
+}
 
 pub(crate) fn panel_contrast_fg(palette: &Palette) -> Color {
     match palette.panel_bg {
@@ -18,10 +32,7 @@ pub(crate) struct ScrollbarThumb {
     pub len: u16,
 }
 
-pub(crate) fn scrollbar_thumb(
-    metrics: crate::pane::ScrollMetrics,
-    track: Rect,
-) -> Option<ScrollbarThumb> {
+pub(crate) fn scrollbar_thumb(metrics: ScrollMetrics, track: Rect) -> Option<ScrollbarThumb> {
     if metrics.max_offset_from_bottom == 0 || track.height == 0 {
         return None;
     }
@@ -52,7 +63,7 @@ pub(crate) fn scrollbar_thumb(
 }
 
 pub(crate) fn scrollbar_thumb_grab_offset(
-    metrics: crate::pane::ScrollMetrics,
+    metrics: ScrollMetrics,
     track: Rect,
     row: u16,
 ) -> Option<u16> {
@@ -60,11 +71,7 @@ pub(crate) fn scrollbar_thumb_grab_offset(
     (row >= thumb.top && row < thumb.top + thumb.len).then(|| row - thumb.top)
 }
 
-fn scrollbar_offset_from_thumb_top(
-    metrics: crate::pane::ScrollMetrics,
-    track: Rect,
-    thumb_top: usize,
-) -> usize {
+fn scrollbar_offset_from_thumb_top(metrics: ScrollMetrics, track: Rect, thumb_top: usize) -> usize {
     if metrics.max_offset_from_bottom == 0 {
         return 0;
     }
@@ -86,11 +93,7 @@ fn scrollbar_offset_from_thumb_top(
         .saturating_sub(scrolled_from_top)
 }
 
-pub(crate) fn scrollbar_offset_from_row(
-    metrics: crate::pane::ScrollMetrics,
-    track: Rect,
-    row: u16,
-) -> usize {
+pub(crate) fn scrollbar_offset_from_row(metrics: ScrollMetrics, track: Rect, row: u16) -> usize {
     let thumb = match scrollbar_thumb(metrics, track) {
         Some(thumb) => thumb,
         None => return 0,
@@ -103,7 +106,7 @@ pub(crate) fn scrollbar_offset_from_row(
 }
 
 pub(crate) fn scrollbar_offset_from_drag_row(
-    metrics: crate::pane::ScrollMetrics,
+    metrics: ScrollMetrics,
     track: Rect,
     row: u16,
     grab_row_offset: u16,
@@ -116,7 +119,7 @@ pub(crate) fn scrollbar_offset_from_drag_row(
 
 pub(crate) fn render_scrollbar_buffer(
     buffer: &mut Buffer,
-    metrics: crate::pane::ScrollMetrics,
+    metrics: ScrollMetrics,
     track: Rect,
     track_color: Color,
     thumb_color: Color,
@@ -140,4 +143,27 @@ pub(crate) fn render_scrollbar_buffer(
         cell.set_symbol(thumb_symbol);
         cell.set_style(Style::default().fg(thumb_color));
     }
+}
+
+pub(crate) fn copy_feedback_offset_for_toast(
+    area: Rect,
+    feedback: &CopyFeedback,
+    base_offset: u16,
+    position: crate::config::ToastClipboardPosition,
+    toast_rect: Rect,
+) -> u16 {
+    let feedback_rect =
+        super::status_popups::copy_feedback_rect(area, feedback, base_offset, position);
+    if rectangles_overlap(feedback_rect, toast_rect) {
+        base_offset.saturating_add(toast_rect.height)
+    } else {
+        base_offset
+    }
+}
+
+fn rectangles_overlap(left: Rect, right: Rect) -> bool {
+    left.x < right.right()
+        && right.x < left.right()
+        && left.y < right.bottom()
+        && right.y < left.bottom()
 }

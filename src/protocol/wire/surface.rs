@@ -167,3 +167,10 @@ pub struct PaneSurfacePatch {
     /// Final cursor relative to the pane surface.
     pub cursor: Option<CursorState>,
 }
+
+/// Client presentation visibility; it carries no server or terminal state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SurfaceGraphicsVisibility {
+    Main,
+    Hidden,
+}

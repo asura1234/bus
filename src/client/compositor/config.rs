@@ -36,7 +36,7 @@ impl ClientShellState {
                     &loaded.invalid_sections,
                 );
                 if let Some(appearance) = self.host_appearance {
-                    self.config.palette = crate::app::client_palette_for_appearance(
+                    self.config.palette = crate::utils::theme::client_palette_for_appearance(
                         &self.config.theme_runtime,
                         appearance,
                     );
@@ -56,8 +56,8 @@ impl ClientShellConfig {
             copy_on_select: config.ui.copy_on_select,
             clipboard_toast_enabled: config.ui.toast.clipboard.enabled,
             clipboard_toast_position: config.ui.toast.clipboard.position,
-            theme_runtime: crate::app::client_theme_runtime_from_config(config),
-            palette: crate::app::client_palette_from_config(config),
+            theme_runtime: crate::utils::theme::client_theme_runtime_from_config(config),
+            palette: crate::utils::theme::client_palette_from_config(config),
             mouse_capture: config.ui.mouse_capture,
             mouse_scroll_lines: config.ui.mouse_scroll_lines(),
             right_click_passthrough_modifiers: config.ui.right_click_passthrough_modifiers(),
@@ -98,15 +98,15 @@ impl ClientShellConfig {
         }
 
         if !invalid_section("theme") {
-            self.theme_runtime = crate::app::client_theme_runtime_from_config(config);
-            self.palette = crate::app::client_palette_from_config(config);
+            self.theme_runtime = crate::utils::theme::client_theme_runtime_from_config(config);
+            self.palette = crate::utils::theme::client_palette_from_config(config);
         }
 
         diagnostics
     }
 
     pub(crate) fn initial_surface_size(&self, cols: u16, rows: u16) -> ClientSurfaceSize {
-        if crate::bus::entry::data_dir().is_some() {
+        if crate::utils::env::bus_data_dir().is_some() {
             let surface = crate::client::rooms::layout(cols, rows).pane_surface;
             return ClientSurfaceSize {
                 cols: surface.width.max(1),

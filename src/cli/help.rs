@@ -1,5 +1,6 @@
 //! CLI help text kept separate from parsing and transport.
 use super::session_pick::USAGE;
+pub(crate) use crate::client::local_attach_command;
 use std::io::{self, Write};
 
 /// CLI and observation-hook replies use the same locked stdout writer as the
@@ -102,19 +103,6 @@ pub(super) fn print_help() {
     write_stdout_line(format_args!("Bus — coordinate selected agents in native terminal rooms\n\n{USAGE}\n\nA plain `bus` launch always creates a new local session.\n`bus sessions` lists resumable sessions, their rooms, and recent activity.\n`bus resume <session-id>` resumes that exact session.\n`bus resume --last` resumes the last opened session.\n`bus stop` stops the session's server and closes its agent panes; quit an open UI first.\n--dev enables developer log files, excluding input/content dumps.\nExisting servers keep their original log level; they are never automatically restarted.\n--paths shows data and log directories without starting a session.\nBUS_DATA_DIR is an exact isolated-root override for development and tests; it cannot be combined with resume.\n\nCtrl+Shift+R room · Ctrl+N agent · Ctrl+F files · F2 rename · F3 notes\n@ choose agents · + choose files (type the shifted symbols)\nEnter send · Shift+Enter (supported hosts) / Ctrl+J newline\nCtrl+A/E line start/end · Ctrl+R history search · Ctrl+Shift+E composer size\nF6 room · Ctrl+C save and quit (Ctrl+Q also works)\n\nBuilt on Herdr; upstream license and attribution are preserved."));
 }
 
-/// Reopens this Bus session: a local session by its ID, an explicit
-/// `BUS_DATA_DIR` root by launching Bus again with the same environment.
-pub fn local_attach_command() -> String {
-    attach_command_for(std::env::var("BUS_SESSION_ID").ok().as_deref())
-}
-
-pub(crate) fn attach_command_for(session_id: Option<&str>) -> String {
-    match session_id {
-        Some(id) if !id.is_empty() => format!("bus resume {id}"),
-        _ => "bus".to_string(),
-    }
-}
-
 /// `bus stop` targets `BUS_DATA_DIR`, else the last opened local session,
 /// which opening this session has just recorded.
 pub fn local_stop_command() -> String {
@@ -129,4 +117,12 @@ pub fn restart_after_update_guidance(stop_command: &str, attach_command: &str) -
 
 pub fn active_restart_after_update_guidance() -> String {
     restart_after_update_guidance(&local_stop_command(), &local_attach_command())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restart_after_update_guidance;
+    use crate::client::attach_command_for;
+
+    include!("tests/session_guidance_test.rs");
 }

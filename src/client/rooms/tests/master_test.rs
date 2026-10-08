@@ -371,7 +371,7 @@ fn prompt_text(ui: &BusUi) -> String {
 }
 
 fn expected_prompt(agent: &str, room: Option<(&str, RoomId)>) -> String {
-    let docs = crate::bus::entry::data_dir().map_or_else(
+    let docs = crate::utils::env::bus_data_dir().map_or_else(
         || std::path::PathBuf::from("<BUS_DATA_DIR>/docs"),
         |data| crate::bus::orchestrator::docs_dir(&data),
     );

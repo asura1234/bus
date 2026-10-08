@@ -61,3 +61,5 @@ use std::io::{self, Read};
 #[cfg(test)]
 #[path = "tests/codec_test.rs"]
 mod tests;
+
+pub(crate) use surface::SurfaceGraphicsVisibility;

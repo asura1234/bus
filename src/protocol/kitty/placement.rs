@@ -1,9 +1,58 @@
-use crate::ghostty::{KittyImageDescriptor, KittyImageFormat, KittyImagePlacement};
-use crate::layout::PaneId;
+use crate::utils::ids::PaneId;
 use ratatui::layout::Rect;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+mod capability;
+pub(crate) use capability::{is_enabled, set_enabled};
 const HOST_IMAGE_ID_BASE: u32 = 10_000;
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum KittyImageFormat {
+    Rgb,
+    Rgba,
+    Png,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KittyImagePlacement {
+    pub image_id: u32,
+    pub placement_id: u32,
+    pub z: i32,
+    pub x_offset: u32,
+    pub y_offset: u32,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub format: KittyImageFormat,
+    pub data_len: usize,
+    pub data_fingerprint: u64,
+    pub data: Vec<u8>,
+    pub render: KittyPlacementRenderInfo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KittyImageDescriptor {
+    pub image_id: u32,
+    pub placement_id: u32,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub format: KittyImageFormat,
+    pub data_len: usize,
+    pub data_fingerprint: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KittyPlacementRenderInfo {
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    pub grid_cols: u32,
+    pub grid_rows: u32,
+    pub viewport_col: i32,
+    pub viewport_row: i32,
+    pub source_x: u32,
+    pub source_y: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HostCellSize {
@@ -335,4 +384,33 @@ fn clipped_source(
     }
 
     Some((source_x, source_y, source_width, source_height))
+}
+
+pub(crate) fn terminal_image_needs_data(
+    pane_id: PaneId,
+    descriptor: KittyImageDescriptor,
+    uploaded_images: &std::collections::HashMap<u32, ImageSignature>,
+    oversized_images: &std::collections::HashMap<HostSourceKey, ImageSignature>,
+    requested_images: &mut std::collections::HashSet<(HostSourceKey, ImageSignature)>,
+) -> bool {
+    let format_code = kitty_format_code(descriptor.format);
+    let signature = image_signature_from_descriptor(descriptor, format_code);
+    let host_id = host_image_id_for_signature(pane_id, signature);
+    let source = HostSourceKey::Terminal {
+        pane_id,
+        image_id: descriptor.image_id,
+    };
+    uploaded_images.get(&host_id).copied() != Some(signature)
+        && oversized_images.get(&source).copied() != Some(signature)
+        && requested_images.insert((source, signature))
+}
+
+/// Upper bound for one Kitty upload transaction, shared by delivery and host caches.
+pub(crate) fn image_transfer_estimated_size(data_len: usize) -> usize {
+    let encoded = data_len.div_ceil(3).saturating_mul(4);
+    let command_overhead = data_len
+        .div_ceil(super::apc::KITTY_CHUNK_BYTES)
+        .saturating_mul(16)
+        + 1024;
+    encoded.saturating_add(command_overhead)
 }

@@ -74,7 +74,7 @@ impl crate::client::compositor::ClientShellState {
     /// `sound` is the user's `[ui.sound]`, used only for custom sound paths; Bus
     /// rooms decide on their own whether to ring.
     pub(crate) fn start_bus(&mut self, sound: &crate::config::SoundConfig) -> Result<(), String> {
-        let Some(root) = crate::bus::entry::data_dir() else {
+        let Some(root) = crate::utils::env::bus_data_dir() else {
             return Ok(());
         };
         let handle = crate::bus::runtime::BusHandle::start(

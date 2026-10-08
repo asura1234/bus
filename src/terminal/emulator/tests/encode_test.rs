@@ -277,7 +277,7 @@ fn ghostty_key_encoder_updates_after_terminal_mode_changes() {
     );
     assert_eq!(before, b"\x1b[A");
 
-    pane.process_pty_bytes(pane_id, 0, b"\x1b[?1h", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"\x1b[?1h", &tx, |_| None);
 
     let after = pane.encode_terminal_key(
         crate::input::TerminalKey::new(
@@ -301,7 +301,7 @@ fn ghostty_key_encoder_updates_after_kitty_flag_changes() {
     );
 
     let before = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
-    pane.process_pty_bytes(pane_id, 0, b"\x1b[>1u", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"\x1b[>1u", &tx, |_| None);
     let after = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
 
     assert_ne!(before, after);
@@ -314,7 +314,7 @@ fn ghostty_kitty_pane_encodes_shift_enter_as_csi_u() {
     let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.process_pty_bytes(pane_id, 0, b"\x1b[>5u", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"\x1b[>5u", &tx, |_| None);
 
     let key = crate::input::parse_terminal_key_sequence("\x1b[13;2u").unwrap();
     let encoded = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
@@ -360,7 +360,7 @@ fn ghostty_kitty_pane_encodes_parsed_legacy_alt_backspace_as_csi_u() {
     let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.process_pty_bytes(pane_id, 0, b"\x1b[>1u", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"\x1b[>1u", &tx, |_| None);
 
     let key = crate::input::parse_terminal_key_sequence("\x1b\x7f").unwrap();
     let encoded = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
@@ -374,7 +374,7 @@ fn ghostty_kitty_pane_preserves_legacy_ctrl_alt_letter() {
     let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.process_pty_bytes(pane_id, 0, b"\x1b[>5u", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"\x1b[>5u", &tx, |_| None);
 
     let mut events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b\x06");
     let crate::raw_input::RawInputEvent::Key(key) = events.remove(0) else {
@@ -421,7 +421,7 @@ fn ghostty_pane_characterizes_ctrl_backspace_encoding() {
     )
     .unwrap();
     let pane_id = PaneId::from_raw(1);
-    kitty.process_pty_bytes(pane_id, 0, b"\x1b[>1u", &tx);
+    kitty.process_pty_bytes(pane_id, 0, b"\x1b[>1u", &tx, |_| None);
 
     assert_eq!(
         kitty.encode_terminal_key(ctrl_backspace, crate::input::KeyboardProtocol::Legacy),
@@ -443,7 +443,7 @@ fn ghostty_key_encoders_are_isolated_per_pane() {
     )
     .unwrap();
 
-    first.process_pty_bytes(PaneId::from_raw(1), 0, b"\x1b[?1h", &tx);
+    first.process_pty_bytes(PaneId::from_raw(1), 0, b"\x1b[?1h", &tx, |_| None);
 
     let first_encoded = first.encode_terminal_key(
         crate::input::TerminalKey::new(

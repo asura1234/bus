@@ -1,10 +1,22 @@
 //! Owned agent launch, deletion and terminal identity checks.
 use super::{
-    launch, mpsc, schema, AddAgent, AgentId, AgentRuntimeIdentity, Author, BusEvent, Draft,
-    LeftOpenTerminal, Method, Provider, ResponseResult, RoomId, RoomKind, Worker,
-    MASTER_AGENT_NEEDS_ROOM,
+    mpsc, schema, AgentId, AgentRuntimeIdentity, Author, BusEvent, Draft, LeftOpenTerminal, Method,
+    Provider, ResponseResult, RoomId, RoomKind, Worker, MASTER_AGENT_NEEDS_ROOM,
 };
+use crate::agents::providers::{cursor, hook_json::HookContext, launch, spool};
 use crate::bus::orchestrator::{self, OrchestratorSpec};
+use crate::messaging::identity;
+
+/// Room-level launch request; provider preparation receives only LaunchSpec.
+#[derive(Clone, Debug)]
+pub(crate) struct AddAgent {
+    pub(crate) room: RoomId,
+    pub(crate) name: String,
+    pub(crate) provider: Provider,
+    pub(crate) cwd: String,
+    pub(crate) extra_args: String,
+    pub(crate) consent_project_hooks: bool,
+}
 
 impl Worker {
     pub(super) fn delete_agent(
@@ -84,8 +96,8 @@ impl Worker {
             }
             return self.agent_error(id, "Cannot verify the terminal created by this launch. Deletion is suspended; inspect the launch outcome before retrying.".into()).map(|()| None);
         };
-        let managed_name = format!("bus-r{}-a{}", agent.room_id.0, id.0);
-        let kind = launch::provider_kind(agent.provider);
+        let managed_name = identity::managed_name(agent.room_id, id);
+        let kind = identity::provider_kind(agent.provider).label();
         let expected_session = identity.session_id.clone();
         let left_open = LeftOpenTerminal {
             agent_id: id,
@@ -270,7 +282,9 @@ impl Worker {
                 .map_err(|e| e.to_string())?;
         }
         if !input.consent_project_hooks {
-            if let Some(notice) = launch::setup_notice(input.provider, &cwd) {
+            if let Some(notice) =
+                launch::setup_notice(identity::provider_kind(input.provider), &cwd)
+            {
                 let _ = events.send(BusEvent::SetupRequired {
                     input,
                     orchestrator,
@@ -279,20 +293,15 @@ impl Worker {
                 return Ok(());
             }
         }
-        let mut prepared = launch::prepare(
-            &input,
-            id,
-            &self.data_dir,
-            &std::env::current_exe().map_err(|e| e.to_string())?,
-        )?;
+        let (mut prepared, hooks) = self.prepare_provider_launch(&input, id)?;
         if let Some(spec) = &orchestrator {
-            self.prepare_orchestrator_prompt(&input, id, &mut state, spec, &mut prepared)?;
+            self.prepare_orchestrator_prompt(&input, id, &mut state, spec, &mut prepared, &hooks)?;
         }
         let identity = self.persist_agent_launch(
             state,
             id,
             input.provider,
-            prepared.manifest.launch_id,
+            hooks.launch_id,
             prepared.adopted_session.clone(),
         )?;
         let created = self
@@ -331,8 +340,8 @@ impl Worker {
         let started = self
             .transport
             .request(Method::AgentStart(schema::AgentStartParams {
-                name: format!("bus-r{}-a{}", input.room.0, id.0),
-                kind: launch::provider_kind(input.provider).into(),
+                name: identity::managed_name(input.room, id),
+                kind: identity::provider_kind(input.provider).label().into(),
                 pane_id: pane.clone(),
                 args: prepared.args,
                 timeout_ms: None,
@@ -347,6 +356,45 @@ impl Worker {
             }
             other => self.agent_error(id,format!("Agent start outcome requires inspection of its owned terminal; no automatic retry or deletion. {other:?}")),
         }
+    }
+
+    /// Routing stays at the room boundary; providers only receive capture facts.
+    fn prepare_provider_launch(
+        &self,
+        input: &AddAgent,
+        id: AgentId,
+    ) -> Result<(launch::PreparedLaunch, HookContext), String> {
+        let binary = std::env::current_exe().map_err(|e| e.to_string())?;
+        let launch_id = crate::utils::time::digest(
+            format!(
+                "{}:{}:{}",
+                id.0,
+                std::process::id(),
+                crate::utils::time::now_ns()
+            )
+            .as_bytes(),
+        );
+        let hooks = HookContext {
+            binary,
+            spool: self.data_dir.join("callbacks").join(&launch_id),
+            launch_id,
+        };
+        let spec = launch::LaunchSpec {
+            provider: identity::provider_kind(input.provider),
+            cwd: input.cwd.clone(),
+            extra_args: input.extra_args.clone(),
+            consent_project_hooks: input.consent_project_hooks,
+            hooks: hooks.clone(),
+        };
+        let prepared = launch::prepare(&spec, |context| {
+            let manifest = spool::Manifest {
+                routing_key: spool::RoutingKey(id.0),
+                provider: spec.provider,
+                launch_id: context.launch_id.clone(),
+            };
+            spool::initialize(&context.spool, &manifest).map_err(|e| e.to_string())
+        })?;
+        Ok((prepared, hooks))
     }
 
     fn persist_agent_launch(
@@ -400,7 +448,7 @@ impl Worker {
     ) -> Result<(), String> {
         // What a SessionStart hook would report, so the native layer's
         // identity checks for dialogs and delivery accept this pane.
-        let kind = launch::provider_kind(provider);
+        let kind = identity::provider_kind(provider).label();
         match self.transport.request(Method::PaneReportAgentSession(
             schema::PaneReportAgentSessionParams {
                 pane_id: pane,
@@ -430,11 +478,8 @@ impl Worker {
         state: &mut super::BusState,
         spec: &OrchestratorSpec,
         prepared: &mut launch::PreparedLaunch,
+        hooks: &HookContext,
     ) -> Result<(), String> {
-        let spool = self
-            .data_dir
-            .join("callbacks")
-            .join(&prepared.manifest.launch_id);
         let values = orchestrator::PromptValues {
             room: state
                 .room(spec.room)
@@ -448,7 +493,7 @@ impl Worker {
             .unwrap_or(orchestrator::DEFAULT_PROMPT);
         let text = orchestrator::fill(template, &values);
         let adopted = prepared.adopted_session.is_some();
-        let path = orchestrator::write_prompt(&spool, &text)?;
+        let path = orchestrator::write_prompt(&hooks.spool, &text)?;
         match orchestrator::prompt_args(input.provider, &path, adopted)? {
             Some(args) => prepared.args.extend(args),
             // Queued until the agent is ready, like any room message.
@@ -458,7 +503,10 @@ impl Worker {
                     .submit_message_with(
                         master,
                         Draft {
-                            text: orchestrator::prompt_message(&text),
+                            text: match input.provider {
+                                Provider::Cursor => cursor::system_prompt::prompt_message(&text),
+                                _ => orchestrator::prompt_message(&text),
+                            },
                             files: Vec::new(),
                             recipient_ids: [id].into_iter().collect(),
                         },
@@ -486,7 +534,9 @@ impl Worker {
         let cwd = launch::canonical_directory(&input.cwd)?;
         // One provider session belongs to one Bus agent: bound by its hook, or
         // reserved by a launch that adopted it and has not reported yet.
-        if let Some(session) = launch::adopted_session(input.provider, &input.extra_args)? {
+        if let Some(session) =
+            launch::adopted_session(identity::provider_kind(input.provider), &input.extra_args)?
+        {
             if let Some(owner) = self.state.agents().find(|agent| {
                 let identity = &agent.runtime_identity;
                 identity.session_id.as_deref() == Some(session.as_str())

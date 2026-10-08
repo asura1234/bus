@@ -36,9 +36,10 @@ impl PaneTerminal {
         shell_pid: u32,
         bytes: &[u8],
         response_writer: &mpsc::Sender<Bytes>,
+        foreground_job: impl Fn(u32) -> Option<crate::platform::ForegroundJob>,
     ) -> ProcessBytesResult {
         self.ghostty
-            .process_pty_bytes(pane_id, shell_pid, bytes, response_writer)
+            .process_pty_bytes(pane_id, shell_pid, bytes, response_writer, foreground_job)
     }
 
     pub fn resize(
@@ -60,6 +61,7 @@ impl GhosttyPaneTerminal {
         shell_pid: u32,
         bytes: &[u8],
         _response_writer: &mpsc::Sender<Bytes>,
+        foreground_job: impl Fn(u32) -> Option<crate::platform::ForegroundJob>,
     ) -> ProcessBytesResult {
         crate::render_prof::counter("pty.bytes", bytes.len() as u64);
         let Ok(mut core) = self.core.lock() else {
@@ -76,7 +78,7 @@ impl GhosttyPaneTerminal {
         };
 
         let (terminal_title_changed, filtered_bytes) =
-            observe_pty_bytes(&mut core, pane_id, shell_pid, bytes);
+            observe_pty_bytes(&mut core, pane_id, shell_pid, bytes, foreground_job);
 
         core.kitty_keyboard.observe(filtered_bytes.as_ref());
         let mut terminal_responses = Vec::new();
@@ -367,6 +369,7 @@ fn observe_pty_bytes<'a>(
     pane_id: PaneId,
     shell_pid: u32,
     bytes: &'a [u8],
+    foreground_job: impl Fn(u32) -> Option<crate::platform::ForegroundJob>,
 ) -> (bool, Cow<'a, [u8]>) {
     let _ = core.terminal.take_pwd_changes();
     // Restored history may have exercised terminal callbacks before this live PTY write.
@@ -375,7 +378,9 @@ fn observe_pty_bytes<'a>(
     let _ = core.terminal.take_clipboard_writes();
     let default_color_observation = core.default_color_tracker.observe(bytes);
     if shell_pid > 0 && default_color_observation {
-        if let Some(owner_pgid) = current_transient_default_color_owner(shell_pid) {
+        if let Some(owner_pgid) =
+            current_transient_default_color_owner(shell_pid, foreground_job(shell_pid).as_ref())
+        {
             core.transient_default_color_owner_pgid = Some(owner_pgid);
             debug!(
                 pane = pane_id.raw(),
@@ -402,7 +407,7 @@ fn observe_pty_bytes<'a>(
         .unwrap_or(false);
     let filtered_bytes = if shell_pid > 0 {
         let foreground_job = (!alternate_screen && contains_scrollback_clear_sequence(bytes))
-            .then(|| crate::detect::foreground_job(shell_pid))
+            .then(|| foreground_job(shell_pid))
             .flatten();
         maybe_filter_primary_screen_scrollback_clear(
             bytes,

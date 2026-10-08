@@ -6,7 +6,7 @@ use crate::terminal_theme::{HostAppearance, TerminalTheme};
 use crate::workspace::Workspace;
 
 pub(crate) use super::app_settings::PaneFocusTarget;
-pub use super::app_settings::{AgentPanelSort, CopyFeedback, Mode, ViewState};
+pub use super::app_settings::{AgentPanelSort, Mode, ViewState};
 pub use super::notifications::delivery::{
     AgentNotificationDelivery, PendingAgentNotification, ToastKind, ToastNotification, ToastTarget,
 };

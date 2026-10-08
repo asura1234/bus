@@ -446,7 +446,7 @@ fn live_runtime_agent(runtime: &crate::terminal::TerminalRuntime) -> Option<crat
         .or_else(|| {
             job.processes
                 .iter()
-                .find_map(|process| crate::platform::process_agent_hint(process.pid))
+                .find_map(|process| crate::agents::process_agent_hint(process.pid))
         })
 }
 

@@ -13,7 +13,7 @@ impl Transport for FakeTransport {
         self.calls
             .lock()
             .unwrap()
-            .push(crate::api::api_method_name(&method));
+            .push(crate::protocol::api::api_method_name(&method));
         if let Method::PaneCloseIfIdentity(params) = &method {
             let state = JsonStore::new(self.state_path.clone())
                 .load()
@@ -148,7 +148,7 @@ pub(super) fn fixture(
     callbacks::initialize(
         &dir.join("callbacks/launch"),
         &callbacks::Manifest {
-            agent_id: agent,
+            routing_key: callbacks::RoutingKey(agent.0),
             provider,
             launch_id: "launch".into(),
         },

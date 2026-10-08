@@ -21,10 +21,16 @@ pub use crate::server::notifications::policy::{
     notification_toast_for_pane_state_update,
     notification_toast_for_state_change_with_agent_labels,
 };
-pub(crate) use crate::utils::text::hit_testing::{
-    logical_cell_for_visible_cell, url_at_column, word_bounds_at_column,
-};
+#[cfg(test)]
+use crate::utils::text::hit_testing::word_bounds_at_column;
+pub(crate) use crate::utils::text::hit_testing::{logical_cell_for_visible_cell, url_at_column};
 pub(crate) use crate::utils::url::safe_web_url;
+
+fn terminal_char_width(ch: char) -> u16 {
+    u16::from(crate::utils::text::width::unicode_codepoint_width(
+        ch as u32,
+    ))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneStateUpdate {
@@ -130,7 +136,13 @@ fn url_at_runtime_cell(
         area.width.saturating_sub(1),
     );
     let visible_text = runtime.extract_selection(&visible_selection)?;
-    let logical_cell = logical_cell_for_visible_cell(&visible_text, area.width, viewport_row, col)?;
+    let logical_cell = logical_cell_for_visible_cell(
+        &visible_text,
+        area.width,
+        viewport_row,
+        col,
+        terminal_char_width,
+    )?;
     let line_start = visible_text[..logical_cell.byte_index]
         .rfind('\n')
         .map_or(0, |idx| idx + 1);
@@ -138,7 +150,7 @@ fn url_at_runtime_cell(
         .find('\n')
         .map_or(visible_text.len(), |idx| logical_cell.byte_index + idx);
     let line = visible_text.get(line_start..line_end)?;
-    url_at_column(line, logical_cell.logical_col).map(str::to_owned)
+    url_at_column(line, logical_cell.logical_col, terminal_char_width).map(str::to_owned)
 }
 
 // ---------------------------------------------------------------------------

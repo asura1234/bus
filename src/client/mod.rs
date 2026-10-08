@@ -87,6 +87,9 @@ use terminal_setup::{
     write_host_color_scheme_report_mode, write_terminal_restore_postlude,
 };
 
+#[cfg(test)]
+pub(crate) use errors::attach_command_for;
+pub(crate) use errors::local_attach_command;
 pub use errors::ClientError;
 #[cfg(test)]
 use frame_output::{clear_received_kitty_graphics, kitty_graphics_image_ids};
@@ -105,7 +108,7 @@ use crate::protocol::render_ansi;
 use crate::protocol::FrameData;
 #[cfg(test)]
 use crate::protocol::NotifyKind;
-use crate::server::socket_paths::client_socket_path;
+use crate::utils::socket_paths::client_socket_path;
 use std::io::{self, Write as _};
 use std::sync::atomic::{AtomicBool, AtomicU16};
 #[cfg(test)]

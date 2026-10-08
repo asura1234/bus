@@ -312,7 +312,8 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
             row: track.y,
             modifiers: KeyModifiers::empty(),
         })]);
-    let expected = crate::ui::scrollbar_offset_from_row(metrics, track, track.y);
+    let expected =
+        crate::utils::render::widgets::scrollbar_offset_from_row(metrics, track, track.y);
     assert!(track_click.requests.is_empty());
     assert!(matches!(
         &track_click.actions[..],
@@ -339,7 +340,8 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
         Ok(pane_scroll_result(expected as u64, 20, 2)),
     );
 
-    let thumb = crate::ui::scrollbar_thumb(metrics, track).expect("scrollbar thumb");
+    let thumb =
+        crate::utils::render::widgets::scrollbar_thumb(metrics, track).expect("scrollbar thumb");
     let thumb_down =
         state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -366,7 +368,8 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
         row: track.y,
         modifiers: KeyModifiers::empty(),
     })]);
-    let expected = crate::ui::scrollbar_offset_from_drag_row(metrics, track, track.y, 0);
+    let expected =
+        crate::utils::render::widgets::scrollbar_offset_from_drag_row(metrics, track, track.y, 0);
     assert!(matches!(
         &drag.actions[..],
         [ClientShellAction::Endpoint { request, .. }]

@@ -1,6 +1,12 @@
 use crate::agents::Agent;
 use crate::terminal::emulator::PaneTerminal;
 
+/// Runtime detection owns process selection; emulator consumers receive only
+/// the resulting neutral job, and invoke the probe when their existing policy needs it.
+pub(super) fn foreground_job(shell_pid: u32) -> Option<crate::platform::ForegroundJob> {
+    crate::agents::foreground_job(shell_pid)
+}
+
 pub(super) const AGENT_MISS_CONFIRMATION_ATTEMPTS: u8 = 6;
 
 pub(super) const PROCESS_RECHECK_IDENTIFIED: std::time::Duration =
@@ -390,7 +396,7 @@ pub(super) fn probe_foreground_process(
         foreground_pgid,
         foreground_pgid.and_then(crate::agents::foreground_group_leader_job),
         || crate::agents::foreground_job(pid),
-        crate::platform::process_agent_hint,
+        crate::agents::process_agent_hint,
     )
 }
 

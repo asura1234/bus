@@ -16,8 +16,17 @@ use std::{
 use tracing::{info, warn};
 
 /// Runs the thin client and enters the main event loop.
-pub fn run_client() -> io::Result<()> {
-    run_client_with_mode("connecting to server")
+pub fn run_client(
+    logging_options: crate::utils::logging::LoggingOptions,
+    config_override: Option<fn(&mut crate::config::Config)>,
+    stop_server: fn() -> Result<(), String>,
+) -> io::Result<()> {
+    run_client_with_mode(
+        "connecting to server",
+        logging_options,
+        config_override,
+        stop_server,
+    )
 }
 
 pub(super) struct ClientLoopConfig {
@@ -39,55 +48,34 @@ pub(super) struct ClientInputLifecycle {
     pub(super) host_palette_query_progress: Arc<AtomicU16>,
 }
 
-fn run_client_with_mode(log_message: &'static str) -> io::Result<()> {
-    init_logging();
+fn run_client_with_mode(
+    log_message: &'static str,
+    logging_options: crate::utils::logging::LoggingOptions,
+    config_override: Option<fn(&mut crate::config::Config)>,
+    stop_server: fn() -> Result<(), String>,
+) -> io::Result<()> {
+    init_logging(&logging_options);
 
-    let loaded_config = crate::config::Config::load();
+    let mut loaded_config = crate::config::Config::load();
+    if let Some(apply) = config_override {
+        apply(&mut loaded_config.config);
+    }
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
     let socket_path = client_socket_path();
     let loop_config = client_loop_config(loaded_config.config, &loaded_config.diagnostics);
     let mouse_capture = loop_config.mouse_capture_active;
-    let pixel_geometry_enabled = loop_config.pixel_geometry_enabled;
-    let kitty_graphics_enabled = loop_config.kitty_graphics_enabled;
 
-    crate::logging::startup("client");
+    crate::utils::logging::startup("client", logging_options.dev);
     info!(path = %socket_path.display(), "{log_message}");
 
-    let initial_stream = match crate::ipc::connect_local_stream(&socket_path) {
-        Ok(stream) => Some(stream),
-        Err(error) => {
-            return Err(io::Error::other(
-                ClientError::ConnectionFailed(error).to_string(),
-            ));
-        }
-    };
-
-    // Get the terminal geometry before handshake (before raw mode).
-    let (cols, rows, cell_width_px, cell_height_px, exact_cell_size) =
-        initial_terminal_geometry(pixel_geometry_enabled, kitty_graphics_enabled)?;
-
-    let shell_surface_size = loop_config
-        .shell_config
-        .as_ref()
-        .expect("client shell")
-        .initial_surface_size(cols, rows);
-    // Healthy Local connects directly; only an actual failure enters background recovery.
-    let initial: io::Result<Option<(LocalStream, handshake::HandshakeResult)>> = initial_stream
-        .map(|mut stream| {
-            let handshake = do_handshake(
-                &mut stream,
-                cell_width_px,
-                cell_height_px,
-                exact_cell_size,
-                shell_surface_size,
-                false,
-                loop_config.mouse_capture_active,
-            )
-            .map_err(|error| io::Error::other(error.to_string()))?;
-            Ok((stream, handshake))
-        })
-        .transpose();
-    let initial = initial?;
+    let InitialClientConnection {
+        cols,
+        rows,
+        cell_width_px,
+        cell_height_px,
+        exact_cell_size,
+        initial,
+    } = initial_client_connection(&socket_path, &loop_config)?;
 
     let terminal_guard = setup_terminal(mouse_capture).map_err(|err| {
         eprintln!("herdr: failed to set up terminal: {err}");
@@ -146,13 +134,72 @@ fn run_client_with_mode(log_message: &'static str) -> io::Result<()> {
     let terminal_restore_failed = terminal_guard.restore().is_err();
     let stopped = stop_server_after_quit(|| {
         eprintln!("Stopping Bus and its agents...");
-        crate::session::stop_active_server()
+        stop_server()
     });
     if let Err(error) = &stopped {
         let _ = writeln!(io::stderr(), "bus: could not stop the server: {error}");
     }
 
     finish_client_run(result, rt, terminal_restore_failed, stopped)
+}
+
+struct InitialClientConnection {
+    cols: u16,
+    rows: u16,
+    cell_width_px: u32,
+    cell_height_px: u32,
+    exact_cell_size: bool,
+    initial: Option<(LocalStream, handshake::HandshakeResult)>,
+}
+
+fn initial_client_connection(
+    socket_path: &std::path::Path,
+    loop_config: &ClientLoopConfig,
+) -> io::Result<InitialClientConnection> {
+    let initial_stream = match crate::ipc::connect_local_stream(socket_path) {
+        Ok(stream) => Some(stream),
+        Err(error) => {
+            return Err(io::Error::other(
+                ClientError::ConnectionFailed(error).to_string(),
+            ));
+        }
+    };
+
+    // Get the terminal geometry before handshake (before raw mode).
+    let (cols, rows, cell_width_px, cell_height_px, exact_cell_size) = initial_terminal_geometry(
+        loop_config.pixel_geometry_enabled,
+        loop_config.kitty_graphics_enabled,
+    )?;
+
+    let shell_surface_size = loop_config
+        .shell_config
+        .as_ref()
+        .expect("client shell")
+        .initial_surface_size(cols, rows);
+    // Healthy Local connects directly; only an actual failure enters background recovery.
+    let initial: io::Result<Option<(LocalStream, handshake::HandshakeResult)>> = initial_stream
+        .map(|mut stream| {
+            let handshake = do_handshake(
+                &mut stream,
+                cell_width_px,
+                cell_height_px,
+                exact_cell_size,
+                shell_surface_size,
+                false,
+                loop_config.mouse_capture_active,
+            )
+            .map_err(|error| io::Error::other(error.to_string()))?;
+            Ok((stream, handshake))
+        })
+        .transpose();
+    Ok(InitialClientConnection {
+        cols,
+        rows,
+        cell_width_px,
+        cell_height_px,
+        exact_cell_size,
+        initial: initial?,
+    })
 }
 
 fn install_client_termination_handler(should_quit: &Arc<AtomicBool>) {

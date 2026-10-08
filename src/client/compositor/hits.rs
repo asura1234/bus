@@ -13,7 +13,7 @@ pub(in crate::client) struct PaneHit {
     pub(in crate::client) rect: Rect,
     pub(in crate::client) inner_rect: Rect,
     pub(in crate::client) scrollbar_rect: Option<Rect>,
-    pub(in crate::client) scroll: Option<crate::pane::ScrollMetrics>,
+    pub(in crate::client) scroll: Option<crate::utils::render::widgets::ScrollMetrics>,
     pub(in crate::client) pane_id: String,
     pub(in crate::client) mouse_reporting: bool,
     pub(in crate::client) sgr_pixel_mouse: bool,

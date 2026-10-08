@@ -107,11 +107,11 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
     }
 }
 
-pub fn read_clipboard_image() -> Option<ClipboardImage> {
+pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
     for attempt in 0..10 {
         if unsafe { OpenClipboard(null_mut()) } != 0 {
             let _clipboard = ClipboardGuard;
-            if let Some(bytes) = read_registered_png_clipboard() {
+            if let Some(bytes) = read_registered_png_clipboard(max_bytes) {
                 return Some(ClipboardImage {
                     bytes,
                     extension: "png",
@@ -121,7 +121,7 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
                 if let Some(bytes) =
                     clipboard_global_bytes(format, clipboard_image::MAX_CLIPBOARD_ALLOCATION)
                 {
-                    if let Some(bytes) = clipboard_image::dib_to_png(&bytes) {
+                    if let Some(bytes) = clipboard_image::dib_to_png(&bytes, max_bytes) {
                         return Some(ClipboardImage {
                             bytes,
                             extension: "png",
@@ -138,7 +138,9 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
     None
 }
 
-pub(in crate::platform::windows) fn read_registered_png_clipboard() -> Option<Vec<u8>> {
+pub(in crate::platform::windows) fn read_registered_png_clipboard(
+    max_bytes: usize,
+) -> Option<Vec<u8>> {
     static PNG_FORMAT: LazyLock<u32> = LazyLock::new(|| {
         let name = wide_null("PNG");
         unsafe { RegisterClipboardFormatW(name.as_ptr()) }
@@ -146,11 +148,8 @@ pub(in crate::platform::windows) fn read_registered_png_clipboard() -> Option<Ve
     if *PNG_FORMAT == 0 {
         return None;
     }
-    let bytes = clipboard_global_bytes(
-        *PNG_FORMAT,
-        crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD + 64 * 1024,
-    )?;
-    clipboard_image::validated_png(&bytes)
+    let bytes = clipboard_global_bytes(*PNG_FORMAT, max_bytes.saturating_add(64 * 1024))?;
+    clipboard_image::validated_png(&bytes, max_bytes)
 }
 
 pub(in crate::platform::windows) fn clipboard_global_bytes(

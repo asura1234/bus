@@ -65,7 +65,7 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
         .map(Some)
 }
 
-pub fn read_clipboard_image() -> Option<ClipboardImage> {
+pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
     let path = std::env::temp_dir().join(format!(
         "herdr-clipboard-image-{}-{}.png",
         std::process::id(),
@@ -90,9 +90,10 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
         return None;
     }
 
-    let bytes = match std::fs::File::open(&path).ok().and_then(|file| {
-        read_limited_reader(file, crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD).ok()
-    }) {
+    let bytes = match std::fs::File::open(&path)
+        .ok()
+        .and_then(|file| read_limited_reader(file, max_bytes).ok())
+    {
         Some(LimitedRead::Complete(bytes)) => bytes,
         Some(LimitedRead::Empty | LimitedRead::Oversized) | None => {
             let _ = std::fs::remove_file(&path);

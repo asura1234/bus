@@ -1,5 +1,3 @@
-use crate::platform::windows::process::peb::process_is_git_bash;
-use crate::platform::windows::process::peb::process_runtime_marker;
 use crate::platform::windows::process::snapshot::cached_foreground_processes;
 use crate::platform::windows::process::snapshot::fresh_foreground_processes;
 use crate::platform::windows::process::snapshot::ProcessIdentity;
@@ -10,6 +8,7 @@ use crate::platform::ForegroundJob;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -45,23 +44,25 @@ pub(in crate::platform::windows) static FOREGROUND_SELECTION_CACHE: LazyLock<
     Mutex<ForegroundSelectionCache>,
 > = LazyLock::new(|| Mutex::new(ForegroundSelectionCache::default()));
 
-pub(in crate::platform::windows) fn select_pane_foreground_job_cached(
+pub(crate) fn pane_foreground_job_with(
     shell_pid: u32,
+    select: impl Fn(u32, &Arc<ProcessSnapshot>) -> Option<ForegroundJob>,
 ) -> Option<ForegroundJob> {
     let snapshot = cached_foreground_processes();
     let (job, retry_with_fresh_snapshot) =
-        select_pane_foreground_job_from_snapshot(shell_pid, &snapshot)?;
+        select_pane_foreground_job_from_snapshot(shell_pid, &snapshot, &select)?;
     if !retry_with_fresh_snapshot {
         return Some(job);
     }
 
     let snapshot = fresh_foreground_processes();
-    select_pane_foreground_job_from_snapshot(shell_pid, &snapshot).map(|(job, _)| job)
+    select_pane_foreground_job_from_snapshot(shell_pid, &snapshot, &select).map(|(job, _)| job)
 }
 
 pub(in crate::platform::windows) fn select_pane_foreground_job_from_snapshot(
     shell_pid: u32,
-    snapshot: &ProcessSnapshot,
+    snapshot: &Arc<ProcessSnapshot>,
+    select: &impl Fn(u32, &Arc<ProcessSnapshot>) -> Option<ForegroundJob>,
 ) -> Option<(ForegroundJob, bool)> {
     if let Some(job) = FOREGROUND_SELECTION_CACHE
         .lock()
@@ -71,7 +72,7 @@ pub(in crate::platform::windows) fn select_pane_foreground_job_from_snapshot(
         return Some((job, false));
     }
 
-    let job = select_pane_foreground_job_from_snapshot_uncached(shell_pid, snapshot)?;
+    let job = select(shell_pid, snapshot)?;
     let cached = prepare_cached_foreground_selection(shell_pid, snapshot, &job);
     let retry_with_fresh_snapshot = job.process_group_id != shell_pid && cached.is_none();
     FOREGROUND_SELECTION_CACHE
@@ -81,78 +82,6 @@ pub(in crate::platform::windows) fn select_pane_foreground_job_from_snapshot(
     Some((job, retry_with_fresh_snapshot))
 }
 
-pub(in crate::platform::windows) fn select_pane_foreground_job_from_snapshot_uncached(
-    shell_pid: u32,
-    snapshot: &ProcessSnapshot,
-) -> Option<ForegroundJob> {
-    select_pane_foreground_job_from_snapshot_with_runtime_inspection(
-        shell_pid,
-        snapshot,
-        |shell| process_is_git_bash(shell.pid),
-        |entry| process_runtime_marker(entry.pid),
-    )
-}
-
-pub(in crate::platform::windows) fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
-    shell_pid: u32,
-    snapshot: &ProcessSnapshot,
-    shell_is_git_bash: impl FnOnce(&WindowsProcessEntry) -> bool,
-    mut runtime_marker: impl FnMut(&WindowsProcessEntry) -> Option<String>,
-) -> Option<ForegroundJob> {
-    let entries = &snapshot.entries;
-    let shell = snapshot.entry(shell_pid)?;
-    let descendants = descendant_entries(shell_pid, snapshot);
-    let mut candidates = Vec::new();
-    for entry in std::iter::once(shell).chain(descendants) {
-        if process_entry_identifies_agent(entry) {
-            candidates.push(entry);
-        }
-    }
-
-    if let Some(selected) = select_topmost_agent_chain_candidate(&candidates, snapshot) {
-        return Some(foreground_job_from_entry(selected));
-    }
-    if !candidates.is_empty() || !shell_is_git_bash(shell) {
-        return Some(foreground_job_from_entry(shell));
-    }
-
-    let escaped_agent_indices = snapshot.agent_indices();
-    if escaped_agent_indices.is_empty() {
-        return Some(foreground_job_from_entry(shell));
-    }
-
-    let Some(shell_runtime_marker) = runtime_marker(shell).filter(|marker| !marker.is_empty())
-    else {
-        return Some(foreground_job_from_entry(shell));
-    };
-    let matching_candidates: Vec<_> = escaped_agent_indices
-        .iter()
-        .map(|&index| &entries[index])
-        .filter(|entry| runtime_marker(entry).as_deref() == Some(shell_runtime_marker.as_str()))
-        .collect();
-    let selected =
-        select_topmost_agent_chain_candidate(&matching_candidates, snapshot).unwrap_or(shell);
-    Some(foreground_job_from_entry(selected))
-}
-
-#[cfg(test)]
-pub(in crate::platform::windows) fn select_pane_foreground_job(
-    shell_pid: u32,
-    entries: &[WindowsProcessEntry],
-) -> Option<ForegroundJob> {
-    select_pane_foreground_job_from_snapshot_uncached(
-        shell_pid,
-        &ProcessSnapshot::new(entries.to_vec()),
-    )
-}
-
-pub(in crate::platform::windows) fn process_entry_identifies_agent(
-    entry: &WindowsProcessEntry,
-) -> bool {
-    crate::detect::identify_agent(&entry.name).is_some()
-        || crate::detect::identify_agent_in_job(&foreground_job_from_entry(entry)).is_some()
-}
-
 pub(in crate::platform::windows) fn foreground_job_from_entry(
     entry: &WindowsProcessEntry,
 ) -> ForegroundJob {
@@ -160,44 +89,6 @@ pub(in crate::platform::windows) fn foreground_job_from_entry(
         process_group_id: entry.pid,
         processes: vec![foreground_process_from_entry(entry)],
     }
-}
-
-pub(in crate::platform::windows) fn select_topmost_agent_chain_candidate<'a>(
-    candidates: &[&'a WindowsProcessEntry],
-    snapshot: &ProcessSnapshot,
-) -> Option<&'a WindowsProcessEntry> {
-    if candidates.is_empty() {
-        return None;
-    }
-
-    candidates.iter().copied().find(|entry| {
-        candidates.iter().all(|other| {
-            entry.pid == other.pid || process_is_ancestor(entry.pid, other.pid, snapshot)
-        })
-    })
-}
-
-pub(in crate::platform::windows) fn process_is_ancestor(
-    ancestor_pid: u32,
-    descendant_pid: u32,
-    snapshot: &ProcessSnapshot,
-) -> bool {
-    let mut current = descendant_pid;
-    let mut visited = HashSet::new();
-    while visited.insert(current) {
-        let Some(parent) = snapshot.entry(current).map(|entry| entry.parent_pid) else {
-            return false;
-        };
-        if parent == ancestor_pid {
-            return true;
-        }
-        if parent == 0 {
-            return false;
-        }
-        current = parent;
-    }
-
-    false
 }
 
 pub(in crate::platform::windows) fn descendant_entries(

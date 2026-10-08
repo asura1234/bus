@@ -1,11 +1,11 @@
 use super::*;
 
 fn resumed_info(provider: Provider) -> schema::AgentInfo {
-    let kind = launch::provider_kind(provider);
+    let kind = crate::messaging::identity::provider_kind(provider).label();
     serde_json::from_value(json!({
         "terminal_id": "restored-terminal", "pane_id": "pane",
         "name": "bus-r1-a2", "agent": kind, "agent_status": "idle",
-        "agent_session": {"source": format!("herdr:{kind}"), "agent": kind, "kind": "id", "value": "session"},
+        "agent_session": {"source": crate::messaging::identity::managed_source(provider), "agent": kind, "kind": "id", "value": "session"},
         "workspace_id": "workspace", "tab_id": "tab", "focused": false,
         "interactive_ready": true, "revision": 1
     })).unwrap()
@@ -71,10 +71,7 @@ fn cold_resume_rejects_foreign_missing_and_ambiguous_ownership() {
             "provider" => info.agent = Some("claude".into()),
             "session" => info.agent_session.as_mut().unwrap().value = "foreign".into(),
             "source" => info.agent_session.as_mut().unwrap().source = "untrusted".into(),
-            "kind" => {
-                info.agent_session.as_mut().unwrap().kind =
-                    crate::agent_resume::AgentSessionRefKind::Path
-            }
+            "kind" => info.agent_session.as_mut().unwrap().kind = schema::AgentSessionRefKind::Path,
             "missing-session" => info.agent_session = None,
             _ => {}
         }

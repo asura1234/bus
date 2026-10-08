@@ -1,17 +1,14 @@
 //! Durable private files and OS-released exclusive ownership, outside all UI paths.
-use sha2::{Digest, Sha256};
-use std::{
-    fs::File,
-    io::{self, Write},
-    path::Path,
-};
+// Preserve existing messaging call sites until the S12 import rewrite.
+pub(crate) use crate::utils::time::{now_ms, now_ns};
+use std::{fs::File, io, path::Path};
 
 pub(crate) fn private_dir(path: &Path) -> io::Result<()> {
     if !path.exists() {
         if let Some(parent) = path.parent() {
             private_dir(parent)?;
         }
-        match crate::platform::create_remote_private_dir(path) {
+        match crate::platform::fs::create_private_directory(path) {
             Ok(()) => return Ok(()),
             // Another process or thread created it first; validate theirs.
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
@@ -36,12 +33,7 @@ pub(crate) fn lock(path: &Path) -> io::Result<File> {
     if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
         return Err(io::Error::other("Bus lock is a symlink"));
     }
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)?;
-    file.try_lock().map_err(io::Error::other)?;
-    Ok(file)
+    crate::platform::fs::lock_file(path)
 }
 
 pub(crate) fn append_lock(path: &Path) -> io::Result<File> {
@@ -56,33 +48,15 @@ pub(crate) fn append_lock(path: &Path) -> io::Result<File> {
 }
 
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::other("missing parent"))?;
-    if path.exists() && std::fs::symlink_metadata(path)?.file_type().is_symlink() {
-        return Err(io::Error::other("Bus refuses to replace a symlink"));
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(io::Error::other("Bus refuses to replace a symlink"));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
-    let temp = parent.join(format!(".bus-{}-{}.tmp", std::process::id(), now_ns()));
-    let mut file = crate::platform::create_private_state_file(&temp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    crate::platform::replace_file(&temp, path)?;
-    crate::platform::sync_parent_directory(parent)
-}
-
-pub(crate) fn now_ns() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-}
-
-pub(crate) fn now_ms() -> u64 {
-    (now_ns() / 1_000_000) as u64
-}
-pub(crate) fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::platform::fs::atomic_write(path, bytes)
 }
 
 #[cfg(test)]
@@ -118,6 +92,32 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("state")).unwrap(), b"second");
         drop(lease);
         assert!(super::lock(&dir.join("lock")).is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn storage_write_and_lock_reject_real_and_dangling_symlinks() {
+        let dir = std::env::temp_dir().join(format!("bus-symlink-policy-{}", super::now_ns()));
+        super::private_dir(&dir).unwrap();
+        let target = dir.join("real");
+        std::fs::write(&target, b"original").unwrap();
+        for (name, target) in [
+            ("real-link", target),
+            ("dangling-link", dir.join("missing")),
+        ] {
+            let link = dir.join(name);
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(super::atomic_write(&link, b"replacement").is_err());
+            assert!(super::lock(&link).is_err());
+            assert!(std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+        }
+        assert_eq!(std::fs::read(dir.join("real")).unwrap(), b"original");
+        assert!(!dir.join("missing").exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

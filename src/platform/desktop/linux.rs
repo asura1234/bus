@@ -84,9 +84,10 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
         .map(Some)
 }
 
-pub fn read_clipboard_image() -> Option<ClipboardImage> {
+pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
     if running_inside_wsl() {
-        if let Some(image) = read_wsl_clipboard_image_with_command(|program| Command::new(program))
+        if let Some(image) =
+            read_wsl_clipboard_image_with_command(|program| Command::new(program), max_bytes)
         {
             return Some(image);
         }
@@ -102,7 +103,7 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
     ] {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             if let Some(image) =
-                read_validated_clipboard_image("wl-paste", &["--type", mime], extension)
+                read_validated_clipboard_image("wl-paste", &["--type", mime], extension, max_bytes)
             {
                 return Some(image);
             }
@@ -113,6 +114,7 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
                 "xclip",
                 &["-selection", "clipboard", "-t", mime, "-o"],
                 extension,
+                max_bytes,
             ) {
                 return Some(image);
             }
@@ -124,6 +126,7 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
 
 pub(in crate::platform) fn read_wsl_clipboard_image_with_command(
     mut command: impl FnMut(&str) -> Command,
+    max_bytes: usize,
 ) -> Option<ClipboardImage> {
     let mut command = command("powershell.exe");
     command.args([
@@ -133,7 +136,7 @@ pub(in crate::platform) fn read_wsl_clipboard_image_with_command(
         "-Command",
         "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $image=[System.Windows.Forms.Clipboard]::GetImage(); if ($null -eq $image) { exit 1 }; $stream=[System.IO.MemoryStream]::new(); try { $image.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png); [Console]::OpenStandardOutput().Write($stream.GetBuffer(), 0, [int]$stream.Length) } finally { $stream.Dispose(); $image.Dispose() }",
     ]);
-    let bytes = read_clipboard_image_with_spawned_command(command)?;
+    let bytes = read_clipboard_image_with_spawned_command(command, max_bytes)?;
     bytes_match_image_signature("png", &bytes).then_some(ClipboardImage {
         bytes,
         extension: "png",
@@ -144,8 +147,9 @@ pub(in crate::platform) fn read_validated_clipboard_image(
     program: &str,
     args: &[&str],
     extension: &'static str,
+    max_bytes: usize,
 ) -> Option<ClipboardImage> {
-    let bytes = read_clipboard_image_with_command(program, args)?;
+    let bytes = read_clipboard_image_with_command(program, args, max_bytes)?;
     if !bytes_match_image_signature(extension, &bytes) {
         return None;
     }
@@ -209,19 +213,18 @@ pub(in crate::platform) fn run_notification_command(mut command: Command) -> std
 pub(in crate::platform) fn read_clipboard_image_with_command(
     program: &str,
     args: &[&str],
+    max_bytes: usize,
 ) -> Option<Vec<u8>> {
     let mut command = Command::new(program);
     command.args(args);
-    read_clipboard_image_with_spawned_command(command)
+    read_clipboard_image_with_spawned_command(command, max_bytes)
 }
 
 pub(in crate::platform) fn read_clipboard_image_with_spawned_command(
     command: Command,
+    max_bytes: usize,
 ) -> Option<Vec<u8>> {
-    read_clipboard_image_with_spawned_command_max(
-        command,
-        crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD,
-    )
+    read_clipboard_image_with_spawned_command_max(command, max_bytes)
 }
 
 pub(in crate::platform) fn read_clipboard_image_with_spawned_command_max(

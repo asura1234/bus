@@ -49,7 +49,7 @@ fn queued_delete_is_applied_before_background_delivery_of_earlier_submit() {
             self.calls
                 .lock()
                 .unwrap()
-                .push(crate::api::api_method_name(&method));
+                .push(crate::protocol::api::api_method_name(&method));
             if matches!(method, Method::AgentList(_)) {
                 if let Some((commands, agent)) = self.delete_during_poll.take() {
                     commands.send((2, BusCommand::DeleteAgent(agent))).unwrap();

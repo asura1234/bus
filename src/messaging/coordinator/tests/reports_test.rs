@@ -61,7 +61,7 @@ fn fixture(provider: Provider) -> Fixture {
         callbacks::initialize(
             &dir.join("callbacks").join(launch),
             &callbacks::Manifest {
-                agent_id: agent,
+                routing_key: callbacks::RoutingKey(agent.0),
                 provider,
                 launch_id: launch.into(),
             },

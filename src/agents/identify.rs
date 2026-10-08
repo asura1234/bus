@@ -1,3 +1,7 @@
+#[cfg(windows)]
+#[path = "identify/windows.rs"]
+mod windows;
+
 use super::catalog::{normalized_agent_lookup_name, path_basename};
 use super::{agent_label, parse_agent_label, Agent};
 
@@ -42,7 +46,14 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
 /// Get the foreground job for a given child PID.
 /// Delegates to platform-specific implementation.
 pub fn foreground_job(child_pid: u32) -> Option<crate::platform::ForegroundJob> {
-    crate::platform::foreground_job(child_pid)
+    #[cfg(windows)]
+    {
+        windows::foreground_job(child_pid)
+    }
+    #[cfg(not(windows))]
+    {
+        crate::platform::foreground_job(child_pid)
+    }
 }
 
 /// Get the foreground process group leader as a one-process job.
@@ -56,7 +67,30 @@ pub fn foreground_group_leader_job(
 /// Get the foreground process group for a pane shell PID.
 /// This is cheaper than collecting every process in the foreground job.
 pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
-    crate::platform::foreground_process_group_id(child_pid)
+    #[cfg(windows)]
+    {
+        foreground_job(child_pid).map(|job| job.process_group_id)
+    }
+    #[cfg(not(windows))]
+    {
+        crate::platform::foreground_process_group_id(child_pid)
+    }
+}
+
+/// Interpret the managed-agent marker after platform has collected raw OS facts.
+pub(crate) fn process_agent_hint(pid: u32) -> Option<Agent> {
+    let environ = crate::platform::process_environment(pid)?;
+    parse_agent_env_hint(&environ)
+}
+
+pub(super) fn parse_agent_env_hint(environ: &[u8]) -> Option<Agent> {
+    for record in environ.split(|&byte| byte == 0) {
+        let Some(value) = record.strip_prefix(b"HERDR_AGENT=") else {
+            continue;
+        };
+        return parse_agent_label(std::str::from_utf8(value).ok()?);
+    }
+    None
 }
 
 fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> String {

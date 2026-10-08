@@ -7,4 +7,4 @@ pub(crate) mod stream;
 pub(crate) mod surface;
 mod window_title;
 // The physical image implementation retains its Kitty parent through S11.
-pub(crate) use crate::protocol::kitty::surface as images;
+pub(crate) mod images;

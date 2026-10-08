@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn shared_api_method_labels_match_serialized_requests() {
+    for (name, params) in [
+        ("ping", serde_json::json!({})),
+        ("server.stop", serde_json::json!({})),
+        ("server.reload_config", serde_json::json!({})),
+        ("session.snapshot", serde_json::json!({})),
+        (
+            "client_shell.surface.set",
+            serde_json::json!({"active": true}),
+        ),
+        ("workspace.create", serde_json::json!({})),
+        ("workspace.list", serde_json::json!({})),
+        ("workspace.get", serde_json::json!({"workspace_id": "w1"})),
+        ("tab.get", serde_json::json!({"tab_id": "w1:t1"})),
+        ("agent.get", serde_json::json!({"target": "reviewer"})),
+        (
+            "agent.prompt",
+            serde_json::json!({"target": "reviewer", "text": "review this"}),
+        ),
+        ("pane.get", serde_json::json!({"pane_id": "w1:p1"})),
+        (
+            "pane.send_text",
+            serde_json::json!({"pane_id": "w1:p1", "text": "herdr"}),
+        ),
+    ] {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "id": "method-label", "method": name, "params": params,
+        }))
+        .unwrap();
+        let label = crate::protocol::api::api_method_name(&request.method);
+        assert_eq!(label, name);
+        assert_eq!(serde_json::to_value(&request).unwrap()["method"], label);
+    }
+}
+
+#[test]
 fn request_uses_dot_method_names() {
     let request = Request {
         id: "req_1".into(),

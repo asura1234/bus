@@ -249,6 +249,14 @@ pub struct AgentInfo {
 pub struct AgentSessionInfo {
     pub source: String,
     pub agent: String,
-    pub kind: crate::agent_resume::AgentSessionRefKind,
+    pub kind: AgentSessionRefKind,
     pub value: String,
+}
+
+// API vocabulary stays independent from persisted provider session references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSessionRefKind {
+    Id,
+    Path,
 }

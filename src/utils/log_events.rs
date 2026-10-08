@@ -1,18 +1,5 @@
 use std::path::Path;
 
-pub(crate) fn startup(role: &'static str) {
-    tracing::info!(
-        target: "bus::utils::logging",
-        event = "app.startup",
-        subsystem = role,
-        outcome = "started",
-        pid = std::process::id(),
-        dev = crate::bus::diagnostics::dev_enabled(),
-        version = env!("CARGO_PKG_VERSION"),
-        "herdr starting"
-    );
-}
-
 pub(crate) fn shutdown(role: &'static str) {
     tracing::info!(
         target: "bus::utils::logging",

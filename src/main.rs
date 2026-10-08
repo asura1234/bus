@@ -19,8 +19,8 @@ pub(crate) use compat_paths::noninteractive_process;
 pub(crate) use compat_paths::{
     agent_resume, api, app, build_info, bus, config, copy_mode, detect, events, ghostty, home_path,
     input, ipc, kitty_graphics, layout, logging, pane, pane_state, persist, raw_input, render_prof,
-    render_signal, selection, session, sound, terminal_effects, terminal_modes, terminal_notify,
-    terminal_theme, ui, workspace,
+    render_signal, selection, session, sound, terminal_effects, terminal_modes, terminal_theme, ui,
+    workspace,
 };
 
 fn args_as_utf8<I>(args: I) -> Result<Vec<String>, String>
@@ -44,19 +44,31 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
-    if let Some(result) = bus::callbacks::dispatch(&raw_args) {
-        return result;
+    if raw_args.get(1).map(String::as_str) == Some("--bus-callback") {
+        let logging_options = cli::logging_options();
+        let diagnostics_dir = std::env::var_os("BUS_CALLBACK_DIR").map(std::path::PathBuf::from);
+        if let Some(result) = agents::providers::callback_entry::dispatch(
+            &raw_args,
+            diagnostics_dir,
+            &logging_options,
+        ) {
+            return result;
+        }
     }
     match raw_args.get(1).map(String::as_str) {
         // Hidden entry the client spawns for the persistent daemon.
         Some("server") if raw_args.len() == 2 => {
             configure_session(&raw_args);
-            server::headless::run_server()
+            server::headless::run_server(cli::logging_options(), cli::config_override())
         }
         // Hidden entry that attaches a thin client to the running daemon.
         Some("client") if raw_args.len() == 2 => {
             configure_session(&raw_args);
-            client::run_client()
+            client::run_client(
+                cli::logging_options(),
+                cli::config_override(),
+                cli::stop::stop_active_server,
+            )
         }
         Some("--version" | "-V") if raw_args.len() == 2 => {
             platform::begin_cli_output();

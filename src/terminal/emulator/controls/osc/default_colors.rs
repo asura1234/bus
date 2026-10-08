@@ -338,9 +338,10 @@ pub(super) fn foreground_job_is_shell(
 
 pub(in crate::terminal::emulator) fn current_transient_default_color_owner(
     shell_pid: u32,
+    job: Option<&crate::platform::ForegroundJob>,
 ) -> Option<u32> {
-    let job = crate::detect::foreground_job(shell_pid)?;
-    (!foreground_job_is_shell(&job, shell_pid)).then_some(job.process_group_id)
+    let job = job?;
+    (!foreground_job_is_shell(job, shell_pid)).then_some(job.process_group_id)
 }
 
 #[cfg(target_os = "macos")]
@@ -416,9 +417,9 @@ pub(super) fn write_host_default_color(
     color: Option<crate::terminal_theme::RgbColor>,
 ) {
     let sequence = if let Some(color) = color {
-        crate::terminal_theme::osc_set_default_color_sequence(kind, color)
+        crate::utils::theme::color::osc_set_default_color_sequence(kind, color)
     } else {
-        crate::terminal_theme::osc_reset_default_color_sequence(kind).to_string()
+        crate::utils::theme::color::osc_reset_default_color_sequence(kind).to_string()
     };
     terminal.write(sequence.as_bytes());
 }

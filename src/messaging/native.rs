@@ -39,7 +39,7 @@ impl Transport for HerdrTransport {
         };
         let shell_deadline = Instant::now() + Duration::from_secs(5);
         let started = Instant::now();
-        let method_name = crate::api::api_method_name(&request.method);
+        let method_name = crate::protocol::api::api_method_name(&request.method);
         let _span =
             tracing::debug_span!("bus.api", api_request_id = %request.id, method = method_name)
                 .entered();

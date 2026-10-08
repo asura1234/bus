@@ -1,5 +1,5 @@
 //! Opt-in process edge; provider HOME/XDG settings are never changed.
-use std::{io, path::PathBuf};
+use std::io;
 
 pub(crate) mod control;
 pub(crate) mod help;
@@ -19,8 +19,31 @@ use crate::messaging::{
     },
 };
 
-pub(crate) fn data_dir() -> Option<PathBuf> {
-    std::env::var_os("BUS_DATA_DIR").map(PathBuf::from)
+pub(crate) use crate::utils::env::bus_data_dir as data_dir;
+
+pub(crate) fn logging_options() -> crate::utils::logging::LoggingOptions {
+    use crate::utils::logging::{
+        LoggingOptions, DEFAULT_MAX_LOG_BYTES, DEFAULT_RETAINED_LOG_FILES, DEV_FILTER,
+    };
+    use tracing_subscriber::EnvFilter;
+
+    let dev = std::env::var_os("BUS_DEV").is_some_and(|value| value == "1");
+    LoggingOptions {
+        filter: if dev {
+            EnvFilter::new(DEV_FILTER)
+        } else {
+            EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("bus=info"))
+        },
+        max_bytes: DEFAULT_MAX_LOG_BYTES,
+        retained_files: if dev { 3 } else { DEFAULT_RETAINED_LOG_FILES },
+        dev,
+    }
+}
+
+pub(crate) fn config_override() -> Option<fn(&mut crate::config::Config)> {
+    data_dir()
+        .is_some()
+        .then_some(apply_config as fn(&mut crate::config::Config))
 }
 
 pub(crate) fn run(args: &[String]) -> io::Result<()> {
@@ -28,7 +51,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     let dev = invocation.dev;
     if dev {
         std::env::set_var("BUS_DEV", "1");
-        std::env::set_var("HERDR_LOG", diagnostics::DEV_FILTER);
+        std::env::set_var("HERDR_LOG", crate::utils::logging::DEV_FILTER);
     } else {
         std::env::remove_var("BUS_DEV");
     }
@@ -152,7 +175,7 @@ fn run_session(
                 return Ok(());
             }
             if launch::is_server_listening() {
-                crate::session::stop_active_server()?;
+                stop::stop_active_server()?;
             }
             registry.discard_if_empty(&id)?;
             Ok(())

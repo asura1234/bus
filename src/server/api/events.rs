@@ -601,7 +601,7 @@ fn terminal_agent_session_info(
         .map(|session| crate::api::schema::AgentSessionInfo {
             source: session.source.clone(),
             agent: session.agent.clone(),
-            kind: session.session_ref.kind,
+            kind: crate::server::terminals::api_session_kind(session.session_ref.kind),
             value: session.session_ref.value.clone(),
         })
 }

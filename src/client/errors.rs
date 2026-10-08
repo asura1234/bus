@@ -1,7 +1,20 @@
 use std::io;
 
 use crate::protocol;
-use crate::server::socket_paths::client_socket_path;
+use crate::utils::socket_paths::client_socket_path;
+
+/// Reopens this Bus session: a local session by its ID, an explicit
+/// `BUS_DATA_DIR` root by launching Bus again with the same environment.
+pub(crate) fn local_attach_command() -> String {
+    attach_command_for(std::env::var("BUS_SESSION_ID").ok().as_deref())
+}
+
+pub(crate) fn attach_command_for(session_id: Option<&str>) -> String {
+    match session_id {
+        Some(id) if !id.is_empty() => format!("bus resume {id}"),
+        _ => "bus".to_string(),
+    }
+}
 
 /// Errors that can occur during client operation.
 #[derive(Debug)]
@@ -37,11 +50,7 @@ impl std::fmt::Display for ClientError {
                 match reason.as_deref() {
                     Some("detached") => {
                         write!(f, "detached from server")?;
-                        write!(
-                            f,
-                            "\nRun `{}` to reattach",
-                            crate::session::local_attach_command()
-                        )?;
+                        write!(f, "\nRun `{}` to reattach", local_attach_command())?;
                     }
                     _ => {
                         write!(f, "server shut down")?;

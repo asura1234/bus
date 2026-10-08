@@ -31,9 +31,7 @@ pub use consts::{
     MOUSE_FORMAT_SGR_PIXELS,
 };
 pub use input::{encode_focus, KeyEncoder, KeyEvent, MouseEncoder, MouseEvent};
-pub use kitty::{
-    KittyImageDescriptor, KittyImageFormat, KittyImagePlacement, KittyPlacementRenderInfo,
-};
+pub use kitty::{KittyImageDescriptor, KittyImagePlacement, KittyPlacementRenderInfo};
 pub use read::{CellBasicData, RowCellIter, RowCells, RowIter, RowIterator};
 pub use render::RenderState;
 pub use terminal::Terminal;
@@ -45,9 +43,7 @@ pub use types::{
 };
 pub(crate) use types::{ScreenTextCell, ScreenTextRow, TerminalCompressionResult};
 
-pub fn unicode_codepoint_width(codepoint: u32) -> u8 {
-    unsafe { ffi::ghostty_unicode_codepoint_width(codepoint) }
-}
+pub use crate::utils::text::width::unicode_codepoint_width;
 
 #[cfg(test)]
 mod tests {

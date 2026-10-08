@@ -1,12 +1,13 @@
 //! Durable provider callback consumption and request correlation.
 use super::{
-    callbacks, launch, schema, AgentId, Author, BTreeMap, BTreeSet, BusState, CallbackDisposition,
-    CallbackEventKind, CallbackRejection, Method, Parsed, Path, PathBuf, Provider,
-    ProviderCallback, ResponseResult, RoomId, RuntimeStatus, Worker,
+    launch, schema, AgentId, Author, BTreeMap, BTreeSet, BusState, CallbackDisposition,
+    CallbackEventKind, CallbackRejection, Method, Path, PathBuf, Provider, ProviderCallback,
+    ResponseResult, RoomId, RuntimeStatus, Worker,
 };
 
 #[cfg(test)]
 use super::{AgentRuntimeIdentity, Draft, Transport};
+use crate::agents::providers::{spool as callbacks, spool::Parsed, ProviderKind};
 use std::ops::ControlFlow;
 
 type CallbackRecordResult = ControlFlow<(), (BusState, Option<ProviderCallback>, Vec<PathBuf>)>;
@@ -47,7 +48,7 @@ impl Worker {
             else {
                 continue;
             };
-            if record.manifest.agent_id != id
+            if record.manifest.routing_key != callbacks::RoutingKey(id.0)
                 || record.manifest.provider != agent.provider
                 || &record.manifest.launch_id != launch
             {
@@ -193,7 +194,7 @@ impl Worker {
         let agent = self.state.agent(id).ok_or("Unknown callback agent")?;
         let found = records.iter().find_map(|(other_path, other)| {
             match callbacks::parse(agent.provider, &other.value) {
-                Ok(Parsed::CursorResponse {
+                Ok(Parsed::Response {
                     session: s,
                     turn: t,
                     ..
@@ -219,26 +220,35 @@ impl Worker {
             .state
             .agent(id)
             .is_some_and(|agent| agent.status == RuntimeStatus::Idle);
-        let text = match callbacks::cursor_reply::settle_text(&response.value, idle) {
-            Ok(text) => text,
-            Err(message) => {
-                tracing::debug!(
-                    event = "bus.callback.deferred",
-                    reason = "cursor_transcript_pending",
-                    "Awaiting completed Cursor transcript"
-                );
-                if agent.actionable_error.as_deref() != Some(message.as_str()) {
-                    state
-                        .set_agent_error(id, Some(message))
-                        .map_err(|e| e.to_string())?;
-                    self.save(state)?;
+        let text =
+            match crate::agents::providers::cursor::final_reply::settle_text(&response.value, idle)
+            {
+                Ok(text) => text,
+                Err(message) => {
+                    tracing::debug!(
+                        event = "bus.callback.deferred",
+                        reason = "cursor_transcript_pending",
+                        "Awaiting completed Cursor transcript"
+                    );
+                    if agent.actionable_error.as_deref() != Some(message.as_str()) {
+                        state
+                            .set_agent_error(id, Some(message))
+                            .map_err(|e| e.to_string())?;
+                        self.save(state)?;
+                    }
+                    return Ok(ControlFlow::Break(()));
                 }
-                return Ok(ControlFlow::Break(()));
-            }
-        };
+            };
         Ok(ControlFlow::Continue((
             state,
-            record.callback(session, turn, None, CallbackEventKind::Final { text }),
+            callback(
+                record,
+                id,
+                session,
+                turn,
+                None,
+                CallbackEventKind::Final { text },
+            ),
             other_path.clone(),
         )))
     }
@@ -323,7 +333,9 @@ impl Worker {
                 session,
                 turn,
                 prompt,
-            } => Some(record.callback(
+            } => Some(callback(
+                record,
+                id,
                 session,
                 turn,
                 Some(prompt),
@@ -333,16 +345,35 @@ impl Worker {
                 session,
                 turn,
                 text,
-            } => Some(record.callback(session, turn, None, CallbackEventKind::Final { text })),
-            Parsed::BackgroundPending { session, turn } => {
-                Some(record.callback(session, turn, None, CallbackEventKind::BackgroundPending))
-            }
+            } => Some(callback(
+                record,
+                id,
+                session,
+                turn,
+                None,
+                CallbackEventKind::Final { text },
+            )),
+            Parsed::BackgroundPending { session, turn } => Some(callback(
+                record,
+                id,
+                session,
+                turn,
+                None,
+                CallbackEventKind::BackgroundPending,
+            )),
             Parsed::Failure {
                 session,
                 turn,
                 message,
-            } => Some(record.callback(session, turn, None, CallbackEventKind::Error { message })),
-            Parsed::CursorStop { session, turn } => {
+            } => Some(callback(
+                record,
+                id,
+                session,
+                turn,
+                None,
+                CallbackEventKind::Error { message },
+            )),
+            Parsed::Completed { session, turn } => {
                 return self
                     .cursor_final_callback(id, state, record, records, session, turn)
                     .map(|flow| {
@@ -352,7 +383,7 @@ impl Worker {
                         })
                     });
             }
-            Parsed::CursorResponse { .. } => return Ok(ControlFlow::Break(())),
+            Parsed::Response { .. } => return Ok(ControlFlow::Break(())),
             Parsed::Ignore => None,
         };
         Ok(ControlFlow::Continue((state, callback, remove)))
@@ -441,8 +472,8 @@ impl Worker {
             | Parsed::Final { session, .. }
             | Parsed::BackgroundPending { session, .. }
             | Parsed::Failure { session, .. }
-            | Parsed::CursorStop { session, .. }
-            | Parsed::CursorResponse { session, .. } => Some(session),
+            | Parsed::Completed { session, .. }
+            | Parsed::Response { session, .. } => Some(session),
             Parsed::Ignore => None,
         };
         if let Some(session) = callback_session {
@@ -515,7 +546,7 @@ impl Worker {
             event = "bus.callback.observed",
             "Reading spooled provider callback"
         );
-        if record.manifest.agent_id != id
+        if record.manifest.routing_key != callbacks::RoutingKey(id.0)
             || record.manifest.provider != agent.provider
             || Some(record.manifest.launch_id.as_str())
                 != agent.runtime_identity.launch_id.as_deref()
@@ -586,7 +617,7 @@ impl Worker {
             ControlFlow::Break(flow) => return Ok(flow),
         };
         if record.manifest.provider == Provider::Codex && matches!(parsed, Parsed::Final { .. }) {
-            *rollout = crate::bus::usage::codex_rollout_path(&record.value)
+            *rollout = crate::agents::providers::codex::usage::codex_rollout_path(&record.value)
                 .map(Path::to_path_buf)
                 .or(rollout.take());
         }
@@ -619,7 +650,7 @@ impl Worker {
     /// Codex writes rate limits into its rollout after each turn. Usage is
     /// advisory: a failed read keeps the previous snapshot and never errors.
     fn refresh_codex_usage(&mut self, id: AgentId, path: &Path) {
-        match crate::bus::usage::read_codex_rollout(path) {
+        match crate::agents::providers::codex::usage::read_codex_rollout(path) {
             Ok(Some(windows)) => {
                 self.usage.codex = Some(crate::bus::usage::UsageSnapshot {
                     windows,
@@ -656,8 +687,8 @@ fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
                     Parsed::Started { session, turn, .. }
                     | Parsed::Final { session, turn, .. }
                     | Parsed::BackgroundPending { session, turn }
-                    | Parsed::CursorResponse { session, turn, .. }
-                    | Parsed::CursorStop { session, turn }
+                    | Parsed::Response { session, turn, .. }
+                    | Parsed::Completed { session, turn }
                     | Parsed::Failure { session, turn, .. },
                 ) => Some((session.clone(), turn.clone())),
                 _ => None,
@@ -686,3 +717,30 @@ fn order_records(records: &mut Vec<(PathBuf, callbacks::Record)>) {
     });
     records.extend(keyed.into_iter().map(|(_, _, entry)| entry));
 }
+
+/// Map an observation only after the coordinator has validated its routing facts.
+fn callback(
+    record: &callbacks::Record,
+    id: AgentId,
+    session: String,
+    turn: String,
+    prompt: Option<String>,
+    kind: CallbackEventKind,
+) -> ProviderCallback {
+    ProviderCallback {
+        callback_id: record.id.clone(),
+        sequence: record.sequence,
+        occurred_at_ms: record.at_ms,
+        agent_id: id,
+        launch_id: record.manifest.launch_id.clone(),
+        provider_session_id: Some(session),
+        provider_turn_id: Some(turn.clone()),
+        provider_prompt_id: (record.manifest.provider == ProviderKind::ClaudeCode).then_some(turn),
+        prompt_payload: prompt,
+        kind,
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/callbacks_test.rs"]
+mod tests;

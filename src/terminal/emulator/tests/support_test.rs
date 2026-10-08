@@ -53,7 +53,7 @@ pub(super) fn process_windows_powershell_prompt_bytes(
     let terminal = crate::ghostty::Terminal::new(cols, rows, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     pane.set_windows_powershell_prompt_cwd_reporting(enabled);
-    pane.process_pty_bytes(PaneId::from_raw(1), 0, bytes, &tx)
+    pane.process_pty_bytes(PaneId::from_raw(1), 0, bytes, &tx, |_| None)
 }
 
 pub(super) fn expected_xtgettcap_response(cap_hex: &str, value: Option<&[u8]>) -> Bytes {

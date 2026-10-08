@@ -227,7 +227,7 @@ fn send_unix_input_chunks(
     for data in chunks {
         let palette_response = std::str::from_utf8(&data)
             .ok()
-            .and_then(crate::terminal_theme::parse_palette_color_response);
+            .and_then(crate::utils::theme::color::parse_palette_color_response);
         if let Some((index, _color)) = palette_response {
             host_palette_query_progress.store(u16::from(index) + 1, Ordering::Release);
             if index == u8::MAX {
@@ -243,7 +243,7 @@ fn send_unix_input_chunks(
         }
         let default_color_response = std::str::from_utf8(&data)
             .ok()
-            .and_then(crate::terminal_theme::parse_default_color_response)
+            .and_then(crate::utils::theme::color::parse_default_color_response)
             .is_some();
         if !default_color_response
             && !flush_unix_palette_input(event_tx, pending_palette, host_palette_query_pending)

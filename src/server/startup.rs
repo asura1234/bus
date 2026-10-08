@@ -10,11 +10,17 @@ use crate::utils::socket_paths::client_socket_path;
 use crate::{api, app, config};
 
 /// Run the headless server. This is the entry point called from main.rs.
-pub fn run_server() -> io::Result<()> {
-    init_logging();
+pub fn run_server(
+    logging_options: crate::utils::logging::LoggingOptions,
+    config_override: Option<fn(&mut config::Config)>,
+) -> io::Result<()> {
+    init_logging(&logging_options);
     crate::platform::raise_server_nofile_limit();
 
-    let loaded_config = config::Config::load();
+    let mut loaded_config = config::Config::load();
+    if let Some(apply) = config_override {
+        apply(&mut loaded_config.config);
+    }
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
     let should_quit = Arc::new(AtomicBool::new(false));
@@ -74,6 +80,7 @@ pub fn run_server() -> io::Result<()> {
         );
         print_ready_message(&api::socket_path(), &client_socket_path());
 
+        crate::utils::logging::startup("server", logging_options.dev);
         server.run().await
     });
 
@@ -107,8 +114,8 @@ fn seed_startup_workspace_if_empty(app: &mut app::App) {
 }
 
 fn take_startup_cwd() -> Option<PathBuf> {
-    let cwd = std::env::var_os(crate::cli::launch::STARTUP_CWD_ENV_VAR)?;
-    std::env::remove_var(crate::cli::launch::STARTUP_CWD_ENV_VAR);
+    let cwd = std::env::var_os(crate::utils::env::STARTUP_CWD_ENV_VAR)?;
+    std::env::remove_var(crate::utils::env::STARTUP_CWD_ENV_VAR);
     (!cwd.is_empty()).then(|| PathBuf::from(cwd))
 }
 
@@ -126,6 +133,14 @@ fn print_ready_message(api_socket: &Path, client_socket: &Path) {
 }
 
 /// Initialize logging for the server process.
-fn init_logging() {
-    crate::logging::init_file_logging("herdr-server.log");
+fn init_logging(options: &crate::utils::logging::LoggingOptions) {
+    crate::utils::logging::init_file_logging_at(
+        crate::utils::paths::data_dir(),
+        "herdr-server.log",
+        options,
+    );
 }
+
+#[cfg(test)]
+#[path = "tests/startup_env_test.rs"]
+mod env_tests;

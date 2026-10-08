@@ -44,11 +44,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 /// Which notification sound to play.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sound {
-    /// Something finished.
-    Done,
-}
+pub use crate::utils::config::Sound;
 
 #[cfg(test)]
 #[path = "tests/sound_test.rs"]

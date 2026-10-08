@@ -24,9 +24,14 @@ impl PaneTerminal {
         self.ghostty.has_transient_default_color_override()
     }
 
-    pub fn maybe_restore_host_terminal_theme(&self, pane_id: PaneId, shell_pid: u32) -> bool {
+    pub fn maybe_restore_host_terminal_theme(
+        &self,
+        pane_id: PaneId,
+        shell_pid: u32,
+        foreground_job: impl FnOnce() -> Option<crate::platform::ForegroundJob>,
+    ) -> bool {
         self.ghostty
-            .maybe_restore_host_terminal_theme(pane_id, shell_pid)
+            .maybe_restore_host_terminal_theme(pane_id, shell_pid, foreground_job)
     }
 }
 
@@ -98,7 +103,12 @@ impl GhosttyPaneTerminal {
             .unwrap_or(false)
     }
 
-    pub fn maybe_restore_host_terminal_theme(&self, pane_id: PaneId, shell_pid: u32) -> bool {
+    pub fn maybe_restore_host_terminal_theme(
+        &self,
+        pane_id: PaneId,
+        shell_pid: u32,
+        foreground_job: impl FnOnce() -> Option<crate::platform::ForegroundJob>,
+    ) -> bool {
         {
             let Ok(core) = self.core.lock() else {
                 return false;
@@ -108,7 +118,7 @@ impl GhosttyPaneTerminal {
             }
         }
 
-        let foreground_job = crate::detect::foreground_job(shell_pid);
+        let foreground_job = foreground_job();
         let Ok(mut core) = self.core.lock() else {
             return false;
         };

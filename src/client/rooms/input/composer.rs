@@ -405,13 +405,15 @@ impl BusUi {
     }
 
     pub(super) fn paste_image(&mut self) {
-        let Some(image) = crate::platform::read_clipboard_image() else {
+        let Some(image) =
+            crate::platform::read_clipboard_image(crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD)
+        else {
             return;
         };
         let Some(room) = self.room else {
             return;
         };
-        let Some(root) = crate::bus::entry::data_dir() else {
+        let Some(root) = crate::utils::env::bus_data_dir() else {
             self.error = Some("Could not save the clipboard image: no Bus data directory.".into());
             return;
         };
@@ -434,7 +436,7 @@ impl BusUi {
     /// would then lose the image. Bus keeps its own copy under the room's
     /// attachments, as for a clipboard image; any other path is kept as given.
     pub(super) fn keep_temporary_image(&mut self, room: RoomId, path: String) -> String {
-        let Some(root) = crate::bus::entry::data_dir() else {
+        let Some(root) = crate::utils::env::bus_data_dir() else {
             return path;
         };
         match copy_temporary_image(&root, room, std::path::Path::new(&path)) {

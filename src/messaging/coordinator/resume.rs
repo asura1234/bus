@@ -1,5 +1,11 @@
 //! Reconnect a Bus agent to the same provider conversation after PTY restore.
-use super::{launch, schema, Agent, BusState};
+use super::{schema, Agent, BusState};
+use crate::messaging::identity;
+
+mod capture;
+#[cfg(test)]
+pub(crate) use capture::load;
+pub(crate) use capture::{for_native_resume, LaunchExtras, NativeResumeContext, NativeResumeFacts};
 
 pub(super) fn restored_agent<'a>(
     state: &BusState,
@@ -19,16 +25,16 @@ pub(super) fn restored_agent<'a>(
         .launch_id
         .as_deref()
         .filter(|s| !s.is_empty())?;
-    let kind = launch::provider_kind(agent.provider);
-    let name = format!("bus-r{}-a{}", agent.room_id.0, agent.id.0);
-    let source = format!("herdr:{kind}");
+    let kind = identity::provider_kind(agent.provider).label();
+    let name = identity::managed_name(agent.room_id, agent.id);
+    let source = identity::managed_source(agent.provider);
     let mut matches = infos.iter().filter(|info| {
         info.name.as_deref() == Some(name.as_str())
             && info.agent.as_deref() == Some(kind)
             && info.agent_session.as_ref().is_some_and(|native| {
                 native.source == source
                     && native.agent == kind
-                    && native.kind == crate::agent_resume::AgentSessionRefKind::Id
+                    && native.kind == schema::AgentSessionRefKind::Id
                     && native.value == session
             })
     });

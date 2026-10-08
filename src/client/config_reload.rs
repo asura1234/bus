@@ -5,8 +5,12 @@ use super::{
 use crate::protocol::ClientMessage;
 use tracing::{debug, warn};
 
-pub(super) fn init_logging() {
-    crate::logging::init_file_logging("herdr-client.log");
+pub(super) fn init_logging(options: &crate::utils::logging::LoggingOptions) {
+    crate::utils::logging::init_file_logging_at(
+        crate::utils::paths::data_dir(),
+        "herdr-client.log",
+        options,
+    );
 }
 
 pub(super) fn apply_reload(

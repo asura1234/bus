@@ -10,7 +10,6 @@ use std::time::Duration;
 use tracing::warn;
 
 pub(crate) use accept::start_server_with_stop_control;
-pub(crate) use connection::api_method_name;
 pub(in crate::server::api) use connection::{
     dispatch_to_app_with_caller_timeout, dispatch_to_app_with_timeout, should_stop_connection,
 };

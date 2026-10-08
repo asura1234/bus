@@ -1,19 +1,15 @@
 use crate::app::AppState;
 use crate::detect::AgentState;
-use crate::terminal::TerminalRuntimeRegistry;
 
 pub(crate) struct AgentPanelEntry {
     pub ws_idx: usize,
-    pub pane_id: crate::layout::PaneId,
+    pub pane_id: crate::utils::ids::PaneId,
     pub state: AgentState,
     pub seen: bool,
     pub last_agent_state_change_seq: Option<u64>,
 }
 
-pub(crate) fn agent_panel_entries_from(
-    app: &AppState,
-    _terminal_runtimes: &TerminalRuntimeRegistry,
-) -> Vec<AgentPanelEntry> {
+pub(crate) fn agent_panel_entries_from(app: &AppState) -> Vec<AgentPanelEntry> {
     let mut entries: Vec<AgentPanelEntry> = app
         .workspaces
         .iter()
@@ -77,8 +73,8 @@ mod tests {
         state
     }
 
-    fn projected_entries(state: &AppState) -> Vec<crate::ui::AgentPanelEntry> {
-        crate::ui::agent_panel_entries_from(state, &crate::terminal::TerminalRuntimeRegistry::new())
+    fn projected_entries(state: &AppState) -> Vec<AgentPanelEntry> {
+        agent_panel_entries_from(state)
     }
 
     #[test]

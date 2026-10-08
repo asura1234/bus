@@ -114,7 +114,13 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
         };
         content_seq.fetch_add(1, Ordering::AcqRel);
         let shell_pid = child_pid.load(Ordering::Acquire);
-        let result = terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
+        let result = terminal.process_pty_bytes(
+            pane_id,
+            shell_pid,
+            bytes,
+            &response_writer,
+            super::detection_process::foreground_job,
+        );
         content_seq.fetch_add(1, Ordering::Release);
         drop(_content_write_guard);
         compression_wake.wake();

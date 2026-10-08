@@ -63,8 +63,8 @@ fn procargs2_env_reads_agent_hint_after_argv() {
 
     let env = procargs2_env(&buf).expect("expected env block");
     assert_eq!(
-        crate::platform::parse_agent_env_hint(env),
-        Some(crate::detect::Agent::Claude)
+        env,
+        b"PATH=/usr/bin\0HERDR_AGENT=claude\0TERM=xterm-256color\0"
     );
 }
 
@@ -77,5 +77,5 @@ fn procargs2_env_does_not_treat_argv_as_environment() {
     );
 
     let env = procargs2_env(&buf).expect("expected env block");
-    assert_eq!(crate::platform::parse_agent_env_hint(env), None);
+    assert_eq!(env, b"PATH=/usr/bin\0");
 }

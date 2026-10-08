@@ -156,9 +156,9 @@ pub(in crate::client) fn write_host_color_scheme_report_mode(
     enabled: bool,
 ) -> io::Result<()> {
     let sequence = if enabled {
-        crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_ENABLE_SEQUENCE
+        crate::utils::theme::color::HOST_COLOR_SCHEME_REPORT_ENABLE_SEQUENCE
     } else {
-        crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE
+        crate::utils::theme::color::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE
     };
     writer.write_all(sequence.as_bytes())?;
     writer.flush()
@@ -170,7 +170,7 @@ pub(in crate::client) fn write_terminal_restore_postlude(
 ) -> io::Result<()> {
     if reset_host_color_scheme_reports {
         writer.write_all(
-            crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
+            crate::utils::theme::color::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
         )?;
     }
     // Restore a visible cursor and reset DECSCUSR back to the terminal default.

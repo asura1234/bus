@@ -32,10 +32,7 @@ use crate::events::AppEvent;
 
 use super::app_settings::{agent_panel_sort_from_config, parse_cjk_ime_agents};
 use crate::utils::theme::theme_runtime_config;
-pub(crate) use crate::utils::theme::{
-    client_palette_for_appearance, client_palette_from_config, client_theme_runtime_from_config,
-    resolve_effective_theme,
-};
+pub(crate) use crate::utils::theme::{client_palette_for_appearance, resolve_effective_theme};
 pub use state::{AppState, Mode, ToastKind, ViewState};
 
 /// Full application: AppState + runtime concerns (event channels, async I/O).
@@ -127,18 +124,28 @@ impl App {
                 .pane_history
                 .then(crate::persist::load_history)
                 .flatten();
-            let (ws, terminals, terminal_runtimes) = crate::persist::restore(
+            let restored = crate::persist::restore(
                 &snap,
                 history.as_ref(),
-                24,
-                80,
-                config.advanced.scrollback_limit_bytes,
-                &config.terminal.default_shell,
-                config.terminal.shell_mode,
                 config.session.resume_agents_on_restore,
                 event_tx.clone(),
                 render_notify.clone(),
                 render_dirty.clone(),
+            );
+            let (ws, terminals, terminal_runtimes) = super::terminals::restore_launch::execute(
+                restored,
+                super::terminals::restore_launch::RestoreLaunchContext {
+                    rows: 24,
+                    cols: 80,
+                    scrollback_limit_bytes: config.advanced.scrollback_limit_bytes,
+                    shell_config: crate::terminal::runtime::PaneShellConfig::new(
+                        &config.terminal.default_shell,
+                        config.terminal.shell_mode,
+                    ),
+                    events: event_tx.clone(),
+                    render_notify: render_notify.clone(),
+                    render_dirty: render_dirty.clone(),
+                },
             );
             restored_terminals = terminals;
             restored_terminal_runtimes = terminal_runtimes.into();

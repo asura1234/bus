@@ -15,7 +15,7 @@ mod codex_activity_tests;
 mod catalog;
 mod detect;
 mod identify;
-#[cfg(any(windows, test))]
+#[cfg(test)]
 pub use identify::identify_agent;
 
 pub(crate) use self::catalog::parse_canonical_agent_label;
@@ -35,3 +35,6 @@ mod tests {
     include!("identify/tests/identity_test.rs");
     include!("detect/tests/detect_test.rs");
 }
+
+pub(crate) mod providers;
+pub(crate) use self::identify::process_agent_hint;

@@ -7,8 +7,8 @@ use ratatui::{
 };
 
 use crate::{
-    app::state::{CopyFeedback, Palette},
     config::ToastClipboardPosition,
+    utils::{render::widgets::CopyFeedback, theme::Palette},
 };
 
 pub(crate) fn copy_feedback_rect(

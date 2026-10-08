@@ -216,13 +216,17 @@ impl ClientShellState {
                         rect.height,
                     )
                 });
-                hit.scroll = updated.scroll.map(|metrics| crate::pane::ScrollMetrics {
-                    offset_from_bottom: usize::try_from(metrics.offset_from_bottom)
-                        .unwrap_or(usize::MAX),
-                    max_offset_from_bottom: usize::try_from(metrics.max_offset_from_bottom)
-                        .unwrap_or(usize::MAX),
-                    viewport_rows: usize::try_from(metrics.viewport_rows).unwrap_or(usize::MAX),
-                });
+                hit.scroll =
+                    updated
+                        .scroll
+                        .map(|metrics| crate::utils::render::widgets::ScrollMetrics {
+                            offset_from_bottom: usize::try_from(metrics.offset_from_bottom)
+                                .unwrap_or(usize::MAX),
+                            max_offset_from_bottom: usize::try_from(metrics.max_offset_from_bottom)
+                                .unwrap_or(usize::MAX),
+                            viewport_rows: usize::try_from(metrics.viewport_rows)
+                                .unwrap_or(usize::MAX),
+                        });
                 hit.mouse_reporting = updated.mouse_reporting;
                 hit.sgr_pixel_mouse = updated.sgr_pixel_mouse;
                 hit.pixel_width = updated.pixel_width;

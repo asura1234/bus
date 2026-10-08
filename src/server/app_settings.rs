@@ -21,11 +21,6 @@ pub enum AgentPanelSort {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CopyFeedback {
-    pub message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaneFocusTarget {
     pub workspace_id: String,
     pub pane_id: PaneId,

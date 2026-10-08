@@ -43,7 +43,7 @@ pub(super) fn dispatch_client_shell_actions(
                 endpoint_commands.enqueue(boot_id, request);
             }
             shell::ClientShellAction::ClipboardWrite(bytes) => {
-                crate::selection::write_osc52_bytes(&bytes);
+                crate::client::clipboard::write_osc52_bytes(&bytes);
             }
             shell::ClientShellAction::EditComposer => {
                 if let Some(shell) = shell.as_deref_mut() {

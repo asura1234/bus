@@ -37,6 +37,21 @@ callback folder, and the provider receives it again on resume.
 `skills/workflow-create/SKILL.md` is only its skill entrypoint; the binary never
 embeds that pointer. This README documents the contract and is not embedded.
 
+## Build input closure
+
+There are exactly eight embedded inputs in the table above. Cargo source
+archives must include `orchestration/` and `workflows/`; the Nix build fileset
+includes the same directories. These are build inputs. Missing source files
+fail compilation through `include_str!`, and an unknown or unfinished
+`{{...}}` placeholder in the compiled default prompt fails its constant
+assertion. The documentation's literal placeholder examples are left intact.
+
+The orchestration tests enumerate all eight repository copies, check rendered
+placeholders and compare emitted bytes at unrelated output locations. The
+default content comes from the binary regardless of the process's working
+directory or where the executable is installed. Explicit custom prompts keep
+their existing per-launch filling behavior.
+
 ## Prompt placeholders
 
 Bus replaces these placeholders in an orchestrator prompt:

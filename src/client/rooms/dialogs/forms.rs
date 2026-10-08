@@ -146,7 +146,7 @@ impl super::BusUi {
             .0
             .and_then(|room| self.snapshot.state.room(room))
             .map(|room| (room.name.clone(), room.id));
-        let docs = crate::bus::entry::data_dir().map_or_else(
+        let docs = crate::utils::env::bus_data_dir().map_or_else(
             || std::path::PathBuf::from("<BUS_DATA_DIR>/docs"),
             |data| orchestrator::docs_dir(&data),
         );

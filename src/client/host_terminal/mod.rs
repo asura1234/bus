@@ -1,4 +1,3 @@
-pub(crate) mod color_probe;
 pub(crate) mod effects;
 pub(super) mod frame_output;
 pub(super) mod geometry;

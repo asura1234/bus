@@ -31,10 +31,6 @@ use process::foreground::descendant_entries;
 #[cfg(test)]
 use process::foreground::foreground_job_from_entry;
 #[cfg(test)]
-use process::foreground::select_pane_foreground_job;
-#[cfg(test)]
-use process::foreground::select_pane_foreground_job_from_snapshot_with_runtime_inspection;
-#[cfg(test)]
 use process::foreground::CachedForegroundSelection;
 #[cfg(test)]
 use process::foreground::ForegroundSelectionCache;
@@ -43,8 +39,6 @@ use process::foreground::FOREGROUND_SELECTION_CACHE_RETENTION;
 #[cfg(test)]
 use process::foreground::FOREGROUND_SELECTION_RECHECK;
 pub use process::foreground_group_leader_job;
-pub use process::foreground_job;
-pub use process::foreground_process_group_id;
 pub(crate) use process::peb::apply_pane_runtime_marker_platform;
 #[cfg(test)]
 use process::peb::environment_variable_from_utf16;
@@ -62,14 +56,12 @@ use process::session_processes_from_snapshot;
 pub use process::signal_processes;
 #[cfg(test)]
 use process::snapshot::ProcessIdentity;
-#[cfg(test)]
-use process::snapshot::ProcessSnapshot;
+pub(crate) use process::snapshot::ProcessSnapshot;
 #[cfg(test)]
 use process::snapshot::ProcessSnapshotCache;
 #[cfg(test)]
-use process::snapshot::WindowsProcessCommand;
-#[cfg(test)]
-use process::snapshot::WindowsProcessEntry;
+pub(crate) use process::snapshot::WindowsProcessCommand;
+pub(crate) use process::snapshot::WindowsProcessEntry;
 pub(crate) use shell::interactive_shell_command;
 pub(crate) use shell::remote_reattach_program;
 pub(crate) use shell::scrollback_editor_argv;
@@ -142,41 +134,6 @@ pub(crate) fn resolve_base_printable_key(vk: u16, scan: u16) -> Option<char> {
     }
 }
 
-/// Encode native or targeted semantic Win32 input for a compatible ConPTY destination.
-pub(crate) fn encode_windows_conpty_fallback(key: &crate::input::TerminalKey) -> Option<Vec<u8>> {
-    use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
-
-    let (virtual_key_code, virtual_scan_code, unicode, control_key_state) =
-        if let Some(record) = key.windows_record() {
-            (
-                record.virtual_key_code,
-                record.virtual_scan_code,
-                record.unicode,
-                record.control_key_state,
-            )
-        } else if key.code == KeyCode::Esc
-            && key.modifiers.is_empty()
-            && key.kind == KeyEventKind::Press
-            && key.vt_bytes().is_none()
-        {
-            return Some(b"\x1b[27;1;27;1;0;1_\x1b[27;1;27;0;0;1_".to_vec());
-        } else if key.code == KeyCode::Enter && key.modifiers == KeyModifiers::SHIFT {
-            (13, 28, 13, 16)
-        } else {
-            return None;
-        };
-    let key_down = key.kind != KeyEventKind::Release;
-    let repeat_count = if key_down { key.repeat_count.max(1) } else { 1 };
-
-    Some(
-        format!(
-            "\x1b[{virtual_key_code};{virtual_scan_code};{unicode};{};{control_key_state};{repeat_count}_",
-            u8::from(key_down),
-        )
-        .into_bytes(),
-    )
-}
-
 pub(crate) fn should_draw_host_cursor_by_default() -> bool {
     true
 }
@@ -232,3 +189,5 @@ fn wide_null(value: &str) -> Vec<u16> {
 #[cfg(test)]
 #[path = "tests/shell_test.rs"]
 mod tests;
+
+pub(crate) use process::foreground::pane_foreground_job_with;

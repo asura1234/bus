@@ -268,9 +268,6 @@ pub(super) fn render_panes(
 #[cfg(test)]
 mod tests {
     use super::super::chrome::pane_border_title;
-    use super::super::selection::{
-        automatic_selection_bg, automatic_selection_style, render_selection_highlight,
-    };
     use super::super::text::display_width;
     use super::*;
     use crate::app::state::Palette;
@@ -279,10 +276,13 @@ mod tests {
     use crate::selection::Selection;
     use crate::terminal::TerminalRuntime;
     use crate::terminal::TerminalState;
+    use crate::utils::render::widgets::selection::{
+        automatic_selection_bg, automatic_selection_style, render_selection_highlight,
+    };
     use crate::workspace::Workspace;
     use ratatui::style::{Color, Modifier, Style};
 
     include!("chrome/tests/chrome_test.rs");
     include!("tests/geometry_test.rs");
-    include!("selection/tests/selection_test.rs");
+    include!("../../../utils/render/widgets/tests/selection_test.rs");
 }

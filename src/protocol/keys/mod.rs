@@ -12,3 +12,6 @@ pub use key::ime_compatible_keyboard_enhancement_flags;
 pub use key::WindowsKeyRecord;
 pub use key::{host_modify_other_keys_mode, KeyIdentity, TerminalKey, TextCommit};
 pub use protocol::KeyboardProtocol;
+
+#[cfg(windows)]
+pub(crate) use encode::encode_windows_conpty_fallback;

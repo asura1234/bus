@@ -56,7 +56,7 @@ impl GhosttyPaneTerminal {
                 .is_ok_and(|flags| flags == 0)
                 && !core.kitty_keyboard.modify_other_keys_enabled()
         }) {
-            if let Some(bytes) = crate::platform::encode_windows_conpty_fallback(&key) {
+            if let Some(bytes) = crate::protocol::keys::encode_windows_conpty_fallback(&key) {
                 return bytes;
             }
         }

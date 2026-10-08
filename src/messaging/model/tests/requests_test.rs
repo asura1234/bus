@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+fn pure_wait_reason_preserves_precedence_and_codex_first_session_exception() {
+    let (state, id, request) = idle_with_queued(1_000, "go");
+    let mut agent = state.agent(id).unwrap().clone();
+    agent.status = RuntimeStatus::Idle;
+    agent.hook_setup_confirmed = true;
+    agent.runtime_identity.launch_id = Some("launch".into());
+    agent.runtime_identity.terminal_id = Some("terminal".into());
+    agent.runtime_identity.pane_id = Some("pane".into());
+    agent.runtime_identity.session_id = None;
+    agent.current_request = None;
+    agent.provider = Provider::Codex;
+    assert_eq!(agent.wait_reason(), None);
+    agent.dialog = true;
+    assert_eq!(agent.shown_status(), RuntimeStatus::Blocked);
+    assert_eq!(agent.wait_reason(), None);
+    agent.provider = Provider::ClaudeCode;
+    assert_eq!(agent.wait_reason(), Some("session_hook_missing"));
+    agent.runtime_identity.pane_id = None;
+    assert_eq!(agent.wait_reason(), Some("terminal_identity_missing"));
+    agent.current_request = Some(request);
+    assert_eq!(agent.wait_reason(), Some("prior_request_active"));
+    for (status, reason) in [
+        (RuntimeStatus::Unavailable, "agent_unavailable"),
+        (RuntimeStatus::Launching, "agent_launching"),
+        (RuntimeStatus::Working, "agent_working"),
+        (RuntimeStatus::Blocked, "agent_blocked"),
+    ] {
+        agent.status = status;
+        assert_eq!(agent.wait_reason(), Some(reason));
+    }
+    agent.hook_setup_confirmed = false;
+    assert_eq!(agent.wait_reason(), Some("hook_setup_unconfirmed"));
+    agent.session_binding_invalidated = true;
+    assert_eq!(agent.wait_reason(), Some("session_invalidated"));
+    agent.deletion_pending = true;
+    assert_eq!(agent.wait_reason(), Some("deletion_pending"));
+}
+
+#[test]
 fn submission_preserves_first_recipient_selection_order() {
     let (mut state, room, codex, claude) = state_with_room_and_agents();
     state
@@ -157,7 +196,10 @@ fn a_queued_message_refused_by_the_input_box_stalls_with_that_reason() {
 #[test]
 fn a_queued_message_without_a_refusal_stalls_with_the_wait_reason() {
     let (state, agent, request) = idle_with_queued(1_000, "go");
-    let expected = crate::messaging::diagnostics::wait_reason(state.agent(agent).unwrap())
+    let expected = state
+        .agent(agent)
+        .unwrap()
+        .wait_reason()
         .unwrap_or("not_submitted");
     assert_eq!(
         stall_at(&state, request, 1_000 + QUEUED_STALL_MS).as_deref(),

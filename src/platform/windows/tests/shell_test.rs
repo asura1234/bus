@@ -158,7 +158,7 @@ fn cmd_agent_command_encodes_edge_arguments_without_cmd_expansion() {
 
 #[test]
 fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
-    let _lock = crate::pane::env::env_lock();
+    let _lock = crate::utils::test_env::env_lock();
     let base = std::env::temp_dir().join(format!(
         "herdr-agent-argv-{}-{}",
         std::process::id(),

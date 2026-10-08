@@ -5,8 +5,6 @@ fn env_lock() -> &'static Mutex<()> {
     crate::config::test_config_env_lock()
 }
 
-include!("../../../cli/tests/session_stop_test.rs");
-
 #[test]
 fn configure_from_args_removes_global_session_option() {
     let _guard = env_lock().lock().unwrap();
@@ -99,7 +97,10 @@ fn configure_from_args_preserves_child_session_equals_option_after_separator() {
 fn configure_from_args_rewrites_session_attach_to_default_launch() {
     let _guard = env_lock().lock().unwrap();
     std::env::set_var(SESSION_ENV_VAR, "bad/name");
-    std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/inherited.sock");
+    std::env::set_var(
+        crate::utils::env::SOCKET_PATH_ENV_VAR,
+        "/tmp/inherited.sock",
+    );
     clear_explicit_session_for_test();
     let args = vec![
         "herdr".to_string(),
@@ -114,7 +115,7 @@ fn configure_from_args_rewrites_session_attach_to_default_launch() {
     assert!(explicit_session_requested());
     assert_eq!(cleaned, vec!["herdr"]);
     std::env::remove_var(SESSION_ENV_VAR);
-    std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+    std::env::remove_var(crate::utils::env::SOCKET_PATH_ENV_VAR);
     clear_explicit_session_for_test();
 }
 
@@ -145,7 +146,10 @@ fn configure_from_args_maps_default_session_name_to_default_path() {
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
     std::env::set_var(SESSION_ENV_VAR, "work");
     clear_explicit_session_for_test();
-    std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/inherited.sock");
+    std::env::set_var(
+        crate::utils::env::SOCKET_PATH_ENV_VAR,
+        "/tmp/inherited.sock",
+    );
     let args = vec![
         "herdr".to_string(),
         "--session".to_string(),
@@ -168,7 +172,7 @@ fn configure_from_args_maps_default_session_name_to_default_path() {
     std::env::remove_var("XDG_CONFIG_HOME");
     std::env::remove_var(SESSION_ENV_VAR);
     clear_explicit_session_for_test();
-    std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+    std::env::remove_var(crate::utils::env::SOCKET_PATH_ENV_VAR);
 }
 
 #[test]
@@ -197,7 +201,7 @@ fn env_default_session_name_uses_default_path() {
     let config_home =
         std::env::temp_dir().join(format!("herdr-env-session-default-{}", std::process::id()));
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
-    std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+    std::env::remove_var(crate::utils::env::SOCKET_PATH_ENV_VAR);
     std::env::set_var(SESSION_ENV_VAR, DEFAULT_SESSION_NAME);
     EXPLICIT_SESSION_REQUESTED.store(true, Ordering::Relaxed);
     let args = vec![
@@ -219,11 +223,9 @@ fn env_default_session_name_uses_default_path() {
     );
     std::env::remove_var("XDG_CONFIG_HOME");
     std::env::remove_var(SESSION_ENV_VAR);
-    std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+    std::env::remove_var(crate::utils::env::SOCKET_PATH_ENV_VAR);
     clear_explicit_session_for_test();
 }
-
-include!("../../../cli/tests/session_guidance_test.rs");
 
 #[test]
 fn explicit_session_socket_ignores_inherited_socket_override() {
@@ -234,7 +236,10 @@ fn explicit_session_socket_ignores_inherited_socket_override() {
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
     std::env::set_var(SESSION_ENV_VAR, "work");
     EXPLICIT_SESSION_REQUESTED.store(true, Ordering::Relaxed);
-    std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/inherited.sock");
+    std::env::set_var(
+        crate::utils::env::SOCKET_PATH_ENV_VAR,
+        "/tmp/inherited.sock",
+    );
 
     let path = active_api_socket_path();
 
@@ -249,7 +254,7 @@ fn explicit_session_socket_ignores_inherited_socket_override() {
     std::env::remove_var("XDG_CONFIG_HOME");
     std::env::remove_var(SESSION_ENV_VAR);
     clear_explicit_session_for_test();
-    std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+    std::env::remove_var(crate::utils::env::SOCKET_PATH_ENV_VAR);
 }
 
 #[test]
@@ -257,16 +262,19 @@ fn env_socket_override_wins_without_explicit_session() {
     let _guard = env_lock().lock().unwrap();
     std::env::set_var(SESSION_ENV_VAR, "work");
     clear_explicit_session_for_test();
-    std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/explicit.sock");
+    std::env::set_var(crate::utils::env::SOCKET_PATH_ENV_VAR, "/tmp/explicit.sock");
 
     assert_eq!(
         active_api_socket_path(),
         PathBuf::from("/tmp/explicit.sock")
     );
 
+    std::env::set_var(crate::utils::env::SOCKET_PATH_ENV_VAR, "");
+    assert_eq!(active_api_socket_path(), PathBuf::new());
+
     std::env::remove_var(SESSION_ENV_VAR);
     clear_explicit_session_for_test();
-    std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+    std::env::remove_var(crate::utils::env::SOCKET_PATH_ENV_VAR);
 }
 
 #[test]
@@ -274,7 +282,7 @@ fn env_socket_override_skips_invalid_env_session_validation_without_explicit_ses
     let _guard = env_lock().lock().unwrap();
     std::env::set_var(SESSION_ENV_VAR, "bad/name");
     clear_explicit_session_for_test();
-    std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/herdr.sock");
+    std::env::set_var(crate::utils::env::SOCKET_PATH_ENV_VAR, "/tmp/herdr.sock");
     let args = vec![
         "herdr".to_string(),
         "workspace".to_string(),
@@ -288,9 +296,21 @@ fn env_socket_override_skips_invalid_env_session_validation_without_explicit_ses
     assert_eq!(active_api_socket_path(), PathBuf::from("/tmp/herdr.sock"));
     assert_eq!(std::env::var(SESSION_ENV_VAR).as_deref(), Ok("bad/name"));
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let path = std::ffi::OsString::from_vec(b"/tmp/herdr-\xff.sock".to_vec());
+        std::env::set_var(crate::utils::env::SOCKET_PATH_ENV_VAR, path);
+        // Presence bypasses inherited session validation even when var() cannot
+        // read the socket path; path selection then falls back to the default.
+        assert_eq!(configure_from_args(&args).unwrap(), cleaned);
+        assert_eq!(active_api_socket_path(), api_socket_path_for(None));
+        assert_eq!(std::env::var(SESSION_ENV_VAR).as_deref(), Ok("bad/name"));
+    }
+
     std::env::remove_var(SESSION_ENV_VAR);
     clear_explicit_session_for_test();
-    std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+    std::env::remove_var(crate::utils::env::SOCKET_PATH_ENV_VAR);
 }
 
 #[test]

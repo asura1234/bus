@@ -49,7 +49,7 @@ def test_s5_facades_keep_utils_and_server_ownership(tmp_path):
 use crate::api::ApiRequestSender;
 use crate::api::EventHub;
 use crate::terminal::TerminalId;
-use crate::server::socket_paths;
+use crate::utils::socket_paths;
 use crate::ui::render_config_diagnostic_buffer;
 use crate::session::active_api_socket_path;
 """,
@@ -232,4 +232,23 @@ use crate::input::TerminalKey;
         ("client", True),
         ("client", True),
         ("protocol", False),
+    ]
+
+
+def test_s11_socket_preparation_is_server_policy(tmp_path):
+    write_source(
+        tmp_path,
+        "src/server/socket_paths.rs",
+        "fn prepare() { crate::platform::ipc::prepare_socket_path(); }",
+    )
+    write_source(
+        tmp_path,
+        "src/client/example.rs",
+        "use crate::server::socket_paths; use crate::utils::socket_paths;",
+    )
+    _, refs = boundaries.scan(tmp_path)
+    assert [(ref.owner, ref.target, ref.forbidden) for ref in refs] == [
+        ("client", "server", True),
+        ("client", "utils", False),
+        ("server", "platform", False),
     ]

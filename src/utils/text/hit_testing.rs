@@ -27,9 +27,13 @@ impl CellSpan {
 /// zero-width marks use display columns, then prefers structured spans that
 /// users expect to copy whole (URLs and quoted paths), and finally falls back
 /// to a separator-delimited token.
-pub(crate) fn word_bounds_at_column(row: &str, col: u16) -> Option<(u16, u16)> {
+pub(crate) fn word_bounds_at_column(
+    row: &str,
+    col: u16,
+    width: impl Fn(char) -> u16,
+) -> Option<(u16, u16)> {
     // Map the row into display cells before doing any word-boundary work.
-    let cells = text_cells(row);
+    let cells = text_cells(row, width);
     let clicked_idx = cell_index_at_column(&cells, col)?;
 
     // Prefer spans that can legally include punctuation or spaces.
@@ -41,8 +45,8 @@ pub(crate) fn word_bounds_at_column(row: &str, col: u16) -> Option<(u16, u16)> {
     Some(span.columns(&cells))
 }
 
-pub(crate) fn url_at_column(row: &str, col: u16) -> Option<&str> {
-    let cells = text_cells(row);
+pub(crate) fn url_at_column(row: &str, col: u16, width: impl Fn(char) -> u16) -> Option<&str> {
+    let cells = text_cells(row, width);
     let clicked_idx = cell_index_at_column(&cells, col)?;
     let span = url_spans(&cells)
         .into_iter()
@@ -83,7 +87,11 @@ pub(crate) struct VisibleTextCell {
     pub(crate) screen_col: u16,
 }
 
-pub(crate) fn visible_text_cells(text: &str, pane_width: u16) -> Vec<VisibleTextCell> {
+pub(crate) fn visible_text_cells(
+    text: &str,
+    pane_width: u16,
+    width: impl Fn(char) -> u16,
+) -> Vec<VisibleTextCell> {
     if pane_width == 0 {
         return Vec::new();
     }
@@ -107,7 +115,7 @@ pub(crate) fn visible_text_cells(text: &str, pane_width: u16) -> Vec<VisibleText
             pending_wrap = false;
         }
 
-        let width = u16::from(crate::ghostty::unicode_codepoint_width(ch as u32));
+        let width = width(ch);
         cells.push(VisibleTextCell {
             byte_index,
             ch,
@@ -135,11 +143,12 @@ pub(crate) fn logical_cell_for_visible_cell(
     pane_width: u16,
     target_row: u16,
     target_col: u16,
+    width: impl Fn(char) -> u16,
 ) -> Option<VisibleTextCell> {
-    visible_text_cells(text, pane_width)
+    visible_text_cells(text, pane_width, &width)
         .into_iter()
         .find(|cell| {
-            let width = u16::from(crate::ghostty::unicode_codepoint_width(cell.ch as u32));
+            let width = width(cell.ch);
             cell.screen_row == target_row
                 && if width == 0 {
                     target_col == cell.screen_col
@@ -168,11 +177,11 @@ fn token_span_at_column(cells: &[TextCell], clicked_idx: usize) -> Option<CellSp
     trim_token_edges(cells, CellSpan { start, end }).filter(|span| span.contains(clicked_idx))
 }
 
-fn text_cells(row: &str) -> Vec<TextCell> {
+fn text_cells(row: &str, width: impl Fn(char) -> u16) -> Vec<TextCell> {
     let mut next_col = 0u16;
     row.chars()
         .map(|ch| {
-            let width = u16::from(crate::ghostty::unicode_codepoint_width(ch as u32));
+            let width = width(ch);
             let start_col = if width == 0 {
                 next_col.saturating_sub(1)
             } else {
@@ -361,3 +370,7 @@ fn is_trailing_token_wrapper(ch: char) -> bool {
 #[cfg(test)]
 #[path = "hit_test_support_test.rs"]
 pub(crate) mod test_support;
+
+#[cfg(test)]
+#[path = "hit_testing/tests/width_test.rs"]
+mod width_tests;

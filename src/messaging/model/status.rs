@@ -1,6 +1,36 @@
-use super::{Agent, BusState, RoomId, RuntimeStatus};
+use super::{Agent, BusState, Provider, RoomId, RuntimeStatus};
 
 impl Agent {
+    /// Pure delivery eligibility; callers decide whether to log or stall.
+    pub(crate) fn wait_reason(&self) -> Option<&'static str> {
+        let identity = &self.runtime_identity;
+        if self.deletion_pending {
+            Some("deletion_pending")
+        } else if self.session_binding_invalidated {
+            Some("session_invalidated")
+        } else if !self.hook_setup_confirmed {
+            Some("hook_setup_unconfirmed")
+        } else if self.status != RuntimeStatus::Idle {
+            Some(match self.status {
+                RuntimeStatus::Blocked => "agent_blocked",
+                RuntimeStatus::Working => "agent_working",
+                RuntimeStatus::Launching => "agent_launching",
+                _ => "agent_unavailable",
+            })
+        } else if self.current_request.is_some() {
+            Some("prior_request_active")
+        } else if identity.launch_id.is_none()
+            || identity.terminal_id.is_none()
+            || identity.pane_id.is_none()
+        {
+            Some("terminal_identity_missing")
+        } else if identity.session_id.is_none() && self.provider != Provider::Codex {
+            Some("session_hook_missing")
+        } else {
+            None
+        }
+    }
+
     /// The status Bus shows for this agent: a visible choice dialog blocks it
     /// whatever its provider reports (Codex reports Idle while it waits on an
     /// approval). Agent rows and room status both use it, so they agree.

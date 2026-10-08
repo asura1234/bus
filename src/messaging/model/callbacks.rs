@@ -4,7 +4,6 @@ use super::{
     PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase, RuntimeStatus,
     STEERING_SETTLE_MS,
 };
-use crate::messaging::provider_glue::callbacks;
 
 impl BusState {
     pub(crate) fn accept_callback(&mut self, callback: ProviderCallback) -> CallbackDisposition {
@@ -144,7 +143,7 @@ impl BusState {
         if callback
             .prompt_payload
             .as_deref()
-            .is_some_and(callbacks::cursor_reply::is_background_task_notice)
+            .is_some_and(crate::agents::providers::cursor::final_reply::is_background_task_notice)
         {
             self.unrelated_provider_turns.extend(turn_key);
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);

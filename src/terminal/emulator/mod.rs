@@ -57,12 +57,7 @@ const MODE_MOUSE_PRESS_RELEASE: u16 = 1000;
 const MODE_MOUSE_BUTTON_MOTION: u16 = 1002;
 const MODE_MOUSE_ANY_MOTION: u16 = 1003;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScrollMetrics {
-    pub offset_from_bottom: usize,
-    pub max_offset_from_bottom: usize,
-    pub viewport_rows: usize,
-}
+pub use crate::utils::render::widgets::ScrollMetrics;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TerminalTextPoint {

@@ -13,8 +13,7 @@ mod commands;
 mod dev_control;
 #[path = "dialogs.rs"]
 mod dialogs;
-#[path = "resume.rs"]
-mod resume;
+pub(crate) mod resume;
 #[path = "settings.rs"]
 mod settings_runtime;
 use crate::api::{
@@ -35,11 +34,6 @@ use crate::messaging::{
     native::{HerdrTransport, Transport},
     orchestration as orchestrator,
     prefs::settings,
-    provider_glue::{
-        callbacks::{self, Parsed},
-        launch::{self, AddAgent},
-        usage,
-    },
     storage::{io, state_store::JsonStore},
 };
 use std::{
@@ -224,3 +218,8 @@ mod steering_tests;
 #[cfg(test)]
 #[path = "tests/poll_test.rs"]
 mod tests;
+
+use crate::agents::providers::spool as callbacks;
+use crate::messaging::launch;
+pub(crate) use agents::AddAgent;
+pub(crate) mod usage;

@@ -27,7 +27,7 @@ const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Private daemon-start hint used to seed a fresh headless server from the
 /// directory where the user ran `herdr`.
-pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HERDR_STARTUP_CWD";
+use crate::utils::env::STARTUP_CWD_ENV_VAR;
 
 // ---------------------------------------------------------------------------
 // Server detection
@@ -145,7 +145,7 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
     let Some(status) = read_server_status()? else {
         return Err(io::Error::other(format!(
             "a Bus server is listening, but its status API is unavailable.\n\n{}\nIf that fails, stop the old server process manually.",
-            crate::session::active_restart_after_update_guidance()
+            super::help::active_restart_after_update_guidance()
         )));
     };
 
@@ -172,7 +172,7 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
             .unwrap_or_else(|| "unavailable".to_string()),
         crate::build_info::version(),
         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
-        crate::session::active_restart_after_update_guidance()
+        super::help::active_restart_after_update_guidance()
     )))
 }
 
@@ -315,7 +315,11 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
     }
 
     // Now attach as a thin client.
-    crate::client::run_client()
+    crate::client::run_client(
+        super::logging_options(),
+        super::config_override(),
+        super::stop::stop_active_server,
+    )
 }
 
 // ---------------------------------------------------------------------------

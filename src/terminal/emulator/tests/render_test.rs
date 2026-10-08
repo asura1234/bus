@@ -220,7 +220,7 @@ fn cursor_state_uses_terminal_default_until_child_sets_shape() {
 
     assert_eq!(pane.cursor_state().unwrap().shape, 0);
 
-    pane.process_pty_bytes(pane_id, 0, b"\x1b[6 q", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"\x1b[6 q", &tx, |_| None);
 
     assert_eq!(pane.cursor_state().unwrap().shape, 6);
 }
@@ -232,10 +232,10 @@ fn cursor_state_returns_terminal_default_after_decscusr_reset() {
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
-    pane.process_pty_bytes(pane_id, 0, b"\x1b[2 q", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"\x1b[2 q", &tx, |_| None);
     assert_eq!(pane.cursor_state().unwrap().shape, 2);
 
-    pane.process_pty_bytes(pane_id, 0, b"\x1b[0 q", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"\x1b[0 q", &tx, |_| None);
 
     assert_eq!(pane.cursor_state().unwrap().shape, 0);
 }
@@ -247,9 +247,9 @@ fn cursor_shape_tracker_handles_split_decscusr_sequences() {
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
-    pane.process_pty_bytes(pane_id, 0, b"\x1b[", &tx);
-    pane.process_pty_bytes(pane_id, 0, b"5 ", &tx);
-    pane.process_pty_bytes(pane_id, 0, b"q", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"\x1b[", &tx, |_| None);
+    pane.process_pty_bytes(pane_id, 0, b"5 ", &tx, |_| None);
+    pane.process_pty_bytes(pane_id, 0, b"q", &tx, |_| None);
 
     assert_eq!(pane.cursor_state().unwrap().shape, 5);
 }
@@ -262,14 +262,14 @@ fn cursor_state_holds_pty_position_change_until_settle_window() {
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
-    pane.process_pty_bytes(pane_id, 0, b"x", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"x", &tx, |_| None);
     assert_eq!(
         pane.cursor_state()
             .map(|cursor| (cursor.x, cursor.y, cursor.visible)),
         Some((1, 0, true))
     );
 
-    let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[6;21H", &tx);
+    let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[6;21H", &tx, |_| None);
 
     assert_eq!(result.render_delay, Some(CURSOR_POSITION_SETTLE));
     assert_eq!(
@@ -287,8 +287,8 @@ fn cursor_state_uses_live_position_when_settle_policy_disabled() {
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
-    pane.process_pty_bytes(pane_id, 0, b"x", &tx);
-    let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[6;21H", &tx);
+    pane.process_pty_bytes(pane_id, 0, b"x", &tx, |_| None);
+    let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[6;21H", &tx, |_| None);
 
     assert_eq!(result.render_delay, None);
     assert_eq!(

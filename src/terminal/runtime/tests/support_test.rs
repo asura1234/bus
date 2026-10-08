@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::{MutexGuard, OnceLock};
 
 #[cfg(unix)]
 fn capture_shell_output(command: &str, extra_env: &[(&str, &str)]) -> String {
@@ -101,7 +100,9 @@ impl TerminalRuntime {
         };
         self.content_seq.fetch_add(1, Ordering::AcqRel);
         let (tx, _rx) = mpsc::channel(1);
-        let _ = self.terminal.process_pty_bytes(self.pane_id, 0, bytes, &tx);
+        let _ = self
+            .terminal
+            .process_pty_bytes(self.pane_id, 0, bytes, &tx, |_| None);
         self.content_seq.fetch_add(1, Ordering::Release);
         self.compression.wake();
     }
@@ -160,34 +161,5 @@ impl TerminalRuntime {
 
 /// Serializes tests that mutate process environment variables such as HOME or APPDATA.
 #[cfg(test)]
-pub(crate) struct EnvLock {
-    _guard: MutexGuard<'static, ()>,
-    #[cfg(windows)]
-    appdata: Option<std::ffi::OsString>,
-}
-
-#[cfg(test)]
-impl Drop for EnvLock {
-    fn drop(&mut self) {
-        #[cfg(windows)]
-        if let Some(appdata) = self.appdata.take() {
-            std::env::set_var("APPDATA", appdata);
-        } else {
-            std::env::remove_var("APPDATA");
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn env_lock() -> EnvLock {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    let guard = LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    EnvLock {
-        _guard: guard,
-        #[cfg(windows)]
-        appdata: std::env::var_os("APPDATA"),
-    }
-}
+#[cfg(unix)]
+pub(crate) use crate::utils::test_env::env_lock;

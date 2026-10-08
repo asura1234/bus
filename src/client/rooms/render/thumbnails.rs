@@ -5,7 +5,8 @@
 //! and emits only what changed between frames. Without a graphics protocol, a
 //! known cell size, or a readable image, history keeps showing the
 //! attachment's file name only (it always shows that row).
-use crate::kitty_graphics::{encode_delete_placement, HostCellSize};
+use crate::protocol::kitty::apc::encode_delete_placement;
+use crate::protocol::kitty::HostCellSize;
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

@@ -222,7 +222,7 @@ impl HeadlessServer {
         kind: protocol::NotifyKind,
         message: impl AsRef<str>,
     ) -> bool {
-        let (title, body) = crate::terminal_notify::split_message(message.as_ref());
+        let (title, body) = crate::utils::text::notification::split_message(message.as_ref());
         self.send_notify_to_foreground_client(kind, title, body.map(str::to_string))
     }
 

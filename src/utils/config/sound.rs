@@ -4,6 +4,13 @@ use serde::Deserialize;
 
 use super::load::resolve_config_relative_path;
 
+/// Which notification sound to play; playback belongs to platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sound {
+    /// Something finished.
+    Done,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct SoundConfig {
@@ -20,9 +27,9 @@ pub struct SoundConfig {
 }
 
 impl SoundConfig {
-    pub fn path_for(&self, sound: crate::sound::Sound) -> Option<PathBuf> {
+    pub fn path_for(&self, sound: Sound) -> Option<PathBuf> {
         let path = match sound {
-            crate::sound::Sound::Done => self.done_path.as_ref().or(self.path.as_ref()),
+            Sound::Done => self.done_path.as_ref().or(self.path.as_ref()),
         }?;
 
         Some(resolve_config_relative_path(path))
@@ -86,6 +93,7 @@ impl Default for SoundConfig {
 mod tests {
     use std::path::PathBuf;
 
+    use super::Sound;
     use crate::config::{config_path, Config};
 
     #[test]
@@ -123,7 +131,7 @@ done_path = "sounds/done.mp3"
 
         let config_root = config_path().parent().unwrap().to_path_buf();
         assert_eq!(
-            config.ui.sound.path_for(crate::sound::Sound::Done),
+            config.ui.sound.path_for(Sound::Done),
             Some(config_root.join("sounds/done.mp3"))
         );
     }

@@ -333,13 +333,12 @@ pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
-/// Read a Herdr agent identity hint from a process environment.
-pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
+/// Read the raw NUL-separated environment records of a process.
+pub fn process_environment(pid: u32) -> Option<Vec<u8>> {
     if pid == 0 {
         return None;
     }
-    let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
-    crate::platform::parse_agent_env_hint(&environ)
+    std::fs::read(format!("/proc/{pid}/environ")).ok()
 }
 
 pub fn session_processes(child_pid: u32) -> Vec<u32> {

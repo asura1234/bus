@@ -6,8 +6,22 @@ use std::sync::{Arc, Mutex};
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
-const DEFAULT_RETAINED_LOG_FILES: usize = 0;
+pub(crate) const DEFAULT_MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
+pub(crate) const DEFAULT_RETAINED_LOG_FILES: usize = 0;
+
+// Upstream input/toast diagnostics contain user content. Keep those payload dumps
+// disabled even in dev mode; the rest of the runtime retains TRACE visibility.
+pub(crate) const DEV_FILTER: &str =
+    "bus=trace,bus::protocol::keys::host=off,bus::client::host_terminal::input=info,bus::private_payload=off";
+
+/// Process policy supplied by startup composition, including inherited hook policy.
+/// Logging itself does not read CLI, messaging or environment configuration.
+pub(crate) struct LoggingOptions {
+    pub(crate) filter: EnvFilter,
+    pub(crate) max_bytes: u64,
+    pub(crate) retained_files: usize,
+    pub(crate) dev: bool,
+}
 
 #[cfg(test)]
 pub(crate) mod test_capture {
@@ -45,32 +59,13 @@ pub(crate) mod test_capture {
     }
 }
 
-pub(crate) fn init_file_logging(file_name: &str) {
-    init_file_logging_at(crate::session::data_dir(), file_name);
-}
-
-pub(crate) fn init_file_logging_at(dir: PathBuf, file_name: &str) {
-    let Ok(make_writer) = RotatingFileMakeWriter::new(
-        dir,
-        file_name,
-        DEFAULT_MAX_LOG_BYTES,
-        if crate::bus::diagnostics::dev_enabled() {
-            3
-        } else {
-            DEFAULT_RETAINED_LOG_FILES
-        },
-    ) else {
+pub(crate) fn init_file_logging_at(dir: PathBuf, file_name: &str, options: &LoggingOptions) {
+    let Ok(make_writer) = RotatingFileMakeWriter::new(dir, file_name, options) else {
         return;
     };
 
-    let filter = if crate::bus::diagnostics::dev_enabled() {
-        EnvFilter::new(crate::bus::diagnostics::DEV_FILTER)
-    } else {
-        EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("bus=info"))
-    };
-
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
+        .with_env_filter(options.filter.clone())
         .with_writer(make_writer)
         .with_ansi(false)
         .with_target(true)
@@ -81,27 +76,35 @@ pub(crate) use super::log_events::{
     api_request_completed, api_request_failed, api_request_started, api_wait_completed,
     api_wait_started, api_wait_timed_out, pane_exit_failed, pane_exited, pane_spawn_started,
     pane_spawned, session_clear_failed, session_cleared, session_restored, session_save_failed,
-    session_saved, shutdown, startup, tab_focused, tab_renamed, workspace_closed,
-    workspace_created, workspace_focused, workspace_renamed,
+    session_saved, shutdown, tab_focused, tab_renamed, workspace_closed, workspace_created,
+    workspace_focused, workspace_renamed,
 };
+
+pub(crate) fn startup(role: &'static str, dev: bool) {
+    tracing::info!(
+        target: "bus::utils::logging",
+        event = "app.startup",
+        subsystem = role,
+        outcome = "started",
+        pid = std::process::id(),
+        dev,
+        version = env!("CARGO_PKG_VERSION"),
+        "herdr starting"
+    );
+}
 
 struct RotatingFileMakeWriter {
     state: Arc<Mutex<RotatingFileState>>,
 }
 
 impl RotatingFileMakeWriter {
-    fn new(
-        dir: PathBuf,
-        file_name: &str,
-        max_bytes: u64,
-        retained_files: usize,
-    ) -> io::Result<Self> {
+    fn new(dir: PathBuf, file_name: &str, options: &LoggingOptions) -> io::Result<Self> {
         fs::create_dir_all(&dir)?;
         let path = dir.join(file_name);
         let mut state = RotatingFileState {
             path,
-            max_bytes,
-            retained_files,
+            max_bytes: options.max_bytes,
+            retained_files: options.retained_files,
             file: None,
             current_size: 0,
             disabled: false,
@@ -257,78 +260,5 @@ fn rotated_log_path(path: &Path, index: usize) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn temp_log_path(name: &str) -> PathBuf {
-        let unique = format!(
-            "herdr-logging-tests-{}-{}-{}",
-            name,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        std::env::temp_dir().join(unique).join("herdr.log")
-    }
-
-    #[test]
-    fn rotated_log_path_appends_numeric_suffix() {
-        let path = PathBuf::from("/tmp/herdr.log");
-        assert_eq!(
-            rotated_log_path(&path, 2),
-            PathBuf::from("/tmp/herdr.log.2")
-        );
-    }
-
-    #[test]
-    fn rotate_files_shifts_existing_generations() {
-        let path = temp_log_path("rotate");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "current").unwrap();
-        fs::write(rotated_log_path(&path, 1), "older").unwrap();
-
-        let mut state = RotatingFileState {
-            path: path.clone(),
-            max_bytes: 128,
-            retained_files: 2,
-            file: None,
-            current_size: 0,
-            disabled: false,
-        };
-        state.rotate_files().unwrap();
-
-        assert_eq!(
-            fs::read_to_string(rotated_log_path(&path, 1)).unwrap(),
-            "current"
-        );
-        assert_eq!(
-            fs::read_to_string(rotated_log_path(&path, 2)).unwrap(),
-            "older"
-        );
-        assert!(!path.exists());
-
-        let _ = fs::remove_dir_all(path.parent().unwrap());
-    }
-
-    #[test]
-    fn write_replaces_log_without_retained_files_when_size_limit_is_reached() {
-        let path = temp_log_path("replace");
-        let dir = path.parent().unwrap().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-
-        let writer = RotatingFileMakeWriter::new(dir.clone(), "herdr.log", 8, 0).unwrap();
-        {
-            let mut guard = writer.make_writer();
-            guard.write_all(b"12345678").unwrap();
-            guard.write_all(b"abc").unwrap();
-            guard.flush().unwrap();
-        }
-
-        assert_eq!(fs::read_to_string(&path).unwrap(), "abc");
-        assert!(!rotated_log_path(&path, 1).exists());
-
-        let _ = fs::remove_dir_all(dir);
-    }
-}
+#[path = "tests/logging_test.rs"]
+mod tests;

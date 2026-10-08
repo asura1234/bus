@@ -1,3 +1,16 @@
+// The native Unicode table is pure and shared by text consumers and VT. This
+// narrow ABI declaration does not load the terminal component or its state.
+unsafe extern "C" {
+    fn ghostty_unicode_codepoint_width(codepoint: u32) -> u8;
+}
+
+/// Preserve the native table's codepoint rules, including invalid codepoints.
+pub fn unicode_codepoint_width(codepoint: u32) -> u8 {
+    // SAFETY: the native function is total for u32, thread-safe, and has no
+    // pointer, initialization, handle, or lifetime preconditions.
+    unsafe { ghostty_unicode_codepoint_width(codepoint) }
+}
+
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(crate) fn display_width(text: &str) -> usize {
@@ -36,6 +49,20 @@ fn take_prefix_width(text: &str, max_width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_codepoint_width_preserves_control_combining_wide_and_invalid_rules() {
+        for (codepoint, expected) in [
+            ('A' as u32, 1),
+            ('\u{301}' as u32, 0),
+            ('界' as u32, 2),
+            (0, 0),
+            (0xd800, 0),
+            (0x11_0000, 1),
+        ] {
+            assert_eq!(unicode_codepoint_width(codepoint), expected);
+        }
+    }
 
     #[test]
     fn truncate_end_uses_display_width() {

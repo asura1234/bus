@@ -90,7 +90,7 @@ pub(in crate::server) fn snapshot(
         .collect();
     let agents = snapshot_agents(snapshot.agents, focused_pane_id.as_deref());
 
-    let agent_order = crate::ui::agent_panel_entries_from(&app.state, &app.terminal_runtimes)
+    let agent_order = crate::ui::agent_panel_entries_from(&app.state)
         .into_iter()
         .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
         .collect();

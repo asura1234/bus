@@ -23,7 +23,7 @@ pub(crate) const STOP_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const STOP_WAIT_POLL: Duration = Duration::from_millis(25);
 pub(crate) fn stop_active_server() -> Result<(), String> {
     let socket_path = active_api_socket_path();
-    let client_socket_path = crate::server::socket_paths::client_socket_path();
+    let client_socket_path = crate::utils::socket_paths::client_socket_path();
     stop_socket_with_timeout(
         socket_path.clone(),
         vec![socket_path, client_socket_path],
@@ -175,4 +175,21 @@ pub(crate) fn socket_timeout_from_remaining(remaining: Duration) -> Option<Durat
         return None;
     }
     Some(remaining.max(MIN_SOCKET_TIMEOUT))
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    use super::{send_stop_request, LocalStream};
+    use super::{
+        socket_timeout_from_remaining, stop_request_error_allows_wait,
+        stop_timeout_error_allows_wait, MIN_SOCKET_TIMEOUT, STOP_WAIT_TIMEOUT,
+    };
+    #[cfg(unix)]
+    use std::io::{BufRead, BufReader};
+    use std::time::Duration;
+    #[cfg(unix)]
+    use std::time::Instant;
+
+    include!("tests/session_stop_test.rs");
 }

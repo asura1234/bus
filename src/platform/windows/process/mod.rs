@@ -4,7 +4,7 @@ pub(super) mod peb;
 pub(super) mod snapshot;
 use crate::platform::windows::process::foreground::descendant_entries;
 use crate::platform::windows::process::foreground::foreground_process_from_entry;
-use crate::platform::windows::process::foreground::select_pane_foreground_job_cached;
+
 use crate::platform::windows::process::peb::read_process_parameters;
 use crate::platform::windows::process::peb::read_unicode_string;
 use crate::platform::windows::process::peb::ProcessHandle;
@@ -19,10 +19,6 @@ use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
 use windows_sys::Win32::System::Threading::PROCESS_VM_READ;
-
-pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
-    select_pane_foreground_job_cached(child_pid)
-}
 
 pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
     let snapshot = ProcessSnapshot::new(snapshot_processes());
@@ -49,10 +45,6 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
         process_group_id,
         processes: vec![foreground_process_from_entry(entry)],
     })
-}
-
-pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
-    select_pane_foreground_job_cached(child_pid).map(|job| job.process_group_id)
 }
 
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {

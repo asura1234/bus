@@ -54,8 +54,12 @@ impl LocalSessionRegistry {
             .map_err(|error| format!("Could not lock the local Bus session registry: {error}"))?;
 
         for attempt in 0..1024_u64 {
-            let seed = format!("{}:{}:{attempt}", super::io::now_ns(), std::process::id());
-            let id = super::io::digest(seed.as_bytes())[..ID_HEX_LEN].to_owned();
+            let seed = format!(
+                "{}:{}:{attempt}",
+                crate::utils::time::now_ns(),
+                std::process::id()
+            );
+            let id = crate::utils::time::digest(seed.as_bytes())[..ID_HEX_LEN].to_owned();
             let root = sessions.join(&id);
             if root.exists() {
                 continue;
@@ -64,7 +68,7 @@ impl LocalSessionRegistry {
             let metadata = Metadata {
                 version: METADATA_VERSION,
                 id: id.clone(),
-                created_at_ms: super::io::now_ms(),
+                created_at_ms: crate::utils::time::now_ms(),
             };
             let encoded =
                 serde_json::to_vec_pretty(&metadata).map_err(|error| error.to_string())?;

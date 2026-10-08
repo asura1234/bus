@@ -15,4 +15,7 @@ fn startup_uses_configured_agent_panel_sort() {
     );
 
     assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
+    assert!(app.state.workspaces.is_empty());
+    assert!(app.state.terminals.is_empty());
+    assert_eq!(app.terminal_runtimes.len(), 0);
 }

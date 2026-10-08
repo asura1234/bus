@@ -18,7 +18,7 @@ pub use self::{
         NewTerminalCwdConfig, PaneBordersConfig, ShellModeConfig, ToastClipboardPosition,
         ToastConfig, ToastDelivery, ToastHerdrPosition, MAX_TOAST_DELAY_SECONDS,
     },
-    sound::SoundConfig,
+    sound::{Sound, SoundConfig},
     ui::{
         theme::{parse_color, CustomThemeColors, ModeThemeColors, ThemeConfig},
         window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
@@ -30,6 +30,11 @@ pub(crate) use self::ui::{
     theme::canonical_theme_name,
     window_title::{sanitize_window_title_text, window_title_diagnostics},
 };
+#[cfg(test)]
+pub(crate) fn test_config_env_lock() -> &'static std::sync::Mutex<()> {
+    crate::utils::test_env::mutex()
+}
+
 #[cfg(test)]
 pub(crate) use self::{load::config_path, ui::theme::THEME_NAMES};
 
@@ -44,12 +49,6 @@ pub const DEFAULT_HEADLESS_ROWS: u16 = 40;
 #[cfg(test)]
 pub(crate) fn app_dir_name() -> &'static str {
     load::app_dir_name()
-}
-
-#[cfg(test)]
-pub(crate) fn test_config_env_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
 #[cfg(test)]

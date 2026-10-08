@@ -11,6 +11,7 @@ mod store;
 
 pub use self::capture::{capture, capture_history};
 pub use self::restore::restore;
+pub(in crate::server) use self::restore::{RestoreLaunch, RestoredSession};
 pub use self::schema::{
     DirectionSnapshot, LayoutSnapshot, SessionHistorySnapshot, SessionSnapshot, TabSnapshot,
     WorkspaceSnapshot,

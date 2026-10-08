@@ -5,11 +5,11 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.config.theme_runtime.auto_switch = true;
 
-    let light = crate::app::client_palette_for_appearance(
+    let light = crate::utils::theme::client_palette_for_appearance(
         &state.config.theme_runtime,
         crate::terminal_theme::HostAppearance::Light,
     );
-    let dark = crate::app::client_palette_for_appearance(
+    let dark = crate::utils::theme::client_palette_for_appearance(
         &state.config.theme_runtime,
         crate::terminal_theme::HostAppearance::Dark,
     );

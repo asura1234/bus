@@ -18,7 +18,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 
-use crate::app::state::Palette;
 use crate::config::Config;
 #[cfg(test)]
 use crate::protocol::ClientMousePosition;
@@ -28,6 +27,7 @@ use crate::protocol::{
 };
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;
+use crate::utils::theme::Palette;
 #[cfg(test)]
 use crossterm::event::KeyCode;
 
@@ -161,7 +161,7 @@ pub(crate) struct ClientShellConfig {
     pub(in crate::client) copy_on_select: bool,
     pub(in crate::client) clipboard_toast_enabled: bool,
     pub(in crate::client) clipboard_toast_position: crate::config::ToastClipboardPosition,
-    pub(in crate::client) theme_runtime: crate::app::state::ThemeRuntimeConfig,
+    pub(in crate::client) theme_runtime: crate::utils::theme::ThemeRuntimeConfig,
     pub(in crate::client) palette: Palette,
     pub(in crate::client) mouse_capture: bool,
     pub(in crate::client) mouse_scroll_lines: usize,
@@ -285,8 +285,8 @@ pub(crate) struct ClientShellState {
     /// A future projection surface waits here until its matching snapshot arrives. The visible
     /// pane surface always remains an exact snapshot pair.
     pub(in crate::client) pending_pane_surface: Option<PaneSurfaceFrame>,
-    pub(in crate::client) graphics: crate::kitty_graphics::surface::ClientState,
-    pub(in crate::client) graphics_cell_size: crate::kitty_graphics::HostCellSize,
+    pub(in crate::client) graphics: crate::client::host_terminal::kitty::scene::ClientState,
+    pub(in crate::client) graphics_cell_size: crate::protocol::kitty::placement::HostCellSize,
     pub(in crate::client) chrome_drag: Option<ClientChromeDrag>,
     pub(in crate::client) last_composed_size: Option<(u16, u16)>,
     pub(in crate::client) hits: ShellHitMap,
@@ -307,7 +307,7 @@ pub(crate) struct ClientShellState {
     pub(in crate::client) pane_scroll_in_flight: HashMap<String, u64>,
     pub(in crate::client) pane_scroll_queued: HashMap<String, usize>,
     pub(in crate::client) pane_scroll_targets: HashMap<String, usize>,
-    pub(in crate::client) copy_feedback: Option<crate::app::state::CopyFeedback>,
+    pub(in crate::client) copy_feedback: Option<crate::utils::render::widgets::CopyFeedback>,
     pub(in crate::client) copy_feedback_deadline: Option<std::time::Instant>,
     pub(in crate::client) host_mouse_pixels: Option<crate::input::mouse::HostPixels>,
     pub(in crate::client) input_leases: ClientInputLeases,
@@ -329,8 +329,8 @@ impl ClientShellState {
             snapshot: None,
             pane_surface: None,
             pending_pane_surface: None,
-            graphics: crate::kitty_graphics::surface::ClientState::default(),
-            graphics_cell_size: crate::kitty_graphics::HostCellSize {
+            graphics: crate::client::host_terminal::kitty::scene::ClientState::default(),
+            graphics_cell_size: crate::protocol::kitty::placement::HostCellSize {
                 width_px: 1,
                 height_px: 1,
             },
@@ -391,7 +391,7 @@ impl ClientShellState {
         if !self.config.clipboard_toast_enabled {
             return false;
         }
-        self.copy_feedback = Some(crate::app::state::CopyFeedback {
+        self.copy_feedback = Some(crate::utils::render::widgets::CopyFeedback {
             message: "copied to clipboard".to_owned(),
         });
         self.copy_feedback_deadline = Some(now + std::time::Duration::from_secs(2));
@@ -440,7 +440,7 @@ impl ClientShellState {
     }
 
     pub(crate) fn set_graphics_cell_size(&mut self, width_px: u32, height_px: u32) {
-        self.graphics_cell_size = crate::kitty_graphics::HostCellSize {
+        self.graphics_cell_size = crate::protocol::kitty::placement::HostCellSize {
             width_px: width_px.max(1),
             height_px: height_px.max(1),
         };
@@ -454,9 +454,9 @@ impl ClientShellState {
                 .as_ref()
                 .is_some_and(|selection| selection.is_visible());
         let visibility = if local_cover {
-            crate::kitty_graphics::surface::Visibility::Hidden
+            crate::protocol::wire::SurfaceGraphicsVisibility::Hidden
         } else {
-            crate::kitty_graphics::surface::Visibility::Main
+            crate::protocol::wire::SurfaceGraphicsVisibility::Main
         };
         frame.graphics = self.graphics.encode(
             visibility,

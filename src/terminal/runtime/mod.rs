@@ -11,7 +11,7 @@ pub(crate) mod spawn;
 // The former local runtime name remains available to its unchanged tests.
 #[cfg(test)]
 pub type PaneRuntime = TerminalRuntime;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod env {
     pub(crate) use super::tests::env_lock;
 }

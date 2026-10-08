@@ -260,13 +260,6 @@ fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> 
     (!sanitized.is_empty()).then_some(sanitized)
 }
 
-pub fn split_message(message: &str) -> (&str, Option<&str>) {
-    match message.split_once(": ") {
-        Some((title, body)) if !title.is_empty() && !body.is_empty() => (title, Some(body)),
-        _ => (message, None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]

@@ -4,9 +4,8 @@ mod chrome;
 mod draw;
 mod layout;
 mod scrollbar;
-mod selection;
 
-use crate::utils::render::{status_popups as status, widgets};
+use crate::utils::render::status_popups as status;
 use crate::utils::text::width as text;
 
 pub(crate) use self::chrome::{apply_pane_chrome, pane_inner_rect};
@@ -15,18 +14,13 @@ pub(crate) use self::layout::{
     compute_tab_surface, compute_tab_surface_for, render_tab_surface, resize_tab_surface,
     tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceLayout, TabSurfaceTarget, TabSurfaceView,
 };
-#[cfg(test)]
-pub(crate) use self::scrollbar::scrollbar_thumb;
 pub(crate) use self::scrollbar::{
     render_pane_scrollbar_buffer, scrollbar_offset_from_drag_row, scrollbar_offset_from_row,
     scrollbar_thumb_grab_offset,
 };
-pub(crate) use self::selection::render_selection_highlight;
-use self::status::copy_feedback_rect;
+
 pub(crate) use self::status::{render_config_diagnostic_buffer, render_copy_feedback_buffer};
 pub(crate) use crate::server::workspaces::agent_view::agent_panel_entries_from;
-#[cfg(test)]
-pub(crate) use crate::server::workspaces::agent_view::AgentPanelEntry;
 
 use crate::app::AppState;
 use crate::terminal::TerminalRuntimeRegistry;
@@ -100,26 +94,4 @@ fn resize_background_tab_panes(
             );
         }
     }
-}
-
-pub(crate) fn copy_feedback_offset_for_toast(
-    area: Rect,
-    feedback: &crate::app::state::CopyFeedback,
-    base_offset: u16,
-    position: crate::config::ToastClipboardPosition,
-    toast_rect: Rect,
-) -> u16 {
-    let feedback_rect = copy_feedback_rect(area, feedback, base_offset, position);
-    if rectangles_overlap(feedback_rect, toast_rect) {
-        base_offset.saturating_add(toast_rect.height)
-    } else {
-        base_offset
-    }
-}
-
-fn rectangles_overlap(left: Rect, right: Rect) -> bool {
-    left.x < right.right()
-        && right.x < left.right()
-        && left.y < right.bottom()
-        && right.y < left.bottom()
 }

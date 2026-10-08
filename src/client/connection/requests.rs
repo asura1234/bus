@@ -265,7 +265,7 @@ impl ClientShellState {
         let Some(snapshot) = self.snapshot.as_deref() else {
             return false;
         };
-        let method_name = crate::api::api_method_name(&method).to_owned();
+        let method_name = crate::protocol::api::api_method_name(&method).to_owned();
         let request_id = self.next_request_id;
         self.next_request_id = self.next_request_id.saturating_add(1);
         let request_id = format!("client-shell:{request_id}");
@@ -417,7 +417,12 @@ impl ClientShellState {
             }
             Err(_) => return (true, Vec::new()),
         };
-        let Some((start_col, end_col)) = crate::app::actions::word_bounds_at_column(&row_text, col)
+        let Some((start_col, end_col)) =
+            crate::utils::text::hit_testing::word_bounds_at_column(&row_text, col, |ch| {
+                u16::from(crate::utils::text::width::unicode_codepoint_width(
+                    ch as u32,
+                ))
+            })
         else {
             self.selection = None;
             return (true, Vec::new());

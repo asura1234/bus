@@ -102,7 +102,7 @@ impl ClientShellState {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
             for hit in &self.hits.panes {
-                crate::ui::render_selection_highlight(
+                crate::utils::render::widgets::selection::render_selection_highlight(
                     self.selection.as_ref(),
                     &mut composed,
                     &hit.pane_id,
@@ -134,7 +134,7 @@ impl ClientShellState {
             let mut composed = frame.to_ratatui_buffer()?;
             let base_offset = u16::from(has_config_diagnostic);
             let feedback_area = pane_area;
-            let offset = crate::ui::copy_feedback_offset_for_toast(
+            let offset = crate::utils::render::widgets::copy_feedback_offset_for_toast(
                 feedback_area,
                 feedback,
                 base_offset,
@@ -177,12 +177,15 @@ fn project_pane_hit(pane: &crate::protocol::PaneSurfacePane, area: Rect) -> Pane
                 rect.height,
             )
         }),
-        scroll: pane.scroll.map(|metrics| crate::pane::ScrollMetrics {
-            offset_from_bottom: usize::try_from(metrics.offset_from_bottom).unwrap_or(usize::MAX),
-            max_offset_from_bottom: usize::try_from(metrics.max_offset_from_bottom)
-                .unwrap_or(usize::MAX),
-            viewport_rows: usize::try_from(metrics.viewport_rows).unwrap_or(usize::MAX),
-        }),
+        scroll: pane
+            .scroll
+            .map(|metrics| crate::utils::render::widgets::ScrollMetrics {
+                offset_from_bottom: usize::try_from(metrics.offset_from_bottom)
+                    .unwrap_or(usize::MAX),
+                max_offset_from_bottom: usize::try_from(metrics.max_offset_from_bottom)
+                    .unwrap_or(usize::MAX),
+                viewport_rows: usize::try_from(metrics.viewport_rows).unwrap_or(usize::MAX),
+            }),
         pane_id: pane.pane_id.clone(),
         mouse_reporting: pane.mouse_reporting,
         sgr_pixel_mouse: pane.sgr_pixel_mouse,

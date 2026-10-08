@@ -54,7 +54,7 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
 
     if let Some(session) = requested_session {
         apply_explicit_name(&session)?;
-    } else if std::env::var_os(crate::api::SOCKET_PATH_ENV_VAR).is_some() {
+    } else if std::env::var_os(crate::utils::env::SOCKET_PATH_ENV_VAR).is_some() {
         EXPLICIT_SESSION_REQUESTED.store(false, Ordering::Relaxed);
     } else if let Ok(session) = std::env::var(SESSION_ENV_VAR) {
         if normalize_name(&session)?.is_none() {

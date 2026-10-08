@@ -5,6 +5,7 @@ fn local_attach_command_resumes_the_local_session_or_relaunches_an_explicit_root
         "bus resume 0123456789abcdef"
     );
     assert_eq!(attach_command_for(None), "bus");
+    assert_eq!(attach_command_for(Some("")), "bus");
 }
 
 #[test]

@@ -1,8 +1,10 @@
 use crate::platform::windows::process::foreground::descendant_entries;
-use crate::platform::windows::process::foreground::process_entry_identifies_agent;
+use crate::platform::windows::process::foreground::foreground_job_from_entry;
 use crate::platform::windows::process::peb::command_line_to_argv;
 use crate::platform::windows::process::peb::nul_terminated_utf16_to_string;
 use crate::platform::windows::process::peb::process_creation_time;
+use crate::platform::windows::process::peb::process_is_git_bash;
+use crate::platform::windows::process::peb::process_runtime_marker;
 use crate::platform::windows::process::peb::read_process_command;
 use crate::platform::windows::process::peb::ProcessHandle;
 use crate::platform::windows::process::peb::STILL_ACTIVE;
@@ -114,19 +116,19 @@ pub(in crate::platform::windows) static FOREGROUND_PROCESS_SNAPSHOT_CACHE: Mutex
 > = Mutex::new(ProcessSnapshotCache { cached: None });
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::platform::windows) struct WindowsProcessCommand {
-    pub(in crate::platform::windows) creation_time: Option<u64>,
-    pub(in crate::platform::windows) argv0: Option<String>,
-    pub(in crate::platform::windows) argv: Option<Vec<String>>,
-    pub(in crate::platform::windows) cmdline: Option<String>,
+pub(crate) struct WindowsProcessCommand {
+    pub(crate) creation_time: Option<u64>,
+    pub(crate) argv0: Option<String>,
+    pub(crate) argv: Option<Vec<String>>,
+    pub(crate) cmdline: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::platform::windows) struct WindowsProcessEntry {
-    pub(in crate::platform::windows) pid: u32,
-    pub(in crate::platform::windows) parent_pid: u32,
-    pub(in crate::platform::windows) name: String,
-    pub(in crate::platform::windows) command: OnceLock<WindowsProcessCommand>,
+pub(crate) struct WindowsProcessEntry {
+    pub(crate) pid: u32,
+    pub(crate) parent_pid: u32,
+    pub(crate) name: String,
+    pub(crate) command: OnceLock<WindowsProcessCommand>,
 }
 
 impl WindowsProcessEntry {
@@ -134,18 +136,28 @@ impl WindowsProcessEntry {
         self.command
             .get_or_init(|| read_process_command(self.pid, &self.name))
     }
+    pub(crate) fn foreground_job(&self) -> crate::platform::ForegroundJob {
+        foreground_job_from_entry(self)
+    }
+
+    pub(crate) fn is_git_bash(&self) -> bool {
+        process_is_git_bash(self.pid)
+    }
+
+    pub(crate) fn runtime_marker(&self) -> Option<String> {
+        process_runtime_marker(self.pid)
+    }
 }
 
 #[derive(Debug)]
-pub(in crate::platform::windows) struct ProcessSnapshot {
-    pub(in crate::platform::windows) entries: Vec<WindowsProcessEntry>,
+pub(crate) struct ProcessSnapshot {
+    pub(crate) entries: Vec<WindowsProcessEntry>,
     pub(in crate::platform::windows) entry_by_pid: HashMap<u32, usize>,
     pub(in crate::platform::windows) children_by_parent: HashMap<u32, Vec<usize>>,
-    pub(in crate::platform::windows) agent_indices: OnceLock<Vec<usize>>,
 }
 
 impl ProcessSnapshot {
-    pub(in crate::platform::windows) fn new(entries: Vec<WindowsProcessEntry>) -> Self {
+    pub(crate) fn new(entries: Vec<WindowsProcessEntry>) -> Self {
         let mut entry_by_pid = HashMap::with_capacity(entries.len());
         let mut children_by_parent = HashMap::<u32, Vec<usize>>::new();
         for (index, entry) in entries.iter().enumerate() {
@@ -159,11 +171,10 @@ impl ProcessSnapshot {
             entries,
             entry_by_pid,
             children_by_parent,
-            agent_indices: OnceLock::new(),
         }
     }
 
-    pub(in crate::platform::windows) fn entry(&self, pid: u32) -> Option<&WindowsProcessEntry> {
+    pub(crate) fn entry(&self, pid: u32) -> Option<&WindowsProcessEntry> {
         self.entry_by_pid
             .get(&pid)
             .map(|&index| &self.entries[index])
@@ -181,14 +192,8 @@ impl ProcessSnapshot {
         signatures
     }
 
-    pub(in crate::platform::windows) fn agent_indices(&self) -> &[usize] {
-        self.agent_indices.get_or_init(|| {
-            self.entries
-                .iter()
-                .enumerate()
-                .filter_map(|(index, entry)| process_entry_identifies_agent(entry).then_some(index))
-                .collect()
-        })
+    pub(crate) fn descendants(&self, root_pid: u32) -> Vec<&WindowsProcessEntry> {
+        descendant_entries(root_pid, self)
     }
 }
 

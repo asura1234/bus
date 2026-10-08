@@ -43,9 +43,8 @@ use crate::protocol::ServerMessage;
 use crate::server::clients::accept::accept_pending_client_connections;
 use crate::server::clients::connection::ClientConnection;
 use crate::server::clients::transport::ServerEvent;
-use crate::server::socket_paths::{
-    client_socket_path, prepare_socket_path, restrict_socket_permissions,
-};
+use crate::server::socket_paths::{prepare_socket_path, restrict_socket_permissions};
+use crate::utils::socket_paths::client_socket_path;
 
 pub use crate::server::startup::run_server;
 
@@ -271,8 +270,6 @@ impl HeadlessServer {
     /// - Handles scheduled tasks (session save, agent resumes, etc.)
     /// - Renders virtually and streams frames to clients
     pub async fn run(&mut self) -> io::Result<()> {
-        crate::logging::startup("server");
-
         // Register SIGINT handler for graceful shutdown.
         let should_quit = self.should_quit.clone();
         let quit_notify = self.server_event_tx.clone();

@@ -53,7 +53,7 @@ pub(crate) fn path() -> Option<PathBuf> {
             return Some(base.join("settings.json"));
         }
     }
-    crate::cli::data_dir().map(|root| root.join("settings.json"))
+    crate::utils::env::bus_data_dir().map(|root| root.join("settings.json"))
 }
 
 pub(crate) fn load(path: &Path) -> Result<BusSettings, String> {

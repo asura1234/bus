@@ -55,7 +55,8 @@ pub fn show_notification(title: &str, body: Option<&str>) -> io::Result<bool> {
     Ok(true)
 }
 
-pub use crate::server::notifications::show::split_message;
+#[cfg(test)]
+use crate::utils::text::notification::split_message;
 fn build_osc9_notification(title: &str, body: Option<&str>) -> Vec<u8> {
     let message = sanitize_text(match body {
         Some(body) if !body.is_empty() => format!("{title}: {body}"),

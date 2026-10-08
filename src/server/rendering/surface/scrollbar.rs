@@ -1,8 +1,6 @@
 use crate::app::AppState;
 use crate::layout::PaneInfo;
 use crate::utils::render::widgets::render_scrollbar_buffer;
-#[cfg(test)]
-pub(crate) use crate::utils::render::widgets::scrollbar_thumb;
 pub(crate) use crate::utils::render::widgets::{
     scrollbar_offset_from_drag_row, scrollbar_offset_from_row, scrollbar_thumb_grab_offset,
 };

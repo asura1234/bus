@@ -1,5 +1,6 @@
 use super::terminal::write_numbered_lines;
 use super::*;
+use crate::protocol::kitty::placement::KittyImageFormat;
 
 #[test]
 fn kitty_image_fingerprint_covers_full_payload() {

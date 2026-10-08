@@ -1,10 +1,13 @@
 //! Content-free delivery diagnostics. Never format commands, prompts or callbacks with Debug.
-use super::model::{Agent, BusState, Provider, RequestId, RuntimeStatus};
+use super::model::{Agent, BusState, RequestId};
 
-// Upstream input/toast diagnostics contain user content. Keep those payload dumps
-// disabled even in dev mode; the rest of the runtime retains TRACE visibility.
-pub(crate) const DEV_FILTER: &str =
-    "bus=trace,bus::protocol::keys::host=off,bus::client::host_terminal::input=info,bus::private_payload=off";
+// Keep the existing test namespace while startup composition consumes the leaf.
+pub(crate) fn wait_reason(agent: &Agent) -> Option<&'static str> {
+    agent.wait_reason()
+}
+
+#[cfg(test)]
+pub(crate) use crate::utils::logging::DEV_FILTER;
 pub(crate) const EXISTING_SERVER_NOTICE: &str =
     "Dev logs enabled for this client. An existing server keeps its original log level; restart it when safe for full server logs. Agents were not restarted.";
 
@@ -29,35 +32,6 @@ pub(crate) fn request(state: &BusState, id: RequestId, event: &'static str, reas
         elapsed_ms = super::storage::io::now_ms().saturating_sub(request.prompt.submitted_at_ms),
         "Bus delivery"
     );
-}
-
-pub(crate) fn wait_reason(agent: &Agent) -> Option<&'static str> {
-    let identity = &agent.runtime_identity;
-    if agent.deletion_pending {
-        Some("deletion_pending")
-    } else if agent.session_binding_invalidated {
-        Some("session_invalidated")
-    } else if !agent.hook_setup_confirmed {
-        Some("hook_setup_unconfirmed")
-    } else if agent.status != RuntimeStatus::Idle {
-        Some(match agent.status {
-            RuntimeStatus::Blocked => "agent_blocked",
-            RuntimeStatus::Working => "agent_working",
-            RuntimeStatus::Launching => "agent_launching",
-            _ => "agent_unavailable",
-        })
-    } else if agent.current_request.is_some() {
-        Some("prior_request_active")
-    } else if identity.launch_id.is_none()
-        || identity.terminal_id.is_none()
-        || identity.pane_id.is_none()
-    {
-        Some("terminal_identity_missing")
-    } else if identity.session_id.is_none() && agent.provider != Provider::Codex {
-        Some("session_hook_missing")
-    } else {
-        None
-    }
 }
 
 /// Called after durable save, and separately when a new snapshot reaches the UI.

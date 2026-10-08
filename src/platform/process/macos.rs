@@ -329,13 +329,13 @@ fn process_argv(pid: u32) -> Option<Vec<String>> {
     procargs2_argv(&buf)
 }
 
-/// Read a Herdr agent identity hint from a process environment.
-pub fn process_agent_hint(pid: u32) -> Option<crate::detect::Agent> {
+/// Read the raw NUL-separated environment records of a process.
+pub fn process_environment(pid: u32) -> Option<Vec<u8>> {
     if pid == 0 {
         return None;
     }
     let buf = kern_procargs2(pid)?;
-    crate::platform::parse_agent_env_hint(procargs2_env(&buf)?)
+    Some(procargs2_env(&buf)?.to_vec())
 }
 
 fn procargs2_argv_start(rest: &[u8]) -> Option<usize> {

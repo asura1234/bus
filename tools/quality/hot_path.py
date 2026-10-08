@@ -15,6 +15,7 @@ SOURCES = {
         "src/server/workspaces/agent_view.rs",
         "src/server/rendering/stream.rs",
         "src/utils/render/widgets.rs",
+        "src/utils/render/widgets/selection.rs",
         "src/utils/render/feedback.rs",
         "src/utils/render/diagnostic.rs",
         "src/utils/text/width.rs",

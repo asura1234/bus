@@ -308,10 +308,10 @@ mod tests {
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
 
-        pane.process_pty_bytes(pane_id, 0, b"old\r\n", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"old\r\n", &tx, |_| None);
         assert!(pane.recent_text(3).contains("old"));
 
-        pane.process_pty_bytes(pane_id, 0, b"\x1b[2J\x1b[H", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[2J\x1b[H", &tx, |_| None);
         assert_eq!(pane.recent_text(3).trim(), "");
     }
 
@@ -321,19 +321,19 @@ mod tests {
         let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
-        pane.process_pty_bytes(pane_id, 0, b"older", &tx);
-        pane.process_pty_bytes(pane_id, 0, b"\r\nold\r\nprompt", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"older", &tx, |_| None);
+        pane.process_pty_bytes(pane_id, 0, b"\r\nold\r\nprompt", &tx, |_| None);
         let mut core = pane.core.lock().unwrap();
         let _ = super::super::finish_recent_snapshot(&mut core, String::new(), 3, false);
         drop(core);
         pane.resize(2, 40, 8, 16);
-        pane.process_pty_bytes(pane_id, 0, b"\rupdated", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"\rupdated", &tx, |_| None);
         let mut core = pane.core.lock().unwrap();
         let resized = super::super::finish_recent_snapshot(&mut core, String::new(), 10, false);
         assert_eq!(resized.text, "older\nold\nupdated\n");
         drop(core);
-        pane.process_pty_bytes(pane_id, 0, b"\x1b[2J\x1b[H", &tx);
-        pane.process_pty_bytes(pane_id, 0, b"updated", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[2J\x1b[H", &tx, |_| None);
+        pane.process_pty_bytes(pane_id, 0, b"updated", &tx, |_| None);
         let mut core = pane.core.lock().unwrap();
         let refreshed = super::super::finish_recent_snapshot(&mut core, String::new(), 10, false);
         assert_eq!(refreshed.text, "older\nupdated\n");
@@ -350,15 +350,21 @@ mod tests {
             let total = core.terminal.scrollbar().unwrap().total;
             (total, core.recent_fallback.needs_refresh)
         };
-        pane.process_pty_bytes(pane_id, 0, b"line-0000", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"line-0000", &tx, |_| None);
         let first_total = state().0;
         let mut max_total = first_total;
         let prune = (1..=5000).find_map(|line| {
             let repaint = format!("repaint-{line:04}");
-            pane.process_pty_bytes(pane_id, 0, format!("\r{repaint}").as_bytes(), &tx);
+            pane.process_pty_bytes(pane_id, 0, format!("\r{repaint}").as_bytes(), &tx, |_| None);
             let (before, pending) = state();
             assert!(pending);
-            pane.process_pty_bytes(pane_id, 0, format!("\r\nline-{line:04}").as_bytes(), &tx);
+            pane.process_pty_bytes(
+                pane_id,
+                0,
+                format!("\r\nline-{line:04}").as_bytes(),
+                &tx,
+                |_| None,
+            );
             let after = state().0;
             max_total = max_total.max(after);
             (after < before).then_some((before, after, repaint))
@@ -373,14 +379,20 @@ mod tests {
 
         let page_rows = before + 1 - after;
         for line in 0..before - after {
-            pane.process_pty_bytes(pane_id, 0, format!("\r\nrefill-{line:04}").as_bytes(), &tx);
+            pane.process_pty_bytes(
+                pane_id,
+                0,
+                format!("\r\nrefill-{line:04}").as_bytes(),
+                &tx,
+                |_| None,
+            );
         }
         assert_eq!(state().0, before);
-        pane.process_pty_bytes(pane_id, 0, b"\rnet-zero-repaint", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"\rnet-zero-repaint", &tx, |_| None);
         let batch = (0..page_rows)
             .map(|line| format!("\r\nbatch-{line:04}"))
             .collect::<String>();
-        pane.process_pty_bytes(pane_id, 0, batch.as_bytes(), &tx);
+        pane.process_pty_bytes(pane_id, 0, batch.as_bytes(), &tx, |_| None);
         assert_eq!(state(), (before, true));
         let mut core = pane.core.lock().unwrap();
         let fallback =
@@ -405,7 +417,9 @@ mod tests {
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
         for line in 0..20 {
-            pane.process_pty_bytes(pane_id, 0, format!("{line:06}\r\n").as_bytes(), &tx);
+            pane.process_pty_bytes(pane_id, 0, format!("{line:06}\r\n").as_bytes(), &tx, |_| {
+                None
+            });
         }
         {
             let core = pane.core.lock().unwrap();
@@ -416,7 +430,7 @@ mod tests {
                 .any(|line| line.text.contains("000000")));
         }
 
-        pane.process_pty_bytes(pane_id, 0, b"\x1b[?1049h\x1b[2J\x1b[H", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[?1049h\x1b[2J\x1b[H", &tx, |_| None);
 
         let core = pane.core.lock().unwrap();
         assert!(core
@@ -434,9 +448,11 @@ mod tests {
         let pane_id = PaneId::from_raw(1);
 
         for line in 0..20 {
-            pane.process_pty_bytes(pane_id, 0, format!("{line:06}\r\n").as_bytes(), &tx);
+            pane.process_pty_bytes(pane_id, 0, format!("{line:06}\r\n").as_bytes(), &tx, |_| {
+                None
+            });
         }
-        pane.process_pty_bytes(pane_id, 0, b"\rredraw", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"\rredraw", &tx, |_| None);
         let before = pane.scroll_metrics().expect("scroll metrics before scroll");
         pane.set_scroll_offset_from_bottom(before.max_offset_from_bottom);
         {
@@ -450,7 +466,7 @@ mod tests {
             .text
             .contains("redraw"));
         pane.set_scroll_offset_from_bottom(before.max_offset_from_bottom);
-        pane.process_pty_bytes(pane_id, 0, b"new output\r\n", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"new output\r\n", &tx, |_| None);
         pane.resize(4, 40, 8, 16);
 
         let core = pane.core.lock().unwrap();
@@ -465,10 +481,10 @@ mod tests {
         let terminal = crate::ghostty::Terminal::new(40, 2, 0).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
-        pane.process_pty_bytes(pane_id, 0, b"one\r\n", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"one\r\n", &tx, |_| None);
         let total = pane.core.lock().unwrap().recent_fallback.last_scrollbar;
-        pane.process_pty_bytes(pane_id, 0, b"two\r\n", &tx);
-        pane.process_pty_bytes(pane_id, 0, b"three\r\n", &tx);
+        pane.process_pty_bytes(pane_id, 0, b"two\r\n", &tx, |_| None);
+        pane.process_pty_bytes(pane_id, 0, b"three\r\n", &tx, |_| None);
 
         let core = pane.core.lock().unwrap();
         assert_eq!(core.recent_fallback.last_scrollbar, total);

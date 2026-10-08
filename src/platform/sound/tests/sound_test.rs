@@ -182,7 +182,7 @@ fn windows_media_player_uses_process_environment_and_dispatcher() {
 #[cfg(windows)]
 #[test]
 fn windows_media_player_reports_invalid_media_without_waiting_for_timeout() {
-    let _lock = crate::pane::env::env_lock();
+    let _lock = crate::utils::test_env::env_lock();
     let path = temp_sound_path();
     std::fs::write(&path, b"not an mp3").unwrap();
     let output = run_windows_player(&path).unwrap();

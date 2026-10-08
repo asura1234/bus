@@ -44,8 +44,8 @@ rustPlatform.buildRustPackage {
         ../../orchestration
         ../../workflows
         ../../src
-        # Unit tests embed fixtures outside src; keep those compile-time inputs too.
-        ../../tests/fixtures
+        # Registered tests and unit fixtures are compile-time Cargo inputs too.
+        ../../tests
         ../../vendor/libghostty-vt
         ../../vendor/libghostty-vt.vendor.json
         ../../vendor/portable-pty

@@ -3,7 +3,7 @@
 Status: decided. It describes the target folder and module layout of the repository. Bus is a prototype: it keeps no fallbacks and no
 backward compatibility with older saves, configs, peers or herdr-era names, and it has no CI.
 
-S10 checkpoint: production owner splits and the final VT/emulator slices are complete. The enforced limit is
+S11 checkpoint: shared filesystem mechanics, neutral provider harnesses, restore planning and package input closure are complete. The enforced limit is
 800 handwritten production lines per file, with shared test scopes and the generated FFI exception. H14 production
 Clippy rules are active at 100 function lines, cognitive complexity 25 and 11 arguments; tests are exempt from these
 selected rules. Python retains Ruff E9,F and has no complexity lint policy.
@@ -28,25 +28,25 @@ selected rules. Python retains Ruff E9,F and has no complexity lint policy.
   - `bus-architecture.md`: this document
   - `guides/`: architecture principles, code review, plan review, review format and response, consumer-fallout format
   - `templates/`: `plan-template.md`
-- `tests/`: black-box integration tests against the built `bus` binary. Each folder is one test target whose root is
-  `<folder>/<folder>_test.rs`, declared with `[[test]]` in `Cargo.toml`
+- `tests/`: black-box integration tests against the built `bus` binary. Targets are declared with `[[test]]` in `Cargo.toml`;
+  the cross-platform `room-screen` target uses `client/room_screen_test.rs`
   - `support/`: `process_test.rs` (pid and dir hygiene), `spawn_test.rs` (one `spawn_server`/`spawn_client`), `wire_test.rs`,
     `json_test.rs`; each target includes them with `#[path]`
   - `api/`: `api_test.rs`, `server_test.rs`, `workspaces_tabs_test.rs`, `panes_test.rs`, `agents_test.rs`, `events_test.rs`
   - `server/`: `server_test.rs`, `lifecycle_test.rs`, `reattach_test.rs`, `headless_size_test.rs`, `multi_client_test.rs`
   - `client/`: `client_test.rs`, `startup_test.rs`, `lifecycle_test.rs`, `window_title_test.rs`, `output_test.rs`,
-    `persistence_test.rs`, `shared_view_test.rs`
+    `persistence_test.rs`, `shared_view_test.rs`, `room_screen_test.rs`, `room_screen_support_test.rs`, `screen_support_test.rs`
   - `cli/`: `cli_test.rs`, `callbacks_test.rs` (`--bus-callback` spooling), `paths_test.rs` (`--paths` and data-dir isolation)
   - `fixtures/`: key corpora, endpoint golden JSON, session files (data files keep their names)
 - `tools/`: repo-level tooling that belongs to no single skill, one Python package and one test root
-  - `quality/`: UI hot-path check and the import-boundary check that enforces graph 3a
+  - `quality/`: UI hot-path check and the import-boundary report for graph 3a (enforcement activates in S12)
   - `acceptance/`: `harness_test.py`, `existing_instance_test.py`, `e2e_test.py`, `live_ui_test.py`, `screen_test.py` (e2e and
     live-UI tests and their helpers, all test code)
   - `keyboard/`: raw-tty helper and the key capture tools
   - `vendor/`: re-vendor (`--source-repo` required) and hand-build libghostty-vt, vendored-tree checks
   - `windows/check.ps1` (local Windows build check), `tests/` (`*_test.py`)
 - `packaging/`: release plumbing; orchestration and workflow defaults are compiled into the binary
-  - `nix/package.nix`: `buildRustPackage`; its source fileset includes both embedded Markdown folders
+  - `nix/package.nix`: `buildRustPackage`; its source fileset includes both embedded Markdown folders, registered test sources/fixtures, native sources/metadata and patched portable-pty
   - `windows/`: `conpty.json`, `licenses/`, `package_conpty.py`, `package_conpty.ps1`, `tests/` (`*_test.py`)
 - `vendor/`: `libghostty-vt/` (with `build.zig.zon.nix`), `portable-pty/`, `patches/` (libghostty-vt carries patch 0001 only), the patch indexes and
   `libghostty-vt.vendor.json`
@@ -84,14 +84,14 @@ Files are split by ownership, not by helper.
 - `utils/`: shared basics; a leaf that imports no other component
   - `ids.rs` (`PaneId`, `TerminalId`), `version.rs`, `paths.rs` (owns the path table for every on-disk
     file and socket under `BUS_DATA_DIR`, including `bus.sock`)
-  - `logging.rs` (takes its filter from `cli`), `log_events.rs`, `home_path.rs`, `url.rs` (safe web URL check)
+  - `logging.rs` (takes explicit filter/rotation/dev options from startup composition), `log_events.rs`, `env.rs` (shared inherited path/key facts), `time.rs`, `home_path.rs`, `url.rs` (safe web URL check)
   - `config/`: `mod.rs`, `load.rs` (TOML, live reload; an unknown key fails with a diagnostic), `session.rs`, `server.rs`,
     `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `interface.rs` (UI settings), `sound.rs` (ding paths),
     `ui/{theme,window_title,keys}.rs`, section-owned `tests/`; `core.rs` retains the logical `model` namespace
   - `theme/`: `color.rs` (`RgbColor`, `TerminalTheme`, `HostAppearance`), `palette.rs`, `builtin.rs`, `resolve.rs`
-  - `paths/`: `session_args.rs`, `socket.rs`; CLI guidance and stop operations live in `cli`, with existing path facades retained
-  - `text/`: `selection.rs` (`Selection`, `ScrollMetrics`), `hit_testing.rs` (URL, word, quoted path), `copy_motion.rs`, `width.rs`
-  - `render/`: `signal.rs` (redraw requests), `prof.rs`, `widgets.rs` (highlight and scrollbar math), `feedback.rs`, `diagnostic.rs`
+  - `paths/`: `session_args.rs`, `socket.rs`; CLI help/stop policy lives in `cli`; detached attach guidance lives in client errors; shared paths contain calculation only
+  - `text/`: `selection.rs` (`Selection`), `notification.rs` (message splitting), `hit_testing.rs` (URL, word, quoted path), `copy_motion.rs`, `width.rs`
+  - `render/`: `signal.rs` (redraw requests), `prof.rs`, `widgets.rs` (`ScrollMetrics`, `CopyFeedback`, scrollbar/overlap math), `widgets/selection.rs` (highlight math), `feedback.rs`, `diagnostic.rs`
 - `platform/`: the operating system
   - `mod.rs`: shared types (`ForegroundJob`, `Signal`, `ChildExitReason`, `ClipboardImage`) and the facade; returns raw process and
     environment facts and leaves their meaning to `agents`
@@ -133,7 +133,7 @@ Files are split by ownership, not by helper.
   - `resume/`: `catalog.rs` (resume argv per agent), `session_ref.rs`, `tests/`
   - `providers/`: agent harnesses Bus launches and observes, one folder each
     - `mod.rs` (`ProviderKind`, match dispatch into each harness), `launch.rs` (room-free `LaunchSpec` to `PreparedLaunch`),
-      `spool.rs` (`--bus-callback` records, parsed into neutral provider events), `hook_json.rs` (shared hook-file merge and consent),
+      `callback_entry.rs` (early hook process entry), `spool.rs` (`--bus-callback` records, parsed into neutral provider events), `hook_json.rs` (shared hook-file merge and consent),
       `suggest.rs` (cwd suggestions), `tests/`
     - each harness passes a prompt file to its CLI and never reads room state; `resume.rs` rebuilds launch extras from verified facts
     - `claude_code/`: `launch.rs` (args, per-launch settings), `hooks.rs` (install, parse, prompt normalization), `system_prompt.rs`,
@@ -201,7 +201,7 @@ Files are split by ownership, not by helper.
     `app_settings.rs`, `app_queries.rs`, `startup.rs`, `shutdown.rs`, `config_reload.rs`
   - `workspaces/`: workspaces, tabs and the split layout
     - `mod.rs` (`Workspace`), `tab.rs`, `pane.rs` (`PaneState`), `layout/{tree,geometry,nav,layout_test}.rs`,
-    `agent_view.rs` (agent-panel entries and the agent-view filter)
+    `agent_view.rs` (ordered agent-panel entries; no filter DSL)
     - `ids.rs` (public `w`/`t`/`p` ids, target resolution), `navigation.rs` (focus, switch, move, zoom), `moves.rs` (move panes
       across tabs), `close.rs`, `attention.rs`, `git_label.rs`, `cwd.rs`, `tests/` (with `support_test.rs`)
   - `terminals/`: live terminals and the agents in them
@@ -209,7 +209,7 @@ Files are split by ownership, not by helper.
       facts, ask `messaging` to validate, then the provider for launch extras), `respawn.rs` (shell after an agent exits), `titles.rs`, `theme_sync.rs`
     - `scrollback_read.rs`: paged scrollback read of full-screen agent TUIs
     - `tests/{events_test,agents_test,resume_test,respawn_test,scrollback_read_test}.rs`
-  - `persistence/`: `schema.rs`, `capture.rs`, `store.rs`, `restore.rs` (snapshot to model plus a launch plan the main loop runs),
+  - `persistence/`: `schema.rs`, `capture.rs`, `store.rs`, `restore.rs` (pure snapshot-to-model/TerminalState/launch descriptions; startup executes them through `terminals/restore_launch.rs`),
     `autosave.rs`, `tests/{schema_test,store_test,restore_test}.rs`
   - `api/`: handlers for every API method
     - `socket/{accept,connection}.rs` (API socket, one thread per connection), `streams/{event_hub,subscriptions,wait,prompt_wait}.rs`
@@ -352,7 +352,7 @@ flowchart TD
 
 **utils**. Ids, version, the path table, logging, config loading, colors, text selection and small render helpers. It is a leaf: it
 imports no other component, though it holds small shared state such as the redraw signal. `config` stores agent names as plain
-strings; `agents` validates them. `logging` takes its filter from `cli`.
+strings; `agents` validates them. `logging` consumes explicit startup options.
 
 **platform**. Every OS call: processes, signals, clipboard, URLs, notifications, local sockets, file primitives, sound playback and the
 Windows backend. It returns raw facts and must not know about agents or protocols; callers pass limits (such as the clipboard image
@@ -399,3 +399,5 @@ embedded docs under `<BUS_DATA_DIR>/docs/` for agents to read, and the filled pr
 installed `share/bus` default directory, runtime source-file lookup or user-file override layer. Explicit per-launch custom prompts
 remain supported. `orchestration/README.md` documents the source-to-emitted filename map, the placeholders Bus fills
 (`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}`, `{{DOCS}}`), and the control CLI as the only way to drive Bus.
+
+S11 packaging closure: Cargo includes all Rust sources, registered integration suites and fixtures, authored Markdown, native Ghostty sources/metadata and the build script. Zig caches, dependency caches and built outputs are excluded. Nix retains the patched portable-pty dependency as a path source; Cargo registry normalization removes the local patch table, so registry publication is a distinct dependency contract, not the Nix/repository build. No runtime resolver or installed default directory is added. The final import graph remains report-only until S12.

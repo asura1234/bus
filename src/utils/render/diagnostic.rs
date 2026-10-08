@@ -1,5 +1,5 @@
 use super::widgets::panel_contrast_fg;
-use crate::app::state::Palette;
+use crate::utils::theme::Palette;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,

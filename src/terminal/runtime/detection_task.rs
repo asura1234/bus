@@ -261,7 +261,9 @@ impl DetectionTask {
             if pid > 0
                 && self
                     .terminal
-                    .maybe_restore_host_terminal_theme(self.pane_id, pid)
+                    .maybe_restore_host_terminal_theme(self.pane_id, pid, || {
+                        super::detection_process::foreground_job(pid)
+                    })
             {
                 if self.render_dirty.request_pty(self.pane_id) {
                     self.render_notify.notify_one();

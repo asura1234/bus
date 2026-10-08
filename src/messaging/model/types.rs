@@ -118,13 +118,7 @@ impl IntoIterator for AgentRecipients {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Provider {
-    Codex,
-    ClaudeCode,
-    Cursor,
-}
+pub(crate) use crate::agents::providers::ProviderKind as Provider;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -453,7 +447,8 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
     if payload == typed {
         return true;
     }
-    let (length, images) = crate::bus::callbacks::claude_image_placeholders(&payload);
+    let (length, images) =
+        crate::agents::providers::claude_code::hooks::claude_image_placeholders(&payload);
     let mut lifted = 0;
     let remaining = typed
         .split('\n')

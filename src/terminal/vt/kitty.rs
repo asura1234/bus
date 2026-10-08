@@ -8,58 +8,14 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::{ptr, slice};
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum KittyImageFormat {
-    Rgb,
-    Rgba,
-    Png,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KittyImagePlacement {
-    pub image_id: u32,
-    pub placement_id: u32,
-    pub z: i32,
-    pub x_offset: u32,
-    pub y_offset: u32,
-    pub image_width: u32,
-    pub image_height: u32,
-    pub format: KittyImageFormat,
-    pub data_len: usize,
-    pub data_fingerprint: u64,
-    pub data: Vec<u8>,
-    pub render: KittyPlacementRenderInfo,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KittyImageDescriptor {
-    pub image_id: u32,
-    pub placement_id: u32,
-    pub image_width: u32,
-    pub image_height: u32,
-    pub format: KittyImageFormat,
-    pub data_len: usize,
-    pub data_fingerprint: u64,
-}
+pub use crate::protocol::kitty::placement::{
+    KittyImageDescriptor, KittyImageFormat, KittyImagePlacement, KittyPlacementRenderInfo,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct KittyImageFingerprintEntry {
     pub(super) generation: u64,
     fingerprint: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KittyPlacementRenderInfo {
-    pub pixel_width: u32,
-    pub pixel_height: u32,
-    pub grid_cols: u32,
-    pub grid_rows: u32,
-    pub viewport_col: i32,
-    pub viewport_row: i32,
-    pub source_x: u32,
-    pub source_y: u32,
-    pub source_width: u32,
-    pub source_height: u32,
 }
 
 impl Terminal {

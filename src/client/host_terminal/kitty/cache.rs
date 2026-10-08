@@ -1,13 +1,11 @@
 use crate::protocol::kitty::apc::{
     encode_delete_image, encode_delete_placement, encode_display_placement, encode_kitty_data,
-    KITTY_CHUNK_BYTES,
 };
 use crate::protocol::kitty::placement::{
     clipped_placement, host_image_id, host_placement_id, image_signature, kitty_format_code,
     placement_signature, HostPlacement, HostSourceKey, ImageSignature, PlacementSignature,
 };
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 const MAX_OVERSIZED_SOURCES: usize = 256;
 
 #[derive(Debug, Default, Clone)]
@@ -20,16 +18,6 @@ pub(crate) struct HostGraphicsCache {
     continuation: Option<(HostSourceKey, u32, usize)>,
     replay_placements: bool,
     pub(crate) replayed_placements: HashSet<(u32, u32)>,
-}
-
-static KITTY_GRAPHICS_ENABLED: AtomicBool = AtomicBool::new(false);
-
-pub(crate) fn set_enabled(enabled: bool) {
-    KITTY_GRAPHICS_ENABLED.store(enabled, Ordering::Release);
-}
-
-pub(crate) fn is_enabled() -> bool {
-    KITTY_GRAPHICS_ENABLED.load(Ordering::Acquire)
 }
 
 pub(crate) struct EncodedGraphics {
@@ -56,12 +44,6 @@ fn image_transaction_fits(placement: &HostPlacement, budget: Option<usize>) -> b
         return true;
     };
     image_transfer_estimated_size(placement.placement.data_len) <= budget
-}
-
-pub(crate) fn image_transfer_estimated_size(data_len: usize) -> usize {
-    let encoded = data_len.div_ceil(3).saturating_mul(4);
-    let command_overhead = data_len.div_ceil(KITTY_CHUNK_BYTES).saturating_mul(16) + 1024;
-    encoded.saturating_add(command_overhead)
 }
 
 fn placement_identity(placement: &HostPlacement) -> (HostSourceKey, u32) {
@@ -371,3 +353,5 @@ fn encode_upload_image(
     encode_kitty_data(out, &control, &placement.placement.data);
     true
 }
+
+use super::image_transfer_estimated_size;

@@ -23,12 +23,12 @@ fn app_with_workspaces(names: &[&str]) -> AppState {
 }
 
 fn selected_word(row: &str, col: u16) -> Option<String> {
-    let (start, end) = word_bounds_at_column(row, col)?;
-    Some(text_in_cell_range(row, start, end))
+    let (start, end) = word_bounds_at_column(row, col, terminal_char_width)?;
+    Some(text_in_cell_range(row, start, end, terminal_char_width))
 }
 
 fn selected_url<'a>(row: &'a str, click: &str) -> Option<&'a str> {
-    url_at_column(row, col_of(row, click))
+    url_at_column(row, col_of(row, click), terminal_char_width)
 }
 
 fn col_of(row: &str, needle: &str) -> u16 {

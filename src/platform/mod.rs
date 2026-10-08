@@ -187,8 +187,8 @@ pub(crate) use desktop::{
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use desktop::{open_url, read_clipboard_image, show_desktop_notification, write_clipboard};
 
-mod fs;
-pub(crate) use fs::{create_private_state_file, replace_file, sync_parent_directory};
+pub(crate) mod fs;
+pub(crate) use fs::{atomic_write, create_private_state_file, sync_parent_directory};
 
 pub(crate) mod ipc;
 pub(crate) mod sound;
@@ -300,22 +300,6 @@ pub(crate) fn is_pane_shell_process_name(name: &str) -> bool {
     )
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn process_agent_hint(_pid: u32) -> Option<crate::detect::Agent> {
-    None
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn parse_agent_env_hint(environ: &[u8]) -> Option<crate::detect::Agent> {
-    for record in environ.split(|&byte| byte == 0) {
-        let Some(value) = record.strip_prefix(b"HERDR_AGENT=") else {
-            continue;
-        };
-        return crate::detect::parse_agent_label(std::str::from_utf8(value).ok()?);
-    }
-    None
-}
-
 #[cfg(all(test, any(unix, windows)))]
 #[test]
 fn child_exit_classification_only_checkpoints_interruptions() {
@@ -347,26 +331,6 @@ mod tests {
         for program in ["vim", "nvim", "cargo", "test-runner", "opencode"] {
             assert!(!is_pane_shell_process_name(program), "{program}");
         }
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn parse_agent_env_hint_accepts_known_agents() {
-        assert_eq!(
-            parse_agent_env_hint(b"PATH=/bin\0HERDR_AGENT=claude\0TERM=xterm\0"),
-            Some(crate::detect::Agent::Claude)
-        );
-        assert_eq!(
-            parse_agent_env_hint(b"HERDR_AGENT=codex"),
-            Some(crate::detect::Agent::Codex)
-        );
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    #[test]
-    fn parse_agent_env_hint_ignores_missing_or_unknown_agents() {
-        assert_eq!(parse_agent_env_hint(b"PATH=/bin\0TERM=xterm\0"), None);
-        assert_eq!(parse_agent_env_hint(b"HERDR_AGENT=not-an-agent\0"), None);
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -453,4 +417,9 @@ mod tests {
             LimitedRead::Complete(b"image".to_vec())
         );
     }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn process_environment(_pid: u32) -> Option<Vec<u8>> {
+    None
 }
