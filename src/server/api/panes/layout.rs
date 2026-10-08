@@ -9,6 +9,8 @@ use crate::server::app::App;
 use crate::server::terminals::events::{PaneZoomCommand, PaneZoomNoopReason};
 use crate::server::workspaces::layout::PaneId;
 
+type PaneSwapTarget = (usize, usize, PaneId, Option<PaneId>, Option<PaneSwapReason>);
+
 impl App {
     pub(in crate::server::api) fn handle_pane_split(
         &mut self,
@@ -104,7 +106,9 @@ impl App {
             .terminals
             .insert(new_pane.terminal.id.clone(), new_pane.terminal);
         self.schedule_session_save();
-        let pane = self.pane_info(ws_idx, new_pane.pane_id).unwrap();
+        let Some(pane) = self.pane_info(ws_idx, new_pane.pane_id) else {
+            return encode_error(id, "pane_not_found", "pane not found");
+        };
         self.emit_event(EventEnvelope {
             event: EventKind::PaneCreated,
             data: EventData::PaneCreated { pane: pane.clone() },
@@ -182,60 +186,10 @@ impl App {
                 ),
             }
         } else {
-            let Some(source_raw) = params.source_pane_id.as_deref() else {
-                return encode_error(id, "invalid_pane_swap", "missing source_pane_id");
-            };
-            let Some(target_raw) = params.target_pane_id.as_deref() else {
-                return encode_error(id, "invalid_pane_swap", "missing target_pane_id");
-            };
-            let source = self
-                .parse_pane_id(source_raw)
-                .and_then(|(ws_idx, pane_id)| {
-                    let tab_idx = self.state.workspaces[ws_idx].find_tab_index_for_pane(pane_id)?;
-                    Some((ws_idx, tab_idx, pane_id))
-                });
-            let target = self
-                .parse_pane_id(target_raw)
-                .and_then(|(ws_idx, pane_id)| {
-                    let tab_idx = self.state.workspaces[ws_idx].find_tab_index_for_pane(pane_id)?;
-                    Some((ws_idx, tab_idx, pane_id))
-                });
-            let response_context = source
-                .map(|(ws_idx, tab_idx, _)| (ws_idx, tab_idx))
-                .or_else(|| target.map(|(ws_idx, tab_idx, _)| (ws_idx, tab_idx)))
-                .or_else(|| {
-                    let ws_idx = self.state.active?;
-                    let tab_idx = self.state.workspaces.get(ws_idx)?.active_tab_index();
-                    Some((ws_idx, tab_idx))
-                });
-            let Some((ws_idx, tab_idx)) = response_context else {
-                return encode_error(id, "pane_layout_unavailable", "pane layout unavailable");
-            };
-            let source_pane_id = source
-                .map(|(_, _, pane_id)| pane_id)
-                .or_else(|| {
-                    self.state
-                        .workspaces
-                        .get(ws_idx)?
-                        .tabs
-                        .get(tab_idx)
-                        .map(|tab| tab.layout.focused())
-                })
-                .unwrap_or(PaneId::from_raw(0));
-            let target_pane_id = target.map(|(_, _, pane_id)| pane_id);
-            let reason = match (source, target) {
-                (None, _) | (_, None) => Some(PaneSwapReason::NotFound),
-                (Some((_, _, source)), Some((_, _, target))) if source == target => {
-                    Some(PaneSwapReason::SamePane)
-                }
-                (Some((source_ws, source_tab, _)), Some((target_ws, target_tab, _)))
-                    if source_ws != target_ws || source_tab != target_tab =>
-                {
-                    Some(PaneSwapReason::CrossTab)
-                }
-                _ => None,
-            };
-            (ws_idx, tab_idx, source_pane_id, target_pane_id, reason)
+            match self.resolve_explicit_pane_swap(&id, &params) {
+                Ok(target) => target,
+                Err(response) => return response,
+            }
         };
 
         let mut changed = false;
@@ -261,6 +215,38 @@ impl App {
             }
         }
 
+        let (source_public_id, target_public_id) =
+            self.pane_swap_public_ids(ws_idx, source_pane_id, target_pane_id, params);
+        let Some(layout) = self.pane_layout_snapshot(ws_idx, tab_idx) else {
+            return encode_error(id, "pane_layout_unavailable", "pane layout unavailable");
+        };
+        let focused_pane_id = layout.focused_pane_id.clone();
+        if changed {
+            self.emit_layout_updated_snapshot(layout.clone());
+        }
+
+        encode_success(
+            id,
+            ResponseResult::PaneSwap {
+                swap: PaneSwapResult {
+                    changed,
+                    reason,
+                    source_pane_id: source_public_id,
+                    target_pane_id: target_public_id,
+                    focused_pane_id,
+                    layout,
+                },
+            },
+        )
+    }
+
+    fn pane_swap_public_ids(
+        &self,
+        ws_idx: usize,
+        source_pane_id: PaneId,
+        target_pane_id: Option<PaneId>,
+        params: PaneSwapParams,
+    ) -> (String, Option<String>) {
         let source_public_id = match params.source_pane_id {
             Some(raw) => self
                 .parse_pane_id(&raw)
@@ -289,27 +275,80 @@ impl App {
                 .or(Some(raw)),
             None => target_pane_id.and_then(|pane_id| self.public_pane_id(ws_idx, pane_id)),
         };
-        let Some(layout) = self.pane_layout_snapshot(ws_idx, tab_idx) else {
-            return encode_error(id, "pane_layout_unavailable", "pane layout unavailable");
-        };
-        let focused_pane_id = layout.focused_pane_id.clone();
-        if changed {
-            self.emit_layout_updated_snapshot(layout.clone());
-        }
+        (source_public_id, target_public_id)
+    }
 
-        encode_success(
-            id,
-            ResponseResult::PaneSwap {
-                swap: PaneSwapResult {
-                    changed,
-                    reason,
-                    source_pane_id: source_public_id,
-                    target_pane_id: target_public_id,
-                    focused_pane_id,
-                    layout,
-                },
-            },
-        )
+    fn resolve_explicit_pane_swap(
+        &self,
+        id: &str,
+        params: &PaneSwapParams,
+    ) -> Result<PaneSwapTarget, String> {
+        let Some(source_raw) = params.source_pane_id.as_deref() else {
+            return Err(encode_error(
+                id.to_owned(),
+                "invalid_pane_swap",
+                "missing source_pane_id",
+            ));
+        };
+        let Some(target_raw) = params.target_pane_id.as_deref() else {
+            return Err(encode_error(
+                id.to_owned(),
+                "invalid_pane_swap",
+                "missing target_pane_id",
+            ));
+        };
+        let source = self
+            .parse_pane_id(source_raw)
+            .and_then(|(ws_idx, pane_id)| {
+                let tab_idx = self.state.workspaces[ws_idx].find_tab_index_for_pane(pane_id)?;
+                Some((ws_idx, tab_idx, pane_id))
+            });
+        let target = self
+            .parse_pane_id(target_raw)
+            .and_then(|(ws_idx, pane_id)| {
+                let tab_idx = self.state.workspaces[ws_idx].find_tab_index_for_pane(pane_id)?;
+                Some((ws_idx, tab_idx, pane_id))
+            });
+        let response_context = source
+            .map(|(ws_idx, tab_idx, _)| (ws_idx, tab_idx))
+            .or_else(|| target.map(|(ws_idx, tab_idx, _)| (ws_idx, tab_idx)))
+            .or_else(|| {
+                let ws_idx = self.state.active?;
+                let tab_idx = self.state.workspaces.get(ws_idx)?.active_tab_index();
+                Some((ws_idx, tab_idx))
+            });
+        let Some((ws_idx, tab_idx)) = response_context else {
+            return Err(encode_error(
+                id.to_owned(),
+                "pane_layout_unavailable",
+                "pane layout unavailable",
+            ));
+        };
+        let source_pane_id = source
+            .map(|(_, _, pane_id)| pane_id)
+            .or_else(|| {
+                self.state
+                    .workspaces
+                    .get(ws_idx)?
+                    .tabs
+                    .get(tab_idx)
+                    .map(|tab| tab.layout.focused())
+            })
+            .unwrap_or(PaneId::from_raw(0));
+        let target_pane_id = target.map(|(_, _, pane_id)| pane_id);
+        let reason = match (source, target) {
+            (None, _) | (_, None) => Some(PaneSwapReason::NotFound),
+            (Some((_, _, source)), Some((_, _, target))) if source == target => {
+                Some(PaneSwapReason::SamePane)
+            }
+            (Some((source_ws, source_tab, _)), Some((target_ws, target_tab, _)))
+                if source_ws != target_ws || source_tab != target_tab =>
+            {
+                Some(PaneSwapReason::CrossTab)
+            }
+            _ => None,
+        };
+        Ok((ws_idx, tab_idx, source_pane_id, target_pane_id, reason))
     }
 
     pub(in crate::server::api) fn handle_pane_zoom(

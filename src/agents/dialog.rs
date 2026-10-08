@@ -380,53 +380,7 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     let start = lines
         .iter()
         .rposition(|line| option_line(line).is_some_and(|option| option.number == 1))?;
-    let mut options: Vec<OptionLine> = Vec::new();
-    let mut end = start;
-    for (index, line) in lines.iter().enumerate().skip(start) {
-        if let Some(mut option) = option_line(line) {
-            if option.number as usize != options.len() + 1 {
-                break;
-            }
-            // Codex 把放不下的选项正文折到下一行，编号行上只剩 `› 1.`。
-            if option.label.is_empty()
-                && !lines.get(index + 1).is_some_and(|next| {
-                    let text = unboxed(next);
-                    !text.trim().is_empty()
-                        && option_line(next).is_none()
-                        && !is_separator(text)
-                        && indentation(text) > option.column
-                })
-            {
-                break;
-            }
-            option.line = index;
-            options.push(option);
-            end = index + 1;
-            continue;
-        }
-        let text = unboxed(line);
-        // Claude's question panel rules off its last option.
-        if is_separator(text)
-            && lines
-                .get(index + 1)
-                .and_then(|next| option_line(next))
-                .is_some_and(|next| next.number as usize == options.len() + 1)
-        {
-            continue;
-        }
-        let Some(last) = options.last_mut() else {
-            break;
-        };
-        if text.trim().is_empty() || indentation(text) <= last.column || is_separator(text) {
-            break;
-        }
-        // A wrapped label continues deeper than its number.
-        if !last.label.is_empty() {
-            last.label.push(' ');
-        }
-        last.label.push_str(text.trim());
-        end = index + 1;
-    }
+    let (mut options, end) = numbered_options(lines, start);
     if options.len() < 2 || options.iter().filter(|option| option.selected).count() > 1 {
         return None;
     }
@@ -506,6 +460,58 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     })
 }
 
+/// Collects consecutive numbered options, including their wrapped labels.
+fn numbered_options(lines: &[&str], start: usize) -> (Vec<OptionLine>, usize) {
+    let mut options: Vec<OptionLine> = Vec::new();
+    let mut end = start;
+    for (index, line) in lines.iter().enumerate().skip(start) {
+        if let Some(mut option) = option_line(line) {
+            if option.number as usize != options.len() + 1 {
+                break;
+            }
+            // Codex 把放不下的选项正文折到下一行，编号行上只剩 `› 1.`。
+            if option.label.is_empty()
+                && !lines.get(index + 1).is_some_and(|next| {
+                    let text = unboxed(next);
+                    !text.trim().is_empty()
+                        && option_line(next).is_none()
+                        && !is_separator(text)
+                        && indentation(text) > option.column
+                })
+            {
+                break;
+            }
+            option.line = index;
+            options.push(option);
+            end = index + 1;
+            continue;
+        }
+        let text = unboxed(line);
+        // Claude's question panel rules off its last option.
+        if is_separator(text)
+            && lines
+                .get(index + 1)
+                .and_then(|next| option_line(next))
+                .is_some_and(|next| next.number as usize == options.len() + 1)
+        {
+            continue;
+        }
+        let Some(last) = options.last_mut() else {
+            break;
+        };
+        if text.trim().is_empty() || indentation(text) <= last.column || is_separator(text) {
+            break;
+        }
+        // A wrapped label continues deeper than its number.
+        if !last.label.is_empty() {
+            last.label.push(' ');
+        }
+        last.label.push_str(text.trim());
+        end = index + 1;
+    }
+    (options, end)
+}
+
 /// The question above the options, up to a separator or a double blank line.
 fn title(above: &[&str]) -> String {
     // Approval notices must retain every command line and the Reason above it.
@@ -583,8 +589,12 @@ fn highlighted(styles: &[Style]) -> Option<usize> {
 /// Splits a screen into plain lines and the style of each of their characters,
 /// following SGR sequences and skipping every other escape sequence.
 fn styled_lines(screen: &str) -> (Vec<String>, Vec<Vec<Style>>) {
-    let mut texts = vec![String::new()];
-    let mut styles = vec![Vec::new()];
+    let mut texts = Vec::new();
+    let mut styles = Vec::new();
+    // Keep the current line directly, so even an empty screen has a line and
+    // character appends never depend on a fallible last-element lookup.
+    let mut text = String::new();
+    let mut line_styles = Vec::new();
     let mut style = Style::default();
     let mut chars = screen.chars().peekable();
     while let Some(c) = chars.next() {
@@ -612,16 +622,18 @@ fn styled_lines(screen: &str) -> (Vec<String>, Vec<Vec<Style>>) {
                 _ => {}
             },
             '\n' => {
-                texts.push(String::new());
-                styles.push(Vec::new());
+                texts.push(std::mem::take(&mut text));
+                styles.push(std::mem::take(&mut line_styles));
             }
             '\r' => {}
             c => {
-                texts.last_mut().unwrap().push(c);
-                styles.last_mut().unwrap().push(style);
+                text.push(c);
+                line_styles.push(style);
             }
         }
     }
+    texts.push(text);
+    styles.push(line_styles);
     (texts, styles)
 }
 

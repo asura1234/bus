@@ -156,46 +156,9 @@ impl ActiveSubscription {
                 lines,
                 r#match,
                 strip_ansi,
-            } => {
-                let regex = match &r#match {
-                    crate::protocol::api::schema::OutputMatch::Regex { value } => {
-                        match Regex::new(value) {
-                            Ok(regex) => Some(regex),
-                            Err(err) => {
-                                return Err(ErrorResponse {
-                                    id: request_id.to_string(),
-                                    error: ErrorBody {
-                                        code: "invalid_regex".into(),
-                                        message: err.to_string(),
-                                    },
-                                });
-                            }
-                        }
-                    }
-                    crate::protocol::api::schema::OutputMatch::Substring { .. } => None,
-                };
-
-                let probe = pane_read(
-                    format!("{request_id}:sub:{index}:probe"),
-                    &pane_id,
-                    source,
-                    lines,
-                    strip_ansi,
-                    api_tx,
-                );
-                probe?;
-
-                Ok(Self::OutputMatched(ActiveOutputMatchedSubscription {
-                    pane_id,
-                    source,
-                    lines,
-                    matcher: r#match,
-                    regex,
-                    strip_ansi,
-                    currently_matching: false,
-                    request_prefix: format!("{request_id}:sub:{index}"),
-                }))
-            }
+            } => Self::output_matched_subscription(
+                request_id, index, api_tx, pane_id, source, lines, r#match, strip_ansi,
+            ),
             Subscription::PaneAgentStatusChanged {
                 pane_id,
                 agent_status,
@@ -238,6 +201,54 @@ impl ActiveSubscription {
                 }))
             }
         }
+    }
+
+    fn output_matched_subscription(
+        request_id: &str,
+        index: usize,
+        api_tx: &ApiRequestSender,
+        pane_id: String,
+        source: crate::protocol::api::schema::ReadSource,
+        lines: Option<u32>,
+        r#match: crate::protocol::api::schema::OutputMatch,
+        strip_ansi: bool,
+    ) -> Result<Self, ErrorResponse> {
+        let regex = match &r#match {
+            crate::protocol::api::schema::OutputMatch::Regex { value } => match Regex::new(value) {
+                Ok(regex) => Some(regex),
+                Err(err) => {
+                    return Err(ErrorResponse {
+                        id: request_id.to_string(),
+                        error: ErrorBody {
+                            code: "invalid_regex".into(),
+                            message: err.to_string(),
+                        },
+                    });
+                }
+            },
+            crate::protocol::api::schema::OutputMatch::Substring { .. } => None,
+        };
+
+        let probe = pane_read(
+            format!("{request_id}:sub:{index}:probe"),
+            &pane_id,
+            source,
+            lines,
+            strip_ansi,
+            api_tx,
+        );
+        probe?;
+
+        Ok(Self::OutputMatched(ActiveOutputMatchedSubscription {
+            pane_id,
+            source,
+            lines,
+            matcher: r#match,
+            regex,
+            strip_ansi,
+            currently_matching: false,
+            request_prefix: format!("{request_id}:sub:{index}"),
+        }))
     }
 
     pub(in crate::server::api) fn poll(

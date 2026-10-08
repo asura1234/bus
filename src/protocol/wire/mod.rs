@@ -21,7 +21,6 @@ mod shell;
 mod surface;
 mod version;
 
-#[cfg(test)]
 pub use frame::TerminalFrame;
 pub use frame::{CellData, CursorState, FrameData};
 pub(crate) use frame_adapters::{

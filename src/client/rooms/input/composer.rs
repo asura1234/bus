@@ -116,73 +116,90 @@ impl BusUi {
     }
 
     pub(super) fn key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
-        if self.rename.is_some() {
-            match code {
-                KeyCode::Esc => self.rename = None,
-                KeyCode::Enter => {
-                    if let Some(rename) = self.rename.take() {
-                        let cmd = match rename.target {
-                            RenameTarget::Room(id) => {
-                                BusCommand::RenameRoom(id, rename.editor.text)
-                            }
-                            RenameTarget::Agent(id) => {
-                                BusCommand::RenameAgent(id, rename.editor.text)
-                            }
-                        };
-                        self.queue(cmd, Effect::None);
-                    }
-                }
-                KeyCode::Char(c)
-                    if !modifiers.intersects(
-                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                    ) =>
-                {
-                    self.insert(&c.to_string())
-                }
-                _ => {
-                    if let Some(rename) = &mut self.rename {
-                        rename.editor.key(code, modifiers);
-                    }
-                }
-            }
-            return;
-        }
-        if self.form.is_some() {
-            self.form_key(code, modifiers);
-            return;
-        }
-        if self.recipient_menu {
-            let ids: Vec<_> = self
-                .snapshot
-                .state
-                .agents()
-                .filter(|a| Some(a.room_id) == self.room)
-                .map(|a| a.id)
-                .collect();
-            match code {
-                KeyCode::Esc | KeyCode::Tab => self.recipient_menu = false,
-                KeyCode::Up => self.recipient_index = self.recipient_index.saturating_sub(1),
-                KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(ids.len()),
-                KeyCode::Enter | KeyCode::Char(' ') => self.toggle_recipient(
-                    self.recipient_index
-                        .checked_sub(1)
-                        .and_then(|i| ids.get(i).copied()),
-                ),
-                _ => {}
-            }
-            return;
-        }
-        if self.chat_search.is_some() {
-            self.chat_search_key(code, modifiers);
-            return;
-        }
-        if self.history_search.is_some() && !self.notes_focus {
-            self.search_key(code, modifiers);
+        if self.modal_key(code, modifiers) {
             return;
         }
         if !matches!(code, KeyCode::Esc) {
             self.last_esc = None;
         }
+        if !self.composer_command_key(code, modifiers) {
+            self.edit_composer_key(code, modifiers);
+        }
+    }
+
+    fn modal_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        if self.rename.is_some() {
+            self.rename_key(code, modifiers);
+            return true;
+        }
+        if self.form.is_some() {
+            self.form_key(code, modifiers);
+            return true;
+        }
+        if self.recipient_menu {
+            self.recipient_menu_key(code);
+            return true;
+        }
+        if self.chat_search.is_some() {
+            self.chat_search_key(code, modifiers);
+            return true;
+        }
+        if self.history_search.is_some() && !self.notes_focus {
+            self.search_key(code, modifiers);
+            return true;
+        }
+        false
+    }
+
+    fn rename_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        match code {
+            KeyCode::Esc => self.rename = None,
+            KeyCode::Enter => {
+                if let Some(rename) = self.rename.take() {
+                    let cmd = match rename.target {
+                        RenameTarget::Room(id) => BusCommand::RenameRoom(id, rename.editor.text),
+                        RenameTarget::Agent(id) => BusCommand::RenameAgent(id, rename.editor.text),
+                    };
+                    self.queue(cmd, Effect::None);
+                }
+            }
+            KeyCode::Char(c)
+                if !modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                self.insert(&c.to_string())
+            }
+            _ => {
+                if let Some(rename) = &mut self.rename {
+                    rename.editor.key(code, modifiers);
+                }
+            }
+        }
+    }
+
+    fn recipient_menu_key(&mut self, code: KeyCode) {
+        let ids: Vec<_> = self
+            .snapshot
+            .state
+            .agents()
+            .filter(|a| Some(a.room_id) == self.room)
+            .map(|a| a.id)
+            .collect();
+        match code {
+            KeyCode::Esc | KeyCode::Tab => self.recipient_menu = false,
+            KeyCode::Up => self.recipient_index = self.recipient_index.saturating_sub(1),
+            KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(ids.len()),
+            KeyCode::Enter | KeyCode::Char(' ') => self.toggle_recipient(
+                self.recipient_index
+                    .checked_sub(1)
+                    .and_then(|i| ids.get(i).copied()),
+            ),
+            _ => {}
+        }
+    }
+
+    fn composer_command_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         match (code, modifiers) {
             (KeyCode::F(2), _) => {
                 if let Some(id) = self.terminal {
@@ -250,6 +267,13 @@ impl BusUi {
             // Pickers sit on Ctrl chords: every printable key, shifted symbols
             // like @ and + included, must type into the composer.
             (KeyCode::Char('p'), KeyModifiers::CONTROL) => self.action(Action::Recipients),
+            _ => return false,
+        }
+        true
+    }
+
+    fn edit_composer_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        match (code, modifiers) {
             (KeyCode::Char('j'), KeyModifiers::CONTROL) | (KeyCode::Enter, KeyModifiers::SHIFT) => {
                 self.insert("\n")
             }

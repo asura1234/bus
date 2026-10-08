@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    push_target_event, ClientInputTarget, ClientMousePosition, ClientPaneInputEvent,
+    ClientShellInput, ClientShellState, MouseEvent, PaneHit,
+};
 
 impl ClientShellState {
     pub(in crate::client) fn push_pane_mouse_event(

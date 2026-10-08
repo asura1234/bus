@@ -90,24 +90,10 @@ impl HeadlessServer {
         let render_targets = render_targets(&self.clients, self.foreground_client_id);
 
         if render_targets.is_empty() {
-            let (cols, rows) = self.effective_size;
-            let area = Rect::new(0, 0, cols, rows);
-            let resize_panes = self.app.state.view.pane_infos.is_empty();
-            if resize_panes {
-                crate::ui::compute_view_with_runtime_registry(
-                    &mut self.app.state,
-                    &self.app.terminal_runtimes,
-                    area,
-                );
-            } else {
-                crate::ui::compute_view_without_resizing_panes(
-                    &mut self.app.state,
-                    &self.app.terminal_runtimes,
-                    area,
-                );
-            }
+            let resize_panes = self.update_headless_render_geometry();
             self.app.full_redraw_pending = false;
             crate::render_prof::duration_since("full_render.total", full_started);
+            let (cols, rows) = self.effective_size;
             debug!(
                 cols,
                 rows, resize_panes, "updated geometry with no attached clients"
@@ -117,177 +103,11 @@ impl HeadlessServer {
 
         let mut broken_clients: Vec<u64> = Vec::new();
         for (client_id, (cols, rows), cell_size, _is_foreground, _mode) in render_targets {
-            let area = Rect::new(0, 0, cols, rows);
-            let shell_target = self.shell_target_for_client(client_id);
+            if self
+                .render_client_pane_surface(client_id, Rect::new(0, 0, cols, rows), cell_size)
+                .is_err()
             {
-                let location = self
-                    .clients
-                    .get(&client_id)
-                    .and_then(|client| client.shell_location.clone());
-                let Some(client) = self.clients.get_mut(&client_id) else {
-                    continue;
-                };
-                let mut candidate = client_shell_snapshot(
-                    &self.app,
-                    &self.client_shell_boot_id,
-                    client.shell_projection_revision,
-                    None,
-                    location.as_ref(),
-                );
-                candidate.config_diagnostic = self.server_config_diagnostic.clone();
-                candidate.revision = client.shell_projection_revision;
-                if client.shell_snapshot.as_ref() != Some(&candidate) {
-                    client.shell_projection_revision =
-                        client.shell_projection_revision.saturating_add(1);
-                    candidate.revision = client.shell_projection_revision;
-                    let message = match crate::protocol::endpoint::snapshot_message(&candidate) {
-                        Ok(message) => message,
-                        Err(err) => {
-                            warn!(client_id, err = %err, "failed to encode endpoint snapshot");
-                            broken_clients.push(client_id);
-                            continue;
-                        }
-                    };
-                    let framed = match Self::frame_server_message(&message) {
-                        Ok(framed) => framed,
-                        Err(err) => {
-                            warn!(client_id, err = %err, "failed to frame endpoint snapshot");
-                            broken_clients.push(client_id);
-                            continue;
-                        }
-                    };
-                    if client.writer.control.send(framed).is_err() {
-                        broken_clients.push(client_id);
-                        continue;
-                    }
-                    client.shell_snapshot = Some(candidate);
-                }
-                if !client.shell_surface_active {
-                    client.clear_deferred_render();
-                    continue;
-                }
-            }
-            let shell_graphics_delivery = self
-                .clients
-                .get(&client_id)
-                .map(|client| client.shell_graphics_delivery.clone())
-                .unwrap_or_default();
-            let render_started = crate::render_prof::timer();
-            let rendered = {
-                let render_cell_size = if cell_size.is_known() {
-                    cell_size
-                } else {
-                    crate::kitty_graphics::HostCellSize::default()
-                };
-                let crate::server::rendering::snapshot::RenderedPaneSurface {
-                    frame,
-                    panes,
-                    splits,
-                    graphics,
-                    graphics_delivery: next_graphics_delivery,
-                } = render_client_shell_pane_surface(
-                    &mut self.app,
-                    shell_target,
-                    area,
-                    false,
-                    render_cell_size,
-                    &shell_graphics_delivery,
-                );
-                crate::render_prof::duration_since(
-                    "full_render.render_tab_surface_virtual",
-                    render_started,
-                );
-                (frame, panes, splits, graphics, next_graphics_delivery)
-            };
-            let Some(client) = self.clients.get_mut(&client_id) else {
-                continue;
-            };
-            let writer = client.writer.clone();
-            let (frame, panes, splits, graphics, delivery) = rendered;
-            let has_graphics = !graphics.assets.is_empty() || !graphics.placements.is_empty();
-            let mut next_shell_graphics_delivery = Some(delivery);
-            let prepared = client
-                .render_state
-                .prepare_pane_surface(protocol::PaneSurfaceFrame {
-                    boot_id: self.client_shell_boot_id.clone(),
-                    projection_revision: client.shell_projection_revision,
-                    surface_revision: 0,
-                    frame,
-                    panes,
-                    splits,
-                    graphics,
-                });
-            let Some(mut prepared) = prepared else {
-                client.clear_deferred_render();
-                crate::render_prof::event("full_render.skip_identical");
-                continue;
-            };
-            let max = if has_graphics {
-                MAX_GRAPHICS_FRAME_SIZE
-            } else {
-                crate::protocol::MAX_FRAME_SIZE
-            };
-            let mut shell_assets_deferred = false;
-            let serialized = match Self::frame_server_message_with_max(prepared.message(), max) {
-                Ok(frame) => frame,
-                Err(protocol::FramingError::Oversized { claimed, max }) if has_graphics => {
-                    warn!(
-                        client_id,
-                        claimed, max, "dropping graphics assets from oversized pane surface"
-                    );
-                    if !prepared.strip_pane_surface_assets() {
-                        crate::render_prof::event("full_render.serialize_oversized");
-                        continue;
-                    }
-                    next_shell_graphics_delivery = None;
-                    shell_assets_deferred = true;
-                    match Self::frame_server_message(prepared.message()) {
-                        Ok(framed) => framed,
-                        Err(err) => {
-                            warn!(client_id, err = %err, "failed to serialize pane surface without assets");
-                            broken_clients.push(client_id);
-                            crate::render_prof::event("full_render.serialize_error");
-                            continue;
-                        }
-                    }
-                }
-                Err(protocol::FramingError::Oversized { claimed, max }) => {
-                    warn!(
-                        client_id,
-                        claimed, max, "skipping oversized frame for client"
-                    );
-                    crate::render_prof::event("full_render.serialize_oversized");
-                    continue;
-                }
-                Err(err) => {
-                    warn!(client_id, err = %err, "failed to serialize frame");
-                    broken_clients.push(client_id);
-                    crate::render_prof::event("full_render.serialize_error");
-                    continue;
-                }
-            };
-            let shell_graphics_pending = next_shell_graphics_delivery
-                .as_ref()
-                .is_some_and(crate::server::rendering::images::DeliveryCache::has_pending);
-            match writer.render.try_send(serialized) {
-                Ok(()) => {
-                    if let Some(delivery) = next_shell_graphics_delivery {
-                        client.shell_graphics_delivery = delivery;
-                    }
-                    client.render_state.commit_sent_frame(prepared);
-                    if shell_graphics_pending || shell_assets_deferred {
-                        client.defer_full_render();
-                    } else {
-                        client.clear_deferred_render();
-                    }
-                    crate::render_prof::event("full_render.sent");
-                }
-                Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                    client.defer_full_render();
-                }
-                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
-                    broken_clients.push(client_id);
-                }
+                broken_clients.push(client_id);
             }
         }
 
@@ -304,5 +124,214 @@ impl HeadlessServer {
         self.app.full_redraw_pending = false;
         crate::render_prof::duration_since("full_render.total", full_started);
         debug!(cols, rows, foreground_client_id = ?self.foreground_client_id, "rendered virtual frame(s)");
+    }
+    fn update_headless_render_geometry(&mut self) -> bool {
+        let (cols, rows) = self.effective_size;
+        let area = Rect::new(0, 0, cols, rows);
+        let resize_panes = self.app.state.view.pane_infos.is_empty();
+        if resize_panes {
+            crate::ui::compute_view_with_runtime_registry(
+                &mut self.app.state,
+                &self.app.terminal_runtimes,
+                area,
+            );
+        } else {
+            crate::ui::compute_view_without_resizing_panes(
+                &mut self.app.state,
+                &self.app.terminal_runtimes,
+                area,
+            );
+        }
+        resize_panes
+    }
+
+    fn sync_client_shell_snapshot(&mut self, client_id: u64) -> Result<bool, ()> {
+        let location = self
+            .clients
+            .get(&client_id)
+            .and_then(|client| client.shell_location.clone());
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return Ok(false);
+        };
+        let mut candidate = client_shell_snapshot(
+            &self.app,
+            &self.client_shell_boot_id,
+            client.shell_projection_revision,
+            None,
+            location.as_ref(),
+        );
+        candidate.config_diagnostic = self.server_config_diagnostic.clone();
+        candidate.revision = client.shell_projection_revision;
+        if client.shell_snapshot.as_ref() != Some(&candidate) {
+            client.shell_projection_revision = client.shell_projection_revision.saturating_add(1);
+            candidate.revision = client.shell_projection_revision;
+            let message =
+                crate::protocol::endpoint::snapshot_message(&candidate).map_err(|err| {
+                    warn!(client_id, err = %err, "failed to encode endpoint snapshot");
+                })?;
+            let framed = Self::frame_server_message(&message).map_err(|err| {
+                warn!(client_id, err = %err, "failed to frame endpoint snapshot");
+            })?;
+            client.writer.control.send(framed).map_err(|_| ())?;
+            client.shell_snapshot = Some(candidate);
+        }
+        if !client.shell_surface_active {
+            client.clear_deferred_render();
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    fn render_client_pane_surface(
+        &mut self,
+        client_id: u64,
+        area: Rect,
+        cell_size: crate::kitty_graphics::HostCellSize,
+    ) -> Result<(), ()> {
+        let shell_target = self.shell_target_for_client(client_id);
+        if !self.sync_client_shell_snapshot(client_id)? {
+            return Ok(());
+        }
+        let shell_graphics_delivery = self
+            .clients
+            .get(&client_id)
+            .map(|client| client.shell_graphics_delivery.clone())
+            .unwrap_or_default();
+        let render_started = crate::render_prof::timer();
+        let crate::server::rendering::snapshot::RenderedPaneSurface {
+            frame,
+            panes,
+            splits,
+            graphics,
+            graphics_delivery: delivery,
+        } = {
+            let render_cell_size = if cell_size.is_known() {
+                cell_size
+            } else {
+                crate::kitty_graphics::HostCellSize::default()
+            };
+            let rendered = render_client_shell_pane_surface(
+                &mut self.app,
+                shell_target,
+                area,
+                false,
+                render_cell_size,
+                &shell_graphics_delivery,
+            );
+            crate::render_prof::duration_since(
+                "full_render.render_tab_surface_virtual",
+                render_started,
+            );
+            rendered
+        };
+        let Some(client) = self.clients.get_mut(&client_id) else {
+            return Ok(());
+        };
+        let writer = client.writer.clone();
+        let has_graphics = !graphics.assets.is_empty() || !graphics.placements.is_empty();
+        let mut next_shell_graphics_delivery = Some(delivery);
+        let prepared = client
+            .render_state
+            .prepare_pane_surface(protocol::PaneSurfaceFrame {
+                boot_id: self.client_shell_boot_id.clone(),
+                projection_revision: client.shell_projection_revision,
+                surface_revision: 0,
+                frame,
+                panes,
+                splits,
+                graphics,
+            });
+        let Some(mut prepared) = prepared else {
+            client.clear_deferred_render();
+            crate::render_prof::event("full_render.skip_identical");
+            return Ok(());
+        };
+        let mut shell_assets_deferred = false;
+        let Some(serialized) = Self::serialize_full_pane_surface(
+            client_id,
+            &mut prepared,
+            has_graphics,
+            &mut next_shell_graphics_delivery,
+            &mut shell_assets_deferred,
+        )?
+        else {
+            return Ok(());
+        };
+        let shell_graphics_pending = next_shell_graphics_delivery
+            .as_ref()
+            .is_some_and(crate::server::rendering::images::DeliveryCache::has_pending);
+        match writer.render.try_send(serialized) {
+            Ok(()) => {
+                if let Some(delivery) = next_shell_graphics_delivery {
+                    client.shell_graphics_delivery = delivery;
+                }
+                client.render_state.commit_sent_frame(prepared);
+                if shell_graphics_pending || shell_assets_deferred {
+                    client.defer_full_render();
+                } else {
+                    client.clear_deferred_render();
+                }
+                crate::render_prof::event("full_render.sent");
+            }
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                client.defer_full_render();
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                return Err(());
+            }
+        }
+        Ok(())
+    }
+
+    fn serialize_full_pane_surface(
+        client_id: u64,
+        prepared: &mut crate::server::rendering::stream::PreparedRender,
+        has_graphics: bool,
+        next_shell_graphics_delivery: &mut Option<crate::server::rendering::images::DeliveryCache>,
+        shell_assets_deferred: &mut bool,
+    ) -> Result<Option<Vec<u8>>, ()> {
+        let max = if has_graphics {
+            MAX_GRAPHICS_FRAME_SIZE
+        } else {
+            crate::protocol::MAX_FRAME_SIZE
+        };
+        let serialized = match Self::frame_server_message_with_max(prepared.message(), max) {
+            Ok(frame) => frame,
+            Err(protocol::FramingError::Oversized { claimed, max }) if has_graphics => {
+                warn!(
+                    client_id,
+                    claimed, max, "dropping graphics assets from oversized pane surface"
+                );
+                if !prepared.strip_pane_surface_assets() {
+                    crate::render_prof::event("full_render.serialize_oversized");
+                    return Ok(None);
+                }
+                *next_shell_graphics_delivery = None;
+                *shell_assets_deferred = true;
+                match Self::frame_server_message(prepared.message()) {
+                    Ok(framed) => framed,
+                    Err(err) => {
+                        warn!(client_id, err = %err, "failed to serialize pane surface without assets");
+                        crate::render_prof::event("full_render.serialize_error");
+                        return Err(());
+                    }
+                }
+            }
+            Err(protocol::FramingError::Oversized { claimed, max }) => {
+                warn!(
+                    client_id,
+                    claimed, max, "skipping oversized frame for client"
+                );
+                crate::render_prof::event("full_render.serialize_oversized");
+                return Ok(None);
+            }
+            Err(err) => {
+                warn!(client_id, err = %err, "failed to serialize frame");
+                crate::render_prof::event("full_render.serialize_error");
+                return Err(());
+            }
+        };
+
+        Ok(Some(serialized))
     }
 }

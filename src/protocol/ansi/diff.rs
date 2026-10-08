@@ -270,10 +270,6 @@ pub(super) fn blit_frame_to_with_cursor_memory_and_clear_policy(
     clear_before_full_redraw: bool,
     suppress_visible_cursor: bool,
 ) {
-    // On first frame or size change, do a full redraw.
-    let full_redraw =
-        prev.is_none() || prev.is_some_and(|p| p.width != frame.width || p.height != frame.height);
-
     // Ask terminals that support synchronized output to apply the whole frame
     // atomically. This keeps IMEs and cursor trackers from observing the
     // intermediate CUP positions used while painting changed cells.
@@ -288,15 +284,16 @@ pub(super) fn blit_frame_to_with_cursor_memory_and_clear_policy(
     // must not inherit it.
     let _ = writer.write_all(b"\x1b]8;;\x1b\\");
 
-    if full_redraw {
+    // Diffing requires a previous frame of the same size. Binding it here
+    // expresses that invariant without unwrapping an independently tested Option.
+    if let Some(prev) = prev.filter(|p| p.width == frame.width && p.height == frame.height) {
+        write_changed_cells(&mut writer, frame, prev);
+    } else {
+        // On first frame or size change, do a full redraw.
         if clear_before_full_redraw {
             let _ = writer.write_all(b"\x1b[2J");
         }
         write_all_cells(&mut writer, frame);
-    } else {
-        // Diff-based update: only write changed cells.
-        let prev = prev.unwrap();
-        write_changed_cells(&mut writer, frame, prev);
     }
 
     // Position the cursor while it is still hidden, then restore visibility.

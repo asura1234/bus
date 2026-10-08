@@ -223,48 +223,9 @@ impl Client {
                     }
                     Err(FrameError::Io(_)) => return false,
                 };
-                let request: Request = match serde_json::from_slice(&bytes) {
-                    Ok(request) => request,
-                    Err(_) => {
-                        return self.respond(Response::failure(
-                            "",
-                            "invalid_request",
-                            "Request must contain id, method and optional params",
-                        ))
-                    }
-                };
-                if request.id.is_empty() || request.method.is_empty() {
-                    return self.respond(Response::failure(
-                        &request.id,
-                        "invalid_request",
-                        "id and method must be nonempty",
-                    ));
-                }
-                let id = request.id.clone();
-                let (reply, receiver) = mpsc::sync_channel(1);
-                let command_id = *next_id;
-                *next_id = next_id.wrapping_add(1) | DEV_COMMAND_BIT;
-                match commands.try_send((command_id, BusCommand::Dev(DevCall { request, reply }))) {
-                    Ok(()) => {
-                        self.state = State::Waiting {
-                            id,
-                            reply: receiver,
-                        };
-                        self.deadline = Instant::now() + WORKER_TIMEOUT;
-                        true
-                    }
-                    Err(mpsc::TrySendError::Full(_)) => self.respond(Response::failure(
-                        &id,
-                        "coordinator_busy",
-                        "Coordinator queue is full",
-                    )),
-                    Err(mpsc::TrySendError::Disconnected(_)) => self.respond(Response::failure(
-                        &id,
-                        "coordinator_unavailable",
-                        "Coordinator has stopped",
-                    )),
-                }
+                self.dispatch_request(&bytes, commands, next_id)
             }
+
             State::Waiting { id, reply } => match reply.try_recv() {
                 Ok(response) => self.respond(response),
                 Err(mpsc::TryRecvError::Empty) => true,
@@ -292,6 +253,55 @@ impl Client {
                 ipc::poll_local_stream_read_count(&mut self.stream.0, &mut [0]),
                 Ok(ipc::LocalStreamReadCount::Pending)
             ),
+        }
+    }
+
+    fn dispatch_request(
+        &mut self,
+        bytes: &[u8],
+        commands: &SyncSender<(u64, BusCommand)>,
+        next_id: &mut u64,
+    ) -> bool {
+        let request: Request = match serde_json::from_slice(bytes) {
+            Ok(request) => request,
+            Err(_) => {
+                return self.respond(Response::failure(
+                    "",
+                    "invalid_request",
+                    "Request must contain id, method and optional params",
+                ))
+            }
+        };
+        if request.id.is_empty() || request.method.is_empty() {
+            return self.respond(Response::failure(
+                &request.id,
+                "invalid_request",
+                "id and method must be nonempty",
+            ));
+        }
+        let id = request.id.clone();
+        let (reply, receiver) = mpsc::sync_channel(1);
+        let command_id = *next_id;
+        *next_id = next_id.wrapping_add(1) | DEV_COMMAND_BIT;
+        match commands.try_send((command_id, BusCommand::Dev(DevCall { request, reply }))) {
+            Ok(()) => {
+                self.state = State::Waiting {
+                    id,
+                    reply: receiver,
+                };
+                self.deadline = Instant::now() + WORKER_TIMEOUT;
+                true
+            }
+            Err(mpsc::TrySendError::Full(_)) => self.respond(Response::failure(
+                &id,
+                "coordinator_busy",
+                "Coordinator queue is full",
+            )),
+            Err(mpsc::TrySendError::Disconnected(_)) => self.respond(Response::failure(
+                &id,
+                "coordinator_unavailable",
+                "Coordinator has stopped",
+            )),
         }
     }
 }

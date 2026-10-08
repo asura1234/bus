@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    blit_pane_surface, pane_surface_topology_signature, render, Buffer, ClientShellState, PaneHit,
+    PaneSplitHit, ShellHitMap, Style,
+};
+use crate::protocol::FrameData;
+use ratatui::layout::Rect;
 
 impl ClientShellState {
     fn compose_unavailable(&mut self, cols: u16, rows: u16) -> FrameData {
@@ -61,76 +66,34 @@ impl ClientShellState {
         self.hits.panes = surface
             .panes
             .iter()
-            .map(|pane| PaneHit {
-                rect: Rect::new(
-                    layout.pane_surface.x.saturating_add(pane.rect.x),
-                    layout.pane_surface.y.saturating_add(pane.rect.y),
-                    pane.rect.width,
-                    pane.rect.height,
-                ),
-                inner_rect: Rect::new(
-                    layout.pane_surface.x.saturating_add(pane.inner_rect.x),
-                    layout.pane_surface.y.saturating_add(pane.inner_rect.y),
-                    pane.inner_rect.width,
-                    pane.inner_rect.height,
-                ),
-                scrollbar_rect: pane.scrollbar_rect.map(|rect| {
-                    Rect::new(
-                        layout.pane_surface.x.saturating_add(rect.x),
-                        layout.pane_surface.y.saturating_add(rect.y),
-                        rect.width,
-                        rect.height,
-                    )
-                }),
-                scroll: pane.scroll.map(|metrics| crate::pane::ScrollMetrics {
-                    offset_from_bottom: usize::try_from(metrics.offset_from_bottom)
-                        .unwrap_or(usize::MAX),
-                    max_offset_from_bottom: usize::try_from(metrics.max_offset_from_bottom)
-                        .unwrap_or(usize::MAX),
-                    viewport_rows: usize::try_from(metrics.viewport_rows).unwrap_or(usize::MAX),
-                }),
-                pane_id: pane.pane_id.clone(),
-                mouse_reporting: pane.mouse_reporting,
-                sgr_pixel_mouse: pane.sgr_pixel_mouse,
-                pixel_width: pane.pixel_width,
-                pixel_height: pane.pixel_height,
-            })
+            .map(|pane| project_pane_hit(pane, layout.pane_surface))
             .collect();
         let topology_signature = pane_surface_topology_signature(surface);
         self.hits.pane_splits = surface
             .splits
             .iter()
-            .map(|split| PaneSplitHit {
-                direction: split.direction,
-                pos: match split.direction {
-                    crate::protocol::PaneSurfaceSplitDirection::Horizontal => {
-                        layout.pane_surface.x.saturating_add(split.pos)
-                    }
-                    crate::protocol::PaneSurfaceSplitDirection::Vertical => {
-                        layout.pane_surface.y.saturating_add(split.pos)
-                    }
-                },
-                area: Rect::new(
-                    layout.pane_surface.x.saturating_add(split.area.x),
-                    layout.pane_surface.y.saturating_add(split.area.y),
-                    split.area.width,
-                    split.area.height,
-                ),
-                hit_rect: Rect::new(
-                    layout.pane_surface.x.saturating_add(split.hit_rect.x),
-                    layout.pane_surface.y.saturating_add(split.hit_rect.y),
-                    split.hit_rect.width,
-                    split.hit_rect.height,
-                ),
-                path: split.path.clone(),
-                topology_signature,
-            })
+            .map(|split| project_split_hit(split, layout.pane_surface, topology_signature))
             .collect();
         if !self.config.mouse_capture {
             self.hits.pane_splits.clear();
         }
         let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
         blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
+        self.compose_overlays(&mut frame, layout.pane_surface, cols, rows)?;
+        self.compose_graphics(&mut frame, layout);
+        if let Some(bus) = self.bus.as_mut() {
+            frame.graphics.extend(bus.thumbnail_graphics());
+        }
+        Some(frame)
+    }
+
+    fn compose_overlays(
+        &self,
+        frame: &mut FrameData,
+        pane_area: Rect,
+        cols: u16,
+        rows: u16,
+    ) -> Option<()> {
         if self
             .selection
             .as_ref()
@@ -170,7 +133,7 @@ impl ClientShellState {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
             let base_offset = u16::from(has_config_diagnostic);
-            let feedback_area = layout.pane_surface;
+            let feedback_area = pane_area;
             let offset = crate::ui::copy_feedback_offset_for_toast(
                 feedback_area,
                 feedback,
@@ -188,10 +151,74 @@ impl ClientShellState {
             );
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
-        self.compose_graphics(&mut frame, layout);
-        if let Some(bus) = self.bus.as_mut() {
-            frame.graphics.extend(bus.thumbnail_graphics());
-        }
-        Some(frame)
+        Some(())
+    }
+}
+
+fn project_pane_hit(pane: &crate::protocol::PaneSurfacePane, area: Rect) -> PaneHit {
+    PaneHit {
+        rect: Rect::new(
+            area.x.saturating_add(pane.rect.x),
+            area.y.saturating_add(pane.rect.y),
+            pane.rect.width,
+            pane.rect.height,
+        ),
+        inner_rect: Rect::new(
+            area.x.saturating_add(pane.inner_rect.x),
+            area.y.saturating_add(pane.inner_rect.y),
+            pane.inner_rect.width,
+            pane.inner_rect.height,
+        ),
+        scrollbar_rect: pane.scrollbar_rect.map(|rect| {
+            Rect::new(
+                area.x.saturating_add(rect.x),
+                area.y.saturating_add(rect.y),
+                rect.width,
+                rect.height,
+            )
+        }),
+        scroll: pane.scroll.map(|metrics| crate::pane::ScrollMetrics {
+            offset_from_bottom: usize::try_from(metrics.offset_from_bottom).unwrap_or(usize::MAX),
+            max_offset_from_bottom: usize::try_from(metrics.max_offset_from_bottom)
+                .unwrap_or(usize::MAX),
+            viewport_rows: usize::try_from(metrics.viewport_rows).unwrap_or(usize::MAX),
+        }),
+        pane_id: pane.pane_id.clone(),
+        mouse_reporting: pane.mouse_reporting,
+        sgr_pixel_mouse: pane.sgr_pixel_mouse,
+        pixel_width: pane.pixel_width,
+        pixel_height: pane.pixel_height,
+    }
+}
+
+fn project_split_hit(
+    split: &crate::protocol::PaneSurfaceSplit,
+    area: Rect,
+    topology_signature: u64,
+) -> PaneSplitHit {
+    PaneSplitHit {
+        direction: split.direction,
+        pos: match split.direction {
+            crate::protocol::PaneSurfaceSplitDirection::Horizontal => {
+                area.x.saturating_add(split.pos)
+            }
+            crate::protocol::PaneSurfaceSplitDirection::Vertical => {
+                area.y.saturating_add(split.pos)
+            }
+        },
+        area: Rect::new(
+            area.x.saturating_add(split.area.x),
+            area.y.saturating_add(split.area.y),
+            split.area.width,
+            split.area.height,
+        ),
+        hit_rect: Rect::new(
+            area.x.saturating_add(split.hit_rect.x),
+            area.y.saturating_add(split.hit_rect.y),
+            split.hit_rect.width,
+            split.hit_rect.height,
+        ),
+        path: split.path.clone(),
+        topology_signature,
     }
 }

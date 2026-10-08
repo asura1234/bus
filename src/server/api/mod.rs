@@ -147,93 +147,71 @@ impl App {
             Method::TabFocus(target) => return self.handle_tab_focus(request.id, target),
             Method::TabRename(params) => return self.handle_tab_rename(request.id, params),
             Method::TabClose(target) => return self.handle_tab_close(request.id, target),
-            Method::AgentList(_) => return self.handle_agent_list(request.id),
-            Method::AgentGet(target) => return self.handle_agent_get(request.id, target),
-            Method::AgentFocus(target) => return self.handle_agent_focus(request.id, target),
-            Method::AgentRename(params) => return self.handle_agent_rename(request.id, params),
-            Method::AgentStart(params) => return self.handle_agent_start(request.id, params),
-            Method::AgentPrompt(_)
-            | Method::AgentPromptIfIdle(_)
-            | Method::AgentPromptIfUnbound(_) => {
-                return errors::encode_error(
-                    request.id,
-                    "invalid_request",
-                    "agent.prompt is handled asynchronously by the app runtime",
-                );
-            }
-            Method::AgentWait(_) => {
-                return errors::encode_error(
-                    request.id,
-                    "invalid_request",
-                    "agent.wait is handled by the api server",
-                );
-            }
-            Method::AgentRead(params) => return self.handle_agent_read(request.id, params),
-            Method::AgentDialogObserve(target) => {
-                return self.handle_agent_dialog_observe(request.id, target)
-            }
-            Method::AgentDialogChoose(params) => {
-                return self.handle_agent_dialog_choose(request.id, params)
-            }
-            Method::AgentDialogAnswer(params) => {
-                return self.handle_agent_dialog_answer(request.id, params)
-            }
-            Method::AgentSendKeys(params) => {
-                return self.handle_agent_send_keys(request.id, params)
-            }
-            Method::PaneSplit(params) => return self.handle_pane_split(request.id, params),
-            Method::PaneSwap(params) => return self.handle_pane_swap(request.id, params),
-            Method::PaneZoom(params) => return self.handle_pane_zoom(request.id, params),
-            Method::PaneLayout(params) => return self.handle_pane_layout(request.id, params),
-            Method::LayoutSetSplitRatio(params) => {
-                return self.handle_layout_set_split_ratio(request.id, params);
-            }
-            Method::PaneFocusDirection(params) => {
-                return self.handle_pane_focus_direction(request.id, params);
-            }
-            Method::PaneResize(params) => return self.handle_pane_resize(request.id, params),
-            Method::PaneScroll(params) => return self.handle_pane_scroll(request.id, params),
-            Method::PaneSelectionRead(params) => {
-                return self.handle_pane_selection_read(request.id, params);
-            }
-            Method::PaneCopyMotion(params) => {
-                return self.handle_pane_copy_motion(request.id, params);
-            }
-            Method::PaneCopySearch(params) => {
-                return self.handle_pane_copy_search(request.id, params);
-            }
-            Method::PaneList(params) => return self.handle_pane_list(request.id, params),
-            Method::PaneCurrent(params) => return self.handle_pane_current(request.id, params),
-            Method::PaneGet(target) => return self.handle_pane_get(request.id, target),
-            Method::PaneFocus(target) => return self.handle_pane_focus(request.id, target),
-            Method::PaneInputSet(params) => return self.handle_pane_input_set(request.id, params),
-            Method::PaneLinkActivate(params) => {
-                return self.handle_pane_link_activate(request.id, params);
-            }
-            Method::PaneRename(params) => return self.handle_pane_rename(request.id, params),
-            Method::PaneRead(params) => return self.handle_pane_read(request.id, params),
-            Method::PaneReportAgentSession(params) => {
-                return self.handle_pane_report_agent_session(request.id, params);
-            }
-            Method::PaneSendText(params) => return self.handle_pane_send_text(request.id, params),
-            Method::PaneSendInput(params) => {
-                return self.handle_pane_send_input(request.id, params)
-            }
-            Method::PaneClose(target) => return self.handle_pane_close(request.id, target),
-            Method::PaneCloseIfIdentity(params) => {
-                return self.handle_pane_close_if_identity(request.id, params)
-            }
-            Method::PaneSendKeys(params) => return self.handle_pane_send_keys(request.id, params),
-            _ => {
-                return errors::encode_error(
-                    request.id,
-                    "not_implemented",
-                    "method not implemented yet",
-                );
-            }
+            method => return self.dispatch_agent_api_method(request.id, method),
         };
 
-        serde_json::to_string(&response).unwrap()
+        errors::encode_success(response.id, response.result)
+    }
+
+    fn dispatch_agent_api_method(&mut self, id: String, method: Method) -> String {
+        match method {
+            Method::AgentList(_) => self.handle_agent_list(id),
+            Method::AgentGet(target) => self.handle_agent_get(id, target),
+            Method::AgentFocus(target) => self.handle_agent_focus(id, target),
+            Method::AgentRename(params) => self.handle_agent_rename(id, params),
+            Method::AgentStart(params) => self.handle_agent_start(id, params),
+            Method::AgentPrompt(_)
+            | Method::AgentPromptIfIdle(_)
+            | Method::AgentPromptIfUnbound(_) => errors::encode_error(
+                id,
+                "invalid_request",
+                "agent.prompt is handled asynchronously by the app runtime",
+            ),
+            Method::AgentWait(_) => errors::encode_error(
+                id,
+                "invalid_request",
+                "agent.wait is handled by the api server",
+            ),
+            Method::AgentRead(params) => self.handle_agent_read(id, params),
+            Method::AgentDialogObserve(target) => self.handle_agent_dialog_observe(id, target),
+            Method::AgentDialogChoose(params) => self.handle_agent_dialog_choose(id, params),
+            Method::AgentDialogAnswer(params) => self.handle_agent_dialog_answer(id, params),
+            Method::AgentSendKeys(params) => self.handle_agent_send_keys(id, params),
+            method => self.dispatch_pane_api_method(id, method),
+        }
+    }
+
+    fn dispatch_pane_api_method(&mut self, id: String, method: Method) -> String {
+        match method {
+            Method::PaneSplit(params) => self.handle_pane_split(id, params),
+            Method::PaneSwap(params) => self.handle_pane_swap(id, params),
+            Method::PaneZoom(params) => self.handle_pane_zoom(id, params),
+            Method::PaneLayout(params) => self.handle_pane_layout(id, params),
+            Method::LayoutSetSplitRatio(params) => self.handle_layout_set_split_ratio(id, params),
+            Method::PaneFocusDirection(params) => self.handle_pane_focus_direction(id, params),
+            Method::PaneResize(params) => self.handle_pane_resize(id, params),
+            Method::PaneScroll(params) => self.handle_pane_scroll(id, params),
+            Method::PaneSelectionRead(params) => self.handle_pane_selection_read(id, params),
+            Method::PaneCopyMotion(params) => self.handle_pane_copy_motion(id, params),
+            Method::PaneCopySearch(params) => self.handle_pane_copy_search(id, params),
+            Method::PaneList(params) => self.handle_pane_list(id, params),
+            Method::PaneCurrent(params) => self.handle_pane_current(id, params),
+            Method::PaneGet(target) => self.handle_pane_get(id, target),
+            Method::PaneFocus(target) => self.handle_pane_focus(id, target),
+            Method::PaneInputSet(params) => self.handle_pane_input_set(id, params),
+            Method::PaneLinkActivate(params) => self.handle_pane_link_activate(id, params),
+            Method::PaneRename(params) => self.handle_pane_rename(id, params),
+            Method::PaneRead(params) => self.handle_pane_read(id, params),
+            Method::PaneReportAgentSession(params) => {
+                self.handle_pane_report_agent_session(id, params)
+            }
+            Method::PaneSendText(params) => self.handle_pane_send_text(id, params),
+            Method::PaneSendInput(params) => self.handle_pane_send_input(id, params),
+            Method::PaneClose(target) => self.handle_pane_close(id, target),
+            Method::PaneCloseIfIdentity(params) => self.handle_pane_close_if_identity(id, params),
+            Method::PaneSendKeys(params) => self.handle_pane_send_keys(id, params),
+            _ => errors::encode_error(id, "not_implemented", "method not implemented yet"),
+        }
     }
 }
 #[cfg(test)]

@@ -189,6 +189,30 @@ pub(in crate::client::rooms) fn orchestrated_room_label(state: &BusState, agent:
     }
 }
 
+/// Measured agent rows, shared by height calculation and visible-row drawing.
+struct SidebarAgent<'a> {
+    agent: &'a Agent,
+    in_master: bool,
+    paths: Vec<String>,
+    height: usize,
+}
+
+#[derive(Clone, Copy)]
+struct SidebarViewport {
+    sidebar: Rect,
+    offset: usize,
+    visible_end: usize,
+}
+impl SidebarViewport {
+    fn at(self, x: u16, y: usize, width: u16) -> Rect {
+        if (self.offset..self.visible_end).contains(&y) {
+            Rect::new(x, (y - self.offset) as u16, width, 1)
+        } else {
+            Rect::default()
+        }
+    }
+}
+
 impl BusUi {
     pub fn cursor(&self) -> Option<crate::protocol::CursorState> {
         self.view.cursor.clone()
@@ -216,282 +240,7 @@ impl BusUi {
             sidebar,
             ..View::default()
         };
-        let sw = sidebar.width.saturating_sub(3);
-        let rooms: Vec<_> = self.snapshot.state.rooms().collect();
-        // Measure logical sidebar rows once; only visible rows become labels
-        // and hit targets. Expanded paths supply both height and display lines.
-        let agents: Vec<_> = self
-            .snapshot
-            .state
-            .agents()
-            .filter(|a| Some(a.room_id) == self.room)
-            .map(|agent| {
-                // MASTER agents show name, provider and orchestrated room only.
-                if self
-                    .snapshot
-                    .state
-                    .master_room()
-                    .is_some_and(|master| master.id == agent.room_id)
-                {
-                    return (agent, true, Vec::new(), MASTER_AGENT_ROWS);
-                }
-                let paths = if agent.details_disclosed {
-                    wrap(&agent.cwd.to_string_lossy(), sw)
-                } else {
-                    Vec::new()
-                };
-                let height = 3
-                    + usize::from(agent.details_disclosed && agent.branch.is_some())
-                    + paths.len();
-                (agent, false, paths, height)
-            })
-            .collect();
-        let master_header_rows = if self.snapshot.state.master_room().is_some() {
-            MASTER_SECTION_ROWS - 1
-        } else {
-            0
-        };
-        let content_height = 6
-            + master_header_rows
-            + rooms.len()
-            + agents.iter().map(|(_, _, _, height)| height).sum::<usize>();
-        let notices = if self.force_exit_available {
-            2
-        } else {
-            u16::from(self.quitting.is_some())
-        };
-        // The settings divider and button stay pinned below any exit notices.
-        view.sidebar_body = Rect::new(0, 0, sidebar.width, rows.saturating_sub(notices + 2));
-        view.sidebar_max_scroll =
-            content_height.saturating_sub(usize::from(view.sidebar_body.height));
-        self.sidebar_scroll = self.sidebar_scroll.min(view.sidebar_max_scroll);
-        let offset = self.sidebar_scroll;
-        let visible_end = offset + usize::from(view.sidebar_body.height);
-        let at = |x, y: usize, width| {
-            if (offset..visible_end).contains(&y) {
-                Rect::new(x, (y - offset) as u16, width, 1)
-            } else {
-                Rect::default()
-            }
-        };
-        // A work room lists ROOMS, then its AGENTS; MASTER lists its
-        // orchestrator AGENTS first, so it is clear whose agents they are.
-        let master_open = self
-            .snapshot
-            .state
-            .master_room()
-            .is_some_and(|master| Some(master.id) == self.room);
-        let rooms_header = sidebar_rooms_header(&self.snapshot.state, self.room);
-        let work_rooms = rooms
-            .iter()
-            .filter(|room| room.kind == RoomKind::Work)
-            .count();
-        let (divider_row, agents_header) = if master_open {
-            (rooms_header - 1, 1 + MASTER_SECTION_ROWS)
-        } else {
-            let divider = rooms_header + 2 + work_rooms;
-            (divider, divider + 1)
-        };
-        view.row(at(1, rooms_header, sw), "ROOMS", None, false, true);
-        view.row(
-            at(sidebar.width.saturating_sub(3), rooms_header, 1),
-            "+",
-            Some(Action::NewRoom),
-            false,
-            false,
-        );
-        for room in &rooms {
-            let Some(row) = sidebar_room_row(&self.snapshot.state, room.id, self.room) else {
-                continue;
-            };
-            // A work room's status sits left of its delete button, as on agent
-            // rows; MASTER shows just its name.
-            let right = match room.kind {
-                RoomKind::Work => status(self.snapshot.state.room_status(room.id)),
-                RoomKind::Master => "",
-            };
-            let name_width = if right.is_empty() {
-                sw.saturating_sub(2)
-            } else {
-                sw.saturating_sub(right.len() as u16 + 3)
-            };
-            let rect = at(1, row, name_width);
-            if rect.height == 0 {
-                continue;
-            }
-            let label = room_label(room, usize::from(name_width));
-            if let Some(rename) = self
-                .rename
-                .as_ref()
-                .filter(|r| r.target == RenameTarget::Room(room.id))
-            {
-                view.editor(rect, &rename.editor, Some(Action::Room(room.id)), true);
-            } else {
-                view.row(
-                    rect,
-                    label,
-                    Some(Action::Room(room.id)),
-                    Some(room.id) == self.room && self.terminal.is_none(),
-                    false,
-                );
-            }
-            if !right.is_empty() {
-                let status_rect = at(
-                    sidebar.width.saturating_sub(right.len() as u16 + 4),
-                    row,
-                    right.len() as u16,
-                );
-                view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
-                if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
-                    view.color_last_row_characters(status_rect, colors);
-                }
-            }
-            // MASTER is permanent, so it never offers a delete button.
-            if Some(room.id) == self.room && room.kind == RoomKind::Work {
-                view.row(
-                    at(sidebar.width.saturating_sub(3), row, 1),
-                    "×",
-                    Some(Action::Delete(DeleteTarget::Room(room.id))),
-                    false,
-                    true,
-                );
-            }
-        }
-        view.sidebar_divider = at(1, divider_row, sw);
-        let mut y = agents_header;
-        view.row(at(1, y, sw), "AGENTS", None, false, true);
-        view.row(
-            at(sidebar.width.saturating_sub(3), y, 1),
-            "+",
-            Some(Action::NewAgent),
-            false,
-            false,
-        );
-        y += 2;
-        for (agent, in_master, paths, height) in agents {
-            if y >= visible_end {
-                break;
-            }
-            if y + height <= offset {
-                y += height;
-                continue;
-            }
-            let right = agent_status(agent);
-            let name_width = sw.saturating_sub(right.len() as u16 + 3);
-            let rect = at(1, y, name_width);
-            if let Some(rename) = self
-                .rename
-                .as_ref()
-                .filter(|r| r.target == RenameTarget::Agent(agent.id))
-            {
-                view.editor(rect, &rename.editor, Some(Action::Agent(agent.id)), true);
-            } else {
-                view.row(
-                    rect,
-                    &agent.name,
-                    Some(Action::Agent(agent.id)),
-                    self.terminal == Some(agent.id),
-                    false,
-                );
-                view.color_last_row(rect, identity_color(agent, &self.settings));
-            }
-            let status_rect = at(
-                sidebar.width.saturating_sub(right.len() as u16 + 4),
-                y,
-                right.len() as u16,
-            );
-            view.row(
-                status_rect,
-                right,
-                Some(Action::Agent(agent.id)),
-                false,
-                true,
-            );
-            if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
-                view.color_last_row_characters(status_rect, colors);
-            }
-            view.row(
-                at(sidebar.width.saturating_sub(3), y, 1),
-                "×",
-                Some(Action::Delete(DeleteTarget::Agent(agent.id))),
-                false,
-                true,
-            );
-            y += 1;
-            view.row(
-                at(1, y, sw.saturating_sub(2)),
-                provider(agent.provider),
-                Some(Action::Agent(agent.id)),
-                false,
-                true,
-            );
-            if in_master {
-                y += 1;
-                // An orchestrator keeps its room for life, so the room line
-                // opens that room instead of offering to reassign it.
-                view.row(
-                    at(1, y, sw),
-                    orchestrated_room_label(&self.snapshot.state, agent),
-                    agent.orchestrates.map(Action::Room),
-                    false,
-                    true,
-                );
-                y += 2;
-                continue;
-            }
-            view.row(
-                at(sidebar.width.saturating_sub(3), y, 1),
-                if agent.details_disclosed { "v" } else { ">" },
-                Some(Action::Details(agent.id)),
-                false,
-                true,
-            );
-            y += 1;
-            if agent.details_disclosed {
-                if let Some(branch) = &agent.branch {
-                    view.row(at(1, y, sw), branch, None, false, true);
-                    y += 1;
-                }
-                for line in paths {
-                    view.row(at(1, y, sw), line, None, false, true);
-                    y += 1;
-                }
-            }
-            y += 1;
-        }
-        view.row(
-            Rect::new(1, rows.saturating_sub(4), sw, 1),
-            if self.force_exit_available {
-                "Unsaved: Ctrl+Shift+Q exits"
-            } else {
-                ""
-            },
-            None,
-            false,
-            true,
-        );
-        view.row(
-            Rect::new(1, rows.saturating_sub(3), sw, 1),
-            if self.quitting.is_some() {
-                "Saving before exit…"
-            } else if self.force_exit_available {
-                "Ctrl+Q retries saving"
-            } else {
-                ""
-            },
-            None,
-            false,
-            true,
-        );
-        view.settings_divider = Rect::new(1, rows.saturating_sub(2), sw, 1);
-        let settings_width = ("Settings".len() as u16).min(sw);
-        view.row(
-            Rect::new(1, rows.saturating_sub(1), settings_width, 1),
-            "Settings",
-            Some(Action::Settings),
-            matches!(self.form, Some(Form::Settings)),
-            false,
-        );
+        self.sidebar_view(&mut view, rows);
         if let Some(form) = &self.form {
             self.form_view(&mut view, main, form);
         } else if self.terminal.is_none() {
@@ -528,6 +277,347 @@ impl BusUi {
             view.thumbnails.clear();
         }
         self.view = view;
+    }
+    fn sidebar_view(&mut self, view: &mut View, rows: u16) {
+        let sidebar = view.sidebar;
+        let sw = sidebar.width.saturating_sub(3);
+        let rooms: Vec<_> = self.snapshot.state.rooms().collect();
+        let agents = Self::sidebar_measure_agents(&self.snapshot.state, self.room, sw);
+        let master_header_rows = if self.snapshot.state.master_room().is_some() {
+            MASTER_SECTION_ROWS - 1
+        } else {
+            0
+        };
+        let content_height = 6
+            + master_header_rows
+            + rooms.len()
+            + agents.iter().map(|entry| entry.height).sum::<usize>();
+        let notices = if self.force_exit_available {
+            2
+        } else {
+            u16::from(self.quitting.is_some())
+        };
+        // The settings divider and button stay pinned below any exit notices.
+        view.sidebar_body = Rect::new(0, 0, sidebar.width, rows.saturating_sub(notices + 2));
+        view.sidebar_max_scroll =
+            content_height.saturating_sub(usize::from(view.sidebar_body.height));
+        self.sidebar_scroll = self.sidebar_scroll.min(view.sidebar_max_scroll);
+        let offset = self.sidebar_scroll;
+        let visible_end = offset + usize::from(view.sidebar_body.height);
+        let viewport = SidebarViewport {
+            sidebar,
+            offset,
+            visible_end,
+        };
+        // A work room lists ROOMS, then its AGENTS; MASTER lists its
+        // orchestrator AGENTS first, so it is clear whose agents they are.
+        let master_open = self
+            .snapshot
+            .state
+            .master_room()
+            .is_some_and(|master| Some(master.id) == self.room);
+        let rooms_header = sidebar_rooms_header(&self.snapshot.state, self.room);
+        let work_rooms = rooms
+            .iter()
+            .filter(|room| room.kind == RoomKind::Work)
+            .count();
+        let (divider_row, agents_header) = if master_open {
+            (rooms_header - 1, 1 + MASTER_SECTION_ROWS)
+        } else {
+            let divider = rooms_header + 2 + work_rooms;
+            (divider, divider + 1)
+        };
+        self.sidebar_room_rows(view, viewport, &rooms, rooms_header);
+        view.sidebar_divider = viewport.at(1, divider_row, sw);
+        self.sidebar_agent_rows(view, viewport, agents, agents_header);
+        self.sidebar_footer(view, rows);
+    }
+
+    fn sidebar_measure_agents(
+        state: &BusState,
+        room: Option<RoomId>,
+        sw: u16,
+    ) -> Vec<SidebarAgent<'_>> {
+        // Measure logical sidebar rows once; only visible rows become labels
+        // and hit targets. Expanded paths supply both height and display lines.
+        state
+            .agents()
+            .filter(|a| Some(a.room_id) == room)
+            .map(|agent| {
+                // MASTER agents show name, provider and orchestrated room only.
+                if state
+                    .master_room()
+                    .is_some_and(|master| master.id == agent.room_id)
+                {
+                    return SidebarAgent {
+                        agent,
+                        in_master: true,
+                        paths: Vec::new(),
+                        height: MASTER_AGENT_ROWS,
+                    };
+                }
+                let paths = if agent.details_disclosed {
+                    wrap(&agent.cwd.to_string_lossy(), sw)
+                } else {
+                    Vec::new()
+                };
+                let height = 3
+                    + usize::from(agent.details_disclosed && agent.branch.is_some())
+                    + paths.len();
+                SidebarAgent {
+                    agent,
+                    in_master: false,
+                    paths,
+                    height,
+                }
+            })
+            .collect()
+    }
+
+    fn sidebar_room_rows(
+        &self,
+        view: &mut View,
+        viewport: SidebarViewport,
+        rooms: &[&Room],
+        rooms_header: usize,
+    ) {
+        let sw = viewport.sidebar.width.saturating_sub(3);
+        view.row(viewport.at(1, rooms_header, sw), "ROOMS", None, false, true);
+        view.row(
+            viewport.at(viewport.sidebar.width.saturating_sub(3), rooms_header, 1),
+            "+",
+            Some(Action::NewRoom),
+            false,
+            false,
+        );
+        for room in rooms {
+            let Some(row) = sidebar_room_row(&self.snapshot.state, room.id, self.room) else {
+                continue;
+            };
+            // A work room's status sits left of its delete button, as on agent
+            // rows; MASTER shows just its name.
+            let right = match room.kind {
+                RoomKind::Work => status(self.snapshot.state.room_status(room.id)),
+                RoomKind::Master => "",
+            };
+            let name_width = if right.is_empty() {
+                sw.saturating_sub(2)
+            } else {
+                sw.saturating_sub(right.len() as u16 + 3)
+            };
+            let rect = viewport.at(1, row, name_width);
+            if rect.height == 0 {
+                continue;
+            }
+            let label = room_label(room, usize::from(name_width));
+            if let Some(rename) = self
+                .rename
+                .as_ref()
+                .filter(|r| r.target == RenameTarget::Room(room.id))
+            {
+                view.editor(rect, &rename.editor, Some(Action::Room(room.id)), true);
+            } else {
+                view.row(
+                    rect,
+                    label,
+                    Some(Action::Room(room.id)),
+                    Some(room.id) == self.room && self.terminal.is_none(),
+                    false,
+                );
+            }
+            if !right.is_empty() {
+                let status_rect = viewport.at(
+                    viewport
+                        .sidebar
+                        .width
+                        .saturating_sub(right.len() as u16 + 4),
+                    row,
+                    right.len() as u16,
+                );
+                view.row(status_rect, right, Some(Action::Room(room.id)), false, true);
+                if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
+                    view.color_last_row_characters(status_rect, colors);
+                }
+            }
+            // MASTER is permanent, so it never offers a delete button.
+            if Some(room.id) == self.room && room.kind == RoomKind::Work {
+                view.row(
+                    viewport.at(viewport.sidebar.width.saturating_sub(3), row, 1),
+                    "×",
+                    Some(Action::Delete(DeleteTarget::Room(room.id))),
+                    false,
+                    true,
+                );
+            }
+        }
+    }
+
+    fn sidebar_agent_rows(
+        &self,
+        view: &mut View,
+        viewport: SidebarViewport,
+        agents: Vec<SidebarAgent<'_>>,
+        agents_header: usize,
+    ) {
+        let sw = viewport.sidebar.width.saturating_sub(3);
+        let mut y = agents_header;
+        view.row(viewport.at(1, y, sw), "AGENTS", None, false, true);
+        view.row(
+            viewport.at(viewport.sidebar.width.saturating_sub(3), y, 1),
+            "+",
+            Some(Action::NewAgent),
+            false,
+            false,
+        );
+        y += 2;
+        for SidebarAgent {
+            agent,
+            in_master,
+            paths,
+            height,
+        } in agents
+        {
+            if y >= viewport.visible_end {
+                break;
+            }
+            if y + height <= viewport.offset {
+                y += height;
+                continue;
+            }
+            self.sidebar_agent_heading(view, viewport, agent, y);
+            y += 1;
+            view.row(
+                viewport.at(1, y, sw.saturating_sub(2)),
+                provider(agent.provider),
+                Some(Action::Agent(agent.id)),
+                false,
+                true,
+            );
+            if in_master {
+                y += 1;
+                // An orchestrator keeps its room for life, so the room line
+                // opens that room instead of offering to reassign it.
+                view.row(
+                    viewport.at(1, y, sw),
+                    orchestrated_room_label(&self.snapshot.state, agent),
+                    agent.orchestrates.map(Action::Room),
+                    false,
+                    true,
+                );
+                y += 2;
+                continue;
+            }
+            view.row(
+                viewport.at(viewport.sidebar.width.saturating_sub(3), y, 1),
+                if agent.details_disclosed { "v" } else { ">" },
+                Some(Action::Details(agent.id)),
+                false,
+                true,
+            );
+            y += 1;
+            if agent.details_disclosed {
+                if let Some(branch) = &agent.branch {
+                    view.row(viewport.at(1, y, sw), branch, None, false, true);
+                    y += 1;
+                }
+                for line in paths {
+                    view.row(viewport.at(1, y, sw), line, None, false, true);
+                    y += 1;
+                }
+            }
+            y += 1;
+        }
+    }
+
+    fn sidebar_agent_heading(
+        &self,
+        view: &mut View,
+        viewport: SidebarViewport,
+        agent: &Agent,
+        y: usize,
+    ) {
+        let sw = viewport.sidebar.width.saturating_sub(3);
+        let right = agent_status(agent);
+        let name_width = sw.saturating_sub(right.len() as u16 + 3);
+        let rect = viewport.at(1, y, name_width);
+        if let Some(rename) = self
+            .rename
+            .as_ref()
+            .filter(|r| r.target == RenameTarget::Agent(agent.id))
+        {
+            view.editor(rect, &rename.editor, Some(Action::Agent(agent.id)), true);
+        } else {
+            view.row(
+                rect,
+                &agent.name,
+                Some(Action::Agent(agent.id)),
+                self.terminal == Some(agent.id),
+                false,
+            );
+            view.color_last_row(rect, identity_color(agent, &self.settings));
+        }
+        let status_rect = viewport.at(
+            viewport
+                .sidebar
+                .width
+                .saturating_sub(right.len() as u16 + 4),
+            y,
+            right.len() as u16,
+        );
+        view.row(
+            status_rect,
+            right,
+            Some(Action::Agent(agent.id)),
+            false,
+            true,
+        );
+        if let Some(colors) = animated_status_colors(right, self.status_animation_phase) {
+            view.color_last_row_characters(status_rect, colors);
+        }
+        view.row(
+            viewport.at(viewport.sidebar.width.saturating_sub(3), y, 1),
+            "×",
+            Some(Action::Delete(DeleteTarget::Agent(agent.id))),
+            false,
+            true,
+        );
+    }
+
+    fn sidebar_footer(&self, view: &mut View, rows: u16) {
+        let sw = view.sidebar.width.saturating_sub(3);
+        view.row(
+            Rect::new(1, rows.saturating_sub(4), sw, 1),
+            if self.force_exit_available {
+                "Unsaved: Ctrl+Shift+Q exits"
+            } else {
+                ""
+            },
+            None,
+            false,
+            true,
+        );
+        view.row(
+            Rect::new(1, rows.saturating_sub(3), sw, 1),
+            if self.quitting.is_some() {
+                "Saving before exit…"
+            } else if self.force_exit_available {
+                "Ctrl+Q retries saving"
+            } else {
+                ""
+            },
+            None,
+            false,
+            true,
+        );
+        view.settings_divider = Rect::new(1, rows.saturating_sub(2), sw, 1);
+        let settings_width = ("Settings".len() as u16).min(sw);
+        view.row(
+            Rect::new(1, rows.saturating_sub(1), settings_width, 1),
+            "Settings",
+            Some(Action::Settings),
+            matches!(self.form, Some(Form::Settings)),
+            false,
+        );
     }
 }
 pub(super) fn status_name(value: RuntimeStatus) -> &'static str {

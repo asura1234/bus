@@ -1,5 +1,15 @@
 //! CLI help text kept separate from parsing and transport.
 use super::session_pick::USAGE;
+use std::io::{self, Write};
+
+/// CLI and observation-hook replies use the same locked stdout writer as the
+/// control CLI. Keep println!'s newline and panic-on-write-error behavior;
+/// these bytes are command/protocol output, not diagnostic log messages.
+pub(crate) fn write_stdout_line(arguments: std::fmt::Arguments<'_>) {
+    if let Err(error) = writeln!(io::stdout().lock(), "{arguments}") {
+        panic!("failed printing to stdout: {error}");
+    }
+}
 
 pub const HELP: &str = "Developer commands (require an already running Bus --dev instance):
   state
@@ -88,8 +98,8 @@ bus stop (no --dev needed), which stops the server, closes every agent pane and 
 Commands only connect to the existing instance in BUS_DATA_DIR; they never start or enable it.";
 
 pub(super) fn print_help() {
-    println!("{}\n", HELP);
-    println!("Bus — coordinate selected agents in native terminal rooms\n\n{USAGE}\n\nA plain `bus` launch always creates a new local session.\n`bus sessions` lists resumable sessions, their rooms, and recent activity.\n`bus resume <session-id>` resumes that exact session.\n`bus resume --last` resumes the last opened session.\n`bus stop` stops the session's server and closes its agent panes; quit an open UI first.\n--dev enables developer log files, excluding input/content dumps.\nExisting servers keep their original log level; they are never automatically restarted.\n--paths shows data and log directories without starting a session.\nBUS_DATA_DIR is an exact isolated-root override for development and tests; it cannot be combined with resume.\n\nCtrl+Shift+R room · Ctrl+N agent · Ctrl+F files · F2 rename · F3 notes\n@ choose agents · + choose files (type the shifted symbols)\nEnter send · Shift+Enter (supported hosts) / Ctrl+J newline\nCtrl+A/E line start/end · Ctrl+R history search · Ctrl+Shift+E composer size\nF6 room · Ctrl+C save and quit (Ctrl+Q also works)\n\nBuilt on Herdr; upstream license and attribution are preserved.");
+    write_stdout_line(format_args!("{}\n", HELP));
+    write_stdout_line(format_args!("Bus — coordinate selected agents in native terminal rooms\n\n{USAGE}\n\nA plain `bus` launch always creates a new local session.\n`bus sessions` lists resumable sessions, their rooms, and recent activity.\n`bus resume <session-id>` resumes that exact session.\n`bus resume --last` resumes the last opened session.\n`bus stop` stops the session's server and closes its agent panes; quit an open UI first.\n--dev enables developer log files, excluding input/content dumps.\nExisting servers keep their original log level; they are never automatically restarted.\n--paths shows data and log directories without starting a session.\nBUS_DATA_DIR is an exact isolated-root override for development and tests; it cannot be combined with resume.\n\nCtrl+Shift+R room · Ctrl+N agent · Ctrl+F files · F2 rename · F3 notes\n@ choose agents · + choose files (type the shifted symbols)\nEnter send · Shift+Enter (supported hosts) / Ctrl+J newline\nCtrl+A/E line start/end · Ctrl+R history search · Ctrl+Shift+E composer size\nF6 room · Ctrl+C save and quit (Ctrl+Q also works)\n\nBuilt on Herdr; upstream license and attribution are preserved."));
 }
 
 /// Reopens this Bus session: a local session by its ID, an explicit

@@ -184,57 +184,13 @@ pub(crate) fn clipped_placement(placement: &HostPlacement) -> Option<(ClippedPla
         return None;
     }
 
-    let source_width = if render.source_width == 0 {
-        placement.placement.image_width
-    } else {
-        render.source_width
-    };
-    let source_height = if render.source_height == 0 {
-        placement.placement.image_height
-    } else {
-        render.source_height
-    };
-    let pixel_width = render
-        .pixel_width
-        .max(
-            render
-                .grid_cols
-                .saturating_mul(placement.cell_size.width_px),
-        )
-        .max(1);
-    let pixel_height = render
-        .pixel_height
-        .max(
-            render
-                .grid_rows
-                .saturating_mul(placement.cell_size.height_px),
-        )
-        .max(1);
-
-    let crop_left_px = left_clip_cells.saturating_mul(placement.cell_size.width_px);
-    let crop_top_px = top_clip_cells.saturating_mul(placement.cell_size.height_px);
-    let visible_width_px = visible_cols.saturating_mul(placement.cell_size.width_px);
-    let visible_height_px = visible_rows.saturating_mul(placement.cell_size.height_px);
-
-    let source_x = render.source_x + scale_pixels(crop_left_px, source_width, pixel_width);
-    let source_y = render.source_y + scale_pixels(crop_top_px, source_height, pixel_height);
-    let source_width = scale_pixels(visible_width_px, source_width, pixel_width)
-        .max(1)
-        .min(placement.placement.image_width.saturating_sub(source_x));
-    let source_height = scale_pixels(visible_height_px, source_height, pixel_height)
-        .max(1)
-        .min(placement.placement.image_height.saturating_sub(source_y));
-
-    if source_width == 0 || source_height == 0 {
-        tracing::debug!(
-            source_width = source_width,
-            source_height = source_height,
-            image_width = placement.placement.image_width,
-            image_height = placement.placement.image_height,
-            "clipped_placement: source dims zero"
-        );
-        return None;
-    }
+    let (source_x, source_y, source_width, source_height) = clipped_source(
+        placement,
+        left_clip_cells,
+        top_clip_cells,
+        visible_cols,
+        visible_rows,
+    )?;
 
     tracing::debug!("clipped_placement: success");
     Some((
@@ -316,4 +272,67 @@ pub(crate) fn kitty_format_code(format: KittyImageFormat) -> u32 {
         KittyImageFormat::Rgba => 32,
         KittyImageFormat::Png => 100,
     }
+}
+
+fn clipped_source(
+    placement: &HostPlacement,
+    left_clip_cells: u32,
+    top_clip_cells: u32,
+    visible_cols: u32,
+    visible_rows: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let render = placement.placement.render;
+    let source_width = if render.source_width == 0 {
+        placement.placement.image_width
+    } else {
+        render.source_width
+    };
+    let source_height = if render.source_height == 0 {
+        placement.placement.image_height
+    } else {
+        render.source_height
+    };
+    let pixel_width = render
+        .pixel_width
+        .max(
+            render
+                .grid_cols
+                .saturating_mul(placement.cell_size.width_px),
+        )
+        .max(1);
+    let pixel_height = render
+        .pixel_height
+        .max(
+            render
+                .grid_rows
+                .saturating_mul(placement.cell_size.height_px),
+        )
+        .max(1);
+
+    let crop_left_px = left_clip_cells.saturating_mul(placement.cell_size.width_px);
+    let crop_top_px = top_clip_cells.saturating_mul(placement.cell_size.height_px);
+    let visible_width_px = visible_cols.saturating_mul(placement.cell_size.width_px);
+    let visible_height_px = visible_rows.saturating_mul(placement.cell_size.height_px);
+
+    let source_x = render.source_x + scale_pixels(crop_left_px, source_width, pixel_width);
+    let source_y = render.source_y + scale_pixels(crop_top_px, source_height, pixel_height);
+    let source_width = scale_pixels(visible_width_px, source_width, pixel_width)
+        .max(1)
+        .min(placement.placement.image_width.saturating_sub(source_x));
+    let source_height = scale_pixels(visible_height_px, source_height, pixel_height)
+        .max(1)
+        .min(placement.placement.image_height.saturating_sub(source_y));
+
+    if source_width == 0 || source_height == 0 {
+        tracing::debug!(
+            source_width = source_width,
+            source_height = source_height,
+            image_width = placement.placement.image_width,
+            image_height = placement.placement.image_height,
+            "clipped_placement: source dims zero"
+        );
+        return None;
+    }
+
+    Some((source_x, source_y, source_width, source_height))
 }

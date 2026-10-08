@@ -3,7 +3,10 @@
 //! worker messaged it, a worker said it is blocked), that turn's final text is
 //! its report, so Bus shows it in MASTER as the orchestrator's own message to
 //! the Human. Bus authors nothing: the text is the agent's.
-use super::*;
+use super::{
+    AgentId, Author, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection,
+    ProviderCallback, RoomId,
+};
 
 /// An orchestrator's final text, taken before `accept_callback` settles it.
 pub(super) struct PendingReport {

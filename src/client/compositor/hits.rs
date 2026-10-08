@@ -1,5 +1,5 @@
 //! Pane hit geometry and in-progress host mouse/chrome gestures.
-use super::*;
+use ratatui::layout::Rect;
 
 #[derive(Default)]
 pub(in crate::client) struct ShellHitMap {

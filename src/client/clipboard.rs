@@ -1,4 +1,4 @@
-use super::*;
+use tracing::warn;
 
 pub(super) fn decode_clipboard_payload(data: &str) -> Option<Vec<u8>> {
     use base64::Engine;

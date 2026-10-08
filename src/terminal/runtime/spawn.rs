@@ -346,10 +346,10 @@ pub(super) fn is_powershell_shell(shell: &str) -> bool {
     // Split on both separators by hand: `Path::file_name` only treats `\` as
     // a separator on Windows hosts, and this predicate must evaluate Windows
     // shell paths correctly from tests on any host.
+    // A missing separator leaves the entire name; empty/trailing components stay empty.
     let name = shell
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap()
+        .rsplit_once(['/', '\\'])
+        .map_or(shell, |(_, name)| name)
         .to_ascii_lowercase();
     matches!(
         name.as_str(),
@@ -442,6 +442,70 @@ pub(crate) fn spawn_with_portable_pty(
         master: pair.master,
         child,
     })
+}
+
+fn initialize_pane_terminal(
+    cols: u16,
+    rows: u16,
+    scrollback_limit_bytes: usize,
+    host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+    host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+    initial_state: &SpawnInitialState<'_>,
+    response_tx: &mpsc::Sender<Bytes>,
+) -> io::Result<Arc<PaneTerminal>> {
+    let mut terminal = crate::terminal::vt::Terminal::new(cols, rows, scrollback_limit_bytes)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    if crate::protocol::kitty::is_enabled() {
+        terminal
+            .enable_kitty_graphics()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+    }
+    let pane_terminal = GhosttyPaneTerminal::new(terminal, response_tx.clone())?;
+    pane_terminal.apply_host_terminal_theme(host_terminal_theme);
+    let _ = pane_terminal.apply_host_terminal_appearance(host_terminal_appearance);
+    pane_terminal.set_windows_powershell_prompt_cwd_reporting(
+        initial_state.windows_powershell_prompt_cwd_reporting,
+    );
+    if let Some(ansi) = initial_state.history_ansi {
+        pane_terminal.seed_history_ansi(ansi);
+    }
+    Ok(Arc::new(PaneTerminal::new(pane_terminal)))
+}
+
+fn spawn_child_watcher(
+    pane_id: PaneId,
+    mut child: Box<dyn Child + Send + Sync>,
+    child_pid: Arc<AtomicU32>,
+    child_wait_completed: Arc<AtomicBool>,
+    events: mpsc::Sender<AppEvent>,
+) {
+    let rt = tokio::runtime::Handle::current();
+    if let Some(pid) = child.process_id() {
+        child_pid.store(pid, Ordering::Release);
+        crate::utils::logging::pane_spawned(pane_id.raw(), pid);
+    }
+    tokio::task::spawn_blocking(move || {
+        let exit_reason = match child.wait() {
+            Ok(status) => {
+                let exit_reason = crate::platform::classify_child_exit(&status);
+                let status_text = format!("{status:?}");
+                crate::utils::logging::pane_exited(pane_id.raw(), &status_text);
+                exit_reason
+            }
+            Err(e) => {
+                crate::utils::logging::pane_exit_failed(pane_id.raw(), &e.to_string());
+                crate::platform::ChildExitReason::WaitFailed
+            }
+        };
+        child_wait_completed.store(true, Ordering::Release);
+        // Use blocking send — PaneDied is critical, must not be dropped
+        if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
+            pane_id,
+            exit_reason,
+        })) {
+            error!(pane = pane_id.raw(), err = %e, "failed to send PaneDied event");
+        }
+    });
 }
 
 impl TerminalRuntime {
@@ -637,23 +701,15 @@ impl TerminalRuntime {
         );
 
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
-        let mut terminal = crate::terminal::vt::Terminal::new(cols, rows, scrollback_limit_bytes)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        if crate::protocol::kitty::is_enabled() {
-            terminal
-                .enable_kitty_graphics()
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-        }
-        let pane_terminal = GhosttyPaneTerminal::new(terminal, response_tx.clone())?;
-        pane_terminal.apply_host_terminal_theme(host_terminal_theme);
-        let _ = pane_terminal.apply_host_terminal_appearance(host_terminal_appearance);
-        pane_terminal.set_windows_powershell_prompt_cwd_reporting(
-            initial_state.windows_powershell_prompt_cwd_reporting,
-        );
-        if let Some(ansi) = initial_state.history_ansi {
-            pane_terminal.seed_history_ansi(ansi);
-        }
-        let terminal = Arc::new(PaneTerminal::new(pane_terminal));
+        let terminal = initialize_pane_terminal(
+            cols,
+            rows,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            &initial_state,
+            &response_tx,
+        )?;
         let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
         let kitty_keyboard_flags = Arc::new(AtomicU16::new(0));
         let content_write_lock = Arc::new(Mutex::new(()));
@@ -667,39 +723,13 @@ impl TerminalRuntime {
         let child_wait_completed = Arc::new(AtomicBool::new(false));
         let content_seq = Arc::new(AtomicU64::new(0));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
-        {
-            let child_pid = child_pid.clone();
-            let child_wait_completed = child_wait_completed.clone();
-            let events = events.clone();
-            let rt = tokio::runtime::Handle::current();
-            let mut child = spawned.child;
-            if let Some(pid) = child.process_id() {
-                child_pid.store(pid, Ordering::Release);
-                crate::utils::logging::pane_spawned(pane_id.raw(), pid);
-            }
-            tokio::task::spawn_blocking(move || {
-                let exit_reason = match child.wait() {
-                    Ok(status) => {
-                        let exit_reason = crate::platform::classify_child_exit(&status);
-                        let status_text = format!("{status:?}");
-                        crate::utils::logging::pane_exited(pane_id.raw(), &status_text);
-                        exit_reason
-                    }
-                    Err(e) => {
-                        crate::utils::logging::pane_exit_failed(pane_id.raw(), &e.to_string());
-                        crate::platform::ChildExitReason::WaitFailed
-                    }
-                };
-                child_wait_completed.store(true, Ordering::Release);
-                // Use blocking send — PaneDied is critical, must not be dropped
-                if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
-                    pane_id,
-                    exit_reason,
-                })) {
-                    error!(pane = pane_id.raw(), err = %e, "failed to send PaneDied event");
-                }
-            });
-        }
+        spawn_child_watcher(
+            pane_id,
+            spawned.child,
+            child_pid.clone(),
+            child_wait_completed.clone(),
+            events.clone(),
+        );
 
         let io = {
             let terminal = terminal.clone();

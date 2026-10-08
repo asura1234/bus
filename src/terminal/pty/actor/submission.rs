@@ -85,10 +85,16 @@ impl PtyIoActorRunner {
         if Instant::now() >= *deadline {
             let enter = enter.clone();
             if enter.is_empty() {
-                let submission = self.active_submission.take().unwrap();
-                let _ = submission.reply.send(Ok(()));
+                // The waiting submission above cannot disappear: this actor
+                // exclusively owns it and has not processed another command.
+                if let Some(submission) = self.active_submission.take() {
+                    let _ = submission.reply.send(Ok(()));
+                }
             } else {
-                self.active_submission.as_mut().unwrap().phase = SubmissionPhase::WritingEnter;
+                // The same exclusive actor ownership keeps the waiting value present.
+                if let Some(submission) = self.active_submission.as_mut() {
+                    submission.phase = SubmissionPhase::WritingEnter;
+                }
                 self.enqueue_submission_write(enter, SubmissionBoundary::Enter);
             }
         }

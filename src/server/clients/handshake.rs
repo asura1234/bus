@@ -121,61 +121,9 @@ pub(crate) fn handle_client_handshake(
             return Ok(());
         }
     };
-    let ClientMessage::EndpointControl { kind, data } = hello else {
-        write_endpoint_rejection(
-            &mut stream,
-            "invalid_hello",
-            "expected endpoint hello as first message",
-        );
+    let Some(hello) = validate_endpoint_hello(&mut stream, hello) else {
         return Ok(());
     };
-    if kind != ENDPOINT_HELLO_KIND {
-        write_endpoint_rejection(
-            &mut stream,
-            "invalid_hello",
-            "expected endpoint hello as first message",
-        );
-        return Ok(());
-    }
-    let hello: EndpointClientHello = match serde_json::from_str(&data) {
-        Ok(hello) => hello,
-        Err(error) => {
-            write_endpoint_rejection(
-                &mut stream,
-                "invalid_hello",
-                format!("invalid endpoint hello: {error}"),
-            );
-            return Ok(());
-        }
-    };
-    let server_version = crate::build_info::version();
-    if hello.client_version != server_version {
-        write_endpoint_rejection(
-            &mut stream,
-            "build_mismatch",
-            format!("client build {:?} does not match server build {server_version:?}; restart both from the same Bus build", hello.client_version),
-        );
-        return Ok(());
-    }
-    let incompatibility = if hello.generation != ENDPOINT_PROTOCOL_GENERATION {
-        Some(("unsupported_generation", format!("endpoint generation {} is unsupported; this server supports generation {ENDPOINT_PROTOCOL_GENERATION}", hello.generation)))
-    } else if !hello.supports_required_codecs() {
-        Some((
-            "no_common_core",
-            "client and server have no compatible endpoint core codecs".to_owned(),
-        ))
-    } else {
-        client_shell_geometry_error(
-            hello.surface_size,
-            hello.cell_width_px,
-            hello.cell_height_px,
-        )
-        .map(|reason| ("invalid_surface", reason.to_owned()))
-    };
-    if let Some((code, reason)) = incompatibility {
-        write_endpoint_rejection(&mut stream, code, reason);
-        return Ok(());
-    }
     if should_quit.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -250,4 +198,66 @@ fn send_shutdown_to_unregistered_client(writer: &ClientWriter) {
     {
         let _ = writer.control.send(framed);
     }
+}
+
+fn validate_endpoint_hello(
+    stream: &mut LocalStream,
+    hello: ClientMessage,
+) -> Option<EndpointClientHello> {
+    let ClientMessage::EndpointControl { kind, data } = hello else {
+        write_endpoint_rejection(
+            stream,
+            "invalid_hello",
+            "expected endpoint hello as first message",
+        );
+        return None;
+    };
+    if kind != ENDPOINT_HELLO_KIND {
+        write_endpoint_rejection(
+            stream,
+            "invalid_hello",
+            "expected endpoint hello as first message",
+        );
+        return None;
+    }
+    let hello: EndpointClientHello = match serde_json::from_str(&data) {
+        Ok(hello) => hello,
+        Err(error) => {
+            write_endpoint_rejection(
+                stream,
+                "invalid_hello",
+                format!("invalid endpoint hello: {error}"),
+            );
+            return None;
+        }
+    };
+    let server_version = crate::build_info::version();
+    if hello.client_version != server_version {
+        write_endpoint_rejection(
+            stream,
+            "build_mismatch",
+            format!("client build {:?} does not match server build {server_version:?}; restart both from the same Bus build", hello.client_version),
+        );
+        return None;
+    }
+    let incompatibility = if hello.generation != ENDPOINT_PROTOCOL_GENERATION {
+        Some(("unsupported_generation", format!("endpoint generation {} is unsupported; this server supports generation {ENDPOINT_PROTOCOL_GENERATION}", hello.generation)))
+    } else if !hello.supports_required_codecs() {
+        Some((
+            "no_common_core",
+            "client and server have no compatible endpoint core codecs".to_owned(),
+        ))
+    } else {
+        client_shell_geometry_error(
+            hello.surface_size,
+            hello.cell_width_px,
+            hello.cell_height_px,
+        )
+        .map(|reason| ("invalid_surface", reason.to_owned()))
+    };
+    if let Some((code, reason)) = incompatibility {
+        write_endpoint_rejection(stream, code, reason);
+        return None;
+    }
+    Some(hello)
 }

@@ -314,6 +314,31 @@ impl RetainedTextBuffer {
         Self { cols, lines, atoms }
     }
 
+    fn search_match(
+        &self,
+        line: &LogicalTextLine,
+        found: regex::Match<'_>,
+        active_screen: crate::ghostty::ActiveScreen,
+    ) -> Option<TerminalTextMatch> {
+        let start_index = line
+            .spans
+            .binary_search_by_key(&found.start(), |span| span.byte_start)
+            .ok()?;
+        let end_index = line
+            .spans
+            .binary_search_by_key(&found.end(), |span| span.byte_end)
+            .ok()?;
+        let start_span = &line.spans[start_index];
+        let end_span = &line.spans[end_index];
+        Some(TerminalTextMatch {
+            start: start_span.start,
+            end: end_span.end,
+            source_fingerprint: text_fingerprint(found.as_str()),
+            scan_cols: self.cols,
+            scan_screen: active_screen,
+        })
+    }
+
     pub(super) fn search_window(
         &self,
         query: &str,
@@ -344,23 +369,7 @@ impl RetainedTextBuffer {
             };
         };
         let to_match = |line: &LogicalTextLine, found: regex::Match<'_>| {
-            let start_index = line
-                .spans
-                .binary_search_by_key(&found.start(), |span| span.byte_start)
-                .ok()?;
-            let end_index = line
-                .spans
-                .binary_search_by_key(&found.end(), |span| span.byte_end)
-                .ok()?;
-            let start_span = &line.spans[start_index];
-            let end_span = &line.spans[end_index];
-            Some(TerminalTextMatch {
-                start: start_span.start,
-                end: end_span.end,
-                source_fingerprint: text_fingerprint(found.as_str()),
-                scan_cols: self.cols,
-                scan_screen: active_screen,
-            })
+            self.search_match(line, found, active_screen)
         };
 
         let origin = match direction {

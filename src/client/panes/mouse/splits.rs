@@ -1,4 +1,4 @@
-use super::*;
+use super::{pane_surface_topology_signature, ClientShellState, PaneSplitHit};
 
 impl ClientShellState {
     pub(super) fn pane_split_target_is_current(

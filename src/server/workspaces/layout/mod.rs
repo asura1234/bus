@@ -169,7 +169,11 @@ impl TileLayout {
         }
         let target = self.focus;
         let ids = self.pane_ids();
-        let pos = ids.iter().position(|id| *id == target).unwrap();
+        // Focus is kept in the tree by construction and by every focus/layout update.
+        // If that invariant is ever broken, leave the layout intact instead of panicking.
+        let Some(pos) = ids.iter().position(|id| *id == target) else {
+            return false;
+        };
         let ordered = if pos + 1 < ids.len() {
             ids[pos + 1]
         } else {

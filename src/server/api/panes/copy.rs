@@ -113,34 +113,16 @@ impl App {
         }
         let target = match params.motion {
             PaneCopyMotion::LineEnd | PaneCopyMotion::FirstNonBlank => {
-                let width = runtime
-                    .terminal_dimensions()
-                    .map_or(1, |(cols, _)| cols.max(1));
-                let selection = crate::selection::Selection::absolute_range(
-                    pane_id,
-                    (params.cursor.row, 0),
-                    (params.cursor.row, width.saturating_sub(1)),
-                );
-                let Some(text) = runtime.extract_selection(&selection) else {
+                let Some(target) =
+                    line_copy_motion_target(runtime, pane_id, params.cursor, params.motion)
+                else {
                     return encode_error(
                         id,
                         "copy_motion_unavailable",
                         "terminal row is unavailable",
                     );
                 };
-                let col = match params.motion {
-                    PaneCopyMotion::LineEnd => {
-                        crate::copy_mode::last_character_col(&text).unwrap_or(0)
-                    }
-                    PaneCopyMotion::FirstNonBlank => {
-                        crate::copy_mode::first_non_blank_col(&text).unwrap_or(0)
-                    }
-                    _ => unreachable!(),
-                };
-                crate::pane::TerminalTextPoint {
-                    row: params.cursor.row,
-                    col: col.min(width.saturating_sub(1)),
-                }
+                target
             }
             PaneCopyMotion::NextWordStart
             | PaneCopyMotion::PreviousWordStart
@@ -288,4 +270,30 @@ impl App {
             },
         )
     }
+}
+
+fn line_copy_motion_target(
+    runtime: &crate::terminal::TerminalRuntime,
+    pane_id: crate::layout::PaneId,
+    cursor: PaneTextPoint,
+    motion: PaneCopyMotion,
+) -> Option<crate::pane::TerminalTextPoint> {
+    let width = runtime
+        .terminal_dimensions()
+        .map_or(1, |(cols, _)| cols.max(1));
+    let selection = crate::selection::Selection::absolute_range(
+        pane_id,
+        (cursor.row, 0),
+        (cursor.row, width.saturating_sub(1)),
+    );
+    let text = runtime.extract_selection(&selection)?;
+    let col = match motion {
+        PaneCopyMotion::LineEnd => crate::copy_mode::last_character_col(&text).unwrap_or(0),
+        PaneCopyMotion::FirstNonBlank => crate::copy_mode::first_non_blank_col(&text).unwrap_or(0),
+        _ => unreachable!(),
+    };
+    Some(crate::pane::TerminalTextPoint {
+        row: cursor.row,
+        col: col.min(width.saturating_sub(1)),
+    })
 }

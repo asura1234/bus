@@ -26,10 +26,13 @@ replace `rebase-origin-main` or PR creation.
     Boundaries are report-only until S12 enables enforcement. These checks read source text;
     they are not UI tests. Rust formatting and Python syntax/pyflakes violations fail the gate.
     Python style-only rules and LibTV's TypeScript-specific complexity limits are not imported. All
-    first-party Rust/Python files (including tests) have a 3,000 physical-line cap. Existing
-    oversized handwritten files are individually exempted in
-    [lint-policy.toml](references/lint-policy.toml), each marked for splitting during the
-    restructure; generated Ghostty bindings are separately named. New/non-exempt files fail.
+    first-party handwritten production Rust/Python files have an 800-line cap. Comments and blank lines count;
+    shared `*_test.*` / `tests` paths and Rust `cfg(test)` scopes are exempt. Generated Ghostty FFI declarations are
+    separately named in [lint-policy.toml](references/lint-policy.toml); no handwritten per-file exemptions remain.
+    Production Clippy runs first with function length 100, cognitive complexity 25 and argument threshold 11,
+    plus wildcard imports, stdout print macros, dbg/todo/unimplemented, get-unwrap and unwrap denied. All-target
+    Clippy follows with only those selected rules allowed for test compilation; other default warnings still fail.
+    `just windows-lint` uses the same production/test policy on the Windows target.
   - **Unit**: instrumented Bus binary tests, excluding the `IN_PROCESS_SERVER_TESTS` prefix in
     `bus_quality.py`, followed by every `test_*.py` / `*_test.py` in its existing `PYTHON_ROOTS`
     (`scripts/`, `skills/`, `cli_extensions/`, `tools/`, `packaging/`) with pytest. They must pass;

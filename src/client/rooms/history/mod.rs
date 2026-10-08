@@ -3,7 +3,7 @@ mod exchange;
 mod markdown;
 
 use super::render::Action;
-use crate::bus::model::*;
+use crate::bus::model::{AgentId, PromptId, RequestId, RoomId};
 pub(super) use exchange::reply;
 #[cfg(test)]
 use exchange::timestamp;
@@ -123,6 +123,7 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bus::model::{BusState, Provider};
     #[test]
     fn routine_poll_revisions_and_draft_edits_reuse_history_lines() {
         let mut state = BusState::default();

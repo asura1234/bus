@@ -1,8 +1,8 @@
 //! Coordinator poll ownership.
 use super::dialogs;
 use super::{
-    io, launch, resume, schema, Duration, Method, Path, PathBuf, ResponseResult, RuntimeStatus,
-    Worker,
+    io, launch, resume, schema, Agent, AgentId, BTreeMap, BusState, Duration, Method, Path,
+    PathBuf, ResponseResult, RuntimeStatus, Worker,
 };
 
 impl Worker {
@@ -63,47 +63,8 @@ impl Worker {
                     ));
                 }
             }
-            let status = info.map_or(RuntimeStatus::Unavailable, |info| {
-                if agent.session_binding_invalidated || agent.deletion_pending {
-                    return RuntimeStatus::Unavailable;
-                }
-                if info.launch_pending {
-                    return RuntimeStatus::Launching;
-                }
-                if !info.interactive_ready {
-                    return RuntimeStatus::Unavailable;
-                }
-                match info.agent_status {
-                    schema::AgentStatus::Idle | schema::AgentStatus::Done => RuntimeStatus::Idle,
-                    schema::AgentStatus::Working => RuntimeStatus::Working,
-                    schema::AgentStatus::Blocked => RuntimeStatus::Blocked,
-                    schema::AgentStatus::Unknown => RuntimeStatus::Unavailable,
-                }
-            });
-            // Hook installation is explicitly consented before the agent is
-            // created. Once the native terminal reports that exact owned
-            // agent as interactive, room delivery is ready too; requiring a
-            // second Bus-only confirmation creates an Idle-but-undeliverable
-            // deadlock (especially for Codex, whose SessionStart is deferred
-            // until its first prompt).
-            if info.is_some_and(|info| info.interactive_ready)
-                && !agent.hook_setup_confirmed
-                && !agent.session_binding_invalidated
-                && !agent.deletion_pending
-            {
-                state
-                    .confirm_hook_setup(agent.id)
-                    .map_err(|e| e.to_string())?;
-                state
-                    .set_agent_error(agent.id, None)
-                    .map_err(|e| e.to_string())?;
-                tracing::info!(
-                    event = "bus.agent.ready",
-                    agent_id = agent.id.0,
-                    provider = ?agent.provider,
-                    "Owned provider terminal is interactive; room delivery enabled"
-                );
-            }
+            let status = polled_status(agent, info);
+            confirm_interactive_agent(&mut state, agent, info)?;
             state
                 .observe_status(agent.id, status, io::now_ms())
                 .map_err(|e| e.to_string())?;
@@ -120,28 +81,7 @@ impl Worker {
                 ));
             }
             if let Some(info) = info {
-                let cwd = info
-                    .foreground_cwd
-                    .as_ref()
-                    .or(info.cwd.as_ref())
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| agent.cwd.clone());
-                // Branch lookup only when visible metadata changes; bounded one process per agent per poll is avoided.
-                let branch = if cwd != agent.cwd
-                    || self
-                        .branch_checks
-                        .get(&agent.id)
-                        .is_none_or(|time| time.elapsed() >= Duration::from_secs(10))
-                {
-                    self.branch_checks
-                        .insert(agent.id, std::time::Instant::now());
-                    branch_for(&cwd)
-                } else {
-                    agent.branch.clone()
-                };
-                state
-                    .update_agent_runtime_metadata(agent.id, cwd, branch)
-                    .map_err(|e| e.to_string())?;
+                update_polled_metadata(&mut state, agent, info, &mut self.branch_checks)?;
             }
         }
         self.save(state)?;
@@ -166,4 +106,85 @@ fn branch_for(cwd: &Path) -> Option<String> {
     }
     let branch = String::from_utf8(output.stdout).ok()?.trim().to_owned();
     (!branch.is_empty()).then_some(branch)
+}
+
+fn polled_status(agent: &Agent, info: Option<&schema::AgentInfo>) -> RuntimeStatus {
+    info.map_or(RuntimeStatus::Unavailable, |info| {
+        if agent.session_binding_invalidated || agent.deletion_pending {
+            return RuntimeStatus::Unavailable;
+        }
+        if info.launch_pending {
+            return RuntimeStatus::Launching;
+        }
+        if !info.interactive_ready {
+            return RuntimeStatus::Unavailable;
+        }
+        match info.agent_status {
+            schema::AgentStatus::Idle | schema::AgentStatus::Done => RuntimeStatus::Idle,
+            schema::AgentStatus::Working => RuntimeStatus::Working,
+            schema::AgentStatus::Blocked => RuntimeStatus::Blocked,
+            schema::AgentStatus::Unknown => RuntimeStatus::Unavailable,
+        }
+    })
+}
+
+fn confirm_interactive_agent(
+    state: &mut BusState,
+    agent: &Agent,
+    info: Option<&schema::AgentInfo>,
+) -> Result<(), String> {
+    // Hook installation is explicitly consented before the agent is
+    // created. Once the native terminal reports that exact owned
+    // agent as interactive, room delivery is ready too; requiring a
+    // second Bus-only confirmation creates an Idle-but-undeliverable
+    // deadlock (especially for Codex, whose SessionStart is deferred
+    // until its first prompt).
+    if info.is_some_and(|info| info.interactive_ready)
+        && !agent.hook_setup_confirmed
+        && !agent.session_binding_invalidated
+        && !agent.deletion_pending
+    {
+        state
+            .confirm_hook_setup(agent.id)
+            .map_err(|e| e.to_string())?;
+        state
+            .set_agent_error(agent.id, None)
+            .map_err(|e| e.to_string())?;
+        tracing::info!(
+            event = "bus.agent.ready",
+            agent_id = agent.id.0,
+            provider = ?agent.provider,
+            "Owned provider terminal is interactive; room delivery enabled"
+        );
+    }
+    Ok(())
+}
+
+fn update_polled_metadata(
+    state: &mut BusState,
+    agent: &Agent,
+    info: &schema::AgentInfo,
+    branch_checks: &mut BTreeMap<AgentId, std::time::Instant>,
+) -> Result<(), String> {
+    let cwd = info
+        .foreground_cwd
+        .as_ref()
+        .or(info.cwd.as_ref())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| agent.cwd.clone());
+    // Branch lookup only when visible metadata changes; bounded one process per agent per poll is avoided.
+    let branch = if cwd != agent.cwd
+        || branch_checks
+            .get(&agent.id)
+            .is_none_or(|time| time.elapsed() >= Duration::from_secs(10))
+    {
+        branch_checks.insert(agent.id, std::time::Instant::now());
+        branch_for(&cwd)
+    } else {
+        agent.branch.clone()
+    };
+    state
+        .update_agent_runtime_metadata(agent.id, cwd, branch)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }

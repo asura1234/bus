@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    ClientSelectionAutoscroll, ClientSelectionAutoscrollDirection, ClientShellInput,
+    ClientShellState, MouseEvent, MouseEventKind, PaneHit,
+};
 
 const SELECTION_AUTOSCROLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(30);
 

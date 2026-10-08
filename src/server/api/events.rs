@@ -63,29 +63,7 @@ impl App {
             self.checkpoint_session_before_pane_exit();
         }
 
-        let overlay_state = if let AppEvent::PaneDied { pane_id, .. } = &ev {
-            self.overlay_panes.remove(pane_id).map(|overlay| {
-                let was_overlay_active =
-                    self.state
-                        .is_active_pane(overlay.ws_idx, overlay.tab_idx, *pane_id);
-                let tab_before_exit = self
-                    .state
-                    .workspaces
-                    .get(overlay.ws_idx)
-                    .and_then(|ws| ws.tabs.get(overlay.tab_idx));
-                let was_overlay_focused_in_tab =
-                    tab_before_exit.is_some_and(|tab| tab.layout.focused() == *pane_id);
-                let tab_zoomed_before_exit = tab_before_exit.map(|tab| tab.zoomed);
-                (
-                    overlay,
-                    was_overlay_active,
-                    was_overlay_focused_in_tab,
-                    tab_zoomed_before_exit,
-                )
-            })
-        } else {
-            None
-        };
+        let overlay_state = self.take_exited_overlay_state(&ev);
 
         if let AppEvent::PaneDied { pane_id, .. } = &ev {
             if let Some((ws_idx, _)) = self.find_pane(*pane_id) {
@@ -145,6 +123,35 @@ impl App {
         self.sync_toast_deadline(previous_toast);
         self.shutdown_detached_terminal_runtimes();
         pane_updates
+    }
+
+    fn take_exited_overlay_state(
+        &mut self,
+        ev: &AppEvent,
+    ) -> Option<(OverlayPaneState, bool, bool, Option<bool>)> {
+        if let AppEvent::PaneDied { pane_id, .. } = ev {
+            self.overlay_panes.remove(pane_id).map(|overlay| {
+                let was_overlay_active =
+                    self.state
+                        .is_active_pane(overlay.ws_idx, overlay.tab_idx, *pane_id);
+                let tab_before_exit = self
+                    .state
+                    .workspaces
+                    .get(overlay.ws_idx)
+                    .and_then(|ws| ws.tabs.get(overlay.tab_idx));
+                let was_overlay_focused_in_tab =
+                    tab_before_exit.is_some_and(|tab| tab.layout.focused() == *pane_id);
+                let tab_zoomed_before_exit = tab_before_exit.map(|tab| tab.zoomed);
+                (
+                    overlay,
+                    was_overlay_active,
+                    was_overlay_focused_in_tab,
+                    tab_zoomed_before_exit,
+                )
+            })
+        } else {
+            None
+        }
     }
 
     fn restore_overlay_after_exit(

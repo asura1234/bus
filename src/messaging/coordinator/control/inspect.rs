@@ -114,18 +114,7 @@ impl Worker {
         source: Option<&str>,
         lines: Option<u32>,
     ) -> Result<Value, String> {
-        let read_source = match source {
-            Some("recent") => schema::ReadSource::Recent,
-            Some("visible") => schema::ReadSource::Visible,
-            None => return Err("Recent reads require an explicit positive lines value".into()),
-            Some(_) => return Err("Source must be visible or recent".into()),
-        };
-        if read_source == schema::ReadSource::Visible && lines.is_some() {
-            return Err("Visible reads return the complete viewport; omit lines".into());
-        }
-        if read_source == schema::ReadSource::Recent && lines.is_none_or(|lines| lines == 0) {
-            return Err("Recent reads require an explicit positive lines value".into());
-        }
+        let read_source = dev_read_source(source, lines)?;
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let target = agent
             .runtime_identity
@@ -205,23 +194,7 @@ impl Worker {
         if !identity_matches(&after) {
             return Err("Agent terminal identity changed during read; text was discarded".into());
         }
-        let mut capture = json!({
-            "at_ms": crate::bus::io::now_ms(),
-            "source": if read_source == schema::ReadSource::Visible { "visible" } else { "recent" },
-            "truncated": read.truncated,
-            "revision": read.revision,
-            "returned_lines": read.returned_lines,
-        });
-        if read_source == schema::ReadSource::Visible {
-            capture["viewport"] = json!({
-                "rows": read.viewport_rows,
-                "columns": read.viewport_columns,
-            });
-        } else {
-            capture["requested_lines"] = json!(read.requested_lines);
-            capture["available_lines"] = json!(read.available_lines);
-            capture["exhausted"] = json!(read.exhausted);
-        }
+        let capture = read_capture(&read, read_source);
         Ok(json!({
             "agent_id": id,
             "name": name,
@@ -247,4 +220,41 @@ fn build_json() -> Value {
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
         "binary": std::env::current_exe().ok(),
     })
+}
+
+fn dev_read_source(source: Option<&str>, lines: Option<u32>) -> Result<schema::ReadSource, String> {
+    let read_source = match source {
+        Some("recent") => schema::ReadSource::Recent,
+        Some("visible") => schema::ReadSource::Visible,
+        None => return Err("Recent reads require an explicit positive lines value".into()),
+        Some(_) => return Err("Source must be visible or recent".into()),
+    };
+    if read_source == schema::ReadSource::Visible && lines.is_some() {
+        return Err("Visible reads return the complete viewport; omit lines".into());
+    }
+    if read_source == schema::ReadSource::Recent && lines.is_none_or(|lines| lines == 0) {
+        return Err("Recent reads require an explicit positive lines value".into());
+    }
+    Ok(read_source)
+}
+
+fn read_capture(read: &schema::PaneReadResult, read_source: schema::ReadSource) -> Value {
+    let mut capture = json!({
+        "at_ms": crate::bus::io::now_ms(),
+        "source": if read_source == schema::ReadSource::Visible { "visible" } else { "recent" },
+        "truncated": read.truncated,
+        "revision": read.revision,
+        "returned_lines": read.returned_lines,
+    });
+    if read_source == schema::ReadSource::Visible {
+        capture["viewport"] = json!({
+            "rows": read.viewport_rows,
+            "columns": read.viewport_columns,
+        });
+    } else {
+        capture["requested_lines"] = json!(read.requested_lines);
+        capture["available_lines"] = json!(read.available_lines);
+        capture["exhausted"] = json!(read.exhausted);
+    }
+    capture
 }

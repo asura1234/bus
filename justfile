@@ -49,7 +49,7 @@ ci: lint unit-test integration-test coverage
 [unix]
 windows-lint:
     rustup target add x86_64-pc-windows-msvc
-    LIBGHOSTTY_VT_SIMD=false cargo clippy --bin bus --locked --target x86_64-pc-windows-msvc -- -D warnings
+    {{python}} skills/gate-and-fix/scripts/bus_quality.py windows-lint
 
 # Check formatting + run unit tests + Windows target lint + documentation contract tests
 [unix]

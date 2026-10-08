@@ -8,6 +8,13 @@ use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tracing::debug;
 
+type PaneApiState = (
+    usize,
+    crate::layout::PaneId,
+    crate::detect::AgentState,
+    Option<String>,
+);
+
 impl HeadlessServer {
     /// Drains API requests with shutdown awareness.
     ///
@@ -63,28 +70,8 @@ impl HeadlessServer {
             }
         };
 
-        if let api::schema::Method::NotificationShow(params) = &msg.request.method {
-            let response =
-                self.handle_notification_show_api(msg.request.id.clone(), params.clone());
-            let _ = msg.respond_to.send(response);
+        if self.handle_client_local_api_request(&msg) {
             return true;
-        }
-
-        match &msg.request.method {
-            api::schema::Method::ClientWindowTitleSet(params) => {
-                let response = self.handle_client_window_title_api(
-                    msg.request.id.clone(),
-                    Some(params.title.clone()),
-                );
-                let _ = msg.respond_to.send(response);
-                return true;
-            }
-            api::schema::Method::ClientWindowTitleClear(_) => {
-                let response = self.handle_client_window_title_api(msg.request.id.clone(), None);
-                let _ = msg.respond_to.send(response);
-                return true;
-            }
-            _ => {}
         }
 
         let mut changed = api::request_changes_ui(&msg.request);
@@ -98,34 +85,7 @@ impl HeadlessServer {
         // bypasses drain_internal_events_with_forwarding. Headless mode disables
         // local sound playback, so sound notifications need to be forwarded here.
         let toast_before = self.app.state.toast.clone();
-        let pane_states_before: Vec<(
-            usize,
-            crate::layout::PaneId,
-            crate::detect::AgentState,
-            Option<String>,
-        )> = {
-            let terminals = &self.app.state.terminals;
-            self.app
-                .state
-                .workspaces
-                .iter()
-                .enumerate()
-                .flat_map(|(ws_idx, ws)| {
-                    ws.tabs.iter().flat_map(move |tab| {
-                        tab.panes.iter().filter_map(move |(&pane_id, pane)| {
-                            terminals.get(&pane.attached_terminal_id).map(|terminal| {
-                                (
-                                    ws_idx,
-                                    pane_id,
-                                    terminal.state,
-                                    terminal.effective_agent_label().map(str::to_string),
-                                )
-                            })
-                        })
-                    })
-                })
-                .collect()
-        };
+        let pane_states_before = self.capture_api_pane_states();
 
         self.sync_foreground_client_state();
         if let Some(error) = self.agent_read_not_idle_error(&msg.request) {
@@ -149,40 +109,7 @@ impl HeadlessServer {
                 .handle_deferred_agent_api_request(msg.request, msg.respond_to);
             return changed | deferred_changed;
         }
-        if self.foreground_client_id.is_some_and(|client_id| {
-            self.clients
-                .get(&client_id)
-                .is_some_and(|client| matches!(client.mode, ClientConnectionMode::ClientShell))
-        }) {
-            self.app.state.view.terminal_area =
-                Rect::new(0, 0, self.effective_size.0, self.effective_size.1);
-        }
-        let mut response = if matches!(
-            &msg.request.method,
-            api::schema::Method::ServerReloadConfig(_)
-        ) {
-            let report = self.reload_server_config(true);
-            serde_json::to_string(&api::schema::SuccessResponse {
-                id: msg.request.id.clone(),
-                result: api::schema::ResponseResult::ConfigReload {
-                    status: report.status,
-                    diagnostics: report.diagnostics,
-                },
-            })
-            .unwrap_or_else(|err| {
-                serde_json::to_string(&api::schema::ErrorResponse {
-                    id: String::new(),
-                    error: api::schema::ErrorBody {
-                        code: "serialization_error".into(),
-                        message: err.to_string(),
-                    },
-                })
-                .unwrap_or_else(|_| "{}".to_string())
-            })
-        } else {
-            self.app
-                .handle_api_request_after_internal_events_drained(msg.request)
-        };
+        let mut response = self.dispatch_foreground_api_request(msg.request);
         if let Some(snapshot) = frozen_alt_screen_read {
             if let Ok(mut success) = serde_json::from_str::<api::schema::SuccessResponse>(&response)
             {
@@ -218,14 +145,55 @@ impl HeadlessServer {
         }
         let _ = msg.respond_to.send(response);
 
+        let forwarded_toast_from_state = self.forward_api_toast_change(&toast_before);
+        self.forward_api_pane_changes(&pane_states_before, forwarded_toast_from_state);
+
+        if !skip_default_workspace && latest_shell_client(&self.clients).is_some() {
+            changed |= self.app.ensure_default_workspace();
+        }
+
+        changed
+    }
+
+    fn handle_client_local_api_request(&mut self, msg: &api::ApiRequestMessage) -> bool {
+        if let api::schema::Method::NotificationShow(params) = &msg.request.method {
+            let response =
+                self.handle_notification_show_api(msg.request.id.clone(), params.clone());
+            let _ = msg.respond_to.send(response);
+            return true;
+        }
+
+        match &msg.request.method {
+            api::schema::Method::ClientWindowTitleSet(params) => {
+                let response = self.handle_client_window_title_api(
+                    msg.request.id.clone(),
+                    Some(params.title.clone()),
+                );
+                let _ = msg.respond_to.send(response);
+                return true;
+            }
+            api::schema::Method::ClientWindowTitleClear(_) => {
+                let response = self.handle_client_window_title_api(msg.request.id.clone(), None);
+                let _ = msg.respond_to.send(response);
+                return true;
+            }
+            _ => {}
+        }
+
+        false
+    }
+
+    fn forward_api_toast_change(
+        &mut self,
+        toast_before: &Option<crate::server::app_state::ToastNotification>,
+    ) -> bool {
         // Forward new toast state only when a client-local delivery mode is selected.
         // Herdr delivery renders the toast in-frame and must not ask clients to
         // show a terminal or system notification.
         let toast_after = self.app.state.toast.clone();
-        let forwarded_toast_from_state = if should_forward_toast_to_clients(
-            self.app.state.toast_config.delivery,
-        ) && toast_after.is_some()
-            && toast_after != toast_before
+        if should_forward_toast_to_clients(self.app.state.toast_config.delivery)
+            && toast_after.is_some()
+            && &toast_after != toast_before
         {
             if let Some(toast) = &toast_after {
                 debug!(target: "bus::private_payload", title = %toast.title, body = %toast.context, "forwarding toast notification from API request");
@@ -241,12 +209,18 @@ impl HeadlessServer {
             }
         } else {
             false
-        };
+        }
+    }
 
+    fn forward_api_pane_changes(
+        &mut self,
+        pane_states_before: &[PaneApiState],
+        forwarded_toast_from_state: bool,
+    ) {
         // Forward notifications for effective pane state changes that occurred
         // during the API request. Hook authority is already folded into
         // pane.state, so raw hook transitions must not produce separate sounds.
-        for (ws_idx, pane_id, prev_state, prev_agent_label) in &pane_states_before {
+        for (ws_idx, pane_id, prev_state, prev_agent_label) in pane_states_before {
             let pane_after = self
                 .app
                 .state
@@ -338,11 +312,63 @@ impl HeadlessServer {
                 }
             }
         }
+    }
 
-        if !skip_default_workspace && latest_shell_client(&self.clients).is_some() {
-            changed |= self.app.ensure_default_workspace();
+    fn capture_api_pane_states(&self) -> Vec<PaneApiState> {
+        let terminals = &self.app.state.terminals;
+        self.app
+            .state
+            .workspaces
+            .iter()
+            .enumerate()
+            .flat_map(|(ws_idx, ws)| {
+                ws.tabs.iter().flat_map(move |tab| {
+                    tab.panes.iter().filter_map(move |(&pane_id, pane)| {
+                        terminals.get(&pane.attached_terminal_id).map(|terminal| {
+                            (
+                                ws_idx,
+                                pane_id,
+                                terminal.state,
+                                terminal.effective_agent_label().map(str::to_string),
+                            )
+                        })
+                    })
+                })
+            })
+            .collect()
+    }
+
+    fn dispatch_foreground_api_request(&mut self, request: api::schema::Request) -> String {
+        if self.foreground_client_id.is_some_and(|client_id| {
+            self.clients
+                .get(&client_id)
+                .is_some_and(|client| matches!(client.mode, ClientConnectionMode::ClientShell))
+        }) {
+            self.app.state.view.terminal_area =
+                Rect::new(0, 0, self.effective_size.0, self.effective_size.1);
         }
-
-        changed
+        if matches!(&request.method, api::schema::Method::ServerReloadConfig(_)) {
+            let report = self.reload_server_config(true);
+            serde_json::to_string(&api::schema::SuccessResponse {
+                id: request.id.clone(),
+                result: api::schema::ResponseResult::ConfigReload {
+                    status: report.status,
+                    diagnostics: report.diagnostics,
+                },
+            })
+            .unwrap_or_else(|err| {
+                serde_json::to_string(&api::schema::ErrorResponse {
+                    id: String::new(),
+                    error: api::schema::ErrorBody {
+                        code: "serialization_error".into(),
+                        message: err.to_string(),
+                    },
+                })
+                .unwrap_or_else(|_| "{}".to_string())
+            })
+        } else {
+            self.app
+                .handle_api_request_after_internal_events_drained(request)
+        }
     }
 }

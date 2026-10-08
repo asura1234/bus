@@ -1,4 +1,6 @@
-use super::*;
+use super::ClientShellState;
+use crate::protocol::FrameData;
+use ratatui::layout::Rect;
 
 pub(crate) struct ClientComposedSurfacePatch {
     pub(crate) rows: Vec<crate::protocol::PaneSurfacePatchRow>,
@@ -91,6 +93,64 @@ fn pane_geometry_matches(
         && left.pixel_height == right.pixel_height
 }
 
+fn patch_matches_surface(
+    current: &crate::protocol::PaneSurfaceFrame,
+    patch: &crate::protocol::PaneSurfacePatch,
+) -> bool {
+    if patch.boot_id != current.boot_id
+        || patch.projection_revision != current.projection_revision
+        || patch.base_surface_revision != current.surface_revision
+        || patch.surface_revision != current.surface_revision.saturating_add(1)
+        || !current.graphics.placements.is_empty()
+    {
+        return false;
+    }
+
+    for updated in &patch.panes {
+        let Some(existing) = current
+            .panes
+            .iter()
+            .find(|pane| pane.pane_id == updated.pane_id)
+        else {
+            return false;
+        };
+        if !pane_geometry_matches(existing, updated) {
+            return false;
+        }
+    }
+    for row in &patch.rows {
+        if !row_fits_frame(row, &current.frame)
+            || row.cells.is_empty()
+            || !patch.panes.iter().any(|pane| {
+                let terminal_row = row.x >= pane.inner_rect.x
+                    && row.y >= pane.inner_rect.y
+                    && row.y < pane.inner_rect.y.saturating_add(pane.inner_rect.height)
+                    && row
+                        .x
+                        .saturating_add(row.cells.len().min(u16::MAX as usize) as u16)
+                        <= pane.inner_rect.x.saturating_add(pane.inner_rect.width);
+                let scrollbar_rect = pane.scrollbar_rect.or_else(|| {
+                    current
+                        .panes
+                        .iter()
+                        .find(|existing| existing.pane_id == pane.pane_id)
+                        .and_then(|existing| existing.scrollbar_rect)
+                });
+                let scrollbar_row = scrollbar_rect.is_some_and(|rect| {
+                    row.x == rect.x
+                        && row.y >= rect.y
+                        && row.y < rect.y.saturating_add(rect.height)
+                        && row.cells.len() == usize::from(rect.width)
+                });
+                terminal_row || scrollbar_row
+            })
+        {
+            return false;
+        }
+    }
+    true
+}
+
 impl ClientShellState {
     pub(crate) fn apply_pane_surface_patch(
         &mut self,
@@ -99,56 +159,8 @@ impl ClientShellState {
         let Some(current) = self.pane_surface.as_ref() else {
             return ClientPaneSurfacePatchOutcome::Rejected;
         };
-        if patch.boot_id != current.boot_id
-            || patch.projection_revision != current.projection_revision
-            || patch.base_surface_revision != current.surface_revision
-            || patch.surface_revision != current.surface_revision.saturating_add(1)
-            || !current.graphics.placements.is_empty()
-        {
+        if !patch_matches_surface(current, &patch) {
             return ClientPaneSurfacePatchOutcome::Rejected;
-        }
-
-        for updated in &patch.panes {
-            let Some(existing) = current
-                .panes
-                .iter()
-                .find(|pane| pane.pane_id == updated.pane_id)
-            else {
-                return ClientPaneSurfacePatchOutcome::Rejected;
-            };
-            if !pane_geometry_matches(existing, updated) {
-                return ClientPaneSurfacePatchOutcome::Rejected;
-            }
-        }
-        for row in &patch.rows {
-            if !row_fits_frame(row, &current.frame)
-                || row.cells.is_empty()
-                || !patch.panes.iter().any(|pane| {
-                    let terminal_row = row.x >= pane.inner_rect.x
-                        && row.y >= pane.inner_rect.y
-                        && row.y < pane.inner_rect.y.saturating_add(pane.inner_rect.height)
-                        && row
-                            .x
-                            .saturating_add(row.cells.len().min(u16::MAX as usize) as u16)
-                            <= pane.inner_rect.x.saturating_add(pane.inner_rect.width);
-                    let scrollbar_rect = pane.scrollbar_rect.or_else(|| {
-                        current
-                            .panes
-                            .iter()
-                            .find(|existing| existing.pane_id == pane.pane_id)
-                            .and_then(|existing| existing.scrollbar_rect)
-                    });
-                    let scrollbar_row = scrollbar_rect.is_some_and(|rect| {
-                        row.x == rect.x
-                            && row.y >= rect.y
-                            && row.y < rect.y.saturating_add(rect.height)
-                            && row.cells.len() == usize::from(rect.width)
-                    });
-                    terminal_row || scrollbar_row
-                })
-            {
-                return ClientPaneSurfacePatchOutcome::Rejected;
-            }
         }
 
         let fast_path_blocker = fast_path_blocker(self, &patch);

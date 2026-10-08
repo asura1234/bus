@@ -1,4 +1,5 @@
-use super::*;
+use crate::protocol::ServerMessage;
+use std::io;
 
 /// Internal events for the client event loop.
 pub(super) enum ClientLoopEvent {

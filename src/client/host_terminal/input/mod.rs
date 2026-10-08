@@ -127,58 +127,19 @@ fn unix_stdin_reader_loop(
                     return;
                 }
 
-                let timeout_ms = idle_flush_timeout_ms(
-                    &framer,
-                    host_mouse_capture_active.load(Ordering::Acquire),
-                );
-                if stdin_read_ready(&reader, timeout_ms) == Some(false) {
-                    let had_pending = framer.has_pending_input();
-                    let chunks = framer.flush_timeout();
-                    let held_escape = had_pending && chunks.is_empty();
-                    let sgr_pixels = pending_mode
-                        .unwrap_or_else(|| host_sgr_pixels_active.load(Ordering::Acquire));
-                    if !framer.has_pending_input() {
-                        pending_mode = None;
-                    }
-                    let chunks_sent = send_unix_input_chunks(
-                        chunks,
-                        &event_tx,
-                        &mut pending_palette,
-                        &host_palette_query_pending,
-                        &host_palette_query_progress,
-                        sgr_pixels,
-                        last_geometry,
-                    );
-                    let palette_sent = flush_unix_palette_input(
-                        &event_tx,
-                        &mut pending_palette,
-                        &host_palette_query_pending,
-                    );
-                    if !chunks_sent || !palette_sent {
-                        return;
-                    }
-                    if held_escape
-                        && stdin_read_ready(
-                            &reader,
-                            crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS,
-                        ) == Some(false)
-                    {
-                        let chunks = framer.flush_timeout();
-                        if !framer.has_pending_input() {
-                            pending_mode = None;
-                        }
-                        if !send_unix_input_chunks(
-                            chunks,
-                            &event_tx,
-                            &mut pending_palette,
-                            &host_palette_query_pending,
-                            &host_palette_query_progress,
-                            sgr_pixels,
-                            last_geometry,
-                        ) {
-                            return;
-                        }
-                    }
+                if !flush_unix_idle_input(
+                    &mut framer,
+                    &reader,
+                    &event_tx,
+                    &mut pending_palette,
+                    &host_palette_query_pending,
+                    &host_palette_query_progress,
+                    &host_mouse_capture_active,
+                    &host_sgr_pixels_active,
+                    &mut pending_mode,
+                    last_geometry,
+                ) {
+                    return;
                 }
             }
             Err(err) => {
@@ -189,6 +150,68 @@ fn unix_stdin_reader_loop(
             }
         }
     }
+}
+
+#[cfg(unix)]
+fn flush_unix_idle_input(
+    framer: &mut crate::raw_input::RawInputByteFramer,
+    reader: &impl AsRawFd,
+    event_tx: &mpsc::Sender<ClientLoopEvent>,
+    pending_palette: &mut Vec<Vec<u8>>,
+    host_palette_query_pending: &AtomicBool,
+    host_palette_query_progress: &AtomicU16,
+    host_mouse_capture_active: &AtomicBool,
+    host_sgr_pixels_active: &AtomicBool,
+    pending_mode: &mut Option<bool>,
+    last_geometry: Option<crate::input::mouse::HostGeometry>,
+) -> bool {
+    let timeout_ms =
+        idle_flush_timeout_ms(framer, host_mouse_capture_active.load(Ordering::Acquire));
+    if stdin_read_ready(reader, timeout_ms) == Some(false) {
+        let had_pending = framer.has_pending_input();
+        let chunks = framer.flush_timeout();
+        let held_escape = had_pending && chunks.is_empty();
+        let sgr_pixels =
+            pending_mode.unwrap_or_else(|| host_sgr_pixels_active.load(Ordering::Acquire));
+        if !framer.has_pending_input() {
+            *pending_mode = None;
+        }
+        let chunks_sent = send_unix_input_chunks(
+            chunks,
+            event_tx,
+            pending_palette,
+            host_palette_query_pending,
+            host_palette_query_progress,
+            sgr_pixels,
+            last_geometry,
+        );
+        let palette_sent =
+            flush_unix_palette_input(event_tx, pending_palette, host_palette_query_pending);
+        if !chunks_sent || !palette_sent {
+            return false;
+        }
+        if held_escape
+            && stdin_read_ready(reader, crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS)
+                == Some(false)
+        {
+            let chunks = framer.flush_timeout();
+            if !framer.has_pending_input() {
+                *pending_mode = None;
+            }
+            if !send_unix_input_chunks(
+                chunks,
+                event_tx,
+                pending_palette,
+                host_palette_query_pending,
+                host_palette_query_progress,
+                sgr_pixels,
+                last_geometry,
+            ) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(unix)]

@@ -92,51 +92,7 @@ pub(in crate::server) fn apply_client_pane_input_events(
             ..
         } = event
         {
-            let kind = kind.to_crossterm();
-            let modifiers = KeyModifiers::from_bits_truncate(*modifiers);
-            let position = match position {
-                crate::protocol::ClientMousePosition::Cell { column, row } => {
-                    crate::input::mouse::Position::Cell {
-                        column: *column,
-                        row: *row,
-                    }
-                }
-                crate::protocol::ClientMousePosition::Pixels { x, y, column, row } => {
-                    if runtime.sgr_pixel_mouse_enabled() {
-                        crate::input::mouse::Position::Pixels { x: *x, y: *y }
-                    } else {
-                        crate::input::mouse::Position::Cell {
-                            column: *column,
-                            row: *row,
-                        }
-                    }
-                }
-            };
-            let bytes = match kind {
-                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                    apply_scroll(runtime, kind, (*lines).max(1), position, modifiers.bits())?;
-                    continue;
-                }
-                MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => runtime
-                    .encode_mouse_wheel(kind, position, modifiers)
-                    .unwrap_or_default(),
-                MouseEventKind::Down(_) | MouseEventKind::Up(_) | MouseEventKind::Drag(_) => {
-                    runtime
-                        .encode_mouse_button(kind, position, modifiers)
-                        .unwrap_or_default()
-                }
-                MouseEventKind::Moved => runtime
-                    .encode_mouse_motion(kind, position, modifiers)
-                    .unwrap_or_default(),
-            };
-            if !bytes.is_empty() {
-                if kind != MouseEventKind::Moved {
-                    runtime.scroll_reset();
-                }
-                runtime
-                    .try_send_bytes(Bytes::from(bytes))
-                    .map_err(|err| format!("targeted pane mouse input failed: {err}"))?;
-            }
+            apply_client_pane_mouse_input(runtime, *kind, position, *modifiers, *lines)?;
             continue;
         }
 
@@ -192,6 +148,59 @@ pub(in crate::server) fn apply_client_pane_input_events(
                 return Err("non-pane input reached targeted pane input".to_owned());
             }
         }
+    }
+    Ok(())
+}
+
+fn apply_client_pane_mouse_input(
+    runtime: &crate::terminal::TerminalRuntime,
+    kind: crate::protocol::ClientMouseKind,
+    position: &crate::protocol::ClientMousePosition,
+    modifiers: u8,
+    lines: u16,
+) -> Result<(), String> {
+    let kind = kind.to_crossterm();
+    let modifiers = KeyModifiers::from_bits_truncate(modifiers);
+    let position = match position {
+        crate::protocol::ClientMousePosition::Cell { column, row } => {
+            crate::input::mouse::Position::Cell {
+                column: *column,
+                row: *row,
+            }
+        }
+        crate::protocol::ClientMousePosition::Pixels { x, y, column, row } => {
+            if runtime.sgr_pixel_mouse_enabled() {
+                crate::input::mouse::Position::Pixels { x: *x, y: *y }
+            } else {
+                crate::input::mouse::Position::Cell {
+                    column: *column,
+                    row: *row,
+                }
+            }
+        }
+    };
+    let bytes = match kind {
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            apply_scroll(runtime, kind, lines.max(1), position, modifiers.bits())?;
+            return Ok(());
+        }
+        MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => runtime
+            .encode_mouse_wheel(kind, position, modifiers)
+            .unwrap_or_default(),
+        MouseEventKind::Down(_) | MouseEventKind::Up(_) | MouseEventKind::Drag(_) => runtime
+            .encode_mouse_button(kind, position, modifiers)
+            .unwrap_or_default(),
+        MouseEventKind::Moved => runtime
+            .encode_mouse_motion(kind, position, modifiers)
+            .unwrap_or_default(),
+    };
+    if !bytes.is_empty() {
+        if kind != MouseEventKind::Moved {
+            runtime.scroll_reset();
+        }
+        runtime
+            .try_send_bytes(Bytes::from(bytes))
+            .map_err(|err| format!("targeted pane mouse input failed: {err}"))?;
     }
     Ok(())
 }

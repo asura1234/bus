@@ -22,13 +22,13 @@ LANES = ("lint", "unit", "integration", "coverage")
 PYTHON_ROOTS = ("scripts", "skills", "cli_extensions", "tools", "packaging")
 RUST_ROOTS = ("src", "tests")
 RUST_SOURCE_ROOT = "src"
-GENERATED_RUST = tuple(
-    tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))["generated_files"]
-)
+_INITIAL_LINT_POLICY = tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))
+GENERATED_RUST = tuple(_INITIAL_LINT_POLICY["generated_files"])
 RUST_EXCLUDE = "|".join(
     (
         r"/(tests|vendor)/",
-        r"/(tests|test_support)\.rs$",
+        *((r"/(tests|test_support)\.rs$",)
+          if "test_files" not in _INITIAL_LINT_POLICY else ()),
         r"/build\.rs$",
         *("/" + re.escape(path) + "$" for path in GENERATED_RUST),
     )
@@ -79,9 +79,9 @@ def configured_test_scopes(policy: dict) -> dict | None:
     return {key: tuple(policy[key]) for key in keys}
 
 
-def clippy_commands(policy: dict) -> tuple[tuple[str, ...], ...]:
+def clippy_commands(policy: dict, target: str | None = None) -> tuple[tuple[str, ...], ...]:
     """Check production before allowing selected lints while compiling tests."""
-    base = ("cargo", "clippy")
+    base = ("cargo", "clippy", *(("--target", target) if target else ()))
     all_targets = (*base, "--all-targets", "--locked", "--", "-D", "warnings")
     scopes = configured_test_scopes(policy)
     selected = policy.get("production_clippy_lints", [])
@@ -100,6 +100,16 @@ def clippy_commands(policy: dict) -> tuple[tuple[str, ...], ...]:
         (*base, "--bin", "bus", "--locked", "--", "-D", "warnings", *denied),
         (*all_targets, *allowed),
     )
+
+
+def windows_lint() -> int:
+    """Use the same production/test policy for the cross-target check."""
+    policy = tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))
+    env = {**os.environ, "LIBGHOSTTY_VT_SIMD": "false"}
+    return int(any([
+        run(*argv, env=env)
+        for argv in clippy_commands(policy, "x86_64-pc-windows-msvc")
+    ]))
 
 
 def head() -> str:
@@ -301,7 +311,7 @@ def rust_lines(report: Path) -> tuple[int, int]:
             if scopes is not None and path.is_relative_to(ROOT / RUST_SOURCE_ROOT):
                 relative = path.relative_to(ROOT)
                 in_source = (
-                    relative.as_posix() not in GENERATED_RUST
+                    in_source and relative.as_posix() not in GENERATED_RUST
                     and "vendor" not in relative.parts and path.name != "build.rs"
                     and not is_test_path(relative, **scopes)
                 )
@@ -382,7 +392,7 @@ def coverage() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("lane", choices=(*LANES, "ci"))
+    parser.add_argument("lane", choices=(*LANES, "ci", "windows-lint"))
     args = parser.parse_args(argv)
     try:
         required = ("ruff", "pytest") if args.lane == "lint" else ("pytest",)
@@ -390,7 +400,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(
                 "missing Python gate tools; install scripts/requirements.txt from this skill"
             )
-        if args.lane != "lint" and not shutil.which("cargo-llvm-cov"):
+        if args.lane in ("unit", "integration", "coverage", "ci") and not shutil.which("cargo-llvm-cov"):
             raise ValueError(
                 "install cargo-llvm-cov and rustup component add llvm-tools-preview"
             )
@@ -399,6 +409,7 @@ def main(argv: list[str] | None = None) -> int:
             "unit": unit,
             "integration": integration,
             "coverage": coverage,
+            "windows-lint": windows_lint,
         }
         return (
             int(any([checks[name]() for name in LANES]))

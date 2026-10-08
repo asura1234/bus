@@ -1,7 +1,8 @@
 //! Callbacks operations for the messaging state.
 use super::{
     AgentId, BusState, CallbackDisposition, CallbackEventKind, CallbackRejection, ModelError,
-    PendingFinal, ProviderCallback, Reply, RequestPhase, RuntimeStatus, STEERING_SETTLE_MS,
+    PendingFinal, ProviderCallback, Reply, Request, RequestId, RequestPhase, RuntimeStatus,
+    STEERING_SETTLE_MS,
 };
 use crate::messaging::provider_glue::callbacks;
 
@@ -117,7 +118,7 @@ impl BusState {
 
     fn accept_callback_for_request(
         &mut self,
-        callback: ProviderCallback,
+        mut callback: ProviderCallback,
         turn_key: Option<String>,
     ) -> CallbackDisposition {
         let Some(agent) = self.agents.get(&callback.agent_id) else {
@@ -134,19 +135,8 @@ impl BusState {
         };
         let settled_after_submission = agent.status == RuntimeStatus::Idle
             && agent.status_revision > request.submission_status_revision;
-        if request.expected_launch_id.as_deref() != Some(callback.launch_id.as_str()) {
-            return CallbackDisposition::Rejected(CallbackRejection::WrongLaunch);
-        }
-        if request
-            .submission_boundary
-            .is_some_and(|boundary| callback.sequence <= boundary)
-        {
-            return CallbackDisposition::Rejected(CallbackRejection::BeforeSubmissionBoundary);
-        }
-        if let Some(expected) = request.provider_session_id.as_deref() {
-            if callback.provider_session_id.as_deref() != Some(expected) {
-                return CallbackDisposition::Rejected(CallbackRejection::WrongSession);
-            }
+        if let Err(reason) = check_callback_identity(request, &callback) {
+            return CallbackDisposition::Rejected(reason);
         }
         // Cursor opens a generation of its own when a background shell finishes.
         // That prompt is a task notice, not a room message. Record the turn as
@@ -162,38 +152,13 @@ impl BusState {
         if self.is_unrelated_turn(&callback) {
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }
-        // Input Bus typed into this turn binds where the provider reports it:
-        // in the running turn, or in a turn of its own that then carries the
-        // group's reply. It is never an unrelated turn or an agent error.
-        if let (CallbackEventKind::PromptStarted, Some(payload), true) = (
-            &callback.kind,
-            callback.prompt_payload.as_deref(),
-            request.trusted_start_bound,
-        ) {
-            let steered = self.group_members(request_id).into_iter().find(|member| {
-                self.requests.get(member).is_some_and(|m| {
-                    m.steered && !m.settled() && m.matches_callback_payload(payload)
-                })
-            });
-            if let Some(member) = steered {
-                if let Some(member) = self.requests.get_mut(&member) {
-                    member.trusted_start_bound = true;
-                    member.uncertain_outcome = false;
-                    member.provider_session_id = callback.provider_session_id.clone();
-                    member.provider_turn_id = callback.provider_turn_id.clone();
-                }
-                if let Some(lead) = self.requests.get_mut(&request_id) {
-                    if callback.provider_turn_id.is_some()
-                        && callback.provider_turn_id != lead.provider_turn_id
-                    {
-                        lead.provider_turn_id = callback.provider_turn_id;
-                        lead.provider_prompt_id = callback.provider_prompt_id;
-                        lead.pending_final = None;
-                    }
-                }
-                return CallbackDisposition::AcceptedSteering;
-            }
+        if self.apply_callback_steering(request_id, &mut callback) {
+            return CallbackDisposition::AcceptedSteering;
         }
+        // Steering that did not match leaves the current request unchanged.
+        let Some(request) = self.requests.get(&request_id) else {
+            return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+        };
         // A turn that wakes after the request paused for background work carries
         // the real reply. Once the request holds a final reply, a new turn is the
         // agent's own activity and must not replace or discard that reply.
@@ -226,30 +191,30 @@ impl BusState {
             self.unrelated_provider_turns.extend(turn_key);
             return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }
-        if let Some(expected) = request.provider_turn_id.as_deref() {
-            if !continuation && callback.provider_turn_id.as_deref() != Some(expected) {
-                return CallbackDisposition::Rejected(CallbackRejection::WrongTurn);
-            }
-        }
-        if let Some(expected) = request.provider_prompt_id.as_deref() {
-            if !continuation
-                && callback
-                    .provider_prompt_id
-                    .as_deref()
-                    .is_some_and(|actual| actual != expected)
-            {
-                return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
-            }
-        }
-        if !continuation
-            && callback
-                .prompt_payload
-                .as_deref()
-                .is_some_and(|payload| !request.matches_callback_payload(payload))
-        {
-            return CallbackDisposition::Rejected(CallbackRejection::WrongPrompt);
+        if let Err(reason) = check_callback_turn(request, &callback, continuation) {
+            return CallbackDisposition::Rejected(reason);
         }
 
+        self.apply_callback_kind(
+            request_id,
+            callback,
+            turn_key,
+            continuation,
+            settled_after_submission,
+        )
+    }
+
+    fn apply_callback_kind(
+        &mut self,
+        request_id: RequestId,
+        callback: ProviderCallback,
+        turn_key: Option<String>,
+        continuation: bool,
+        settled_after_submission: bool,
+    ) -> CallbackDisposition {
+        let Some(request) = self.requests.get(&request_id) else {
+            return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+        };
         match callback.kind {
             CallbackEventKind::PromptStarted => {
                 if callback.provider_session_id.is_none() || callback.provider_turn_id.is_none() {
@@ -338,6 +303,49 @@ impl BusState {
                 CallbackDisposition::AcceptedError
             }
         }
+    }
+
+    fn apply_callback_steering(
+        &mut self,
+        request_id: RequestId,
+        callback: &mut ProviderCallback,
+    ) -> bool {
+        let Some(request) = self.requests.get(&request_id) else {
+            return false;
+        };
+        // Input Bus typed into this turn binds where the provider reports it:
+        // in the running turn, or in a turn of its own that then carries the
+        // group's reply. It is never an unrelated turn or an agent error.
+        if let (CallbackEventKind::PromptStarted, Some(payload), true) = (
+            &callback.kind,
+            callback.prompt_payload.as_deref(),
+            request.trusted_start_bound,
+        ) {
+            let steered = self.group_members(request_id).into_iter().find(|member| {
+                self.requests.get(member).is_some_and(|m| {
+                    m.steered && !m.settled() && m.matches_callback_payload(payload)
+                })
+            });
+            if let Some(member) = steered {
+                if let Some(member) = self.requests.get_mut(&member) {
+                    member.trusted_start_bound = true;
+                    member.uncertain_outcome = false;
+                    member.provider_session_id = callback.provider_session_id.clone();
+                    member.provider_turn_id = callback.provider_turn_id.clone();
+                }
+                if let Some(lead) = self.requests.get_mut(&request_id) {
+                    if callback.provider_turn_id.is_some()
+                        && callback.provider_turn_id != lead.provider_turn_id
+                    {
+                        lead.provider_turn_id = callback.provider_turn_id.take();
+                        lead.provider_prompt_id = callback.provider_prompt_id.take();
+                        lead.pending_final = None;
+                    }
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// Whether the callback belongs to a turn the agent started on its own.
@@ -441,4 +449,57 @@ fn provider_turn_key(
     turn_id: Option<&str>,
 ) -> Option<String> {
     Some(format!("{launch_id}\u{0}{}\u{0}{}", session_id?, turn_id?))
+}
+
+fn check_callback_identity(
+    request: &Request,
+    callback: &ProviderCallback,
+) -> Result<(), CallbackRejection> {
+    if request.expected_launch_id.as_deref() != Some(callback.launch_id.as_str()) {
+        return Err(CallbackRejection::WrongLaunch);
+    }
+    if request
+        .submission_boundary
+        .is_some_and(|boundary| callback.sequence <= boundary)
+    {
+        return Err(CallbackRejection::BeforeSubmissionBoundary);
+    }
+    if let Some(expected) = request.provider_session_id.as_deref() {
+        if callback.provider_session_id.as_deref() != Some(expected) {
+            return Err(CallbackRejection::WrongSession);
+        }
+    }
+    Ok(())
+}
+
+fn check_callback_turn(
+    request: &Request,
+    callback: &ProviderCallback,
+    continuation: bool,
+) -> Result<(), CallbackRejection> {
+    if let Some(expected) = request.provider_turn_id.as_deref() {
+        if !continuation && callback.provider_turn_id.as_deref() != Some(expected) {
+            return Err(CallbackRejection::WrongTurn);
+        }
+    }
+    if let Some(expected) = request.provider_prompt_id.as_deref() {
+        if !continuation
+            && callback
+                .provider_prompt_id
+                .as_deref()
+                .is_some_and(|actual| actual != expected)
+        {
+            return Err(CallbackRejection::WrongPrompt);
+        }
+    }
+    if !continuation
+        && callback
+            .prompt_payload
+            .as_deref()
+            .is_some_and(|payload| !request.matches_callback_payload(payload))
+    {
+        return Err(CallbackRejection::WrongPrompt);
+    }
+
+    Ok(())
 }

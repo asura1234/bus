@@ -7,7 +7,7 @@ pub(super) fn run() -> io::Result<()> {
     if running {
         stop_active_server().map_err(io::Error::other)?;
     }
-    println!("{}", serde_json::json!({"stopped": running}));
+    super::help::write_stdout_line(format_args!("{}", serde_json::json!({"stopped": running})));
     Ok(())
 }
 

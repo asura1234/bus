@@ -214,6 +214,56 @@ struct RetainedRecipientUpdate {
     graphics_delivery: Option<crate::server::rendering::images::DeliveryCache>,
 }
 
+fn retained_fallback(reason: &'static str, started: Option<std::time::Instant>) -> bool {
+    crate::render_prof::event(reason);
+    crate::render_prof::duration_since("retained_surface.total", started);
+    false
+}
+
+fn apply_collected_pane_patch(
+    app: &app::App,
+    frame: &mut FrameData,
+    pane: &mut protocol::PaneSurfacePane,
+    collected_pane: &CollectedPanePatch,
+) -> Result<Vec<protocol::PaneSurfacePatchRow>, &'static str> {
+    // Alternate-screen transitions change whether the pane reserves
+    // a scrollbar gutter. Recompute layout and resize the runtime
+    // through the complete renderer before retaining further rows.
+    if pane.alternate_screen_active != collected_pane.alternate_screen_active {
+        return Err("retained_surface.fallback.alternate_screen_geometry");
+    }
+    if patch_intersects_hyperlinks(frame, pane.inner_rect, &collected_pane.patch) {
+        return Err("retained_surface.fallback.hyperlink");
+    }
+    let Some(rows) = apply_rows(frame, pane.inner_rect, &collected_pane.patch) else {
+        return Err("retained_surface.fallback.invalid_patch");
+    };
+    let mut patch_rows = rows;
+    let Some(scrollbar_rows) = retained_scrollbar_patch(
+        app,
+        frame,
+        pane,
+        collected_pane.alternate_screen_active,
+        collected_pane.scroll_metrics,
+    ) else {
+        return Err("retained_surface.fallback.scrollbar_patch");
+    };
+    patch_rows.extend(scrollbar_rows);
+    pane.content_revision = collected_pane.content_revision;
+    pane.mouse_reporting = collected_pane.mouse_reporting;
+    pane.sgr_pixel_mouse = collected_pane.sgr_pixel_mouse;
+    pane.alternate_screen_active = collected_pane.alternate_screen_active;
+    pane.scroll = collected_pane
+        .scroll_metrics
+        .map(|metrics| protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom: metrics.offset_from_bottom as u64,
+            max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
+            viewport_rows: metrics.viewport_rows as u64,
+        });
+
+    Ok(patch_rows)
+}
+
 impl HeadlessServer {
     /// Applies terminal dirty rows to the committed origin-relative pane surface.
     /// Any presentation or geometry uncertainty falls back to the complete renderer.
@@ -263,17 +313,52 @@ impl HeadlessServer {
             fallback!("non_shell_target");
         }
 
+        let recipients = match self.collect_retained_recipients(&targets) {
+            Ok(recipients) => recipients,
+            Err(reason) => return retained_fallback(reason, started),
+        };
+        if recipients.is_empty() {
+            success!("all_recipients_deferred");
+        }
+
+        let collected = match self.collect_retained_pane_patches(pty_sources, &recipients) {
+            Ok(collected) => collected,
+            Err(reason) => return retained_fallback(reason, started),
+        };
+        let mut updates = Vec::with_capacity(recipients.len());
+        for recipient in recipients {
+            match self.build_retained_recipient_update(recipient, &collected) {
+                Ok(Some(update)) => updates.push(update),
+                Ok(None) => {}
+                Err(reason) => return retained_fallback(reason, started),
+            }
+        }
+        if updates.is_empty() {
+            success!("unchanged");
+        }
+
+        let sent = self.send_retained_recipient_updates(updates);
+        if sent > 0 {
+            success!("sent");
+        }
+        success!("recovery_queued");
+    }
+
+    fn collect_retained_recipients(
+        &self,
+        targets: &[crate::server::clients::connection::RenderTarget],
+    ) -> Result<Vec<RetainedRecipient>, &'static str> {
         let mut recipients = Vec::with_capacity(targets.len());
-        for (client_id, (cols, rows), _, _, _) in &targets {
+        for (client_id, (cols, rows), _, _, _) in targets {
             let Some(client) = self.clients.get(client_id) else {
-                fallback!("client_missing");
+                return Err("retained_surface.fallback.client_missing");
             };
             if client.deferred_render() != DeferredRender::None {
                 crate::render_prof::event("retained_surface.recipient_deferred");
                 continue;
             }
             let Some(surface) = client.render_state.last_pane_surface() else {
-                fallback!("no_baseline");
+                return Err("retained_surface.fallback.no_baseline");
             };
             if surface.boot_id != self.client_shell_boot_id
                 || surface.projection_revision != client.shell_projection_revision
@@ -282,23 +367,27 @@ impl HeadlessServer {
                 || !surface.graphics.assets.is_empty()
                 || !surface.frame.graphics.is_empty()
             {
-                fallback!("baseline_mismatch");
+                return Err("retained_surface.fallback.baseline_mismatch");
             }
             recipients.push(RetainedRecipient {
                 client_id: *client_id,
                 surface: surface.clone(),
             });
         }
-        if recipients.is_empty() {
-            success!("all_recipients_deferred");
-        }
+        Ok(recipients)
+    }
 
+    fn collect_retained_pane_patches(
+        &self,
+        pty_sources: &HashSet<crate::layout::PaneId>,
+        recipients: &[RetainedRecipient],
+    ) -> Result<Vec<CollectedPanePatch>, &'static str> {
         let mut collected = Vec::with_capacity(pty_sources.len());
         for source in pty_sources {
             let mut public_pane_id = None;
             let mut width = 0u16;
             let mut height = 0u16;
-            for recipient in &recipients {
+            for recipient in recipients {
                 let Some(pane) = recipient.surface.panes.iter().find(|pane| {
                     self.app
                         .parse_pane_id(&pane.pane_id)
@@ -314,18 +403,18 @@ impl HeadlessServer {
                 continue;
             };
             let Some((workspace_index, pane_id)) = self.app.parse_pane_id(&public_pane_id) else {
-                fallback!("pane_missing");
+                return Err("retained_surface.fallback.pane_missing");
             };
             let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
                 &self.app.terminal_runtimes,
                 workspace_index,
                 pane_id,
             ) else {
-                fallback!("runtime_missing");
+                return Err("retained_surface.fallback.runtime_missing");
             };
             let revision_before = runtime.content_seq();
             if !revision_before.is_multiple_of(2) {
-                fallback!("unstable_content");
+                return Err("retained_surface.fallback.unstable_content");
             }
             let patch = match runtime.collect_dirty_patch(width, height) {
                 crate::pane::TerminalDirtyPatchOutcome::Clean => {
@@ -334,14 +423,14 @@ impl HeadlessServer {
                 }
                 crate::pane::TerminalDirtyPatchOutcome::Patch(patch) => patch,
                 crate::pane::TerminalDirtyPatchOutcome::Fallback => {
-                    fallback!("terminal_patch");
+                    return Err("retained_surface.fallback.terminal_patch");
                 }
             };
             let graphics_may_have_placements =
                 crate::kitty_graphics::is_enabled() && runtime.kitty_graphics_may_have_placements();
             let revision = runtime.content_seq();
             if revision != revision_before || !revision.is_multiple_of(2) {
-                fallback!("content_changed");
+                return Err("retained_surface.fallback.content_changed");
             }
             collected.push(CollectedPanePatch {
                 pane_id: public_pane_id,
@@ -355,119 +444,89 @@ impl HeadlessServer {
             });
         }
 
-        let mut updates = Vec::with_capacity(recipients.len());
-        for recipient in recipients {
-            let client_id = recipient.client_id;
-            let mut surface = recipient.surface;
-            let projection_revision = surface.projection_revision;
-            let base_surface_revision = surface.surface_revision;
-            let mut changed_panes = Vec::with_capacity(collected.len());
-            let mut patch_rows = Vec::new();
-            let mut metadata_changed = false;
-            let mut refresh_graphics = !surface.graphics.placements.is_empty();
-            for collected_pane in &collected {
-                let Some(pane) = surface
-                    .panes
-                    .iter_mut()
-                    .find(|pane| pane.pane_id == collected_pane.pane_id)
-                else {
-                    continue;
-                };
-                // Alternate-screen transitions change whether the pane reserves
-                // a scrollbar gutter. Recompute layout and resize the runtime
-                // through the complete renderer before retaining further rows.
-                if pane.alternate_screen_active != collected_pane.alternate_screen_active {
-                    fallback!("alternate_screen_geometry");
-                }
-                if patch_intersects_hyperlinks(
-                    &surface.frame,
-                    pane.inner_rect,
-                    &collected_pane.patch,
-                ) {
-                    fallback!("hyperlink");
-                }
-                refresh_graphics |= collected_pane.graphics_may_have_placements;
-                let previous_pane = pane.clone();
-                let Some(rows) =
-                    apply_rows(&mut surface.frame, pane.inner_rect, &collected_pane.patch)
-                else {
-                    fallback!("invalid_patch");
-                };
-                patch_rows.extend(rows);
-                let Some(scrollbar_rows) = retained_scrollbar_patch(
-                    &self.app,
-                    &mut surface.frame,
-                    pane,
-                    collected_pane.alternate_screen_active,
-                    collected_pane.scroll_metrics,
-                ) else {
-                    fallback!("scrollbar_patch");
-                };
-                patch_rows.extend(scrollbar_rows);
-                pane.content_revision = collected_pane.content_revision;
-                pane.mouse_reporting = collected_pane.mouse_reporting;
-                pane.sgr_pixel_mouse = collected_pane.sgr_pixel_mouse;
-                pane.alternate_screen_active = collected_pane.alternate_screen_active;
-                pane.scroll = collected_pane.scroll_metrics.map(|metrics| {
-                    protocol::PaneSurfaceScrollMetrics {
-                        offset_from_bottom: metrics.offset_from_bottom as u64,
-                        max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
-                        viewport_rows: metrics.viewport_rows as u64,
-                    }
-                });
-                metadata_changed |= *pane != previous_pane;
-                changed_panes.push(pane.clone());
-            }
+        Ok(collected)
+    }
 
-            let cursor = retained_cursor(&self.app, &surface.panes);
-            let cursor_changed = cursor != surface.frame.cursor;
-            surface.frame.cursor = cursor.clone();
-            let mut graphics_changed = false;
-            let graphics_delivery = if refresh_graphics {
-                let Some(target) = self.shell_target_for_client(client_id) else {
-                    fallback!("graphics_target");
-                };
-                let client = &self.clients[&client_id];
-                let Some((graphics, delivery)) =
-                    crate::server::rendering::snapshot_graphics::collect_retained(
-                        &self.app,
-                        &surface,
-                        target,
-                        client.cell_size,
-                        &client.shell_graphics_delivery,
-                    )
-                else {
-                    fallback!("graphics_geometry");
-                };
-                graphics_changed = graphics != surface.graphics;
-                surface.graphics = graphics;
-                Some(delivery)
-            } else {
-                None
-            };
-            if patch_rows.is_empty() && !cursor_changed && !metadata_changed && !graphics_changed {
+    fn build_retained_recipient_update(
+        &self,
+        recipient: RetainedRecipient,
+        collected: &[CollectedPanePatch],
+    ) -> Result<Option<RetainedRecipientUpdate>, &'static str> {
+        let client_id = recipient.client_id;
+        let mut surface = recipient.surface;
+        let projection_revision = surface.projection_revision;
+        let base_surface_revision = surface.surface_revision;
+        let mut changed_panes = Vec::with_capacity(collected.len());
+        let mut patch_rows = Vec::new();
+        let mut metadata_changed = false;
+        let mut refresh_graphics = !surface.graphics.placements.is_empty();
+        for collected_pane in collected {
+            let Some(pane) = surface
+                .panes
+                .iter_mut()
+                .find(|pane| pane.pane_id == collected_pane.pane_id)
+            else {
                 continue;
-            }
-            let patch = protocol::PaneSurfacePatch {
-                boot_id: self.client_shell_boot_id.clone(),
-                projection_revision,
-                base_surface_revision,
-                surface_revision: 0,
-                rows: patch_rows,
-                panes: changed_panes,
-                cursor,
             };
-            updates.push(RetainedRecipientUpdate {
-                client_id,
-                surface,
-                patch,
-                graphics_delivery,
-            });
-        }
-        if updates.is_empty() {
-            success!("unchanged");
+            refresh_graphics |= collected_pane.graphics_may_have_placements;
+            let previous_pane = pane.clone();
+            patch_rows.extend(apply_collected_pane_patch(
+                &self.app,
+                &mut surface.frame,
+                pane,
+                collected_pane,
+            )?);
+            metadata_changed |= *pane != previous_pane;
+            changed_panes.push(pane.clone());
         }
 
+        let cursor = retained_cursor(&self.app, &surface.panes);
+        let cursor_changed = cursor != surface.frame.cursor;
+        surface.frame.cursor = cursor.clone();
+        let mut graphics_changed = false;
+        let graphics_delivery = if refresh_graphics {
+            let Some(target) = self.shell_target_for_client(client_id) else {
+                return Err("retained_surface.fallback.graphics_target");
+            };
+            let client = &self.clients[&client_id];
+            let Some((graphics, delivery)) =
+                crate::server::rendering::snapshot_graphics::collect_retained(
+                    &self.app,
+                    &surface,
+                    target,
+                    client.cell_size,
+                    &client.shell_graphics_delivery,
+                )
+            else {
+                return Err("retained_surface.fallback.graphics_geometry");
+            };
+            graphics_changed = graphics != surface.graphics;
+            surface.graphics = graphics;
+            Some(delivery)
+        } else {
+            None
+        };
+        if patch_rows.is_empty() && !cursor_changed && !metadata_changed && !graphics_changed {
+            return Ok(None);
+        }
+        let patch = protocol::PaneSurfacePatch {
+            boot_id: self.client_shell_boot_id.clone(),
+            projection_revision,
+            base_surface_revision,
+            surface_revision: 0,
+            rows: patch_rows,
+            panes: changed_panes,
+            cursor,
+        };
+        Ok(Some(RetainedRecipientUpdate {
+            client_id,
+            surface,
+            patch,
+            graphics_delivery,
+        }))
+    }
+
+    fn send_retained_recipient_updates(&mut self, updates: Vec<RetainedRecipientUpdate>) -> u64 {
         let mut sent = 0u64;
         let mut deferred = 0u64;
         let mut disconnected = Vec::new();
@@ -546,10 +605,8 @@ impl HeadlessServer {
         }
         crate::render_prof::counter("retained_surface.recipients.sent", sent);
         crate::render_prof::counter("retained_surface.recipients.deferred", deferred);
-        if sent > 0 {
-            success!("sent");
-        }
-        success!("recovery_queued");
+
+        sent
     }
 }
 

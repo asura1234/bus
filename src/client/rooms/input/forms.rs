@@ -94,44 +94,11 @@ impl BusUi {
             return;
         }
         if matches!(self.form, Some(Form::Settings)) {
-            let targets = self.sound_settings_targets();
-            match code {
-                KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
-                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(targets.len()),
-                // Enter alone toggles (Space is deliberately inert in Settings).
-                KeyCode::Enter => match self.settings_field {
-                    0 => self.toggle_color_blind_mode(),
-                    field => {
-                        if let Some(target) = targets.get(field - 1) {
-                            self.toggle_sound(*target);
-                        }
-                    }
-                },
-                KeyCode::Left | KeyCode::Right => {
-                    if let Some(target) = self
-                        .settings_field
-                        .checked_sub(1)
-                        .and_then(|i| targets.get(i))
-                    {
-                        self.cycle_sound(*target, code == KeyCode::Right);
-                    }
-                }
-                _ => {}
-            }
-            self.reveal_settings_field();
+            self.settings_form_key(code);
             return;
         }
         if matches!(self.form, Some(Form::Help { .. })) {
-            match code {
-                KeyCode::Enter => self.action(Action::Cancel),
-                KeyCode::Up | KeyCode::Down => self.scroll_help(code == KeyCode::Down, 1),
-                KeyCode::PageUp | KeyCode::PageDown => self.scroll_help(
-                    code == KeyCode::PageDown,
-                    usize::from(self.view.help.height.saturating_sub(1).max(1)),
-                ),
-                KeyCode::Home | KeyCode::End => self.scroll_help(code == KeyCode::End, usize::MAX),
-                _ => {}
-            }
+            self.help_form_key(code);
             return;
         }
         if matches!(code, KeyCode::Up | KeyCode::Down) && !self.suggestions.entries.is_empty() {
@@ -142,61 +109,7 @@ impl BusUi {
             };
             return;
         }
-        if matches!(self.form, Some(Form::Agent { field: 1, .. }))
-            && matches!(
-                code,
-                KeyCode::Left
-                    | KeyCode::Right
-                    | KeyCode::Up
-                    | KeyCode::Down
-                    | KeyCode::Char(' ')
-                    | KeyCode::Enter
-            )
-        {
-            if let Some(Form::Agent {
-                provider,
-                provider_cursor,
-                field,
-                orchestrates,
-                ..
-            }) = &mut self.form
-            {
-                let choices = forms::provider_choices(orchestrates.is_some());
-                let index = choices
-                    .iter()
-                    .position(|choice| choice == provider_cursor)
-                    .unwrap_or(0);
-                match code {
-                    KeyCode::Left | KeyCode::Up => {
-                        *provider_cursor = choices[(index + choices.len() - 1) % choices.len()];
-                    }
-                    KeyCode::Right | KeyCode::Down => {
-                        *provider_cursor = choices[(index + 1) % choices.len()];
-                    }
-                    KeyCode::Char(' ') | KeyCode::Enter => {
-                        *provider = Some(*provider_cursor);
-                        *field = 2;
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            self.query_paths();
-            return;
-        }
-        if matches!(
-            self.form,
-            Some(Form::Agent {
-                field: ORCHESTRATES_FIELD,
-                ..
-            })
-        ) && matches!(
-            code,
-            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Char(' ')
-        ) {
-            self.cycle_orchestrates(matches!(
-                code,
-                KeyCode::Right | KeyCode::Down | KeyCode::Char(' ')
-            ));
+        if self.agent_choice_key(code) {
             return;
         }
         // The system prompt is multi-line: Enter adds a line, Ctrl+Enter adds the agent.
@@ -264,6 +177,108 @@ impl BusUi {
         }
     }
 
+    fn settings_form_key(&mut self, code: KeyCode) {
+        let targets = self.sound_settings_targets();
+        match code {
+            KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
+            KeyCode::Down => self.settings_field = (self.settings_field + 1).min(targets.len()),
+            // Enter alone toggles (Space is deliberately inert in Settings).
+            KeyCode::Enter => match self.settings_field {
+                0 => self.toggle_color_blind_mode(),
+                field => {
+                    if let Some(target) = targets.get(field - 1) {
+                        self.toggle_sound(*target);
+                    }
+                }
+            },
+            KeyCode::Left | KeyCode::Right => {
+                if let Some(target) = self
+                    .settings_field
+                    .checked_sub(1)
+                    .and_then(|i| targets.get(i))
+                {
+                    self.cycle_sound(*target, code == KeyCode::Right);
+                }
+            }
+            _ => {}
+        }
+        self.reveal_settings_field();
+    }
+
+    fn help_form_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Enter => self.action(Action::Cancel),
+            KeyCode::Up | KeyCode::Down => self.scroll_help(code == KeyCode::Down, 1),
+            KeyCode::PageUp | KeyCode::PageDown => self.scroll_help(
+                code == KeyCode::PageDown,
+                usize::from(self.view.help.height.saturating_sub(1).max(1)),
+            ),
+            KeyCode::Home | KeyCode::End => self.scroll_help(code == KeyCode::End, usize::MAX),
+            _ => {}
+        }
+    }
+
+    fn agent_choice_key(&mut self, code: KeyCode) -> bool {
+        if matches!(self.form, Some(Form::Agent { field: 1, .. }))
+            && matches!(
+                code,
+                KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Char(' ')
+                    | KeyCode::Enter
+            )
+        {
+            if let Some(Form::Agent {
+                provider,
+                provider_cursor,
+                field,
+                orchestrates,
+                ..
+            }) = &mut self.form
+            {
+                let choices = forms::provider_choices(orchestrates.is_some());
+                let index = choices
+                    .iter()
+                    .position(|choice| choice == provider_cursor)
+                    .unwrap_or(0);
+                match code {
+                    KeyCode::Left | KeyCode::Up => {
+                        *provider_cursor = choices[(index + choices.len() - 1) % choices.len()];
+                    }
+                    KeyCode::Right | KeyCode::Down => {
+                        *provider_cursor = choices[(index + 1) % choices.len()];
+                    }
+                    KeyCode::Char(' ') | KeyCode::Enter => {
+                        *provider = Some(*provider_cursor);
+                        *field = 2;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            self.query_paths();
+            return true;
+        }
+        if matches!(
+            self.form,
+            Some(Form::Agent {
+                field: ORCHESTRATES_FIELD,
+                ..
+            })
+        ) && matches!(
+            code,
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Char(' ')
+        ) {
+            self.cycle_orchestrates(matches!(
+                code,
+                KeyCode::Right | KeyCode::Down | KeyCode::Char(' ')
+            ));
+            return true;
+        }
+        false
+    }
+
     pub(super) fn query_paths(&mut self) {
         self.suggestions.entries.clear();
         self.suggestions.query_id += 1;
@@ -307,6 +322,87 @@ impl BusUi {
         self.suggestions.query_id += 1;
     }
 
+    fn add_agent_form(&mut self, form: Form) {
+        let Form::Agent {
+            name,
+            provider,
+            cwd,
+            args,
+            orchestrates,
+            prompt,
+            ..
+        } = form
+        else {
+            return;
+        };
+        let mut missing = Vec::new();
+        if name.text.trim().is_empty() {
+            missing.push("Name");
+        }
+        if provider.is_none() {
+            missing.push("Model");
+        }
+        if cwd.text.trim().is_empty() {
+            missing.push("PWD");
+        }
+        if !missing.is_empty() {
+            self.error = Some(match missing.as_slice() {
+                [field] => format!("{field} is required."),
+                [first, second] => format!("{first} and {second} are required."),
+                [first, second, third] => {
+                    format!("{first}, {second}, and {third} are required.")
+                }
+                _ => unreachable!(),
+            });
+            return;
+        }
+        if orchestrates.is_some_and(|choice| choice.0.is_none()) {
+            self.error = Some(
+                "Orchestrates room is required: create a work room without an orchestrator first."
+                    .into(),
+            );
+            return;
+        }
+        // The MASTER form never offers Codex; this keeps the form and
+        // the coordinator, which refuses it too, in step.
+        if let (Some(_), Some(provider)) = (orchestrates, provider) {
+            if let Err(error) = crate::bus::orchestrator::check_new_orchestrator(provider) {
+                self.error = Some(error);
+                return;
+            }
+        }
+        let system_prompt = prompt.map(|prompt| prompt.editor.text);
+        if system_prompt
+            .as_ref()
+            .is_some_and(|text| text.trim().is_empty())
+        {
+            self.error = Some("System prompt is required.".into());
+            return;
+        }
+        self.error = None;
+        if let Some(room) = self.room {
+            let input = AddAgent {
+                room,
+                name: name.text,
+                provider: provider.expect("validated provider"),
+                cwd: cwd.text,
+                extra_args: args.text,
+                consent_project_hooks: false,
+            };
+            let command = match orchestrates.and_then(|choice| choice.0) {
+                Some(room) => BusCommand::AddOrchestrator(
+                    input,
+                    OrchestratorSpec {
+                        room,
+                        system_prompt,
+                    },
+                ),
+                None => BusCommand::AddAgent(input),
+            };
+            self.queue(command, Effect::None);
+        }
+    }
+
     pub(super) fn add(&mut self) {
         if self.pending.iter().any(|p| {
             matches!(
@@ -326,82 +422,7 @@ impl BusUi {
             Form::Room(editor) => {
                 self.queue(BusCommand::CreateRoom(editor.text), Effect::None);
             }
-            Form::Agent {
-                name,
-                provider,
-                cwd,
-                args,
-                orchestrates,
-                prompt,
-                ..
-            } => {
-                let mut missing = Vec::new();
-                if name.text.trim().is_empty() {
-                    missing.push("Name");
-                }
-                if provider.is_none() {
-                    missing.push("Model");
-                }
-                if cwd.text.trim().is_empty() {
-                    missing.push("PWD");
-                }
-                if !missing.is_empty() {
-                    self.error = Some(match missing.as_slice() {
-                        [field] => format!("{field} is required."),
-                        [first, second] => format!("{first} and {second} are required."),
-                        [first, second, third] => {
-                            format!("{first}, {second}, and {third} are required.")
-                        }
-                        _ => unreachable!(),
-                    });
-                    return;
-                }
-                if orchestrates.is_some_and(|choice| choice.0.is_none()) {
-                    self.error = Some(
-                        "Orchestrates room is required: create a work room without an orchestrator first."
-                            .into(),
-                    );
-                    return;
-                }
-                // The MASTER form never offers Codex; this keeps the form and
-                // the coordinator, which refuses it too, in step.
-                if let (Some(_), Some(provider)) = (orchestrates, provider) {
-                    if let Err(error) = crate::bus::orchestrator::check_new_orchestrator(provider) {
-                        self.error = Some(error);
-                        return;
-                    }
-                }
-                let system_prompt = prompt.map(|prompt| prompt.editor.text);
-                if system_prompt
-                    .as_ref()
-                    .is_some_and(|text| text.trim().is_empty())
-                {
-                    self.error = Some("System prompt is required.".into());
-                    return;
-                }
-                self.error = None;
-                if let Some(room) = self.room {
-                    let input = AddAgent {
-                        room,
-                        name: name.text,
-                        provider: provider.expect("validated provider"),
-                        cwd: cwd.text,
-                        extra_args: args.text,
-                        consent_project_hooks: false,
-                    };
-                    let command = match orchestrates.and_then(|choice| choice.0) {
-                        Some(room) => BusCommand::AddOrchestrator(
-                            input,
-                            OrchestratorSpec {
-                                room,
-                                system_prompt,
-                            },
-                        ),
-                        None => BusCommand::AddAgent(input),
-                    };
-                    self.queue(command, Effect::None);
-                }
-            }
+            form @ Form::Agent { .. } => self.add_agent_form(form),
             Form::Files(editor) => {
                 if let Some(room) = self.room {
                     self.queue(

@@ -177,7 +177,7 @@ impl HeadlessServer {
         &mut self,
         client_id: u64,
         boot_id: String,
-        mut request: api::schema::Request,
+        request: api::schema::Request,
     ) -> bool {
         let Some(client) = self.clients.get(&client_id) else {
             return false;
@@ -248,6 +248,16 @@ impl HeadlessServer {
             return false;
         }
 
+        self.dispatch_client_shell_endpoint_request(client_id, boot_id, request)
+    }
+
+    fn dispatch_client_shell_endpoint_request(
+        &mut self,
+        client_id: u64,
+        boot_id: String,
+        mut request: api::schema::Request,
+    ) -> bool {
+        let request_id = request.id.clone();
         let api_request_id = format!(
             "endpoint:{}:{client_id}:{request_id}",
             self.client_shell_boot_id

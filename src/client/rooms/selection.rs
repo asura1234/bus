@@ -3,7 +3,7 @@
 //! scrolling; releasing the button copies the selected text to the host
 //! clipboard. History selections cover exactly the dragged characters.
 use super::render::{cell_offset, wrap_ranges, Action};
-use super::*;
+use super::BusUi;
 use crate::client::compositor::{ClientShellAction, ClientShellInput};
 use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;

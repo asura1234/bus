@@ -1,7 +1,7 @@
 use super::editor::Editor;
 use crate::bus::{
     launch::{AddAgent, PathSuggestion, SetupNotice},
-    model::*,
+    model::{AgentId, Provider, RoomId},
     orchestrator::{self, OrchestratorSpec, PromptValues},
 };
 

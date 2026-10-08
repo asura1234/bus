@@ -1,4 +1,4 @@
-use super::*;
+use super::{Buffer, Style};
 
 pub(super) fn put_text(buffer: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) {
     if width == 0 || y >= buffer.area.bottom() || x >= buffer.area.right() {

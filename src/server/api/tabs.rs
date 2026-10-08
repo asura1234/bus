@@ -138,7 +138,9 @@ impl App {
             return tab_not_found(id, &target.tab_id);
         };
         self.state.switch_workspace_tab(ws_idx, tab_idx);
-        let tab = self.tab_info(ws_idx, tab_idx).unwrap();
+        let Some(tab) = self.tab_info(ws_idx, tab_idx) else {
+            return tab_not_found(id, &target.tab_id);
+        };
 
         encode_success(id, ResponseResult::TabInfo { tab })
     }
@@ -162,15 +164,18 @@ impl App {
         tab.set_custom_name(params.label.clone());
         crate::logging::tab_renamed(&workspace_id, &tab_id);
         self.schedule_session_save();
+        // Renaming the label leaves the public tab number and resolved ID unchanged.
         self.emit_event(EventEnvelope {
             event: EventKind::TabRenamed,
             data: EventData::TabRenamed {
-                tab_id: self.public_tab_id(ws_idx, tab_idx).unwrap(),
+                tab_id,
                 workspace_id: self.public_workspace_id(ws_idx),
                 label: params.label,
             },
         });
-        let tab = self.tab_info(ws_idx, tab_idx).unwrap();
+        let Some(tab) = self.tab_info(ws_idx, tab_idx) else {
+            return tab_not_found(id, &params.tab_id);
+        };
 
         encode_success(id, ResponseResult::TabInfo { tab })
     }

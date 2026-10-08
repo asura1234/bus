@@ -61,105 +61,92 @@ impl Worker {
             {
                 continue;
             }
-            let identity = &agent.runtime_identity;
-            let (Some(launch), Some(terminal), Some(pane)) = (
-                &identity.launch_id,
-                &identity.terminal_id,
-                &identity.pane_id,
-            ) else {
-                continue;
-            };
-            if identity.session_id.is_none() && agent.provider != Provider::Codex {
-                continue;
-            }
-            let Some(request) = self.state.next_queued_request(agent.id) else {
-                continue;
-            };
-            let mut state = self.state.clone();
-            // Messages that piled up while the agent was unavailable go as one prompt.
-            let text = match waited.then(|| state.coalesce_queue(request)).flatten() {
-                Some(text) => text,
-                None => state
-                    .request(request)
-                    .ok_or("Missing queued request")?
-                    .prompt
-                    .rendered_payload(),
-            };
-            let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
-                .map_err(|e| e.to_string())?;
-            state
-                .begin_submission(request, launch, boundary)
-                .map_err(|e| e.to_string())?;
-            self.save(state)?;
-            diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
-            let started = std::time::Instant::now();
-            let _span = tracing::info_span!(
-                "bus.delivery",
-                request_id = request.0,
-                agent_id = agent.id.0,
-                room_id = agent.room_id.0
-            )
-            .entered();
-            tracing::debug!(
-                event = "bus.delivery.payload",
-                payload_bytes = text.len(),
-                "Bus payload metadata"
-            );
-            let method = if let Some(session) = &identity.session_id {
-                Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
-                    target: pane.clone(),
-                    text,
-                    expected_terminal_id: terminal.clone(),
-                    expected_pane_id: pane.clone(),
-                    expected_agent: launch::provider_kind(agent.provider).into(),
-                    expected_session_id: session.clone(),
-                    steer: false,
-                })
-            } else {
-                Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {
-                    target: pane.clone(),
-                    text,
-                    expected_terminal_id: terminal.clone(),
-                    expected_pane_id: pane.clone(),
-                    expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
-                })
-            };
-            let outcome = match self.transport.request(method) {
-                Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
-                    provider_session_id: identity.session_id.clone(),
-                    provider_turn_id: None,
-                },
-                Ok(other) => SubmissionOutcome::Uncertain {
-                    message: format!("Unexpected submit response; no automatic retry: {other:?}"),
-                },
-                Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
-                    message: error.message,
-                },
-                Err(error) => SubmissionOutcome::Uncertain {
-                    message: format!(
-                        "Submit outcome unknown; no automatic retry: {}",
-                        error.message
-                    ),
-                },
-            };
-            let outcome_name = match &outcome {
-                SubmissionOutcome::Confirmed { .. } => "confirmed",
-                SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
-                SubmissionOutcome::Uncertain { .. } => "uncertain",
-            };
-            tracing::info!(
-                event = "bus.delivery.result",
-                request_id = request.0,
-                outcome = outcome_name,
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                "Native submit result; uncertain outcomes are never retried"
-            );
-            let mut state = self.state.clone();
-            state
-                .record_submission(request, outcome)
-                .map_err(|e| e.to_string())?;
-            self.save(state)?;
+            self.deliver_idle_request(&agent, waited)?;
         }
+        Ok(())
+    }
+
+    fn deliver_idle_request(&mut self, agent: &Agent, waited: bool) -> Result<(), String> {
+        let identity = &agent.runtime_identity;
+        let (Some(launch), Some(terminal), Some(pane)) = (
+            &identity.launch_id,
+            &identity.terminal_id,
+            &identity.pane_id,
+        ) else {
+            return Ok(());
+        };
+        if identity.session_id.is_none() && agent.provider != Provider::Codex {
+            return Ok(());
+        }
+        let Some(request) = self.state.next_queued_request(agent.id) else {
+            return Ok(());
+        };
+        let mut state = self.state.clone();
+        // Messages that piled up while the agent was unavailable go as one prompt.
+        let text = match waited.then(|| state.coalesce_queue(request)).flatten() {
+            Some(text) => text,
+            None => state
+                .request(request)
+                .ok_or("Missing queued request")?
+                .prompt
+                .rendered_payload(),
+        };
+        let boundary = callbacks::boundary(&self.data_dir.join("callbacks").join(launch))
+            .map_err(|e| e.to_string())?;
+        state
+            .begin_submission(request, launch, boundary)
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
+        diagnostics::request(&self.state, request, "bus.delivery.start", "native_submit");
+        let started = std::time::Instant::now();
+        let _span = tracing::info_span!(
+            "bus.delivery",
+            request_id = request.0,
+            agent_id = agent.id.0,
+            room_id = agent.room_id.0
+        )
+        .entered();
+        tracing::debug!(
+            event = "bus.delivery.payload",
+            payload_bytes = text.len(),
+            "Bus payload metadata"
+        );
+        let method = submission_method(agent, text, terminal, pane);
+        let outcome = match self.transport.request(method) {
+            Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
+                provider_session_id: identity.session_id.clone(),
+                provider_turn_id: None,
+            },
+            Ok(other) => SubmissionOutcome::Uncertain {
+                message: format!("Unexpected submit response; no automatic retry: {other:?}"),
+            },
+            Err(error) if error.definitely_rejected => SubmissionOutcome::DefinitelyRejected {
+                message: error.message,
+            },
+            Err(error) => SubmissionOutcome::Uncertain {
+                message: format!(
+                    "Submit outcome unknown; no automatic retry: {}",
+                    error.message
+                ),
+            },
+        };
+        let outcome_name = match &outcome {
+            SubmissionOutcome::Confirmed { .. } => "confirmed",
+            SubmissionOutcome::DefinitelyRejected { .. } => "rejected",
+            SubmissionOutcome::Uncertain { .. } => "uncertain",
+        };
+        tracing::info!(
+            event = "bus.delivery.result",
+            request_id = request.0,
+            outcome = outcome_name,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "Native submit result; uncertain outcomes are never retried"
+        );
+        let mut state = self.state.clone();
+        state
+            .record_submission(request, outcome)
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
         Ok(())
     }
 
@@ -222,5 +209,27 @@ impl Worker {
             .record_steering(request, outcome)
             .map_err(|e| e.to_string())?;
         self.save(state)
+    }
+}
+
+fn submission_method(agent: &Agent, text: String, terminal: &str, pane: &str) -> Method {
+    if let Some(session) = &agent.runtime_identity.session_id {
+        Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
+            target: pane.to_owned(),
+            text,
+            expected_terminal_id: terminal.to_owned(),
+            expected_pane_id: pane.to_owned(),
+            expected_agent: launch::provider_kind(agent.provider).into(),
+            expected_session_id: session.clone(),
+            steer: false,
+        })
+    } else {
+        Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {
+            target: pane.to_owned(),
+            text,
+            expected_terminal_id: terminal.to_owned(),
+            expected_pane_id: pane.to_owned(),
+            expected_managed_name: format!("bus-r{}-a{}", agent.room_id.0, agent.id.0),
+        })
     }
 }

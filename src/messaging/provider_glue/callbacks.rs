@@ -436,7 +436,7 @@ pub(crate) fn dispatch(args: &[String]) -> Option<io::Result<()>> {
     tracing::debug!(event = "bus.callback.capture", "Provider hook invoked");
     let result = capture(args, io::stdin().lock());
     // Observation hooks must never inject context or approve a permission prompt.
-    println!("{{}}");
+    crate::cli::help::write_stdout_line(format_args!("{{}}"));
     if let Err(error) = result {
         tracing::warn!(event = "bus.callback.capture_failed", error_kind = ?error.kind(), "Provider hook capture failed");
         eprintln!("Bus callback: {error}");

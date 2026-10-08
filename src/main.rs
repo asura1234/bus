@@ -14,7 +14,14 @@ mod server;
 mod terminal;
 mod utils;
 
-pub(crate) use compat_paths::*;
+#[cfg(any(windows, test))]
+pub(crate) use compat_paths::noninteractive_process;
+pub(crate) use compat_paths::{
+    agent_resume, api, app, build_info, bus, config, copy_mode, detect, events, ghostty, home_path,
+    input, ipc, kitty_graphics, layout, logging, pane, pane_state, persist, raw_input, render_prof,
+    render_signal, selection, session, sound, terminal_effects, terminal_modes, terminal_notify,
+    terminal_theme, ui, workspace,
+};
 
 fn args_as_utf8<I>(args: I) -> Result<Vec<String>, String>
 where
@@ -53,7 +60,7 @@ fn main() -> io::Result<()> {
         }
         Some("--version" | "-V") if raw_args.len() == 2 => {
             platform::begin_cli_output();
-            println!("bus {}", crate::build_info::version());
+            cli::help::write_stdout_line(format_args!("bus {}", crate::build_info::version()));
             Ok(())
         }
         _ => bus::entry::run(&raw_args[1..]),

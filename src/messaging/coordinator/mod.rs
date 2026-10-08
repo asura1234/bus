@@ -21,10 +21,17 @@ use crate::api::{
     client::ConnectionTarget,
     schema::{self, Method, ResponseResult},
 };
+#[cfg(test)]
+use crate::messaging::model::UNBOUND_SETTLE_MS;
 use crate::messaging::{
     control::server as control,
     diagnostics,
-    model::*,
+    model::{
+        Agent, AgentId, AgentRecipients, AgentRuntimeIdentity, Author, BusState,
+        CallbackDisposition, CallbackEventKind, CallbackRejection, Draft, ModelError, PromptId,
+        Provider, ProviderCallback, Request, RequestId, RequestPhase, Room, RoomId, RoomKind,
+        RuntimeStatus, SubmissionOutcome,
+    },
     native::{HerdrTransport, Transport},
     orchestration as orchestrator,
     prefs::settings,

@@ -32,40 +32,12 @@ pub(in crate::server) fn snapshot(
             app.public_pane_id(workspace_index, pane_id)
         })
         .or_else(|| snapshot.focused_pane_id.clone());
-    let workspaces = snapshot
-        .workspaces
-        .into_iter()
-        .zip(&app.state.workspaces)
-        .enumerate()
-        .map(|(workspace_index, (workspace, state))| {
-            let mut tokens = workspace.tokens.into_iter().collect::<Vec<_>>();
-            tokens.sort_by(|left, right| left.0.cmp(&right.0));
-            let workspace_id = workspace.workspace_id;
-            let active_tab_id = location
-                .and_then(|location| location.active_tab_ids.get(&workspace_id))
-                .cloned()
-                .unwrap_or(workspace.active_tab_id);
-            let active_tab_index =
-                app.parse_tab_id(&active_tab_id)
-                    .and_then(|(tab_workspace_index, tab_index)| {
-                        (tab_workspace_index == workspace_index).then_some(tab_index)
-                    });
-            protocol::ClientShellWorkspace {
-                focused: focused_workspace_id.as_deref() == Some(workspace_id.as_str()),
-                workspace_id,
-                active_tab_id,
-                new_workspace_cwd: app
-                    .resolved_new_workspace_cwd_from_tab(workspace_index, active_tab_index)
-                    .display()
-                    .to_string(),
-                number: workspace.number,
-                label: workspace.label,
-                custom_label: state.custom_name.is_some(),
-                tokens,
-                agent_status: workspace.agent_status,
-            }
-        })
-        .collect();
+    let workspaces = snapshot_workspaces(
+        app,
+        snapshot.workspaces,
+        location,
+        focused_workspace_id.as_deref(),
+    );
     let tabs = snapshot
         .tabs
         .into_iter()
@@ -116,34 +88,7 @@ pub(in crate::server) fn snapshot(
             }
         })
         .collect();
-    let agents = snapshot
-        .agents
-        .into_iter()
-        .map(|agent| {
-            let pane_id = agent.pane_id;
-            let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
-            let mut state_labels = agent.state_labels.into_iter().collect::<Vec<_>>();
-            state_labels.sort_by(|left, right| left.0.cmp(&right.0));
-            let mut tokens = agent.tokens.into_iter().collect::<Vec<_>>();
-            tokens.sort_by(|left, right| left.0.cmp(&right.0));
-            protocol::ClientShellAgent {
-                pane_id,
-                workspace_id: agent.workspace_id,
-                tab_id: agent.tab_id,
-                name: agent.name,
-                display_agent: agent.display_agent,
-                agent: agent.agent,
-                title: agent.title,
-                terminal_title: agent.terminal_title,
-                terminal_title_stripped: agent.terminal_title_stripped,
-                agent_status: agent.agent_status,
-                state_change_seq: agent.state_change_seq,
-                state_labels,
-                tokens,
-                focused,
-            }
-        })
-        .collect();
+    let agents = snapshot_agents(snapshot.agents, focused_pane_id.as_deref());
 
     let agent_order = crate::ui::agent_panel_entries_from(&app.state, &app.terminal_runtimes)
         .into_iter()
@@ -212,11 +157,147 @@ pub(in crate::server) fn render_pane_surface(
             resize_panes,
             cell_size,
         );
-    let panes = target
+    let panes = snapshot_surface_panes(
+        app,
+        target,
+        &layout.pane_infos,
+        cell_size,
+        &content_revisions_before,
+    );
+    let pane_frames = layout
+        .pane_infos
+        .iter()
+        .map(|pane| pane.rect)
+        .collect::<Vec<_>>();
+    let splits = layout
+        .split_borders
+        .iter()
+        .filter_map(|split| {
+            let hit_rect = split_hit_rect(
+                split,
+                app.state.pane_borders.draws_borders(),
+                app.state.pane_gaps,
+                &pane_frames,
+            )?;
+            let direction = match split.direction {
+                ratatui::layout::Direction::Horizontal => {
+                    protocol::PaneSurfaceSplitDirection::Horizontal
+                }
+                ratatui::layout::Direction::Vertical => {
+                    protocol::PaneSurfaceSplitDirection::Vertical
+                }
+            };
+            Some(protocol::PaneSurfaceSplit {
+                direction,
+                pos: split.pos,
+                area: split.area.into(),
+                hit_rect: hit_rect.into(),
+                path: split.path.clone(),
+            })
+        })
+        .collect();
+    let (graphics, next_graphics_delivery) = crate::server::rendering::snapshot_graphics::collect(
+        app,
+        &layout.pane_infos,
+        &layout.split_borders,
+        target,
+        cell_size,
+        graphics_delivery,
+    );
+    RenderedPaneSurface {
+        frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
+        panes,
+        splits,
+        graphics,
+        graphics_delivery: next_graphics_delivery,
+    }
+}
+
+fn snapshot_workspaces(
+    app: &app::App,
+    workspaces: Vec<crate::api::schema::WorkspaceInfo>,
+    location: Option<&crate::server::clients::connection::ClientShellLocation>,
+    focused_workspace_id: Option<&str>,
+) -> Vec<protocol::ClientShellWorkspace> {
+    workspaces
+        .into_iter()
+        .zip(&app.state.workspaces)
+        .enumerate()
+        .map(|(workspace_index, (workspace, state))| {
+            let mut tokens = workspace.tokens.into_iter().collect::<Vec<_>>();
+            tokens.sort_by(|left, right| left.0.cmp(&right.0));
+            let workspace_id = workspace.workspace_id;
+            let active_tab_id = location
+                .and_then(|location| location.active_tab_ids.get(&workspace_id))
+                .cloned()
+                .unwrap_or(workspace.active_tab_id);
+            let active_tab_index =
+                app.parse_tab_id(&active_tab_id)
+                    .and_then(|(tab_workspace_index, tab_index)| {
+                        (tab_workspace_index == workspace_index).then_some(tab_index)
+                    });
+            protocol::ClientShellWorkspace {
+                focused: focused_workspace_id == Some(workspace_id.as_str()),
+                workspace_id,
+                active_tab_id,
+                new_workspace_cwd: app
+                    .resolved_new_workspace_cwd_from_tab(workspace_index, active_tab_index)
+                    .display()
+                    .to_string(),
+                number: workspace.number,
+                label: workspace.label,
+                custom_label: state.custom_name.is_some(),
+                tokens,
+                agent_status: workspace.agent_status,
+            }
+        })
+        .collect()
+}
+
+fn snapshot_agents(
+    agents: Vec<crate::api::schema::AgentInfo>,
+    focused_pane_id: Option<&str>,
+) -> Vec<protocol::ClientShellAgent> {
+    agents
+        .into_iter()
+        .map(|agent| {
+            let pane_id = agent.pane_id;
+            let focused = focused_pane_id == Some(pane_id.as_str());
+            let mut state_labels = agent.state_labels.into_iter().collect::<Vec<_>>();
+            state_labels.sort_by(|left, right| left.0.cmp(&right.0));
+            let mut tokens = agent.tokens.into_iter().collect::<Vec<_>>();
+            tokens.sort_by(|left, right| left.0.cmp(&right.0));
+            protocol::ClientShellAgent {
+                pane_id,
+                workspace_id: agent.workspace_id,
+                tab_id: agent.tab_id,
+                name: agent.name,
+                display_agent: agent.display_agent,
+                agent: agent.agent,
+                title: agent.title,
+                terminal_title: agent.terminal_title,
+                terminal_title_stripped: agent.terminal_title_stripped,
+                agent_status: agent.agent_status,
+                state_change_seq: agent.state_change_seq,
+                state_labels,
+                tokens,
+                focused,
+            }
+        })
+        .collect()
+}
+
+fn snapshot_surface_panes(
+    app: &app::App,
+    target: Option<crate::ui::TabSurfaceTarget>,
+    pane_infos: &[crate::layout::PaneInfo],
+    cell_size: crate::kitty_graphics::HostCellSize,
+    content_revisions_before: &std::collections::HashMap<crate::layout::PaneId, u64>,
+) -> Vec<protocol::PaneSurfacePane> {
+    target
         .map(|target| {
             let workspace_index = target.workspace_index;
-            layout
-                .pane_infos
+            pane_infos
                 .iter()
                 .filter_map(|pane| {
                     app.public_pane_id(workspace_index, pane.id).map(|pane_id| {
@@ -272,54 +353,7 @@ pub(in crate::server) fn render_pane_surface(
                 })
                 .collect()
         })
-        .unwrap_or_default();
-    let pane_frames = layout
-        .pane_infos
-        .iter()
-        .map(|pane| pane.rect)
-        .collect::<Vec<_>>();
-    let splits = layout
-        .split_borders
-        .iter()
-        .filter_map(|split| {
-            let hit_rect = split_hit_rect(
-                split,
-                app.state.pane_borders.draws_borders(),
-                app.state.pane_gaps,
-                &pane_frames,
-            )?;
-            let direction = match split.direction {
-                ratatui::layout::Direction::Horizontal => {
-                    protocol::PaneSurfaceSplitDirection::Horizontal
-                }
-                ratatui::layout::Direction::Vertical => {
-                    protocol::PaneSurfaceSplitDirection::Vertical
-                }
-            };
-            Some(protocol::PaneSurfaceSplit {
-                direction,
-                pos: split.pos,
-                area: split.area.into(),
-                hit_rect: hit_rect.into(),
-                path: split.path.clone(),
-            })
-        })
-        .collect();
-    let (graphics, next_graphics_delivery) = crate::server::rendering::snapshot_graphics::collect(
-        app,
-        &layout.pane_infos,
-        &layout.split_borders,
-        target,
-        cell_size,
-        graphics_delivery,
-    );
-    RenderedPaneSurface {
-        frame: FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, cursor, &hyperlinks),
-        panes,
-        splits,
-        graphics,
-        graphics_delivery: next_graphics_delivery,
-    }
+        .unwrap_or_default()
 }
 
 fn split_hit_rect(

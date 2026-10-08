@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    client_shell_resize_message, endpoint, should_draw_host_cursor, write_to_server, ClientError,
+    ClientState,
+};
+use crate::protocol::ClientMessage;
+use tracing::{debug, warn};
 
 pub(super) fn init_logging() {
     crate::logging::init_file_logging("herdr-client.log");

@@ -1,7 +1,10 @@
 //! Client-only confirmation; the coordinator owns persisted deletion and stopping sessions.
-use super::{render::Action, *};
+use super::{render::Action, BusUi, Effect};
 use crate::{
-    bus::{model::*, runtime::BusCommand},
+    bus::{
+        model::{AgentId, BusState, ModelError, RoomId},
+        runtime::BusCommand,
+    },
     raw_input::RawInputEvent,
 };
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};

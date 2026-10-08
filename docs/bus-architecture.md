@@ -3,10 +3,10 @@
 Status: decided. It describes the target folder and module layout of the repository. Bus is a prototype: it keeps no fallbacks and no
 backward compatibility with older saves, configs, peers or herdr-era names, and it has no CI.
 
-S10a checkpoint: production owners have split their large modules and moved local tests alongside their code. The VT and
-emulator facades retain their first slices; S10b finishes those splits. The enforced limit remains 3,000 physical lines with
-the existing named exemptions. Production counting and separate production/test Clippy commands are prepared but dormant;
-the 800-line cap and H14 lints activate together later. Python has no complexity lint policy.
+S10 checkpoint: production owner splits and the final VT/emulator slices are complete. The enforced limit is
+800 handwritten production lines per file, with shared test scopes and the generated FFI exception. H14 production
+Clippy rules are active at 100 function lines, cognitive complexity 25 and 11 arguments; tests are exempt from these
+selected rules. Python retains Ruff E9,F and has no complexity lint policy.
 
 ## 1. Repository root
 
@@ -58,8 +58,9 @@ the 800-line cap and H14 lints activate together later. Python has no complexity
 
 Nine components, listed in reading order. The dependency rule is graph 3a, not this order; `main.rs` is the composition root above all
 of them. The final target is at most 800 handwritten production lines per file (generated bindings are not handwritten).
-S10a keeps the existing Clippy rules, including the argument threshold of 11. H14's selected production Rust lints and the
-function-length/cognitive thresholds of 100/25 are reserved for the final activation after the measured findings are fixed.
+The gate retains the default Clippy rules and enforces production function length 100, cognitive complexity 25 and argument
+threshold 11, plus no wildcard imports, stdout print macros, dbg/todo/unimplemented macros, get-unwrap or unwrap calls.
+Production checking runs before test-target compilation, where only those selected rules are exempt.
 
 Every test file in the repository, Rust or Python, is named `*_test.<ext>`: `*_test.rs` and `*_test.py`. Shared test helpers are
 test code and follow the same rule (`support_test.rs`). Data fixtures such as `.json` keep their names inside a test folder. A
@@ -70,7 +71,8 @@ A file is a test file, and so exempt from the 800-line cap and the complexity li
 (file level) or it sits inside a test directory: any folder named `tests`, at any depth, including the top-level `tests/`
 (directory level). Inline `#[cfg(test)]` modules in production files are exempt by their test scope and stay where they are; they
 are not moved out just for the cap. Both levels are patterns in the lint policy and the clippy and test-scope config, never a
-per-file list in the final policy. Until S10b, the gate retains the physical counter and existing exemptions.
+per-file list. The same shared classifier drives length, coverage and architecture checks; no handwritten file-length
+exemptions remain.
 
 An enforced lint check fails the gate when test code (a `#[test]` fn, or a pytest test function or file) is in none of those three
 places: a `*_test.*` file, a `tests` directory or an inline `#[cfg(test)]` module. Pytest (`python_files`) and the gate's Python
@@ -143,16 +145,18 @@ Files are split by ownership, not by helper.
 - `terminal/`: one live terminal, from PTY to server-owned state
   - `mod.rs`, `registry.rs`, `events.rs` (`TerminalEvent`, the one stream runtimes and API handlers send to the server),
     `history.rs` (alt-screen scrollback merge)
-  - `vt/`: safe wrapper over libghostty-vt
-    - `mod.rs` (errors, re-exports), `ffi.rs` (generated bindings), `consts.rs`, `types.rs` (cells, colors, cursor, scrollbar)
-    - `callbacks.rs` (C trampolines, clipboard, PNG decode), `read.rs`, `read/rows.rs` (render state, row and cell iterators)
-    - `mod.rs` retains lifecycle, input/mode and Kitty operations until the final S10b split
+  - `vt/`: safe libghostty-vt facade and cohesive handle/protocol owners
+    - `mod.rs` (stable re-exports), `ffi.rs` (generated bindings), `consts.rs`, `types.rs` (cells, colors, cursor, scrollbar)
+    - `terminal.rs` (handle, lifecycle, modes), `callbacks.rs` (C trampolines, clipboard, PNG decode), `input.rs` (focus/key/mouse encoders)
+    - `render.rs` (render state), `read.rs` (terminal queries), `read/rows.rs` (borrowed row and cell iterators)
+    - `kitty.rs` (image data/cache/storage), `kitty_placement.rs` (ordinary/virtual placement geometry)
     - `tests/{terminal_test,render_test,input_test,kitty_test}.rs`
   - `pty/`: `fd.rs` (wake pipe, poll, resize), `actor/{mod,unix,windows}.rs` (per-terminal I/O thread),
     `actor/submission.rs` (paced text, delay and Enter), `tests/{unix_actor_test,submission_test}.rs`
   - `emulator/`: PTY bytes into the VT, frames and text out
-    - `mod.rs` retains core/locking, modes, write/reply ordering, render and encoding until S10b;
-      `read.rs` holds visible, recent and detection text and ANSI
+    - `mod.rs` retains core/locking and the mode/state facade; `write.rs` owns ordered writes/replies and response draining
+    - `color_replies.rs` (theme ownership and queries), `encode.rs` (key/mouse encoders), `render.rs` (full painting),
+      `dirty_patch.rs` (bounded dirty preparation, collection and clearing), `read.rs` (visible, recent and detection text and ANSI)
     - `text_motion.rs` (retained text, search, word and paragraph motion), `windows.rs`, `conpty_recent_cache.rs`
     - `controls/`: `osc/{default_colors,agent,cwd,scrollback_compat,debug,collector}.rs`, `osc/tests/`, `xtgettcap.rs`, `kitty_keyboard.rs`
       (kitty flags and the modifyOtherKeys 0/1/2 tracker),

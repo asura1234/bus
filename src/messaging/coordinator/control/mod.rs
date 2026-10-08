@@ -5,8 +5,19 @@ mod inspect;
 mod messages;
 mod rooms;
 
-use super::*;
+use super::{
+    launch, mpsc, schema, AddAgent, AgentId, AgentRecipients, Author, BTreeMap, BusCommand,
+    BusEvent, Draft, Duration, Method, ModelError, PathBuf, PromptId, Provider, Request, RequestId,
+    RequestPhase, ResponseResult, RoomId, RoomKind, RuntimeStatus, Worker, MASTER_AGENT_NEEDS_ROOM,
+};
+#[cfg(test)]
+use super::{
+    AgentRuntimeIdentity, BTreeSet, BusState, CallbackDisposition, CallbackEventKind, JsonStore,
+    ProviderCallback, SubmissionOutcome, Transport,
+};
 use crate::bus::control::{Request as ControlRequest, Response};
+#[cfg(test)]
+use crate::messaging::model::MASTER_ROOM_NAME;
 use serde_json::{json, Value};
 
 /// Receipts younger than this are never evicted, so a retry within it replays.
@@ -60,51 +71,8 @@ impl Worker {
                 )
             };
         }
-        let (fields, mutation): (&[&str], bool) = match request.method.as_str() {
-            "state" | "diagnostics" | "sounds" | "settings" => (&[], false),
-            "room.create" => (&["name"], true),
-            "room.rename" => (&["room", "name"], true),
-            "room.notes" => (&["room", "text"], true),
-            "room.delete" => (&["room", "confirm"], true),
-            "room.focus" => (&["room"], true),
-            "room.seen" => (&["room"], true),
-            "room.sound" => (&["room", "on", "sound"], true),
-            "agent.rename" => (&["agent", "name"], true),
-            "agent.details" => (&["agent", "on"], true),
-            "settings.color_blind" => (&["on"], true),
-            "settings.room_sound" => (&["on", "sound"], true),
-            "bus.quit" => (&[], true),
-            "agent.add" => (
-                &[
-                    "room",
-                    "name",
-                    "provider",
-                    "cwd",
-                    "extra_args",
-                    "consent_project_hooks",
-                    "orchestrates",
-                    "system_prompt",
-                ],
-                true,
-            ),
-            "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
-            "agent.read" => (&["agent", "source", "lines"], false),
-            "agent.dialog.observe" => (&["agent"], false),
-            "agent.dialog.choose" => (&["agent", "option", "fingerprint"], true),
-            "agent.dialog.answer" => (&["agent", "text", "skip", "fingerprint"], true),
-            "agent.focus" => (&["agent"], true),
-            "agent.clear" => (&["agent"], true),
-            "message.send" => (&["room", "to", "text", "files", "as", "queue"], true),
-            "message.status" => (&["message"], false),
-            "request.recover" => (&["request", "confirm"], true),
-            "room.history" => (&["room"], false),
-            _ => {
-                return Response::failure(
-                    &request.id,
-                    "unknown_method",
-                    "Unknown Bus control method",
-                )
-            }
+        let Some((fields, mutation)) = dev_method_fields(request.method.as_str()) else {
+            return Response::failure(&request.id, "unknown_method", "Unknown Bus control method");
         };
         let Some(params) = request.params.as_object() else {
             return Response::failure(
@@ -127,32 +95,10 @@ impl Worker {
                 "Explicit --confirm is required",
             );
         }
-        if mutation && self.storage_failed {
-            return Response::failure(
-                &request.id,
-                "storage_unavailable",
-                "Fix Bus storage and restart before making changes",
-            );
-        }
-        // A receipt lets a retry replay its response instead of launching or
-        // sending twice. Retries come within seconds, so receipts older than
-        // the retention window make room; younger ones are never evicted.
-        let reserve = serde_json::to_vec(request)
-            .map_or(usize::MAX, |v| v.len())
-            .saturating_add(4096);
-        if mutation {
-            self.evict_expired_dev_receipts();
-        }
-        if mutation
-            && (self.dev_receipts.len() >= DEV_RECEIPT_LIMIT
-                || self.dev_receipt_bytes.saturating_add(reserve) > 8 * 1024 * 1024)
-        {
-            return Response::failure(
-                &request.id,
-                "receipt_capacity",
-                "Dev mutation receipt limit reached; restart when safe",
-            );
-        }
+        let reserve = match self.reserve_dev_receipt(request, mutation) {
+            Ok(reserve) => reserve,
+            Err(response) => return response,
+        };
         let _span = tracing::info_span!("bus.dev.command", control_request_id = %request.id, method = %request.method).entered();
         let started = std::time::Instant::now();
         let response = match self.dev_execute(&request.method, &request.params, events) {
@@ -186,6 +132,40 @@ impl Worker {
             );
         }
         response
+    }
+
+    fn reserve_dev_receipt(
+        &mut self,
+        request: &ControlRequest,
+        mutation: bool,
+    ) -> Result<usize, Response> {
+        if mutation && self.storage_failed {
+            return Err(Response::failure(
+                &request.id,
+                "storage_unavailable",
+                "Fix Bus storage and restart before making changes",
+            ));
+        }
+        // A receipt lets a retry replay its response instead of launching or
+        // sending twice. Retries come within seconds, so receipts older than
+        // the retention window make room; younger ones are never evicted.
+        let reserve = serde_json::to_vec(request)
+            .map_or(usize::MAX, |v| v.len())
+            .saturating_add(4096);
+        if mutation {
+            self.evict_expired_dev_receipts();
+        }
+        if mutation
+            && (self.dev_receipts.len() >= DEV_RECEIPT_LIMIT
+                || self.dev_receipt_bytes.saturating_add(reserve) > 8 * 1024 * 1024)
+        {
+            return Err(Response::failure(
+                &request.id,
+                "receipt_capacity",
+                "Dev mutation receipt limit reached; restart when safe",
+            ));
+        }
+        Ok(reserve)
     }
 
     fn evict_expired_dev_receipts(&mut self) {
@@ -310,3 +290,46 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/focus_test.rs"]
 mod focus_tests;
+
+fn dev_method_fields(method: &str) -> Option<(&'static [&'static str], bool)> {
+    Some(match method {
+        "state" | "diagnostics" | "sounds" | "settings" => (&[], false),
+        "room.create" => (&["name"], true),
+        "room.rename" => (&["room", "name"], true),
+        "room.notes" => (&["room", "text"], true),
+        "room.delete" => (&["room", "confirm"], true),
+        "room.focus" => (&["room"], true),
+        "room.seen" => (&["room"], true),
+        "room.sound" => (&["room", "on", "sound"], true),
+        "agent.rename" => (&["agent", "name"], true),
+        "agent.details" => (&["agent", "on"], true),
+        "settings.color_blind" => (&["on"], true),
+        "settings.room_sound" => (&["on", "sound"], true),
+        "bus.quit" => (&[], true),
+        "agent.add" => (
+            &[
+                "room",
+                "name",
+                "provider",
+                "cwd",
+                "extra_args",
+                "consent_project_hooks",
+                "orchestrates",
+                "system_prompt",
+            ],
+            true,
+        ),
+        "agent.delete" | "agent.setup-confirm" => (&["agent", "confirm"], true),
+        "agent.read" => (&["agent", "source", "lines"], false),
+        "agent.dialog.observe" => (&["agent"], false),
+        "agent.dialog.choose" => (&["agent", "option", "fingerprint"], true),
+        "agent.dialog.answer" => (&["agent", "text", "skip", "fingerprint"], true),
+        "agent.focus" => (&["agent"], true),
+        "agent.clear" => (&["agent"], true),
+        "message.send" => (&["room", "to", "text", "files", "as", "queue"], true),
+        "message.status" => (&["message"], false),
+        "request.recover" => (&["request", "confirm"], true),
+        "room.history" => (&["room"], false),
+        _ => return None,
+    })
+}

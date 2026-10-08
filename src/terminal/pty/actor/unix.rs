@@ -567,11 +567,14 @@ impl PtyIoActorRunner {
                 Ok(written) => {
                     self.current_write_offset += written;
                     if self.current_write_offset >= write.bytes.len() {
-                        let completed = self.pending_writes.pop_front().unwrap();
-                        self.current_write_offset = 0;
-                        if let Some(boundary) = completed.boundary {
-                            self.file.flush()?;
-                            return Ok(Some(boundary));
+                        // The front inspected above is still queued: only this
+                        // actor mutates the deque, with no intervening command.
+                        if let Some(completed) = self.pending_writes.pop_front() {
+                            self.current_write_offset = 0;
+                            if let Some(boundary) = completed.boundary {
+                                self.file.flush()?;
+                                return Ok(Some(boundary));
+                            }
                         }
                     }
                 }

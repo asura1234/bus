@@ -176,22 +176,7 @@ impl App {
         let extras = match crate::bus::resume_launch::for_native_resume(terminal, &plan, &cwd) {
             Ok(extras) => extras,
             Err(reason) => {
-                tracing::warn!(event = "bus.resume.suspended", pane = pane_id.raw(), terminal = %terminal_id, %reason,
-                    "Bus conversation was kept; resume requires inspection before restarting");
-                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-                    // Keep durable name/session metadata for recovery on a later
-                    // restart, but do not retry disk reads on every layout tick.
-                    terminal.pending_agent_resume_plan = None;
-                    let kind = terminal.managed_agent_kind();
-                    terminal.set_detected_state_with_screen_signals_at(
-                        kind,
-                        crate::detect::AgentState::Unknown,
-                        false,
-                        false,
-                        Instant::now(),
-                    );
-                }
-                return true;
+                return self.suspend_pending_agent_resume(pane_id, &terminal_id, &reason);
             }
         };
         let plan = match &extras.session {
@@ -271,6 +256,30 @@ impl App {
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.pending_agent_resume_plan = None;
             terminal.respawn_shell_on_exit = false;
+        }
+        true
+    }
+
+    fn suspend_pending_agent_resume(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        terminal_id: &crate::terminal::TerminalId,
+        reason: &str,
+    ) -> bool {
+        tracing::warn!(event = "bus.resume.suspended", pane = pane_id.raw(), terminal = %terminal_id, %reason,
+            "Bus conversation was kept; resume requires inspection before restarting");
+        if let Some(terminal) = self.state.terminals.get_mut(terminal_id) {
+            // Keep durable name/session metadata for recovery on a later
+            // restart, but do not retry disk reads on every layout tick.
+            terminal.pending_agent_resume_plan = None;
+            let kind = terminal.managed_agent_kind();
+            terminal.set_detected_state_with_screen_signals_at(
+                kind,
+                crate::detect::AgentState::Unknown,
+                false,
+                false,
+                Instant::now(),
+            );
         }
         true
     }

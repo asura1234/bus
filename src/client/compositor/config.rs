@@ -1,4 +1,5 @@
-use super::*;
+use super::{ClientShellConfig, ClientShellState, Config};
+use crate::protocol::ClientSurfaceSize;
 
 pub(super) fn merged_config_diagnostic(
     local: Option<&str>,

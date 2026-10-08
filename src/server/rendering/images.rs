@@ -270,6 +270,14 @@ pub(crate) fn collect_scene(
         });
     }
 
+    package_scene_assets(placements, asset_data, delivered)
+}
+
+fn package_scene_assets(
+    mut placements: Vec<SurfaceGraphicsPlacement>,
+    asset_data: HashMap<SurfaceGraphicsAssetKey, Vec<u8>>,
+    delivered: &DeliveryCache,
+) -> (SurfaceGraphicsScene, DeliveryCache) {
     let desired = placements
         .iter()
         .map(|placement| placement.asset.clone())

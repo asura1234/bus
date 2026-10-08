@@ -1,4 +1,8 @@
-use super::schema::*;
+use super::schema::{
+    DirectionSnapshot, LayoutSnapshot, PaneAgentSessionSnapshot, PaneHistorySnapshot, PaneSnapshot,
+    SessionHistorySnapshot, SessionSnapshot, TabHistorySnapshot, TabSnapshot,
+    WorkspaceHistorySnapshot, WorkspaceSnapshot, SNAPSHOT_VERSION,
+};
 use crate::server::workspaces::{layout::Node, Workspace};
 use crate::terminal::TerminalRuntimeRegistry;
 use ratatui::layout::Direction;

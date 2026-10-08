@@ -1,8 +1,9 @@
 //! Monotonic snapshot/surface pairing and foreground snapshot installation.
-use super::*;
+use super::{ClientInputLeases, ClientShellState, ShellHitMap};
 use crate::client::{
     client_shell_resize_message, endpoint, write_to_server, ClientError, ClientState,
 };
+use crate::protocol::{ClientShellSnapshot, PaneSurfaceFrame};
 
 fn pane_surface_row<'a>(
     surface: &'a PaneSurfaceFrame,

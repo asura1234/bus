@@ -1,6 +1,6 @@
 //! Paint the prepared view and acknowledge emitted thumbnail graphics.
 use super::super::BusUi;
-use super::{cell_width, display, ACCENT, SELECTION};
+use super::{cell_width, display, Row, ACCENT, SELECTION};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Widget};
 use ratatui::{
     buffer::Buffer,
@@ -45,6 +45,36 @@ impl BusUi {
                 .fg(Color::Rgb(222, 222, 226))
                 .bg(Color::Rgb(24, 24, 28)),
         );
+        self.paint_borders(buffer);
+        let mut selection_painted = false;
+        for (index, row) in self.view.rows.iter().enumerate() {
+            if index == self.view.dialog_rows_start && self.view.dialog.width > 0 {
+                paint_selection(&self.view.selection, buffer);
+                selection_painted = true;
+                let rect = self.view.dialog.intersection(buffer.area);
+                Clear.render(rect, buffer);
+                Block::default()
+                    .borders(Borders::ALL)
+                    .style(Style::default().bg(Color::Rgb(24, 24, 28)))
+                    .border_style(Style::default().fg(ACCENT))
+                    .render(rect, buffer);
+            }
+            paint_row(row, buffer);
+        }
+        if !selection_painted {
+            paint_selection(&self.view.selection, buffer);
+        }
+        let sidebar = self.view.sidebar.intersection(buffer.area);
+        if sidebar.width > 0 {
+            for y in sidebar.y..sidebar.bottom() {
+                if !self.view.dialog.contains((sidebar.right() - 1, y).into()) {
+                    buffer.set_stringn(sidebar.right() - 1, y, "│", 1, Style::default().fg(ACCENT));
+                }
+            }
+        }
+    }
+
+    fn paint_borders(&self, buffer: &mut Buffer) {
         // Fixed-count borders/dividers per client frame, never per agent/pane.
         for rect in [
             self.view.composer_box,
@@ -83,88 +113,73 @@ impl BusUi {
                 }
             }
         }
-        // Selection tints the rows it covers but stays beneath a dialog.
-        fn paint_selection(selection: &[Rect], buffer: &mut Buffer) {
-            for rect in selection {
-                let rect = rect.intersection(buffer.area);
-                for y in rect.top()..rect.bottom() {
-                    for x in rect.left()..rect.right() {
-                        buffer[(x, y)].set_bg(SELECTION);
-                    }
-                }
+    }
+}
+
+// Selection tints the rows it covers but stays beneath a dialog.
+fn paint_selection(selection: &[Rect], buffer: &mut Buffer) {
+    for rect in selection {
+        let rect = rect.intersection(buffer.area);
+        for y in rect.top()..rect.bottom() {
+            for x in rect.left()..rect.right() {
+                buffer[(x, y)].set_bg(SELECTION);
             }
         }
-        let mut selection_painted = false;
-        for (index, row) in self.view.rows.iter().enumerate() {
-            if index == self.view.dialog_rows_start && self.view.dialog.width > 0 {
-                paint_selection(&self.view.selection, buffer);
-                selection_painted = true;
-                let rect = self.view.dialog.intersection(buffer.area);
-                Clear.render(rect, buffer);
-                Block::default()
-                    .borders(Borders::ALL)
-                    .style(Style::default().bg(Color::Rgb(24, 24, 28)))
-                    .border_style(Style::default().fg(ACCENT))
-                    .render(rect, buffer);
-            }
-            if row.y >= buffer.area.bottom() || row.x >= buffer.area.right() {
+    }
+}
+
+fn paint_row(row: &Row, buffer: &mut Buffer) {
+    if row.y >= buffer.area.bottom() || row.x >= buffer.area.right() {
+        return;
+    }
+    let foreground = row.color.unwrap_or(if row.muted {
+        Color::Rgb(145, 148, 159)
+    } else {
+        Color::Rgb(222, 222, 226)
+    });
+    let style = Style::default()
+        .fg(foreground)
+        .bg(if row.selected {
+            Color::Rgb(46, 48, 58)
+        } else {
+            Color::Rgb(24, 24, 28)
+        })
+        .patch(row.style.unwrap_or_default());
+    buffer.set_stringn(
+        row.x,
+        row.y,
+        display(&row.text),
+        row.width.min(buffer.area.right() - row.x) as usize,
+        style,
+    );
+    if let Some(colors) = &row.character_colors {
+        let mut x = row.x;
+        let right = row.x.saturating_add(row.width).min(buffer.area.right());
+        for (index, character) in display(&row.text).chars().enumerate() {
+            let width = cell_width(character) as u16;
+            if width == 0 {
                 continue;
             }
-            let style = Style::default()
-                .fg(row.color.unwrap_or(if row.muted {
-                    Color::Rgb(145, 148, 159)
-                } else {
-                    Color::Rgb(222, 222, 226)
-                }))
-                .bg(if row.selected {
-                    Color::Rgb(46, 48, 58)
-                } else {
-                    Color::Rgb(24, 24, 28)
-                })
-                .patch(row.style.unwrap_or_default());
+            if x.saturating_add(width) > right {
+                break;
+            }
+            // The base style always has a foreground; patch preserves it
+            // unless it supplies another. Keep that base without unwrapping.
+            let color = colors
+                .get(index)
+                .copied()
+                .unwrap_or(style.fg.unwrap_or(foreground));
             buffer.set_stringn(
-                row.x,
+                x,
                 row.y,
-                display(&row.text),
-                row.width.min(buffer.area.right() - row.x) as usize,
-                style,
+                character.to_string(),
+                usize::from(width),
+                style.fg(color),
             );
-            if let Some(colors) = &row.character_colors {
-                let mut x = row.x;
-                let right = row.x.saturating_add(row.width).min(buffer.area.right());
-                for (index, character) in display(&row.text).chars().enumerate() {
-                    let width = cell_width(character) as u16;
-                    if width == 0 {
-                        continue;
-                    }
-                    if x.saturating_add(width) > right {
-                        break;
-                    }
-                    let color = colors.get(index).copied().unwrap_or(style.fg.unwrap());
-                    buffer.set_stringn(
-                        x,
-                        row.y,
-                        character.to_string(),
-                        usize::from(width),
-                        style.fg(color),
-                    );
-                    x = x.saturating_add(width);
-                }
-            }
-            if row.color.is_none() && row.text.starts_with('#') {
-                buffer.set_stringn(row.x, row.y, "#", 1, Style::default().fg(ACCENT));
-            }
+            x = x.saturating_add(width);
         }
-        if !selection_painted {
-            paint_selection(&self.view.selection, buffer);
-        }
-        let sidebar = self.view.sidebar.intersection(buffer.area);
-        if sidebar.width > 0 {
-            for y in sidebar.y..sidebar.bottom() {
-                if !self.view.dialog.contains((sidebar.right() - 1, y).into()) {
-                    buffer.set_stringn(sidebar.right() - 1, y, "│", 1, Style::default().fg(ACCENT));
-                }
-            }
-        }
+    }
+    if row.color.is_none() && row.text.starts_with('#') {
+        buffer.set_stringn(row.x, row.y, "#", 1, Style::default().fg(ACCENT));
     }
 }

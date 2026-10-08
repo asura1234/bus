@@ -258,37 +258,7 @@ impl Worker {
         events: &mpsc::Sender<BusEvent>,
     ) -> Result<(), String> {
         let orchestrates = orchestrator.as_ref().map(|spec| spec.room);
-        // Before anything else, so the CLI and the form get the same answer.
-        if orchestrator.is_some() {
-            orchestrator::check_new_orchestrator(input.provider)?;
-        }
-        let cwd = launch::canonical_directory(&input.cwd)?;
-        // One provider session belongs to one Bus agent: bound by its hook, or
-        // reserved by a launch that adopted it and has not reported yet.
-        if let Some(session) = launch::adopted_session(input.provider, &input.extra_args)? {
-            if let Some(owner) = self.state.agents().find(|agent| {
-                let identity = &agent.runtime_identity;
-                identity.session_id.as_deref() == Some(session.as_str())
-                    || identity.launch_id.as_ref().is_some_and(|launch| {
-                        launch::reserved_session(&self.data_dir.join("callbacks").join(launch))
-                            .is_some_and(|reserved| reserved == session)
-                    })
-            }) {
-                return Err(format!(
-                    "Session {session} already belongs to Bus agent {}",
-                    owner.name
-                ));
-            }
-        }
-        // Every MASTER agent is an orchestrator bound to one work room.
-        if orchestrates.is_none()
-            && self
-                .state
-                .room(input.room)
-                .is_some_and(|room| room.kind == RoomKind::Master)
-        {
-            return Err(MASTER_AGENT_NEEDS_ROOM.into());
-        }
+        let cwd = self.validate_agent_addition(&input, orchestrator.as_ref())?;
         let mut state = self.state.clone();
         let id = state
             .create_agent(input.room, &input.name, input.provider, cwd.clone(), None)
@@ -315,81 +285,16 @@ impl Worker {
             &self.data_dir,
             &std::env::current_exe().map_err(|e| e.to_string())?,
         )?;
-        let spool = self
-            .data_dir
-            .join("callbacks")
-            .join(&prepared.manifest.launch_id);
         if let Some(spec) = &orchestrator {
-            let values = orchestrator::PromptValues {
-                room: orchestrates
-                    .and_then(|room| state.room(room))
-                    .map(|room| (room.name.clone(), room.id)),
-                agent: state.agent(id).map(|a| a.name.clone()).unwrap_or_default(),
-                docs: orchestrator::write_docs(&self.data_dir)?,
-            };
-            let template = spec
-                .system_prompt
-                .as_deref()
-                .unwrap_or(orchestrator::DEFAULT_PROMPT);
-            let text = orchestrator::fill(template, &values);
-            let adopted = prepared.adopted_session.is_some();
-            let path = orchestrator::write_prompt(&spool, &text)?;
-            match orchestrator::prompt_args(input.provider, &path, adopted)? {
-                Some(args) => prepared.args.extend(args),
-                // Queued until the agent is ready, like any room message.
-                None => {
-                    let master = input.room;
-                    state
-                        .submit_message_with(
-                            master,
-                            Draft {
-                                text: orchestrator::prompt_message(&text),
-                                files: Vec::new(),
-                                recipient_ids: [id].into_iter().collect(),
-                            },
-                            Author::Human,
-                            crate::bus::io::now_ms(),
-                            // The system prompt is the agent's first turn of its own.
-                            true,
-                        )
-                        .map_err(|e| e.to_string())?;
-                }
-            }
+            self.prepare_orchestrator_prompt(&input, id, &mut state, spec, &mut prepared)?;
         }
-        // cursor-agent --resume fires no sessionStart; its first hook comes with
-        // the first prompt, which Bus types only into a bound session. The
-        // session Bus itself launched with binds it, and every later callback
-        // must still match it.
-        let session_id = prepared
-            .adopted_session
-            .clone()
-            .filter(|_| input.provider == Provider::Cursor);
-        let identity = AgentRuntimeIdentity {
-            launch_id: Some(prepared.manifest.launch_id),
-            session_id,
-            ..Default::default()
-        };
-        state
-            .set_agent_runtime_identity(id, identity.clone())
-            .map_err(|e| e.to_string())?;
-        if input.provider == Provider::ClaudeCode {
-            state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
-        }
-        state
-            .set_agent_error(
-                id,
-                Some(
-                    match input.provider {
-                        Provider::Codex | Provider::Cursor => {
-                            "Not ready; waiting for the provider terminal."
-                        }
-                        Provider::ClaudeCode => "Not ready; waiting for provider hook readiness.",
-                    }
-                    .into(),
-                ),
-            )
-            .map_err(|e| e.to_string())?;
-        self.save(state)?;
+        let identity = self.persist_agent_launch(
+            state,
+            id,
+            input.provider,
+            prepared.manifest.launch_id,
+            prepared.adopted_session.clone(),
+        )?;
         let created = self
             .transport
             .request(Method::TabCreate(schema::TabCreateParams {
@@ -438,29 +343,174 @@ impl Worker {
                 let Some(session) = identity.session_id else {
                     return Ok(());
                 };
-                // What a SessionStart hook would report, so the native layer's
-                // identity checks for dialogs and delivery accept this pane.
-                let kind = launch::provider_kind(input.provider);
-                match self.transport.request(Method::PaneReportAgentSession(
-                    schema::PaneReportAgentSessionParams {
-                        pane_id: pane,
-                        source: format!("herdr:{kind}"),
-                        agent: kind.into(),
-                        seq: None,
-                        agent_session_id: Some(session),
-                        agent_session_path: None,
-                        session_start_source: Some("resume".into()),
-                    },
-                )) {
-                    Ok(_) => Ok(()),
-                    Err(error) => self.agent_error(
-                        id,
-                        format!("Adopted session not reported to its terminal: {}", error.message),
-                    ),
-                }
+                self.report_adopted_session(id, input.provider, pane, session)
             }
             other => self.agent_error(id,format!("Agent start outcome requires inspection of its owned terminal; no automatic retry or deletion. {other:?}")),
         }
+    }
+
+    fn persist_agent_launch(
+        &mut self,
+        mut state: super::BusState,
+        id: AgentId,
+        provider: Provider,
+        launch_id: String,
+        adopted_session: Option<String>,
+    ) -> Result<AgentRuntimeIdentity, String> {
+        // cursor-agent --resume fires no sessionStart; its first hook comes with
+        // the first prompt, which Bus types only into a bound session. The
+        // session Bus itself launched with binds it, and every later callback
+        // must still match it.
+        let session_id = adopted_session.filter(|_| provider == Provider::Cursor);
+        let identity = AgentRuntimeIdentity {
+            launch_id: Some(launch_id),
+            session_id,
+            ..Default::default()
+        };
+        state
+            .set_agent_runtime_identity(id, identity.clone())
+            .map_err(|e| e.to_string())?;
+        if provider == Provider::ClaudeCode {
+            state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
+        }
+        state
+            .set_agent_error(
+                id,
+                Some(
+                    match provider {
+                        Provider::Codex | Provider::Cursor => {
+                            "Not ready; waiting for the provider terminal."
+                        }
+                        Provider::ClaudeCode => "Not ready; waiting for provider hook readiness.",
+                    }
+                    .into(),
+                ),
+            )
+            .map_err(|e| e.to_string())?;
+        self.save(state)?;
+        Ok(identity)
+    }
+
+    fn report_adopted_session(
+        &mut self,
+        id: AgentId,
+        provider: Provider,
+        pane: String,
+        session: String,
+    ) -> Result<(), String> {
+        // What a SessionStart hook would report, so the native layer's
+        // identity checks for dialogs and delivery accept this pane.
+        let kind = launch::provider_kind(provider);
+        match self.transport.request(Method::PaneReportAgentSession(
+            schema::PaneReportAgentSessionParams {
+                pane_id: pane,
+                source: format!("herdr:{kind}"),
+                agent: kind.into(),
+                seq: None,
+                agent_session_id: Some(session),
+                agent_session_path: None,
+                session_start_source: Some("resume".into()),
+            },
+        )) {
+            Ok(_) => Ok(()),
+            Err(error) => self.agent_error(
+                id,
+                format!(
+                    "Adopted session not reported to its terminal: {}",
+                    error.message
+                ),
+            ),
+        }
+    }
+
+    fn prepare_orchestrator_prompt(
+        &self,
+        input: &AddAgent,
+        id: AgentId,
+        state: &mut super::BusState,
+        spec: &OrchestratorSpec,
+        prepared: &mut launch::PreparedLaunch,
+    ) -> Result<(), String> {
+        let spool = self
+            .data_dir
+            .join("callbacks")
+            .join(&prepared.manifest.launch_id);
+        let values = orchestrator::PromptValues {
+            room: state
+                .room(spec.room)
+                .map(|room| (room.name.clone(), room.id)),
+            agent: state.agent(id).map(|a| a.name.clone()).unwrap_or_default(),
+            docs: orchestrator::write_docs(&self.data_dir)?,
+        };
+        let template = spec
+            .system_prompt
+            .as_deref()
+            .unwrap_or(orchestrator::DEFAULT_PROMPT);
+        let text = orchestrator::fill(template, &values);
+        let adopted = prepared.adopted_session.is_some();
+        let path = orchestrator::write_prompt(&spool, &text)?;
+        match orchestrator::prompt_args(input.provider, &path, adopted)? {
+            Some(args) => prepared.args.extend(args),
+            // Queued until the agent is ready, like any room message.
+            None => {
+                let master = input.room;
+                state
+                    .submit_message_with(
+                        master,
+                        Draft {
+                            text: orchestrator::prompt_message(&text),
+                            files: Vec::new(),
+                            recipient_ids: [id].into_iter().collect(),
+                        },
+                        Author::Human,
+                        crate::bus::io::now_ms(),
+                        // The system prompt is the agent's first turn of its own.
+                        true,
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_agent_addition(
+        &self,
+        input: &AddAgent,
+        orchestrator: Option<&OrchestratorSpec>,
+    ) -> Result<std::path::PathBuf, String> {
+        let orchestrates = orchestrator.map(|spec| spec.room);
+        // Before anything else, so the CLI and the form get the same answer.
+        if orchestrator.is_some() {
+            orchestrator::check_new_orchestrator(input.provider)?;
+        }
+        let cwd = launch::canonical_directory(&input.cwd)?;
+        // One provider session belongs to one Bus agent: bound by its hook, or
+        // reserved by a launch that adopted it and has not reported yet.
+        if let Some(session) = launch::adopted_session(input.provider, &input.extra_args)? {
+            if let Some(owner) = self.state.agents().find(|agent| {
+                let identity = &agent.runtime_identity;
+                identity.session_id.as_deref() == Some(session.as_str())
+                    || identity.launch_id.as_ref().is_some_and(|launch| {
+                        launch::reserved_session(&self.data_dir.join("callbacks").join(launch))
+                            .is_some_and(|reserved| reserved == session)
+                    })
+            }) {
+                return Err(format!(
+                    "Session {session} already belongs to Bus agent {}",
+                    owner.name
+                ));
+            }
+        }
+        // Every MASTER agent is an orchestrator bound to one work room.
+        if orchestrates.is_none()
+            && self
+                .state
+                .room(input.room)
+                .is_some_and(|room| room.kind == RoomKind::Master)
+        {
+            return Err(MASTER_AGENT_NEEDS_ROOM.into());
+        }
+        Ok(cwd)
     }
 
     pub(super) fn agent_error(&mut self, id: AgentId, message: String) -> Result<(), String> {

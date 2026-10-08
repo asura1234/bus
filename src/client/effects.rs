@@ -1,4 +1,17 @@
-use super::*;
+#[cfg(not(windows))]
+use super::query_host_terminal_appearance;
+use super::{
+    endpoint, endpoint_commands, query_host_terminal_theme, shell, write_to_server, ClientError,
+    ClientState,
+};
+#[cfg(test)]
+use crate::protocol::render_ansi;
+use crate::protocol::{ClientMessage, FrameData};
+use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::sync::Arc;
+use tracing::warn;
 
 /// Set when the human quits Bus. The server and its agents stop only after the
 /// client has restored the terminal, so the stop wait and any error stay readable.

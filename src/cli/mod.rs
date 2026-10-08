@@ -45,7 +45,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         let sessions = registry.list().map_err(io::Error::other)?;
         let output = sessions::format_session_list(&sessions, bus_io::now_ms());
         if !output.is_empty() {
-            println!("{output}");
+            help::write_stdout_line(format_args!("{output}"));
         }
         return Ok(());
     }
@@ -114,39 +114,12 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             // without saving drafts, so quit it first when one is open.
             stop::run()
         }
-        Action::Run | Action::Resume(_) => {
-            if let Some(id) = &local_session_id {
-                eprintln!("Bus session: {id}");
-            }
-            // Only a read-only liveness check: never change an attached server's
-            // lifecycle or release queued requests to enable diagnostics.
-            if dev && launch::is_server_listening() {
-                std::env::set_var("BUS_DEV_EXISTING_SERVER", "1");
-                eprintln!("{}", diagnostics::EXISTING_SERVER_NOTICE);
-            }
-            let result = launch::auto_detect_launch(false);
-            if let Some(id) = local_session_id {
-                let cleanup = (|| -> Result<(), String> {
-                    if !registry.is_empty(&id)? {
-                        return Ok(());
-                    }
-                    if launch::is_server_listening() {
-                        crate::session::stop_active_server()?;
-                    }
-                    registry.discard_if_empty(&id)?;
-                    Ok(())
-                })();
-                if result.is_ok() {
-                    cleanup.map_err(io::Error::other)?;
-                }
-            }
-            result
-        }
+        Action::Run | Action::Resume(_) => run_session(&registry, local_session_id, dev),
         Action::Paths => {
-            println!(
+            help::write_stdout_line(format_args!(
                 "{}",
                 serde_json::json!({"data":root,"session_base":base,"dev":dev,"logs":crate::session::data_dir(),"callback_logs":root.join("callbacks/<launch-id>/hook.log"),"config":crate::config::config_dir(),"state":crate::config::state_dir(),"xdg_config":std::env::var("XDG_CONFIG_HOME").ok(),"xdg_state":std::env::var("XDG_STATE_HOME").ok()})
-            );
+            ));
             Ok(())
         }
         Action::Sessions | Action::Help => unreachable!(),
@@ -156,6 +129,39 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
 pub(crate) fn apply_config(config: &mut crate::config::Config) {
     config.onboarding = Some(false);
     config.ui.sound.enabled = false;
+}
+
+fn run_session(
+    registry: &LocalSessionRegistry,
+    local_session_id: Option<String>,
+    dev: bool,
+) -> io::Result<()> {
+    if let Some(id) = &local_session_id {
+        eprintln!("Bus session: {id}");
+    }
+    // Only a read-only liveness check: never change an attached server's
+    // lifecycle or release queued requests to enable diagnostics.
+    if dev && launch::is_server_listening() {
+        std::env::set_var("BUS_DEV_EXISTING_SERVER", "1");
+        eprintln!("{}", diagnostics::EXISTING_SERVER_NOTICE);
+    }
+    let result = launch::auto_detect_launch(false);
+    if let Some(id) = local_session_id {
+        let cleanup = (|| -> Result<(), String> {
+            if !registry.is_empty(&id)? {
+                return Ok(());
+            }
+            if launch::is_server_listening() {
+                crate::session::stop_active_server()?;
+            }
+            registry.discard_if_empty(&id)?;
+            Ok(())
+        })();
+        if result.is_ok() {
+            cleanup.map_err(io::Error::other)?;
+        }
+    }
+    result
 }
 
 #[cfg(test)]

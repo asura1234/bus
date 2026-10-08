@@ -107,57 +107,7 @@ fn load(
         .load()
         .map_err(|_| "Bus resume state is unreadable")?
         .ok_or("Bus resume state is missing")?;
-    let owns = |agent: &&Agent, value: &str| {
-        super::launch::provider_kind(agent.provider) == session.agent
-            && agent.runtime_identity.session_id.as_deref() == Some(value)
-    };
-    let mut candidates = state
-        .agents()
-        .filter(|agent| owns(agent, &session.session_ref.value));
-    let mut corrected = None;
-    let agent = match candidates.next() {
-        Some(agent) => {
-            if candidates.next().is_some()
-                || terminal.agent_name.as_deref()
-                    != Some(format!("bus-r{}-a{}", agent.room_id.0, agent.id.0).as_str())
-            {
-                return Err("Bus resume ownership is ambiguous or mismatched".into());
-            }
-            agent
-        }
-        // The terminal kept a conversation Bus moved away from, as an older
-        // server did for a Cursor new chat after `agent clear`. The agent
-        // this terminal was launched for, by name and provider, resumes the
-        // conversation its own hooks bound, never one another agent owns.
-        None => {
-            let mut named = state.agents().filter(|agent| {
-                super::launch::provider_kind(agent.provider) == session.agent
-                    && terminal.agent_name.as_deref()
-                        == Some(format!("bus-r{}-a{}", agent.room_id.0, agent.id.0).as_str())
-            });
-            let agent = named
-                .next()
-                .ok_or("Bus resume has no matching saved owner")?;
-            let bound = agent
-                .runtime_identity
-                .session_id
-                .as_deref()
-                .ok_or("Bus resume has no matching saved owner")?;
-            if named.next().is_some()
-                || state.agents().filter(|other| owns(other, bound)).count() != 1
-            {
-                return Err("Bus resume ownership is ambiguous or mismatched".into());
-            }
-            let session_ref = crate::agent_resume::AgentSessionRef::id(bound)
-                .ok_or("Bus resume session is not a provider session ID")?;
-            corrected = Some(crate::agent_resume::PersistedAgentSession {
-                source: session.source.clone(),
-                agent: session.agent.clone(),
-                session_ref,
-            });
-            agent
-        }
-    };
+    let (agent, corrected) = resume_owner(&state, terminal, session)?;
     if agent.deletion_pending
         || state
             .room(agent.room_id)
@@ -196,22 +146,7 @@ fn load(
     {
         return Err("Bus resume callback manifest does not match its saved owner".into());
     }
-    let hook_path = match agent.provider {
-        Provider::ClaudeCode => spool.join("claude-settings.json"),
-        Provider::Codex => project.join(".codex/hooks.json"),
-        Provider::Cursor => project.join(".cursor/hooks.json"),
-    };
-    if validate_hooks(&hook_path, agent.provider, binary).is_err() {
-        // Another Bus executable rewrote the owned hooks in place, as any Bus
-        // launching an agent in this project does. Without them this resume
-        // could never report a turn, so take them back the same way.
-        super::launch::rebind_owned_hooks(&hook_path, agent.provider, binary).map_err(|_| {
-            "Bus resume hooks are missing or changed; existing configuration was kept"
-        })?;
-        validate_hooks(&hook_path, agent.provider, binary)?;
-        tracing::info!(event = "bus.resume.hooks_rebound", agent_id = agent.id.0,
-            path = %hook_path.display(), "Bus hooks moved back to this executable for resume");
-    }
+    let hook_path = resume_hook_path(agent, &spool, project, binary)?;
     let env = vec![
         ("BUS_LAUNCH_ID".into(), launch.into()),
         (
@@ -761,4 +696,94 @@ mod tests {
             );
         }
     }
+}
+
+fn resume_owner<'a>(
+    state: &'a crate::messaging::model::BusState,
+    terminal: &TerminalState,
+    session: &crate::agent_resume::PersistedAgentSession,
+) -> Result<
+    (
+        &'a Agent,
+        Option<crate::agent_resume::PersistedAgentSession>,
+    ),
+    String,
+> {
+    let owns = |agent: &&Agent, value: &str| {
+        super::launch::provider_kind(agent.provider) == session.agent
+            && agent.runtime_identity.session_id.as_deref() == Some(value)
+    };
+    let mut candidates = state
+        .agents()
+        .filter(|agent| owns(agent, &session.session_ref.value));
+    let mut corrected = None;
+    let agent = match candidates.next() {
+        Some(agent) => {
+            if candidates.next().is_some()
+                || terminal.agent_name.as_deref()
+                    != Some(format!("bus-r{}-a{}", agent.room_id.0, agent.id.0).as_str())
+            {
+                return Err("Bus resume ownership is ambiguous or mismatched".into());
+            }
+            agent
+        }
+        // The terminal kept a conversation Bus moved away from, as an older
+        // server did for a Cursor new chat after `agent clear`. The agent
+        // this terminal was launched for, by name and provider, resumes the
+        // conversation its own hooks bound, never one another agent owns.
+        None => {
+            let mut named = state.agents().filter(|agent| {
+                super::launch::provider_kind(agent.provider) == session.agent
+                    && terminal.agent_name.as_deref()
+                        == Some(format!("bus-r{}-a{}", agent.room_id.0, agent.id.0).as_str())
+            });
+            let agent = named
+                .next()
+                .ok_or("Bus resume has no matching saved owner")?;
+            let bound = agent
+                .runtime_identity
+                .session_id
+                .as_deref()
+                .ok_or("Bus resume has no matching saved owner")?;
+            if named.next().is_some()
+                || state.agents().filter(|other| owns(other, bound)).count() != 1
+            {
+                return Err("Bus resume ownership is ambiguous or mismatched".into());
+            }
+            let session_ref = crate::agent_resume::AgentSessionRef::id(bound)
+                .ok_or("Bus resume session is not a provider session ID")?;
+            corrected = Some(crate::agent_resume::PersistedAgentSession {
+                source: session.source.clone(),
+                agent: session.agent.clone(),
+                session_ref,
+            });
+            agent
+        }
+    };
+    Ok((agent, corrected))
+}
+
+fn resume_hook_path(
+    agent: &Agent,
+    spool: &Path,
+    project: &Path,
+    binary: &Path,
+) -> Result<PathBuf, String> {
+    let hook_path = match agent.provider {
+        Provider::ClaudeCode => spool.join("claude-settings.json"),
+        Provider::Codex => project.join(".codex/hooks.json"),
+        Provider::Cursor => project.join(".cursor/hooks.json"),
+    };
+    if validate_hooks(&hook_path, agent.provider, binary).is_err() {
+        // Another Bus executable rewrote the owned hooks in place, as any Bus
+        // launching an agent in this project does. Without them this resume
+        // could never report a turn, so take them back the same way.
+        super::launch::rebind_owned_hooks(&hook_path, agent.provider, binary).map_err(|_| {
+            "Bus resume hooks are missing or changed; existing configuration was kept"
+        })?;
+        validate_hooks(&hook_path, agent.provider, binary)?;
+        tracing::info!(event = "bus.resume.hooks_rebound", agent_id = agent.id.0,
+            path = %hook_path.display(), "Bus hooks moved back to this executable for resume");
+    }
+    Ok(hook_path)
 }

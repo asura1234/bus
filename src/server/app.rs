@@ -155,6 +155,60 @@ impl App {
             (Vec::new(), None, 0)
         };
 
+        let mut state =
+            Self::initial_state(config, config_diagnostic, workspaces, active, selected);
+
+        state.terminals = restored_terminals;
+
+        state.refresh_workspace_auto_labels(&restored_terminal_runtimes);
+
+        let last_focus = state.active.and_then(|idx| {
+            state
+                .workspaces
+                .get(idx)
+                .and_then(|ws| ws.focused_pane_id().map(|pane_id| (idx, pane_id)))
+        });
+
+        let mut app = Self {
+            config_diagnostic_deadline: None,
+            toast_deadline: None,
+            last_api_notification_at: None,
+            state,
+            pixel_mouse_available: false,
+            terminal_runtimes: restored_terminal_runtimes,
+            event_tx,
+            event_rx,
+            loaded_host_cursor: config.ui.host_cursor,
+            pending_agent_resume_deadline: None,
+            session_save_deadline: None,
+            session_save_thread: None,
+            pane_exit_checkpoint_pending: false,
+            detached_process_children: Vec::new(),
+            window_title_template: None,
+            persist_pane_history: config.experimental.pane_history,
+            last_render_at: None,
+            last_presentation_at: None,
+            api_rx,
+            event_hub,
+            last_focus,
+            policy,
+            render_notify,
+            render_dirty,
+            full_redraw_pending: false,
+            overlay_panes: HashMap::new(),
+            config_reloaded_from_disk: false,
+        };
+        app.configure_window_title(&config.ui.window_title);
+        app
+    }
+
+    fn initial_state(
+        config: &Config,
+        config_diagnostic: Option<String>,
+        workspaces: Vec<crate::server::workspaces::Workspace>,
+        active: Option<usize>,
+        selected: usize,
+    ) -> AppState {
         let agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
 
         info!(
@@ -171,7 +225,7 @@ impl App {
         let theme_runtime = theme_runtime_config(config, true);
         let (theme_palette, theme_name) = resolve_effective_theme(&theme_runtime, None);
 
-        let mut state = AppState {
+        AppState {
             terminals: std::collections::HashMap::new(),
             pane_id_aliases: std::collections::HashMap::new(),
             public_pane_id_aliases: std::collections::HashMap::new(),
@@ -219,50 +273,7 @@ impl App {
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
             terminal_runtime_shutdowns: Vec::new(),
-        };
-
-        state.terminals = restored_terminals;
-
-        state.refresh_workspace_auto_labels(&restored_terminal_runtimes);
-
-        let last_focus = state.active.and_then(|idx| {
-            state
-                .workspaces
-                .get(idx)
-                .and_then(|ws| ws.focused_pane_id().map(|pane_id| (idx, pane_id)))
-        });
-
-        let mut app = Self {
-            config_diagnostic_deadline: None,
-            toast_deadline: None,
-            last_api_notification_at: None,
-            state,
-            pixel_mouse_available: false,
-            terminal_runtimes: restored_terminal_runtimes,
-            event_tx,
-            event_rx,
-            loaded_host_cursor: config.ui.host_cursor,
-            pending_agent_resume_deadline: None,
-            session_save_deadline: None,
-            session_save_thread: None,
-            pane_exit_checkpoint_pending: false,
-            detached_process_children: Vec::new(),
-            window_title_template: None,
-            persist_pane_history: config.experimental.pane_history,
-            last_render_at: None,
-            last_presentation_at: None,
-            api_rx,
-            event_hub,
-            last_focus,
-            policy,
-            render_notify,
-            render_dirty,
-            full_redraw_pending: false,
-            overlay_panes: HashMap::new(),
-            config_reloaded_from_disk: false,
-        };
-        app.configure_window_title(&config.ui.window_title);
-        app
+        }
     }
 
     pub(crate) fn ensure_default_workspace(&mut self) -> bool {

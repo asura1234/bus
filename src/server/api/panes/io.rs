@@ -131,6 +131,9 @@ impl App {
             params.format,
             params.lines,
         );
+        let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) else {
+            return pane_not_found(id, &params.pane_id);
+        };
 
         encode_success(
             id,
@@ -138,7 +141,7 @@ impl App {
                 read: PaneReadResult {
                     pane_id: public_pane_id,
                     workspace_id,
-                    tab_id: self.public_tab_id(ws_idx, tab_idx).unwrap(),
+                    tab_id,
                     source: params.source,
                     format: params.format,
                     text: snapshot.text,

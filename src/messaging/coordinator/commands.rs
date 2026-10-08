@@ -1,5 +1,8 @@
 //! Single-writer command dispatch.
-use super::{launch, mpsc, schema, BusCommand, BusEvent, Method, Provider, ResponseResult, Worker};
+use super::{
+    launch, mpsc, schema, AgentId, BusCommand, BusEvent, BusState, Method, Provider,
+    ResponseResult, RoomId, Worker,
+};
 
 impl Worker {
     pub(super) fn command(
@@ -58,41 +61,12 @@ impl Worker {
             }
             BusCommand::RemoveFile(room, path) => state.remove_file(room, &path),
             BusCommand::Submit(room) | BusCommand::SubmitQueued(room) => {
-                let now = crate::bus::io::now_ms();
-                let requests = if queued {
-                    state.submit_draft_queued(room, now)
-                } else {
-                    state.submit_draft(room, now)
-                }
-                .map_err(|e| e.to_string())?;
-                self.save(state)?;
-                for id in requests {
-                    super::super::diagnostics::request(
-                        &self.state,
-                        id,
-                        "bus.message.queued",
-                        "persisted",
-                    );
-                }
-                return Ok(());
+                return self.persist_draft_submission(state, room, queued);
             }
             BusCommand::SetDetails(id, expanded) => state.set_agent_details_disclosed(id, expanded),
             BusCommand::CompleteHookSetup(id) => {
-                if state
-                    .agent(id)
-                    .is_some_and(|agent| agent.session_binding_invalidated)
-                {
-                    return Err("This provider session changed; create a new Bus agent. Existing requests remain preserved.".into());
-                }
-                state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
-                if state.agent(id).is_some_and(|a| {
-                    (a.runtime_identity.session_id.is_some() || a.provider == Provider::Codex)
-                        && a.current_request.is_none()
-                }) {
-                    state.set_agent_error(id, None)
-                } else {
-                    state.set_agent_error(id,Some("Awaiting matching provider session-start hook. Trust all Bus hooks, then restart/resume normally.".into()))
-                }
+                complete_hook_setup(&mut state, id)?;
+                Ok(())
             }
             BusCommand::Suggestions {
                 query_id,
@@ -110,24 +84,7 @@ impl Worker {
                 return self.add_agent(input, Some(spec), events)
             }
             BusCommand::FocusTerminal(id) => {
-                let agent = state.agent(id).ok_or("Unknown agent")?;
-                let target = agent
-                    .runtime_identity
-                    .pane_id
-                    .clone()
-                    .ok_or("Agent has no terminal; inspect its launch error")?;
-                let result = self
-                    .transport
-                    .request(Method::PaneFocus(schema::PaneTarget { pane_id: target }))
-                    .map_err(|e| e.message)?;
-                let ResponseResult::PaneInfo { pane } = result else {
-                    return Err("Unexpected focus response".into());
-                };
-                let _ = events.send(BusEvent::TerminalFocused {
-                    agent: id,
-                    pane_id: pane.pane_id,
-                });
-                state.leave_room_view();
+                self.focus_terminal(&mut state, id, events)?;
                 Ok(())
             }
             BusCommand::Dev(_) | BusCommand::Shutdown => return Ok(()),
@@ -135,4 +92,69 @@ impl Worker {
         result.map_err(|e| e.to_string())?;
         self.save(state)
     }
+
+    fn persist_draft_submission(
+        &mut self,
+        mut state: BusState,
+        room: RoomId,
+        queued: bool,
+    ) -> Result<(), String> {
+        let now = crate::bus::io::now_ms();
+        let requests = if queued {
+            state.submit_draft_queued(room, now)
+        } else {
+            state.submit_draft(room, now)
+        }
+        .map_err(|e| e.to_string())?;
+        self.save(state)?;
+        for id in requests {
+            super::super::diagnostics::request(&self.state, id, "bus.message.queued", "persisted");
+        }
+        Ok(())
+    }
+
+    fn focus_terminal(
+        &mut self,
+        state: &mut BusState,
+        id: AgentId,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        let agent = state.agent(id).ok_or("Unknown agent")?;
+        let target = agent
+            .runtime_identity
+            .pane_id
+            .clone()
+            .ok_or("Agent has no terminal; inspect its launch error")?;
+        let result = self
+            .transport
+            .request(Method::PaneFocus(schema::PaneTarget { pane_id: target }))
+            .map_err(|e| e.message)?;
+        let ResponseResult::PaneInfo { pane } = result else {
+            return Err("Unexpected focus response".into());
+        };
+        let _ = events.send(BusEvent::TerminalFocused {
+            agent: id,
+            pane_id: pane.pane_id,
+        });
+        state.leave_room_view();
+        Ok(())
+    }
+}
+
+fn complete_hook_setup(state: &mut BusState, id: AgentId) -> Result<(), String> {
+    if state
+        .agent(id)
+        .is_some_and(|agent| agent.session_binding_invalidated)
+    {
+        return Err("This provider session changed; create a new Bus agent. Existing requests remain preserved.".into());
+    }
+    state.confirm_hook_setup(id).map_err(|e| e.to_string())?;
+    if state.agent(id).is_some_and(|a| {
+        (a.runtime_identity.session_id.is_some() || a.provider == Provider::Codex)
+            && a.current_request.is_none()
+    }) {
+        state.set_agent_error(id, None)
+    } else {
+        state.set_agent_error(id,Some("Awaiting matching provider session-start hook. Trust all Bus hooks, then restart/resume normally.".into()))
+    }.map_err(|e| e.to_string())
 }

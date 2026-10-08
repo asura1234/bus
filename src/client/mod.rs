@@ -44,12 +44,15 @@ use clipboard::forward_clipboard;
 #[cfg(test)]
 use config_reload::reload_local_client_config;
 use config_reload::{apply_reload, init_logging};
-use effects::*;
+use effects::{
+    client_shell_resize_message, dispatch_client_shell_actions, finish_client_shell_input,
+    install_client_shell_snapshot, stop_server_after_quit, sync_client_shell_keyboard_report_all,
+};
 use event_loop::run_client_loop;
 use events::ClientLoopEvent;
 use run::{ClientInputLifecycle, ClientLoopConfig};
 use state::ClientState;
-use transport::*;
+use transport::{start_endpoint_transport, write_to_server};
 
 pub use run::run_client;
 #[cfg(test)]
@@ -98,19 +101,16 @@ use handshake::do_handshake;
 use notifications::handle_notify_with_notifiers;
 use notifications::{forward_terminal_bells, handle_notify};
 
-use std::io::{self, Write as _};
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
-
-use tracing::{debug, info, warn};
-
-use crate::ipc::LocalStream;
 use crate::protocol::render_ansi;
+use crate::protocol::FrameData;
 #[cfg(test)]
 use crate::protocol::NotifyKind;
-use crate::protocol::{self, ClientMessage, FrameData, ServerMessage, MAX_GRAPHICS_FRAME_SIZE};
 use crate::server::socket_paths::client_socket_path;
+use std::io::{self, Write as _};
+use std::sync::atomic::{AtomicBool, AtomicU16};
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 #[cfg(test)]
 #[path = "tests/client_test.rs"]

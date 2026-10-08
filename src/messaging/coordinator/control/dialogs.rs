@@ -236,6 +236,72 @@ impl Worker {
                 ))
             }
         };
+        self.record_dialog_answer(id, option)?;
+        let (outcome, after) = self.settle_dialog_answer(
+            &pane_id,
+            &terminal_id,
+            session_id.as_deref(),
+            &claims,
+            option.is_some(),
+        );
+        if outcome == "closed" {
+            self.finish_answered_dialog(id)?;
+        }
+        let mut result = json!({
+            "agent_id": id,
+            "keys": keys,
+            "outcome": outcome,
+            "dialog": after.as_ref().map(dialog_json),
+        });
+        if let Some(option) = option {
+            result["option"] = json!(option);
+        } else {
+            result["skipped"] = json!(skip);
+        }
+        Ok(result)
+    }
+
+    fn settle_dialog_answer(
+        &mut self,
+        pane_id: &str,
+        terminal_id: &str,
+        session_id: Option<&str>,
+        claims: &DialogFingerprintClaims,
+        choice: bool,
+    ) -> (&'static str, Option<schema::AgentDialog>) {
+        // Moves are confirmed after a short delay, so watch until the dialog
+        // closes or another one replaces it.
+        let mut outcome = "unchanged";
+        let mut after = None;
+        for poll in 0..DIALOG_SETTLE_POLLS {
+            if poll > 0 {
+                std::thread::sleep(DIALOG_SETTLE_INTERVAL);
+            }
+            let Ok(observation) = self.native_dialog(pane_id, terminal_id, session_id) else {
+                outcome = "unknown";
+                break;
+            };
+            outcome = match &observation.dialog {
+                None => "closed",
+                Some(dialog) if dialog.digest == claims.dialog_digest => "unchanged",
+                Some(dialog) if dialog.id == claims.dialog_shape => {
+                    if choice {
+                        "selection_moved"
+                    } else {
+                        "input_changed"
+                    }
+                }
+                Some(_) => "replaced",
+            };
+            after = observation.dialog;
+            if matches!(outcome, "closed" | "replaced") {
+                break;
+            }
+        }
+        (outcome, after)
+    }
+
+    fn record_dialog_answer(&mut self, id: AgentId, option: Option<u32>) -> Result<(), String> {
         // Its closing is expected now, so no "closed on its own" follow-up.
         if let Some(option) = option {
             let mut answered = self.state.clone();
@@ -255,51 +321,7 @@ impl Worker {
                 .map_err(|error| error.to_string())?;
             self.save(answered)?;
         }
-        // Moves are confirmed after a short delay, so watch until the dialog
-        // closes or another one replaces it.
-        let mut outcome = "unchanged";
-        let mut after = None;
-        for poll in 0..DIALOG_SETTLE_POLLS {
-            if poll > 0 {
-                std::thread::sleep(DIALOG_SETTLE_INTERVAL);
-            }
-            let Ok(observation) = self.native_dialog(&pane_id, &terminal_id, session_id.as_deref())
-            else {
-                outcome = "unknown";
-                break;
-            };
-            outcome = match &observation.dialog {
-                None => "closed",
-                Some(dialog) if dialog.digest == claims.dialog_digest => "unchanged",
-                Some(dialog) if dialog.id == claims.dialog_shape => {
-                    if option.is_some() {
-                        "selection_moved"
-                    } else {
-                        "input_changed"
-                    }
-                }
-                Some(_) => "replaced",
-            };
-            after = observation.dialog;
-            if matches!(outcome, "closed" | "replaced") {
-                break;
-            }
-        }
-        if outcome == "closed" {
-            self.finish_answered_dialog(id)?;
-        }
-        let mut result = json!({
-            "agent_id": id,
-            "keys": keys,
-            "outcome": outcome,
-            "dialog": after.as_ref().map(dialog_json),
-        });
-        if let Some(option) = option {
-            result["option"] = json!(option);
-        } else {
-            result["skipped"] = json!(skip);
-        }
-        Ok(result)
+        Ok(())
     }
 }
 

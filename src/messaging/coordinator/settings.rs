@@ -1,6 +1,8 @@
 //! Global settings the coordinator applies to its session: MASTER's sound and
 //! the All rooms sound, which new work rooms start with (see `bus::settings`).
-use super::*;
+use super::{mpsc, BusEvent, BusState, Room, RoomId, RoomKind, Worker};
+#[cfg(test)]
+use super::{BusCommand, Method, Path, PathBuf, ResponseResult, Transport};
 use crate::bus::settings::{self, BusSettings, SoundPref};
 
 impl Worker {

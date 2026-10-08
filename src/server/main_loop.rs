@@ -301,209 +301,16 @@ impl HeadlessServer {
                 continue;
             }
 
-            // 1. Check the coalesced render signal from PTY readers and generic runtime work.
-            if self.app.render_dirty.is_pending() {
-                needs_render = true;
-                crate::render_prof::event("render.request.signal");
-            }
-            // 2. Drain a bounded internal-event batch. API handlers perform an
-            // exhaustive forwarding-aware drain before reading pane/runtime state.
-            if self.drain_internal_events_with_forwarding() {
-                needs_render = true;
-                needs_full_render = true;
-                crate::render_prof::event("full_render_cause.internal_events");
-            }
-            if self.should_quit.load(Ordering::Acquire) {
+            if !self.drain_loop_inputs(&mut needs_render, &mut needs_full_render)? {
                 continue;
             }
-            // 3. Drain API requests.
-            if self.drain_api_requests_with_shutdown_check() {
-                needs_render = true;
-                needs_full_render = true;
-                crate::render_prof::event("full_render_cause.api_requests");
-            }
-            if self.should_quit.load(Ordering::Acquire) {
-                continue;
-            }
-
-            self.app.sync_focus_events();
-            self.app.sync_session_save_schedule();
-
-            // 4. Accept new client connections.
-            self.accept_client_connections()?;
-
-            // 5. Drain server events from client threads.
-            if self.drain_server_events() {
-                needs_render = true;
-                needs_full_render = true;
-                crate::render_prof::event("full_render_cause.server_events");
-            }
-            if self.should_quit.load(Ordering::Acquire) {
-                continue;
-            }
-
-            // 6. Handle scheduled tasks.
             let now = Instant::now();
-            if self.handle_scheduled_tasks_headless(now, needs_render) {
-                needs_render = true;
-                needs_full_render = true;
-                crate::render_prof::event("full_render_cause.scheduled_tasks");
-            }
-
-            self.poll_pending_alt_screen_reads(now);
-            if self.process_deferred_alt_screen_reads() {
-                needs_render = true;
-                needs_full_render = true;
-            }
-
-            if latest_shell_client(&self.clients).is_some() && self.app.ensure_default_workspace() {
-                needs_render = true;
-                needs_full_render = true;
-                crate::render_prof::event("full_render_cause.default_workspace");
-            }
-
-            self.drain_client_config_reload_request();
-            self.sync_immediate_pty_sources();
-            self.stream_host_mouse_capture_mode();
-            self.stream_direct_terminal_keyboard_mode();
-
-            // 7. Render virtually and stream frames. Hidden-only PTY work keeps a
-            // bounded classification cadence without delaying presentation work
-            // that joins the same coalesced request.
-            let render_cadence_due = self.app.can_render_now(now);
-            if needs_render
-                && (render_cadence_due
-                    || (self.app.can_present_now(now)
-                        && self.has_pending_presentation_work(needs_full_render)))
-            {
-                crate::render_prof::event("render.attempt");
-                let render_request = self.app.render_dirty.take();
-                let pty_dirty = !render_request.pty_sources.is_empty();
-                if pty_dirty {
-                    crate::render_prof::event("render.attempt.pty_dirty");
-                    crate::render_prof::counter(
-                        "render.attempt.pty_sources",
-                        render_request.pty_sources.len() as u64,
-                    );
-                }
-                if render_request.generic {
-                    needs_full_render = true;
-                    crate::render_prof::event("full_render_cause.generic_dirty");
-                }
-                let (sidebar_title_changed, outer_title_synced) =
-                    self.sync_terminal_title_sources(&render_request.terminal_title_sources);
-                if sidebar_title_changed {
-                    needs_full_render = true;
-                    crate::render_prof::event("full_render_cause.terminal_title_sidebar");
-                }
-                if needs_full_render && !outer_title_synced {
-                    self.sync_window_title();
-                }
-                if !needs_full_render && !pty_dirty {
-                    // A synchronized-output OSC title can be the only pending work.
-                    // Its deferred PTY repaint has its own signal; do not manufacture
-                    // a full UI render for this client-local side effect.
-                    needs_render = false;
-                    continue;
-                }
-                let hidden_only = pty_dirty
-                    && !needs_full_render
-                    && !self.pty_sources_visible_to_any_render_target(&render_request.pty_sources);
-                if hidden_only {
-                    crate::render_prof::event("render.skipped.hidden_sources");
-                } else if !needs_full_render
-                    && self.render_retained_pane_surface_and_stream(&render_request.pty_sources)
-                {
-                    crate::render_prof::event("retained_surface.invoke");
-                } else {
-                    crate::render_prof::event("full_render.invoke");
-                    self.render_and_stream();
-                }
-                self.app.record_render_attempt(now, !hidden_only);
-                needs_render = false;
-                needs_full_render = false;
+            self.schedule_loop_work(now, &mut needs_render, &mut needs_full_render);
+            if self.render_pending_loop_work(now, &mut needs_render, &mut needs_full_render) {
                 continue;
             }
-
-            // 8. Wait for next event.
-            let next_deadline = self
-                .app
-                .next_headless_loop_deadline(now, needs_render)
-                .map(|deadline| deadline.min(now + CLIENT_ACCEPT_POLL_INTERVAL))
-                .or(Some(now + CLIENT_ACCEPT_POLL_INTERVAL));
-            let next_deadline = self
-                .pending_alt_screen_reads
-                .iter()
-                .map(|pending| pending.next_deadline())
-                .fold(next_deadline, |deadline, pending| {
-                    Some(deadline.map_or(pending, |current| current.min(pending)))
-                });
-            let event = {
-                tokio::select! {
-                    maybe_api = self.app.api_rx.recv() => match maybe_api {
-                        Some(msg) => LoopEvent::Api(Box::new(msg)),
-                        None => LoopEvent::Timer,
-                    },
-                    maybe_ev = self.app.event_rx.recv() => match maybe_ev {
-                        Some(ev) => LoopEvent::Internal(ev),
-                        None => LoopEvent::Timer,
-                    },
-                    maybe_server_ev = self.server_event_rx.recv() => match maybe_server_ev {
-                        Some(ev) => LoopEvent::ServerEvent(ev),
-                        None => LoopEvent::Timer,
-                    },
-                    _ = sleep_until_or_pending(next_deadline) => LoopEvent::Timer,
-                    _ = self.app.render_notify.notified() => LoopEvent::RenderRequested,
-                }
-            };
-
-            if self.should_quit.load(Ordering::Acquire) {
-                match event {
-                    LoopEvent::Internal(ev) => {
-                        self.handle_internal_event_with_forwarding(ev);
-                    }
-                    LoopEvent::ServerEvent(ServerEvent::ClientShellConnected {
-                        writer, ..
-                    }) => {
-                        if let Ok(message) =
-                            Self::frame_server_message(&ServerMessage::ServerShutdown {
-                                reason: Some("server is shutting down".to_owned()),
-                            })
-                        {
-                            let _ = writer.control.send(message);
-                        }
-                    }
-                    _ => {}
-                }
-                continue;
-            }
-
-            match event {
-                LoopEvent::Timer => {}
-                LoopEvent::Internal(ev) => {
-                    if self.handle_internal_event_with_forwarding(ev) {
-                        needs_render = true;
-                        needs_full_render = true;
-                    }
-                }
-                LoopEvent::Api(msg) => {
-                    if self.handle_api_request_with_shutdown_check(*msg) {
-                        needs_render = true;
-                        needs_full_render = true;
-                    }
-                }
-                LoopEvent::ServerEvent(ev) => {
-                    if self.handle_server_event(ev) {
-                        needs_render = true;
-                        needs_full_render = true;
-                    }
-                }
-                LoopEvent::RenderRequested => {
-                    if self.app.render_dirty.is_pending() {
-                        needs_render = true;
-                    }
-                }
-            }
+            let event = self.wait_for_loop_event(now, needs_render).await;
+            self.apply_loop_event(event, &mut needs_render, &mut needs_full_render);
         }
 
         // Save session on exit.
@@ -513,6 +320,240 @@ impl HeadlessServer {
 
         info!("headless server exiting");
         Ok(())
+    }
+
+    fn drain_loop_inputs(
+        &mut self,
+        needs_render: &mut bool,
+        needs_full_render: &mut bool,
+    ) -> io::Result<bool> {
+        // 1. Check the coalesced render signal from PTY readers and generic runtime work.
+        if self.app.render_dirty.is_pending() {
+            *needs_render = true;
+            crate::render_prof::event("render.request.signal");
+        }
+        // 2. Drain a bounded internal-event batch. API handlers perform an
+        // exhaustive forwarding-aware drain before reading pane/runtime state.
+        if self.drain_internal_events_with_forwarding() {
+            *needs_render = true;
+            *needs_full_render = true;
+            crate::render_prof::event("full_render_cause.internal_events");
+        }
+        if self.should_quit.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        // 3. Drain API requests.
+        if self.drain_api_requests_with_shutdown_check() {
+            *needs_render = true;
+            *needs_full_render = true;
+            crate::render_prof::event("full_render_cause.api_requests");
+        }
+        if self.should_quit.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+
+        self.app.sync_focus_events();
+        self.app.sync_session_save_schedule();
+
+        // 4. Accept new client connections.
+        self.accept_client_connections()?;
+
+        // 5. Drain server events from client threads.
+        if self.drain_server_events() {
+            *needs_render = true;
+            *needs_full_render = true;
+            crate::render_prof::event("full_render_cause.server_events");
+        }
+        if self.should_quit.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    fn schedule_loop_work(
+        &mut self,
+        now: Instant,
+        needs_render: &mut bool,
+        needs_full_render: &mut bool,
+    ) {
+        // 6. Handle scheduled tasks.
+        if self.handle_scheduled_tasks_headless(now, *needs_render) {
+            *needs_render = true;
+            *needs_full_render = true;
+            crate::render_prof::event("full_render_cause.scheduled_tasks");
+        }
+
+        self.poll_pending_alt_screen_reads(now);
+        if self.process_deferred_alt_screen_reads() {
+            *needs_render = true;
+            *needs_full_render = true;
+        }
+
+        if latest_shell_client(&self.clients).is_some() && self.app.ensure_default_workspace() {
+            *needs_render = true;
+            *needs_full_render = true;
+            crate::render_prof::event("full_render_cause.default_workspace");
+        }
+
+        self.drain_client_config_reload_request();
+        self.sync_immediate_pty_sources();
+        self.stream_host_mouse_capture_mode();
+        self.stream_direct_terminal_keyboard_mode();
+    }
+
+    fn render_pending_loop_work(
+        &mut self,
+        now: Instant,
+        needs_render: &mut bool,
+        needs_full_render: &mut bool,
+    ) -> bool {
+        // 7. Render virtually and stream frames. Hidden-only PTY work keeps a
+        // bounded classification cadence without delaying presentation work
+        // that joins the same coalesced request.
+        let render_cadence_due = self.app.can_render_now(now);
+        if *needs_render
+            && (render_cadence_due
+                || (self.app.can_present_now(now)
+                    && self.has_pending_presentation_work(*needs_full_render)))
+        {
+            crate::render_prof::event("render.attempt");
+            let render_request = self.app.render_dirty.take();
+            let pty_dirty = !render_request.pty_sources.is_empty();
+            if pty_dirty {
+                crate::render_prof::event("render.attempt.pty_dirty");
+                crate::render_prof::counter(
+                    "render.attempt.pty_sources",
+                    render_request.pty_sources.len() as u64,
+                );
+            }
+            if render_request.generic {
+                *needs_full_render = true;
+                crate::render_prof::event("full_render_cause.generic_dirty");
+            }
+            let (sidebar_title_changed, outer_title_synced) =
+                self.sync_terminal_title_sources(&render_request.terminal_title_sources);
+            if sidebar_title_changed {
+                *needs_full_render = true;
+                crate::render_prof::event("full_render_cause.terminal_title_sidebar");
+            }
+            if *needs_full_render && !outer_title_synced {
+                self.sync_window_title();
+            }
+            if !*needs_full_render && !pty_dirty {
+                // A synchronized-output OSC title can be the only pending work.
+                // Its deferred PTY repaint has its own signal; do not manufacture
+                // a full UI render for this client-local side effect.
+                *needs_render = false;
+                return true;
+            }
+            let hidden_only = pty_dirty
+                && !*needs_full_render
+                && !self.pty_sources_visible_to_any_render_target(&render_request.pty_sources);
+            if hidden_only {
+                crate::render_prof::event("render.skipped.hidden_sources");
+            } else if !*needs_full_render
+                && self.render_retained_pane_surface_and_stream(&render_request.pty_sources)
+            {
+                crate::render_prof::event("retained_surface.invoke");
+            } else {
+                crate::render_prof::event("full_render.invoke");
+                self.render_and_stream();
+            }
+            self.app.record_render_attempt(now, !hidden_only);
+            *needs_render = false;
+            *needs_full_render = false;
+            return true;
+        }
+
+        false
+    }
+
+    async fn wait_for_loop_event(&mut self, now: Instant, needs_render: bool) -> LoopEvent {
+        // 8. Wait for next event.
+        let next_deadline = self
+            .app
+            .next_headless_loop_deadline(now, needs_render)
+            .map(|deadline| deadline.min(now + CLIENT_ACCEPT_POLL_INTERVAL))
+            .or(Some(now + CLIENT_ACCEPT_POLL_INTERVAL));
+        let next_deadline = self
+            .pending_alt_screen_reads
+            .iter()
+            .map(|pending| pending.next_deadline())
+            .fold(next_deadline, |deadline, pending| {
+                Some(deadline.map_or(pending, |current| current.min(pending)))
+            });
+        {
+            tokio::select! {
+                maybe_api = self.app.api_rx.recv() => match maybe_api {
+                    Some(msg) => LoopEvent::Api(Box::new(msg)),
+                    None => LoopEvent::Timer,
+                },
+                maybe_ev = self.app.event_rx.recv() => match maybe_ev {
+                    Some(ev) => LoopEvent::Internal(ev),
+                    None => LoopEvent::Timer,
+                },
+                maybe_server_ev = self.server_event_rx.recv() => match maybe_server_ev {
+                    Some(ev) => LoopEvent::ServerEvent(ev),
+                    None => LoopEvent::Timer,
+                },
+                _ = sleep_until_or_pending(next_deadline) => LoopEvent::Timer,
+                _ = self.app.render_notify.notified() => LoopEvent::RenderRequested,
+            }
+        }
+    }
+
+    fn apply_loop_event(
+        &mut self,
+        event: LoopEvent,
+        needs_render: &mut bool,
+        needs_full_render: &mut bool,
+    ) {
+        if self.should_quit.load(Ordering::Acquire) {
+            match event {
+                LoopEvent::Internal(ev) => {
+                    self.handle_internal_event_with_forwarding(ev);
+                }
+                LoopEvent::ServerEvent(ServerEvent::ClientShellConnected { writer, .. }) => {
+                    if let Ok(message) =
+                        Self::frame_server_message(&ServerMessage::ServerShutdown {
+                            reason: Some("server is shutting down".to_owned()),
+                        })
+                    {
+                        let _ = writer.control.send(message);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match event {
+            LoopEvent::Timer => {}
+            LoopEvent::Internal(ev) => {
+                if self.handle_internal_event_with_forwarding(ev) {
+                    *needs_render = true;
+                    *needs_full_render = true;
+                }
+            }
+            LoopEvent::Api(msg) => {
+                if self.handle_api_request_with_shutdown_check(*msg) {
+                    *needs_render = true;
+                    *needs_full_render = true;
+                }
+            }
+            LoopEvent::ServerEvent(ev) => {
+                if self.handle_server_event(ev) {
+                    *needs_render = true;
+                    *needs_full_render = true;
+                }
+            }
+            LoopEvent::RenderRequested => {
+                if self.app.render_dirty.is_pending() {
+                    *needs_render = true;
+                }
+            }
+        }
     }
 
     /// Accepts pending client connections from the non-blocking listener.

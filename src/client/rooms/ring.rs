@@ -1,5 +1,5 @@
 //! Decides when a Bus room should ding for a new message, like a group chat.
-use crate::bus::model::*;
+use crate::bus::model::{Author, BusState, PromptId, Room, RoomId};
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 

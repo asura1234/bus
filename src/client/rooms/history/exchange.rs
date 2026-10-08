@@ -82,165 +82,17 @@ impl History {
         let mut active_markdown = BTreeSet::new();
         for exchange in exchanges.into_values() {
             let prompt = exchange.prompt;
-            let mut header = vec![
-                (
-                    participant_label(state, &prompt.author),
-                    participant_tone(&prompt.author),
-                ),
-                (" → ".into(), Tone::Muted),
-            ];
-            for (index, agent) in prompt
-                .recipient_ids
-                .iter()
-                .filter_map(|id| state.agent(*id))
-                .enumerate()
-            {
-                if index > 0 {
-                    header.push((", ".into(), Tone::Muted));
-                }
-                header.push((agent.name.clone(), Tone::Agent(agent.id)));
-            }
-            if prompt.recipient_ids.is_empty() {
-                header.push(("You".into(), Tone::You));
-            }
-            header.push((
-                format!("  {}", timestamp(prompt.submitted_at_ms, now)),
-                Tone::Muted,
-            ));
-            lines.extend(wrap_header(
-                header,
-                width,
-                "",
-                RowAnchor::new(prompt.id, None, RowKind::PromptHeader),
-            ));
-            let prompt_source = MarkdownSource::Prompt(prompt.id);
-            active_markdown.insert(prompt_source);
-            lines.extend(
-                self.markdown_block(prompt_source, &prompt.text)
-                    .lines(
-                        width,
-                        prompt_source,
-                        "",
-                        RowAnchor::new(prompt.id, None, RowKind::PromptBody),
-                    )
-                    .iter()
-                    .cloned(),
-            );
-            for (index, path) in prompt.files.iter().enumerate() {
-                let file_anchor = RowAnchor {
-                    position: index,
-                    ..RowAnchor::new(prompt.id, None, RowKind::File)
-                };
-                // With an image protocol the picture stands in for the file:
-                // its rows open the file detail, and no name row follows. The
-                // name shows only where no picture can be drawn.
-                if let Some((cols, rows)) = thumbnails.size(path, width) {
-                    let shared: Arc<std::path::Path> = Arc::from(path.as_path());
-                    lines.extend((0..rows).map(|row| Line {
-                        text: String::new(),
-                        action: Some(Action::FileDetail(path.clone())),
-                        tone: Tone::Muted,
-                        spans: Vec::new(),
-                        styles: Vec::new(),
-                        thumbnail: Some(ThumbnailRow {
-                            path: Arc::clone(&shared),
-                            cols,
-                            rows,
-                            row,
-                        }),
-                        raw_markdown: None,
-                        continued: false,
-                        rejoin_space: false,
-                        copy_from: 0,
-                        anchor: RowAnchor {
-                            kind: RowKind::Thumbnail,
-                            position: index * usize::from(MAX_ROWS) + usize::from(row),
-                            ..file_anchor
-                        },
-                    }));
-                    continue;
-                }
-                lines.push(Line {
-                    text: format!(
-                        "[{}]",
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    ),
-                    action: Some(Action::FileDetail(path.clone())),
-                    tone: Tone::Muted,
-                    spans: Vec::new(),
-                    styles: Vec::new(),
-                    thumbnail: None,
-                    raw_markdown: None,
-                    continued: false,
-                    rejoin_space: false,
-                    copy_from: 0,
-                    anchor: file_anchor,
-                });
-            }
+            self.push_prompt_lines(&mut lines, &mut active_markdown, state, prompt, width, now);
+            push_prompt_files(&mut lines, prompt, width, thumbnails);
 
-            for agent_id in &prompt.recipient_ids {
-                let Some(agent) = state.agent(*agent_id) else {
-                    continue;
-                };
-                let request = exchange.requests.get(agent_id).copied();
-                // A group's messages share one reply, shown under its newest one.
-                if let Some(request) = request {
-                    let members = state.group_members(request.group.unwrap_or(request.id));
-                    if members.last().is_some_and(|last| *last != request.id) {
-                        continue;
-                    }
-                }
-                let final_reply = request
-                    .filter(|request| request.phase == RequestPhase::Completed)
-                    .and_then(|request| request.pending_final.as_ref());
-                let legacy_reply = request
-                    .is_none()
-                    .then(|| room.latest_replies.get(agent_id))
-                    .flatten();
-                let (text, quote) = if let Some(reply) = final_reply {
-                    (reply.text.as_str(), request.map(|request| request.id))
-                } else if let Some(reply) = legacy_reply {
-                    (reply.text.as_str(), Some(reply.request_id))
-                } else {
-                    ("…", None)
-                };
-                let reply_header = vec![
-                    (agent.name.clone(), Tone::Agent(agent.id)),
-                    (format!("  {}", provider(agent.provider)), Tone::Muted),
-                ];
-                lines.extend(wrap_header(
-                    reply_header,
-                    width,
-                    "    ",
-                    RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyHeader),
-                ));
-                let reply_anchor = RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyBody);
-                if let Some(request) = quote {
-                    let source = MarkdownSource::Reply(request);
-                    active_markdown.insert(source);
-                    lines.extend(
-                        self.markdown_block(source, text)
-                            .lines(width, source, "    ", reply_anchor)
-                            .iter()
-                            .cloned(),
-                    );
-                    lines.push(Line {
-                        text: "    Quote".into(),
-                        action: Some(Action::Quote(request)),
-                        tone: Tone::Muted,
-                        spans: Vec::new(),
-                        styles: Vec::new(),
-                        thumbnail: None,
-                        raw_markdown: None,
-                        continued: false,
-                        rejoin_space: false,
-                        copy_from: 0,
-                        anchor: RowAnchor::new(prompt.id, Some(*agent_id), RowKind::Quote),
-                    });
-                } else {
-                    push_body(&mut lines, text, width, "    ", reply_anchor);
-                }
-            }
+            self.push_reply_lines(
+                &mut lines,
+                &mut active_markdown,
+                state,
+                room,
+                &exchange,
+                width,
+            );
             lines.push(Line {
                 text: String::new(),
                 action: None,
@@ -260,6 +112,135 @@ impl History {
         self.key = Some(key);
         self.lines = lines;
         &self.lines
+    }
+    fn push_prompt_lines(
+        &mut self,
+        lines: &mut Vec<Line>,
+        active_markdown: &mut BTreeSet<MarkdownSource>,
+        state: &BusState,
+        prompt: &Prompt,
+        width: u16,
+        now: u64,
+    ) {
+        let mut header = vec![
+            (
+                participant_label(state, &prompt.author),
+                participant_tone(&prompt.author),
+            ),
+            (" → ".into(), Tone::Muted),
+        ];
+        for (index, agent) in prompt
+            .recipient_ids
+            .iter()
+            .filter_map(|id| state.agent(*id))
+            .enumerate()
+        {
+            if index > 0 {
+                header.push((", ".into(), Tone::Muted));
+            }
+            header.push((agent.name.clone(), Tone::Agent(agent.id)));
+        }
+        if prompt.recipient_ids.is_empty() {
+            header.push(("You".into(), Tone::You));
+        }
+        header.push((
+            format!("  {}", timestamp(prompt.submitted_at_ms, now)),
+            Tone::Muted,
+        ));
+        lines.extend(wrap_header(
+            header,
+            width,
+            "",
+            RowAnchor::new(prompt.id, None, RowKind::PromptHeader),
+        ));
+        let prompt_source = MarkdownSource::Prompt(prompt.id);
+        active_markdown.insert(prompt_source);
+        lines.extend(
+            self.markdown_block(prompt_source, &prompt.text)
+                .lines(
+                    width,
+                    prompt_source,
+                    "",
+                    RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+                )
+                .iter()
+                .cloned(),
+        );
+    }
+
+    fn push_reply_lines(
+        &mut self,
+        lines: &mut Vec<Line>,
+        active_markdown: &mut BTreeSet<MarkdownSource>,
+        state: &BusState,
+        room: &Room,
+        exchange: &Exchange<'_>,
+        width: u16,
+    ) {
+        let prompt = exchange.prompt;
+        for agent_id in &prompt.recipient_ids {
+            let Some(agent) = state.agent(*agent_id) else {
+                continue;
+            };
+            let request = exchange.requests.get(agent_id).copied();
+            // A group's messages share one reply, shown under its newest one.
+            if let Some(request) = request {
+                let members = state.group_members(request.group.unwrap_or(request.id));
+                if members.last().is_some_and(|last| *last != request.id) {
+                    continue;
+                }
+            }
+            let final_reply = request
+                .filter(|request| request.phase == RequestPhase::Completed)
+                .and_then(|request| request.pending_final.as_ref());
+            let legacy_reply = request
+                .is_none()
+                .then(|| room.latest_replies.get(agent_id))
+                .flatten();
+            let (text, quote) = if let Some(reply) = final_reply {
+                (reply.text.as_str(), request.map(|request| request.id))
+            } else if let Some(reply) = legacy_reply {
+                (reply.text.as_str(), Some(reply.request_id))
+            } else {
+                ("…", None)
+            };
+            let reply_header = vec![
+                (agent.name.clone(), Tone::Agent(agent.id)),
+                (format!("  {}", provider(agent.provider)), Tone::Muted),
+            ];
+            lines.extend(wrap_header(
+                reply_header,
+                width,
+                "    ",
+                RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyHeader),
+            ));
+            let reply_anchor = RowAnchor::new(prompt.id, Some(*agent_id), RowKind::ReplyBody);
+            if let Some(request) = quote {
+                let source = MarkdownSource::Reply(request);
+                active_markdown.insert(source);
+                lines.extend(
+                    self.markdown_block(source, text)
+                        .lines(width, source, "    ", reply_anchor)
+                        .iter()
+                        .cloned(),
+                );
+                lines.push(Line {
+                    text: "    Quote".into(),
+                    action: Some(Action::Quote(request)),
+                    tone: Tone::Muted,
+                    spans: Vec::new(),
+                    styles: Vec::new(),
+                    thumbnail: None,
+                    raw_markdown: None,
+                    continued: false,
+                    rejoin_space: false,
+                    copy_from: 0,
+                    anchor: RowAnchor::new(prompt.id, Some(*agent_id), RowKind::Quote),
+                });
+            } else {
+                push_body(lines, text, width, "    ", reply_anchor);
+            }
+        }
     }
 }
 
@@ -415,4 +396,63 @@ pub(in crate::client::rooms) fn timestamp(at: u64, now: u64) -> String {
         .and_then(crate::platform::local_datetime_at)
         .map(|local| format!("{:02}:{:02}", local.hour(), local.minute()))
         .unwrap_or_else(|| "--:--".into())
+}
+
+fn push_prompt_files(
+    lines: &mut Vec<Line>,
+    prompt: &Prompt,
+    width: u16,
+    thumbnails: &mut Thumbnails,
+) {
+    for (index, path) in prompt.files.iter().enumerate() {
+        let file_anchor = RowAnchor {
+            position: index,
+            ..RowAnchor::new(prompt.id, None, RowKind::File)
+        };
+        // With an image protocol the picture stands in for the file:
+        // its rows open the file detail, and no name row follows. The
+        // name shows only where no picture can be drawn.
+        if let Some((cols, rows)) = thumbnails.size(path, width) {
+            let shared: Arc<std::path::Path> = Arc::from(path.as_path());
+            lines.extend((0..rows).map(|row| Line {
+                text: String::new(),
+                action: Some(Action::FileDetail(path.clone())),
+                tone: Tone::Muted,
+                spans: Vec::new(),
+                styles: Vec::new(),
+                thumbnail: Some(ThumbnailRow {
+                    path: Arc::clone(&shared),
+                    cols,
+                    rows,
+                    row,
+                }),
+                raw_markdown: None,
+                continued: false,
+                rejoin_space: false,
+                copy_from: 0,
+                anchor: RowAnchor {
+                    kind: RowKind::Thumbnail,
+                    position: index * usize::from(MAX_ROWS) + usize::from(row),
+                    ..file_anchor
+                },
+            }));
+            continue;
+        }
+        lines.push(Line {
+            text: format!(
+                "[{}]",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            action: Some(Action::FileDetail(path.clone())),
+            tone: Tone::Muted,
+            spans: Vec::new(),
+            styles: Vec::new(),
+            thumbnail: None,
+            raw_markdown: None,
+            continued: false,
+            rejoin_space: false,
+            copy_from: 0,
+            anchor: file_anchor,
+        });
+    }
 }

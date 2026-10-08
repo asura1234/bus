@@ -367,114 +367,137 @@ impl ClientShellState {
                 col,
                 generation,
             } => {
-                if self.pending_word_selection != Some(generation)
-                    || self.snapshot.as_deref().is_none_or(|snapshot| {
-                        !snapshot.panes.iter().any(|pane| pane.pane_id == pane_id)
-                    })
-                {
-                    return (false, Vec::new());
-                }
-                self.pending_word_selection = None;
-                let row_text = match result {
-                    Ok(crate::api::schema::ResponseResult::PaneSelection {
-                        pane_id: returned_pane_id,
-                        text,
-                    }) if returned_pane_id == pane_id => text,
-                    Ok(crate::api::schema::ResponseResult::PaneSelection { .. }) => {
-                        return (false, Vec::new())
-                    }
-                    Ok(_) => {
-                        tracing::warn!("endpoint returned an unexpected word-selection result");
-                        return (true, Vec::new());
-                    }
-                    Err(_) => return (true, Vec::new()),
-                };
-                let Some((start_col, end_col)) =
-                    crate::app::actions::word_bounds_at_column(&row_text, col)
-                else {
-                    self.selection = None;
-                    return (true, Vec::new());
-                };
-                let mut selection = crate::selection::Selection::absolute_range(
+                return self.complete_word_selection(
                     pane_id,
-                    (absolute_row, start_col),
-                    (absolute_row, end_col),
+                    absolute_row,
+                    col,
+                    generation,
+                    result,
                 );
-                if !selection.finish() {
-                    return (false, Vec::new());
-                }
-                self.selection = Some(selection);
-                self.selection_autoscroll = None;
-                self.selection_autoscroll_deadline = None;
-                if !self.config.copy_on_select {
-                    return (true, Vec::new());
-                }
-                self.selection_highlight_clear_deadline =
-                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
-                let mut outcome = ClientShellInput::default();
-                self.request_selection_copy(&mut outcome, false);
-                return (true, outcome.actions);
             }
             PendingEndpointKind::PaneLinkActivate {
                 pane_id,
                 inner_rect,
                 fallback_events,
             } => {
-                let completed_before_release = !fallback_events.iter().any(|event| {
-                    event.kind
-                        == crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left)
-                });
-                let replay = self
-                    .hits
-                    .panes
-                    .iter()
-                    .any(|hit| hit.pane_id == pane_id && hit.inner_rect == inner_rect)
-                    .then_some(fallback_events);
-                if replay.is_none() {
-                    self.url_click_consumes_until_up = completed_before_release;
-                }
-                let replay_action = |events: Option<Vec<crossterm::event::MouseEvent>>| {
-                    events
-                        .map(ClientShellAction::ReplayMouse)
-                        .into_iter()
-                        .collect()
-                };
-                return match result {
-                    Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
-                        handled: true,
-                        ..
-                    }) => {
-                        self.url_click_consumes_until_up = completed_before_release;
-                        (false, Vec::new())
-                    }
-                    Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
-                        url: Some(url),
-                        handled: false,
-                    }) if crate::app::actions::safe_web_url(&url).is_some() => {
-                        self.url_click_consumes_until_up = completed_before_release;
-                        (false, vec![ClientShellAction::OpenSafeWebUrl(url)])
-                    }
-                    Ok(crate::api::schema::ResponseResult::PaneLinkActivated { .. }) => {
-                        (false, replay_action(replay))
-                    }
-                    Ok(_) => {
-                        tracing::warn!("endpoint returned an unexpected link result");
-                        (true, replay_action(replay))
-                    }
-                    Err(error)
-                        if matches!(
-                            error.code.as_deref(),
-                            Some("stale_content" | "stale_target" | "endpoint_cancelled")
-                        ) =>
-                    {
-                        self.url_click_consumes_until_up = completed_before_release;
-                        (false, Vec::new())
-                    }
-                    Err(_) => (true, replay_action(replay)),
-                };
+                return self.complete_pane_link(pane_id, inner_rect, fallback_events, result);
             }
         }
         (result.is_err(), Vec::new())
+    }
+
+    fn complete_word_selection(
+        &mut self,
+        pane_id: String,
+        absolute_row: u32,
+        col: u16,
+        generation: u64,
+        result: Result<ResponseResult, ClientShellEndpointError>,
+    ) -> (bool, Vec<ClientShellAction>) {
+        if self.pending_word_selection != Some(generation)
+            || self
+                .snapshot
+                .as_deref()
+                .is_none_or(|snapshot| !snapshot.panes.iter().any(|pane| pane.pane_id == pane_id))
+        {
+            return (false, Vec::new());
+        }
+        self.pending_word_selection = None;
+        let row_text = match result {
+            Ok(crate::api::schema::ResponseResult::PaneSelection {
+                pane_id: returned_pane_id,
+                text,
+            }) if returned_pane_id == pane_id => text,
+            Ok(crate::api::schema::ResponseResult::PaneSelection { .. }) => {
+                return (false, Vec::new())
+            }
+            Ok(_) => {
+                tracing::warn!("endpoint returned an unexpected word-selection result");
+                return (true, Vec::new());
+            }
+            Err(_) => return (true, Vec::new()),
+        };
+        let Some((start_col, end_col)) = crate::app::actions::word_bounds_at_column(&row_text, col)
+        else {
+            self.selection = None;
+            return (true, Vec::new());
+        };
+        let mut selection = crate::selection::Selection::absolute_range(
+            pane_id,
+            (absolute_row, start_col),
+            (absolute_row, end_col),
+        );
+        if !selection.finish() {
+            return (false, Vec::new());
+        }
+        self.selection = Some(selection);
+        self.selection_autoscroll = None;
+        self.selection_autoscroll_deadline = None;
+        if !self.config.copy_on_select {
+            return (true, Vec::new());
+        }
+        self.selection_highlight_clear_deadline =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+        let mut outcome = ClientShellInput::default();
+        self.request_selection_copy(&mut outcome, false);
+        (true, outcome.actions)
+    }
+
+    fn complete_pane_link(
+        &mut self,
+        pane_id: String,
+        inner_rect: ratatui::layout::Rect,
+        fallback_events: Vec<crossterm::event::MouseEvent>,
+        result: Result<ResponseResult, ClientShellEndpointError>,
+    ) -> (bool, Vec<ClientShellAction>) {
+        let completed_before_release = !fallback_events.iter().any(|event| {
+            event.kind == crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left)
+        });
+        let replay = self
+            .hits
+            .panes
+            .iter()
+            .any(|hit| hit.pane_id == pane_id && hit.inner_rect == inner_rect)
+            .then_some(fallback_events);
+        if replay.is_none() {
+            self.url_click_consumes_until_up = completed_before_release;
+        }
+        let replay_action = |events: Option<Vec<crossterm::event::MouseEvent>>| {
+            events
+                .map(ClientShellAction::ReplayMouse)
+                .into_iter()
+                .collect()
+        };
+        match result {
+            Ok(crate::api::schema::ResponseResult::PaneLinkActivated { handled: true, .. }) => {
+                self.url_click_consumes_until_up = completed_before_release;
+                (false, Vec::new())
+            }
+            Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
+                url: Some(url),
+                handled: false,
+            }) if crate::app::actions::safe_web_url(&url).is_some() => {
+                self.url_click_consumes_until_up = completed_before_release;
+                (false, vec![ClientShellAction::OpenSafeWebUrl(url)])
+            }
+            Ok(crate::api::schema::ResponseResult::PaneLinkActivated { .. }) => {
+                (false, replay_action(replay))
+            }
+            Ok(_) => {
+                tracing::warn!("endpoint returned an unexpected link result");
+                (true, replay_action(replay))
+            }
+            Err(error)
+                if matches!(
+                    error.code.as_deref(),
+                    Some("stale_content" | "stale_target" | "endpoint_cancelled")
+                ) =>
+            {
+                self.url_click_consumes_until_up = completed_before_release;
+                (false, Vec::new())
+            }
+            Err(_) => (true, replay_action(replay)),
+        }
     }
 }
 

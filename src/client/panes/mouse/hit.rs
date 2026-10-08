@@ -1,4 +1,4 @@
-use super::*;
+use super::{ClientMousePosition, ClientShellState, MouseEvent, PaneHit};
 
 impl ClientShellState {
     pub(super) fn pane_mouse_position(

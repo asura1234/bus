@@ -1,5 +1,5 @@
 //! Content-free delivery diagnostics. Never format commands, prompts or callbacks with Debug.
-use super::model::*;
+use super::model::{Agent, BusState, Provider, RequestId, RuntimeStatus};
 
 // Upstream input/toast diagnostics contain user content. Keep those payload dumps
 // disabled even in dev mode; the rest of the runtime retains TRACE visibility.

@@ -91,54 +91,67 @@ impl XtgettcapQueryTracker {
                         self.state = XtgettcapTrackerState::IgnoreString;
                     }
                 }
-                XtgettcapTrackerState::IgnoreOsc => {
-                    if byte == 0x1b {
-                        self.state = XtgettcapTrackerState::IgnoreOscEscape;
-                    } else if matches!(byte, 0x07 | 0x9c) {
-                        self.state = XtgettcapTrackerState::Ground;
-                    }
-                }
-                XtgettcapTrackerState::IgnoreOscEscape => {
-                    if byte == b'\\' {
-                        self.state = XtgettcapTrackerState::Ground;
-                    } else if byte != 0x1b {
-                        self.state = XtgettcapTrackerState::IgnoreOsc;
-                    }
-                }
-                XtgettcapTrackerState::IgnoreString => {
-                    if byte == 0x1b {
-                        self.state = XtgettcapTrackerState::IgnoreStringEscape;
-                    } else if byte == 0x9c {
-                        self.state = XtgettcapTrackerState::Ground;
-                    }
-                }
-                XtgettcapTrackerState::IgnoreStringEscape => {
-                    if byte == b'\\' {
-                        self.state = XtgettcapTrackerState::Ground;
-                    } else if byte != 0x1b {
-                        self.state = XtgettcapTrackerState::IgnoreString;
-                    }
-                }
-                XtgettcapTrackerState::OversizedDcs => {
-                    if byte == 0x1b {
-                        self.state = XtgettcapTrackerState::OversizedDcsEscape;
-                    } else if byte == 0x9c {
-                        self.state = XtgettcapTrackerState::Ground;
-                    }
-                }
-                XtgettcapTrackerState::OversizedDcsEscape => {
-                    if byte == b'\\' {
-                        self.state = XtgettcapTrackerState::Ground;
-                    } else if byte != 0x1b {
-                        self.state = XtgettcapTrackerState::OversizedDcs;
-                    }
-                }
+                XtgettcapTrackerState::IgnoreOsc
+                | XtgettcapTrackerState::IgnoreOscEscape
+                | XtgettcapTrackerState::IgnoreString
+                | XtgettcapTrackerState::IgnoreStringEscape
+                | XtgettcapTrackerState::OversizedDcs
+                | XtgettcapTrackerState::OversizedDcsEscape => self.observe_ignored_string(byte),
             }
 
             if self.body.len() > 1024 {
                 self.body.clear();
                 self.state = XtgettcapTrackerState::OversizedDcs;
             }
+        }
+    }
+
+    /// Discard unrelated/oversized control strings until their original terminator.
+    fn observe_ignored_string(&mut self, byte: u8) {
+        match self.state {
+            XtgettcapTrackerState::IgnoreOsc => {
+                if byte == 0x1b {
+                    self.state = XtgettcapTrackerState::IgnoreOscEscape;
+                } else if matches!(byte, 0x07 | 0x9c) {
+                    self.state = XtgettcapTrackerState::Ground;
+                }
+            }
+            XtgettcapTrackerState::IgnoreOscEscape => {
+                if byte == b'\\' {
+                    self.state = XtgettcapTrackerState::Ground;
+                } else if byte != 0x1b {
+                    self.state = XtgettcapTrackerState::IgnoreOsc;
+                }
+            }
+            XtgettcapTrackerState::IgnoreString => {
+                if byte == 0x1b {
+                    self.state = XtgettcapTrackerState::IgnoreStringEscape;
+                } else if byte == 0x9c {
+                    self.state = XtgettcapTrackerState::Ground;
+                }
+            }
+            XtgettcapTrackerState::IgnoreStringEscape => {
+                if byte == b'\\' {
+                    self.state = XtgettcapTrackerState::Ground;
+                } else if byte != 0x1b {
+                    self.state = XtgettcapTrackerState::IgnoreString;
+                }
+            }
+            XtgettcapTrackerState::OversizedDcs => {
+                if byte == 0x1b {
+                    self.state = XtgettcapTrackerState::OversizedDcsEscape;
+                } else if byte == 0x9c {
+                    self.state = XtgettcapTrackerState::Ground;
+                }
+            }
+            XtgettcapTrackerState::OversizedDcsEscape => {
+                if byte == b'\\' {
+                    self.state = XtgettcapTrackerState::Ground;
+                } else if byte != 0x1b {
+                    self.state = XtgettcapTrackerState::OversizedDcs;
+                }
+            }
+            _ => {}
         }
     }
 

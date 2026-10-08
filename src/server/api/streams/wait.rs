@@ -36,16 +36,11 @@ pub(in crate::server::api) fn wait_for_output(
         crate::protocol::api::schema::OutputMatch::Regex { value } => match Regex::new(value) {
             Ok(regex) => Some(regex),
             Err(err) => {
-                return Ok(Some(
-                    serde_json::to_string(&ErrorResponse {
-                        id: request_id,
-                        error: ErrorBody {
-                            code: "invalid_regex".into(),
-                            message: err.to_string(),
-                        },
-                    })
-                    .unwrap(),
-                ));
+                return Ok(Some(crate::server::api::errors::encode_error(
+                    request_id,
+                    "invalid_regex",
+                    err.to_string(),
+                )));
             }
         },
         crate::protocol::api::schema::OutputMatch::Substring { .. } => None,
@@ -80,7 +75,9 @@ pub(in crate::server::api) fn wait_for_output(
         if value.get("error").is_some() {
             let mut value = value;
             value["id"] = serde_json::Value::String(request_id.clone());
-            return Ok(Some(serde_json::to_string(&value).unwrap()));
+            return Ok(Some(
+                serde_json::to_string(&value).map_err(std::io::Error::other)?,
+            ));
         }
 
         let read_value = value["result"]["read"].clone();
@@ -95,7 +92,7 @@ pub(in crate::server::api) fn wait_for_output(
                         message: "failed to decode pane read result".into(),
                     },
                 })
-                .unwrap(),
+                .map_err(std::io::Error::other)?,
             ));
         };
 
@@ -113,7 +110,7 @@ pub(in crate::server::api) fn wait_for_output(
                         read,
                     },
                 })
-                .unwrap(),
+                .map_err(std::io::Error::other)?,
             ));
         }
 
@@ -127,7 +124,7 @@ pub(in crate::server::api) fn wait_for_output(
                         message: "timed out waiting for output match".into(),
                     },
                 })
-                .unwrap(),
+                .map_err(std::io::Error::other)?,
             ));
         }
 
@@ -229,64 +226,20 @@ pub(super) fn wait_for_resolved_agent(
             return Ok(None);
         }
 
-        let mut should_probe = false;
-        let mut matched_event_status = None;
-        for (sequence, event) in event_hub.events_after(last_event_sequence) {
-            last_event_sequence = sequence;
-            match event.data {
-                EventData::PaneAgentDetected {
-                    pane_id: event_pane,
-                    agent,
-                    released,
-                    final_status,
-                    ..
-                } if event_pane == pane_id => {
-                    if released {
-                        if let Some(status) = final_status
-                            .filter(|status| wait.until.contains(status))
-                            .or(matched_event_status)
-                        {
-                            let mut matched = wait.initial.clone();
-                            matched.agent_status = status;
-                            return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
-                        }
-                        return agent_wait_not_running(request_id)
-                            .map(AgentWaitOutcome::Response)
-                            .map(Some);
-                    }
-                    if agent.is_some() && expected_agent.is_some() && agent != expected_agent {
-                        return agent_wait_not_running(request_id)
-                            .map(AgentWaitOutcome::Response)
-                            .map(Some);
-                    }
-                    should_probe = true;
-                }
-                EventData::PaneAgentStatusChanged {
-                    pane_id: event_pane,
-                    agent_status,
-                    ..
-                } if event_pane == pane_id => {
-                    if wait.accept_transient_status && wait.until.contains(&agent_status) {
-                        matched_event_status = Some(agent_status);
-                    }
-                    should_probe = true;
-                }
-                EventData::PaneUpdated { pane } if pane.pane_id == pane_id => should_probe = true,
-                EventData::PaneClosed {
-                    pane_id: event_pane,
-                    ..
-                }
-                | EventData::PaneExited {
-                    pane_id: event_pane,
-                    ..
-                } if event_pane == pane_id => {
-                    return agent_wait_not_running(request_id)
-                        .map(AgentWaitOutcome::Response)
-                        .map(Some);
-                }
-                _ => {}
-            }
-        }
+        let (should_probe, matched_event_status) = match scan_agent_wait_events(
+            &request_id,
+            &wait,
+            &pane_id,
+            &expected_agent,
+            &mut last_event_sequence,
+            event_hub,
+        )? {
+            AgentWaitEventScan::Outcome(outcome) => return Ok(Some(outcome)),
+            AgentWaitEventScan::Probe {
+                should_probe,
+                matched_event_status,
+            } => (should_probe, matched_event_status),
+        };
 
         if should_probe {
             let current = match agent_get(&request_id, &wait.target, api_tx) {
@@ -345,6 +298,88 @@ pub(super) fn wait_for_resolved_agent(
         }
         std::thread::sleep(CONNECTION_POLL_INTERVAL);
     }
+}
+
+enum AgentWaitEventScan {
+    Outcome(AgentWaitOutcome),
+    Probe {
+        should_probe: bool,
+        matched_event_status: Option<crate::protocol::api::schema::AgentStatus>,
+    },
+}
+
+fn scan_agent_wait_events(
+    request_id: &str,
+    wait: &ResolvedAgentWait,
+    pane_id: &str,
+    expected_agent: &Option<String>,
+    last_event_sequence: &mut u64,
+    event_hub: &EventHub,
+) -> std::io::Result<AgentWaitEventScan> {
+    let mut should_probe = false;
+    let mut matched_event_status = None;
+    for (sequence, event) in event_hub.events_after(*last_event_sequence) {
+        *last_event_sequence = sequence;
+        match event.data {
+            EventData::PaneAgentDetected {
+                pane_id: event_pane,
+                agent,
+                released,
+                final_status,
+                ..
+            } if event_pane == pane_id => {
+                if released {
+                    if let Some(status) = final_status
+                        .filter(|status| wait.until.contains(status))
+                        .or(matched_event_status)
+                    {
+                        let mut matched = wait.initial.clone();
+                        matched.agent_status = status;
+                        return Ok(AgentWaitEventScan::Outcome(AgentWaitOutcome::Matched(
+                            Box::new(matched),
+                        )));
+                    }
+                    return agent_wait_not_running(request_id.to_owned())
+                        .map(AgentWaitOutcome::Response)
+                        .map(AgentWaitEventScan::Outcome);
+                }
+                if agent.is_some() && expected_agent.is_some() && &agent != expected_agent {
+                    return agent_wait_not_running(request_id.to_owned())
+                        .map(AgentWaitOutcome::Response)
+                        .map(AgentWaitEventScan::Outcome);
+                }
+                should_probe = true;
+            }
+            EventData::PaneAgentStatusChanged {
+                pane_id: event_pane,
+                agent_status,
+                ..
+            } if event_pane == pane_id => {
+                if wait.accept_transient_status && wait.until.contains(&agent_status) {
+                    matched_event_status = Some(agent_status);
+                }
+                should_probe = true;
+            }
+            EventData::PaneUpdated { pane } if pane.pane_id == pane_id => should_probe = true,
+            EventData::PaneClosed {
+                pane_id: event_pane,
+                ..
+            }
+            | EventData::PaneExited {
+                pane_id: event_pane,
+                ..
+            } if event_pane == pane_id => {
+                return agent_wait_not_running(request_id.to_owned())
+                    .map(AgentWaitOutcome::Response)
+                    .map(AgentWaitEventScan::Outcome);
+            }
+            _ => {}
+        }
+    }
+    Ok(AgentWaitEventScan::Probe {
+        should_probe,
+        matched_event_status,
+    })
 }
 
 pub(super) fn agent_wait_statuses(
@@ -508,7 +543,11 @@ pub(in crate::server::api) fn wait_for_event(
 
     let subscription = match event_match_subscription(&request_id, params.match_event) {
         Ok(subscription) => subscription,
-        Err(response) => return Ok(Some(serde_json::to_string(&response).unwrap())),
+        Err(response) => {
+            return Ok(Some(
+                serde_json::to_string(&response).map_err(std::io::Error::other)?,
+            ))
+        }
     };
     let mut active = match ActiveSubscription::new(
         subscription,
@@ -519,7 +558,11 @@ pub(in crate::server::api) fn wait_for_event(
         event_hub.current_sequence(),
     ) {
         Ok(active) => active,
-        Err(response) => return Ok(Some(serde_json::to_string(&response).unwrap())),
+        Err(response) => {
+            return Ok(Some(
+                serde_json::to_string(&response).map_err(std::io::Error::other)?,
+            ))
+        }
     };
 
     loop {
@@ -528,7 +571,7 @@ pub(in crate::server::api) fn wait_for_event(
         }
 
         match active.poll_for_wait(api_tx, event_hub) {
-            Ok(Some(event)) => return Ok(Some(wait_matched_response(&request_id, event))),
+            Ok(Some(event)) => return Ok(Some(wait_matched_response(&request_id, event)?)),
             Ok(None) => {}
             Err(mut response) if response.error.code == "pane_not_found" => {
                 response.id = request_id;
@@ -548,7 +591,7 @@ pub(in crate::server::api) fn wait_for_event(
                         message: "timed out waiting for event match".into(),
                     },
                 })
-                .unwrap(),
+                .map_err(std::io::Error::other)?,
             ));
         }
 
@@ -578,7 +621,7 @@ fn event_match_subscription(
     }
 }
 
-fn wait_matched_response(request_id: &str, event: serde_json::Value) -> String {
+fn wait_matched_response(request_id: &str, event: serde_json::Value) -> std::io::Result<String> {
     let Ok(event) = serde_json::from_value::<SubscriptionEventEnvelope>(event) else {
         return serde_json::to_string(&ErrorResponse {
             id: request_id.into(),
@@ -587,7 +630,7 @@ fn wait_matched_response(request_id: &str, event: serde_json::Value) -> String {
                 message: "failed to decode matched event".into(),
             },
         })
-        .unwrap();
+        .map_err(std::io::Error::other);
     };
 
     let SubscriptionEventData::PaneAgentStatusChanged(data) = event.data else {
@@ -598,7 +641,7 @@ fn wait_matched_response(request_id: &str, event: serde_json::Value) -> String {
                 message: "events.wait currently supports pane agent status matches".into(),
             },
         })
-        .unwrap();
+        .map_err(std::io::Error::other);
     };
 
     serde_json::to_string(&SuccessResponse {
@@ -618,7 +661,7 @@ fn wait_matched_response(request_id: &str, event: serde_json::Value) -> String {
             },
         },
     })
-    .unwrap()
+    .map_err(std::io::Error::other)
 }
 
 #[cfg(test)]

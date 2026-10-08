@@ -1,7 +1,12 @@
 //! Lets a room know when one of its agents is blocked on something it cannot
 //! pass alone: a permission dialog, a question, a trust prompt or any other
 //! blocked screen. The blocked agent itself says so, once per episode.
-use super::*;
+#[cfg(test)]
+use super::{
+    schema, AgentRuntimeIdentity, BTreeMap, Method, ModelError, PathBuf, PromptId, Provider,
+    ResponseResult, RoomId, RuntimeStatus, Transport,
+};
+use super::{AgentId, Author, BusState, Draft, Worker};
 
 /// The notice key for a blocked screen without a readable dialog.
 pub(super) const BLOCKED: &str = "blocked";

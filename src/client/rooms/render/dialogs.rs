@@ -1,10 +1,23 @@
 //! Forms, sound-setting rows and deletion confirmation views.
-use super::super::{deletion::DeleteTarget, forms::Form, BusUi};
+use super::super::{chat_search::ChatSearch, deletion::DeleteTarget, forms::Form, BusUi};
 use super::geometry::agent_form_gap;
 use super::text::{display, provider, wrap};
 use super::{Action, SoundSettingsLine, SoundTarget, View};
 use crate::bus::model::RoomKind;
 use ratatui::layout::Rect;
+
+/// The chat-search panel: a border, the query row, the key hint, a border.
+// Border, the 3-row query field, the key hint, border.
+pub(super) const SEARCH_BOX_HEIGHT: u16 = 6;
+const SEARCH_LABEL: &str = "Find ";
+/// Enter steps to older matches (up the history), as a find in a chat starts
+/// from the newest message. Down also goes newer: it works in every terminal,
+/// while Shift+Enter needs one that reports it apart from Enter.
+const SEARCH_HINTS: [&str; 3] = [
+    "Enter/↑ older · Shift+Enter/↓ newer · Esc close",
+    "Enter/↑ older · ↓ newer · Esc close",
+    "↑ older · ↓ newer · Esc",
+];
 
 impl BusUi {
     /// MASTER in its own group first, then the new-room default and every
@@ -208,152 +221,11 @@ impl BusUi {
         let mut y = 3;
         match form {
             Form::Help { scroll } => {
-                view.row(
-                    Rect::new(x, 1, width, 1),
-                    "Keyboard shortcuts",
-                    None,
-                    false,
-                    false,
-                );
-                view.help = Rect::new(x, 3, width, main.height.saturating_sub(6));
-                let lines = wrap(super::super::help::TEXT, width);
-                view.help_max_scroll = lines.len().saturating_sub(usize::from(view.help.height));
-                view.help_scroll = (*scroll).min(view.help_max_scroll);
-                for (index, line) in lines
-                    .into_iter()
-                    .skip(view.help_scroll)
-                    .take(usize::from(view.help.height))
-                    .enumerate()
-                {
-                    view.row(
-                        Rect::new(x, 3 + index as u16, width, 1),
-                        line,
-                        None,
-                        false,
-                        false,
-                    );
-                }
-                view.row(
-                    Rect::new(x, main.bottom().saturating_sub(2), width, 1),
-                    "Close (Esc / Enter) · ↑↓ / PgUp/Dn scroll",
-                    Some(Action::Cancel),
-                    false,
-                    true,
-                );
+                self.help_view(view, main, *scroll);
                 return;
             }
             Form::Settings => {
-                view.row(Rect::new(x, 1, width, 1), "Settings", None, false, false);
-                view.row(
-                    Rect::new(x, 3, width, 1),
-                    format!(
-                        "[{}] Color blind mode",
-                        if self.settings.color_blind_mode {
-                            "x"
-                        } else {
-                            " "
-                        }
-                    ),
-                    Some(Action::ToggleColorBlindMode),
-                    self.settings_field == 0,
-                    false,
-                );
-                view.lines(
-                    Rect::new(x + 4, 4, width.saturating_sub(4), 3),
-                    "Agent colors stay distinct and readable with red-green or blue-yellow color blindness.",
-                    None,
-                    true,
-                );
-                view.row(
-                    Rect::new(x, 8, width, 1),
-                    "Sound notifications",
-                    None,
-                    false,
-                    false,
-                );
-                let footer = main.bottom().saturating_sub(2);
-                let error = self.visible_error().map(str::to_owned);
-                let list_bottom = footer.saturating_sub(if error.is_some() { 4 } else { 1 });
-                view.settings_list = Rect::new(x, 10, width, list_bottom.saturating_sub(10));
-                let lines = self.sound_settings_lines();
-                view.settings_max_scroll = lines
-                    .len()
-                    .saturating_sub(usize::from(view.settings_list.height));
-                let scroll = self.settings_scroll.min(view.settings_max_scroll);
-                for (index, line) in lines
-                    .iter()
-                    .skip(scroll)
-                    .take(usize::from(view.settings_list.height))
-                    .enumerate()
-                {
-                    let rect = Rect::new(x, 10 + index as u16, width, 1);
-                    match line {
-                        SoundSettingsLine::Heading(text) => {
-                            view.row(rect, *text, None, false, true);
-                        }
-                        SoundSettingsLine::Empty(text) => {
-                            view.row(rect, *text, None, false, true);
-                        }
-                        SoundSettingsLine::Sound { target, field } => {
-                            let Some((label, enabled, sound)) = self.sound_row(*target) else {
-                                continue;
-                            };
-                            let selected = self.settings_field == *field;
-                            // The row's sound sits right of its checkbox:
-                            // ‹ previous · name · next ›.
-                            let name = display(&sound);
-                            let name_width = (unicode_width::UnicodeWidthStr::width(name.as_str())
-                                as u16)
-                                .min(width.saturating_sub(16));
-                            let choice_width = name_width + 4;
-                            let choice_x = x + width.saturating_sub(choice_width);
-                            view.row(
-                                Rect::new(x, rect.y, width.saturating_sub(choice_width + 1), 1),
-                                format!(
-                                    "[{}] {label}",
-                                    match enabled {
-                                        Some(true) => "x",
-                                        Some(false) => " ",
-                                        // All rooms while the rooms differ.
-                                        None => "-",
-                                    }
-                                ),
-                                Some(Action::ToggleSound(*target)),
-                                selected,
-                                false,
-                            );
-                            view.row(
-                                Rect::new(choice_x, rect.y, 2, 1),
-                                "‹",
-                                Some(Action::CycleSound(*target, false)),
-                                selected,
-                                true,
-                            );
-                            view.row(
-                                Rect::new(choice_x + 2, rect.y, name_width + 2, 1),
-                                format!("{name} ›"),
-                                Some(Action::CycleSound(*target, true)),
-                                selected,
-                                false,
-                            );
-                        }
-                    }
-                }
-                if let Some(error) = error {
-                    view.lines(
-                        Rect::new(x, footer.saturating_sub(4), width, 3),
-                        &error,
-                        None,
-                        false,
-                    );
-                }
-                view.row(
-                    Rect::new(x, footer, width, 1),
-                    "Close (Esc) · ↑↓ move · Enter toggles · ←→ sound",
-                    Some(Action::Cancel),
-                    false,
-                    true,
-                );
+                self.settings_view(view, main);
                 return;
             }
             Form::Room(editor) => {
@@ -379,94 +251,8 @@ impl BusUi {
                 );
                 y += 3;
             }
-            Form::Agent {
-                name,
-                provider: selected,
-                provider_cursor: _,
-                cwd,
-                args,
-                field,
-                orchestrates,
-                prompt,
-            } => {
-                let gap = agent_form_gap(main, form);
-                for (index, label, editor) in [
-                    (0, "Name", Some(name)),
-                    (1, "Agent", None),
-                    (2, "PWD", Some(cwd)),
-                    (3, "Additional launch args (optional)", Some(args)),
-                ] {
-                    view.row(
-                        Rect::new(x, y, width, 1),
-                        label,
-                        Some(Action::Field(index)),
-                        false,
-                        true,
-                    );
-                    y += 1;
-                    if let Some(editor) = editor {
-                        view.editor(
-                            Rect::new(x, y, width, 1),
-                            editor,
-                            Some(Action::Field(index)),
-                            *field == index,
-                        );
-                    } else {
-                        view.row(
-                            Rect::new(x, y, width, 1),
-                            format!("< {} >", selected.map_or("Choose model", provider)),
-                            Some(Action::Field(1)),
-                            *field == 1,
-                            false,
-                        );
-                    }
-                    y += gap;
-                }
-                if let Some(choice) = orchestrates {
-                    view.row(
-                        Rect::new(x, y, width, 1),
-                        "Orchestrates room",
-                        Some(Action::Field(super::super::forms::ORCHESTRATES_FIELD)),
-                        false,
-                        true,
-                    );
-                    y += 1;
-                    let target = choice
-                        .0
-                        .and_then(|room| self.snapshot.state.room(room))
-                        .map_or("no work room without an orchestrator", |room| {
-                            room.name.as_str()
-                        });
-                    view.row(
-                        Rect::new(x, y, width, 1),
-                        format!("< {target} >"),
-                        Some(Action::Orchestrates),
-                        *field == super::super::forms::ORCHESTRATES_FIELD,
-                        false,
-                    );
-                    y += gap;
-                }
-                if let Some(prompt) = prompt {
-                    let index = super::super::forms::PROMPT_FIELD;
-                    view.row(
-                        Rect::new(x, y, width, 1),
-                        "System prompt (Enter adds a line, Ctrl+Enter adds the agent)",
-                        Some(Action::Field(index)),
-                        false,
-                        true,
-                    );
-                    y += 1;
-                    // The prompt takes what the buttons and a validation error leave.
-                    let below = if self.visible_error().is_some() { 7 } else { 3 };
-                    let height = main.bottom().saturating_sub(y + below).clamp(1, 16);
-                    view.editor(
-                        Rect::new(x, y, width, height),
-                        &prompt.editor,
-                        Some(Action::Field(index)),
-                        *field == index,
-                    );
-                    y += height + 1;
-                }
+            Form::Agent { .. } => {
+                y = self.agent_fields(view, main, form);
             }
             Form::Consent { notice, .. } => {
                 let text = format!(
@@ -479,6 +265,292 @@ impl BusUi {
                 y += height + 2;
             }
         }
+        self.form_footer(view, main, form, y);
+    }
+    fn help_view(&self, view: &mut View, main: Rect, scroll: usize) {
+        let x = main.x + 3;
+        let width = main.width.saturating_sub(6);
+        view.row(
+            Rect::new(x, 1, width, 1),
+            "Keyboard shortcuts",
+            None,
+            false,
+            false,
+        );
+        view.help = Rect::new(x, 3, width, main.height.saturating_sub(6));
+        let lines = wrap(super::super::help::TEXT, width);
+        view.help_max_scroll = lines.len().saturating_sub(usize::from(view.help.height));
+        view.help_scroll = scroll.min(view.help_max_scroll);
+        for (index, line) in lines
+            .into_iter()
+            .skip(view.help_scroll)
+            .take(usize::from(view.help.height))
+            .enumerate()
+        {
+            view.row(
+                Rect::new(x, 3 + index as u16, width, 1),
+                line,
+                None,
+                false,
+                false,
+            );
+        }
+        view.row(
+            Rect::new(x, main.bottom().saturating_sub(2), width, 1),
+            "Close (Esc / Enter) · ↑↓ / PgUp/Dn scroll",
+            Some(Action::Cancel),
+            false,
+            true,
+        );
+    }
+
+    fn settings_view(&self, view: &mut View, main: Rect) {
+        let x = main.x + 3;
+        let width = main.width.saturating_sub(6);
+        view.row(Rect::new(x, 1, width, 1), "Settings", None, false, false);
+        view.row(
+            Rect::new(x, 3, width, 1),
+            format!(
+                "[{}] Color blind mode",
+                if self.settings.color_blind_mode {
+                    "x"
+                } else {
+                    " "
+                }
+            ),
+            Some(Action::ToggleColorBlindMode),
+            self.settings_field == 0,
+            false,
+        );
+        view.lines(
+            Rect::new(x + 4, 4, width.saturating_sub(4), 3),
+            "Agent colors stay distinct and readable with red-green or blue-yellow color blindness.",
+            None,
+            true,
+        );
+        view.row(
+            Rect::new(x, 8, width, 1),
+            "Sound notifications",
+            None,
+            false,
+            false,
+        );
+        let footer = main.bottom().saturating_sub(2);
+        let error = self.visible_error().map(str::to_owned);
+        let list_bottom = footer.saturating_sub(if error.is_some() { 4 } else { 1 });
+        view.settings_list = Rect::new(x, 10, width, list_bottom.saturating_sub(10));
+        let lines = self.sound_settings_lines();
+        view.settings_max_scroll = lines
+            .len()
+            .saturating_sub(usize::from(view.settings_list.height));
+        let scroll = self.settings_scroll.min(view.settings_max_scroll);
+        for (index, line) in lines
+            .iter()
+            .skip(scroll)
+            .take(usize::from(view.settings_list.height))
+            .enumerate()
+        {
+            let rect = Rect::new(x, 10 + index as u16, width, 1);
+            self.sound_settings_row(view, rect, line);
+        }
+        if let Some(error) = error {
+            view.lines(
+                Rect::new(x, footer.saturating_sub(4), width, 3),
+                &error,
+                None,
+                false,
+            );
+        }
+        view.row(
+            Rect::new(x, footer, width, 1),
+            "Close (Esc) · ↑↓ move · Enter toggles · ←→ sound",
+            Some(Action::Cancel),
+            false,
+            true,
+        );
+    }
+
+    fn sound_settings_row(&self, view: &mut View, rect: Rect, line: &SoundSettingsLine) {
+        match line {
+            SoundSettingsLine::Heading(text) => {
+                view.row(rect, *text, None, false, true);
+            }
+            SoundSettingsLine::Empty(text) => {
+                view.row(rect, *text, None, false, true);
+            }
+            SoundSettingsLine::Sound { target, field } => {
+                let Some((label, enabled, sound)) = self.sound_row(*target) else {
+                    return;
+                };
+                let selected = self.settings_field == *field;
+                // The row's sound sits right of its checkbox:
+                // ‹ previous · name · next ›.
+                let name = display(&sound);
+                let name_width = (unicode_width::UnicodeWidthStr::width(name.as_str()) as u16)
+                    .min(rect.width.saturating_sub(16));
+                let choice_width = name_width + 4;
+                let choice_x = rect.x + rect.width.saturating_sub(choice_width);
+                view.row(
+                    Rect::new(
+                        rect.x,
+                        rect.y,
+                        rect.width.saturating_sub(choice_width + 1),
+                        1,
+                    ),
+                    format!(
+                        "[{}] {label}",
+                        match enabled {
+                            Some(true) => "x",
+                            Some(false) => " ",
+                            // All rooms while the rooms differ.
+                            None => "-",
+                        }
+                    ),
+                    Some(Action::ToggleSound(*target)),
+                    selected,
+                    false,
+                );
+                view.row(
+                    Rect::new(choice_x, rect.y, 2, 1),
+                    "‹",
+                    Some(Action::CycleSound(*target, false)),
+                    selected,
+                    true,
+                );
+                view.row(
+                    Rect::new(choice_x + 2, rect.y, name_width + 2, 1),
+                    format!("{name} ›"),
+                    Some(Action::CycleSound(*target, true)),
+                    selected,
+                    false,
+                );
+            }
+        }
+    }
+
+    fn agent_fields(&self, view: &mut View, main: Rect, form: &Form) -> u16 {
+        let Form::Agent {
+            name,
+            provider: selected,
+            cwd,
+            args,
+            field,
+            ..
+        } = form
+        else {
+            return 3;
+        };
+        let x = main.x + 3;
+        let width = main.width.saturating_sub(6);
+        let mut y = 3;
+        let gap = agent_form_gap(main, form);
+        for (index, label, editor) in [
+            (0, "Name", Some(name)),
+            (1, "Agent", None),
+            (2, "PWD", Some(cwd)),
+            (3, "Additional launch args (optional)", Some(args)),
+        ] {
+            view.row(
+                Rect::new(x, y, width, 1),
+                label,
+                Some(Action::Field(index)),
+                false,
+                true,
+            );
+            y += 1;
+            if let Some(editor) = editor {
+                view.editor(
+                    Rect::new(x, y, width, 1),
+                    editor,
+                    Some(Action::Field(index)),
+                    *field == index,
+                );
+            } else {
+                view.row(
+                    Rect::new(x, y, width, 1),
+                    format!("< {} >", selected.map_or("Choose model", provider)),
+                    Some(Action::Field(1)),
+                    *field == 1,
+                    false,
+                );
+            }
+            y += gap;
+        }
+
+        self.orchestrator_fields(view, main, form, y, gap)
+    }
+
+    fn orchestrator_fields(
+        &self,
+        view: &mut View,
+        main: Rect,
+        form: &Form,
+        mut y: u16,
+        gap: u16,
+    ) -> u16 {
+        let Form::Agent {
+            field,
+            orchestrates,
+            prompt,
+            ..
+        } = form
+        else {
+            return y;
+        };
+        let x = main.x + 3;
+        let width = main.width.saturating_sub(6);
+        if let Some(choice) = orchestrates {
+            view.row(
+                Rect::new(x, y, width, 1),
+                "Orchestrates room",
+                Some(Action::Field(super::super::forms::ORCHESTRATES_FIELD)),
+                false,
+                true,
+            );
+            y += 1;
+            let target = choice
+                .0
+                .and_then(|room| self.snapshot.state.room(room))
+                .map_or("no work room without an orchestrator", |room| {
+                    room.name.as_str()
+                });
+            view.row(
+                Rect::new(x, y, width, 1),
+                format!("< {target} >"),
+                Some(Action::Orchestrates),
+                *field == super::super::forms::ORCHESTRATES_FIELD,
+                false,
+            );
+            y += gap;
+        }
+        if let Some(prompt) = prompt {
+            let index = super::super::forms::PROMPT_FIELD;
+            view.row(
+                Rect::new(x, y, width, 1),
+                "System prompt (Enter adds a line, Ctrl+Enter adds the agent)",
+                Some(Action::Field(index)),
+                false,
+                true,
+            );
+            y += 1;
+            // The prompt takes what the buttons and a validation error leave.
+            let below = if self.visible_error().is_some() { 7 } else { 3 };
+            let height = main.bottom().saturating_sub(y + below).clamp(1, 16);
+            view.editor(
+                Rect::new(x, y, width, height),
+                &prompt.editor,
+                Some(Action::Field(index)),
+                *field == index,
+            );
+            y += height + 1;
+        }
+
+        y
+    }
+
+    fn form_footer(&self, view: &mut View, main: Rect, form: &Form, mut y: u16) {
+        let x = main.x + 3;
+        let width = main.width.saturating_sub(6);
         view.row(
             Rect::new(x, y, 14.min(width), 1),
             "Cancel (Esc)",
@@ -546,5 +618,71 @@ impl BusUi {
                 );
             }
         }
+    }
+}
+
+pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: u16, count: usize) {
+    let panel = view.search_box;
+    if panel.height > 0 {
+        let counter = match (search.query.is_empty(), count) {
+            (true, _) => String::new(),
+            (false, 0) => "no matches".to_owned(),
+            (false, _) => format!("{}/{count}", search.current + 1),
+        };
+        let counter_width = unicode_width::UnicodeWidthStr::width(counter.as_str()) as u16;
+        // The label sits outside the field, dim like the hint, so it
+        // never reads as part of the query.
+        let label_width = SEARCH_LABEL.len() as u16;
+        let field_y = panel.y + 1;
+        view.row(
+            Rect::new(x, field_y + 1, label_width, 1),
+            SEARCH_LABEL,
+            None,
+            false,
+            true,
+        );
+        // Room for the widest counter, so the field keeps its width
+        // as the counter changes.
+        let field_width = width.saturating_sub(label_width + "no matches".len() as u16 + 1);
+        view.search_field = Rect::new(x + label_width, field_y, field_width, 3);
+        let inner = field_width.saturating_sub(2);
+        view.row(
+            Rect::new(x + label_width + 1, field_y + 1, inner, 1),
+            &search.query,
+            None,
+            false,
+            false,
+        );
+        view.row(
+            Rect::new(
+                x + width.saturating_sub(counter_width),
+                field_y + 1,
+                counter_width,
+                1,
+            ),
+            &counter,
+            None,
+            false,
+            true,
+        );
+        // The longest hint that fits a narrow pane.
+        let hint = SEARCH_HINTS
+            .iter()
+            .find(|hint| unicode_width::UnicodeWidthStr::width(**hint) <= usize::from(width))
+            .unwrap_or(&SEARCH_HINTS[2]);
+        view.row(
+            Rect::new(x, field_y + 3, width, 1),
+            *hint,
+            None,
+            false,
+            true,
+        );
+        let typed = unicode_width::UnicodeWidthStr::width(search.query.as_str()) as u16;
+        view.cursor = Some(crate::protocol::CursorState {
+            x: x + label_width + 1 + typed.min(inner.saturating_sub(1)),
+            y: field_y + 1,
+            visible: true,
+            shape: 2,
+        });
     }
 }

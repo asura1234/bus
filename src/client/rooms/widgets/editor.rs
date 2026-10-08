@@ -203,21 +203,22 @@ impl Editor {
         }
         self.text.len()
     }
-    pub fn key(&mut self, key: KeyCode, modifiers: KeyModifiers) -> bool {
-        let before = self.text.clone();
-        // Option is Alt with most macOS terminal settings and Meta with some;
-        // legacy terminals send Option+arrows as the readline chords Alt+B/F.
-        let option = modifiers.intersects(KeyModifiers::ALT | KeyModifiers::META);
-        let control = modifiers.contains(KeyModifiers::CONTROL) && !option;
+    fn editing_chord(
+        &mut self,
+        key: KeyCode,
+        modifiers: KeyModifiers,
+        control: bool,
+        option: bool,
+    ) -> bool {
         if (control && matches!(key, KeyCode::Char('u')))
             || (matches!(key, KeyCode::Backspace) && modifiers.contains(KeyModifiers::SUPER))
         {
             self.kill_to_line_start();
-            return self.text != before;
+            return true;
         }
         if control && matches!(key, KeyCode::Char('k')) {
             self.kill_to_line_end();
-            return self.text != before;
+            return true;
         }
         if control && matches!(key, KeyCode::Char('w')) {
             if let Some(range) = self.selection() {
@@ -225,18 +226,30 @@ impl Editor {
             } else {
                 self.kill_range(self.space_start()..self.cursor, KillDir::Backward);
             }
-            return self.text != before;
+            return true;
         }
         if control && matches!(key, KeyCode::Char('y')) {
             self.yank();
-            return self.text != before;
+            return true;
         }
         if option && matches!(key, KeyCode::Char('y')) {
             self.yank_pop();
-            return self.text != before;
+            return true;
         }
         if control && matches!(key, KeyCode::Char('_' | '-')) {
             self.undo();
+            return true;
+        }
+        false
+    }
+
+    pub fn key(&mut self, key: KeyCode, modifiers: KeyModifiers) -> bool {
+        let before = self.text.clone();
+        // Option is Alt with most macOS terminal settings and Meta with some;
+        // legacy terminals send Option+arrows as the readline chords Alt+B/F.
+        let option = modifiers.intersects(KeyModifiers::ALT | KeyModifiers::META);
+        let control = modifiers.contains(KeyModifiers::CONTROL) && !option;
+        if self.editing_chord(key, modifiers, control, option) {
             return self.text != before;
         }
         let (key, word) = match key {

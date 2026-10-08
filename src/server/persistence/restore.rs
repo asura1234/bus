@@ -295,129 +295,23 @@ fn restore_tab(
     let mut terminals = Vec::new();
     let mut terminal_runtimes = HashMap::new();
     for id in &pane_ids {
-        let old_id = reverse_id_map.get(id);
-        let saved_pane = old_id.and_then(|old_id| snap.panes.get(old_id));
-        let saved_cwd = saved_pane
-            .map(|p| p.cwd.clone())
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
-
-        let cwd = if saved_cwd.exists() {
-            saved_cwd
-        } else {
-            warn!(
-                cwd = %saved_cwd.display(),
-                "saved pane cwd does not exist, falling back to HOME"
-            );
-            let home = std::env::var("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("/"));
-            if home.exists() {
-                home
-            } else {
-                PathBuf::from("/")
-            }
-        };
-
-        let saved_label = saved_pane.and_then(|p| p.label.clone());
-        let saved_agent_name = saved_pane.and_then(|p| p.agent_name.clone());
-        let saved_managed_agent = saved_pane
-            .and_then(|pane| pane.managed_agent_kind.as_deref())
-            .and_then(crate::detect::parse_canonical_agent_label);
-        let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
-        let saved_history =
-            old_id.and_then(|old_id| history.and_then(|history| history.panes.get(old_id)));
-        let startup = {
-            let mut agent_restore = AgentRestoreState {
-                enabled: runtime_context.resume_agents_on_restore,
-                resumed_sessions: resumed_agent_sessions,
-            };
-            pane_restore_startup(saved_agent_session, saved_history, &mut agent_restore)
-        };
-        let restored_agent_session =
-            restored_terminal_agent_session(saved_agent_session, startup.duplicate_agent_session);
-        let old_pane_id = reverse_id_map.get(id).copied();
-        let public_pane_id = old_pane_id
-            .and_then(|old_id| public_pane_ids_by_old_raw.get(&old_id))
-            .map(String::as_str);
-        let launch_env = public_pane_id
-            .map(|pane_id| {
-                PaneLaunchEnv::from_extra(Vec::new()).with_identity(
-                    workspace_id.to_string(),
-                    crate::server::workspaces::public_tab_id_for_number(workspace_id, number),
-                    pane_id.to_string(),
-                )
-            })
-            .unwrap_or_default();
-        if let Some(plan) = startup.restore_plan {
-            let initial_restore_agent = crate::detect::parse_agent_label(&plan.agent);
-            let terminal_id = TerminalId::alloc();
-            let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone())
-                .with_pending_agent_resume_plan(plan);
-            if let Some(label) = saved_label {
-                terminal.set_manual_label(label);
-            }
-            if let Some(session) = restored_agent_session {
-                terminal.set_persisted_agent_session(session);
-            }
-            match (saved_agent_name, saved_managed_agent) {
-                (Some(agent_name), Some(agent)) => {
-                    terminal.restore_managed_agent(agent_name, agent)
-                }
-                (Some(_), None) => {}
-                (None, _) => {}
-            }
-            if let Some(agent) = initial_restore_agent {
-                let _ = terminal.set_detected_state_with_screen_signals_at(
-                    Some(agent),
-                    AgentState::Idle,
-                    false,
-                    false,
-                    std::time::Instant::now(),
-                );
-            }
-            panes.insert(*id, PaneState::new(terminal_id));
-            terminals.push(terminal);
-            continue;
-        }
-
-        let runtime_result = TerminalRuntime::spawn_with_initial_history(
+        if let Some((pane, terminal, runtime)) = restore_tab_pane(
             *id,
-            rows,
-            cols,
-            cwd.clone(),
-            runtime_context.scrollback_limit_bytes,
-            crate::terminal_theme::TerminalTheme::default(),
-            None,
-            runtime_context.shell_config,
-            &launch_env,
-            startup.initial_history_ansi,
-            runtime_context.events.clone(),
-            runtime_context.render_notify.clone(),
-            runtime_context.render_dirty.clone(),
-        );
-
-        match runtime_result {
-            Ok(runtime) => {
-                let terminal_id = TerminalId::alloc();
-                let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
-                if let Some(label) = saved_label {
-                    terminal.set_manual_label(label);
-                }
-                if let Some(session) = restored_agent_session {
-                    terminal.set_persisted_agent_session(session);
-                }
-                panes.insert(*id, PaneState::new(terminal_id.clone()));
-                terminal_runtimes.insert(terminal_id, runtime);
-                terminals.push(terminal);
+            reverse_id_map.get(id),
+            snap,
+            history,
+            number,
+            workspace_id,
+            (rows, cols),
+            runtime_context,
+            resumed_agent_sessions,
+            public_pane_ids_by_old_raw,
+        ) {
+            panes.insert(*id, pane);
+            if let Some(runtime) = runtime {
+                terminal_runtimes.insert(terminal.id.clone(), runtime);
             }
-            Err(e) => {
-                error!(
-                    tab = ?snap.custom_name,
-                    pane_id = id.raw(),
-                    err = %e,
-                    "failed to restore pane, skipping"
-                );
-            }
+            terminals.push(terminal);
         }
     }
 
@@ -460,6 +354,161 @@ fn restore_tab(
         terminal_runtimes,
         reverse_id_map,
     ))
+}
+
+fn restore_tab_pane(
+    id: PaneId,
+    old_id: Option<&u32>,
+    snap: &TabSnapshot,
+    history: Option<&TabHistorySnapshot>,
+    number: usize,
+    workspace_id: &str,
+    (rows, cols): (u16, u16),
+    runtime_context: &RestoreRuntimeContext<'_>,
+    resumed_agent_sessions: &mut HashSet<String>,
+    public_pane_ids_by_old_raw: &HashMap<u32, String>,
+) -> Option<(PaneState, TerminalState, Option<TerminalRuntime>)> {
+    let saved_pane = old_id.and_then(|old_id| snap.panes.get(old_id));
+    let cwd = restored_pane_cwd(saved_pane);
+
+    let saved_label = saved_pane.and_then(|p| p.label.clone());
+    let saved_agent_name = saved_pane.and_then(|p| p.agent_name.clone());
+    let saved_managed_agent = saved_pane
+        .and_then(|pane| pane.managed_agent_kind.as_deref())
+        .and_then(crate::detect::parse_canonical_agent_label);
+    let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
+    let saved_history =
+        old_id.and_then(|old_id| history.and_then(|history| history.panes.get(old_id)));
+    let startup = {
+        let mut agent_restore = AgentRestoreState {
+            enabled: runtime_context.resume_agents_on_restore,
+            resumed_sessions: resumed_agent_sessions,
+        };
+        pane_restore_startup(saved_agent_session, saved_history, &mut agent_restore)
+    };
+    let restored_agent_session =
+        restored_terminal_agent_session(saved_agent_session, startup.duplicate_agent_session);
+    let old_pane_id = old_id.copied();
+    let public_pane_id = old_pane_id
+        .and_then(|old_id| public_pane_ids_by_old_raw.get(&old_id))
+        .map(String::as_str);
+    let launch_env = public_pane_id
+        .map(|pane_id| {
+            PaneLaunchEnv::from_extra(Vec::new()).with_identity(
+                workspace_id.to_string(),
+                crate::server::workspaces::public_tab_id_for_number(workspace_id, number),
+                pane_id.to_string(),
+            )
+        })
+        .unwrap_or_default();
+    if let Some(plan) = startup.restore_plan {
+        let terminal = restored_pending_agent_terminal(
+            cwd,
+            plan,
+            saved_label,
+            restored_agent_session,
+            saved_agent_name,
+            saved_managed_agent,
+        );
+        return Some((PaneState::new(terminal.id.clone()), terminal, None));
+    }
+
+    let runtime_result = TerminalRuntime::spawn_with_initial_history(
+        id,
+        rows,
+        cols,
+        cwd.clone(),
+        runtime_context.scrollback_limit_bytes,
+        crate::terminal_theme::TerminalTheme::default(),
+        None,
+        runtime_context.shell_config,
+        &launch_env,
+        startup.initial_history_ansi,
+        runtime_context.events.clone(),
+        runtime_context.render_notify.clone(),
+        runtime_context.render_dirty.clone(),
+    );
+
+    match runtime_result {
+        Ok(runtime) => {
+            let terminal_id = TerminalId::alloc();
+            let mut terminal = TerminalState::new(terminal_id.clone(), cwd.clone());
+            if let Some(label) = saved_label {
+                terminal.set_manual_label(label);
+            }
+            if let Some(session) = restored_agent_session {
+                terminal.set_persisted_agent_session(session);
+            }
+            Some((PaneState::new(terminal_id), terminal, Some(runtime)))
+        }
+        Err(e) => {
+            error!(
+                tab = ?snap.custom_name,
+                pane_id = id.raw(),
+                err = %e,
+                "failed to restore pane, skipping"
+            );
+            None
+        }
+    }
+}
+
+fn restored_pane_cwd(saved_pane: Option<&super::schema::PaneSnapshot>) -> PathBuf {
+    let saved_cwd = saved_pane
+        .map(|p| p.cwd.clone())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
+
+    if saved_cwd.exists() {
+        saved_cwd
+    } else {
+        warn!(
+            cwd = %saved_cwd.display(),
+            "saved pane cwd does not exist, falling back to HOME"
+        );
+        let home = std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/"));
+        if home.exists() {
+            home
+        } else {
+            PathBuf::from("/")
+        }
+    }
+}
+
+fn restored_pending_agent_terminal(
+    cwd: PathBuf,
+    plan: crate::agent_resume::AgentResumePlan,
+    saved_label: Option<String>,
+    restored_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    saved_agent_name: Option<String>,
+    saved_managed_agent: Option<crate::detect::Agent>,
+) -> TerminalState {
+    let initial_restore_agent = crate::detect::parse_agent_label(&plan.agent);
+    let terminal_id = TerminalId::alloc();
+    let mut terminal =
+        TerminalState::new(terminal_id.clone(), cwd).with_pending_agent_resume_plan(plan);
+    if let Some(label) = saved_label {
+        terminal.set_manual_label(label);
+    }
+    if let Some(session) = restored_agent_session {
+        terminal.set_persisted_agent_session(session);
+    }
+    match (saved_agent_name, saved_managed_agent) {
+        (Some(agent_name), Some(agent)) => terminal.restore_managed_agent(agent_name, agent),
+        (Some(_), None) => {}
+        (None, _) => {}
+    }
+    if let Some(agent) = initial_restore_agent {
+        let _ = terminal.set_detected_state_with_screen_signals_at(
+            Some(agent),
+            AgentState::Idle,
+            false,
+            false,
+            std::time::Instant::now(),
+        );
+    }
+    terminal
 }
 
 fn pane_restore_startup<'a>(

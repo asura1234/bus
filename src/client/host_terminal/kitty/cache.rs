@@ -142,12 +142,13 @@ fn release_superseded_source_image(
     cache.replayed_placements.retain(|(id, _)| *id != previous);
 }
 
-pub(crate) fn encode_graphics_update_incremental(
+fn encode_stale_graphics_placements(
     cache: &mut HostGraphicsCache,
     placements: &[HostPlacement],
     transaction_budget: Option<usize>,
     coalesce_placements: bool,
-) -> EncodedGraphics {
+    bytes: &mut Vec<u8>,
+) -> Option<bool> {
     let desired_sources = placements
         .iter()
         .map(|placement| placement.source_key.clone())
@@ -166,20 +167,7 @@ pub(crate) fn encode_graphics_update_incremental(
             })
         })
         .collect::<HashSet<_>>();
-    let start = cache
-        .continuation
-        .as_ref()
-        .and_then(|(source, id, _)| {
-            placements
-                .iter()
-                .position(|placement| placement_identity(placement) == (source.clone(), *id))
-        })
-        .map(|index| index + 1)
-        .or_else(|| cache.continuation.as_ref().map(|cursor| cursor.2))
-        .map_or(0, |index| index % placements.len().max(1));
-    let mut bytes = Vec::new();
     let mut emitted = false;
-
     cache
         .sources
         .retain(|source, _| desired_sources.contains(source));
@@ -204,10 +192,7 @@ pub(crate) fn encode_graphics_update_incremental(
                 && same_image
                 && coalesced_transaction_fits(bytes.len(), transaction.len(), transaction_budget))
         {
-            return EncodedGraphics {
-                bytes,
-                incomplete: true,
-            };
+            return None;
         }
         bytes.extend(transaction);
         cache.placements.remove(&key);
@@ -215,6 +200,39 @@ pub(crate) fn encode_graphics_update_incremental(
         emitted = true;
         stale_image = Some(host_id);
     }
+    Some(emitted)
+}
+
+pub(crate) fn encode_graphics_update_incremental(
+    cache: &mut HostGraphicsCache,
+    placements: &[HostPlacement],
+    transaction_budget: Option<usize>,
+    coalesce_placements: bool,
+) -> EncodedGraphics {
+    let start = cache
+        .continuation
+        .as_ref()
+        .and_then(|(source, id, _)| {
+            placements
+                .iter()
+                .position(|placement| placement_identity(placement) == (source.clone(), *id))
+        })
+        .map(|index| index + 1)
+        .or_else(|| cache.continuation.as_ref().map(|cursor| cursor.2))
+        .map_or(0, |index| index % placements.len().max(1));
+    let mut bytes = Vec::new();
+    let Some(mut emitted) = encode_stale_graphics_placements(
+        cache,
+        placements,
+        transaction_budget,
+        coalesce_placements,
+        &mut bytes,
+    ) else {
+        return EncodedGraphics {
+            bytes,
+            incomplete: true,
+        };
+    };
 
     // Keep unrelated images isolated, but treat every row of one logical image
     // as part of its upload or replacement transaction. Sending only the first

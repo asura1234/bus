@@ -1,5 +1,5 @@
 //! Reconnect a Bus agent to the same provider conversation after PTY restore.
-use super::*;
+use super::{launch, schema, Agent, BusState};
 
 pub(super) fn restored_agent<'a>(
     state: &BusState,

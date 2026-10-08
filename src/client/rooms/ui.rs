@@ -5,8 +5,10 @@ use super::{
     forms::{Form, Rename, Suggestions},
     render::View,
 };
+#[cfg(test)]
+use crate::bus::model::{BusState, Provider};
 use crate::bus::{
-    model::*,
+    model::{AgentId, RoomId, RoomKind, RuntimeStatus},
     runtime::{BusCommand, BusEvent, BusHandle, BusSnapshot},
 };
 use std::{

@@ -158,29 +158,7 @@ impl PendingAltScreenRead {
             }
         }
 
-        let content_seq = runtime.content_seq();
-        if content_seq != self.observed_content_seq {
-            self.observed_content_seq = content_seq;
-            self.step_observed_output = true;
-            let synchronized_frame_complete =
-                self.synchronized_redraw_pending && !runtime.synchronized_output_active();
-            if synchronized_frame_complete {
-                self.synchronized_redraw_pending = false;
-                self.output_quiet_until = None;
-            } else {
-                self.output_quiet_until = Some(now + OUTPUT_QUIET);
-                if !traversal_expired {
-                    return Some(self);
-                }
-            }
-        }
-        if !traversal_expired && self.output_quiet_until.is_some_and(|quiet| now < quiet) {
-            return Some(self);
-        }
-        self.output_quiet_until = None;
-        if !traversal_expired && runtime.synchronized_output_active() {
-            self.synchronized_redraw_pending = true;
-            self.next_poll_at = now + OUTPUT_QUIET;
+        if self.wait_for_output_settle(runtime, now, traversal_expired) {
             return Some(self);
         }
         let step_expired = now >= self.step_deadline;
@@ -212,64 +190,17 @@ impl PendingAltScreenRead {
         }
         match self.phase {
             Phase::SettleInitial => {
-                if output_observed || !snapshot.similar_text(&self.initial) {
-                    self.initial = snapshot.clone();
-                    self.previous = snapshot.clone();
-                    self.history = snapshot.rows;
-                    self.observed_content_seq = snapshot_seq;
-                    self.step_observed_output = false;
-                    self.next_poll_at = now + INITIAL_QUIET;
-                    self.step_deadline = self.next_poll_at;
-                    return Some(self);
-                }
-                if send_wheel(
-                    runtime,
-                    MouseEventKind::ScrollDown,
-                    WHEEL_STEP_EVENTS,
-                    &snapshot,
-                )
-                .is_err()
-                {
-                    return self.complete_fallback();
-                }
-                self.phase = Phase::ProbeBottom;
-                self.arm_step(snapshot_seq, now);
-                Some(self)
+                self.poll_initial_settle(runtime, now, snapshot, snapshot_seq, output_observed)
             }
-            Phase::ProbeBottom => {
-                let at_bottom = snapshot.similar_text(&self.initial);
-                if output_observed && at_bottom && !step_expired && !traversal_expired {
-                    self.step_observed_output = false;
-                    return Some(self);
-                }
-                debug!(
-                    terminal_id = %self.terminal_id,
-                    at_bottom,
-                    "alternate-screen read bottom probe settled"
-                );
-                if at_bottom {
-                    if self.valid {
-                        self.start_harvest(runtime, now, snapshot_seq)
-                    } else {
-                        self.complete_fallback()
-                    }
-                } else {
-                    if send_wheel(
-                        runtime,
-                        MouseEventKind::ScrollUp,
-                        WHEEL_STEP_EVENTS,
-                        &snapshot,
-                    )
-                    .is_err()
-                    {
-                        return self.complete_fallback();
-                    }
-                    self.phase = Phase::RestoreProbe;
-                    self.restore_started_at = Some(now);
-                    self.arm_step(snapshot_seq, now);
-                    Some(self)
-                }
-            }
+            Phase::ProbeBottom => self.poll_bottom_probe(
+                runtime,
+                now,
+                snapshot,
+                snapshot_seq,
+                output_observed,
+                step_expired,
+                traversal_expired,
+            ),
             Phase::RestoreProbe => {
                 if snapshot.similar_text(&self.initial) {
                     self.complete_fallback()
@@ -282,69 +213,195 @@ impl PendingAltScreenRead {
                     Some(self)
                 }
             }
-            Phase::Harvest => {
-                let merge = crate::terminal::merge_scrolled_up(
-                    &mut self.history,
-                    &self.previous,
-                    &snapshot,
-                );
-                debug!(
-                    terminal_id = %self.terminal_id,
-                    ?merge,
-                    retained_rows = self.history.len(),
-                    batch_events = WHEEL_STEP_EVENTS,
-                    step_expired,
-                    "alternate-screen harvest snapshot"
-                );
-                match merge {
-                    UpwardMerge::Advanced { .. } => {
-                        self.previous = snapshot;
-                        if self.history.len() >= self.lines {
-                            self.start_restore(runtime, now, Some(snapshot_seq))
-                        } else {
-                            self.start_harvest(runtime, now, snapshot_seq)
-                        }
-                    }
-                    UpwardMerge::Unchanged if step_expired => {
-                        self.reached_top = true;
-                        self.start_restore(runtime, now, Some(snapshot_seq))
-                    }
-                    UpwardMerge::Unaligned if step_expired => {
-                        self.valid = false;
-                        self.start_restore(runtime, now, Some(snapshot_seq))
-                    }
-                    UpwardMerge::Unchanged | UpwardMerge::Unaligned => {
-                        self.step_observed_output = false;
-                        Some(self)
-                    }
+            Phase::Harvest => self.poll_harvest(runtime, now, snapshot, snapshot_seq, step_expired),
+            Phase::Restore => self.poll_restore(runtime, now, snapshot, snapshot_seq, step_expired),
+        }
+    }
+
+    fn wait_for_output_settle(
+        &mut self,
+        runtime: &TerminalRuntime,
+        now: Instant,
+        traversal_expired: bool,
+    ) -> bool {
+        let content_seq = runtime.content_seq();
+        if content_seq != self.observed_content_seq {
+            self.observed_content_seq = content_seq;
+            self.step_observed_output = true;
+            let synchronized_frame_complete =
+                self.synchronized_redraw_pending && !runtime.synchronized_output_active();
+            if synchronized_frame_complete {
+                self.synchronized_redraw_pending = false;
+                self.output_quiet_until = None;
+            } else {
+                self.output_quiet_until = Some(now + OUTPUT_QUIET);
+                if !traversal_expired {
+                    return true;
                 }
             }
-            Phase::Restore => {
-                if snapshot.similar_text(&self.initial) {
-                    if self.valid {
-                        self.complete_success()
-                    } else {
-                        self.complete_fallback()
-                    }
-                } else if step_expired || !snapshot.similar_text(&self.previous) {
-                    if send_wheel(
-                        runtime,
-                        MouseEventKind::ScrollDown,
-                        restore_batch_size(&snapshot),
-                        &snapshot,
-                    )
-                    .is_err()
-                    {
-                        return self.complete_fallback();
-                    }
-                    self.previous = snapshot;
-                    self.arm_step(snapshot_seq, now);
-                    Some(self)
+        }
+        if !traversal_expired && self.output_quiet_until.is_some_and(|quiet| now < quiet) {
+            return true;
+        }
+        self.output_quiet_until = None;
+        if !traversal_expired && runtime.synchronized_output_active() {
+            self.synchronized_redraw_pending = true;
+            self.next_poll_at = now + OUTPUT_QUIET;
+            return true;
+        }
+        false
+    }
+
+    fn poll_initial_settle(
+        mut self,
+        runtime: &TerminalRuntime,
+        now: Instant,
+        snapshot: ScreenSnapshot,
+        snapshot_seq: u64,
+        output_observed: bool,
+    ) -> PollOutcome {
+        if output_observed || !snapshot.similar_text(&self.initial) {
+            self.initial = snapshot.clone();
+            self.previous = snapshot.clone();
+            self.history = snapshot.rows;
+            self.observed_content_seq = snapshot_seq;
+            self.step_observed_output = false;
+            self.next_poll_at = now + INITIAL_QUIET;
+            self.step_deadline = self.next_poll_at;
+            return Some(self);
+        }
+        if send_wheel(
+            runtime,
+            MouseEventKind::ScrollDown,
+            WHEEL_STEP_EVENTS,
+            &snapshot,
+        )
+        .is_err()
+        {
+            return self.complete_fallback();
+        }
+        self.phase = Phase::ProbeBottom;
+        self.arm_step(snapshot_seq, now);
+        Some(self)
+    }
+
+    fn poll_bottom_probe(
+        mut self,
+        runtime: &TerminalRuntime,
+        now: Instant,
+        snapshot: ScreenSnapshot,
+        snapshot_seq: u64,
+        output_observed: bool,
+        step_expired: bool,
+        traversal_expired: bool,
+    ) -> PollOutcome {
+        let at_bottom = snapshot.similar_text(&self.initial);
+        if output_observed && at_bottom && !step_expired && !traversal_expired {
+            self.step_observed_output = false;
+            return Some(self);
+        }
+        debug!(
+            terminal_id = %self.terminal_id,
+            at_bottom,
+            "alternate-screen read bottom probe settled"
+        );
+        if at_bottom {
+            if self.valid {
+                self.start_harvest(runtime, now, snapshot_seq)
+            } else {
+                self.complete_fallback()
+            }
+        } else {
+            if send_wheel(
+                runtime,
+                MouseEventKind::ScrollUp,
+                WHEEL_STEP_EVENTS,
+                &snapshot,
+            )
+            .is_err()
+            {
+                return self.complete_fallback();
+            }
+            self.phase = Phase::RestoreProbe;
+            self.restore_started_at = Some(now);
+            self.arm_step(snapshot_seq, now);
+            Some(self)
+        }
+    }
+
+    fn poll_harvest(
+        mut self,
+        runtime: &TerminalRuntime,
+        now: Instant,
+        snapshot: ScreenSnapshot,
+        snapshot_seq: u64,
+        step_expired: bool,
+    ) -> PollOutcome {
+        let merge =
+            crate::terminal::merge_scrolled_up(&mut self.history, &self.previous, &snapshot);
+        debug!(
+            terminal_id = %self.terminal_id,
+            ?merge,
+            retained_rows = self.history.len(),
+            batch_events = WHEEL_STEP_EVENTS,
+            step_expired,
+            "alternate-screen harvest snapshot"
+        );
+        match merge {
+            UpwardMerge::Advanced { .. } => {
+                self.previous = snapshot;
+                if self.history.len() >= self.lines {
+                    self.start_restore(runtime, now, Some(snapshot_seq))
                 } else {
-                    self.step_observed_output = false;
-                    Some(self)
+                    self.start_harvest(runtime, now, snapshot_seq)
                 }
             }
+            UpwardMerge::Unchanged if step_expired => {
+                self.reached_top = true;
+                self.start_restore(runtime, now, Some(snapshot_seq))
+            }
+            UpwardMerge::Unaligned if step_expired => {
+                self.valid = false;
+                self.start_restore(runtime, now, Some(snapshot_seq))
+            }
+            UpwardMerge::Unchanged | UpwardMerge::Unaligned => {
+                self.step_observed_output = false;
+                Some(self)
+            }
+        }
+    }
+
+    fn poll_restore(
+        mut self,
+        runtime: &TerminalRuntime,
+        now: Instant,
+        snapshot: ScreenSnapshot,
+        snapshot_seq: u64,
+        step_expired: bool,
+    ) -> PollOutcome {
+        if snapshot.similar_text(&self.initial) {
+            if self.valid {
+                self.complete_success()
+            } else {
+                self.complete_fallback()
+            }
+        } else if step_expired || !snapshot.similar_text(&self.previous) {
+            if send_wheel(
+                runtime,
+                MouseEventKind::ScrollDown,
+                restore_batch_size(&snapshot),
+                &snapshot,
+            )
+            .is_err()
+            {
+                return self.complete_fallback();
+            }
+            self.previous = snapshot;
+            self.arm_step(snapshot_seq, now);
+            Some(self)
+        } else {
+            self.step_observed_output = false;
+            Some(self)
         }
     }
 

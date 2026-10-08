@@ -34,6 +34,26 @@ class BusQualityTest(unittest.TestCase):
         self.assertNotIn("-A", production)
         self.assertEqual(production[-4:], ("-D", "clippy::too_many_lines", "-D", "clippy::cognitive_complexity"))
         self.assertEqual(tests[-4:], ("-A", "clippy::too_many_lines", "-A", "clippy::cognitive_complexity"))
+        windows_production, windows_tests = quality.clippy_commands(
+            policy, "x86_64-pc-windows-msvc"
+        )
+        self.assertEqual(windows_production[:4], (
+            "cargo", "clippy", "--target", "x86_64-pc-windows-msvc",
+        ))
+        self.assertEqual(windows_tests[:4], windows_production[:4])
+        with (
+            patch.object(quality, "run", side_effect=(1, 0)) as run,
+            patch.object(Path, "read_text", return_value=json.dumps({})),
+            patch.object(quality.tomllib, "loads", return_value=policy),
+        ):
+            self.assertEqual(quality.windows_lint(), 1)
+        self.assertEqual([call.args for call in run.call_args_list], [
+            windows_production, windows_tests,
+        ])
+        self.assertTrue(all(
+            call.kwargs["env"]["LIBGHOSTTY_VT_SIMD"] == "false"
+            for call in run.call_args_list
+        ))
 
     def test_production_counting_waits_for_final_scope_keys(self):
         with tempfile.TemporaryDirectory() as folder:

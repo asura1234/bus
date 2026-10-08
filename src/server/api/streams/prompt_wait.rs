@@ -85,6 +85,49 @@ pub(in crate::server::api) fn prompt_agent(
         return agent_wait_not_running(request_id).map(Some);
     }
 
+    finish_prompt_wait(
+        PromptWaitProgress {
+            request_id,
+            target,
+            wait,
+            wait_started,
+            last_event_sequence,
+            prompt_started_working,
+            prompted,
+        },
+        stream,
+        api_tx,
+        event_hub,
+        running,
+    )
+}
+
+struct PromptWaitProgress {
+    request_id: String,
+    target: String,
+    wait: crate::protocol::api::schema::AgentPromptWaitOptions,
+    wait_started: std::time::Instant,
+    last_event_sequence: u64,
+    prompt_started_working: bool,
+    prompted: crate::protocol::api::schema::AgentInfo,
+}
+
+fn finish_prompt_wait(
+    progress: PromptWaitProgress,
+    stream: &mut LocalStream,
+    api_tx: &ApiRequestSender,
+    event_hub: &EventHub,
+    running: &Arc<AtomicBool>,
+) -> std::io::Result<Option<String>> {
+    let PromptWaitProgress {
+        request_id,
+        target,
+        wait,
+        wait_started,
+        last_event_sequence,
+        prompt_started_working,
+        prompted,
+    } = progress;
     let prompt_activity_observed = prompt_started_working
         || matches!(
             prompted.agent_status,

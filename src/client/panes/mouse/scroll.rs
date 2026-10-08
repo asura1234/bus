@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    ClientShellEndpointError, ClientShellInput, ClientShellState, PaneHit, PendingEndpointKind,
+};
 
 impl ClientShellState {
     pub(super) fn pane_scrollbar_offset(

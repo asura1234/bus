@@ -181,29 +181,7 @@ impl RawInputByteFramer {
         let mut chunks = self.drain_available_chunks();
 
         if let Some(family) = self.discard_until {
-            let keep_split_st = self.buffer.last() == Some(&ESC);
-            let keep_discarding = match family {
-                ControlStringFamily::HostReplyCsi => return chunks,
-                ControlStringFamily::OrphanedSgrMouseTail => {
-                    self.buffer.clear();
-                    self.discard_until = None;
-                    self.discarded_tail_bytes = 0;
-                    return chunks;
-                }
-                ControlStringFamily::Osc => plausible_osc_tail(&self.buffer),
-                ControlStringFamily::StTerminated => keep_split_st,
-            };
-
-            self.discarded_tail_bytes = self.discarded_tail_bytes.saturating_add(self.buffer.len());
-            self.buffer.clear();
-            if keep_discarding && self.discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES {
-                if keep_split_st {
-                    self.buffer.push(ESC);
-                }
-            } else {
-                self.discard_until = None;
-                self.discarded_tail_bytes = 0;
-            }
+            self.discard_timeout_tail(family);
             return chunks;
         }
 
@@ -237,81 +215,7 @@ impl RawInputByteFramer {
             return chunks;
         }
 
-        if self.has_pending_bracketed_paste() {
-            tracing::trace!(
-                len = self.buffer.len(),
-                "waiting for bracketed paste terminator"
-            );
-            return chunks;
-        }
-
-        if starts_with_incomplete_default_color_response(&self.buffer) {
-            tracing::trace!(
-                len = self.buffer.len(),
-                "waiting for host color response terminator"
-            );
-            return chunks;
-        }
-
-        if (self.host_cell_size_replies_awaited > 0 || self.host_appearance_reply_awaited)
-            && self.buffer.as_slice() == b"\x1b["
-        {
-            if !self.held_pending_host_reply_esc {
-                self.held_pending_host_reply_esc = true;
-                tracing::trace!("holding incomplete host CSI reply one flush");
-                return chunks;
-            }
-            self.host_cell_size_replies_awaited = 0;
-            self.host_appearance_reply_awaited = false;
-            self.held_pending_host_reply_esc = false;
-        }
-
-        if self.host_cell_size_replies_awaited > 0
-            && starts_with_incomplete_host_cell_size_report(&self.buffer)
-        {
-            tracing::debug!(
-                len = self.buffer.len(),
-                "discarding incomplete host cell size report after input timeout"
-            );
-            self.host_cell_size_replies_awaited = 0;
-            self.held_pending_host_reply_esc = false;
-            self.discard_until = Some(ControlStringFamily::HostReplyCsi);
-            self.discarded_tail_bytes = 0;
-            self.buffer.clear();
-            return chunks;
-        }
-
-        if starts_with_incomplete_host_color_scheme_report(&self.buffer) {
-            if self.host_appearance_reply_awaited && !self.held_pending_host_reply_esc {
-                self.held_pending_host_reply_esc = true;
-                tracing::trace!(
-                    len = self.buffer.len(),
-                    "holding incomplete host color scheme report one flush"
-                );
-                return chunks;
-            }
-            tracing::debug!(
-                len = self.buffer.len(),
-                "discarding incomplete host color scheme report after input timeout"
-            );
-            self.host_appearance_reply_awaited = false;
-            self.held_pending_host_reply_esc = false;
-            self.discard_until = Some(ControlStringFamily::HostReplyCsi);
-            self.discarded_tail_bytes = 0;
-            self.buffer.clear();
-            return chunks;
-        }
-
-        if let Some(ControlString::Incomplete { family }) = control_string(&self.buffer) {
-            tracing::debug!(
-                len = self.buffer.len(),
-                "discarding incomplete host control string after input timeout"
-            );
-            // This intentionally gives host control replies precedence over legacy
-            // Alt forms like Alt+] after timeout, so later reply tails cannot leak.
-            self.discard_until = Some(family);
-            self.discarded_tail_bytes = 0;
-            self.buffer.clear();
+        if self.hold_or_discard_timeout_reply() {
             return chunks;
         }
 
@@ -357,6 +261,113 @@ impl RawInputByteFramer {
         self.lone_escape_recently_flushed = false;
         self.buffer.clear();
         chunks
+    }
+
+    fn discard_timeout_tail(&mut self, family: ControlStringFamily) {
+        let keep_split_st = self.buffer.last() == Some(&ESC);
+        let keep_discarding = match family {
+            ControlStringFamily::HostReplyCsi => return,
+            ControlStringFamily::OrphanedSgrMouseTail => {
+                self.buffer.clear();
+                self.discard_until = None;
+                self.discarded_tail_bytes = 0;
+                return;
+            }
+            ControlStringFamily::Osc => plausible_osc_tail(&self.buffer),
+            ControlStringFamily::StTerminated => keep_split_st,
+        };
+
+        self.discarded_tail_bytes = self.discarded_tail_bytes.saturating_add(self.buffer.len());
+        self.buffer.clear();
+        if keep_discarding && self.discarded_tail_bytes <= MAX_DISCARDED_CONTROL_TAIL_BYTES {
+            if keep_split_st {
+                self.buffer.push(ESC);
+            }
+        } else {
+            self.discard_until = None;
+            self.discarded_tail_bytes = 0;
+        }
+    }
+
+    fn hold_or_discard_timeout_reply(&mut self) -> bool {
+        if self.has_pending_bracketed_paste() {
+            tracing::trace!(
+                len = self.buffer.len(),
+                "waiting for bracketed paste terminator"
+            );
+            return true;
+        }
+
+        if starts_with_incomplete_default_color_response(&self.buffer) {
+            tracing::trace!(
+                len = self.buffer.len(),
+                "waiting for host color response terminator"
+            );
+            return true;
+        }
+
+        if (self.host_cell_size_replies_awaited > 0 || self.host_appearance_reply_awaited)
+            && self.buffer.as_slice() == b"\x1b["
+        {
+            if !self.held_pending_host_reply_esc {
+                self.held_pending_host_reply_esc = true;
+                tracing::trace!("holding incomplete host CSI reply one flush");
+                return true;
+            }
+            self.host_cell_size_replies_awaited = 0;
+            self.host_appearance_reply_awaited = false;
+            self.held_pending_host_reply_esc = false;
+        }
+
+        if self.host_cell_size_replies_awaited > 0
+            && starts_with_incomplete_host_cell_size_report(&self.buffer)
+        {
+            tracing::debug!(
+                len = self.buffer.len(),
+                "discarding incomplete host cell size report after input timeout"
+            );
+            self.host_cell_size_replies_awaited = 0;
+            self.held_pending_host_reply_esc = false;
+            self.discard_until = Some(ControlStringFamily::HostReplyCsi);
+            self.discarded_tail_bytes = 0;
+            self.buffer.clear();
+            return true;
+        }
+
+        if starts_with_incomplete_host_color_scheme_report(&self.buffer) {
+            if self.host_appearance_reply_awaited && !self.held_pending_host_reply_esc {
+                self.held_pending_host_reply_esc = true;
+                tracing::trace!(
+                    len = self.buffer.len(),
+                    "holding incomplete host color scheme report one flush"
+                );
+                return true;
+            }
+            tracing::debug!(
+                len = self.buffer.len(),
+                "discarding incomplete host color scheme report after input timeout"
+            );
+            self.host_appearance_reply_awaited = false;
+            self.held_pending_host_reply_esc = false;
+            self.discard_until = Some(ControlStringFamily::HostReplyCsi);
+            self.discarded_tail_bytes = 0;
+            self.buffer.clear();
+            return true;
+        }
+
+        if let Some(ControlString::Incomplete { family }) = control_string(&self.buffer) {
+            tracing::debug!(
+                len = self.buffer.len(),
+                "discarding incomplete host control string after input timeout"
+            );
+            // This intentionally gives host control replies precedence over legacy
+            // Alt forms like Alt+] after timeout, so later reply tails cannot leak.
+            self.discard_until = Some(family);
+            self.discarded_tail_bytes = 0;
+            self.buffer.clear();
+            return true;
+        }
+        false
     }
 
     fn drain_available_chunks(&mut self) -> Vec<Vec<u8>> {

@@ -63,21 +63,8 @@ pub(super) fn handle_connection_with_stop(
         return Ok(());
     }
 
-    let request = match serde_json::from_str::<Request>(line) {
-        Ok(request) => request,
-        Err(request_error) => {
-            write_json_line_allow_disconnect(
-                &mut stream,
-                &ErrorResponse {
-                    id: String::new(),
-                    error: ErrorBody {
-                        code: "invalid_request".into(),
-                        message: format!("invalid request: {request_error}"),
-                    },
-                },
-            )?;
-            return Ok(());
-        }
+    let Some(request) = decode_initial_request(line, &mut stream)? else {
+        return Ok(());
     };
 
     let request_id = request.id.clone();
@@ -146,29 +133,62 @@ pub(super) fn handle_connection_with_stop(
                 wait_for_output(request_id.clone(), params, &mut stream, api_tx, running)?;
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
-        method_body => {
-            let response = handle_request(
-                Request {
-                    id: request_id.clone(),
-                    method: method_body,
+        method_body => serve_regular_request(
+            &mut stream,
+            Request {
+                id: request_id,
+                method: method_body,
+            },
+            api_tx,
+            capabilities,
+            server_stop,
+            method,
+            changes_ui,
+        ),
+    }
+}
+
+fn serve_regular_request(
+    stream: &mut LocalStream,
+    request: Request,
+    api_tx: &ApiRequestSender,
+    capabilities: ServerCapabilities,
+    server_stop: &Arc<AtomicBool>,
+    method: &'static str,
+    changes_ui: bool,
+) -> io::Result<()> {
+    let request_id = request.id.clone();
+    let response = handle_request(request, api_tx, capabilities, server_stop);
+    let result = write_text_line_allow_disconnect(stream, &response);
+    match &result {
+        Ok(()) => crate::utils::logging::api_request_completed(
+            &request_id,
+            method,
+            api_response_outcome(&response),
+            changes_ui,
+        ),
+        Err(err) => {
+            crate::utils::logging::api_request_failed(&request_id, method, &err.to_string())
+        }
+    }
+    result
+}
+
+fn decode_initial_request(line: &str, stream: &mut LocalStream) -> io::Result<Option<Request>> {
+    match serde_json::from_str::<Request>(line) {
+        Ok(request) => Ok(Some(request)),
+        Err(request_error) => {
+            write_json_line_allow_disconnect(
+                stream,
+                &ErrorResponse {
+                    id: String::new(),
+                    error: ErrorBody {
+                        code: "invalid_request".into(),
+                        message: format!("invalid request: {request_error}"),
+                    },
                 },
-                api_tx,
-                capabilities,
-                server_stop,
-            );
-            let result = write_text_line_allow_disconnect(&mut stream, &response);
-            match &result {
-                Ok(()) => crate::utils::logging::api_request_completed(
-                    &request_id,
-                    method,
-                    api_response_outcome(&response),
-                    changes_ui,
-                ),
-                Err(err) => {
-                    crate::utils::logging::api_request_failed(&request_id, method, &err.to_string())
-                }
-            }
-            result
+            )?;
+            Ok(None)
         }
     }
 }

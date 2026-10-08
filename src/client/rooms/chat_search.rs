@@ -2,7 +2,7 @@
 //! row, not just the visible ones, so the terminal's own find, which sees only
 //! the screen, is not needed. Header rows are searched too, so author names
 //! match as well as message text.
-use super::*;
+use super::BusUi;
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::ops::Range;
 

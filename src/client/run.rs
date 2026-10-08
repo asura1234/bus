@@ -1,4 +1,19 @@
-use super::*;
+#[cfg(unix)]
+use super::finish_terminal_input;
+use super::{
+    client_socket_path, do_handshake, handshake, init_logging, initial_terminal_geometry,
+    run_client_loop, setup_terminal, shell, stop_server_after_quit, ClientError,
+};
+use crate::ipc::LocalStream;
+use std::{
+    io::{self, Write as _},
+    sync::{
+        atomic::{AtomicBool, AtomicU16, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tracing::{info, warn};
 
 /// Runs the thin client and enters the main event loop.
 pub fn run_client() -> io::Result<()> {
@@ -30,29 +45,10 @@ fn run_client_with_mode(log_message: &'static str) -> io::Result<()> {
     let loaded_config = crate::config::Config::load();
     crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
     let socket_path = client_socket_path();
-    let startup_config_diagnostic =
-        crate::config::config_diagnostic_summary(&loaded_config.diagnostics);
-    let shell_config = Some(
-        shell::ClientShellConfig::from_config(&loaded_config.config)
-            .with_startup_config_diagnostic(startup_config_diagnostic),
-    );
-    let mouse_capture = loaded_config.config.ui.mouse_capture;
-    let mouse_scroll_lines = loaded_config.config.ui.mouse_scroll_lines();
-    let redraw_on_focus_gained = loaded_config.config.ui.redraw_on_focus_gained;
-    let host_cursor = loaded_config.config.ui.host_cursor;
-    let kitty_graphics_enabled = loaded_config.config.kitty_graphics_enabled();
-    let pixel_geometry_enabled = kitty_graphics_enabled;
-    let loop_config = ClientLoopConfig {
-        sound_config: loaded_config.config.ui.sound,
-        mouse_scroll_lines,
-        redraw_on_focus_gained,
-        host_cursor,
-        kitty_graphics_enabled,
-        pixel_geometry_enabled,
-        pixel_geometry_fallback: kitty_graphics_enabled,
-        mouse_capture_active: mouse_capture,
-        shell_config,
-    };
+    let loop_config = client_loop_config(loaded_config.config, &loaded_config.diagnostics);
+    let mouse_capture = loop_config.mouse_capture_active;
+    let pixel_geometry_enabled = loop_config.pixel_geometry_enabled;
+    let kitty_graphics_enabled = loop_config.kitty_graphics_enabled;
 
     crate::logging::startup("client");
     info!(path = %socket_path.display(), "{log_message}");
@@ -115,19 +111,7 @@ fn run_client_with_mode(log_message: &'static str) -> io::Result<()> {
     let should_quit = Arc::new(AtomicBool::new(false));
     let input_lifecycle = ClientInputLifecycle::default();
 
-    // ctrlc's "termination" feature also catches SIGTERM/SIGHUP so direct
-    // termination signals still run the quit path and TerminalGuard::Drop.
-    let quit_flag = should_quit.clone();
-    if let Err(err) = ctrlc::set_handler(move || {
-        quit_flag.store(true, Ordering::Release);
-    }) {
-        warn!(%err, "failed to install termination handler; terminal restore relies on TerminalGuard::Drop and the panic hook");
-    }
-    // Ctrl+C belongs to the agents, so a SIGINT (for example from a terminal
-    // that still delivers one in raw mode) must not quit the client. This runs
-    // after ctrlc so it replaces only ctrlc's SIGINT hook; SIGTERM and SIGHUP
-    // still take the quit path above.
-    crate::platform::disregard_interrupt_signal();
+    install_client_termination_handler(&should_quit);
 
     let result = rt.block_on(async {
         run_client_loop(
@@ -168,6 +152,31 @@ fn run_client_with_mode(log_message: &'static str) -> io::Result<()> {
         let _ = writeln!(io::stderr(), "bus: could not stop the server: {error}");
     }
 
+    finish_client_run(result, rt, terminal_restore_failed, stopped)
+}
+
+fn install_client_termination_handler(should_quit: &Arc<AtomicBool>) {
+    // ctrlc's "termination" feature also catches SIGTERM/SIGHUP so direct
+    // termination signals still run the quit path and TerminalGuard::Drop.
+    let quit_flag = should_quit.clone();
+    if let Err(err) = ctrlc::set_handler(move || {
+        quit_flag.store(true, Ordering::Release);
+    }) {
+        warn!(%err, "failed to install termination handler; terminal restore relies on TerminalGuard::Drop and the panic hook");
+    }
+    // Ctrl+C belongs to the agents, so a SIGINT (for example from a terminal
+    // that still delivers one in raw mode) must not quit the client. This runs
+    // after ctrlc so it replaces only ctrlc's SIGINT hook; SIGTERM and SIGHUP
+    // still take the quit path above.
+    crate::platform::disregard_interrupt_signal();
+}
+
+fn finish_client_run(
+    result: Result<(), ClientError>,
+    rt: tokio::runtime::Runtime,
+    terminal_restore_failed: bool,
+    stopped: Result<(), String>,
+) -> io::Result<()> {
     if let Err(err) = result {
         let _ = writeln!(io::stderr(), "herdr: {err}");
         rt.shutdown_timeout(Duration::from_millis(100));
@@ -191,4 +200,29 @@ fn run_client_with_mode(log_message: &'static str) -> io::Result<()> {
     rt.shutdown_timeout(Duration::from_millis(100));
     crate::logging::shutdown("client");
     stopped.map_err(io::Error::other)
+}
+
+fn client_loop_config(config: crate::config::Config, diagnostics: &[String]) -> ClientLoopConfig {
+    let startup_config_diagnostic = crate::config::config_diagnostic_summary(diagnostics);
+    let shell_config = Some(
+        shell::ClientShellConfig::from_config(&config)
+            .with_startup_config_diagnostic(startup_config_diagnostic),
+    );
+    let mouse_capture = config.ui.mouse_capture;
+    let mouse_scroll_lines = config.ui.mouse_scroll_lines();
+    let redraw_on_focus_gained = config.ui.redraw_on_focus_gained;
+    let host_cursor = config.ui.host_cursor;
+    let kitty_graphics_enabled = config.kitty_graphics_enabled();
+    let pixel_geometry_enabled = kitty_graphics_enabled;
+    ClientLoopConfig {
+        sound_config: config.ui.sound,
+        mouse_scroll_lines,
+        redraw_on_focus_gained,
+        host_cursor,
+        kitty_graphics_enabled,
+        pixel_geometry_enabled,
+        pixel_geometry_fallback: kitty_graphics_enabled,
+        mouse_capture_active: mouse_capture,
+        shell_config,
+    }
 }

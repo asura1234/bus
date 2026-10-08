@@ -327,77 +327,8 @@ impl HeadlessServer {
                 false
             }
             AppEvent::StateChanged { pane_id, .. } => {
-                // Capture toast before handling.
-                let toast_before = self.app.state.toast.clone();
                 let pane_id_val = *pane_id;
-
-                // Find the previous effective state of this pane before the event
-                // is processed, so notifications follow effective state changes.
-                let prev_state = self.pane_effective_state(pane_id_val);
-                let prev_agent_label = self.pane_effective_agent_label(pane_id_val);
-
-                // Handle the state change (updates pane state, sets toast on AppState).
-                self.sync_foreground_client_state();
-                let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
-                let suppress_completion = pane_updates
-                    .iter()
-                    .any(|update| update.pane_id == pane_id_val && update.suppress_completion);
-                for update in pane_updates
-                    .iter()
-                    .filter(|update| update.pane_id == pane_id_val)
-                {
-                    self.forward_semantic_agent_notification(update);
-                }
-
-                let is_active_tab = self
-                    .app
-                    .state
-                    .active
-                    .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
-                    .is_some_and(|ws| {
-                        ws.find_tab_index_for_pane(pane_id_val)
-                            .is_some_and(|tab_idx| ws.active_tab_index() == tab_idx)
-                    });
-
-                let suppress_active_tab_notifications =
-                    self.active_tab_suppresses_notifications(is_active_tab);
-
-                let next_state = self.pane_effective_state(pane_id_val);
-
-                let toast_msg = if !suppress_completion
-                    && self.app.state.toast_config.delay_seconds == 0
-                    && should_forward_toast_to_clients(self.app.state.toast_config.delivery)
-                {
-                    if self.app.state.toast.is_some() && self.app.state.toast != toast_before {
-                        self.app
-                            .state
-                            .toast
-                            .as_ref()
-                            .map(|toast| format!("{}: {}", toast.title, toast.context))
-                    } else {
-                        toast_message_from_state_change(
-                            &self.app.state,
-                            &self.app.terminal_runtimes,
-                            pane_id_val,
-                            suppress_active_tab_notifications,
-                            prev_state,
-                            next_state,
-                            prev_agent_label.as_deref(),
-                        )
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(msg) = toast_msg {
-                    self.send_flat_toast_to_foreground_client(
-                        toast_notify_kind(self.app.state.toast_config.delivery)
-                            .expect("toast forwarding requires a client notification kind"),
-                        msg,
-                    );
-                }
-
-                true
+                self.handle_forwarded_state_change(ev, pane_id_val)
             }
             AppEvent::PaneDied { pane_id, .. } => {
                 let focus_before = self.shell_focus_targets();
@@ -426,6 +357,83 @@ impl HeadlessServer {
             }
             _ => self.app.handle_internal_event_with_render_impact(ev),
         }
+    }
+
+    fn handle_forwarded_state_change(
+        &mut self,
+        ev: AppEvent,
+        pane_id_val: crate::layout::PaneId,
+    ) -> bool {
+        // Capture toast before handling.
+        let toast_before = self.app.state.toast.clone();
+
+        // Find the previous effective state of this pane before the event
+        // is processed, so notifications follow effective state changes.
+        let prev_state = self.pane_effective_state(pane_id_val);
+        let prev_agent_label = self.pane_effective_agent_label(pane_id_val);
+
+        // Handle the state change (updates pane state, sets toast on AppState).
+        self.sync_foreground_client_state();
+        let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
+        let suppress_completion = pane_updates
+            .iter()
+            .any(|update| update.pane_id == pane_id_val && update.suppress_completion);
+        for update in pane_updates
+            .iter()
+            .filter(|update| update.pane_id == pane_id_val)
+        {
+            self.forward_semantic_agent_notification(update);
+        }
+
+        let is_active_tab = self
+            .app
+            .state
+            .active
+            .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
+            .is_some_and(|ws| {
+                ws.find_tab_index_for_pane(pane_id_val)
+                    .is_some_and(|tab_idx| ws.active_tab_index() == tab_idx)
+            });
+
+        let suppress_active_tab_notifications =
+            self.active_tab_suppresses_notifications(is_active_tab);
+
+        let next_state = self.pane_effective_state(pane_id_val);
+
+        let toast_msg = if !suppress_completion
+            && self.app.state.toast_config.delay_seconds == 0
+            && should_forward_toast_to_clients(self.app.state.toast_config.delivery)
+        {
+            if self.app.state.toast.is_some() && self.app.state.toast != toast_before {
+                self.app
+                    .state
+                    .toast
+                    .as_ref()
+                    .map(|toast| format!("{}: {}", toast.title, toast.context))
+            } else {
+                toast_message_from_state_change(
+                    &self.app.state,
+                    &self.app.terminal_runtimes,
+                    pane_id_val,
+                    suppress_active_tab_notifications,
+                    prev_state,
+                    next_state,
+                    prev_agent_label.as_deref(),
+                )
+            }
+        } else {
+            None
+        };
+
+        if let Some(msg) = toast_msg {
+            self.send_flat_toast_to_foreground_client(
+                toast_notify_kind(self.app.state.toast_config.delivery)
+                    .expect("toast forwarding requires a client notification kind"),
+                msg,
+            );
+        }
+
+        true
     }
 
     /// Drains internal events, forwarding clipboard and toast notifications
