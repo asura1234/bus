@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """Capture the terminal window that runs the Bus client and print the PNG path.
 
+Usage, from the repository root:
+
+    python3 tools/bus_screenshot.py [--window ID | --title TEXT] [--out-dir DIR]
+
+It takes the frontmost on-screen iTerm2 or Ghostty window whose title shows it
+runs `bus` (`host: bus`), saves temp/screenshots/bus-YYYYmmdd-HHMMSS.png and
+prints that absolute path as the last stdout line. Without a Bus window or
+Screen Recording permission it exits 1 and says which app to allow.
+
 macOS only. Windows are listed with CoreGraphics through osascript (JXA), so no
 Python packages are needed, and the window is captured with `screencapture -x
 -o -l ID`: silent, no shadow, and without bringing the window to the front.
@@ -18,7 +27,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[1]
 TERMINALS = ("iTerm2", "Ghostty")
 
 # CGWindowListCopyWindowInfo lists windows front to back. Titles
