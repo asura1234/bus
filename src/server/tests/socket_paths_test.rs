@@ -69,8 +69,9 @@ fn prepare_socket_path_rejects_live_socket() {
 #[test]
 fn restrict_socket_permissions_keeps_owner_read_write_only() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = std::env::temp_dir().join(format!(
-        "herdr-private-socket-{}-{}",
+    // macOS TMPDIR can exceed sockaddr_un's path limit before the socket name.
+    let dir = PathBuf::from("/tmp").join(format!(
+        "hperm-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
