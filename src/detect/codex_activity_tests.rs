@@ -99,3 +99,21 @@ fn expanded_codex_text_question_blocks_while_collapsed_questions_stay_working() 
         assert!(result.visible_blocker);
     }
 }
+
+#[test]
+fn codex_running_its_own_updater_is_not_idle() {
+    let updating = concat!(
+        "› Ask Codex to do anything\n\n",
+        "✗ codex resume 01a11654 --no-daemon\n\n",
+        "Updating Codex via `npm install -g @openai/codex`...\n",
+        "⠙\n",
+    );
+    // The stale Codex title must not read as idle either.
+    let result = codex_detection(updating, "bus");
+    assert_eq!(result.state, AgentState::Unknown);
+    assert!(!result.skip_state_update, "the change must be published");
+
+    // Once Codex is back, its prompt sits below the old update line.
+    let relaunched = format!("{updating}\n› Ask Codex to do anything\n\n  ? for shortcuts\n");
+    assert_eq!(codex_detection(&relaunched, "bus").state, AgentState::Idle);
+}

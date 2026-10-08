@@ -443,7 +443,12 @@ bus state | jq '.result.build'
 - Each room has `id`, `name`, `kind` (`master` or `work`), `notes`,
   `unread_count`, `sound`, `sound_name`, `deletion_pending`, and
   `orchestrator`: the ID of
-  the MASTER agent orchestrating it, or `null`.
+  the MASTER agent orchestrating it, or `null`, and `status`, the sidebar's
+  status: `blocked` if any agent is blocked, on a dialog, or `unavailable`,
+  else `working` if any agent works, else `idle`. An agent is `unavailable`
+  while its provider is not running in its pane (it exited or crashed, or an
+  updater or another program replaced it); deliveries to it stay queued with
+  wait reason `agent_unavailable` until the provider is relaunched or resumed.
 - Each agent includes `room_id`, `status`, `dialog`, `details_disclosed`,
   `orchestrates` (a MASTER agent's work room, `null` for work-room agents), and `compactions`:
   `count` and `last_at_ms` of the provider context compactions Bus observed for
