@@ -220,7 +220,11 @@ def test_s8_input_lease_facade_keeps_client_ownership(tmp_path):
     write_source(
         tmp_path,
         "src/server/example.rs",
-        "use crate::input::{InputLeaseKey, InputLeaseTable, RepeatPlan, TerminalKey};",
+        """use crate::input::InputLeaseKey;
+use crate::input::InputLeaseTable;
+use crate::input::RepeatPlan;
+use crate::input::TerminalKey;
+""",
     )
     _, refs = boundaries.scan(tmp_path)
     assert [(ref.target, ref.forbidden) for ref in refs] == [
