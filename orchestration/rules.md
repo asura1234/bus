@@ -25,6 +25,11 @@ These rules are binding for every Bus orchestrator. Commands use an installed
 - **Compartmentalize, within reason.** Break big work into manageable pieces;
   give each agent one piece plus limited context on how it fits the bigger
   picture. *Why:* one giant ask in one terminal is daunting and goes worse.
+- **Size the team to the current step.** Add workers with `bus agent add`
+  when a parallel step starts and delete them with `bus agent delete` when
+  their part is done; do not keep idle agents around for later steps. *Why:*
+  work lives in files and commits, so a deleted worker loses nothing; a fresh
+  one is briefed from those files.
 - **Keep follow-ups in the running workflow file, not in your context.**
   Unless the graph has a pause or human check before them, execute them in
   order; never defer them to later. If the room has no running workflow, create

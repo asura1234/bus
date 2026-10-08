@@ -64,6 +64,11 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   running workflow: create one with workflow-create.
 - Compartmentalize, within reason: give each agent one manageable piece plus
   brief context on how it fits the bigger picture.
+- Size the team to the current step: add workers with `bus agent add` when a
+  parallel step starts and delete them with `bus agent delete` when their part
+  is done; do not keep idle agents around for later steps. Work lives in files
+  and commits, so a deleted worker loses nothing; a fresh one is briefed from
+  those files.
 - Brief workers directly: write tasks as your own instructions, never as
   "from the human" or "human-approved".
 - Give each task a clear output: what to produce, where to write it, how to

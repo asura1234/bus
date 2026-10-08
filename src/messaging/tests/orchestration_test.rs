@@ -61,6 +61,7 @@ fn fill_replaces_every_placeholder() {
     assert!(!text.contains("--to human"), "{text}");
     assert!(text.contains("Parallelism is king"), "{text}");
     assert!(text.contains("Compartmentalize, within reason"), "{text}");
+    assert!(text.contains("Size the team to the current step"), "{text}");
     assert!(text.contains("Brief workers directly"), "{text}");
     // Tasks go out with --async in the background, never a blocking wait.
     assert!(text.contains("bus send --room 7 --as orch --to AGENT --async --text"));
@@ -90,6 +91,7 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     assert!(!rules.contains("--to human"), "{rules}");
     assert!(rules.contains("**Parallelism is king.**"));
     assert!(rules.contains("**Compartmentalize, within reason.**"));
+    assert!(rules.contains("**Size the team to the current step.**"));
     assert!(rules.contains("**Brief workers directly.**"));
     assert!(
         rules.contains("**Keep follow-ups in the running workflow file, not in your context.**")
