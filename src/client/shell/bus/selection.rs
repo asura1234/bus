@@ -1,12 +1,12 @@
 //! Mouse text selection in the room notes, history and composer. Selections are
-//! anchored to source text rather than screen cells, so they survive scrolling;
-//! releasing the button copies the selected text to the host clipboard.
+//! anchored to text positions rather than screen cells, so they survive
+//! scrolling; releasing the button copies the selected text to the host
+//! clipboard. History selections cover exactly the dragged characters.
 use super::render::{cell_offset, wrap_ranges, Action};
 use super::*;
 use crate::client::shell::{ClientShellAction, ClientShellInput};
 use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
-use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Region {
@@ -22,67 +22,54 @@ pub(super) struct Point {
     pub offset: usize,
 }
 
-/// Rendered Markdown does not have stable character offsets back into its
-/// source. Expand either endpoint that touches a rendered reply so the visible
-/// highlight describes the whole raw Markdown message copied to the clipboard.
+/// Orders a history selection. It is never widened: a drag selects exactly
+/// the characters from press to release, inside rendered Markdown too, the
+/// way a text view does. Whole replies are copied through `Quote` instead.
 pub(super) fn normalize_history_selection(
-    lines: &[super::history::Line],
+    _lines: &[super::history::Line],
     selection: Option<(Point, Point)>,
 ) -> Option<(Point, Point)> {
     let (anchor, head) = selection?;
-    let (mut start, mut end) = (anchor.min(head), anchor.max(head));
-    if start == end {
-        return Some((start, end));
-    }
-    if let Some((request, _)) = lines
-        .get(start.line)
-        .and_then(|line| line.raw_markdown.as_ref())
+    Some((anchor.min(head), anchor.max(head)))
+}
+
+/// The text of `lines` between `start` and `end`, as shown: layout indents,
+/// thumbnails and the `Quote` buttons are not message text, soft-wrapped rows
+/// rejoin, and every real line end stays a line end.
+pub(super) fn history_text(lines: &[super::history::Line], start: Point, end: Point) -> String {
+    let mut text = String::new();
+    let mut first = true;
+    for (index, line) in lines
+        .iter()
+        .enumerate()
+        .take(end.line.saturating_add(1))
+        .skip(start.line)
     {
-        let mut last = start.line;
-        while lines
-            .get(last + 1)
-            .and_then(|line| line.raw_markdown.as_ref())
-            .is_some_and(|(candidate, _)| candidate == request)
-        {
-            last += 1;
+        if line.thumbnail.is_some() || matches!(line.action, Some(Action::Quote(_))) {
+            continue;
         }
-        if start.offset < lines[start.line].text.len() || start.line < last {
-            while start.line > 0
-                && lines[start.line - 1]
-                    .raw_markdown
-                    .as_ref()
-                    .is_some_and(|(candidate, _)| candidate == request)
-            {
-                start.line -= 1;
+        let from = if index == start.line { start.offset } else { 0 }.max(line.copy_from);
+        let to = if index == end.line {
+            end.offset
+        } else {
+            line.text.len()
+        };
+        let mut piece = line.text.get(from..to.max(from)).unwrap_or_default();
+        if !first {
+            if line.continued {
+                if line.rejoin_space {
+                    // The renderer's continuation indent is layout, not text.
+                    piece = piece.trim_start();
+                    text.push(' ');
+                }
+            } else {
+                text.push('\n');
             }
-            start.offset = 0;
         }
+        text.push_str(piece);
+        first = false;
     }
-    if let Some((request, _)) = lines
-        .get(end.line)
-        .and_then(|line| line.raw_markdown.as_ref())
-    {
-        let mut first = end.line;
-        while first > 0
-            && lines[first - 1]
-                .raw_markdown
-                .as_ref()
-                .is_some_and(|(candidate, _)| candidate == request)
-        {
-            first -= 1;
-        }
-        if end.offset > 0 || end.line > first {
-            while lines
-                .get(end.line + 1)
-                .and_then(|line| line.raw_markdown.as_ref())
-                .is_some_and(|(candidate, _)| candidate == request)
-            {
-                end.line += 1;
-            }
-            end.offset = lines[end.line].text.len();
-        }
-    }
-    Some((start, end))
+    text
 }
 
 fn row_offset(text: &str, rect: Rect, column: u16, inclusive: bool) -> usize {
@@ -253,46 +240,7 @@ impl BusUi {
 
     pub(super) fn selected_text(&self) -> Option<String> {
         if let Some((start, end)) = self.history_selection_range() {
-            let mut text = String::new();
-            let mut copied_markdown = BTreeSet::new();
-            for (index, line) in self
-                .history
-                .cached()
-                .iter()
-                .enumerate()
-                .take(end.line.saturating_add(1))
-                .skip(start.line)
-            {
-                let from = if index == start.line { start.offset } else { 0 };
-                let to = if index == end.line {
-                    end.offset
-                } else {
-                    line.text.len()
-                };
-                if let Some((request, source)) = &line.raw_markdown {
-                    if from < to && copied_markdown.insert(*request) {
-                        if index > start.line && !line.continued && !text.is_empty() {
-                            text.push('\n');
-                        }
-                        text.push_str(source);
-                    } else if index == end.line
-                        && to == 0
-                        && index > start.line
-                        && !line.continued
-                        && !text.is_empty()
-                    {
-                        // The visible selection includes the preceding hard
-                        // line end even though it stops before this reply.
-                        text.push('\n');
-                    }
-                    continue;
-                }
-                // Soft-wrapped rows rejoin; real line ends stay line ends.
-                if index > start.line && !line.continued {
-                    text.push('\n');
-                }
-                text.push_str(line.text.get(from..to).unwrap_or_default());
-            }
+            let text = history_text(self.history.cached(), start, end);
             return (!text.is_empty()).then_some(text);
         }
         let local = self.locals.get(&self.room?)?;

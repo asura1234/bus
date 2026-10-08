@@ -1,3 +1,4 @@
+mod chat_search;
 mod deletion;
 mod editor;
 mod forms;

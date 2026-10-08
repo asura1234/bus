@@ -6,6 +6,8 @@ use crate::{
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::sync::Arc;
+#[path = "chat_search_tests.rs"]
+mod chat_search_tests;
 #[path = "history_tests.rs"]
 mod history_tests;
 #[path = "keys_tests.rs"]
@@ -378,7 +380,7 @@ fn ctrl_chords_open_the_agent_and_file_pickers() {
     assert!(ui.recipient_menu && ui.form.is_none());
     let (mut ui, room, _) = fixture();
     ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
-    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('o'), KeyModifiers::CONTROL);
     assert!(matches!(ui.form, Some(forms::Form::Files(_))));
     assert_eq!(ui.locals[&room].text.text, "keep draft");
 }
@@ -401,7 +403,7 @@ fn symbols_stay_literal_in_paste_notes_and_forms() {
     assert_eq!(ui.locals[&room].notes.text, "@+");
     assert!(!ui.recipient_menu && ui.form.is_none());
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('o'), KeyModifiers::CONTROL);
     for symbol in ['@', '+'] {
         key(&mut ui, KeyCode::Char(symbol), KeyModifiers::SHIFT);
     }
@@ -2438,7 +2440,7 @@ fn drag_copy(ui: &mut BusUi, from: (u16, u16), to: (u16, u16)) -> Option<String>
 }
 
 #[test]
-fn dragging_a_rendered_prompt_copies_its_raw_source_and_highlights_it() {
+fn dragging_a_rendered_prompt_copies_exactly_the_dragged_text_and_highlights_it() {
     let (mut ui, room, agent) = fixture();
     let source = "alpha **beta** gamma delta epsilon zeta eta theta\nsecond line";
     let mut snapshot = (*ui.snapshot).clone();
@@ -2460,16 +2462,25 @@ fn dragging_a_rendered_prompt_copies_its_raw_source_and_highlights_it() {
     let first = row_of(&ui, "alpha beta");
     let second = row_of(&ui, "second");
     assert!(second > first + 1, "the long prompt must soft-wrap");
-    // Rendered Markdown has no stable offsets back into its source, so any
-    // selection touching the prompt copies the whole raw source.
+    // From "beta" to the end of "second": the soft wrap rejoins with a space,
+    // the real line end stays, and the Markdown markers are not copied.
     let copied = drag_copy(&mut ui, (text.x + 6, first), (text.x + 5, second));
-    assert_eq!(copied.as_deref(), Some(source));
+    assert_eq!(
+        copied.as_deref(),
+        Some("beta gamma delta epsilon zeta eta theta\nsecond")
+    );
     ui.compute_view(60, 30);
     let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 60, 30));
     ui.render(&mut buffer);
     let tint = ratatui::style::Color::Rgb(44, 88, 56);
-    assert_eq!(buffer[(text.x, first)].bg, tint);
-    assert_eq!(buffer[(text.x + 10, second)].bg, tint);
+    assert_ne!(buffer[(text.x, first)].bg, tint, "before the press point");
+    assert_eq!(buffer[(text.x + 6, first)].bg, tint);
+    assert_eq!(buffer[(text.x + 5, second)].bg, tint);
+    assert_ne!(
+        buffer[(text.x + 7, second)].bg,
+        tint,
+        "after the release point"
+    );
     // Typing ends the history selection.
     key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
     assert!(ui.history_selection.is_none());

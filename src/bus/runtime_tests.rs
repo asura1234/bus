@@ -19,6 +19,8 @@ static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[path = "runtime_resume_tests.rs"]
 mod resume_tests;
+#[path = "runtime_status_tests.rs"]
+mod status_tests;
 
 #[test]
 fn claude_statusline_refresh_is_identity_bound_and_does_not_change_delivery_state() {

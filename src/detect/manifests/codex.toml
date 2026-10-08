@@ -1,7 +1,19 @@
 id = "codex"
-version = "2026.10.06.2"
+version = "2026.10.08.1"
 min_engine_version = 3
-updated_at = "2026-10-06T15:23:00Z"
+updated_at = "2026-10-08T14:00:00Z"
+
+# "Update now" replaces the Codex UI with the package manager it runs, while the
+# node launcher keeps the pane's process looking like Codex. Without this rule
+# the updater's output fell through to the idle fallback (or the stale OSC
+# title), so Bus showed an agent that was gone as Idle. A relaunched Codex
+# draws its prompt below this text, which ends the match.
+[[rules]]
+id = "self_update_running"
+state = "unknown"
+priority = 1200
+region = "after_last_prompt_marker"
+line_regex = ['^\s*Updating Codex via `[^`]+`']
 
 [[rules]]
 id = "expanded_text_question"

@@ -335,7 +335,7 @@ impl BusUi {
     }
     /// MASTER has no notes: they are a work room's status board, and MASTER is
     /// where the human talks to orchestrators.
-    fn room_has_notes(&self) -> bool {
+    pub(super) fn room_has_notes(&self) -> bool {
         self.room
             .and_then(|id| self.snapshot.state.room(id))
             .is_some_and(|room| room.kind != RoomKind::Master)
@@ -874,6 +874,10 @@ impl BusUi {
             }
             return;
         }
+        if self.chat_search.is_some() {
+            self.chat_search_key(code, modifiers);
+            return;
+        }
         if self.history_search.is_some() && !self.notes_focus {
             self.search_key(code, modifiers);
             return;
@@ -941,7 +945,10 @@ impl BusUi {
                 self.paste_image();
             }
             (KeyCode::Char('n'), KeyModifiers::CONTROL) => self.action(Action::NewAgent),
-            (KeyCode::Char('f'), KeyModifiers::CONTROL) => self.action(Action::Files),
+            // Ctrl+F finds in the chat history, as in most apps; Ctrl+O, free in
+            // Bus and in iTerm2, Ghostty and Windows Terminal, adds files.
+            (KeyCode::Char('f' | 'F'), KeyModifiers::CONTROL) => self.open_chat_search(),
+            (KeyCode::Char('o' | 'O'), KeyModifiers::CONTROL) => self.action(Action::Files),
             // Pickers sit on Ctrl chords: every printable key, shifted symbols
             // like @ and + included, must type into the composer.
             (KeyCode::Char('p'), KeyModifiers::CONTROL) => self.action(Action::Recipients),

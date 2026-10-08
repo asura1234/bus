@@ -27,11 +27,19 @@ pub(super) struct Line {
     pub spans: Vec<(String, Tone)>,
     pub styles: Vec<(String, Style)>,
     /// Durable Markdown source for a rendered prompt or agent-reply row. Every
-    /// row of one message shares the same allocation so selection can copy the
-    /// source once instead of reconstructing it from the display projection.
+    /// row of one message shares the same allocation. Selection no longer
+    /// copies it (a drag copies exactly what it covers); it identifies a row's
+    /// message and lets tests prove a rendering is reused.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub raw_markdown: Option<(MarkdownSource, Arc<str>)>,
     /// Soft-wrapped continuation of the previous row, rejoined when copied.
     pub continued: bool,
+    /// The wrap that `continued` rejoins dropped a space (rendered Markdown
+    /// trims it), so copying puts one back.
+    pub rejoin_space: bool,
+    /// Bytes of layout indent at the start of `text`. They are not message
+    /// text, so copying skips them.
+    pub copy_from: usize,
     /// Row `row` of an image thumbnail drawn over these blank cells.
     pub thumbnail: Option<ThumbnailRow>,
     anchor: RowAnchor,
@@ -257,6 +265,8 @@ impl History {
                         }),
                         raw_markdown: None,
                         continued: false,
+                        rejoin_space: false,
+                        copy_from: 0,
                         anchor: RowAnchor {
                             kind: RowKind::Thumbnail,
                             position: index * usize::from(MAX_ROWS) + usize::from(row),
@@ -277,6 +287,8 @@ impl History {
                     thumbnail: None,
                     raw_markdown: None,
                     continued: false,
+                    rejoin_space: false,
+                    copy_from: 0,
                     anchor: file_anchor,
                 });
             }
@@ -336,6 +348,8 @@ impl History {
                         thumbnail: None,
                         raw_markdown: None,
                         continued: false,
+                        rejoin_space: false,
+                        copy_from: 0,
                         anchor: RowAnchor::new(prompt.id, Some(*agent_id), RowKind::Quote),
                     });
                 } else {
@@ -351,6 +365,8 @@ impl History {
                 thumbnail: None,
                 raw_markdown: None,
                 continued: false,
+                rejoin_space: false,
+                copy_from: 0,
                 anchor: RowAnchor::new(prompt.id, None, RowKind::Gap),
             });
         }
@@ -476,13 +492,35 @@ fn prepared_markdown_lines(
                 request,
                 source,
                 indent,
-                position > 0,
                 RowAnchor { position, ..anchor },
             ));
         }
         first += usize::from(height);
     }
+    mark_soft_wraps(&mut lines, width, indent.len());
     Some(lines)
+}
+
+/// Marks which rendered Markdown rows continue a soft-wrapped line. The
+/// renderer keeps no such flag and trims the space at each wrap, so a row
+/// counts as a wrap of the one above when its first word could not have fit
+/// on that row. Copying then rejoins it with one space instead of a line end.
+fn mark_soft_wraps(lines: &mut [Line], width: u16, indent: usize) {
+    use unicode_width::UnicodeWidthStr;
+    for index in 1..lines.len() {
+        let previous = lines[index - 1].text.get(indent..).unwrap_or_default();
+        let current = lines[index]
+            .text
+            .get(indent..)
+            .unwrap_or_default()
+            .trim_start();
+        let first_word = current.split(' ').next().unwrap_or_default();
+        let wrapped = !previous.trim().is_empty()
+            && !first_word.is_empty()
+            && previous.width() + 1 + first_word.width() > usize::from(width);
+        lines[index].continued = wrapped;
+        lines[index].rejoin_space = wrapped;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -493,7 +531,6 @@ fn line_from_buffer(
     request: MarkdownSource,
     source: &Arc<str>,
     indent: &str,
-    continued: bool,
     anchor: RowAnchor,
 ) -> Line {
     let mut text = indent.to_owned();
@@ -547,7 +584,10 @@ fn line_from_buffer(
         styles,
         thumbnail: None,
         raw_markdown: Some((request, Arc::clone(source))),
-        continued,
+        // Set by `mark_soft_wraps` once every row of the message exists.
+        continued: false,
+        rejoin_space: false,
+        copy_from: indent.len(),
         anchor,
     }
 }
@@ -571,6 +611,8 @@ fn literal_reply_lines(
             thumbnail: None,
             raw_markdown: Some((request, Arc::clone(source))),
             continued: index > 0 && rows[index - 1].end == row.start,
+            rejoin_space: false,
+            copy_from: indent.len(),
             anchor: RowAnchor {
                 position: row.start,
                 ..anchor
@@ -592,6 +634,8 @@ fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor
         thumbnail: None,
         raw_markdown: None,
         continued: index > 0 && rows[index - 1].end == row.start,
+        rejoin_space: false,
+        copy_from: indent.len(),
         anchor: RowAnchor {
             position: row.start,
             ..anchor
@@ -638,6 +682,8 @@ fn wrap_header(
                 thumbnail: None,
                 raw_markdown: None,
                 continued: index > 0,
+                rejoin_space: false,
+                copy_from: indent.len(),
                 anchor: RowAnchor {
                     position: index,
                     ..anchor

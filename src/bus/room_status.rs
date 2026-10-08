@@ -14,14 +14,20 @@ impl Agent {
 }
 
 impl BusState {
-    /// A room's activity from its agents' shown status: `Blocked` if any agent
-    /// is blocked (including on a dialog), else `Working` if any works, else
-    /// `Idle` (including a room without agents).
+    /// A room's activity from its agents' shown status, in precedence order:
+    /// `Blocked` if any agent is blocked (including on a dialog) or
+    /// Unavailable, else `Working` if any works, else `Idle` (including a room
+    /// without agents). An Unavailable agent counts as blocked because its
+    /// provider is not running, so the room cannot progress without help; an
+    /// agent being deleted does not count.
     pub(crate) fn room_status(&self, room: RoomId) -> RuntimeStatus {
         let mut status = RuntimeStatus::Idle;
         for agent in self.agents().filter(|agent| agent.room_id == room) {
             match agent.shown_status() {
                 RuntimeStatus::Blocked => return RuntimeStatus::Blocked,
+                RuntimeStatus::Unavailable if !agent.deletion_pending => {
+                    return RuntimeStatus::Blocked
+                }
                 RuntimeStatus::Working => status = RuntimeStatus::Working,
                 _ => {}
             }
@@ -120,6 +126,33 @@ mod tests {
             .unwrap();
         assert_eq!(state.room_status(room), RuntimeStatus::Blocked);
         state.delete_agent(codex).unwrap();
+        assert_eq!(state.room_status(room), RuntimeStatus::Working);
+    }
+
+    #[test]
+    fn an_unavailable_agent_blocks_its_room_over_a_working_one() {
+        let mut state = BusState::default();
+        let room = state.create_room("work").unwrap();
+        let agent = |state: &mut BusState, name| {
+            state
+                .create_agent(room, name, Provider::Codex, "/repo".into(), None)
+                .unwrap()
+        };
+        let (gone, busy) = (agent(&mut state, "gone"), agent(&mut state, "busy"));
+        state
+            .observe_status(busy, RuntimeStatus::Working, 1)
+            .unwrap();
+        state.observe_status(gone, RuntimeStatus::Idle, 1).unwrap();
+        assert_eq!(state.room_status(room), RuntimeStatus::Working);
+
+        // Its provider exits or is replaced: the room needs help.
+        state
+            .observe_status(gone, RuntimeStatus::Unavailable, 2)
+            .unwrap();
+        assert_eq!(state.room_status(room), RuntimeStatus::Blocked);
+
+        // Relaunched, the room is back to its agents' activity.
+        state.observe_status(gone, RuntimeStatus::Idle, 3).unwrap();
         assert_eq!(state.room_status(room), RuntimeStatus::Working);
     }
 }
