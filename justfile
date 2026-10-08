@@ -6,7 +6,7 @@ python := if os() == "windows" { "python" } else if path_exists("temp/gate-tools
 # Run tests
 test: unit-test integration-test
 
-# Collect fresh Rust and Python unit coverage, including every maintenance and skill test
+# Collect fresh Rust unit coverage and run every Python maintenance and skill test
 unit-test:
     {{python}} skills/gate-and-fix/scripts/bus_quality.py unit
 
@@ -14,7 +14,7 @@ unit-test:
 integration-test:
     {{python}} skills/gate-and-fix/scripts/bus_quality.py integration
 
-# Fail below the checked-in Rust/Python floors; requires this round's unit/integration profiles
+# Fail below the checked-in Rust floor; requires this round's unit/integration profiles
 coverage:
     {{python}} skills/gate-and-fix/scripts/bus_quality.py coverage
 

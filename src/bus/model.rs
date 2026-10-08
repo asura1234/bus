@@ -327,6 +327,18 @@ pub(crate) struct Agent {
     /// different provider session rebinds this agent to it instead of being rejected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) session_reset_pending: bool,
+    /// When the agent entered its current `status`, from status polls. Stall
+    /// detection measures how long an agent has sat idle on a request.
+    #[serde(default)]
+    pub(crate) status_since_ms: u64,
+    /// When the agent's status was last polled. The model has no clock of its
+    /// own, so a submission is timed by the poll that preceded it.
+    #[serde(default)]
+    pub(crate) observed_at_ms: u64,
+    /// Why the native server last refused to type a queued request into this
+    /// agent (see `rejection_reason`); cleared once a submission is confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) delivery_rejection: Option<String>,
 }
 
 /// Context compactions reported by the provider's SessionStart hook
@@ -383,6 +395,11 @@ pub(crate) struct Request {
     /// but never seen starting, waited. The agent has moved on since.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) foreign_turn_settled_at_ms: Option<u64>,
+    /// The last sign of life for this request since Bus typed it: the status
+    /// poll before submission, then every accepted provider callback.
+    /// Stall detection counts idle time from here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) progress_at_ms: Option<u64>,
 }
 
 impl Request {
@@ -1000,6 +1017,9 @@ impl BusState {
                 orchestrates: None,
                 compactions: Compactions::default(),
                 session_reset_pending: false,
+                status_since_ms: 0,
+                observed_at_ms: 0,
+                delivery_rejection: None,
             },
         );
         self.queues.insert(id, Vec::new());
@@ -1412,6 +1432,7 @@ impl BusState {
                     steered: false,
                     submitted_payload: None,
                     foreign_turn_settled_at_ms: None,
+                    progress_at_ms: None,
                 },
             );
             self.queues.entry(agent_id).or_default().push(request_id);
@@ -1464,6 +1485,7 @@ impl BusState {
             return Err(ModelError::LaunchIdentityMismatch);
         }
         let submission_status_revision = agent.status_revision;
+        let submitted_at_ms = agent.observed_at_ms;
         if agent.current_request.is_some()
             || self
                 .queues
@@ -1493,6 +1515,8 @@ impl BusState {
         request_state.submission_boundary = Some(callback_boundary);
         request_state.submission_status_revision = submission_status_revision;
         request_state.foreign_turn_settled_at_ms = None;
+        // Starts the idle clock for stall detection at the submission.
+        request_state.progress_at_ms = Some(submitted_at_ms);
         Ok(())
     }
 
@@ -1537,12 +1561,19 @@ impl BusState {
                     .get_mut(&agent_id)
                     .ok_or(ModelError::UnknownAgent(agent_id))?;
                 agent.current_request = None;
+                agent.delivery_rejection = Some(rejection_reason(&message).into());
                 agent.actionable_error = Some(message);
             }
             SubmissionOutcome::Confirmed {
                 provider_session_id,
                 provider_turn_id,
             } => {
+                if let Some(agent) = self.agents.get_mut(&agent_id) {
+                    agent.delivery_rejection = None;
+                }
+                let Some(request_state) = self.requests.get_mut(&request) else {
+                    return Err(ModelError::UnknownRequest(request));
+                };
                 request_state.phase = RequestPhase::Active;
                 request_state.provider_session_id = provider_session_id;
                 request_state.provider_turn_id = provider_turn_id;
@@ -1661,11 +1692,15 @@ impl BusState {
             .agents
             .get_mut(&agent)
             .ok_or(ModelError::UnknownAgent(agent))?;
+        if agent_state.status != status {
+            agent_state.status_since_ms = now_ms;
+        }
         agent_state.status = status;
         agent_state.status_revision = revision;
         if matches!(status, RuntimeStatus::Working | RuntimeStatus::Blocked) {
             agent_state.busy_revision = revision;
         }
+        agent_state.observed_at_ms = now_ms;
         if status == RuntimeStatus::Idle {
             self.complete_pending_final(agent, now_ms)?;
             let settled_idle = self.unbound_request(agent).is_some_and(|request| {
@@ -1678,6 +1713,89 @@ impl BusState {
             }
         }
         Ok(())
+    }
+
+    /// Why `request` is stuck, once it has made no progress for a grace
+    /// period, or `None`. A Working or Blocked agent is never stalled: a long
+    /// turn is normal, and a blocked one waits on an answer, not on Bus (see
+    /// `blocked_unanswered`). Recovery stays explicit (`request recover`);
+    /// this only reports.
+    pub(crate) fn stall_reason(&self, request: &Request, now_ms: u64) -> Option<String> {
+        // A member typed into another request's turn shares that turn's fate.
+        let lead = match request.group {
+            Some(lead) => self.requests.get(&lead).unwrap_or(request),
+            None => request,
+        };
+        let agent = self.agents.get(&lead.agent_id)?;
+        let since = |grace: u64, from: u64| now_ms.saturating_sub(from) >= grace;
+        if matches!(
+            lead.phase,
+            RequestPhase::Completed | RequestPhase::Abandoned
+        ) {
+            return None;
+        }
+        if matches!(
+            agent.status,
+            RuntimeStatus::Working | RuntimeStatus::Blocked
+        ) {
+            return None;
+        }
+        match lead.phase {
+            RequestPhase::Completed | RequestPhase::Abandoned => None,
+            RequestPhase::Queued => since(
+                QUEUED_STALL_MS,
+                lead.prompt.submitted_at_ms.max(agent.status_since_ms),
+            )
+            .then(|| {
+                agent
+                    .delivery_rejection
+                    .clone()
+                    .or_else(|| super::diagnostics::wait_reason(agent).map(Into::into))
+                    .unwrap_or_else(|| "not_submitted".into())
+            }),
+            RequestPhase::Submitting | RequestPhase::Active => {
+                let progress = lead.progress_at_ms.unwrap_or(agent.status_since_ms);
+                if agent.status != RuntimeStatus::Idle
+                    || !since(DELIVERED_STALL_MS, progress.max(agent.status_since_ms))
+                {
+                    return None;
+                }
+                Some(
+                    if lead.phase == RequestPhase::Submitting {
+                        "submission_unconfirmed"
+                    } else if !lead.trusted_start_bound {
+                        "no_start_hook"
+                    } else {
+                        // The turn started and the agent is idle, yet no
+                        // final reply matched the provider's transcript.
+                        "transcript_unmatched"
+                    }
+                    .into(),
+                )
+            }
+        }
+    }
+
+    /// Whether `request`'s agent has sat blocked (a dialog, question or trust
+    /// prompt) past `BLOCKED_STALL_MS` while the request is unsettled. The
+    /// agent asks for help once per blocked episode; this surfaces a block
+    /// nobody answered in `message status`, without ending `send --async`,
+    /// which waits on through a block by design.
+    pub(crate) fn blocked_unanswered(&self, request: &Request, now_ms: u64) -> bool {
+        if matches!(
+            request.phase,
+            RequestPhase::Completed | RequestPhase::Abandoned
+        ) {
+            return false;
+        }
+        self.agents.get(&request.agent_id).is_some_and(|agent| {
+            let from = agent
+                .status_since_ms
+                .max(request.progress_at_ms.unwrap_or(0))
+                .max(request.prompt.submitted_at_ms);
+            agent.status == RuntimeStatus::Blocked
+                && now_ms.saturating_sub(from) >= BLOCKED_STALL_MS
+        })
     }
 
     /// Whether `request`'s agent took the message and finished its turn: the
@@ -1744,7 +1862,15 @@ impl BusState {
 
     pub(crate) fn accept_callback(&mut self, callback: ProviderCallback) -> CallbackDisposition {
         let agent = callback.agent_id;
+        let occurred_at_ms = callback.occurred_at_ms;
+        let current = self.agents.get(&agent).and_then(|a| a.current_request);
         let disposition = self.accept_callback_unrecorded(callback);
+        if !matches!(disposition, CallbackDisposition::Rejected(_)) {
+            if let Some(request) = current.and_then(|id| self.requests.get_mut(&id)) {
+                let progress = request.progress_at_ms.get_or_insert(occurred_at_ms);
+                *progress = (*progress).max(occurred_at_ms);
+            }
+        }
         // A provider turn event on a Bus request proves the agent was busy
         // with it, even when the turn started and ended between two status
         // polls that only ever saw Idle. Recording the edge here lets
@@ -1875,6 +2001,20 @@ impl BusState {
             if callback.provider_session_id.as_deref() != Some(expected) {
                 return CallbackDisposition::Rejected(CallbackRejection::WrongSession);
             }
+        }
+        // Cursor opens a generation of its own when a background shell finishes.
+        // That prompt is a task notice, not a room message. Record the turn as
+        // unrelated so its later stop is neither the room reply nor WrongTurn.
+        if callback
+            .prompt_payload
+            .as_deref()
+            .is_some_and(super::callbacks::cursor_reply::is_background_task_notice)
+        {
+            self.unrelated_provider_turns.extend(turn_key);
+            return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
+        }
+        if self.is_unrelated_turn(&callback) {
+            return CallbackDisposition::Rejected(CallbackRejection::UnrelatedTurn);
         }
         // Input Bus typed into this turn binds where the provider reports it:
         // in the running turn, or in a turn of its own that then carries the
@@ -2420,6 +2560,35 @@ fn work_room_name(name: &str) -> Result<String, ModelError> {
         return Err(ModelError::ReservedRoomName);
     }
     Ok(name)
+}
+
+/// How long a queued message may wait on an agent that is not working before
+/// it counts as stalled. Delivery normally starts within a status tick of the
+/// agent going idle, so two minutes means something refuses it.
+pub(crate) const QUEUED_STALL_MS: u64 = 2 * 60 * 1000;
+/// How long a typed message may sit with its agent idle and no hook progress.
+/// Longer than the queued grace: providers can take a while to report the
+/// turn start or the final reply after the screen goes idle.
+pub(crate) const DELIVERED_STALL_MS: u64 = 3 * 60 * 1000;
+/// How long an agent may stay blocked (a dialog, question or trust prompt)
+/// before `message status` reports `blocked_unanswered`. Answering takes a
+/// person or the orchestrator a moment; five minutes untouched means nobody
+/// saw it.
+pub(crate) const BLOCKED_STALL_MS: u64 = 5 * 60 * 1000;
+
+/// The stall reason for a native refusal to type a request. The native
+/// server (`src/app/api/agents.rs`) shares one `agent_not_ready` code for
+/// several causes, so the message tells them apart.
+pub(crate) fn rejection_reason(message: &str) -> &'static str {
+    if message.contains("input box is not empty") || message.contains("composer is not empty") {
+        "input_box_not_empty"
+    } else if message.contains("blocked") {
+        "agent_blocked"
+    } else if message.contains("not ready") || message.contains("not an active") {
+        "agent_not_ready"
+    } else {
+        "delivery_rejected"
+    }
 }
 
 fn agent_name(name: &str) -> Result<String, ModelError> {
@@ -3514,6 +3683,165 @@ mod tests {
         assert!(ended(&state, first), "a captured reply counts too");
         state.requests.get_mut(&first).unwrap().phase = RequestPhase::Abandoned;
         assert!(!ended(&state, first));
+    }
+
+    /// A codex agent idle since `at`, with one message `text` queued.
+    fn idle_with_queued(at: u64, text: &str) -> (BusState, AgentId, RequestId) {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        state
+            .observe_status(agent, RuntimeStatus::Idle, at)
+            .unwrap();
+        let request = submit_text(&mut state, room, agent, text);
+        (state, agent, request)
+    }
+
+    fn stall_at(state: &BusState, request: RequestId, now_ms: u64) -> Option<String> {
+        state.stall_reason(state.request(request).unwrap(), now_ms)
+    }
+
+    #[test]
+    fn a_queued_message_refused_by_the_input_box_stalls_with_that_reason() {
+        let (mut state, agent, request) = idle_with_queued(1_000, "go");
+        state.begin_submission(request, "launch-codex", 5).unwrap();
+        state
+            .record_submission(
+                request,
+                SubmissionOutcome::DefinitelyRejected {
+                    message: "Claude input box is not empty; prompt was not sent".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(state.request(request).unwrap().phase, RequestPhase::Queued);
+        assert_eq!(
+            state.agent(agent).unwrap().delivery_rejection.as_deref(),
+            Some("input_box_not_empty")
+        );
+        assert_eq!(stall_at(&state, request, 1_000 + QUEUED_STALL_MS - 1), None);
+        assert_eq!(
+            stall_at(&state, request, 1_000 + QUEUED_STALL_MS).as_deref(),
+            Some("input_box_not_empty")
+        );
+        // A confirmed submission clears the refusal.
+        state.begin_submission(request, "launch-codex", 6).unwrap();
+        state
+            .record_submission(
+                request,
+                SubmissionOutcome::Confirmed {
+                    provider_session_id: None,
+                    provider_turn_id: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(state.agent(agent).unwrap().delivery_rejection, None);
+    }
+
+    #[test]
+    fn native_refusals_map_to_stall_reasons() {
+        // The exact texts `src/app/api/agents.rs` sends.
+        for (message, reason) in [
+            (
+                "Claude input box is not empty; prompt was not sent",
+                "input_box_not_empty",
+            ),
+            (
+                "Codex composer is not empty; prompt was not sent",
+                "input_box_not_empty",
+            ),
+            ("Agent is not ready; prompt was not sent", "agent_not_ready"),
+            (
+                "agent w1:p1 is not an active named agent",
+                "agent_not_ready",
+            ),
+            ("agent is blocked on a dialog", "agent_blocked"),
+            ("something else", "delivery_rejected"),
+        ] {
+            assert_eq!(rejection_reason(message), reason, "{message}");
+        }
+    }
+
+    #[test]
+    fn a_queued_message_without_a_refusal_stalls_with_the_wait_reason() {
+        let (state, agent, request) = idle_with_queued(1_000, "go");
+        let expected = super::super::diagnostics::wait_reason(state.agent(agent).unwrap())
+            .unwrap_or("not_submitted");
+        assert_eq!(
+            stall_at(&state, request, 1_000 + QUEUED_STALL_MS).as_deref(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn typed_messages_stall_by_how_far_they_got_while_the_agent_idles() {
+        // Typed with no response yet. The clock starts at the poll before
+        // the submission (1_000), not at later idle polls.
+        let (mut state, agent, submitting) = idle_with_queued(1_000, "a");
+        state
+            .begin_submission(submitting, "launch-codex", 5)
+            .unwrap();
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 2_000)
+            .unwrap();
+        assert_eq!(
+            stall_at(&state, submitting, 1_000 + DELIVERED_STALL_MS - 1),
+            None
+        );
+        assert_eq!(
+            stall_at(&state, submitting, 1_000 + DELIVERED_STALL_MS).as_deref(),
+            Some("submission_unconfirmed")
+        );
+
+        // Typed and confirmed, but no provider turn start ever came.
+        let (mut state, agent, unstarted) = idle_with_queued(1_000, "b");
+        submit_request(&mut state, unstarted, "launch-codex", 5);
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 2_000)
+            .unwrap();
+        assert_eq!(
+            stall_at(&state, unstarted, 1_000 + DELIVERED_STALL_MS).as_deref(),
+            Some("no_start_hook")
+        );
+
+        // Started, finished, but no final reply matched the transcript.
+        let (mut state, agent, started) = idle_with_queued(1_000, "c");
+        start_request(&mut state, started, "launch-codex", 5);
+        state
+            .observe_status(agent, RuntimeStatus::Idle, 2_000)
+            .unwrap();
+        let progress = state.request(started).unwrap().progress_at_ms.unwrap();
+        assert_eq!(
+            stall_at(&state, started, progress.max(2_000) + DELIVERED_STALL_MS).as_deref(),
+            Some("transcript_unmatched")
+        );
+        // A later hook event restarts the clock.
+        state.requests.get_mut(&started).unwrap().progress_at_ms = Some(500_000);
+        assert_eq!(
+            stall_at(&state, started, 500_000 + DELIVERED_STALL_MS - 1),
+            None
+        );
+    }
+
+    #[test]
+    fn a_long_working_turn_never_stalls_and_a_long_block_is_reported_not_stalled() {
+        let (mut state, agent, request) = idle_with_queued(1_000, "go");
+        start_request(&mut state, request, "launch-codex", 5);
+        state
+            .observe_status(agent, RuntimeStatus::Working, 2_000)
+            .unwrap();
+        let hour = 60 * 60 * 1000;
+        assert_eq!(stall_at(&state, request, 2_000 + hour), None);
+        assert!(!state.blocked_unanswered(state.request(request).unwrap(), 2_000 + hour));
+
+        state
+            .observe_status(agent, RuntimeStatus::Blocked, 3_000)
+            .unwrap();
+        assert_eq!(
+            stall_at(&state, request, 3_000 + hour),
+            None,
+            "blocked is not stalled"
+        );
+        let blocked = |now| state.blocked_unanswered(state.request(request).unwrap(), now);
+        assert!(!blocked(3_000 + BLOCKED_STALL_MS - 1));
+        assert!(blocked(3_000 + BLOCKED_STALL_MS));
     }
 
     #[test]

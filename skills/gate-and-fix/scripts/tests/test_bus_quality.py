@@ -46,6 +46,10 @@ class BusQualityTest(unittest.TestCase):
                     env.get("BUS_DATA_DIR"), os.environ.get("BUS_DATA_DIR")
                 )
                 self.assertIn("%p", env["LLVM_PROFILE_FILE"])
+                # Python tests run plainly: no coverage.py, no Python floor.
+                self.assertEqual(
+                    run.call_args.args[:4], (sys.executable, "-m", "pytest", "-q")
+                )
 
     def test_file_length_cap_has_only_named_exemptions(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -188,22 +192,14 @@ class BusQualityTest(unittest.TestCase):
             )
             self.assertTrue(save.call_args.args[0]["integration"])
 
-    def test_coverage_exit_status_enforces_both_language_floors(self):
+    def test_coverage_exit_status_enforces_only_the_rust_floor(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             policy = root / "policy.json"
-            policy.write_text(
-                json.dumps(
-                    {
-                        "rust_line_percent": 80,
-                        "python_line_percent": 80,
-                        "python_exclude": {},
-                    }
-                )
-            )
-            for rust, python, expected in ((79, 80, 1), (80, 79, 1), (80, 80, 0)):
+            policy.write_text(json.dumps({"rust_line_percent": 80}))
+            for rust, expected in ((79, 1), (80, 0)):
                 with (
-                    self.subTest(rust=rust, python=python),
+                    self.subTest(rust=rust),
                     patch.object(quality, "OUTPUT", root),
                     patch.object(quality, "POLICY", policy),
                     patch.object(
@@ -217,9 +213,10 @@ class BusQualityTest(unittest.TestCase):
                     ),
                     patch.object(quality, "run", return_value=0),
                     patch.object(quality, "rust_lines", return_value=(rust, 100)),
-                    patch.object(quality, "python_lines", return_value=(python, 100)),
                 ):
                     self.assertEqual(quality.coverage(), expected)
+                    summary = json.loads((root / "summary.json").read_text())
+                    self.assertEqual(set(summary), {"head", "rust"})
 
     def test_coverage_fails_below_floor_and_for_empty_or_invalid_measurement(self):
         self.assertTrue(quality.check_percent("fixture", 81, 100, 80)["pass"])
@@ -262,30 +259,6 @@ class BusQualityTest(unittest.TestCase):
                 patch.object(quality, "RUST_EXCLUDE", r"/moved/generated\.rs$"),
             ):
                 self.assertEqual(quality.rust_lines(report), (0, 1))
-
-    def test_python_coverage_includes_never_imported_file(self):
-        from coverage import Coverage
-
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            scripts = root / "scripts"
-            scripts.mkdir()
-            (scripts / "unused.py").write_text("value = 1\n")
-            for name in ("tools", "packaging"):
-                source = root / name / "unused.py"
-                source.parent.mkdir()
-                source.write_text("value = 1\n")
-            config = root / "coverage.ini"
-            config.write_text(f"[run]\ndata_file = {root / '.coverage'}\n")
-            Coverage(config_file=str(config)).save()
-            with (
-                patch.object(quality, "ROOT", root),
-                patch.object(quality, "CONFIG", config),
-            ):
-                self.assertEqual(quality.python_lines({}), (0, 3))
-                self.assertEqual(
-                    quality.python_lines({"scripts/unused.py": "fixture"}), (0, 2)
-                )
 
     def test_missing_stale_or_failed_profiles_cannot_pass(self):
         with (

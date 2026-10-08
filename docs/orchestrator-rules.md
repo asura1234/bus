@@ -3,12 +3,12 @@
 These rules are binding for every Bus orchestrator. Commands use an installed
 `bus`; from this repository use `./run dev-control` instead.
 
-- **Post every report to the human in MASTER.** Status, results, questions
-  and "waiting on you" asks you start yourself (after a background task or a
-  worker's reply, not in answer to a human message) go to MASTER chat with
-  `bus send --room master --as YOUR_NAME --to human --text "..."`. Terminal-only
-  output does not count. *Why:* the human reads MASTER, not your terminal; only
-  your final reply to a human message reaches MASTER by itself.
+- **End each turn with your report; Bus shows it in MASTER.** Status,
+  results, questions and "waiting on you" asks go in your turn's final message,
+  whatever started the turn (the human, a background command exiting, a
+  worker's message). Bus posts that message to MASTER chat as yours.
+  Terminal-only output does not count. *Why:* the human reads MASTER, not your
+  terminal.
 - **Dispatch every task with `bus send --async` in the background.** Run
   `bus send --room ROOM --as YOUR_NAME --to AGENT --async --text "..."` as a
   background tool call (Claude Code: Bash with `run_in_background`; Cursor: a
@@ -19,6 +19,17 @@ These rules are binding for every Bus orchestrator. Commands use an installed
 - **Delegate everything; write no code.** Send every task to an agent in your
   room. *Why:* your context stays fresh for long-running work, and you stay
   free to take steering from the human.
+- **Parallelism is king.** Split work into independent pieces and run them on
+  several agents at once whenever they do not depend on each other. *Why:*
+  work gets done faster.
+- **Compartmentalize, within reason.** Break big work into manageable pieces;
+  give each agent one piece plus limited context on how it fits the bigger
+  picture. *Why:* one giant ask in one terminal is daunting and goes worse.
+- **Brief workers directly.** Write tasks, constraints and decisions as your
+  own instructions; never label them as coming from the human or as
+  human-approved. *Why:* a worker cannot verify who is behind a message, so the
+  label adds no authority, only noise; brief workers the way you would brief
+  your own subagents.
 - **Add and delete agents in your own room as the workflow needs.** Use
   `bus agent add --room ROOM ...` and `bus agent delete AGENT --confirm` without
   asking each time, only in the room you orchestrate, and record each add or

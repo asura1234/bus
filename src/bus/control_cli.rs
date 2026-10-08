@@ -87,8 +87,10 @@ Usage status \"unknown\" means data is missing or stale, never that the allowanc
 wait polls every 200 ms, defaults to 60 seconds, and accepts 1–600 seconds.
 send --async prints the send receipt, then blocks with no time limit until every recipient
 has worked on the message and gone idle again (a blocked recipient keeps it waiting), and
-prints the final message status. It exits non-zero only if the send fails or Bus abandons
-a recipient's request. Orchestrators run it as a background tool call and read the reply
+prints the final message status. It exits 1 if the send fails or Bus abandons a
+recipient's request, and 3 if a message stalls (stage stalled, reason in message status).
+wait also exits 3 on a stall. A Blocked agent never stalls; after 5 minutes its reason
+reads blocked_unanswered. Orchestrators run it as a background tool call and read the reply
 with history when it exits.
 message status, wait and history keep raw Markdown and list attached files as absolute paths.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.
@@ -101,15 +103,42 @@ bus stop (no --dev needed), which stops the server, closes every agent pane and 
 {\"stopped\":true}, or {\"stopped\":false} when no server was running.
 Commands only connect to the existing instance in BUS_DATA_DIR; they never start or enable it.";
 
+/// The exit code of `wait` and `send --async` when a message stalled, so a
+/// caller can tell "stuck, look at it" from a failed command (1).
+pub(crate) const STALLED_EXIT_CODE: i32 = 3;
+
+/// A failure that ends the process with its own code and a one-line reason on
+/// stderr, instead of the generic error report.
+#[derive(Debug)]
+struct CliExit {
+    code: i32,
+    message: String,
+}
+
+impl std::fmt::Display for CliExit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CliExit {}
+
 pub fn run(data_dir: &Path, args: &[String]) -> io::Result<()> {
-    run_with(
+    let result = run_with(
         args,
         &mut io::stdout().lock(),
         |request, timeout| match timeout {
             Some(timeout) => control::request_with_timeout(data_dir, request, timeout),
             None => control::request(data_dir, request),
         },
-    )
+    );
+    if let Err(error) = &result {
+        if let Some(exit) = error.get_ref().and_then(|e| e.downcast_ref::<CliExit>()) {
+            eprintln!("bus: {exit}");
+            std::process::exit(exit.code);
+        }
+    }
+    result
 }
 
 fn next_request_id() -> String {
@@ -166,15 +195,21 @@ fn run_with_pause(
     };
     write_response(output, &response)?;
     if response.ok {
-        Ok(())
-    } else {
-        Err(io::Error::other(
-            response
-                .error
-                .map(|error| error.message)
-                .unwrap_or_else(|| "Developer command failed".into()),
-        ))
+        return Ok(());
     }
+    let (code, message) = response
+        .error
+        .map(|error| (error.code, error.message))
+        .unwrap_or_else(|| (String::new(), "Developer command failed".into()));
+    Err(io::Error::other(match code.as_str() {
+        "message_stalled" => CliExit {
+            code: STALLED_EXIT_CODE,
+            message,
+        }
+        .into(),
+        "message_abandoned" => CliExit { code: 1, message }.into(),
+        _ => Box::<dyn std::error::Error + Send + Sync>::from(message),
+    }))
 }
 
 /// `send --async`: reads the message's status until every recipient has worked
@@ -207,8 +242,8 @@ fn follow_message(
             Ok(response) if !response.ok => return response,
             Ok(response) => match async_outcome(&response.result) {
                 Some(Ok(())) => return response,
-                Some(Err(message)) => {
-                    let mut failure = Response::failure(id, "message_abandoned", message);
+                Some(Err((code, message))) => {
+                    let mut failure = Response::failure(id, code, message);
                     failure.result = response.result;
                     return failure;
                 }
@@ -218,22 +253,45 @@ fn follow_message(
     }
 }
 
-/// `Some(Ok)` once every recipient's turn ended, `Some(Err)` when Bus
-/// abandoned a recipient's request, `None` while any recipient still works,
-/// is blocked, or has not started.
-fn async_outcome(status: &Value) -> Option<Result<(), String>> {
+/// `Some(Ok)` once every recipient's turn ended, `Some(Err)` with an error
+/// code when Bus abandoned a recipient's request or one stalled, `None` while
+/// any recipient still works, is blocked, or has not started.
+fn async_outcome(status: &Value) -> Option<Result<(), (&'static str, String)>> {
     let requests = status["requests"].as_array()?;
     if let Some(abandoned) = requests.iter().find(|r| r["stage"] == "abandoned") {
-        return Some(Err(format!(
-            "Bus abandoned message {} for agent {}; inspect message status and the agent's terminal",
-            status["message_id"],
-            abandoned["agent_name"].as_str().unwrap_or("unknown"),
+        return Some(Err((
+            "message_abandoned",
+            format!(
+                "Bus abandoned message {} for agent {}; inspect message status and the agent's terminal",
+                status["message_id"],
+                abandoned["agent_name"].as_str().unwrap_or("unknown"),
+            ),
         )));
     }
-    requests
+    if requests.iter().all(|r| r["turn_ended"] == true) {
+        return Some(Ok(()));
+    }
+    // A finished turn whose reply was not captured is done for --async.
+    stalled(status, |r| r["turn_ended"] != true).map(Err)
+}
+
+/// The first stalled request (among those `relevant`) as a `message_stalled`
+/// error with its reason.
+fn stalled(status: &Value, relevant: impl Fn(&Value) -> bool) -> Option<(&'static str, String)> {
+    let request = status["requests"]
+        .as_array()?
         .iter()
-        .all(|r| r["turn_ended"] == true)
-        .then_some(Ok(()))
+        .find(|r| r["stage"] == "stalled" && relevant(r))?;
+    Some((
+        "message_stalled",
+        format!(
+            "message {} stalled for agent {} while {}: {}; inspect message status, then fix the agent or run request recover",
+            status["message_id"],
+            request["agent_name"].as_str().unwrap_or("unknown"),
+            request["stalled_from"].as_str().unwrap_or("unknown"),
+            request["reason"].as_str().unwrap_or("unknown"),
+        ),
+    ))
 }
 
 fn timeout_response(id: &str, last_status: Value) -> Response {
@@ -294,6 +352,12 @@ fn execute(
             .is_some_and(|agents| !agents.is_empty())
         {
             return dialog_response(&id, response.result);
+        }
+        // A stalled message will not complete by waiting longer.
+        if let Some((code, message)) = stalled(&response.result, |_| true) {
+            let mut failure = Response::failure(&id, code, message);
+            failure.result = response.result;
+            return failure;
         }
         last_status = response.result;
         if let Some(deadline) = deadline {
@@ -1502,6 +1566,88 @@ mod tests {
         assert_eq!(lines[1]["ok"], false);
         assert_eq!(lines[1]["error"]["code"], "message_abandoned");
         assert_eq!(lines[1]["result"]["requests"][1]["stage"], "abandoned");
+    }
+
+    fn stalled_recipient(agent: u64, from: &str, reason: &str, turn_ended: bool) -> Value {
+        json!({"request_id": 40 + agent, "agent_id": agent, "agent_name": format!("a{agent}"),
+            "stage": "stalled", "stalled_from": from, "reason": reason, "turn_ended": turn_ended})
+    }
+
+    fn exit_code(outcome: &io::Result<()>) -> Option<i32> {
+        outcome
+            .as_ref()
+            .err()?
+            .get_ref()?
+            .downcast_ref::<CliExit>()
+            .map(|exit| exit.code)
+    }
+
+    #[test]
+    fn send_async_exits_early_with_the_stalled_code_and_reason() {
+        let (outcome, lines, _, _) = run_async(
+            &[],
+            [
+                status(vec![recipient(1, "queued", false)]),
+                status(vec![stalled_recipient(
+                    1,
+                    "queued",
+                    "input_box_not_empty",
+                    false,
+                )]),
+            ],
+        );
+        assert_eq!(exit_code(&outcome), Some(STALLED_EXIT_CODE));
+        let error = outcome.unwrap_err().to_string();
+        assert!(
+            error.contains("message 19 stalled for agent a1 while queued: input_box_not_empty"),
+            "{error}"
+        );
+        assert_eq!(lines[1]["error"]["code"], "message_stalled");
+    }
+
+    #[test]
+    fn send_async_counts_a_finished_turn_without_a_captured_reply_as_done() {
+        let (outcome, lines, _, _) = run_async(
+            &[],
+            [status(vec![stalled_recipient(
+                1,
+                "delivered",
+                "transcript_unmatched",
+                true,
+            )])],
+        );
+        assert!(outcome.is_ok());
+        assert_eq!(lines[1]["ok"], true);
+    }
+
+    #[test]
+    fn an_abandoned_async_send_exits_one_with_a_clear_reason() {
+        let (outcome, _, _, _) = run_async(&[], [status(vec![recipient(1, "abandoned", false)])]);
+        assert_eq!(exit_code(&outcome), Some(1));
+    }
+
+    #[test]
+    fn wait_exits_early_when_a_recipient_stalls() {
+        let mut output = Vec::new();
+        let outcome = run_with(
+            &["wait", "--message", "19", "--timeout", "600"].map(String::from),
+            &mut output,
+            |request, _| {
+                Ok(Response::success(
+                    &request.id,
+                    status(vec![stalled_recipient(
+                        1,
+                        "awaiting_start",
+                        "no_start_hook",
+                        false,
+                    )]),
+                ))
+            },
+        );
+        assert_eq!(exit_code(&outcome), Some(STALLED_EXIT_CODE));
+        let response: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(response["error"]["code"], "message_stalled");
+        assert_eq!(response["result"]["requests"][0]["reason"], "no_start_hook");
     }
 
     #[test]

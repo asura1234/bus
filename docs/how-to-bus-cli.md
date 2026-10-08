@@ -250,7 +250,8 @@ MASTER).
 
 `send` confirms that the message was durably queued. It does not mean the agent
 started or replied. `wait` polls every 200 milliseconds until every recipient
-has replied or the timeout expires. Its timeout can be 1–600 seconds and
+has replied, a recipient waits on a dialog, a recipient's message stalls (exit
+3), or the timeout expires. Its timeout can be 1–600 seconds and
 defaults to 60 seconds.
 
 ### Send and follow a task with `--async`
@@ -272,8 +273,10 @@ reported the turn start for the message, and Bus has seen it Idle since. The
 provider's turn start covers a turn that starts and ends between two status
 polls. A captured reply also counts.
 A blocked recipient, for example one waiting on a dialog, is not idle, so the
-command keeps waiting until someone answers it. It exits non-zero, with the
-reason on stderr, only if the send fails or Bus abandons a recipient's request.
+command keeps waiting until someone answers it. It exits early only if the send
+fails or Bus abandons a recipient's request (exit 1), or a recipient's message
+stalls before its turn ended (exit 3, see Stalled messages); the reason is on
+stderr.
 `--async` cannot be combined with `--to human`.
 
 Orchestrators run it as a background tool call (Claude Code: Bash with
@@ -297,6 +300,27 @@ The per-agent `stage` explains how far delivery progressed:
 | `delivered` | A trusted provider turn started and Bus is awaiting its final reply. |
 | `joined` | The message joined another message's turn; see `group`. |
 | `replied` | Bus recorded the final reply for that recipient. |
+| `stalled` | The message made no progress for a grace period; `reason` says why and `stalled_from` names the stage it stalled in. |
+
+### Stalled messages
+
+A message is `stalled` when it stops moving while its agent is not working:
+
+| `stalled_from` | After | `reason` |
+| --- | --- | --- |
+| `queued` | 2 minutes with the agent not working | The native server's last refusal to type it (`input_box_not_empty`: the input box holds someone's text; `agent_not_ready`; `agent_blocked`), otherwise why Bus is waiting (`session_hook_missing`, `agent_unavailable`, `prior_request_active`, …) |
+| `submitting` | 3 minutes idle after Bus typed it | `submission_unconfirmed`: the native server never confirmed the typing |
+| `awaiting_start` | 3 minutes idle | `no_start_hook`: the provider never reported the turn start |
+| `delivered`, `joined` | 3 minutes idle with no hook event | `transcript_unmatched`: the turn ended but no final reply matched the transcript |
+
+A Working agent never stalls, however long its turn. A Blocked agent does not
+stall either: it already asked for help. After 5 minutes blocked, `reason`
+reads `blocked_unanswered` so the block shows in `message status`, but the stage
+stays as it was and `send --async` keeps waiting. Bus never re-sends a stalled
+message: fix the cause (clear the input box, answer the agent, restart it), or
+recover the request explicitly with `request recover`. `wait` and `send
+--async` stop at a stall with exit code 3 and the reason on stderr; for `--async`
+a finished turn whose reply was not captured counts as done, not stalled.
 
 Treat `complete: true` from `message status` or `wait` as the settlement signal.
 A successful terminal write, a visually idle agent, or a queued focus change is

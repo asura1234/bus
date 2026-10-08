@@ -1,6 +1,7 @@
 use super::*;
 use crate::bus::transport::TransportError;
 use serde_json::json;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// What the fake server shows for the watched agent's screen.
@@ -9,6 +10,9 @@ struct Screen {
     dialog: bool,
     blocked: bool,
     question: bool,
+    text: Option<String>,
+    next_dialog: Option<(bool, String)>,
+    revision: u64,
 }
 
 struct FakeServer(Arc<Mutex<Screen>>);
@@ -35,6 +39,26 @@ fn dialog() -> schema::AgentDialog {
     }
 }
 
+impl Screen {
+    fn current_dialog(&self) -> Option<schema::AgentDialog> {
+        self.dialog.then(|| {
+            let mut dialog = dialog();
+            if self.question {
+                dialog.kind = schema::AgentDialogKind::Question;
+                dialog.text = "What token should Bus use?".into();
+                dialog.options.clear();
+            }
+            if let Some(text) = &self.text {
+                dialog.text.clone_from(text);
+            }
+            // Native dialog ids also change with kind/text, not selection or redraws.
+            dialog.id = format!("{:?}:{}", dialog.kind, dialog.text);
+            dialog.digest.clone_from(&dialog.id);
+            dialog
+        })
+    }
+}
+
 impl Transport for FakeServer {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         let screen = self.0.lock().unwrap().clone();
@@ -45,7 +69,7 @@ impl Transport for FakeServer {
                     "agent": "claude", "workspace_id": "w", "tab_id": "t", "focused": false,
                     "interactive_ready": true, "revision": 1,
                     "agent_status": if screen.dialog || screen.blocked { "blocked" } else { "idle" },
-                    "dialog_id": screen.dialog.then_some("dialog-id"),
+                    "dialog_id": screen.current_dialog().map(|dialog| dialog.id),
                 }))
                 .unwrap()],
             }),
@@ -54,20 +78,20 @@ impl Transport for FakeServer {
                     terminal_id: "terminal".into(),
                     pane_id: "pane".into(),
                     session_id: None,
-                    content_revision: 4,
-                    dialog: screen.dialog.then(|| {
-                        let mut dialog=dialog();
-                        if screen.question {
-                            dialog.kind=schema::AgentDialogKind::Question;
-                            dialog.text="What token should Bus use?".into();
-                            dialog.options.clear();
-                        }
-                        dialog
-                    }),
+                    content_revision: 4 + screen.revision,
+                    dialog: screen.current_dialog(),
                 },
             }),
             Method::AgentDialogChoose(_) | Method::AgentDialogAnswer(_) => {
-                self.0.lock().unwrap().dialog = false;
+                let mut screen = self.0.lock().unwrap();
+                if let Some((question, text)) = screen.next_dialog.take() {
+                    screen.dialog = true;
+                    screen.question = question;
+                    screen.text = Some(text);
+                } else {
+                    screen.dialog = false;
+                }
+                screen.revision += 1;
                 Ok(ResponseResult::AgentDialogChosen {
                     choice: schema::AgentDialogChooseResult {
                         written: true,
@@ -77,8 +101,8 @@ impl Transport for FakeServer {
                             terminal_id: "terminal".into(),
                             pane_id: "pane".into(),
                             session_id: None,
-                            content_revision: 5,
-                            dialog: None,
+                            content_revision: 4 + screen.revision,
+                            dialog: screen.current_dialog(),
                         },
                     },
                 })
@@ -99,10 +123,13 @@ fn worker(
     Arc<Mutex<Screen>>,
     PathBuf,
 ) {
+    // Timestamp resolution alone can collide between parallel fixture threads.
+    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "bus-dialogs-{}-{}",
+        "bus-dialogs-{}-{}-{}",
         std::process::id(),
-        crate::bus::io::now_ns()
+        crate::bus::io::now_ns(),
+        NEXT_DIR.fetch_add(1, Ordering::Relaxed)
     ));
     let screen = Arc::new(Mutex::new(Screen::default()));
     let mut worker = Worker::open(dir.clone(), Box::new(FakeServer(screen.clone()))).unwrap();
@@ -158,7 +185,7 @@ fn sent_by(worker: &Worker, room: RoomId, author: AgentId) -> Vec<(Vec<AgentId>,
     std::mem::take(&mut sent).into_values().collect()
 }
 
-/// Bus is not an agent: it authors nothing, and MASTER never hears of a block.
+/// Worker blocks stay in their work room, and Bus authors no messages.
 fn assert_bus_sent_nothing(worker: &Worker) {
     assert!(worker
         .state
@@ -210,16 +237,13 @@ fn a_blocked_worker_tells_its_orchestrator_once_per_episode() {
         .any(|request| request.agent_id == orchestrator && request.room_id == room));
     assert!(worker.state.agent(agent).unwrap().dialog);
 
-    // Still blocked, now on a question and then a blocked screen: same episode.
+    // A different question starts another episode without first going idle.
     screen.lock().unwrap().question = true;
     polls(&mut worker, 3);
     screen.lock().unwrap().dialog = false;
     screen.lock().unwrap().blocked = true;
     polls(&mut worker, 3);
-    assert_eq!(
-        sent_by(&worker, room, agent),
-        std::slice::from_ref(&blocked)
-    );
+    assert_eq!(sent_by(&worker, room, agent), [blocked.clone(), blocked]);
     assert_bus_sent_nothing(&worker);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
@@ -237,7 +261,6 @@ fn answering_adds_no_echo_and_a_new_dialog_is_a_new_episode() {
         .to_owned();
     let chosen = worker.choose_dialog_option(agent, 1, &fingerprint).unwrap();
     assert_eq!(chosen["outcome"], "closed");
-    polls(&mut worker, 3);
     let blocked = (vec![orchestrator], BLOCKED_MESSAGE.to_owned());
     assert_eq!(
         sent_by(&worker, room, agent),
@@ -245,6 +268,7 @@ fn answering_adds_no_echo_and_a_new_dialog_is_a_new_episode() {
         "no answered echo"
     );
 
+    // The identical next prompt appears before any idle status poll.
     screen.lock().unwrap().dialog = true;
     polls(&mut worker, 3);
     assert_eq!(sent_by(&worker, room, agent), [blocked.clone(), blocked]);
@@ -286,28 +310,192 @@ fn without_an_orchestrator_the_blocked_worker_tells_the_human() {
 }
 
 #[test]
-fn a_blocked_agent_in_master_posts_nothing() {
+fn a_blocked_orchestrator_tells_the_human_once_in_master() {
+    for wait in ["dialog-id", "question-id", "trust-id", BLOCKED] {
+        let (mut worker, _, room, orchestrator, _, dir) = worker(true);
+        let orchestrator = orchestrator.unwrap();
+        let master = worker.state.master_room().unwrap().id;
+        worker
+            .notify_dialogs(vec![(orchestrator, Some(wait.into()))])
+            .unwrap();
+        assert!(sent_by(&worker, master, orchestrator).is_empty());
+        notify_steady(&mut worker, orchestrator, Some(wait));
+        assert_eq!(
+            sent_by(&worker, master, orchestrator),
+            [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+        );
+        let master_room = worker.state.room(master).unwrap();
+        let notice = &master_room.notices[0];
+        assert_eq!(notice.author, Author::Agent(orchestrator));
+        assert!(notice.files.is_empty());
+        assert_eq!(master_room.unread_count, 1);
+        // The agent-authored latest prompt uses the existing MASTER ring path.
+        assert_eq!(master_room.latest_prompt.as_ref().unwrap().id, notice.id);
+        assert!(master_room.sound_enabled());
+        assert!(worker.state.room(room).unwrap().notices.is_empty());
+        assert_eq!(worker.state.requests().count(), 0);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+fn notify_steady(worker: &mut Worker, agent: AgentId, wait: Option<&str>) {
+    for _ in 0..2 {
+        worker
+            .notify_dialogs(vec![(agent, wait.map(str::to_owned))])
+            .unwrap();
+    }
+}
+
+#[test]
+fn repeating_an_orchestrators_dialog_in_the_same_episode_adds_no_message() {
     let (mut worker, _, _, orchestrator, _, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();
-    worker
-        .notify_dialogs(vec![(orchestrator, Some("dialog-id".into()))])
-        .unwrap();
-    worker
-        .notify_dialogs(vec![(orchestrator, Some("dialog-id".into()))])
-        .unwrap();
+    let master = worker.state.master_room().unwrap().id;
+    for wait in ["dialog-id", "dialog-id", BLOCKED, "dialog-id"] {
+        notify_steady(&mut worker, orchestrator, Some(wait));
+    }
     assert_eq!(
-        worker
-            .state
-            .agent(orchestrator)
-            .unwrap()
-            .dialog_notice
-            .as_deref(),
-        Some("dialog-id")
+        sent_by(&worker, master, orchestrator),
+        [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
     );
-    assert_eq!(worker.state.requests().count(), 0);
-    assert_bus_sent_nothing(&worker);
+    assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_new_dialog_while_still_blocked_notifies_workers_and_orchestrators() {
+    for (question, text, next_question, next_text) in [
+        (false, "Allow command one?", false, "Allow command two?"),
+        (true, "What token should Bus use?", false, "Allow command?"),
+        (false, "Which layout?", false, "Which color?"),
+        (true, "Form one: name and token?", true, "Form two: host?"),
+    ] {
+        for in_master in [false, true] {
+            let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+            let orchestrator = orchestrator.unwrap();
+            let (sender, room, recipients) = if in_master {
+                let identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+                let mut state = worker.state.clone();
+                state.delete_agent(agent).unwrap();
+                state
+                    .set_agent_runtime_identity(orchestrator, identity)
+                    .unwrap();
+                let master = state.master_room().unwrap().id;
+                worker.save(state).unwrap();
+                (orchestrator, master, Vec::new())
+            } else {
+                (agent, room, vec![orchestrator])
+            };
+            {
+                let mut screen = screen.lock().unwrap();
+                screen.dialog = true;
+                screen.question = question;
+                screen.text = Some(text.into());
+            }
+            polls(&mut worker, 3);
+            assert_eq!(
+                worker.state.agent(sender).unwrap().status,
+                RuntimeStatus::Blocked
+            );
+            assert_eq!(sent_by(&worker, room, sender).len(), 1);
+
+            // The next permission/question form appears immediately after the answer.
+            screen.lock().unwrap().next_dialog = Some((next_question, next_text.into()));
+            let fingerprint = worker.observe_dialog(sender).unwrap()["fingerprint"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let answered = if question {
+                worker
+                    .answer_dialog(sender, Some("answer"), false, &fingerprint)
+                    .unwrap()
+            } else {
+                worker
+                    .choose_dialog_option(sender, 1, &fingerprint)
+                    .unwrap()
+            };
+            assert_eq!(answered["outcome"], "replaced");
+            polls(&mut worker, 3);
+            assert_eq!(
+                worker.state.agent(sender).unwrap().status,
+                RuntimeStatus::Blocked
+            );
+            assert_eq!(sent_by(&worker, room, sender).len(), 2);
+
+            let blocked = (recipients, BLOCKED_MESSAGE.to_owned());
+            assert_eq!(sent_by(&worker, room, sender), [blocked.clone(), blocked]);
+            polls(&mut worker, 3);
+            assert_eq!(sent_by(&worker, room, sender).len(), 2);
+
+            // A confirmed close is another boundary, even if the next form
+            // has identical text and is shown before the next status poll.
+            let fingerprint = worker.observe_dialog(sender).unwrap()["fingerprint"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let answered = if next_question {
+                worker
+                    .answer_dialog(sender, Some("answer"), false, &fingerprint)
+                    .unwrap()
+            } else {
+                worker
+                    .choose_dialog_option(sender, 1, &fingerprint)
+                    .unwrap()
+            };
+            assert_eq!(answered["outcome"], "closed");
+            assert_eq!(sent_by(&worker, room, sender).len(), 2);
+            screen.lock().unwrap().dialog = true;
+            polls(&mut worker, 3);
+            assert_eq!(sent_by(&worker, room, sender).len(), 3);
+            drop(worker);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[test]
+fn an_unblocked_orchestrator_reports_a_new_dialog_as_a_new_episode() {
+    let (mut worker, _, _, orchestrator, _, dir) = worker(true);
+    let orchestrator = orchestrator.unwrap();
+    let master = worker.state.master_room().unwrap().id;
+    notify_steady(&mut worker, orchestrator, Some("dialog-id"));
+    notify_steady(&mut worker, orchestrator, None);
+    assert_eq!(sent_by(&worker, master, orchestrator).len(), 1);
+    notify_steady(&mut worker, orchestrator, Some("question-id"));
+    let blocked = (Vec::new(), BLOCKED_MESSAGE.to_owned());
+    assert_eq!(
+        sent_by(&worker, master, orchestrator),
+        [blocked.clone(), blocked]
+    );
+    assert_eq!(worker.state.room(master).unwrap().unread_count, 2);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_flicker_does_not_repeat_an_orchestrators_blocked_message() {
+    for wait in ["dialog-id", BLOCKED] {
+        let (mut worker, _, _, orchestrator, _, dir) = worker(true);
+        let orchestrator = orchestrator.unwrap();
+        let master = worker.state.master_room().unwrap().id;
+        notify_steady(&mut worker, orchestrator, Some(wait));
+        worker.notify_dialogs(vec![(orchestrator, None)]).unwrap();
+        notify_steady(&mut worker, orchestrator, Some(wait));
+        if wait == BLOCKED {
+            // Unreadable blocked screens retain the marker through idle flicker.
+            notify_steady(&mut worker, orchestrator, None);
+            notify_steady(&mut worker, orchestrator, Some(wait));
+        }
+        assert_eq!(
+            sent_by(&worker, master, orchestrator),
+            [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+        );
+        assert_eq!(worker.state.room(master).unwrap().unread_count, 1);
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[test]

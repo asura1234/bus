@@ -16,7 +16,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 OUTPUT = ROOT / "temp/gate-and-fix/coverage"
-CONFIG = ROOT / "skills/gate-and-fix/references/python-coverage.ini"
 POLICY = ROOT / "skills/gate-and-fix/references/coverage-policy.json"
 LINT_POLICY = ROOT / "skills/gate-and-fix/references/lint-policy.toml"
 LANES = ("lint", "unit", "integration", "coverage")
@@ -176,9 +175,7 @@ def lint() -> int:
 
 def unit() -> int:
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    # Never let a failed/new round reuse yesterday's successful report or Python profiles.
-    for path in OUTPUT.glob(".coverage*"):
-        path.unlink()
+    # Never let a failed/new round reuse yesterday's successful report.
     for name in ("rust.lcov", "summary.json"):
         (OUTPUT / name).unlink(missing_ok=True)
     value = {"head": head(), "unit": False, "integration": False}
@@ -208,18 +205,9 @@ def unit() -> int:
     tests = [str(path.relative_to(ROOT)) for path in python_files() if is_test(path)]
     if not tests:
         raise ValueError("no Python tests found")
-    python = run(
-        sys.executable,
-        "-m",
-        "coverage",
-        "run",
-        f"--rcfile={CONFIG}",
-        "-m",
-        "pytest",
-        "-q",
-        *tests,
-        env=test_env,
-    )
+    # Python here is developer and agent tooling, not the product: its tests
+    # must pass, but a percentage target would only reward coverage-only tests.
+    python = run(sys.executable, "-m", "pytest", "-q", *tests, env=test_env)
     value["unit"] = not (rust or cli or python)
     save_state(value)
     return int(not value["unit"])
@@ -280,22 +268,6 @@ def rust_lines(report: Path) -> tuple[int, int]:
     return covered, total
 
 
-def python_lines(exclusions: dict) -> tuple[int, int]:
-    from coverage import Coverage
-
-    cov = Coverage(config_file=str(CONFIG))
-    cov.load()
-    covered = total = 0
-    for path in python_files():
-        if is_test(path) or path.relative_to(ROOT).as_posix() in exclusions:
-            continue
-        # analysis2 includes executable statements even for files never imported by tests.
-        _, statements, _, missing, _ = cov.analysis2(str(path))
-        total += len(statements)
-        covered += len(statements) - len(missing)
-    return covered, total
-
-
 def check_percent(label: str, covered: int, total: int, threshold: float) -> dict:
     if total <= 0 or not 0 < threshold <= 100:
         raise ValueError(f"{label}: missing executable coverage or invalid threshold")
@@ -318,37 +290,30 @@ def coverage() -> int:
         raise ValueError(
             "coverage requires successful unit and integration checks from this round"
         )
-    results = [
-        run(
-            "cargo",
-            "llvm-cov",
-            "report",
-            "--lcov",
-            "--output-path",
-            str(OUTPUT / "rust.lcov"),
-            "--ignore-filename-regex",
-            RUST_EXCLUDE,
-        ),
-        run(sys.executable, "-m", "coverage", "combine", f"--rcfile={CONFIG}"),
-    ]
-    if any(results):
+    if run(
+        "cargo",
+        "llvm-cov",
+        "report",
+        "--lcov",
+        "--output-path",
+        str(OUTPUT / "rust.lcov"),
+        "--ignore-filename-regex",
+        RUST_EXCLUDE,
+    ):
         return 1
     policy = json.loads(POLICY.read_text(encoding="utf-8"))
+    # Only Rust, the product, has a floor; Python tests run in the unit lane
+    # without one (see unit()).
     summary = {
         "head": value["head"],
         "rust": check_percent(
             "Rust", *rust_lines(OUTPUT / "rust.lcov"), policy["rust_line_percent"]
         ),
-        "python": check_percent(
-            "Python",
-            *python_lines(policy["python_exclude"]),
-            policy["python_line_percent"],
-        ),
     }
     (OUTPUT / "summary.json").write_text(
         json.dumps(summary, indent=2) + "\n", encoding="utf-8"
     )
-    return int(not all(summary[name]["pass"] for name in ("rust", "python")))
+    return int(not summary["rust"]["pass"])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -356,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("lane", choices=(*LANES, "ci"))
     args = parser.parse_args(argv)
     try:
-        required = ("ruff", "pytest") if args.lane == "lint" else ("coverage", "pytest")
+        required = ("ruff", "pytest") if args.lane == "lint" else ("pytest",)
         if any(importlib.util.find_spec(name) is None for name in required):
             raise ValueError(
                 "missing Python gate tools; install scripts/requirements.txt from this skill"

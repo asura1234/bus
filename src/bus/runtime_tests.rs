@@ -2840,3 +2840,112 @@ fn delete_keeps_an_agent_whose_restored_terminal_runs_its_own_session() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn cursor_steered_generation_stop_settles_the_group_from_hook_text_when_idle() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Cursor, vec![]);
+    let first = queue(&mut worker, room, agent, "first message");
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn-1","prompt":"first message"}),
+    );
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    let follow = queue(&mut worker, room, agent, "follow up");
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Working, 3)
+        .unwrap();
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn-2","prompt":"follow up"}),
+    );
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    let transcript = dir.join("cursor-session.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"follow up\"}]}}\n{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"unrelated\"}]}}\n",
+    )
+    .unwrap();
+    let hook = "I'll search.The published docs still have no launch-time system prompt.";
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"stop","conversation_id":"session","generation_id":"turn-2","status":"completed"}),
+    );
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn-2","text":hook,"transcript_path":transcript}),
+    );
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 4)
+        .unwrap();
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    assert_eq!(
+        worker.state.request(first).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        worker.state.request(follow).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        worker.state.room(room).unwrap().latest_replies[&agent].text,
+        hook
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cursor_background_task_notice_is_not_the_room_reply() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Cursor, vec![]);
+    let request = queue(&mut worker, room, agent, "real work");
+    worker.submit_ready().unwrap();
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn-1","prompt":"real work"}),
+    );
+    let notice = "<timestamp>Wednesday, Oct 7, 2026, 8:30 PM (UTC+8)</timestamp>  <user_query>Briefly inform the user about the task result and perform any follow-up actions (if needed). If there's no follow-ups needed, don't explicitly say that.</user_query>";
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"beforeSubmitPrompt","conversation_id":"session","generation_id":"turn-bg","prompt":notice}),
+    );
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"stop","conversation_id":"session","generation_id":"turn-bg","status":"completed"}),
+    );
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"afterAgentResponse","conversation_id":"session","generation_id":"turn-bg","text":"The job finished."}),
+    );
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 3)
+        .unwrap();
+    worker
+        .consume_callbacks(agent, &dir.join("callbacks/launch"))
+        .unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Active
+    );
+    assert!(worker.state.room(room).unwrap().latest_replies.is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
