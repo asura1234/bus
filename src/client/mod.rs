@@ -12,41 +12,46 @@
 //! - Forwards OSC 52 clipboard writes from server to its own stdout
 //! - Displays sound/toast notifications forwarded from server
 
-mod clipboard_forwarding;
+mod clipboard;
 mod config_reload;
-pub(crate) mod endpoint;
-mod endpoint_commands;
+pub(crate) mod connection;
+pub(crate) use connection::bootstrap as endpoint;
+use connection::requests as endpoint_commands;
 mod errors;
 mod events;
-mod frame_output;
-mod handshake;
-mod input;
+pub(crate) mod host_terminal;
+use connection::handshake;
+use host_terminal::frame_output;
+use host_terminal::input;
+pub(crate) mod compositor;
 mod loop_config;
 mod notifications;
-mod shell;
-mod shell_runtime;
-mod startup;
+pub(crate) mod panes;
+mod rooms;
+use compositor as shell;
+mod effects;
+mod run;
 mod state;
-mod terminal_geometry;
-mod terminal_setup;
+use host_terminal::geometry as terminal_geometry;
+use host_terminal::setup as terminal_setup;
 mod timer;
-mod transport;
+use connection::transport;
 
 #[cfg(test)]
-use clipboard_forwarding::decode_clipboard_payload;
-use clipboard_forwarding::forward_clipboard;
+use clipboard::decode_clipboard_payload;
+use clipboard::forward_clipboard;
 #[cfg(test)]
 use config_reload::reload_local_client_config;
 use config_reload::{apply_reload, init_logging};
+use effects::*;
 use events::ClientLoopEvent;
 use loop_config::ClientLoopConfig;
-use shell_runtime::*;
 use state::ClientState;
 use transport::*;
 
+pub use run::run_client;
 #[cfg(test)]
 pub(crate) use shell::{ClientShellConfig, ClientShellState};
-pub use startup::run_client;
 
 #[cfg(not(windows))]
 use terminal_geometry::query_host_terminal_appearance;
@@ -96,8 +101,6 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use interprocess::local_socket::traits::Stream as _;
-use interprocess::TryClone as _;
 use tracing::{debug, info, warn};
 
 use crate::ipc::LocalStream;

@@ -4,7 +4,7 @@ use super::model::*;
 // Upstream input/toast diagnostics contain user content. Keep those payload dumps
 // disabled even in dev mode; the rest of the runtime retains TRACE visibility.
 pub(crate) const DEV_FILTER: &str =
-    "bus=trace,bus::protocol::keys::host=off,bus::client::input=info,bus::private_payload=off";
+    "bus=trace,bus::protocol::keys::host=off,bus::client::host_terminal::input=info,bus::private_payload=off";
 pub(crate) const EXISTING_SERVER_NOTICE: &str =
     "Dev logs enabled for this client. An existing server keeps its original log level; restart it when safe for full server logs. Agents were not restarted.";
 
@@ -91,7 +91,7 @@ mod tests {
             tracing::debug!(target: "bus::messaging", "DEBUG_ENABLED");
             tracing::trace!(target: "bus::server::main_loop", "TRACE_ENABLED");
             tracing::debug!(target: "bus::protocol::keys::host", "SECRET_TYPED_TEXT");
-            tracing::debug!(target: "bus::client::input", "SECRET_PASTED_TEXT");
+            tracing::debug!(target: "bus::client::host_terminal::input", "SECRET_PASTED_TEXT");
             tracing::debug!(target: "bus::private_payload", "SECRET_TOAST");
             tracing::info!(target: "bus::messaging", "NORMAL_EVENTS");
         });

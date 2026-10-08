@@ -25,11 +25,10 @@ pub(crate) mod api {
     pub use crate::server::api::{ApiRequestMessage, ApiRequestSender, EventHub, ServerHandle};
 }
 
-#[path = "input/lease.rs"]
-mod input_lease;
-
 pub(crate) mod input {
-    pub(crate) use super::input_lease::{InputLeaseKey, InputLeaseTable, RepeatPlan};
+    pub(crate) use crate::client::panes::input_lease::{
+        InputLeaseKey, InputLeaseTable, RepeatPlan,
+    };
     #[cfg(not(windows))]
     pub use crate::protocol::keys::ime_compatible_keyboard_enhancement_flags;
     pub(crate) use crate::protocol::keys::mouse;
@@ -46,3 +45,7 @@ pub(crate) use crate::server::rendering::surface as ui;
 pub(crate) use crate::server::workspaces as workspace;
 pub(crate) use crate::server::workspaces::layout;
 pub(crate) use crate::server::workspaces::pane as pane_state;
+
+pub(crate) use crate::client::host_terminal::{
+    effects as terminal_effects, modes as terminal_modes, notify as terminal_notify,
+};

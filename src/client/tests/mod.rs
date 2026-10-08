@@ -280,13 +280,13 @@ fn cell_size_fallback_prefers_reported_then_previous_size() {
 fn reported_cell_size_is_taken_from_host_cell_size_events() {
     let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[?997;1n");
     assert_eq!(
-        super::terminal_geometry::reported_cell_size_from_events(&events),
+        super::host_terminal::geometry::reported_cell_size_from_events(&events),
         None
     );
 
     let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[6;21;10t\x1b[6;18;9t");
     assert_eq!(
-        super::terminal_geometry::reported_cell_size_from_events(&events),
+        super::host_terminal::geometry::reported_cell_size_from_events(&events),
         Some((9, 18))
     );
 }

@@ -12,9 +12,6 @@ mod platform;
 mod protocol;
 mod server;
 mod terminal;
-mod terminal_effects;
-mod terminal_modes;
-mod terminal_notify;
 mod utils;
 
 pub(crate) use compat_paths::*;

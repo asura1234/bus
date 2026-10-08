@@ -1,0 +1,1694 @@
+use super::*;
+use super::{
+    editor::Editor,
+    forms::{
+        Form, Orchestrates, PromptField, Rename, RenameTarget, ORCHESTRATES_FIELD, PROMPT_FIELD,
+    },
+    render::{Action, SoundTarget},
+};
+use crate::bus::{launch::AddAgent, model::*, orchestrator::OrchestratorSpec, runtime::BusCommand};
+use crate::{client::compositor::ClientShellInput, raw_input::RawInputEvent};
+use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+
+impl BusUi {
+    pub fn input(
+        &mut self,
+        event: &RawInputEvent,
+        ready: bool,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        if let RawInputEvent::Key(key) = event {
+            // Ctrl+C never quits Bus. A focused agent terminal receives it
+            // unchanged below so the human can interrupt the agent; the room
+            // composer clears its draft; everywhere else it does nothing.
+            let interrupt = matches!(key.code, KeyCode::Char('c' | 'C'))
+                && key.modifiers == KeyModifiers::CONTROL;
+            if interrupt && !self.terminal_has_focus() {
+                if key.kind != KeyEventKind::Release && self.clear_composer() {
+                    outcome.repaint = true;
+                }
+                return true;
+            }
+            let quit = matches!(key.code, KeyCode::Char('q' | 'Q'))
+                && key.modifiers.contains(KeyModifiers::CONTROL);
+            if quit && key.kind != KeyEventKind::Release {
+                if key.modifiers.contains(KeyModifiers::SHIFT) && self.force_exit_available {
+                    outcome.detach = true;
+                } else {
+                    self.request_quit();
+                    outcome.repaint = true;
+                }
+                return true;
+            }
+            if self.deletion.is_some() {
+                self.deletion_input(event);
+                outcome.repaint = true;
+                return true;
+            }
+            if key.code == KeyCode::F(6) {
+                if let Some(room) = self.room {
+                    self.open_room(room);
+                }
+                outcome.repaint = true;
+                return true;
+            }
+            if key.code == KeyCode::F(2) && self.form.is_none() && self.rename.is_none() {
+                if let Some(agent) = self.terminal {
+                    self.start_rename(RenameTarget::Agent(agent));
+                } else if let Some(room) = self.room {
+                    self.start_rename(RenameTarget::Room(room));
+                }
+                outcome.repaint = true;
+                return true;
+            }
+        }
+        if self.deletion_input(event) {
+            outcome.repaint = true;
+            return true;
+        }
+        if self.quitting.is_some()
+            && matches!(
+                event,
+                RawInputEvent::Key(_)
+                    | RawInputEvent::Text(_)
+                    | RawInputEvent::Paste(_)
+                    | RawInputEvent::Mouse(_)
+            )
+        {
+            return true;
+        }
+        if let RawInputEvent::Mouse(mouse) = event {
+            let hit = self
+                .view
+                .hits
+                .iter()
+                .rev()
+                .find(|h| h.rect.contains((mouse.column, mouse.row).into()))
+                .map(|h| h.action.clone());
+            if mouse.kind == MouseEventKind::Moved {
+                let detail = match &hit {
+                    Some(Action::RemoveFile(path) | Action::FileDetail(path)) => {
+                        Some(path.display().to_string())
+                    }
+                    _ => None,
+                };
+                if self.detail_path != detail {
+                    self.detail_path = detail;
+                    outcome.repaint = true;
+                }
+            }
+            if self.selection_mouse(mouse, hit.as_ref(), outcome) {
+                outcome.repaint = true;
+                return true;
+            }
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                if let Some(action) = hit {
+                    let double = self.last_click.as_ref().is_some_and(|(last, time)| {
+                        *last == action && time.elapsed() < std::time::Duration::from_millis(400)
+                    });
+                    self.last_click = Some((action.clone(), std::time::Instant::now()));
+                    if double {
+                        match action {
+                            Action::Room(room) => self.start_rename(RenameTarget::Room(room)),
+                            Action::Agent(agent) => self.start_rename(RenameTarget::Agent(agent)),
+                            _ => self.action(action),
+                        }
+                    } else {
+                        self.action(action);
+                    }
+                    outcome.repaint = true;
+                    return true;
+                }
+            }
+            if matches!(
+                mouse.kind,
+                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+            ) {
+                if matches!(self.form, Some(Form::Help { .. }))
+                    && mouse.column >= self.view.sidebar.right()
+                {
+                    self.scroll_help(mouse.kind == MouseEventKind::ScrollDown, 3);
+                    outcome.repaint = true;
+                    return true;
+                }
+                if matches!(self.form, Some(Form::Settings))
+                    && mouse.column >= self.view.sidebar.right()
+                {
+                    self.settings_scroll = if mouse.kind == MouseEventKind::ScrollDown {
+                        (self.settings_scroll + 3).min(self.view.settings_max_scroll)
+                    } else {
+                        self.settings_scroll.saturating_sub(3)
+                    };
+                    outcome.repaint = true;
+                    return true;
+                }
+                if self.terminal.is_none()
+                    && self.form.is_none()
+                    && self
+                        .view
+                        .recipient_bar
+                        .contains((mouse.column, mouse.row).into())
+                {
+                    self.recipient_scroll = if mouse.kind == MouseEventKind::ScrollDown {
+                        self.recipient_scroll
+                            .saturating_add(3)
+                            .min(self.view.recipient_max_scroll)
+                    } else {
+                        self.recipient_scroll.saturating_sub(3)
+                    };
+                    outcome.repaint = true;
+                    return true;
+                }
+                if self.terminal.is_none()
+                    && self.form.is_none()
+                    && self
+                        .view
+                        .notes_box
+                        .contains((mouse.column, mouse.row).into())
+                {
+                    self.scroll_notes(mouse.kind == MouseEventKind::ScrollDown, 1);
+                    outcome.repaint = true;
+                    return true;
+                }
+                if self.terminal.is_none()
+                    && !self.recipient_menu
+                    && self
+                        .view
+                        .composer
+                        .contains((mouse.column, mouse.row).into())
+                {
+                    self.scroll_composer(mouse.kind == MouseEventKind::ScrollDown, 3);
+                    outcome.repaint = true;
+                    return true;
+                }
+                let file_row = self.view.files.contains((mouse.column, mouse.row).into());
+                let history_row = self.view.history.contains((mouse.column, mouse.row).into());
+                if file_row {
+                    self.detail_path = None;
+                }
+                let (scroll, maximum) = if mouse.column < self.view.sidebar.right() {
+                    (&mut self.sidebar_scroll, self.view.sidebar_max_scroll)
+                } else if file_row {
+                    (&mut self.file_scroll, usize::MAX)
+                } else if history_row {
+                    (&mut self.main_scroll, self.view.history_max_scroll)
+                } else if self.terminal.is_none() || self.form.is_some() {
+                    return true;
+                } else {
+                    return !ready;
+                };
+                let step = if file_row || history_row { 1 } else { 3 };
+                *scroll = if mouse.kind == MouseEventKind::ScrollDown {
+                    scroll.saturating_add(step).min(maximum)
+                } else {
+                    scroll.saturating_sub(step)
+                };
+                if history_row {
+                    self.history_follow_tail = self.main_scroll == self.view.history_max_scroll;
+                }
+                outcome.repaint = true;
+                return true;
+            }
+            if mouse.column < self.view.sidebar.right() {
+                return true;
+            }
+        }
+        if self.terminal.is_some() && self.form.is_none() && self.rename.is_none() {
+            return matches!(
+                event,
+                RawInputEvent::Key(_)
+                    | RawInputEvent::Text(_)
+                    | RawInputEvent::Paste(_)
+                    | RawInputEvent::Mouse(_)
+            ) && !ready;
+        }
+        match event {
+            RawInputEvent::Text(text) => {
+                self.insert(text.as_str());
+                self.keep_focused_selection(None);
+            }
+            RawInputEvent::Paste(text) => {
+                if self.form.is_none() && self.rename.is_none() && !self.notes_focus {
+                    let paths = crate::bus::files::parse_path_tokens(text)
+                        .ok()
+                        .filter(|paths| {
+                            text.trim() != "/help"
+                                && !paths.is_empty()
+                                && paths
+                                    .iter()
+                                    .all(|p| p.starts_with('/') || p.starts_with("~/"))
+                        });
+                    if let (Some(room), Some(paths)) = (self.room, paths) {
+                        for path in paths {
+                            let path = self.keep_temporary_image(room, path);
+                            self.queue(BusCommand::AttachFile(room, path), Effect::Files(room));
+                        }
+                    } else {
+                        self.insert(text);
+                    }
+                } else {
+                    self.insert(text);
+                }
+                self.keep_focused_selection(None);
+            }
+            RawInputEvent::Key(key) => {
+                if key.kind == KeyEventKind::Release {
+                    return true;
+                }
+                // Terminals that forward Cmd+C can copy the selection again.
+                if matches!(key.code, KeyCode::Char('c' | 'C'))
+                    && key.modifiers == KeyModifiers::SUPER
+                {
+                    if let Some(text) = self.selected_text() {
+                        outcome.actions.push(
+                            crate::client::compositor::ClientShellAction::ClipboardWrite(
+                                text.into_bytes(),
+                            ),
+                        );
+                    }
+                    return true;
+                }
+                if matches!(key.code, KeyCode::Char('g' | 'G'))
+                    && key.modifiers == KeyModifiers::CONTROL
+                    && self.form.is_none()
+                    && self.rename.is_none()
+                    && self.terminal.is_none()
+                    && !self.notes_focus
+                {
+                    outcome
+                        .actions
+                        .push(crate::client::compositor::ClientShellAction::EditComposer);
+                    outcome.repaint = true;
+                    return true;
+                }
+                // Enhanced terminals can report the base key plus its shifted
+                // symbol separately (e.g. 2 + Shift with an alternate @).
+                let code = if key.modifiers.contains(KeyModifiers::SHIFT)
+                    && matches!(key.code, KeyCode::Char(_))
+                {
+                    key.shifted_codepoint
+                        .and_then(char::from_u32)
+                        .map(KeyCode::Char)
+                        .unwrap_or(key.code)
+                } else {
+                    key.code
+                };
+                self.key(code, key.modifiers);
+                self.keep_focused_selection(Some(key.code));
+            }
+            RawInputEvent::Mouse(_) => {}
+            _ => return false,
+        }
+        outcome.repaint = true;
+        true
+    }
+
+    /// An agent terminal is open with no Bus overlay taking its keys.
+    fn terminal_has_focus(&self) -> bool {
+        self.terminal.is_some()
+            && self.deletion.is_none()
+            && self.form.is_none()
+            && self.rename.is_none()
+    }
+    pub fn terminal_ready(&self, pane: Option<&str>) -> bool {
+        self.terminal.is_some()
+            && self.deletion.is_none()
+            && self.form.is_none()
+            && self
+                .target_pane
+                .as_deref()
+                .is_some_and(|target| Some(target) == pane)
+    }
+    fn scroll_composer(&mut self, forward: bool, lines: usize) {
+        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
+            let offset = local.composer_scroll.unwrap_or(self.view.composer_scroll);
+            let maximum = self
+                .view
+                .composer_rows
+                .saturating_sub(usize::from(self.view.composer.height));
+            local.composer_scroll = Some(if forward {
+                offset.saturating_add(lines).min(maximum)
+            } else {
+                offset.min(maximum).saturating_sub(lines)
+            });
+        }
+    }
+    /// MASTER has no notes: they are a work room's status board, and MASTER is
+    /// where the human talks to orchestrators.
+    pub(super) fn room_has_notes(&self) -> bool {
+        self.room
+            .and_then(|id| self.snapshot.state.room(id))
+            .is_some_and(|room| room.kind != RoomKind::Master)
+    }
+
+    /// Starting to edit the notes brings their caret back into view.
+    fn reveal_notes_caret(&mut self) {
+        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
+            local.notes_scroll = None;
+        }
+    }
+    fn scroll_notes(&mut self, forward: bool, lines: usize) {
+        if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
+            let offset = local.notes_scroll.unwrap_or(self.view.notes_scroll);
+            let maximum = self
+                .view
+                .notes_rows
+                .saturating_sub(usize::from(self.view.notes.height));
+            local.notes_scroll = Some(if forward {
+                offset.saturating_add(lines).min(maximum)
+            } else {
+                offset.min(maximum).saturating_sub(lines)
+            });
+        }
+    }
+    fn toggle_sound(&mut self, target: SoundTarget) {
+        match target {
+            SoundTarget::Room(room) => {
+                if let Some(enabled) = self
+                    .snapshot
+                    .state
+                    .room(room)
+                    .map(|room| room.sound_enabled())
+                {
+                    self.queue(BusCommand::SetRoomSound(room, !enabled), Effect::None);
+                }
+            }
+            SoundTarget::AllRooms => {
+                // Like a tri-state checkbox: only all-on turns off; off or
+                // mixed turns every room on.
+                let enabled = self.all_rooms_sound().0 != Some(true);
+                // Shown at once when there are no rooms; the coordinator's
+                // saved copy and the rooms' snapshot follow.
+                self.settings.room_sound.enabled = enabled;
+                self.queue(BusCommand::SetAllRoomsSound(enabled), Effect::None);
+            }
+        }
+    }
+    /// Moves a sound row to the next or previous sound (Default first, then
+    /// the system sounds) and plays it as a preview.
+    pub(super) fn cycle_sound(&mut self, target: SoundTarget, forward: bool) {
+        let current = match target {
+            SoundTarget::Room(room) => match self.snapshot.state.room(room) {
+                Some(room) => room.sound_name.clone(),
+                None => return,
+            },
+            // Mixed sounds cycle from Default.
+            SoundTarget::AllRooms => self.all_rooms_sound().1.flatten(),
+        };
+        let mut choices: Vec<Option<String>> = vec![None];
+        choices.extend(self.system_sounds.iter().flatten().cloned().map(Some));
+        let index = choices
+            .iter()
+            .position(|choice| match (choice, &current) {
+                (Some(choice), Some(current)) => choice.eq_ignore_ascii_case(current),
+                (choice, current) => choice.is_none() && current.is_none(),
+            })
+            .unwrap_or(0);
+        let next = if forward {
+            (index + 1) % choices.len()
+        } else {
+            (index + choices.len() - 1) % choices.len()
+        };
+        let choice = choices.swap_remove(next);
+        if let Some(config) = &self.sound_config {
+            crate::sound::play_named(choice.as_deref(), config);
+        }
+        let command = match target {
+            SoundTarget::Room(room) => BusCommand::SetRoomSoundName(room, choice),
+            SoundTarget::AllRooms => {
+                self.settings.room_sound.name = choice.clone();
+                BusCommand::SetAllRoomsSoundName(choice)
+            }
+        };
+        self.queue(command, Effect::None);
+    }
+    /// A sound name as Settings shows it, noting one no longer installed.
+    pub(super) fn sound_label(&self, name: Option<&str>) -> String {
+        match name {
+            None => crate::sound::DEFAULT_SOUND_NAME.into(),
+            Some(name)
+                if self.system_sounds.as_ref().is_some_and(|sounds| {
+                    !sounds.iter().any(|sound| sound.eq_ignore_ascii_case(name))
+                }) =>
+            {
+                format!("{name} (missing)")
+            }
+            Some(name) => name.to_owned(),
+        }
+    }
+    /// Keeps the keyboard-focused sound row inside the scrolled Settings list.
+    fn reveal_settings_field(&mut self) {
+        let lines = self.sound_settings_lines();
+        let Some(line) = lines.iter().position(|line| {
+            matches!(line, super::render::SoundSettingsLine::Sound { field, .. } if *field == self.settings_field)
+        }) else {
+            self.settings_scroll = 0;
+            return;
+        };
+        // Bring a group heading into view along with its first row.
+        let line = match line.checked_sub(1).map(|above| &lines[above]) {
+            Some(super::render::SoundSettingsLine::Heading(_)) => line - 1,
+            _ => line,
+        };
+        let height = usize::from(self.view.settings_list.height.max(1));
+        if line < self.settings_scroll {
+            self.settings_scroll = line;
+        } else if line >= self.settings_scroll + height {
+            self.settings_scroll = line + 1 - height;
+        }
+    }
+    fn scroll_help(&mut self, forward: bool, lines: usize) {
+        if let Some(Form::Help { scroll }) = &mut self.form {
+            *scroll = if forward {
+                self.view
+                    .help_scroll
+                    .saturating_add(lines)
+                    .min(self.view.help_max_scroll)
+            } else {
+                self.view.help_scroll.saturating_sub(lines)
+            };
+        }
+    }
+    pub fn open_terminal(&mut self, agent: AgentId) {
+        self.clear_selection();
+        self.terminal = Some(agent);
+        self.target_pane = None;
+        self.form = None;
+        self.recipient_menu = false;
+        self.queue(BusCommand::LeaveRoom, Effect::None);
+        self.queue(BusCommand::FocusTerminal(agent), Effect::None);
+    }
+    pub fn open_room(&mut self, room: RoomId) {
+        self.clear_selection();
+        if let Some(row) = super::render::sidebar_room_row(&self.snapshot.state, room, Some(room))
+            .filter(|_| self.view.sidebar_body.height > 0)
+        {
+            let capacity = usize::from(self.view.sidebar_body.height.max(1));
+            if row < self.sidebar_scroll {
+                self.sidebar_scroll = row;
+            } else if row >= self.sidebar_scroll + capacity {
+                self.sidebar_scroll = row + 1 - capacity;
+            }
+        }
+        self.file_scroll = 0;
+        self.detail_path = None;
+        self.room = Some(room);
+        self.terminal = None;
+        self.target_pane = None;
+        self.form = None;
+        self.rename = None;
+        self.notes_focus = false;
+        self.recipient_menu = false;
+        self.main_scroll = 0;
+        self.history_follow_tail = true;
+        self.recipient_scroll = 0;
+        self.queue(BusCommand::SelectRoom(room), Effect::None);
+    }
+    pub fn quote(&mut self, request: RequestId) {
+        let Some(room) = self.room else {
+            return;
+        };
+        let Some((agent, text)) = super::history::reply(&self.snapshot.state, room, request) else {
+            return;
+        };
+        let Some(name) = self.snapshot.state.agent(agent).map(|a| a.name.as_str()) else {
+            return;
+        };
+        let quote = format!(
+            "{name}: \"{}\"\n",
+            text.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        if let Some(local) = self.locals.get_mut(&room) {
+            // A leftover mouse selection must not be replaced by the quote.
+            local.text.anchor = None;
+            local.text.cursor = local.text.text.len();
+            if !local.text.text.is_empty() && !local.text.text.ends_with('\n') {
+                local.text.insert("\n");
+            }
+            local.text.insert(&quote);
+        }
+        self.notes_focus = false;
+        self.recipient_menu = false;
+        self.text_changed(room);
+    }
+    /// The work rooms a new orchestrator can take: each work room has at most one.
+    fn orchestratable_rooms(&self) -> Vec<RoomId> {
+        let state = &self.snapshot.state;
+        state
+            .rooms()
+            .filter(|room| {
+                room.kind == RoomKind::Work
+                    && !room.deletion_pending
+                    && state.orchestrator_of(room.id).is_none()
+            })
+            .map(|room| room.id)
+            .collect()
+    }
+    /// Steps the new orchestrator's room through the work rooms without one.
+    /// There is no "no room" choice: an orchestrator exists only for its room.
+    fn cycle_orchestrates(&mut self, forward: bool) {
+        let choices = self.orchestratable_rooms();
+        if let Some(Form::Agent {
+            orchestrates: Some(choice),
+            ..
+        }) = &mut self.form
+        {
+            choice.0 = match choice.0.and_then(|c| choices.iter().position(|r| *r == c)) {
+                _ if choices.is_empty() => None,
+                None => Some(choices[0]),
+                Some(index) => Some(
+                    choices[if forward {
+                        (index + 1) % choices.len()
+                    } else {
+                        (index + choices.len() - 1) % choices.len()
+                    }],
+                ),
+            };
+        }
+        self.refill_orchestrator_prompt();
+    }
+    pub(super) fn is_master_room(&self, room: RoomId) -> bool {
+        self.snapshot
+            .state
+            .room(room)
+            .is_some_and(|room| room.kind == RoomKind::Master)
+    }
+    fn start_rename(&mut self, target: RenameTarget) {
+        if let RenameTarget::Room(id) = target {
+            if self.is_master_room(id) {
+                self.error = Some(ModelError::MasterRoomFixed.to_string());
+                return;
+            }
+        }
+        let name = match target {
+            RenameTarget::Room(id) => self.snapshot.state.room(id).map(|r| r.name.clone()),
+            RenameTarget::Agent(id) => self.snapshot.state.agent(id).map(|a| a.name.clone()),
+        };
+        if let Some(name) = name {
+            self.rename = Some(Rename {
+                target,
+                editor: Editor::new(name),
+            });
+        }
+    }
+    fn open_form(&mut self, form: Form) {
+        self.clear_selection();
+        if self.failed.is_empty() {
+            // Dismiss only a handled UI operation's matching snapshot copy,
+            // not unrelated background/runtime failures or unsaved drafts.
+            if self.error.is_some() && self.error == self.snapshot.error {
+                self.dismissed_snapshot_error = self.error.clone();
+            }
+            self.error = None;
+        }
+        self.form = Some(form);
+        self.terminal = None;
+        self.recipient_menu = false;
+        self.queue(BusCommand::LeaveRoom, Effect::None);
+        self.query_paths();
+    }
+    pub(super) fn action(&mut self, action: Action) {
+        match action {
+            Action::Delete(target) => self.start_delete(target),
+            Action::CancelDelete => self.cancel_delete(),
+            Action::ConfirmDelete => self.confirm_delete(),
+            Action::ScrollFiles(forward) => {
+                self.file_scroll = if forward {
+                    self.file_scroll.saturating_add(1)
+                } else {
+                    self.file_scroll.saturating_sub(1)
+                };
+                self.detail_path = None;
+            }
+            Action::Room(room) => self.open_room(room),
+            Action::Agent(agent) => self.open_terminal(agent),
+            Action::NewRoom => self.open_form(Form::Room(Editor::default())),
+            Action::NewAgent => {
+                let master = self.room.is_some_and(|room| self.is_master_room(room));
+                self.open_form(Form::Agent {
+                    name: Editor::default(),
+                    provider: None,
+                    provider_cursor: forms::provider_choices(master)[0],
+                    cwd: Editor::new("~/".into()),
+                    args: Box::new(Editor::default()),
+                    field: 0,
+                    // Starts on the first work room without an orchestrator.
+                    orchestrates: master
+                        .then(|| Orchestrates(self.orchestratable_rooms().first().copied())),
+                    prompt: master.then(|| {
+                        Box::new(PromptField {
+                            editor: Editor::default(),
+                            filled: String::new(),
+                        })
+                    }),
+                });
+                self.refill_orchestrator_prompt();
+            }
+            Action::Orchestrates => {
+                if let Some(Form::Agent { field, .. }) = &mut self.form {
+                    *field = ORCHESTRATES_FIELD;
+                }
+                self.cycle_orchestrates(true);
+            }
+            Action::Notes => {
+                if self.room_has_notes() {
+                    if !self.notes_focus {
+                        self.reveal_notes_caret();
+                    }
+                    self.notes_focus = true;
+                    self.recipient_menu = false;
+                }
+            }
+            Action::Composer => {
+                self.notes_focus = false;
+                self.recipient_menu = false;
+            }
+            Action::Recipients => {
+                self.recipient_menu = !self.recipient_menu;
+                self.notes_focus = false;
+            }
+            Action::Recipient(id) => self.toggle_recipient(id),
+            Action::Files => self.open_form(Form::Files(Editor::new("~/".into()))),
+            Action::RemoveFile(path) => {
+                if let Some(room) = self.room {
+                    let before = self.failed.len();
+                    self.failed.retain(|p| !matches!(&p.command,BusCommand::AttachFile(id,input) if *id==room && std::path::Path::new(input)==path));
+                    if before != self.failed.len() {
+                        self.error = None;
+                        return;
+                    }
+                    self.queue(BusCommand::RemoveFile(room, path), Effect::Files(room));
+                }
+            }
+            Action::FileDetail(path) => self.detail_path = Some(path.display().to_string()),
+            Action::Details(agent) => {
+                if let Some(a) = self.snapshot.state.agent(agent) {
+                    self.queue(
+                        BusCommand::SetDetails(agent, !a.details_disclosed),
+                        Effect::None,
+                    );
+                }
+            }
+            Action::Quote(agent) => self.quote(agent),
+            Action::Field(index) => {
+                if let Some(Form::Agent { field, .. }) = &mut self.form {
+                    *field = index;
+                }
+                self.query_paths();
+            }
+            Action::Provider(kind) => {
+                if let Some(Form::Agent {
+                    provider,
+                    provider_cursor,
+                    field,
+                    ..
+                }) = &mut self.form
+                {
+                    *provider = Some(kind);
+                    *provider_cursor = kind;
+                    *field = 2;
+                }
+                self.query_paths();
+            }
+            Action::Suggestion(index) => {
+                self.suggestions.selected = index;
+                self.complete_path();
+            }
+            Action::Settings => {
+                self.settings_field = 0;
+                self.settings_scroll = 0;
+                if self.system_sounds.is_none() {
+                    self.system_sounds = Some(
+                        crate::sound::system_sounds()
+                            .into_iter()
+                            .map(|sound| sound.name)
+                            .collect(),
+                    );
+                }
+                self.open_form(Form::Settings);
+            }
+            Action::ToggleSound(target) => {
+                if let Some(index) = self
+                    .sound_settings_targets()
+                    .iter()
+                    .position(|t| *t == target)
+                {
+                    self.settings_field = index + 1;
+                }
+                self.toggle_sound(target);
+            }
+            Action::CycleSound(target, forward) => {
+                if let Some(index) = self
+                    .sound_settings_targets()
+                    .iter()
+                    .position(|t| *t == target)
+                {
+                    self.settings_field = index + 1;
+                }
+                self.cycle_sound(target, forward);
+            }
+            Action::ToggleColorBlindMode => self.toggle_color_blind_mode(),
+            Action::Cancel => {
+                if let Some(room) = self.room {
+                    self.open_room(room);
+                } else {
+                    self.form = None;
+                }
+            }
+            Action::Add => self.add(),
+        }
+    }
+    fn toggle_recipient(&mut self, id: Option<AgentId>) {
+        let Some(room) = self.room else {
+            return;
+        };
+        let all: AgentRecipients = self
+            .snapshot
+            .state
+            .agents()
+            .filter(|a| a.room_id == room)
+            .map(|a| a.id)
+            .collect();
+        if let Some(local) = self.locals.get_mut(&room) {
+            if let Some(id) = id {
+                if !local.recipients.remove(&id) {
+                    local.recipients.insert(id);
+                }
+            } else if local.recipients.len() == all.len()
+                && all.iter().all(|id| local.recipients.contains(id))
+            {
+                local.recipients.clear();
+            } else {
+                local.recipients = all;
+            }
+        }
+        self.recipients_changed(room);
+    }
+    fn insert(&mut self, text: &str) {
+        if let Some(rename) = &mut self.rename {
+            rename.editor.insert(text);
+            return;
+        }
+        if let Some(form) = &mut self.form {
+            if let Some(editor) = form.editor_mut() {
+                editor.insert(text);
+            }
+            self.refill_orchestrator_prompt();
+            self.query_paths();
+            return;
+        }
+        let Some(room) = self.room else {
+            return;
+        };
+        if let Some(local) = self.locals.get_mut(&room) {
+            if self.notes_focus {
+                local.notes.insert(text);
+            } else {
+                local.history_index = None;
+                local.live_draft = None;
+                local.text.insert(text);
+            }
+        }
+        self.pending_line_continue = false;
+        self.last_esc = None;
+        if self.notes_focus {
+            self.notes_changed(room);
+        } else {
+            self.text_changed(room);
+        }
+    }
+    fn key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        if self.rename.is_some() {
+            match code {
+                KeyCode::Esc => self.rename = None,
+                KeyCode::Enter => {
+                    if let Some(rename) = self.rename.take() {
+                        let cmd = match rename.target {
+                            RenameTarget::Room(id) => {
+                                BusCommand::RenameRoom(id, rename.editor.text)
+                            }
+                            RenameTarget::Agent(id) => {
+                                BusCommand::RenameAgent(id, rename.editor.text)
+                            }
+                        };
+                        self.queue(cmd, Effect::None);
+                    }
+                }
+                KeyCode::Char(c)
+                    if !modifiers.intersects(
+                        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                    ) =>
+                {
+                    self.insert(&c.to_string())
+                }
+                _ => {
+                    if let Some(rename) = &mut self.rename {
+                        rename.editor.key(code, modifiers);
+                    }
+                }
+            }
+            return;
+        }
+        if self.form.is_some() {
+            self.form_key(code, modifiers);
+            return;
+        }
+        if self.recipient_menu {
+            let ids: Vec<_> = self
+                .snapshot
+                .state
+                .agents()
+                .filter(|a| Some(a.room_id) == self.room)
+                .map(|a| a.id)
+                .collect();
+            match code {
+                KeyCode::Esc | KeyCode::Tab => self.recipient_menu = false,
+                KeyCode::Up => self.recipient_index = self.recipient_index.saturating_sub(1),
+                KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(ids.len()),
+                KeyCode::Enter | KeyCode::Char(' ') => self.toggle_recipient(
+                    self.recipient_index
+                        .checked_sub(1)
+                        .and_then(|i| ids.get(i).copied()),
+                ),
+                _ => {}
+            }
+            return;
+        }
+        if self.chat_search.is_some() {
+            self.chat_search_key(code, modifiers);
+            return;
+        }
+        if self.history_search.is_some() && !self.notes_focus {
+            self.search_key(code, modifiers);
+            return;
+        }
+        if !matches!(code, KeyCode::Esc) {
+            self.last_esc = None;
+        }
+        match (code, modifiers) {
+            (KeyCode::F(2), _) => {
+                if let Some(id) = self.terminal {
+                    self.start_rename(RenameTarget::Agent(id));
+                } else if let Some(id) = self.room {
+                    self.start_rename(RenameTarget::Room(id));
+                }
+            }
+            (KeyCode::F(3), _) => {
+                if self.room_has_notes() {
+                    if !self.notes_focus {
+                        self.reveal_notes_caret();
+                    }
+                    self.notes_focus = !self.notes_focus;
+                }
+            }
+            (KeyCode::Char('e' | 'E'), modifiers)
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && modifiers.contains(KeyModifiers::SHIFT)
+                    && !self.notes_focus =>
+            {
+                if let Some(local) = self.room.and_then(|room| self.locals.get_mut(&room)) {
+                    local.composer_size = if local.composer_size == ComposerSize::Full
+                        || (self.view.composer.height > 0
+                            && self.view.composer.height == self.view.composer_max_height)
+                    {
+                        ComposerSize::Compact
+                    } else {
+                        ComposerSize::Full
+                    };
+                }
+            }
+            (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) if self.notes_focus => {
+                self.scroll_notes(
+                    code == KeyCode::PageDown,
+                    usize::from(self.view.notes.height.saturating_sub(1).max(1)),
+                );
+            }
+            (KeyCode::PageUp | KeyCode::PageDown, KeyModifiers::NONE) if !self.notes_focus => {
+                self.scroll_composer(
+                    code == KeyCode::PageDown,
+                    usize::from(self.view.composer.height.saturating_sub(1).max(1)),
+                );
+            }
+            (KeyCode::Char('r' | 'R'), KeyModifiers::CONTROL) if !self.notes_focus => {
+                self.cycle_history_search();
+            }
+            (KeyCode::Char('r' | 'R'), modifiers)
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.action(Action::NewRoom);
+            }
+            (KeyCode::Char('s' | 'S'), KeyModifiers::CONTROL) if !self.notes_focus => {
+                self.stash_prompt();
+            }
+            (KeyCode::Char('v' | 'V'), KeyModifiers::CONTROL) if !self.notes_focus => {
+                self.paste_image();
+            }
+            (KeyCode::Char('n'), KeyModifiers::CONTROL) => self.action(Action::NewAgent),
+            // Ctrl+F finds in the chat history, as in most apps; Ctrl+O, free in
+            // Bus and in iTerm2, Ghostty and Windows Terminal, adds files.
+            (KeyCode::Char('f' | 'F'), KeyModifiers::CONTROL) => self.open_chat_search(),
+            (KeyCode::Char('o' | 'O'), KeyModifiers::CONTROL) => self.action(Action::Files),
+            // Pickers sit on Ctrl chords: every printable key, shifted symbols
+            // like @ and + included, must type into the composer.
+            (KeyCode::Char('p'), KeyModifiers::CONTROL) => self.action(Action::Recipients),
+            (KeyCode::Char('j'), KeyModifiers::CONTROL) | (KeyCode::Enter, KeyModifiers::SHIFT) => {
+                self.insert("\n")
+            }
+            (KeyCode::Char('\\'), modifiers)
+                if !self.notes_focus && modifiers.difference(KeyModifiers::SHIFT).is_empty() =>
+            {
+                self.insert("\\");
+                self.pending_line_continue = true;
+            }
+            (KeyCode::Enter, _) if self.notes_focus => self.insert("\n"),
+            (KeyCode::Enter, _) if self.pending_line_continue => self.finish_line_continue(),
+            (KeyCode::Enter, KeyModifiers::ALT) => {
+                if let Some(room) = self.room {
+                    self.request_queued_send(room);
+                }
+            }
+            (KeyCode::Enter, _) => {
+                if let Some(room) = self.room {
+                    self.request_send(room);
+                }
+            }
+            (KeyCode::Up | KeyCode::Down, KeyModifiers::NONE) if !self.notes_focus => {
+                self.history_or_move(code);
+            }
+            (KeyCode::Esc, _) => self.escape(),
+            (KeyCode::Char(c), _)
+                if !modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                self.insert(&c.to_string())
+            }
+            _ => {
+                if let Some(room) = self.room {
+                    if let Some(local) = self.locals.get_mut(&room) {
+                        if self.notes_focus {
+                            local.notes_scroll = None;
+                        } else {
+                            local.composer_scroll = None;
+                        }
+                        let editor = if self.notes_focus {
+                            &mut local.notes
+                        } else {
+                            &mut local.text
+                        };
+                        let changed = editor.key(code, modifiers);
+                        if changed {
+                            if self.notes_focus {
+                                self.notes_changed(room);
+                            } else {
+                                self.text_changed(room);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fn escape(&mut self) {
+        if self.notes_focus {
+            self.notes_focus = false;
+            self.last_esc = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self.last_esc.is_some_and(|last| {
+            now.saturating_duration_since(last) < std::time::Duration::from_millis(800)
+        }) {
+            self.archive_draft();
+            self.last_esc = None;
+        } else {
+            self.last_esc = Some(now);
+        }
+    }
+    fn archive_draft(&mut self) {
+        let Some(room) = self.room else {
+            return;
+        };
+        let Some(local) = self.locals.get_mut(&room) else {
+            return;
+        };
+        let text = std::mem::take(&mut local.text.text);
+        if !text.is_empty() && local.recall.last() != Some(&text) {
+            local.recall.push(text);
+        }
+        local.text = Editor::default();
+        local.history_index = None;
+        local.live_draft = None;
+        self.text_changed(room);
+    }
+    fn stash_prompt(&mut self) {
+        let Some(room) = self.room else {
+            return;
+        };
+        let Some(local) = self.locals.get_mut(&room) else {
+            return;
+        };
+        if local.text.text.is_empty() {
+            if let Some(text) = local.stash.pop() {
+                local.text = Editor::new(text);
+                local.history_index = None;
+                local.live_draft = None;
+                self.text_changed(room);
+            }
+            return;
+        }
+        local.stash.push(std::mem::take(&mut local.text.text));
+        local.text = Editor::default();
+        local.history_index = None;
+        local.live_draft = None;
+        self.text_changed(room);
+    }
+    fn finish_line_continue(&mut self) {
+        self.pending_line_continue = false;
+        let Some(room) = self.room else {
+            return;
+        };
+        if let Some(local) = self.locals.get_mut(&room) {
+            if local.text.cursor > 0 && local.text.text[..local.text.cursor].ends_with('\\') {
+                local.text.key(KeyCode::Backspace, KeyModifiers::NONE);
+            }
+            local.text.insert("\n");
+        }
+        self.text_changed(room);
+    }
+    fn paste_image(&mut self) {
+        let Some(image) = crate::platform::read_clipboard_image() else {
+            return;
+        };
+        let Some(room) = self.room else {
+            return;
+        };
+        let Some(root) = crate::bus::entry::data_dir() else {
+            self.error = Some("Could not save the clipboard image: no Bus data directory.".into());
+            return;
+        };
+        let path = match save_pasted_image(&root, room, &image.bytes, image.extension) {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::warn!(event = "bus.paste_image.write_failed", %error);
+                self.error = Some("Could not write the clipboard image.".into());
+                return;
+            }
+        };
+        self.queue(
+            BusCommand::AttachFile(room, path.display().to_string()),
+            Effect::Files(room),
+        );
+    }
+    /// A pasted image path in the OS temp folder (a macOS screenshot or a
+    /// terminal's image paste) vanishes once its app cleans up, and the message
+    /// would then lose the image. Bus keeps its own copy under the room's
+    /// attachments, as for a clipboard image; any other path is kept as given.
+    fn keep_temporary_image(&mut self, room: RoomId, path: String) -> String {
+        let Some(root) = crate::bus::entry::data_dir() else {
+            return path;
+        };
+        match copy_temporary_image(&root, room, std::path::Path::new(&path)) {
+            Ok(Some(copy)) => copy.display().to_string(),
+            Ok(None) => path,
+            Err(error) => {
+                tracing::warn!(event = "bus.paste_image.copy_failed", %error);
+                path
+            }
+        }
+    }
+    fn history_entries(&self, room: RoomId) -> Vec<String> {
+        let mut entries = self
+            .locals
+            .get(&room)
+            .map(|local| local.recall.clone())
+            .unwrap_or_default();
+        for request in self
+            .snapshot
+            .state
+            .requests()
+            .filter(|request| request.room_id == room && !request.delivery_only())
+        {
+            if entries.last() != Some(&request.prompt.text) {
+                entries.push(request.prompt.text.clone());
+            }
+        }
+        if let Some(text) = self
+            .snapshot
+            .state
+            .room(room)
+            .and_then(|room| room.latest_prompt.as_ref())
+            .map(|prompt| prompt.text.clone())
+        {
+            if entries.last() != Some(&text) {
+                entries.push(text);
+            }
+        }
+        entries
+    }
+    fn history_or_move(&mut self, code: KeyCode) {
+        let Some(room) = self.room else {
+            return;
+        };
+        let Some(local) = self.locals.get(&room) else {
+            return;
+        };
+        if code == KeyCode::Up && local.text.at_first_line() {
+            self.history_older(room);
+        } else if code == KeyCode::Down && local.text.at_last_line() {
+            self.history_newer(room);
+        } else if let Some(local) = self.locals.get_mut(&room) {
+            local.composer_scroll = None;
+            local.text.key(code, KeyModifiers::NONE);
+        }
+    }
+    fn history_older(&mut self, room: RoomId) {
+        let entries = self.history_entries(room);
+        if entries.is_empty() {
+            return;
+        }
+        let Some(local) = self.locals.get_mut(&room) else {
+            return;
+        };
+        let index = match local.history_index {
+            None => {
+                local.live_draft = Some(local.text.text.clone());
+                entries.len() - 1
+            }
+            Some(0) => 0,
+            Some(index) => index - 1,
+        };
+        local.history_index = Some(index);
+        local.text = Editor::new(entries[index].clone());
+        self.text_changed(room);
+    }
+    fn history_newer(&mut self, room: RoomId) {
+        let entries = self.history_entries(room);
+        let Some(local) = self.locals.get_mut(&room) else {
+            return;
+        };
+        match local.history_index {
+            None => {}
+            Some(index) if index + 1 < entries.len() => {
+                local.history_index = Some(index + 1);
+                local.text = Editor::new(entries[index + 1].clone());
+                self.text_changed(room);
+            }
+            Some(_) => {
+                local.history_index = None;
+                let draft = local.live_draft.take().unwrap_or_default();
+                local.text = Editor::new(draft);
+                self.text_changed(room);
+            }
+        }
+    }
+    fn cycle_history_search(&mut self) {
+        let Some(room) = self.room else {
+            return;
+        };
+        if self.history_entries(room).is_empty() {
+            return;
+        }
+        match &mut self.history_search {
+            None => {
+                let live_draft = self
+                    .locals
+                    .get(&room)
+                    .map(|local| local.text.text.clone())
+                    .unwrap_or_default();
+                self.history_search = Some(HistorySearch {
+                    query: String::new(),
+                    selected: 0,
+                    live_draft,
+                });
+            }
+            Some(search) => search.selected = search.selected.saturating_add(1),
+        }
+        self.apply_search(room);
+    }
+    pub(super) fn filtered_history(&self, room: RoomId, query: &str) -> Vec<String> {
+        let query = query.to_lowercase();
+        self.history_entries(room)
+            .into_iter()
+            .rev()
+            .filter(|text| query.is_empty() || text.to_lowercase().contains(&query))
+            .collect()
+    }
+    fn apply_search(&mut self, room: RoomId) {
+        let Some(search) = &self.history_search else {
+            return;
+        };
+        let matches = self.filtered_history(room, &search.query);
+        if matches.is_empty() {
+            return;
+        }
+        let selected = search.selected % matches.len();
+        let text = matches[selected].clone();
+        if let Some(search) = &mut self.history_search {
+            search.selected = selected;
+        }
+        if let Some(local) = self.locals.get_mut(&room) {
+            local.text = Editor::new(text);
+            local.history_index = None;
+        }
+        self.text_changed(room);
+    }
+    fn cancel_search(&mut self) {
+        let Some(search) = self.history_search.take() else {
+            return;
+        };
+        let Some(room) = self.room else {
+            return;
+        };
+        if let Some(local) = self.locals.get_mut(&room) {
+            local.text = Editor::new(search.live_draft);
+            local.history_index = None;
+            local.live_draft = None;
+        }
+        self.text_changed(room);
+    }
+    fn search_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        let Some(room) = self.room else {
+            return;
+        };
+        match (code, modifiers) {
+            (KeyCode::Esc, _) => self.cancel_search(),
+            (KeyCode::Enter, _) => self.history_search = None,
+            (KeyCode::Char('r' | 'R'), KeyModifiers::CONTROL) => {
+                if let Some(search) = &mut self.history_search {
+                    search.selected = search.selected.saturating_add(1);
+                }
+                self.apply_search(room);
+            }
+            (KeyCode::Backspace, _) => {
+                if let Some(search) = &mut self.history_search {
+                    search.query.pop();
+                    search.selected = 0;
+                }
+                self.apply_search(room);
+            }
+            (KeyCode::Char(c), modifiers)
+                if !modifiers.intersects(
+                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
+                ) =>
+            {
+                if let Some(search) = &mut self.history_search {
+                    search.query.push(c);
+                    search.selected = 0;
+                }
+                self.apply_search(room);
+            }
+            _ => {}
+        }
+    }
+    fn form_key(&mut self, code: KeyCode, modifiers: KeyModifiers) {
+        if code == KeyCode::Esc {
+            self.action(Action::Cancel);
+            return;
+        }
+        if matches!(self.form, Some(Form::Settings)) {
+            let targets = self.sound_settings_targets();
+            match code {
+                KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
+                KeyCode::Down => self.settings_field = (self.settings_field + 1).min(targets.len()),
+                // Enter alone toggles (Space is deliberately inert in Settings).
+                KeyCode::Enter => match self.settings_field {
+                    0 => self.toggle_color_blind_mode(),
+                    field => {
+                        if let Some(target) = targets.get(field - 1) {
+                            self.toggle_sound(*target);
+                        }
+                    }
+                },
+                KeyCode::Left | KeyCode::Right => {
+                    if let Some(target) = self
+                        .settings_field
+                        .checked_sub(1)
+                        .and_then(|i| targets.get(i))
+                    {
+                        self.cycle_sound(*target, code == KeyCode::Right);
+                    }
+                }
+                _ => {}
+            }
+            self.reveal_settings_field();
+            return;
+        }
+        if matches!(self.form, Some(Form::Help { .. })) {
+            match code {
+                KeyCode::Enter => self.action(Action::Cancel),
+                KeyCode::Up | KeyCode::Down => self.scroll_help(code == KeyCode::Down, 1),
+                KeyCode::PageUp | KeyCode::PageDown => self.scroll_help(
+                    code == KeyCode::PageDown,
+                    usize::from(self.view.help.height.saturating_sub(1).max(1)),
+                ),
+                KeyCode::Home | KeyCode::End => self.scroll_help(code == KeyCode::End, usize::MAX),
+                _ => {}
+            }
+            return;
+        }
+        if matches!(code, KeyCode::Up | KeyCode::Down) && !self.suggestions.entries.is_empty() {
+            self.suggestions.selected = if code == KeyCode::Up {
+                self.suggestions.selected.saturating_sub(1)
+            } else {
+                (self.suggestions.selected + 1).min(self.suggestions.entries.len() - 1)
+            };
+            return;
+        }
+        if matches!(self.form, Some(Form::Agent { field: 1, .. }))
+            && matches!(
+                code,
+                KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Char(' ')
+                    | KeyCode::Enter
+            )
+        {
+            if let Some(Form::Agent {
+                provider,
+                provider_cursor,
+                field,
+                orchestrates,
+                ..
+            }) = &mut self.form
+            {
+                let choices = forms::provider_choices(orchestrates.is_some());
+                let index = choices
+                    .iter()
+                    .position(|choice| choice == provider_cursor)
+                    .unwrap_or(0);
+                match code {
+                    KeyCode::Left | KeyCode::Up => {
+                        *provider_cursor = choices[(index + choices.len() - 1) % choices.len()];
+                    }
+                    KeyCode::Right | KeyCode::Down => {
+                        *provider_cursor = choices[(index + 1) % choices.len()];
+                    }
+                    KeyCode::Char(' ') | KeyCode::Enter => {
+                        *provider = Some(*provider_cursor);
+                        *field = 2;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            self.query_paths();
+            return;
+        }
+        if matches!(
+            self.form,
+            Some(Form::Agent {
+                field: ORCHESTRATES_FIELD,
+                ..
+            })
+        ) && matches!(
+            code,
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Char(' ')
+        ) {
+            self.cycle_orchestrates(matches!(
+                code,
+                KeyCode::Right | KeyCode::Down | KeyCode::Char(' ')
+            ));
+            return;
+        }
+        // The system prompt is multi-line: Enter adds a line, Ctrl+Enter adds the agent.
+        if code == KeyCode::Enter
+            && !modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(
+                self.form,
+                Some(Form::Agent {
+                    field: PROMPT_FIELD,
+                    ..
+                })
+            )
+        {
+            self.insert("\n");
+            return;
+        }
+        if code == KeyCode::Enter && matches!(self.form, Some(Form::Agent { .. })) {
+            self.add();
+            return;
+        }
+        if matches!(code, KeyCode::Tab | KeyCode::Enter) && !self.suggestions.entries.is_empty() {
+            self.complete_path();
+            return;
+        }
+        if code == KeyCode::Enter && modifiers.contains(KeyModifiers::CONTROL) {
+            self.add();
+            return;
+        }
+        if code == KeyCode::Tab || code == KeyCode::BackTab || code == KeyCode::Enter {
+            let count = self.form.as_ref().map_or(0, Form::agent_field_count);
+            if let Some(Form::Agent { field, .. }) = &mut self.form {
+                *field = if code == KeyCode::BackTab {
+                    (*field + count - 1) % count
+                } else {
+                    (*field + 1) % count
+                };
+                self.query_paths();
+                return;
+            }
+            if code == KeyCode::Enter {
+                self.add();
+            }
+            return;
+        }
+        if let KeyCode::Char(c) = code {
+            if !modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+            {
+                self.insert(&c.to_string());
+                return;
+            }
+        }
+        // Modified letters are editing chords (Alt+B/F/D, Ctrl+W) or no-ops.
+        let edited = self
+            .form
+            .as_mut()
+            .and_then(Form::editor_mut)
+            .is_some_and(|editor| {
+                let before = editor.cursor;
+                editor.key(code, modifiers) || editor.cursor != before
+            });
+        if edited || !matches!(code, KeyCode::Char(_)) {
+            self.refill_orchestrator_prompt();
+            self.query_paths();
+        }
+    }
+    fn query_paths(&mut self) {
+        self.suggestions.entries.clear();
+        self.suggestions.query_id += 1;
+        if let Some((input, directories_only)) = self.form.as_ref().and_then(Form::path_query) {
+            let query_id = self.suggestions.query_id;
+            self.queue(
+                BusCommand::Suggestions {
+                    query_id,
+                    input,
+                    directories_only,
+                },
+                Effect::None,
+            );
+        }
+    }
+    fn complete_path(&mut self) {
+        let Some(entry) = self
+            .suggestions
+            .entries
+            .get(self.suggestions.selected)
+            .cloned()
+        else {
+            return;
+        };
+        if !entry.is_directory && matches!(self.form, Some(Form::Files(_))) {
+            if let Some(room) = self.room {
+                self.queue(
+                    BusCommand::AttachFile(room, entry.path.display().to_string()),
+                    Effect::Files(room),
+                );
+                self.open_room(room);
+            }
+            return;
+        }
+        if let Some(editor) = self.form.as_mut().and_then(Form::editor_mut) {
+            *editor = Editor::new(format!("{}/", entry.path.display()));
+        }
+        // Completing a directory keeps it selected; type a prefix or press Down to browse further.
+        self.suggestions.entries.clear();
+        self.suggestions.query_id += 1;
+    }
+    fn add(&mut self) {
+        if self.pending.iter().any(|p| {
+            matches!(
+                p.command,
+                BusCommand::AddAgent(_)
+                    | BusCommand::AddOrchestrator(..)
+                    | BusCommand::CreateRoom(_)
+            )
+        }) {
+            return;
+        }
+        let Some(form) = self.form.clone() else {
+            return;
+        };
+        match form {
+            Form::Help { .. } | Form::Settings => {}
+            Form::Room(editor) => {
+                self.queue(BusCommand::CreateRoom(editor.text), Effect::None);
+            }
+            Form::Agent {
+                name,
+                provider,
+                cwd,
+                args,
+                orchestrates,
+                prompt,
+                ..
+            } => {
+                let mut missing = Vec::new();
+                if name.text.trim().is_empty() {
+                    missing.push("Name");
+                }
+                if provider.is_none() {
+                    missing.push("Model");
+                }
+                if cwd.text.trim().is_empty() {
+                    missing.push("PWD");
+                }
+                if !missing.is_empty() {
+                    self.error = Some(match missing.as_slice() {
+                        [field] => format!("{field} is required."),
+                        [first, second] => format!("{first} and {second} are required."),
+                        [first, second, third] => {
+                            format!("{first}, {second}, and {third} are required.")
+                        }
+                        _ => unreachable!(),
+                    });
+                    return;
+                }
+                if orchestrates.is_some_and(|choice| choice.0.is_none()) {
+                    self.error = Some(
+                        "Orchestrates room is required: create a work room without an orchestrator first."
+                            .into(),
+                    );
+                    return;
+                }
+                // The MASTER form never offers Codex; this keeps the form and
+                // the coordinator, which refuses it too, in step.
+                if let (Some(_), Some(provider)) = (orchestrates, provider) {
+                    if let Err(error) = crate::bus::orchestrator::check_new_orchestrator(provider) {
+                        self.error = Some(error);
+                        return;
+                    }
+                }
+                let system_prompt = prompt.map(|prompt| prompt.editor.text);
+                if system_prompt
+                    .as_ref()
+                    .is_some_and(|text| text.trim().is_empty())
+                {
+                    self.error = Some("System prompt is required.".into());
+                    return;
+                }
+                self.error = None;
+                if let Some(room) = self.room {
+                    let input = AddAgent {
+                        room,
+                        name: name.text,
+                        provider: provider.expect("validated provider"),
+                        cwd: cwd.text,
+                        extra_args: args.text,
+                        consent_project_hooks: false,
+                    };
+                    let command = match orchestrates.and_then(|choice| choice.0) {
+                        Some(room) => BusCommand::AddOrchestrator(
+                            input,
+                            OrchestratorSpec {
+                                room,
+                                system_prompt,
+                            },
+                        ),
+                        None => BusCommand::AddAgent(input),
+                    };
+                    self.queue(command, Effect::None);
+                }
+            }
+            Form::Files(editor) => {
+                if let Some(room) = self.room {
+                    self.queue(
+                        BusCommand::AttachFile(room, editor.text),
+                        Effect::Files(room),
+                    );
+                    self.open_room(room);
+                }
+            }
+            Form::Consent {
+                mut input,
+                orchestrator,
+                ..
+            } => {
+                input.consent_project_hooks = true;
+                let command = match orchestrator {
+                    Some(spec) => BusCommand::AddOrchestrator(input, spec),
+                    None => BusCommand::AddAgent(input),
+                };
+                self.queue(command, Effect::None);
+            }
+        }
+    }
+}
+
+/// Saves a pasted clipboard image where later readers can still open it: the
+/// Bus data directory outlives the session, unlike the system temp directory.
+/// Naming by content keeps repeated pastes of one image to a single file.
+/// Copies `path` into the room's attachments when it is an image in a
+/// temporary folder; `Ok(None)` leaves any other path as it is.
+pub(super) fn copy_temporary_image(
+    root: &std::path::Path,
+    room: RoomId,
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    if !super::thumbnails::is_image(path) {
+        return Ok(None);
+    }
+    let Ok(canonical) = path.canonicalize() else {
+        return Ok(None);
+    };
+    // Bus's own data dir can itself live in a temp folder (tests, isolated runs).
+    let owned = root
+        .canonicalize()
+        .is_ok_and(|root| canonical.starts_with(root));
+    let temporary = [std::env::temp_dir(), "/tmp".into()]
+        .into_iter()
+        .filter_map(|dir| dir.canonicalize().ok())
+        .any(|dir| canonical.starts_with(dir));
+    if owned || !temporary {
+        return Ok(None);
+    }
+    let extension = canonical
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("png")
+        .to_ascii_lowercase();
+    save_pasted_image(root, room, &std::fs::read(&canonical)?, &extension).map(Some)
+}
+
+pub(super) fn save_pasted_image(
+    root: &std::path::Path,
+    room: RoomId,
+    bytes: &[u8],
+    extension: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    use sha2::{Digest, Sha256};
+    let dir = root.join("attachments").join(format!("room-{}", room.0));
+    std::fs::create_dir_all(&dir)?;
+    let digest = format!("{:x}", Sha256::digest(bytes));
+    let path = dir.join(format!("paste-{}.{extension}", &digest[..16]));
+    if !path.is_file() {
+        // Write beside the target and rename so readers never see a partial image.
+        let partial = dir.join(format!(".{}.partial-{}", &digest[..16], std::process::id()));
+        std::fs::write(&partial, bytes)?;
+        std::fs::rename(&partial, &path)?;
+    }
+    Ok(path)
+}
