@@ -331,7 +331,7 @@ class BusQualityTest(unittest.TestCase):
                 self.assertNotIn("--no-clean", run.call_args.args)
                 if not nextest:
                     self.assertEqual(
-                        run.call_args.args[-3:], ("--", "--skip", "server::headless::")
+                        run.call_args.args[-3:], ("--", "--skip", "server::tests::")
                     )
 
     def test_server_prefix_changes_apply_to_nextest_and_libtest_in_both_lanes(self):

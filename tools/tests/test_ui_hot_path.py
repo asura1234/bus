@@ -80,21 +80,30 @@ fn f<'a>(s: &'a str) { crate::protocol::read(s); }
 
 def test_globs_deduplicate_files_and_exclude_test_sources(tmp_path, monkeypatch):
     for name in (
-        "src/ui.rs",
-        "src/ui/draw.rs",
-        "src/ui/tests.rs",
-        "src/ui/draw_tests.rs",
-        "src/ui/tests/draw.rs",
+        "src/server/rendering/surface/mod.rs",
+        "src/server/rendering/surface/draw.rs",
+        "src/server/rendering/surface/tests.rs",
+        "src/server/rendering/surface/draw_tests.rs",
+        "src/server/rendering/surface/tests/draw.rs",
+        "src/server/workspaces/agent_panel.rs",
     ):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fn render() {}", encoding="utf-8")
     monkeypatch.setitem(
-        hot_path.SOURCES, "hot_path", ("src/ui.rs", "src/ui/**/*.rs", "src/ui/draw.rs")
+        hot_path.SOURCES,
+        "hot_path",
+        (
+            "src/server/rendering/surface/mod.rs",
+            "src/server/rendering/surface/**/*.rs",
+            "src/server/rendering/surface/draw.rs",
+            "src/server/workspaces/agent_panel.rs",
+        ),
     )
     assert hot_path.source_paths("hot_path", tmp_path) == (
-        tmp_path / "src/ui/draw.rs",
-        tmp_path / "src/ui.rs",
+        tmp_path / "src/server/rendering/surface/draw.rs",
+        tmp_path / "src/server/rendering/surface/mod.rs",
+        tmp_path / "src/server/workspaces/agent_panel.rs",
     )
 
 

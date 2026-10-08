@@ -33,7 +33,7 @@ RUST_EXCLUDE = "|".join(
         *("/" + re.escape(path) + "$" for path in GENERATED_RUST),
     )
 )
-IN_PROCESS_SERVER_TESTS = "server::headless::"
+IN_PROCESS_SERVER_TESTS = "server::tests::"
 ARCHITECTURE_TESTS = (
     "tools/tests/test_ui_hot_path.py",
     "tools/tests/test_import_boundaries.py",
