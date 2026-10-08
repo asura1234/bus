@@ -64,6 +64,21 @@ These rules are binding for every Bus orchestrator. Commands use an installed
 - **Always run `worktree-close` after a merge.** Have an agent run it when a PR
   is merged, or when a temporary worktree is merged into the local feature
   branch. *Why:* stale worktrees and branches pile up and get edited by mistake.
+- **Check data-volume free space at kickoff and every phase boundary.** Delegate
+  a `df` check. Below 30 GiB, declare a `DISK HOLD`: no builds, benchmarks or
+  large copies until space is back. Worktree-heavy spikes, best-of-N and
+  parallel workers fill disks quickly; one incident's roughly 12 worktrees of
+  6–18 GB each filled a 460 GB volume and paused Bus storage.
+- **Delegate disk cleanup without losing work.** Have a worker run
+  `worktree-close` for worktrees no longer needed: finished, killed and not
+  retained by the workflow, or unrelated stale ones. First confirm their work
+  is committed and pushed and needed baselines and metrics are archived outside
+  the worktree. Skip and report unpushed work; never force removal; keep remote
+  branches. Then run `reclaim-disk-space` for regenerable caches. Ask the human
+  before removing worktrees outside this room's effort or deleting artifacts.
+- **Build Bus into a separate target directory.** Set `CARGO_TARGET_DIR` away
+  from the live Bus repository's `target` so a build cannot replace the binary
+  used by running agents.
 - **On a dev build, fix Bus bugs as you meet them.** `bus state` reports
   `build.profile`: `debug` is a dev build (`./run dev` builds one), `release` is
   not. On a dev build, when you hit a Bus bug, dispatch a worker to fix it in the
