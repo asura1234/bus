@@ -2,12 +2,16 @@
 
 #![cfg(unix)]
 
+// Separate instances retain each original suite's cleanup registry and support test identities.
+#[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
 pub mod detach_reattach_support;
 
+#[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
 pub mod server_headless_support;
 
+#[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
 pub mod multi_client_support;
 

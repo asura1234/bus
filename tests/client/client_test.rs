@@ -2,6 +2,8 @@
 
 #![cfg(unix)]
 
+// Separate instances retain the original suite's cleanup registry and support test identities.
+#[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
 pub mod client_mode_support;
 
@@ -236,6 +238,7 @@ mod client_mode {
     include!("output_test.rs");
 }
 
+#[allow(clippy::duplicate_mod)]
 #[path = "../support/process_test.rs"]
 pub mod cross_area_support;
 

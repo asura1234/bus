@@ -412,6 +412,33 @@ fn process_exists(pid: libc::pid_t) -> bool {
     }
 }
 
+pub fn unique_test_dir() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    PathBuf::from(format!("/tmp/hapi-{}-{nanos}", std::process::id()))
+}
+
+pub fn test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(target_os = "linux")]
+pub fn wait_for_path(path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("path did not appear at {}", path.display());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,31 +493,4 @@ mod tests {
             "installed binaries must not be considered test-owned"
         );
     }
-}
-
-pub fn unique_test_dir() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    PathBuf::from(format!("/tmp/hapi-{}-{nanos}", std::process::id()))
-}
-
-pub fn test_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-#[cfg(target_os = "linux")]
-pub fn wait_for_path(path: &Path, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if path.exists() {
-            return;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-    panic!("path did not appear at {}", path.display());
 }
