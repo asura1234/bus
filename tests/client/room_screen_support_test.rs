@@ -189,6 +189,21 @@ impl RoomClient {
     }
 
     pub(super) fn observe(&mut self, needle: &str) {
+        self.observe_matching(needle, |screen| screen.text().contains(needle));
+    }
+
+    pub(super) fn observe_room(&mut self, name: &str) {
+        let needle = format!("# {name}");
+        // In the fixed 100-column fixture the sidebar occupies columns 0..28.
+        // Its room labels cannot attest that the active pane has switched yet.
+        self.observe_matching(&needle, |screen| screen.row_from(28, 1).contains(&needle));
+    }
+
+    fn observe_matching(
+        &mut self,
+        needle: &str,
+        ready: impl Fn(&room_host_screen::HostScreen) -> bool,
+    ) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -202,7 +217,7 @@ impl RoomClient {
                 .recv_timeout(remaining)
                 .expect("client PTY output");
             self.screen.write(&bytes);
-            if self.screen.text().contains(needle) {
+            if ready(&self.screen) {
                 // Drain the same repaint's trailing bytes before observing cells.
                 while Instant::now() < deadline {
                     match self.output.recv_timeout(Duration::from_millis(50)) {

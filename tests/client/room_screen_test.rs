@@ -13,7 +13,7 @@ fn a_screen_switch_repaints_stale_cells_in_the_right_margin() {
     client.control("room.create", serde_json::json!({"name":"margin-first"}));
     client.control("room.create", serde_json::json!({"name":"margin-other"}));
     client.control("room.focus", serde_json::json!({"room":"margin-first"}));
-    client.observe("# margin-first");
+    client.observe_room("margin-first");
     assert!(
         client.screen.margin().trim().is_empty(),
         "Bus never draws in the margin"
@@ -32,7 +32,7 @@ fn a_screen_switch_repaints_stale_cells_in_the_right_margin() {
     );
 
     client.control("room.focus", serde_json::json!({"room":"margin-other"}));
-    client.observe("# margin-other");
+    client.observe_room("margin-other");
     assert!(
         client.screen.margin().trim().is_empty(),
         "{:?}",
