@@ -887,7 +887,7 @@ normally, with these changes:
 
 ## End-to-end check
 
-`tools/acceptance/e2e.py` checks message round trips against real Claude Code,
+`tools/acceptance/e2e_test.py` checks message round trips against real Claude Code,
 Codex and Cursor agents. It spends real model usage, so it runs only with
 `--allow-live-models`, which `just e2e` passes for you:
 
