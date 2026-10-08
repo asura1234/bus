@@ -205,7 +205,7 @@ struct Worker {
     durable_state: BusState,
     store: JsonStore,
     data_dir: PathBuf,
-    _lease: std::fs::File,
+    _lease: CoordinatorLease,
     transport: Box<dyn Transport>,
     revision: u64,
     last_command_id: u64,
@@ -233,6 +233,23 @@ struct Worker {
     sound_dirs: Option<Vec<PathBuf>>,
 }
 
+/// Unlock while the owning handle is still open. A duplicated handle may
+/// outlive the coordinator, so closing only this handle is not sufficient.
+struct CoordinatorLease(std::fs::File);
+
+impl Drop for CoordinatorLease {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.unlock() {
+            tracing::warn!(
+                event = "bus.coordinator.unlock_failed",
+                raw_os_error = ?error.raw_os_error(),
+                %error,
+                "Coordinator lock could not be explicitly released"
+            );
+        }
+    }
+}
+
 const STORAGE_RETRY_MIN: Duration = Duration::from_secs(1);
 const STORAGE_RETRY_MAX: Duration = Duration::from_secs(30);
 const STORAGE_RETRYING: &str = "Storage paused; retrying";
@@ -252,6 +269,7 @@ impl Worker {
         let lease = super::io::lock(&data_dir.join("coordinator.lock")).map_err(|e| {
             format!("Another Bus coordinator owns this data directory, or it is inaccessible: {e}")
         })?;
+        let lease = CoordinatorLease(lease);
         let store = JsonStore::new(data_dir.join("state.json"));
         let mut state = store.load().map_err(|e| e.to_string())?.unwrap_or_default();
         // Sessions saved before MASTER existed gain it here, once, before any client sees them.
