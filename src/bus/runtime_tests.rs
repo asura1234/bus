@@ -1660,6 +1660,92 @@ fn storage_failure_prevents_send_and_startup_failure_releases_coordinator() {
 }
 
 #[test]
+fn status_only_polls_skip_disk_writes_and_recovery_checks_the_last_commit() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    let before = std::fs::read(worker.store.path()).unwrap();
+    let committed = worker.durable_state.clone();
+    let mut observed = worker.state.clone();
+    observed
+        .observe_status(agent, RuntimeStatus::Idle, 42)
+        .unwrap();
+    worker.store.fail_once_at(SaveStage::TempSync);
+    worker.apply_poll(observed).unwrap();
+    assert_eq!(std::fs::read(worker.store.path()).unwrap(), before);
+    assert_eq!(worker.durable_state, committed);
+    assert_eq!(worker.state.agent(agent).unwrap().observed_at_ms, 42);
+
+    let mut changed = worker.state.clone();
+    changed
+        .observe_status(agent, RuntimeStatus::Working, 43)
+        .unwrap();
+    assert_eq!(worker.apply_poll(changed).unwrap_err(), STORAGE_RETRYING);
+    assert_eq!(std::fs::read(worker.store.path()).unwrap(), before);
+    let (events, received) = mpsc::channel();
+    worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+    assert!(matches!(
+        received.try_recv(),
+        Ok(BusEvent::StorageRecovered)
+    ));
+    assert_eq!(worker.store.load().unwrap(), Some(worker.state.clone()));
+    assert_eq!(worker.state.agent(agent).unwrap().observed_at_ms, 42);
+
+    let mut changed = worker.state.clone();
+    changed
+        .observe_status(agent, RuntimeStatus::Working, 44)
+        .unwrap();
+    worker.apply_poll(changed).unwrap();
+    assert_eq!(worker.store.load().unwrap(), Some(worker.state.clone()));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn skipped_observation_is_saved_before_submission_and_survives_restart() {
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "keep ownership");
+    let before = std::fs::read(worker.store.path()).unwrap();
+    let mut observed = worker.state.clone();
+    observed
+        .observe_status(agent, RuntimeStatus::Idle, 85)
+        .unwrap();
+    worker.apply_poll(observed).unwrap();
+    assert_eq!(std::fs::read(worker.store.path()).unwrap(), before);
+
+    let mut submitting = worker.state.clone();
+    submitting.begin_submission(request, "launch", 0).unwrap();
+    worker.save(submitting).unwrap();
+    let on_disk = worker.store.load().unwrap().unwrap();
+    assert_eq!(
+        on_disk.request(request).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(on_disk.request(request).unwrap().progress_at_ms, Some(85));
+    assert_eq!(
+        on_disk.request(request).unwrap().submission_status_revision,
+        worker.state.agent(agent).unwrap().status_revision
+    );
+    assert!(calls.lock().unwrap().is_empty());
+
+    drop(worker);
+    let recovered = Worker::open(
+        dir.clone(),
+        Box::new(FakeTransport {
+            replies: VecDeque::new(),
+            calls: calls.clone(),
+            state_path: dir.join("state.json"),
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        recovered.state.request(request).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert!(calls.lock().unwrap().is_empty());
+    drop(recovered);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn temporary_state_write_failures_pause_then_recover_without_replaying_a_mutation() {
     for stage in [
         SaveStage::TempCreate,

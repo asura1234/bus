@@ -201,6 +201,8 @@ impl BusHandle {
 
 struct Worker {
     state: BusState,
+    /// Exact last committed model; status-only polls may advance `state` in memory.
+    durable_state: BusState,
     store: JsonStore,
     data_dir: PathBuf,
     _lease: std::fs::File,
@@ -265,6 +267,7 @@ impl Worker {
         }
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
+            durable_state: state.clone(),
             state,
             store,
             data_dir,
@@ -315,9 +318,21 @@ impl Worker {
                     status = ?agent.status, "Bus status changed");
             }
         }
+        self.durable_state = state.clone();
         self.state = state;
         self.revision += 1;
         Ok(())
+    }
+
+    fn apply_poll(&mut self, state: BusState) -> Result<(), String> {
+        if state.durable_poll_change_from(&self.state) {
+            self.save(state)
+        } else {
+            // Keep the latest observation boundary for a later submission.
+            // The submission save persists it before contacting the provider.
+            self.state = state;
+            Ok(())
+        }
     }
 
     fn storage_notice(&self) -> &'static str {
@@ -370,7 +385,9 @@ impl Worker {
             return;
         }
         match self.store.load() {
-            Ok(Some(durable)) if durable == self.state => {}
+            // Compare with the exact last commit: status-only polls may have
+            // advanced in-memory observation revisions since that write.
+            Ok(Some(durable)) if durable == self.durable_state => {}
             Ok(_) => {
                 self.require_storage_repair("divergent_or_missing");
                 return;
@@ -395,6 +412,7 @@ impl Worker {
             }
             return;
         }
+        self.durable_state = self.state.clone();
         self.storage_pause = None;
         self.error = None;
         self.revision += 1;
@@ -552,7 +570,7 @@ impl Worker {
                         .observe_status(id, RuntimeStatus::Unavailable, super::io::now_ms())
                         .map_err(|e| e.to_string())?;
                 }
-                self.save(state)?;
+                self.apply_poll(state)?;
                 return Err(format!(
                     "Herdr unavailable; queues and active requests retained: {other:?}"
                 ));
@@ -677,7 +695,7 @@ impl Worker {
                     .map_err(|e| e.to_string())?;
             }
         }
-        self.save(state)?;
+        self.apply_poll(state)?;
         for (agent, previous, current) in rebound {
             tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
                 previous_terminal_id = ?previous, terminal_id = current,
