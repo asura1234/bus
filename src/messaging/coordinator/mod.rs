@@ -828,5 +828,5 @@ fn branch_for(cwd: &Path) -> Option<String> {
 #[path = "tests/steering_test.rs"]
 mod steering_tests;
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "tests/poll_test.rs"]
 mod tests;

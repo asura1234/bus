@@ -15,8 +15,6 @@ mod ring;
 mod selection;
 #[path = "ui.rs"]
 mod state;
-#[cfg(test)]
-mod tests;
 #[path = "render/thumbnails.rs"]
 mod thumbnails;
 pub(super) use render::layout;
@@ -153,4 +151,59 @@ impl crate::client::compositor::ClientShellState {
                 .any(|p| Some(p.pane_id.as_str()) == snapshot.focused_pane_id.as_deref())
         }) && bus.terminal_ready(snapshot.focused_pane_id.as_deref())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        bus::{model::*, runtime::*},
+        input::TerminalKey,
+        raw_input::RawInputEvent,
+    };
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use std::sync::Arc;
+
+    #[path = "support_test.rs"]
+    mod support;
+    use support::*;
+
+    #[path = "deletion_test.rs"]
+    mod deletion_tests;
+
+    #[path = "sidebar_test.rs"]
+    mod sidebar_tests;
+
+    #[path = "toasts_test.rs"]
+    mod toasts_tests;
+
+    #[path = "native_shell_test.rs"]
+    mod native_shell_tests;
+
+    #[path = "chat_search_test.rs"]
+    mod chat_search_tests;
+
+    #[path = "history_markdown_test.rs"]
+    mod history_markdown_tests;
+
+    #[path = "history_slots_test.rs"]
+    mod history_slots_tests;
+
+    #[path = "history_scroll_test.rs"]
+    mod history_scroll_tests;
+
+    #[path = "keys_test.rs"]
+    mod keys_tests;
+
+    #[path = "master_test.rs"]
+    mod master_tests;
+
+    #[path = "sound_test.rs"]
+    mod sound_tests;
+
+    include!("tests/composer_test.rs");
+    include!("tests/forms_test.rs");
+    include!("tests/layout_test.rs");
+    include!("tests/attachments_test.rs");
+    include!("tests/selection_test.rs");
 }
