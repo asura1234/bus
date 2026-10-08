@@ -214,3 +214,18 @@ def test_missing_tree_or_unmapped_source_fails_closed(tmp_path):
 def test_repository_can_be_scanned_in_report_mode(capsys):
     assert boundaries.main([]) == 0
     assert "Import boundaries:" in capsys.readouterr().out
+
+
+def test_s8_input_lease_facade_keeps_client_ownership(tmp_path):
+    write_source(
+        tmp_path,
+        "src/server/example.rs",
+        "use crate::input::{InputLeaseKey, InputLeaseTable, RepeatPlan, TerminalKey};",
+    )
+    _, refs = boundaries.scan(tmp_path)
+    assert [(ref.target, ref.forbidden) for ref in refs] == [
+        ("client", True),
+        ("client", True),
+        ("client", True),
+        ("protocol", False),
+    ]
