@@ -1,11 +1,3 @@
 {
-  "rust_line_percent": 81,
-  "python_line_percent": 72,
-  "python_exclude": {
-    "tools/acceptance/e2e.py": "Opt-in live UI and real model driver; excluded from this local gate.",
-    "tools/acceptance/live_ui.py": "Requires real LLM agents and UI interaction; no headless mode.",
-    "tools/keyboard/capture_keys.py": "Manual native keyboard observation tool.",
-    "tools/keyboard/capture_key_matrix.py": "Manual native keyboard observation tool.",
-    "tools/keyboard/verify_suspicious_keys.py": "Manual native keyboard observation tool."
-  }
+  "rust_line_percent": 80
 }
