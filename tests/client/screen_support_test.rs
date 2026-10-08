@@ -83,14 +83,21 @@ impl HostScreen {
             .collect()
     }
 
-    pub(super) fn row_from(&self, x: u16, y: u32) -> String {
-        (x..self.cols).map(|col| self.cell(col, y)).collect()
-    }
-
     pub(super) fn text(&self) -> String {
         (0..u32::from(self.rows))
             .flat_map(|row| (0..self.cols).map(move |col| self.cell(col, row)))
             .collect()
+    }
+
+    pub(super) fn rows_text(&self) -> String {
+        (0..u32::from(self.rows))
+            .map(|row| {
+                (0..self.cols)
+                    .map(|col| self.cell(col, row))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 

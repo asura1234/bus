@@ -194,9 +194,11 @@ impl RoomClient {
 
     pub(super) fn observe_room(&mut self, name: &str) {
         let needle = format!("# {name}");
-        // In the fixed 100-column fixture the sidebar occupies columns 0..28.
-        // Its room labels cannot attest that the active pane has switched yet.
-        self.observe_matching(&needle, |screen| screen.row_from(28, 1).contains(&needle));
+        // Each unique room has one sidebar label. Its second occurrence is
+        // the active pane header; the sidebar alone cannot attest a switch.
+        self.observe_matching(&needle, |screen| {
+            screen.text().matches(&needle).count() == 2
+        });
     }
 
     fn observe_matching(
@@ -212,10 +214,12 @@ impl RoomClient {
                 "client did not draw {needle:?}: {}",
                 self.screen.text()
             );
-            let bytes = self
-                .output
-                .recv_timeout(remaining)
-                .expect("client PTY output");
+            let bytes = self.output.recv_timeout(remaining).unwrap_or_else(|error| {
+                panic!(
+                    "client did not draw {needle:?}: {error}\n{}",
+                    self.screen.rows_text()
+                )
+            });
             self.screen.write(&bytes);
             if ready(&self.screen) {
                 // Drain the same repaint's trailing bytes before observing cells.
