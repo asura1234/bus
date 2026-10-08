@@ -155,40 +155,125 @@ fn prompt_and_agent_reply_markdown_are_rendered() {
     );
 }
 
+/// The screen row of the first history line whose text contains `needle`, and
+/// the column where `needle` starts.
+fn locate(ui: &BusUi, needle: &str) -> (u16, u16) {
+    let text = ui.view.history_text;
+    let (index, line) = ui
+        .history
+        .cached()
+        .iter()
+        .enumerate()
+        .find(|(_, line)| line.text.contains(needle))
+        .unwrap_or_else(|| panic!("no history row contains {needle:?}"));
+    let column =
+        unicode_width::UnicodeWidthStr::width(&line.text[..line.text.find(needle).unwrap()]);
+    (
+        text.x + column as u16,
+        text.y + (index - ui.main_scroll) as u16,
+    )
+}
+
 #[test]
-fn selecting_a_rendered_agent_reply_copies_its_raw_markdown() {
+fn a_drag_inside_a_rendered_reply_selects_and_copies_only_those_characters() {
     use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
     let (mut ui, room, agent) = fixture();
     let markdown = "**bold** and [docs](https://example.com) and `code`";
     saved_exchange(&mut ui, room, agent, "literal prompt", markdown);
     ui.compute_view(100, 40);
-    let text = ui.view.history_text;
-    let (index, rendered) = ui
-        .history
-        .cached()
-        .iter()
-        .enumerate()
-        .find(|(_, line)| line.text.contains("bold and docs"))
-        .map(|(index, line)| (index, line.text.clone()))
-        .expect("rendered agent reply");
-    let row = text.y + (index - ui.main_scroll) as u16;
-
+    let (start, row) = locate(&ui, "and docs");
+    // "and docs" is 8 cells; the release column is inclusive.
     assert_eq!(
-        drag_copy(&mut ui, (text.x, row), (text.x + 1, row)).as_deref(),
-        Some(markdown)
+        drag_copy(&mut ui, (start, row), (start + 7, row)).as_deref(),
+        Some("and docs"),
+        "rendered text, not its Markdown source"
     );
 
     ui.compute_view(100, 40);
     let mut buffer = Buffer::empty(Rect::new(0, 0, 100, 40));
     ui.render(&mut buffer);
-    for x in text.x..text.x + rendered.len() as u16 {
-        assert_eq!(
-            buffer[(x, row)].bg,
-            Color::Rgb(44, 88, 56),
-            "the visible selection covers the whole raw Markdown reply"
-        );
+    let tint = Color::Rgb(44, 88, 56);
+    for x in start..start + 8 {
+        assert_eq!(buffer[(x, row)].bg, tint, "selected cell {x}");
     }
+    assert_ne!(buffer[(start - 2, row)].bg, tint, "before the press point");
+    assert_ne!(buffer[(start + 9, row)].bg, tint, "after the release point");
+}
+
+#[test]
+fn a_drag_across_two_messages_copies_the_text_between_without_layout_indents() {
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(&mut ui, room, agent, "literal prompt", "**bold** reply");
+    ui.compute_view(100, 40);
+    let (from, from_row) = locate(&ui, "prompt");
+    let (to, to_row) = locate(&ui, "bold reply");
+    assert!(to_row > from_row);
+    // From "prompt" in the human's message to "bold" in the agent's reply:
+    // the blank separator row and the reply header in between are inside the
+    // selection, so they are copied, but the four-cell reply indent is layout
+    // and is not.
+    assert_eq!(
+        drag_copy(&mut ui, (from, from_row), (to + 3, to_row)).as_deref(),
+        Some("prompt\n\nauthor  Codex\nbold")
+    );
+}
+
+#[test]
+fn a_drag_across_a_wrapped_reply_line_rejoins_it_and_never_copies_quote() {
+    let (mut ui, room, agent) = fixture();
+    let words: Vec<String> = (0..30).map(|n| format!("w{n:02}")).collect();
+    let reply = format!("**lead** {}", words.join(" "));
+    saved_exchange(&mut ui, room, agent, "literal prompt", &reply);
+    ui.compute_view(60, 40);
+    let rows: Vec<_> = ui
+        .history
+        .cached()
+        .iter()
+        .filter(|line| is_reply(line))
+        .map(|line| line.text.clone())
+        .collect();
+    assert!(rows.len() >= 2, "the reply must wrap: {rows:?}");
+    let (from, from_row) = locate(&ui, "lead");
+    let (to, to_row) = locate(&ui, "w29");
+    assert!(to_row > from_row);
+    let (_, quote_row) = locate(&ui, "Quote");
+    assert!(quote_row > to_row);
+    // Wrapped rows rejoin with one space, as the reply was written.
+    let expected = format!("lead {}", words.join(" "));
+    assert_eq!(
+        drag_copy(&mut ui, (from, from_row), (to + 2, to_row)).as_deref(),
+        Some(expected.as_str())
+    );
+    // Dragging on past the Quote button adds only the blank row above it: the
+    // button is not message text.
+    assert_eq!(
+        drag_copy(&mut ui, (from, from_row), (from + 4, quote_row)).as_deref(),
+        Some(format!("{expected}\n").as_str())
+    );
+}
+
+#[test]
+fn a_drag_in_a_scrolled_history_selects_the_rows_on_screen() {
+    let (mut ui, room, agent) = fixture();
+    saved_history(&mut ui, room, agent, 30);
+    ui.history_follow_tail = false;
+    ui.compute_view(100, 40);
+    let target = ui
+        .history
+        .cached()
+        .iter()
+        .position(|line| line.text.trim() == "prompt-10")
+        .unwrap();
+    // Scroll so prompt-10 sits mid-screen, with neither end of the history shown.
+    ui.main_scroll = target - 5;
+    ui.compute_view(100, 40);
+    assert_eq!(ui.main_scroll, target - 5);
+    let (column, row) = locate(&ui, "prompt-10");
+    assert_eq!(
+        drag_copy(&mut ui, (column + 3, row), (column + 8, row)).as_deref(),
+        Some("mpt-10")
+    );
 }
 
 #[test]
