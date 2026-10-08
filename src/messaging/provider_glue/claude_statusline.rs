@@ -307,5 +307,5 @@ fn git_bash() -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-#[path = "claude_statusline_tests.rs"]
+#[path = "claude_statusline_test.rs"]
 mod tests;

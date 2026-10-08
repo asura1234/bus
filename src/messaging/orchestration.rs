@@ -181,5 +181,5 @@ pub(crate) fn prompt_message(text: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "tests/orchestration.rs"]
+#[path = "tests/orchestration_test.rs"]
 mod tests;

@@ -9,7 +9,7 @@ pub(crate) mod resume;
 pub(crate) mod title;
 
 #[cfg(test)]
-#[path = "tests/codex_activity.rs"]
+#[path = "tests/codex_activity_test.rs"]
 mod codex_activity_tests;
 
 /// The detected state of a terminal pane.

@@ -937,4 +937,20 @@ fn line_start_offset(content: &str, lines: &[&str], index: usize) -> usize {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+    use engine::*;
+
+    #[path = "claude_test.rs"]
+    mod claude;
+    #[path = "codex_test.rs"]
+    mod codex;
+    #[path = "engine_test.rs"]
+    mod engine;
+    #[path = "others_test.rs"]
+    mod others;
+    #[path = "regions_test.rs"]
+    mod regions;
+    #[path = "validation_test.rs"]
+    mod validation;
+}

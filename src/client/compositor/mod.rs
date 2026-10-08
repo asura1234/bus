@@ -156,4 +156,5 @@ fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
 }
 
 #[cfg(test)]
+#[path = "tests/compositor_test.rs"]
 pub(super) mod tests;

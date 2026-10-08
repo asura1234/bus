@@ -678,5 +678,5 @@ fn apply_sgr(style: &mut Style, params: &str) {
 }
 
 #[cfg(test)]
-#[path = "tests/dialog.rs"]
+#[path = "tests/dialog_test.rs"]
 mod tests;

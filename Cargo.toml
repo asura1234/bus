@@ -3,6 +3,7 @@ name = "bus"
 version = "0.9.0"
 edition = "2021"
 build = "build.rs"
+autotests = false
 description = "coordinate selected AI coding agents in native terminal rooms (built on Herdr)"
 license = "Apache-2.0"
 keywords = ["terminal", "tui", "ai", "agents", "multiplexer"]
@@ -14,6 +15,22 @@ include = [
     "LICENSE",
     "Cargo.toml",
 ]
+
+[[test]]
+name = "api"
+path = "tests/api/api_test.rs"
+
+[[test]]
+name = "client"
+path = "tests/client/client_test.rs"
+
+[[test]]
+name = "server"
+path = "tests/server/server_test.rs"
+
+[[test]]
+name = "cli"
+path = "tests/cli/cli_test.rs"
 
 [dependencies]
 base64 = "0.22.1"

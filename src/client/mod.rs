@@ -910,4 +910,5 @@ async fn run_client_loop(
 }
 
 #[cfg(test)]
+#[path = "tests/client_test.rs"]
 mod tests;

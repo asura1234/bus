@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use crate::messaging::control::{self, Request, Response};
 
 #[cfg(test)]
-#[path = "tests/control_focus.rs"]
+#[path = "tests/control_focus_test.rs"]
 mod focus_tests;
 
 pub const HELP: &str = "Developer commands (require an already running Bus --dev instance):

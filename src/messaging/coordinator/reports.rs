@@ -86,5 +86,5 @@ pub(super) fn post_report(
 }
 
 #[cfg(test)]
-#[path = "tests/reports.rs"]
+#[path = "tests/reports_test.rs"]
 mod tests;

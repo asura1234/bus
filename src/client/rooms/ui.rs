@@ -13,7 +13,7 @@ use std::{
 };
 
 #[cfg(test)]
-#[path = "tests/focus.rs"]
+#[path = "tests/focus_test.rs"]
 mod focus_tests;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -167,4 +167,13 @@ pub enum Method {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[path = "golden_test.rs"]
+    mod golden;
+    #[path = "requests_test.rs"]
+    mod requests;
+    #[path = "responses_test.rs"]
+    mod responses;
+}

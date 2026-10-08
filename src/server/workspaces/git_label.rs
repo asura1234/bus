@@ -1,7 +1,7 @@
 #[path = "git_discovery.rs"]
 mod discovery;
 #[cfg(test)]
-#[path = "tests/git_support.rs"]
+#[path = "tests/git_support_test.rs"]
 pub(super) mod test_support;
 
 pub(crate) use self::discovery::automatic_workspace_label;

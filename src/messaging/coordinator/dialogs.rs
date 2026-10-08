@@ -112,5 +112,5 @@ fn post_blocked(state: &mut BusState, id: AgentId) -> Result<(), String> {
 }
 
 #[cfg(test)]
-#[path = "tests/dialogs.rs"]
+#[path = "tests/dialogs_test.rs"]
 mod tests;

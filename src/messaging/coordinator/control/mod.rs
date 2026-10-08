@@ -1245,11 +1245,11 @@ fn unique<T>(mut items: impl Iterator<Item = T>) -> Result<T, String> {
 }
 
 #[cfg(test)]
-#[path = "../tests/control/mod.rs"]
+#[path = "../tests/control/support_test.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "../tests/focus.rs"]
+#[path = "../tests/focus_test.rs"]
 mod focus_tests;
 
 /// How the running Bus was built: `debug` for a development build (`./run dev`,

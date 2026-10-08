@@ -100,5 +100,5 @@ fn room_sound(room: &Room) -> SoundPref {
 }
 
 #[cfg(test)]
-#[path = "tests/settings.rs"]
+#[path = "tests/settings_test.rs"]
 mod tests;

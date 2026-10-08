@@ -14,7 +14,7 @@ pub(crate) mod workspaces;
 pub(crate) use crate::utils::socket_paths;
 pub use main_loop as headless;
 #[cfg(test)]
-#[path = "tests/render_scale.rs"]
+#[path = "tests/render_scale_test.rs"]
 mod render_scale_benchmark;
 #[cfg(test)]
 mod tests;
