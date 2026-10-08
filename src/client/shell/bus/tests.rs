@@ -6,6 +6,8 @@ use crate::{
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 use std::sync::Arc;
+#[path = "chat_search_tests.rs"]
+mod chat_search_tests;
 #[path = "history_tests.rs"]
 mod history_tests;
 #[path = "keys_tests.rs"]
@@ -378,7 +380,7 @@ fn ctrl_chords_open_the_agent_and_file_pickers() {
     assert!(ui.recipient_menu && ui.form.is_none());
     let (mut ui, room, _) = fixture();
     ui.locals.get_mut(&room).unwrap().text.insert("keep draft");
-    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('o'), KeyModifiers::CONTROL);
     assert!(matches!(ui.form, Some(forms::Form::Files(_))));
     assert_eq!(ui.locals[&room].text.text, "keep draft");
 }
@@ -401,7 +403,7 @@ fn symbols_stay_literal_in_paste_notes_and_forms() {
     assert_eq!(ui.locals[&room].notes.text, "@+");
     assert!(!ui.recipient_menu && ui.form.is_none());
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
-    key(&mut ui, KeyCode::Char('f'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Char('o'), KeyModifiers::CONTROL);
     for symbol in ['@', '+'] {
         key(&mut ui, KeyCode::Char(symbol), KeyModifiers::SHIFT);
     }

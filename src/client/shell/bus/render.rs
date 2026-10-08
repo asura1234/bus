@@ -13,6 +13,21 @@ use unicode_width::UnicodeWidthChar;
 
 /// Background of mouse-selected text.
 const SELECTION: Color = Color::Rgb(44, 88, 56);
+/// The chat-search panel: a border, the query row, the key hint, a border.
+// Border, the 3-row query field, the key hint, border.
+const SEARCH_BOX_HEIGHT: u16 = 6;
+const SEARCH_LABEL: &str = "Find ";
+/// Enter steps to older matches (up the history), as a find in a chat starts
+/// from the newest message. Down also goes newer: it works in every terminal,
+/// while Shift+Enter needs one that reports it apart from Enter.
+const SEARCH_HINTS: [&str; 3] = [
+    "Enter/↑ older · Shift+Enter/↓ newer · Esc close",
+    "Enter/↑ older · ↓ newer · Esc close",
+    "↑ older · ↓ newer · Esc",
+];
+/// Background of chat-search matches, and of the selected match.
+const SEARCH_MATCH: Color = Color::Rgb(150, 125, 60);
+const SEARCH_CURRENT: Color = Color::Rgb(240, 190, 70);
 const ACCENT: Color = {
     let [r, g, b] = crate::bus::colors::YOU_COLOR;
     Color::Rgb(r, g, b)
@@ -109,6 +124,13 @@ pub(super) struct View {
     pub notes_rows: usize,
     /// Text columns of the visible history rows.
     pub history_text: Rect,
+    /// The chat search panel above the history; empty while it is closed.
+    pub search_box: Rect,
+    /// The bordered query field inside `search_box`, after the "Find" label.
+    pub search_field: Rect,
+    /// The chat search's matches over all history rows, as (row, byte range),
+    /// laid out at the last render's width.
+    pub search_matches: Vec<(usize, std::ops::Range<usize>)>,
     /// Selected cells, painted after the rows they cover.
     selection: Vec<Rect>,
     /// Image thumbnails wholly inside the history viewport.
@@ -1111,6 +1133,7 @@ impl BusUi {
                 .max(1);
             (query, selected, total)
         });
+        let chat_search = self.chat_search.clone();
         let status = notice
             .or_else(|| {
                 search_status.as_ref().map(|(query, selected, total)| {
@@ -1212,10 +1235,21 @@ impl BusUi {
         }
         // The expanded draft may hide the top section. Never paint a history
         // separator over its editor or reserve rows from full-screen editing.
-        let history_y = if has_notes { 5 + note_height.max(1) } else { 3 };
+        let mut history_y = if has_notes { 5 + note_height.max(1) } else { 3 };
         if history_y - 1 < view.composer_box.y {
             view.history_divider =
                 Rect::new(main.x + 1, history_y - 1, main.width.saturating_sub(2), 1);
+        }
+        // The open search takes the top of the history pane, full width, and
+        // the history shrinks by its height until it closes.
+        if chat_search.is_some() && history_y + SEARCH_BOX_HEIGHT < view.composer_box.y {
+            view.search_box = Rect::new(
+                main.x + 1,
+                history_y,
+                main.width.saturating_sub(2),
+                SEARCH_BOX_HEIGHT,
+            );
+            history_y += SEARCH_BOX_HEIGHT;
         }
         view.notes = Rect::new(x, 3, width, note_height);
         (view.notes_scroll, view.notes_rows) = view.editor_scrolled(
@@ -1288,6 +1322,93 @@ impl BusUi {
         view.history_max_scroll = content
             .len()
             .saturating_sub(usize::from(view.history.height));
+        view.search_matches = chat_search
+            .as_ref()
+            .map(|search| super::chat_search::find_matches(content, &search.query))
+            .unwrap_or_default();
+        if let Some(search) = self.chat_search.as_mut() {
+            let count = view.search_matches.len();
+            if search.jump_to_newest {
+                // A new query starts from the newest match, nearest the bottom.
+                search.jump_to_newest = false;
+                search.current = count.saturating_sub(1);
+                if let Some((row, _)) = view.search_matches.last() {
+                    self.history_follow_tail = false;
+                    self.main_scroll = row.saturating_sub(usize::from(view.history.height) / 3);
+                }
+            }
+            search.current = search.current.min(count.saturating_sub(1));
+            let panel = view.search_box;
+            if panel.height > 0 {
+                let counter = match (search.query.is_empty(), count) {
+                    (true, _) => String::new(),
+                    (false, 0) => "no matches".to_owned(),
+                    (false, _) => format!("{}/{count}", search.current + 1),
+                };
+                let counter_width = unicode_width::UnicodeWidthStr::width(counter.as_str()) as u16;
+                // The label sits outside the field, dim like the hint, so it
+                // never reads as part of the query.
+                let label_width = SEARCH_LABEL.len() as u16;
+                let field_y = panel.y + 1;
+                view.row(
+                    Rect::new(x, field_y + 1, label_width, 1),
+                    SEARCH_LABEL,
+                    None,
+                    false,
+                    true,
+                );
+                // Room for the widest counter, so the field keeps its width
+                // as the counter changes.
+                let field_width = width.saturating_sub(label_width + "no matches".len() as u16 + 1);
+                view.search_field = Rect::new(x + label_width, field_y, field_width, 3);
+                let inner = field_width.saturating_sub(2);
+                view.row(
+                    Rect::new(x + label_width + 1, field_y + 1, inner, 1),
+                    &search.query,
+                    None,
+                    false,
+                    false,
+                );
+                view.row(
+                    Rect::new(
+                        x + width.saturating_sub(counter_width),
+                        field_y + 1,
+                        counter_width,
+                        1,
+                    ),
+                    &counter,
+                    None,
+                    false,
+                    true,
+                );
+                // The longest hint that fits a narrow pane.
+                let hint = SEARCH_HINTS
+                    .iter()
+                    .find(|hint| {
+                        unicode_width::UnicodeWidthStr::width(**hint) <= usize::from(width)
+                    })
+                    .unwrap_or(&SEARCH_HINTS[2]);
+                view.row(
+                    Rect::new(x, field_y + 3, width, 1),
+                    *hint,
+                    None,
+                    false,
+                    true,
+                );
+                let typed = unicode_width::UnicodeWidthStr::width(search.query.as_str()) as u16;
+                view.cursor = Some(crate::protocol::CursorState {
+                    x: x + label_width + 1 + typed.min(inner.saturating_sub(1)),
+                    y: field_y + 1,
+                    visible: true,
+                    shape: 2,
+                });
+            }
+        }
+        let current_match = self
+            .chat_search
+            .as_ref()
+            .and_then(|search| view.search_matches.get(search.current))
+            .cloned();
         self.main_scroll = if self.history_follow_tail {
             view.history_max_scroll
         } else {
@@ -1384,6 +1505,37 @@ impl BusUi {
                 view.style_last_row(span_rect, *style);
                 column = column.saturating_add(span_width);
             }
+            // Search matches are painted last, over any span colors.
+            for (row, range) in view
+                .search_matches
+                .iter()
+                .filter(|(row, _)| *row == line_index)
+                .cloned()
+                .collect::<Vec<_>>()
+            {
+                let Some(found) = line.text.get(range.clone()) else {
+                    continue;
+                };
+                let column =
+                    unicode_width::UnicodeWidthStr::width(&line.text[..range.start]) as u16;
+                let found_width = unicode_width::UnicodeWidthStr::width(found) as u16;
+                let span_rect = Rect::new(
+                    rect.x + column,
+                    rect.y,
+                    found_width.min(width.saturating_sub(column)),
+                    1,
+                );
+                let current = current_match.as_ref() == Some(&(row, range));
+                view.row(span_rect, found, None, false, false);
+                view.style_last_row(
+                    span_rect,
+                    Style::default().fg(Color::Rgb(24, 24, 28)).bg(if current {
+                        SEARCH_CURRENT
+                    } else {
+                        SEARCH_MATCH
+                    }),
+                );
+            }
         }
         view.lines(
             Rect::new(x, bottom.saturating_sub(1), width, 1),
@@ -1445,7 +1597,10 @@ impl BusUi {
             view.composer,
             &local.text,
             Some(Action::Composer),
-            !self.notes_focus && !self.recipient_menu && self.rename.is_none(),
+            !self.notes_focus
+                && !self.recipient_menu
+                && self.rename.is_none()
+                && self.chat_search.is_none(),
             local.composer_scroll,
             self.view.composer_scroll,
         );
@@ -2058,7 +2213,12 @@ impl BusUi {
                 .bg(Color::Rgb(24, 24, 28)),
         );
         // Fixed-count borders/dividers per client frame, never per agent/pane.
-        for rect in [self.view.composer_box, self.view.notes_box] {
+        for rect in [
+            self.view.composer_box,
+            self.view.notes_box,
+            self.view.search_box,
+            self.view.search_field,
+        ] {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(ACCENT))

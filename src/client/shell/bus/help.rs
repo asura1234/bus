@@ -19,13 +19,15 @@ Ctrl+Y         Paste back the last Ctrl+K / Ctrl+U / Ctrl+W deletion
 Option+Y       After Ctrl+Y, cycle earlier deletions
 Esc Esc        Clear the draft and save it so Up brings it back
 Ctrl+R         Search prompt history
+Ctrl+F         Find in the chat history, from the newest match: Enter or Up goes
+               older, Shift+Enter or Down newer, Esc closes
 Ctrl+S         Stash the current prompt; empty composer restores it
 Ctrl+G         Open the prompt in $EDITOR
 Ctrl+V         Attach a clipboard image
 Ctrl+C         Clear the draft (never quits Bus)
 Mouse drag     Select notes, history or draft text and copy it
 Ctrl+P         Choose agents
-Ctrl+F         Add files
+Ctrl+O         Add files
 Ctrl+Shift+E   Toggle full-height / compact composer
 Page Up/Down   Scroll the draft, or the notes while editing (F3)
 Mouse wheel    Scroll sidebar, notes, history, recipients or draft under the pointer

@@ -166,6 +166,8 @@ pub(in crate::client::shell) struct BusUi {
     pub(super) force_exit_available: bool,
     pub exit_ready: bool,
     pub(super) history_search: Option<HistorySearch>,
+    /// The open Ctrl+F search over the room's chat history.
+    pub(super) chat_search: Option<super::chat_search::ChatSearch>,
     pub(super) pending_line_continue: bool,
     pub(super) last_esc: Option<std::time::Instant>,
     pub(super) settings: crate::bus::settings::BusSettings,
@@ -250,6 +252,7 @@ impl BusUi {
             force_exit_available: false,
             exit_ready: false,
             history_search: None,
+            chat_search: None,
             pending_line_continue: false,
             last_esc: None,
             settings: crate::bus::settings::BusSettings::default(),
