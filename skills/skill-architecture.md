@@ -26,7 +26,7 @@ A rule may have only one authoritative layer. Other layers may only reference it
 - Do not embed complete report templates; only reference the corresponding `*-format.md`.
 - Do not rewrite script output by hand; when chat output must be fixed, return the renderer's product verbatim.
 
-The `SKILL.md` of every canonical workflow skill listed in `scripts/test_skill_migration_contract.py` must stay within 250 lines, enforced by that test in `just maintenance-test`. The typical reason an entrypoint grows too long is not that the flow got more complex, but that guide principles, artifact templates, or pseudo-implementations of scripts flowed back into the entrypoint. The line-count gate only constrains entrypoint complexity; it does not prove the skill's quality — a 240-line `SKILL.md` that writes judgment principles as pseudocode passes just as well.
+The `SKILL.md` of every canonical workflow skill listed in `scripts/skill_migration_contract_test.py` must stay within 250 lines, enforced by that test in `just maintenance-test`. The typical reason an entrypoint grows too long is not that the flow got more complex, but that guide principles, artifact templates, or pseudo-implementations of scripts flowed back into the entrypoint. The line-count gate only constrains entrypoint complexity; it does not prove the skill's quality — a 240-line `SKILL.md` that writes judgment principles as pseudocode passes just as well.
 
 ## 2. `guide.md`: guiding principles
 

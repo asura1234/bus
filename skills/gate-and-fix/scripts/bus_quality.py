@@ -35,10 +35,17 @@ RUST_EXCLUDE = "|".join(
 )
 IN_PROCESS_SERVER_TESTS = "server::tests::"
 ARCHITECTURE_TESTS = (
-    "tools/tests/test_ui_hot_path.py",
-    "tools/tests/test_import_boundaries.py",
+    "tools/tests/ui_hot_path_test.py",
+    "tools/tests/import_boundaries_test.py",
+    "tools/tests/scopes_test.py",
+    "tools/tests/test_placement_check_test.py",
 )
 IMPORT_BOUNDARIES = "tools.quality.import_boundaries"
+# Preserve the existing coverage scope rules until the S10 policy activation.
+LEGACY_TEST_MODULE = re.compile(
+    r"(?m)^[ \t]*#\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*"
+    r"(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{"
+)
 
 
 def python_roots() -> tuple[str, ...]:
@@ -168,6 +175,7 @@ def lint() -> int:
         ),
         run(sys.executable, "-m", "pytest", "-q", *ARCHITECTURE_TESTS),
         run(sys.executable, "-m", IMPORT_BOUNDARIES),
+        run(sys.executable, "-m", "tools.quality.placement"),
         file_lengths(),
     ]
     return int(any(results))
@@ -228,10 +236,7 @@ def rust_lines(report: Path) -> tuple[int, int]:
     # LLVM's DA records already define executable lines. Only remove cfg(test) modules;
     # their high coverage must not inflate the production baseline.
     sys.path.insert(0, str(ROOT))
-    from tools.quality.hot_path import (
-        TEST_MODULE,
-        mask_comments_and_literals,
-    )
+    from tools.quality.rust_source import mask_comments_and_literals
 
     covered = total = 0
     excluded: set[int] = set()
@@ -247,7 +252,7 @@ def rust_lines(report: Path) -> tuple[int, int]:
             excluded = set()
             if in_source:
                 code = mask_comments_and_literals(path.read_text(encoding="utf-8"))
-                for match in TEST_MODULE.finditer(code):
+                for match in LEGACY_TEST_MODULE.finditer(code):
                     depth, end = 0, match.end() - 1
                     while end < len(code):
                         depth += (code[end] == "{") - (code[end] == "}")

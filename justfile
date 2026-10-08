@@ -20,15 +20,15 @@ coverage:
 
 # Run repository maintenance contract tests
 maintenance-test:
-    {{python}} -m unittest tools.tests.test_acceptance_existing_instance tools.tests.test_sanitize_review_severity scripts.test_skill_migration_contract tools.tests.test_review_artifact tools.tests.test_review_artifact_write tools.tests.test_review_round_common tools.tests.test_review_prologue_entrypoints tools.tests.test_review_pr_round tools.tests.test_vendor_libghostty_vt tools.tests.test_vendor_portable_pty
-    {{python}} -m pytest packaging/windows/tests/test_package_conpty.py
-    {{python}} skills/pr/scripts/test_pr_format_check.py
-    {{python}} skills/review-pr/scripts/test_review_round.py
-    {{python}} skills/split-pr/scripts/tests/test_split_plan.py
+    {{python}} -m unittest tools.tests.acceptance_existing_instance_test tools.tests.sanitize_review_severity_test scripts.skill_migration_contract_test tools.tests.review_artifact_test tools.tests.review_artifact_write_test tools.tests.review_round_common_test tools.tests.review_prologue_entrypoints_test tools.tests.review_pr_round_test tools.tests.vendor_libghostty_vt_test tools.tests.vendor_portable_pty_test
+    {{python}} -m pytest packaging/windows/tests/package_conpty_test.py
+    {{python}} skills/pr/scripts/tests/pr_format_check_test.py
+    {{python}} skills/review-pr/scripts/tests/review_round_test.py
+    {{python}} skills/split-pr/scripts/tests/split_plan_test.py
 
 # Live message round trips with real Claude Code, Codex and Cursor; spends model usage (e.g. `just e2e --providers claude`)
 e2e *args:
-    {{python}} tools/acceptance/e2e.py --allow-live-models {{args}}
+    {{python}} tools/acceptance/e2e_test.py --allow-live-models {{args}}
 
 # Run one nextest filter, e.g. `just test-one codex_stale_working`
 test-one filter:
@@ -36,7 +36,7 @@ test-one filter:
 
 # Enforce deterministic UI hot-path architecture boundaries
 ui-hot-path-architecture-test:
-    {{python}} -m pytest -q tools/tests/test_ui_hot_path.py tools/tests/test_import_boundaries.py
+    {{python}} -m pytest -q tools/tests/ui_hot_path_test.py tools/tests/import_boundaries_test.py
 
 # Run local Rust/Python lint checks
 lint:

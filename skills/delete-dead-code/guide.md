@@ -593,7 +593,7 @@ lands it, so the handoff surface leaks nothing.
 Wrong deletions first show up in **the module's own tests**, so running unit / integration tests is SOP, not optional.
 But this is deliberately lighter than `gate-and-fix`:
 
-- Run: the module's own tests, narrowed (Rust `just test-one <filter>`, Python `python3 -m unittest scripts.test_<name>` /
+- Run: the module's own tests, narrowed (Rust `just test-one <filter>`, Python `python3 -m unittest scripts.<name>_test` /
   `python3 -m pytest skills/<skill> -q`, Bun `bun test <file>`).
 - Run: `rustfmt --check --edition 2021 <files you changed>`. **Never whole-tree `cargo fmt --check`**: it pulls in
   in-flight files of other agents in the same round; an agent reporting errors for another agent's half-finished work has

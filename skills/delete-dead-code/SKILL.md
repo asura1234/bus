@@ -77,7 +77,7 @@ FOR round IN rounds:
       - hard constraints: no Git write of any kind; never start Bus (`./run dev`, live sessions, `just e2e`); leave no background build/test process;
         never change shared config (`Cargo.toml`, `Cargo.lock`, `justfile`, `clippy.toml`, `rust-toolchain.toml`, `.github/workflows/*`); report it instead
       - verification (only if something changed; otherwise say nothing changed): this module's tests, narrowly (Rust `just test-one <module path filter>`,
-        Python `python3 -m unittest scripts.test_<name>` or `python3 -m pytest skills/<skill> -q`, Bun `bun test <test file>`); `rustfmt --check --edition 2021
+        Python `python3 -m unittest scripts.<name>_test` or `python3 -m pytest skills/<skill> -q`, Bun `bun test <test file>`); `rustfmt --check --edition 2021
         <own changed .rs files…>` (never whole-tree `cargo fmt --check`); no coverage, E2E, or whole-tree clippy/build (guide.md "How far each unit verifies itself")
 
   Wait for every subagent in this round. No short-interval polling.

@@ -12,7 +12,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.quality.hot_path import PROJECT_ROOT, mask_comments_and_literals
+from tools.quality.hot_path import PROJECT_ROOT
+from tools.quality.rust_source import mask_comments_and_literals
 
 # Same-component and utils imports are implicit for every component.
 DEPENDENCIES = {
@@ -101,7 +102,7 @@ LEGACY_PATHS = {
     "ui::render_config_diagnostic_buffer": "utils",
     "ui::render_copy_feedback_buffer": "utils",
 }
-EXCEPTIONS = {"src/server/tests/render_scale.rs": frozenset({"client"})}
+EXCEPTIONS = {"src/server/tests/render_scale_test.rs": frozenset({"client"})}
 IDENTIFIER = r"(?:r#)?[A-Za-z_]\w*"
 PATH = re.compile(rf"{IDENTIFIER}(?:\s*::\s*{IDENTIFIER})*")
 CRATE_PATH = re.compile(rf"\bcrate\s*::\s*(?P<path>{PATH.pattern})")

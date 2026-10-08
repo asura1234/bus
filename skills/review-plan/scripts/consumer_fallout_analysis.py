@@ -109,7 +109,7 @@ def is_test(path: str) -> bool:
     )
 
 
-def test_subject_stem(path: str) -> str | None:
+def subject_stem(path: str) -> str | None:
     name = PurePosixPath(path).name
     positions = [name.find(marker) for marker in TEST_MARKERS if marker in name]
     return name[: min(positions)] if positions else None

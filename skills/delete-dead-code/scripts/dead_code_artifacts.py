@@ -53,7 +53,7 @@ _ASSERTION = re.compile(
 )
 _TEST_PATH = re.compile(
     r"(?:^|/)(?:__tests__|tests?)/"
-    r"|(?:\.test\.[jt]sx?|_test\.(?:cc|cpp)|(?:^|/)test_[^/]+\.py|(?:^|/|_)tests?\.rs)$"
+    r"|(?:\.test\.[jt]sx?|_test\.(?:cc|cpp|rs|py)|(?:^|/)test_[^/]+\.py|(?:^|/|_)tests?\.rs)$"
 )
 
 
