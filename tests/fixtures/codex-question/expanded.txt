@@ -1,0 +1,44 @@
+
+  >_ OpenAI Codex (v0.161.0)
+     /private/tmp/bus-codex-dialog-repro/workspace
+
+
+› This is a terminal UI regression capture only. Do not run commands, edit files, use skills, or delegate. Call
+  request_user_input_async now with one question titled Which capture mode should Bus use? and exactly two options: Plain screen
+  (Recommended), ANSI screen. Wait for the answer. After receiving it, reply with exactly RECEIVED:<answer>.
+
+
+• Which capture mode should Bus use?
+
+  • Plain screen (Recommended)
+  • ANSI screen
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+• Working (1m 16s • esc to interrupt)
+
+• Queued follow-up inputs
+
+
+  Which capture mode should Bus use?
+
+  › 1. Plain screen (Recommended)
+    2. ANSI screen
+    3. Other
+
+  enter submit   ⌃] skip   ⇧→ main prompt

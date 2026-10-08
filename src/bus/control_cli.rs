@@ -63,8 +63,8 @@ A MASTER agent launches with an orchestrator system prompt, the built-in one unl
 --args \"--resume SESSION_ID\" (claude, cursor) or \"resume SESSION_ID\" (codex) adopts an
 existing provider session by its UUID; quit that session elsewhere first.
 Use --to all explicitly for all room agents.
-agent dialog shows a choice dialog or focused free-text question and a single-use
-fingerprint. agent choose selects an option with Up/Down and Enter; agent answer pastes
+agent dialog opens queued Codex questions and shows choices or a focused text question.
+It returns a single-use fingerprint. agent choose selects an option with Up/Down and Enter; agent answer pastes
 text and presses Enter, or skips the question. Both require the exact observed dialog.
 Bus messages a room's orchestrator about each dialog, and
 wait stops early with agent_waiting_on_dialog when a recipient shows one.

@@ -202,6 +202,57 @@ pub(crate) fn parse(screen: &str) -> Option<Dialog> {
         .or_else(|| text_question(&lines))
 }
 
+/// Only the live, collapsed queue beside an empty composer can be opened.
+/// This is deliberately separate from parse: a pending async question can coexist
+/// with Working, and status polling must neither open it nor invent a selection.
+pub(crate) fn codex_question_pending(screen: &str) -> bool {
+    let (texts, _) = styled_lines(screen);
+    let lines: Vec<_> = texts.iter().map(|line| unboxed(line).trim()).collect();
+    let Some(header) = lines
+        .iter()
+        .rposition(|line| line.trim_start_matches(['•', '◦']).trim() == "Queued follow-up inputs")
+    else {
+        return false;
+    };
+    let after: Vec<_> = lines[header + 1..]
+        .iter()
+        .copied()
+        .filter(|line| !line.is_empty())
+        .collect();
+    let [count, hint, tail @ ..] = after.as_slice() else {
+        return false;
+    };
+    let count = count.split(" · ").next().unwrap_or_default();
+    let words: Vec<_> = count.split_whitespace().collect();
+    if !matches!(words.as_slice(), ["?", n, "question" | "questions"] if n.parse::<u32>().is_ok_and(|n| n > 0))
+        || !matches!(
+            hint.to_lowercase().as_str(),
+            "⇧← to answer" | "shift+left to answer" | "shift+← to answer"
+        )
+    {
+        return false;
+    }
+    let empty_composer = |line: &str| {
+        line.strip_prefix('›').is_some_and(|body| {
+            matches!(
+                body.trim(),
+                "" | "Ask Codex to do anything" | "Use /skills to list available skills"
+            )
+        })
+    };
+    if tail.is_empty() {
+        return lines[..header]
+            .iter()
+            .rfind(|line| line.starts_with('›'))
+            .is_some_and(|line| empty_composer(line));
+    }
+    empty_composer(tail[0])
+        && (tail.len() == 1
+            || (tail.len() == 3
+                && tail[2] == "? for shortcuts"
+                && !tail[1].starts_with(['•', '›'])))
+}
+
 fn codex_text_footer(line: &str) -> bool {
     let lower = unboxed(line).trim().to_lowercase();
     lower.contains("enter")
@@ -465,6 +516,23 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
             .collect();
         if let Some(index) = highlighted(&label_styles) {
             options[index].selected = true;
+        }
+    }
+    // Codex's last numbered row is its editable Other field. Typing replaces
+    // the placeholder itself; Enter on an empty field leaves the form open.
+    if let Some(hint) = hint.as_deref().filter(|hint| codex_text_footer(hint)) {
+        if lines[..start].iter().any(|line| {
+            unboxed(line).trim().trim_start_matches(['•', '◦']).trim() == "Queued follow-up inputs"
+        }) {
+            if let Some(last) = options.last().filter(|option| option.selected) {
+                return question_dialog(
+                    title(&lines[..start]),
+                    hint,
+                    &last.label,
+                    "Other",
+                    "ctrl+]",
+                );
+            }
         }
     }
     // Claude's custom answer is editable at the resting selection, before

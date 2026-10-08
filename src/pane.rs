@@ -2419,6 +2419,24 @@ impl PaneRuntime {
         self.io.try_send_bytes(bytes)
     }
 
+    /// Open only the live Codex queue under the same lock as terminal updates.
+    pub(crate) fn try_open_pending_codex_question(&self) -> Result<(), String> {
+        let _guard = self
+            .content_write_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if crate::detect::dialog::codex_question_pending(&self.terminal.visible_ansi()) {
+            let key = crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Left,
+                crossterm::event::KeyModifiers::SHIFT,
+            );
+            self.io
+                .try_send_bytes(Bytes::from(self.encode_terminal_key(key.into())))
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Re-parse the live choice dialog and send the keys that choose `option`
     /// while holding the lock that serializes terminal content updates, so the
     /// keys only ever reach the exact dialog the caller observed.

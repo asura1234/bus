@@ -783,6 +783,7 @@ fn agent_dialog_choose_is_identity_bound_single_use_and_reports_the_outcome() {
     struct DialogTransport(Arc<Mutex<Native>>);
     fn observation(shown: bool) -> schema::AgentDialogObservation {
         schema::AgentDialogObservation {
+            pending_question: false,
             terminal_id: "term_internal".into(),
             pane_id: "w1:p2".into(),
             session_id: None,
@@ -2710,6 +2711,144 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
     assert_eq!(blocked["stage"], "queued", "{blocked}");
     assert_eq!(blocked["reason"], "blocked_unanswered");
 
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn codex_queued_question_redraw_returns_a_fingerprint_then_allows_choose_and_answer() {
+    use std::sync::{Arc, Mutex};
+    struct Native {
+        stage: u32,
+        opens: Vec<bool>,
+    }
+    struct QueuedTransport(Arc<Mutex<Native>>);
+    fn observation(stage: u32) -> schema::AgentDialogObservation {
+        let screen = match stage {
+            1 => include_str!("../../tests/fixtures/codex-question/expanded.txt"),
+            2 => include_str!("../../tests/fixtures/codex-question/other-selected.txt"),
+            _ => "",
+        };
+        let dialog = crate::detect::dialog::parse(screen).map(|dialog| schema::AgentDialog {
+            kind: match dialog.kind {
+                crate::detect::dialog::DialogKind::Choice => schema::AgentDialogKind::Choice,
+                crate::detect::dialog::DialogKind::Question => schema::AgentDialogKind::Question,
+            },
+            id: dialog.id(),
+            digest: dialog.digest(),
+            text: dialog.text,
+            hint: dialog.hint,
+            options: dialog
+                .options
+                .into_iter()
+                .map(|option| schema::AgentDialogOption {
+                    number: option.number,
+                    label: option.label,
+                    selected: option.selected,
+                })
+                .collect(),
+        });
+        schema::AgentDialogObservation {
+            pending_question: stage == 0,
+            terminal_id: "terminal".into(),
+            pane_id: "pane".into(),
+            session_id: None,
+            content_revision: stage as u64,
+            dialog,
+        }
+    }
+    impl Transport for QueuedTransport {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            let mut native = self.0.lock().unwrap();
+            match method {
+                Method::AgentDialogObserve(params) => {
+                    native.opens.push(params.open_pending_question);
+                    if native.stage == 0 && native.opens.len() == 3 {
+                        native.stage = 1;
+                    }
+                    Ok(ResponseResult::AgentDialog {
+                        observation: observation(native.stage),
+                    })
+                }
+                Method::AgentDialogChoose(params) => {
+                    assert_eq!(params.option, 3);
+                    assert_eq!(
+                        params.expected_dialog_digest,
+                        observation(1).dialog.unwrap().digest
+                    );
+                    native.stage = 2;
+                    Ok(ResponseResult::AgentDialogChosen {
+                        choice: schema::AgentDialogChooseResult {
+                            written: true,
+                            reason: None,
+                            keys: vec!["down".into(), "down".into(), "enter".into()],
+                            observation: observation(2),
+                        },
+                    })
+                }
+                Method::AgentDialogAnswer(params) => {
+                    assert_eq!(params.text.as_deref(), Some("capture answer"));
+                    assert_eq!(
+                        params.expected_dialog_digest,
+                        observation(2).dialog.unwrap().digest
+                    );
+                    native.stage = 3;
+                    Ok(ResponseResult::AgentDialogChosen {
+                        choice: schema::AgentDialogChooseResult {
+                            written: true,
+                            reason: None,
+                            keys: vec!["enter".into()],
+                            observation: observation(3),
+                        },
+                    })
+                }
+                other => panic!("unexpected request: {other:?}"),
+            }
+        }
+    }
+    let (mut worker, _, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("terminal".into()),
+                pane_id: Some("pane".into()),
+                session_id: None,
+            },
+        )
+        .unwrap();
+    let native = Arc::new(Mutex::new(Native {
+        stage: 0,
+        opens: Vec::new(),
+    }));
+    worker.transport = Box::new(QueuedTransport(native.clone()));
+    let observed = worker.observe_dialog(agent).unwrap();
+    assert_eq!(
+        native.lock().unwrap().opens,
+        [true, false, false],
+        "open only once, then poll without navigation"
+    );
+    assert_eq!(observed["dialog"]["options"][2]["label"], "Other");
+    let fingerprint = observed["fingerprint"].as_str().unwrap();
+    assert_eq!(
+        worker.choose_dialog_option(agent, 3, fingerprint).unwrap()["outcome"],
+        "replaced"
+    );
+    assert!(worker.choose_dialog_option(agent, 3, fingerprint).is_err());
+    let other = worker.observe_dialog(agent).unwrap();
+    assert_eq!(other["dialog"]["kind"], "question");
+    let fingerprint = other["fingerprint"].as_str().unwrap();
+    assert_eq!(
+        worker
+            .answer_dialog(agent, Some("capture answer"), false, fingerprint)
+            .unwrap()["outcome"],
+        "closed"
+    );
+    assert!(worker
+        .answer_dialog(agent, Some("replay"), false, fingerprint)
+        .is_err());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

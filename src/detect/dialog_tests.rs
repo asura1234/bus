@@ -518,3 +518,68 @@ fn id_ignores_the_selection_but_not_the_question() {
     let other = parse(&CLAUDE_BASH.replace("curl -sS", "curl -fsS")).unwrap();
     assert_ne!(other.id(), dialog.id());
 }
+
+#[test]
+fn codex_queued_question_fixtures_preserve_choices_and_focused_other_input() {
+    let expanded = include_str!("../../tests/fixtures/codex-question/expanded.txt");
+    let chooser = parse(expanded).unwrap();
+    assert_eq!(chooser.text, "Which capture mode should Bus use?");
+    assert_eq!(
+        labels(&chooser),
+        [
+            (1, "Plain screen (Recommended)", true),
+            (2, "ANSI screen", false),
+            (3, "Other", false)
+        ]
+    );
+    let other = parse(include_str!(
+        "../../tests/fixtures/codex-question/other-selected.txt"
+    ))
+    .unwrap();
+    assert_eq!(other.kind, DialogKind::Question);
+    assert_eq!(other.text, chooser.text);
+    assert!(other.options.is_empty());
+    assert_eq!(other.input.as_ref().unwrap().value, "");
+    assert_eq!(other.input.as_ref().unwrap().skip_key, "ctrl+]");
+    let typed = parse(include_str!(
+        "../../tests/fixtures/codex-question/other-typed.txt"
+    ))
+    .unwrap();
+    assert_eq!(typed.input.as_ref().unwrap().value, "T");
+    assert_eq!(other.id(), typed.id());
+    assert_ne!(other.digest(), typed.digest());
+}
+
+#[test]
+fn codex_pending_question_requires_a_live_queue_and_empty_composer() {
+    let screen = include_str!("../../tests/fixtures/codex-question/collapsed.txt");
+    assert!(codex_question_pending(screen));
+    assert!(
+        parse(screen).is_none(),
+        "polling must not invent a live selection"
+    );
+    assert!(codex_question_pending(
+        &screen
+            .replace("⇧←", "shift+left")
+            .replace("? 1 question", "? 1 question · 12s")
+    ));
+    assert!(codex_question_pending(
+        &screen.replace("? 1 question", "? 2 questions")
+    ));
+    for stale in [
+        screen.replace("Queued follow-up inputs", "Transcript excerpt"),
+        screen.replace("⇧← to answer", "enter to continue"),
+        screen.replace("? 1 question", "? 0 questions"),
+        screen.replace("› Ask Codex to do anything", "› human draft"),
+        format!("{screen}\n• New output\n"),
+        screen.replace("? 1 question", "? unknown question"),
+    ] {
+        assert!(!codex_question_pending(&stale), "{stale}");
+    }
+    let below =
+        "› Ask Codex to do anything\n• Queued follow-up inputs\n? 1 question · 12s\n⇧← to answer\n";
+    assert!(codex_question_pending(below));
+    assert!(!codex_question_pending(
+        &below.replace("Ask Codex to do anything", "human draft")
+    ));
+}

@@ -330,6 +330,10 @@ impl TerminalRuntime {
         self.0.try_send_bytes(bytes)
     }
 
+    pub(crate) fn try_open_pending_codex_question(&self) -> Result<(), String> {
+        self.0.try_open_pending_codex_question()
+    }
+
     pub(crate) fn try_choose_dialog_option(
         &self,
         expected_digest: &str,

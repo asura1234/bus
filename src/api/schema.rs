@@ -86,7 +86,7 @@ pub enum Method {
     #[serde(rename = "agent.read")]
     AgentRead(AgentReadParams),
     #[serde(rename = "agent.dialog.observe")]
-    AgentDialogObserve(AgentTarget),
+    AgentDialogObserve(AgentDialogObserveParams),
     #[serde(rename = "agent.dialog.choose")]
     AgentDialogChoose(AgentDialogChooseParams),
     #[serde(rename = "agent.dialog.answer")]
