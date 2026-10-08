@@ -21,7 +21,7 @@ class BusQualityTest(unittest.TestCase):
                 patch.object(quality, "OUTPUT", root / "profiles"),
                 patch.object(quality, "head", return_value="fixture"),
                 patch.object(
-                    quality, "python_files", return_value=[root / "scripts/test_one.py"]
+                    quality, "python_files", return_value=[root / "scripts/one_test.py"]
                 ),
                 patch.object(quality, "rust_test", return_value=0) as rust_test,
                 patch.object(quality, "run", return_value=0) as run,
@@ -170,9 +170,13 @@ class BusQualityTest(unittest.TestCase):
                 (sys.executable, "-m", "tools.quality.import_boundaries"), calls
             )
             self.assertIn(
-                (sys.executable, "-m", "tools.quality.placement"), calls
+                (sys.executable, "-m", "tools.quality.placement", "--enforce"), calls
             )
-            self.assertNotIn("--enforce", [arg for call in calls for arg in call])
+            # Import boundaries remain report-only; test placement is enforced.
+            self.assertNotIn(
+                (sys.executable, "-m", "tools.quality.import_boundaries", "--enforce"),
+                calls,
+            )
 
     def test_lint_rejects_an_empty_python_inventory_instead_of_scanning_the_cwd(self):
         with (
@@ -289,6 +293,16 @@ class BusQualityTest(unittest.TestCase):
                 quality.coverage()
 
     def test_all_maintenance_and_skill_tests_are_in_the_unit_inventory(self):
+        for root in quality.PYTHON_ROOTS:
+            for name, expected in (
+                ("nested/suite_test.py", True),
+                ("tests/helper_test.py", True),
+                ("test_legacy.py", False),
+                ("tests/helper.py", False),
+                ("production.py", False),
+            ):
+                with self.subTest(root=root, name=name):
+                    self.assertEqual(quality.is_test(Path(root) / name), expected)
         files = {
             path.relative_to(quality.ROOT).as_posix()
             for path in quality.python_files()

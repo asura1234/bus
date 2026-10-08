@@ -62,11 +62,7 @@ def python_files() -> list[Path]:
 
 
 def is_test(path: Path) -> bool:
-    return (
-        path.name.startswith("test_")
-        or path.name.endswith("_test.py")
-        or "tests" in path.parts
-    )
+    return path.name.endswith("_test.py")
 
 
 def head() -> str:
@@ -175,7 +171,7 @@ def lint() -> int:
         ),
         run(sys.executable, "-m", "pytest", "-q", *ARCHITECTURE_TESTS),
         run(sys.executable, "-m", IMPORT_BOUNDARIES),
-        run(sys.executable, "-m", "tools.quality.placement"),
+        run(sys.executable, "-m", "tools.quality.placement", "--enforce"),
         file_lengths(),
     ]
     return int(any(results))
