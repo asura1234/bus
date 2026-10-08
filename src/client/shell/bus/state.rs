@@ -403,6 +403,49 @@ impl BusUi {
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
             BusEvent::SettingsChanged(settings) => self.settings = settings,
+            BusEvent::StorageRecovered => {
+                if self
+                    .snapshot
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.starts_with("Storage paused;"))
+                {
+                    self.dismissed_snapshot_error = self.snapshot.error.clone();
+                }
+                if self
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.starts_with("Storage paused;"))
+                {
+                    self.error = None;
+                }
+                let failed = std::mem::take(&mut self.failed);
+                for pending in failed {
+                    let storage_error = matches!(
+                        pending.result.as_ref(),
+                        Some(Err(error)) if error.starts_with("Storage paused;")
+                    );
+                    if !storage_error {
+                        self.failed.push(pending);
+                        continue;
+                    }
+                    match pending.effect {
+                        Effect::Text(room, _) => self.text_changed(room),
+                        Effect::Notes(room, _) => self.notes_changed(room),
+                        Effect::Recipients(room, _) => self.recipients_changed(room),
+                        effect => {
+                            self.queue(pending.command, effect);
+                        }
+                    }
+                }
+                if let Some(agent) = self
+                    .terminal
+                    .filter(|agent| self.snapshot.state.agent(*agent).is_some())
+                {
+                    self.queue(BusCommand::FocusTerminal(agent), Effect::None);
+                }
+                self.show_toast("Storage recovered");
+            }
             BusEvent::DevFocusRequested { room, agent } => {
                 if let Some(agent) = agent {
                     // Show this agent's room in the sidebar without marking the
@@ -926,6 +969,39 @@ mod tests {
         snapshot.revision += 1;
         ui.receive_snapshot(Arc::new(snapshot));
         ui.settle();
+    }
+
+    #[test]
+    fn storage_recovery_retries_local_edits_and_refreshes_selected_terminal() {
+        let (mut ui, room) = ui();
+        let agent = ui.snapshot.state.agents().next().unwrap().id;
+        ui.open_terminal(agent);
+        ui.pending.clear();
+        ui.locals
+            .get_mut(&room)
+            .unwrap()
+            .text
+            .insert("retained draft");
+        ui.failed.push(Pending {
+            id: 1,
+            command: BusCommand::SetDraftText(room, "retained draft".into()),
+            effect: Effect::Text(room, 1),
+            enqueued: true,
+            result: Some(Err("Storage paused; retrying".into())),
+        });
+        ui.error = Some("Storage paused; retrying".into());
+
+        ui.receive_event(BusEvent::StorageRecovered);
+
+        assert!(ui.failed.is_empty());
+        assert!(ui.error.is_none());
+        assert!(ui.pending.iter().any(|pending| {
+            matches!(&pending.command, BusCommand::SetDraftText(id, _) if *id == room)
+        }));
+        assert!(ui.pending.iter().any(|pending| {
+            matches!(&pending.command, BusCommand::FocusTerminal(id) if *id == agent)
+        }));
+        assert_eq!(ui.toast.as_ref().unwrap().message, "Storage recovered");
     }
     #[test]
     fn delivery_logs_receipt_once_when_reply_snapshot_reaches_room() {

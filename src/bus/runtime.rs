@@ -15,7 +15,7 @@ use super::{
     callbacks::{self, Parsed},
     launch::{self, AddAgent},
     model::*,
-    store::JsonStore,
+    store::{JsonStore, StoreError},
     transport::{HerdrTransport, Transport},
 };
 use crate::api::{
@@ -26,7 +26,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{mpsc, Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Debug)]
@@ -96,6 +96,7 @@ pub(crate) enum BusEvent {
         agent: AgentId,
         pane_id: String,
     },
+    StorageRecovered,
     SetupRequired {
         input: AddAgent,
         orchestrator: Option<super::orchestrator::OrchestratorSpec>,
@@ -207,7 +208,7 @@ struct Worker {
     revision: u64,
     last_command_id: u64,
     error: Option<String>,
-    storage_failed: bool,
+    storage_pause: Option<StoragePause>,
     branch_checks: BTreeMap<AgentId, std::time::Instant>,
     /// Each agent's latest dialog wait and how many polls it has held.
     dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
@@ -228,6 +229,19 @@ struct Worker {
     settings_path: Option<PathBuf>,
     /// Folders listed for system sounds; None reads the operating system's.
     sound_dirs: Option<Vec<PathBuf>>,
+}
+
+const STORAGE_RETRY_MIN: Duration = Duration::from_secs(1);
+const STORAGE_RETRY_MAX: Duration = Duration::from_secs(30);
+const STORAGE_RETRYING: &str = "Storage paused; retrying";
+const STORAGE_NEEDS_REPAIR: &str = "Storage paused; durable state needs inspection";
+
+enum StoragePause {
+    Retrying {
+        next_retry: Instant,
+        delay: Duration,
+    },
+    NeedsRepair,
 }
 
 impl Worker {
@@ -259,7 +273,7 @@ impl Worker {
             revision: 0,
             last_command_id: 0,
             error: None,
-            storage_failed: false,
+            storage_pause: None,
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
@@ -286,13 +300,8 @@ impl Worker {
 
     fn save(&mut self, state: BusState) -> Result<(), String> {
         if let Err(error) = self.store.save(&state) {
-            self.storage_failed = true;
-            tracing::error!(
-                event = "bus.storage.failed",
-                reason = "save_failed",
-                "Sending suspended; state not persisted"
-            );
-            return Err(format!("Bus storage failed at {}; sending is suspended. Fix storage and restart Bus: {error}",self.store.path().display()));
+            self.pause_storage(&error);
+            return Err(self.storage_notice().into());
         }
         super::diagnostics::replies(&self.state, &state, "bus.reply.persisted");
         for agent in state.agents() {
@@ -309,6 +318,91 @@ impl Worker {
         self.state = state;
         self.revision += 1;
         Ok(())
+    }
+
+    fn storage_notice(&self) -> &'static str {
+        match self.storage_pause.as_ref() {
+            Some(StoragePause::NeedsRepair) => STORAGE_NEEDS_REPAIR,
+            _ => STORAGE_RETRYING,
+        }
+    }
+
+    fn log_storage_error(error: &StoreError, event: &'static str) {
+        let (stage, raw_os_error, bytes) = error.diagnostic();
+        tracing::error!(event, stage, raw_os_error = ?raw_os_error, bytes, "Bus state storage failed");
+    }
+
+    fn pause_storage(&mut self, error: &StoreError) {
+        Self::log_storage_error(error, "bus.storage.failed");
+        self.storage_pause = Some(if error.retryable_io() {
+            StoragePause::Retrying {
+                next_retry: Instant::now() + STORAGE_RETRY_MIN,
+                delay: STORAGE_RETRY_MIN,
+            }
+        } else {
+            StoragePause::NeedsRepair
+        });
+        self.error = Some(self.storage_notice().into());
+    }
+
+    fn defer_storage_retry(&mut self, now: Instant) {
+        if let Some(StoragePause::Retrying { next_retry, delay }) = &mut self.storage_pause {
+            *delay = (*delay * 2).min(STORAGE_RETRY_MAX);
+            *next_retry = now + *delay;
+        }
+    }
+
+    fn require_storage_repair(&mut self, reason: &'static str) {
+        tracing::error!(
+            event = "bus.storage.repair_required",
+            reason,
+            "Bus state differs from last committed state"
+        );
+        self.storage_pause = Some(StoragePause::NeedsRepair);
+        self.error = Some(STORAGE_NEEDS_REPAIR.into());
+    }
+
+    fn retry_storage(&mut self, now: Instant, events: &mpsc::Sender<BusEvent>) {
+        let Some(StoragePause::Retrying { next_retry, .. }) = &self.storage_pause else {
+            return;
+        };
+        if now < *next_retry {
+            return;
+        }
+        match self.store.load() {
+            Ok(Some(durable)) if durable == self.state => {}
+            Ok(_) => {
+                self.require_storage_repair("divergent_or_missing");
+                return;
+            }
+            Err(error) if error.retryable_io() => {
+                Self::log_storage_error(&error, "bus.storage.retry_failed");
+                self.defer_storage_retry(now);
+                return;
+            }
+            Err(error) => {
+                Self::log_storage_error(&error, "bus.storage.validation_failed");
+                self.require_storage_repair("unreadable");
+                return;
+            }
+        }
+        if let Err(error) = self.store.save(&self.state) {
+            Self::log_storage_error(&error, "bus.storage.retry_failed");
+            if error.retryable_io() {
+                self.defer_storage_retry(now);
+            } else {
+                self.require_storage_repair("save_rejected");
+            }
+            return;
+        }
+        self.storage_pause = None;
+        self.error = None;
+        self.revision += 1;
+        tracing::info!(
+            event = "bus.storage.recovered",
+            "Bus state storage recovered"
+        );
+        let _ = events.send(BusEvent::StorageRecovered);
     }
 
     fn run(
@@ -348,8 +442,8 @@ impl Worker {
                     let submitting =
                         matches!(command, BusCommand::Submit(_) | BusCommand::SubmitQueued(_));
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
-                    let result = if self.storage_failed {
-                        Err("Bus storage unavailable; restart after fixing storage".into())
+                    let result = if self.storage_pause.is_some() {
+                        Err(self.storage_notice().into())
                     } else {
                         self.command(command, &events)
                     };
@@ -372,12 +466,13 @@ impl Worker {
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
+            self.retry_storage(Instant::now(), &events);
             // Apply already-confirmed user commands before delivering queued
             // work. In particular, Submit followed by Delete must not send in
             // the background between those two commands.
             pending_command = commands.try_recv().ok();
             if pending_command.is_none() && std::time::Instant::now() >= next_poll {
-                if !self.storage_failed {
+                if self.storage_pause.is_none() {
                     if let Err(error) =
                         self.tick_with_delivery_check(|| match commands.try_recv() {
                             Ok(command) => {
@@ -388,7 +483,9 @@ impl Worker {
                             Err(mpsc::TryRecvError::Disconnected) => false,
                         })
                     {
-                        self.error = Some(error);
+                        if self.storage_pause.is_none() {
+                            self.error = Some(error);
+                        }
                     }
                 }
                 next_poll = std::time::Instant::now() + interval;

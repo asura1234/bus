@@ -10,11 +10,40 @@ use super::model::BusState;
 
 pub(crate) const STORE_VERSION: u64 = 1;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SaveStage {
+    Parent,
+    TempCreate,
+    TempWrite,
+    TempSync,
+    Replace,
+    ParentSync,
+}
+
+impl SaveStage {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Parent => "parent",
+            Self::TempCreate => "temp_create",
+            Self::TempWrite => "temp_write",
+            Self::TempSync => "temp_sync",
+            Self::Replace => "replace",
+            Self::ParentSync => "parent_sync",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum StoreError {
     Io {
         path: PathBuf,
         source: std::io::Error,
+    },
+    SaveIo {
+        path: PathBuf,
+        stage: SaveStage,
+        source: std::io::Error,
+        bytes: usize,
     },
     Corrupt {
         path: PathBuf,
@@ -36,6 +65,19 @@ impl std::fmt::Display for StoreError {
         match self {
             Self::Io { path, source } => {
                 write!(formatter, "Bus storage {}: {source}", path.display())
+            }
+            Self::SaveIo {
+                path,
+                stage,
+                source,
+                ..
+            } => {
+                write!(
+                    formatter,
+                    "Bus storage {} ({}): {source}",
+                    path.display(),
+                    stage.name()
+                )
             }
             Self::Corrupt { path, source } => {
                 write!(formatter, "Corrupt Bus state {}: {source}", path.display())
@@ -59,6 +101,28 @@ impl std::fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
+impl StoreError {
+    pub(crate) fn diagnostic(&self) -> (&'static str, Option<i32>, usize) {
+        match self {
+            Self::SaveIo {
+                stage,
+                source,
+                bytes,
+                ..
+            } => (stage.name(), source.raw_os_error(), *bytes),
+            Self::Io { source, .. } => ("read", source.raw_os_error(), 0),
+            Self::Corrupt { .. } => ("parse", None, 0),
+            Self::UnsupportedVersion { .. } => ("version", None, 0),
+            Self::ExistingStateUnreadable { .. } => ("preflight", None, 0),
+            Self::UnsafePath(_) => ("path", None, 0),
+        }
+    }
+
+    pub(crate) fn retryable_io(&self) -> bool {
+        matches!(self, Self::Io { .. } | Self::SaveIo { .. })
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 struct StoredDocument {
     version: u64,
@@ -67,11 +131,35 @@ struct StoredDocument {
 
 pub(crate) struct JsonStore {
     path: PathBuf,
+    #[cfg(test)]
+    fail_stage: std::sync::Mutex<Option<SaveStage>>,
 }
 
 impl JsonStore {
     pub(crate) fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            #[cfg(test)]
+            fail_stage: std::sync::Mutex::new(None),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_once_at(&self, stage: SaveStage) {
+        *self.fail_stage.lock().unwrap() = Some(stage);
+    }
+
+    fn injected_failure(&self, stage: SaveStage) -> std::io::Result<()> {
+        #[cfg(test)]
+        {
+            let mut fail_stage = self.fail_stage.lock().unwrap();
+            if *fail_stage == Some(stage) {
+                *fail_stage = None;
+                return Err(std::io::Error::from_raw_os_error(28));
+            }
+        }
+        let _ = stage;
+        Ok(())
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -133,16 +221,20 @@ impl JsonStore {
                 return Err(StoreError::UnsafePath(self.path.clone()));
             }
         }
-        let parent = self.path.parent().ok_or_else(|| StoreError::Io {
+        let parent = self.path.parent().ok_or_else(|| StoreError::SaveIo {
             path: self.path.clone(),
+            stage: SaveStage::Parent,
             source: std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Bus state path has no parent directory",
             ),
+            bytes: 0,
         })?;
-        std::fs::create_dir_all(parent).map_err(|source| StoreError::Io {
+        std::fs::create_dir_all(parent).map_err(|source| StoreError::SaveIo {
             path: parent.to_path_buf(),
+            stage: SaveStage::Parent,
             source,
+            bytes: 0,
         })?;
         let bytes = serde_json::to_vec_pretty(&StoredDocument {
             version: STORE_VERSION,
@@ -160,33 +252,62 @@ impl JsonStore {
             .and_then(|name| name.to_str())
             .unwrap_or("state.json");
         let temp_path = parent.join(format!(".{stem}.tmp-{}-{sequence}", std::process::id()));
-        let mut temp =
-            crate::platform::create_private_state_file(&temp_path).map_err(|source| {
-                StoreError::Io {
-                    path: temp_path.clone(),
-                    source,
-                }
+        let mut temp = self
+            .injected_failure(SaveStage::TempCreate)
+            .and_then(|()| crate::platform::create_private_state_file(&temp_path))
+            .map_err(|source| StoreError::SaveIo {
+                path: temp_path.clone(),
+                stage: SaveStage::TempCreate,
+                source,
+                bytes: bytes.len(),
             })?;
-        if let Err(source) = temp.write_all(&bytes).and_then(|()| temp.sync_all()) {
+        if let Err(source) = self
+            .injected_failure(SaveStage::TempWrite)
+            .and_then(|()| temp.write_all(&bytes))
+        {
             drop(temp);
             let _ = std::fs::remove_file(&temp_path);
-            return Err(StoreError::Io {
+            return Err(StoreError::SaveIo {
                 path: temp_path,
+                stage: SaveStage::TempWrite,
                 source,
+                bytes: bytes.len(),
+            });
+        }
+        if let Err(source) = self
+            .injected_failure(SaveStage::TempSync)
+            .and_then(|()| temp.sync_all())
+        {
+            drop(temp);
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(StoreError::SaveIo {
+                path: temp_path,
+                stage: SaveStage::TempSync,
+                source,
+                bytes: bytes.len(),
             });
         }
         drop(temp);
-        if let Err(source) = crate::platform::replace_file(&temp_path, &self.path) {
+        if let Err(source) = self
+            .injected_failure(SaveStage::Replace)
+            .and_then(|()| crate::platform::replace_file(&temp_path, &self.path))
+        {
             let _ = std::fs::remove_file(&temp_path);
-            return Err(StoreError::Io {
+            return Err(StoreError::SaveIo {
                 path: self.path.clone(),
+                stage: SaveStage::Replace,
                 source,
+                bytes: bytes.len(),
             });
         }
-        crate::platform::sync_parent_directory(parent).map_err(|source| StoreError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })
+        self.injected_failure(SaveStage::ParentSync)
+            .and_then(|()| crate::platform::sync_parent_directory(parent))
+            .map_err(|source| StoreError::SaveIo {
+                path: parent.to_path_buf(),
+                stage: SaveStage::ParentSync,
+                source,
+                bytes: bytes.len(),
+            })
     }
 }
 
