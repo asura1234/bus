@@ -91,7 +91,7 @@ class SkillMigrationContractTest(unittest.TestCase):
         self.assertEqual(set(verdicts), {"plan", "pr"})
         markdown = "\n".join(
             path.read_text(encoding="utf-8")
-            for root in (SKILLS, REPO / "docs")
+            for root in (SKILLS, REPO / "docs", REPO / "orchestration", REPO / "workflows")
             for path in root.rglob("*.md")
         )
         self.assertNotIn("Not Ready", markdown)
@@ -111,7 +111,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             "docs/guides/consumer-fallout-format.md",
             "docs/guides/review-format.md",
             "docs/templates/plan-template.md",
-            "docs/templates/workflow-template.md",
+            "workflows/template.md",
             "skills/delete-dead-code/references/dead-code-findings-format.md",
             "skills/delete-dead-code/references/duplicate-findings-format.md",
             "skills/gate-and-fix/references/gate-round-format.md",
@@ -120,7 +120,7 @@ class SkillMigrationContractTest(unittest.TestCase):
         }
         actual = {
             path.relative_to(REPO).as_posix()
-            for root in (REPO / "docs", REPO / "skills")
+            for root in (REPO / "docs", REPO / "skills", REPO / "workflows")
             for path in root.rglob("*.md")
             if path.name.endswith(("template.md", "format.md"))
         }

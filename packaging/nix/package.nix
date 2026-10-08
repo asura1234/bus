@@ -13,8 +13,8 @@
 }:
 
 let
-  manifest = lib.importTOML ../Cargo.toml;
-  zigDeps = callPackage ../vendor/libghostty-vt/build.zig.zon.nix {
+  manifest = lib.importTOML ../../Cargo.toml;
+  zigDeps = callPackage ../../vendor/libghostty-vt/build.zig.zon.nix {
     name = "bus-libghostty-vt-zig-cache";
     inherit zstd;
     linkFarm =
@@ -36,28 +36,28 @@ rustPlatform.buildRustPackage {
   version = manifest.package.version;
 
   src = lib.fileset.toSource {
-    root = ./..;
-    fileset = lib.fileset.intersection (lib.fileset.fromSource (lib.sources.cleanSource ./..)) (
+    root = ../..;
+    fileset = lib.fileset.intersection (lib.fileset.fromSource (lib.sources.cleanSource ../..)) (
       lib.fileset.unions [
-        ../assets
-        # The orchestrator embeds these docs and the workflow skill at compile time.
-        ../docs
-        ../skills/workflow-create/SKILL.md
-        ../src
+        ../../assets
+        # The orchestrator embeds its prompt, docs and workflows at compile time.
+        ../../orchestration
+        ../../workflows
+        ../../src
         # Unit tests embed fixtures outside src; keep those compile-time inputs too.
-        ../tests/fixtures
-        ../vendor/libghostty-vt
-        ../vendor/libghostty-vt.vendor.json
-        ../vendor/portable-pty
-        ../build.rs
-        ../Cargo.lock
-        ../Cargo.toml
+        ../../tests/fixtures
+        ../../vendor/libghostty-vt
+        ../../vendor/libghostty-vt.vendor.json
+        ../../vendor/portable-pty
+        ../../build.rs
+        ../../Cargo.lock
+        ../../Cargo.toml
       ]
     );
   };
 
   cargoLock = {
-    lockFile = ../Cargo.lock;
+    lockFile = ../../Cargo.lock;
   };
 
   nativeBuildInputs = [
@@ -77,9 +77,8 @@ rustPlatform.buildRustPackage {
     export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
   '';
 
-  # Rust tests are covered by the normal CI workflow. The Nix check is
-  # intentionally build-only so it validates packaging inputs without
-  # duplicating the full Rust test suite.
+  # The local gate covers Rust tests. This package is build-only so it
+  # validates packaging inputs without duplicating the test suite.
   doCheck = false;
 
   meta = {

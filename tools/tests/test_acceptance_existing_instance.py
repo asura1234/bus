@@ -85,7 +85,7 @@ class AcceptanceProfileTests(unittest.TestCase):
 class AcceptanceObservationTests(unittest.TestCase):
     def test_public_guide_documents_explicit_reads_and_safe_room_recovery_surfaces(self):
         # 测试在 tools/tests/ 下，仓库根是上两级。
-        guide = (Path(__file__).resolve().parents[2] / "docs/how-to-bus-cli.md").read_text()
+        guide = (Path(__file__).resolve().parents[2] / "orchestration/how-to-bus-cli.md").read_text()
         self.assertIn("agent read AGENT --source visible", guide)
         self.assertIn("agent read AGENT --source recent --lines N", guide)
         self.assertNotIn("returns up to 400 recent lines", guide)

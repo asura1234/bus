@@ -7,7 +7,7 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
 
 - `src/`: the Bus terminal application (Rust), described in section 2
 - `orchestration/`: Markdown only; how a MASTER orchestrator agent works
-  - `README.md`: the contract between Bus and these files (placeholders, lookup order, control CLI)
+  - `README.md`: the contract between Bus and these files (placeholders, compiled-in defaults, control CLI)
   - `prompt.md`: the MASTER system prompt
   - `rules.md`, `guide.md`, `how-to-bus-cli.md`: binding rules, working guide, control CLI reference
 - `workflows/`: Markdown only; the standard workflow library
@@ -18,6 +18,7 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
   - one folder per skill: `SKILL.md`, `guide.md`, `references/` and the skill's own `scripts/` (quality lanes, review lanes, PR signals,
     ledgers and plan checks stay with the skill that runs them; their tests are `scripts/tests/*_test.py`)
 - `cli_extensions/`: shared Python for the review skills (artifact parser and renderer, round and lane ownership)
+- `scripts/`: skill-referenced shared tooling; `conventional_commits.py` and the skill-migration contract test stay here
 - `docs/`: repo-development docs
   - `bus-architecture.md`: this document
   - `guides/`: architecture principles, code review, plan review, review format and response, consumer-fallout format
@@ -38,9 +39,9 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
     live-UI tests and their helpers, all test code)
   - `keyboard/`: raw-tty helper and the key capture tools
   - `vendor/`: re-vendor (`--source-repo` required) and hand-build libghostty-vt, vendored-tree checks
-  - `git/conventional_commits.py`, `windows/check.ps1` (local Windows build check), `tests/` (`*_test.py`)
-- `packaging/`: release plumbing; every package installs the binary with `orchestration/` and `workflows/` beside it
-  - `nix/package.nix`: `buildRustPackage`, installs the two folders into `share/bus/`
+  - `windows/check.ps1` (local Windows build check), `tests/` (`*_test.py`)
+- `packaging/`: release plumbing; orchestration and workflow defaults are compiled into the binary
+  - `nix/package.nix`: `buildRustPackage`; its source fileset includes both embedded Markdown folders
   - `windows/`: `conpty.json`, `licenses/`, `package_conpty.py`, `package_conpty.ps1`, `tests/` (`*_test.py`)
 - `vendor/`: `libghostty-vt/` (with `build.zig.zon.nix`), `portable-pty/`, `patches/` (libghostty-vt carries patch 0001 only), the patch indexes and
   `libghostty-vt.vendor.json`
@@ -183,9 +184,8 @@ Files are split by ownership, not by helper.
   - `control/`: `server.rs` (control socket, started only with `--dev`; `send --as` must name an agent in the room or its
     orchestrator, other commands trust the caller), `protocol.rs` (framing)
   - `prefs/`: `settings.rs` (`settings.json`), `colors.rs` (agent palette)
-  - `orchestration.rs`: resolve `orchestration/` and `workflows/` (a user file in the data root replaces the default of the same name;
-    defaults come from the checkout in debug builds and from `share/bus` beside the executable in release builds) and fill MASTER
-    prompt placeholders
+  - `orchestration.rs`: embed `orchestration/` and `workflows/`, write the docs into the Bus data root, and fill MASTER
+    prompt placeholders; compiled-in copies are the only defaults in every build
 - `server/`: the `bus server` daemon
   - `mod.rs` (`Server`, the main loop), `app.rs` (`App`, `AppState`, `AppSettings`), `startup.rs`, `shutdown.rs`, `config_reload.rs`
   - `workspaces/`: workspaces, tabs and the split layout
@@ -376,7 +376,8 @@ prompt and request ids (`messaging/model`).
 **orchestration/ and workflows/** (Markdown, outside `src/`). How MASTER agents work, and the workflows they run. Bus gives each agent the
 context its job needs: MASTER agents know they are in Bus and command the agents in the room they are attached to, so they get the prompt,
 rules, guide, control CLI reference and workflow library. Work-room agents do ordinary software work and get only the messages sent to them.
-Both folders are installed beside the binary as defaults. A user layer in the Bus data root (default `~/.local/share/bus/`) overrides them
-file by file (defaults come from the checkout in debug builds and from `share/bus` beside the executable in release builds), so anyone can design their own way of working on top of the defaults. `orchestration/README.md` documents the contract:
-the placeholders Bus fills (`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}`, `{{DOCS}}`), the lookup order, and the control CLI as the
-only way to drive Bus.
+Both folders are compiled into the binary with `include_str!`; debug, release and Nix builds use the same defaults. Bus writes the
+embedded docs under `<BUS_DATA_DIR>/docs/` for agents to read, and the filled prompt into each launch's callback folder. There is no
+installed `share/bus` default directory, runtime source-file lookup or user-file override layer. Explicit per-launch custom prompts
+remain supported. `orchestration/README.md` documents the source-to-emitted filename map, the placeholders Bus fills
+(`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}`, `{{DOCS}}`), and the control CLI as the only way to drive Bus.

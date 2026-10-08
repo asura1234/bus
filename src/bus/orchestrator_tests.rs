@@ -16,13 +16,30 @@ fn values(room: Option<(&str, u64)>, data: &Path) -> PromptValues {
 fn embedded_docs_match_the_repository_copies() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
     assert_eq!(
-        WORKFLOW_CREATE,
-        std::fs::read_to_string(repo.join("skills/workflow-create/SKILL.md")).unwrap()
+        DEFAULT_PROMPT,
+        std::fs::read_to_string(repo.join("orchestration/prompt.md")).unwrap()
     );
-    for (name, text) in DOCS {
+    assert_eq!(
+        WORKFLOW_CREATE,
+        std::fs::read_to_string(repo.join("workflows/create.md")).unwrap()
+    );
+    let sources = [
+        ("how-to-bus-cli.md", "orchestration/how-to-bus-cli.md"),
+        ("orchestrator-guide.md", "orchestration/guide.md"),
+        ("orchestrator-rules.md", "orchestration/rules.md"),
+        ("templates/workflow-template.md", "workflows/template.md"),
+        ("workflows/pr-review-loop.md", "workflows/pr-review-loop.md"),
+        (
+            "workflows/cross-repo-feature.md",
+            "workflows/cross-repo-feature.md",
+        ),
+    ];
+    assert_eq!(DOCS.len(), sources.len());
+    for ((name, text), (expected_name, source)) in DOCS.iter().zip(sources) {
+        assert_eq!(*name, expected_name);
         assert_eq!(
             *text,
-            std::fs::read_to_string(repo.join("docs").join(name)).unwrap(),
+            std::fs::read_to_string(repo.join(source)).unwrap(),
             "{name}"
         );
     }
@@ -60,8 +77,12 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     let data = temp_root("docs");
     let root = write_docs(&data).unwrap();
     assert_eq!(root, data.join("docs"));
-    for (name, _) in DOCS {
-        assert!(root.join(name).is_file(), "{name}");
+    for (name, text) in DOCS {
+        assert_eq!(
+            std::fs::read_to_string(root.join(name)).unwrap(),
+            *text,
+            "{name}"
+        );
     }
     let rules = std::fs::read_to_string(root.join("orchestrator-rules.md")).unwrap();
     assert!(rules.starts_with("# Orchestrator rules"), "{rules}");
@@ -72,6 +93,7 @@ fn docs_are_written_owner_only_with_workflow_create_as_a_plain_doc() {
     assert!(rules.contains("**Brief workers directly.**"));
     assert!(rules.contains("bus send --room ROOM --as YOUR_NAME --to AGENT --async"));
     let guide = std::fs::read_to_string(root.join("workflow-create.md")).unwrap();
+    assert_eq!(guide, WORKFLOW_CREATE);
     assert!(guide.starts_with("# workflow-create"), "{guide}");
     assert!(!guide.contains("description:"));
     let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;

@@ -54,7 +54,7 @@
         system:
         let
           pkgs = pkgsFor system;
-          bus = pkgs.callPackage ./nix/package.nix {
+          bus = pkgs.callPackage ./packaging/nix/package.nix {
             rustPlatform = rustPlatformFor pkgs;
           };
         in
@@ -108,7 +108,7 @@
 
       overlays.default = lib.composeExtensions rust-overlay.overlays.default (
         final: _prev: {
-          bus = final.callPackage ./nix/package.nix {
+          bus = final.callPackage ./packaging/nix/package.nix {
             rustPlatform = rustPlatformFor final;
           };
         }

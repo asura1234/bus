@@ -7,33 +7,33 @@ use super::io::{atomic_write, private_dir};
 use super::model::{Provider, RoomId};
 
 /// The default orchestrator system prompt, with `{{...}}` placeholders.
-pub(crate) const DEFAULT_PROMPT: &str = include_str!("prompts/orchestrator.md");
-const WORKFLOW_CREATE: &str = include_str!("../../skills/workflow-create/SKILL.md");
+pub(crate) const DEFAULT_PROMPT: &str = include_str!("../../orchestration/prompt.md");
+const WORKFLOW_CREATE: &str = include_str!("../../workflows/create.md");
 /// The docs the prompt references, written under `<BUS_DATA_DIR>/docs/`.
 const DOCS: &[(&str, &str)] = &[
     (
         "how-to-bus-cli.md",
-        include_str!("../../docs/how-to-bus-cli.md"),
+        include_str!("../../orchestration/how-to-bus-cli.md"),
     ),
     (
         "orchestrator-guide.md",
-        include_str!("../../docs/orchestrator-guide.md"),
+        include_str!("../../orchestration/guide.md"),
     ),
     (
         "orchestrator-rules.md",
-        include_str!("../../docs/orchestrator-rules.md"),
+        include_str!("../../orchestration/rules.md"),
     ),
     (
         "templates/workflow-template.md",
-        include_str!("../../docs/templates/workflow-template.md"),
+        include_str!("../../workflows/template.md"),
     ),
     (
         "workflows/pr-review-loop.md",
-        include_str!("../../docs/workflows/pr-review-loop.md"),
+        include_str!("../../workflows/pr-review-loop.md"),
     ),
     (
         "workflows/cross-repo-feature.md",
-        include_str!("../../docs/workflows/cross-repo-feature.md"),
+        include_str!("../../workflows/cross-repo-feature.md"),
     ),
 ];
 /// The prompt file in a launch's callback folder; resumes deliver it again.
@@ -77,22 +77,13 @@ pub(crate) fn fill(template: &str, values: &PromptValues) -> String {
         .replace("{{DOCS}}", &values.docs.to_string_lossy())
 }
 
-/// The workflow-create guide as a doc: the repository skill without its
-/// frontmatter, which only skill loaders read.
-fn workflow_create_doc() -> &'static str {
-    WORKFLOW_CREATE
-        .strip_prefix("---\n")
-        .and_then(|rest| rest.split_once("\n---\n"))
-        .map_or(WORKFLOW_CREATE, |(_, body)| body.trim_start())
-}
-
 /// Writes the embedded Bus docs under `<data_dir>/docs/` and returns that folder.
 pub(crate) fn write_docs(data_dir: &Path) -> Result<PathBuf, String> {
     let root = docs_dir(data_dir);
     let docs = DOCS
         .iter()
         .copied()
-        .chain([("workflow-create.md", workflow_create_doc())]);
+        .chain([("workflow-create.md", WORKFLOW_CREATE)]);
     for (name, text) in docs {
         let path = root.join(name);
         private_dir(path.parent().expect("doc has a parent")).map_err(|e| e.to_string())?;

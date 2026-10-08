@@ -140,7 +140,7 @@ and resuming.
 
 The PWD works as for any agent; Bus writes nothing into it. Every MASTER agent
 launches with an orchestrator system prompt, by default Bus's built-in one
-(`src/bus/prompts/orchestrator.md` in the Bus repository). Replace it with
+(`orchestration/prompt.md` in the Bus repository). Replace it with
 `--system-prompt TEXT` or `--system-prompt-file PATH`. Bus fills in
 `{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}` and `{{DOCS}}`, the folder
 `<BUS_DATA_DIR>/docs/` where Bus writes the docs the prompt links to: this
@@ -887,7 +887,7 @@ normally, with these changes:
 
 ## End-to-end check
 
-`scripts/bus_e2e.py` checks message round trips against real Claude Code,
+`tools/acceptance/e2e.py` checks message round trips against real Claude Code,
 Codex and Cursor agents. It spends real model usage, so it runs only with
 `--allow-live-models`, which `just e2e` passes for you:
 
