@@ -13,7 +13,7 @@ use crate::ghostty::{KittyImageDescriptor, KittyImageFormat, KittyImagePlacement
 use crate::layout::PaneId;
 use crate::terminal::TerminalRuntimeRegistry;
 
-#[path = "../../kitty_graphics/surface.rs"]
+#[path = "../../server/rendering/images.rs"]
 pub(crate) mod surface;
 
 const KITTY_CHUNK_BYTES: usize = 3072;

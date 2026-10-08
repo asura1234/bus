@@ -38,3 +38,11 @@ pub(crate) mod input {
         KeyboardProtocol, TerminalKey, TextCommit, WindowsKeyRecord,
     };
 }
+
+pub(crate) use crate::messaging as bus;
+pub(crate) use crate::server::app;
+pub(crate) use crate::server::persistence as persist;
+pub(crate) use crate::server::rendering::surface as ui;
+pub(crate) use crate::server::workspaces as workspace;
+pub(crate) use crate::server::workspaces::layout;
+pub(crate) use crate::server::workspaces::pane as pane_state;

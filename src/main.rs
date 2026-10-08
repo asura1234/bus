@@ -4,14 +4,10 @@ pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
 
 mod agents;
-mod app;
-mod bus;
+mod cli;
 mod client;
 mod compat_paths;
-mod layout;
-#[path = "pane/state.rs"]
-mod pane_state;
-mod persist;
+mod messaging;
 mod platform;
 mod protocol;
 mod server;
@@ -19,9 +15,7 @@ mod terminal;
 mod terminal_effects;
 mod terminal_modes;
 mod terminal_notify;
-mod ui;
 mod utils;
-mod workspace;
 
 pub(crate) use compat_paths::*;
 

@@ -1,18 +1,20 @@
-mod alt_screen_read;
 pub(crate) mod api;
-pub mod autodetect;
-#[cfg(unix)]
-pub(crate) mod client_accept;
-pub(crate) mod client_commands;
-pub(crate) mod client_shell;
-pub(crate) mod client_shell_graphics;
-pub(crate) mod client_transport;
+pub(crate) mod app;
+mod app_loop;
+pub(crate) mod app_state;
 pub(crate) mod clients;
-pub(crate) mod clipboard_image;
-pub mod headless;
+pub mod main_loop;
 pub(crate) mod notifications;
-pub(crate) mod pane_input;
-#[cfg(test)]
-mod render_scale_benchmark;
-pub(crate) mod render_stream;
+pub(crate) mod persistence;
+pub(crate) mod rendering;
+pub(crate) mod shutdown;
+pub(crate) mod startup;
+pub(crate) mod terminals;
+pub(crate) mod workspaces;
 pub(crate) use crate::utils::socket_paths;
+pub use main_loop as headless;
+#[cfg(test)]
+#[path = "tests/render_scale.rs"]
+mod render_scale_benchmark;
+#[cfg(test)]
+mod tests;
