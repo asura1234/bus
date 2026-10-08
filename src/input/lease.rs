@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use super::{KeyIdentity, TerminalKey};
+use crate::protocol::keys::{KeyIdentity, TerminalKey};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct InputLeaseKey<Source> {

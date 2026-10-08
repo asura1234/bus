@@ -40,7 +40,7 @@ impl ChildExitReason {
 }
 
 #[cfg(unix)]
-pub(crate) use unix_common::classify_child_exit;
+pub(crate) use unix::classify_child_exit;
 
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn classify_child_exit(_status: &portable_pty::ExitStatus) -> ChildExitReason {
@@ -89,7 +89,7 @@ pub(crate) const fn capabilities() -> PlatformCapabilities {
 
 pub(crate) fn terminal_grid_size() -> std::io::Result<(u16, u16)> {
     #[cfg(unix)]
-    let (cols, rows) = unix_common::read_terminal_grid_size()?;
+    let (cols, rows) = unix::read_terminal_grid_size()?;
     #[cfg(windows)]
     let (cols, rows) = windows::read_terminal_grid_size()?;
     #[cfg(not(any(unix, windows)))]
@@ -247,25 +247,27 @@ pub(crate) fn read_limited_reader(
 }
 
 #[cfg(unix)]
-mod unix_common;
+mod unix;
 #[cfg(unix)]
-pub(crate) use unix_common::begin_cli_output;
+pub(crate) use unix::begin_cli_output;
 
-mod client_state;
-pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};
+mod fs;
+pub(crate) use fs::{create_private_state_file, replace_file, sync_parent_directory};
+
+pub(crate) mod ipc;
+pub(crate) mod sound;
 
 #[cfg(not(unix))]
 pub(crate) fn begin_cli_output() {}
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(target_os = "linux")]
-pub use linux::*;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod process;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use process::*;
 
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "macos")]
-pub use macos::*;
+#[cfg(any(windows, test))]
+#[path = "windows/console_command.rs"]
+pub(crate) mod console_command;
 
 #[cfg(target_os = "windows")]
 mod windows;

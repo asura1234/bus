@@ -3,10 +3,10 @@ use ratatui::layout::Rect;
 mod panes;
 mod scrollbar;
 mod sidebar;
-mod status;
 mod tab_surface;
-mod text;
-mod widgets;
+
+use crate::utils::render::{status_popups as status, widgets};
+use crate::utils::text::width as text;
 
 pub(crate) use self::panes::{
     apply_pane_chrome, pane_inner_rect, pane_is_scrolled_back, render_selection_highlight,

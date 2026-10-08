@@ -4,43 +4,29 @@ pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
 
 mod agent_resume;
-mod api;
 mod app;
-mod build_info;
 mod bus;
 mod client;
-mod config;
-mod copy_mode;
+mod compat_paths;
 mod detect;
 mod events;
 mod ghostty;
-mod home_path;
-mod input;
-mod ipc;
-mod kitty_graphics;
 mod layout;
-mod logging;
-#[cfg(any(windows, test))]
-mod noninteractive_process;
 mod pane;
 mod persist;
 mod platform;
 mod protocol;
 mod pty;
-mod raw_input;
-mod render_prof;
-mod render_signal;
-mod selection;
 mod server;
-mod session;
-mod sound;
 mod terminal;
 mod terminal_effects;
 mod terminal_modes;
 mod terminal_notify;
-mod terminal_theme;
 mod ui;
+mod utils;
 mod workspace;
+
+pub(crate) use compat_paths::*;
 
 fn args_as_utf8<I>(args: I) -> Result<Vec<String>, String>
 where

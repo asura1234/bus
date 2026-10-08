@@ -1,4 +1,5 @@
 mod alt_screen_read;
+pub(crate) mod api;
 pub mod autodetect;
 #[cfg(unix)]
 pub(crate) mod client_accept;
@@ -14,4 +15,4 @@ pub(crate) mod pane_input;
 #[cfg(test)]
 mod render_scale_benchmark;
 pub(crate) mod render_stream;
-pub mod socket_paths;
+pub(crate) use crate::utils::socket_paths;
