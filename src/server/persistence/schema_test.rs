@@ -1,0 +1,682 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use ratatui::layout::{Direction, Rect};
+
+use super::*;
+use crate::server::app::{AppState, Mode};
+use crate::server::workspaces::layout::NavDirection;
+use crate::server::workspaces::Workspace;
+
+fn session_fixture(name: &str) -> &'static str {
+    match name {
+        "current-herdr" => {
+            include_str!("../../../tests/fixtures/session/current-herdr-session.json")
+        }
+        "current-herdr-dev" => {
+            include_str!("../../../tests/fixtures/session/current-herdr-dev-session.json")
+        }
+        other => panic!("unknown session fixture: {other}"),
+    }
+}
+
+fn test_session_path(name: &str) -> String {
+    std::env::current_dir()
+        .unwrap()
+        .join(name)
+        .display()
+        .to_string()
+}
+
+fn state_with_workspaces(names: &[&str]) -> AppState {
+    let mut state = AppState::test_new();
+    state.workspaces = names.iter().map(|name| Workspace::test_new(name)).collect();
+    state.ensure_test_terminals();
+    if !state.workspaces.is_empty() {
+        state.active = Some(0);
+        state.selected = 0;
+        state.mode = Mode::Terminal;
+    }
+    state
+}
+
+fn capture_from_state(state: &AppState) -> SessionSnapshot {
+    let terminal_runtimes = TerminalRuntimeRegistry::new();
+    capture_from_state_with_runtimes(state, &terminal_runtimes)
+}
+
+fn capture_from_state_with_runtimes(
+    state: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+) -> SessionSnapshot {
+    capture(
+        &state.workspaces,
+        &state.terminals,
+        terminal_runtimes,
+        state.active,
+        state.selected,
+    )
+}
+
+fn capture_history_from_state_with_runtimes(
+    state: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+) -> SessionHistorySnapshot {
+    capture_history(&state.workspaces, terminal_runtimes)
+}
+
+fn root_split_ratio(tab: &TabSnapshot) -> Option<f32> {
+    match &tab.layout {
+        LayoutSnapshot::Split { ratio, .. } => Some(*ratio),
+        LayoutSnapshot::Pane(_) => None,
+    }
+}
+
+#[test]
+fn managed_agent_snapshot_omits_pending_and_persists_active_ownership() {
+    let mut state = state_with_workspaces(&["managed-snapshot"]);
+    let root = state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+        .attached_terminal_id
+        .clone();
+    let now = std::time::Instant::now();
+    state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .begin_managed_agent(
+            "reviewer".into(),
+            crate::detect::Agent::Pi,
+            now,
+            std::time::Duration::ZERO,
+            std::time::Duration::from_secs(1),
+        );
+
+    let pending = capture_from_state(&state);
+    let pending_pane = &pending.workspaces[0].tabs[0].panes[&root.raw()];
+    assert_eq!(pending_pane.agent_name, None);
+    assert_eq!(pending_pane.managed_agent_kind, None);
+
+    let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.set_detected_state(
+        Some(crate::detect::Agent::Pi),
+        crate::detect::AgentState::Idle,
+    );
+    assert!(terminal.reconcile_managed_agent_at(now, false));
+    let active = capture_from_state(&state);
+    let active_pane = &active.workspaces[0].tabs[0].panes[&root.raw()];
+    assert_eq!(active_pane.agent_name.as_deref(), Some("reviewer"));
+    assert_eq!(active_pane.managed_agent_kind.as_deref(), Some("pi"));
+}
+
+#[test]
+fn round_trip_empty_session() {
+    let snap = SessionSnapshot {
+        version: SNAPSHOT_VERSION,
+        workspaces: vec![],
+        active: None,
+        selected: 0,
+    };
+    let json = serde_json::to_string(&snap).unwrap();
+    let restored = parse_snapshot(&json).unwrap();
+    assert!(restored.workspaces.is_empty());
+    assert_eq!(restored.active, None);
+}
+
+#[test]
+fn round_trip_layout_snapshot() {
+    let layout = LayoutSnapshot::Split {
+        direction: DirectionSnapshot::Horizontal,
+        ratio: 0.6,
+        first: Box::new(LayoutSnapshot::Pane(0)),
+        second: Box::new(LayoutSnapshot::Split {
+            direction: DirectionSnapshot::Vertical,
+            ratio: 0.5,
+            first: Box::new(LayoutSnapshot::Pane(1)),
+            second: Box::new(LayoutSnapshot::Pane(2)),
+        }),
+    };
+    let json = serde_json::to_string(&layout).unwrap();
+    let restored: LayoutSnapshot = serde_json::from_str(&json).unwrap();
+
+    match restored {
+        LayoutSnapshot::Split { ratio, .. } => assert!((ratio - 0.6).abs() < 0.01),
+        _ => panic!("expected split"),
+    }
+}
+
+#[test]
+fn round_trip_full_workspace_snapshot() {
+    let mut panes = HashMap::new();
+    panes.insert(
+        0,
+        PaneSnapshot {
+            cwd: PathBuf::from("/home/can/Projects/herdr"),
+            label: None,
+            agent_name: None,
+            managed_agent_kind: None,
+            agent_session: None,
+            launch_argv: None,
+        },
+    );
+    panes.insert(
+        1,
+        PaneSnapshot {
+            cwd: PathBuf::from("/home/can/Projects/website"),
+            label: Some("website".into()),
+            agent_name: None,
+            managed_agent_kind: None,
+            agent_session: None,
+            launch_argv: None,
+        },
+    );
+
+    let snap = SessionSnapshot {
+        workspaces: vec![WorkspaceSnapshot {
+            id: Some("wproj".to_string()),
+            custom_name: Some("pi-mono".to_string()),
+            identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
+            public_pane_numbers: HashMap::from([(0, 1), (1, 2)]),
+            next_public_pane_number: 3,
+            public_tab_numbers: vec![1],
+            next_public_tab_number: 2,
+            tabs: vec![TabSnapshot {
+                custom_name: Some("api".to_string()),
+                layout: LayoutSnapshot::Split {
+                    direction: DirectionSnapshot::Horizontal,
+                    ratio: 0.5,
+                    first: Box::new(LayoutSnapshot::Pane(0)),
+                    second: Box::new(LayoutSnapshot::Pane(1)),
+                },
+                panes,
+                zoomed: false,
+                focused: Some(0),
+                root_pane: Some(0),
+            }],
+            active_tab: 0,
+        }],
+        active: Some(0),
+        selected: 0,
+        version: SNAPSHOT_VERSION,
+    };
+
+    let json = serde_json::to_string_pretty(&snap).unwrap();
+    let restored = parse_snapshot(&json).unwrap();
+
+    assert_eq!(restored.workspaces.len(), 1);
+    assert_eq!(restored.workspaces[0].id.as_deref(), Some("wproj"));
+    assert_eq!(
+        restored.workspaces[0].custom_name.as_deref(),
+        Some("pi-mono")
+    );
+    assert_eq!(restored.workspaces[0].tabs.len(), 1);
+    assert_eq!(restored.workspaces[0].tabs[0].panes.len(), 2);
+    assert_eq!(
+        restored.workspaces[0].tabs[0].panes[&0].cwd,
+        PathBuf::from("/home/can/Projects/herdr")
+    );
+    assert_eq!(
+        restored.workspaces[0].tabs[0].panes[&1].label.as_deref(),
+        Some("website")
+    );
+}
+
+#[test]
+fn current_session_fixture_parses() {
+    let snap = parse_snapshot(session_fixture("current-herdr")).unwrap();
+
+    assert_eq!(snap.version, 3);
+    assert_eq!(snap.workspaces.len(), 2);
+    assert_eq!(snap.active, Some(0));
+    assert_eq!(snap.selected, 0);
+    assert_eq!(snap.workspaces[0].tabs.len(), 2);
+    assert_eq!(
+        snap.workspaces[1].identity_cwd,
+        PathBuf::from("/home/test/projects/project-b")
+    );
+}
+
+#[test]
+fn current_dev_session_fixture_parses_additive_fields() {
+    let snap = parse_snapshot(session_fixture("current-herdr-dev")).unwrap();
+
+    assert_eq!(snap.version, 3);
+    assert_eq!(snap.workspaces.len(), 2);
+    assert_eq!(snap.workspaces[0].active_tab, 1);
+    assert_eq!(snap.workspaces[1].tabs[0].panes.len(), 2);
+}
+
+#[test]
+fn old_pane_snapshot_with_embedded_history_is_ignored() {
+    let json = serde_json::json!({
+        "version": SNAPSHOT_VERSION,
+        "workspaces": [{
+            "id": "wtest",
+            "identity_cwd": "/tmp",
+            "tabs": [{
+                "layout": { "Pane": 0 },
+                "panes": {
+                    "0": {
+                        "cwd": "/tmp",
+                        "history": {
+                            "ansi": "legacy-secret",
+                            "lines": 1
+                        }
+                    }
+                },
+                "zoomed": false,
+                "focused": 0,
+                "root_pane": 0
+            }],
+            "active_tab": 0
+        }],
+        "active": 0,
+        "selected": 0
+    })
+    .to_string();
+
+    let restored = parse_snapshot(&json).unwrap();
+
+    let encoded = serde_json::to_string(&restored).unwrap();
+    assert!(!encoded.contains("legacy-secret"));
+    assert!(!encoded.contains("\"history\""));
+}
+
+#[test]
+fn capture_contract_tracks_workspace_order_active_and_selected() {
+    let mut state = state_with_workspaces(&["a", "b", "c"]);
+    state.active = Some(1);
+    state.selected = 2;
+
+    state.move_workspace(1, 0);
+
+    let snapshot = capture_from_state(&state);
+    let ids: Vec<_> = state.workspaces.iter().map(|ws| ws.id.clone()).collect();
+    let captured_ids: Vec<_> = snapshot
+        .workspaces
+        .iter()
+        .map(|ws| ws.id.clone().unwrap())
+        .collect();
+    assert_eq!(captured_ids, ids);
+    assert_eq!(snapshot.active, state.active);
+    assert_eq!(snapshot.selected, state.selected);
+}
+
+#[test]
+fn capture_contract_tracks_workspace_and_tab_names_and_active_tab() {
+    let mut state = state_with_workspaces(&["one"]);
+    state.workspaces[0].set_custom_name("renamed-workspace".into());
+    let second_tab = state.workspaces[0].test_add_tab(Some("logs"));
+    state.workspaces[0].switch_tab(second_tab);
+    state.workspaces[0].tabs[0].set_custom_name("main".into());
+
+    let snapshot = capture_from_state(&state);
+    let workspace = &snapshot.workspaces[0];
+    assert_eq!(workspace.custom_name.as_deref(), Some("renamed-workspace"));
+    assert_eq!(workspace.active_tab, second_tab);
+    assert_eq!(workspace.tabs[0].custom_name.as_deref(), Some("main"));
+    assert_eq!(workspace.tabs[1].custom_name.as_deref(), Some("logs"));
+}
+
+#[test]
+fn capture_contract_tracks_workspace_closure() {
+    let mut state = state_with_workspaces(&["one", "two"]);
+    state.selected = 1;
+    state.active = Some(1);
+
+    state.close_selected_workspace();
+
+    let snapshot = capture_from_state(&state);
+    assert_eq!(snapshot.workspaces.len(), 1);
+    assert_eq!(snapshot.workspaces[0].custom_name.as_deref(), Some("one"));
+    assert_eq!(snapshot.active, Some(0));
+    assert_eq!(snapshot.selected, 0);
+}
+
+#[test]
+fn capture_contract_tracks_layout_focus_zoom_and_root_pane() {
+    let mut state = state_with_workspaces(&["one"]);
+    let root = state.workspaces[0].tabs[0].root_pane;
+    let second = state.workspaces[0].test_split(Direction::Horizontal);
+    state.workspaces[0].tabs[0].layout.focus_pane(second);
+    state.toggle_zoom();
+
+    let snapshot = capture_from_state(&state);
+    let tab = &snapshot.workspaces[0].tabs[0];
+    assert!(matches!(tab.layout, LayoutSnapshot::Split { .. }));
+    assert_eq!(tab.focused, Some(second.raw()));
+    assert_eq!(tab.root_pane, Some(root.raw()));
+    assert!(tab.zoomed);
+    assert_eq!(tab.panes.len(), 2);
+}
+
+#[test]
+fn capture_contract_tracks_focus_navigation() {
+    let mut state = state_with_workspaces(&["one"]);
+    let root = state.workspaces[0].tabs[0].root_pane;
+    let second = state.workspaces[0].test_split(Direction::Horizontal);
+    crate::ui::compute_view_with_runtime_registry(
+        &mut state,
+        &crate::terminal::TerminalRuntimeRegistry::new(),
+        Rect::new(0, 0, 106, 20),
+    );
+
+    state.navigate_pane(NavDirection::Right);
+
+    let snapshot = capture_from_state(&state);
+    assert_eq!(snapshot.workspaces[0].tabs[0].focused, Some(second.raw()));
+    assert_ne!(snapshot.workspaces[0].tabs[0].focused, Some(root.raw()));
+}
+
+#[test]
+fn capture_contract_tracks_resize_ratio_changes() {
+    let mut state = state_with_workspaces(&["one"]);
+    let root = state.workspaces[0].tabs[0].root_pane;
+    state.workspaces[0].test_split(Direction::Horizontal);
+    state.workspaces[0].layout.focus_pane(root);
+    crate::ui::compute_view_with_runtime_registry(
+        &mut state,
+        &crate::terminal::TerminalRuntimeRegistry::new(),
+        Rect::new(0, 0, 106, 20),
+    );
+    let before = capture_from_state(&state);
+
+    state.resize_pane(NavDirection::Right);
+
+    let after = capture_from_state(&state);
+    let before_ratio = root_split_ratio(&before.workspaces[0].tabs[0]).unwrap();
+    let after_ratio = root_split_ratio(&after.workspaces[0].tabs[0]).unwrap();
+    assert_ne!(before_ratio, after_ratio);
+}
+
+#[test]
+fn capture_contract_tracks_pane_closure() {
+    let mut state = state_with_workspaces(&["one"]);
+    state.workspaces[0].test_split(Direction::Horizontal);
+
+    state.close_pane();
+
+    let snapshot = capture_from_state(&state);
+    let tab = &snapshot.workspaces[0].tabs[0];
+    assert_eq!(tab.panes.len(), 1);
+    assert!(matches!(tab.layout, LayoutSnapshot::Pane(_)));
+    assert!(!tab.zoomed);
+}
+
+#[test]
+fn capture_contract_tracks_public_id_counters() {
+    let mut state = state_with_workspaces(&["one"]);
+    let second = state.workspaces[0].test_split(Direction::Horizontal);
+    let third = state.workspaces[0].test_split(Direction::Vertical);
+    let second_tab = state.workspaces[0].test_add_tab(None);
+
+    state.workspaces[0].close_pane(second);
+
+    let snapshot = capture_from_state(&state);
+    let workspace = &snapshot.workspaces[0];
+    assert_eq!(
+        workspace.public_pane_numbers,
+        HashMap::from([
+            (state.workspaces[0].tabs[0].root_pane.raw(), 1),
+            (third.raw(), 3),
+            (state.workspaces[0].tabs[second_tab].root_pane.raw(), 4),
+        ])
+    );
+    assert_eq!(workspace.next_public_pane_number, 5);
+    assert_eq!(workspace.public_tab_numbers, vec![1, 2]);
+    assert_eq!(workspace.next_public_tab_number, 3);
+}
+
+#[test]
+fn capture_contract_tracks_workspace_identity_and_pane_cwds() {
+    let mut state = state_with_workspaces(&["one"]);
+    let root = state.workspaces[0].tabs[0].root_pane;
+    state.workspaces[0].identity_cwd = PathBuf::from("/tmp/pion");
+    let second = state.workspaces[0].test_split(Direction::Horizontal);
+    state.ensure_test_terminals();
+    let root_terminal_id = state.workspaces[0].tabs[0].panes[&root]
+        .attached_terminal_id
+        .clone();
+    state.terminals.get_mut(&root_terminal_id).unwrap().cwd = PathBuf::from("/tmp/pion");
+    let second_terminal_id = state.workspaces[0].tabs[0].panes[&second]
+        .attached_terminal_id
+        .clone();
+    state.terminals.get_mut(&second_terminal_id).unwrap().cwd = PathBuf::from("/tmp/herdr");
+
+    let snapshot = capture_from_state(&state);
+    let workspace = &snapshot.workspaces[0];
+    let tab = &workspace.tabs[0];
+    assert_eq!(workspace.identity_cwd, PathBuf::from("/tmp/pion"));
+    assert_eq!(tab.panes[&root.raw()].cwd, PathBuf::from("/tmp/pion"));
+    assert_eq!(tab.panes[&second.raw()].cwd, PathBuf::from("/tmp/herdr"));
+}
+
+#[tokio::test]
+async fn capture_contract_tracks_pane_history_from_runtime() {
+    let state = state_with_workspaces(&["one"]);
+    let root = state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+        .attached_terminal_id
+        .clone();
+    let mut terminal_runtimes = TerminalRuntimeRegistry::new();
+    terminal_runtimes.insert(
+        terminal_id,
+        crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+            20,
+            3,
+            4096,
+            b"alpha\r\nbeta\r\ngamma\r\n",
+        ),
+    );
+
+    let snapshot = capture_from_state_with_runtimes(&state, &terminal_runtimes);
+    let encoded = serde_json::to_string(&snapshot).unwrap();
+    assert!(!encoded.contains("alpha"));
+    assert!(!encoded.contains("\"history\""));
+
+    let history_snapshot = capture_history_from_state_with_runtimes(&state, &terminal_runtimes);
+    let history = &history_snapshot.workspaces[0].tabs[0].panes[&root.raw()];
+
+    assert!(history.ansi.contains("alpha"));
+    assert!(history.ansi.contains("gamma"));
+    assert!(history.lines >= 3);
+}
+
+#[tokio::test]
+async fn capture_contract_tracks_history_for_each_pane() {
+    let mut state = state_with_workspaces(&["one"]);
+    let first = state.workspaces[0].tabs[0].root_pane;
+    let second = state.workspaces[0].test_split(Direction::Horizontal);
+    let first_terminal_id = state.workspaces[0].tabs[0].panes[&first]
+        .attached_terminal_id
+        .clone();
+    let second_terminal_id = state.workspaces[0].tabs[0].panes[&second]
+        .attached_terminal_id
+        .clone();
+    let mut terminal_runtimes = TerminalRuntimeRegistry::new();
+    terminal_runtimes.insert(
+        first_terminal_id,
+        crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+            20,
+            3,
+            4096,
+            b"first-pane-history\r\n",
+        ),
+    );
+    terminal_runtimes.insert(
+        second_terminal_id,
+        crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+            20,
+            3,
+            4096,
+            b"second-pane-history\r\n",
+        ),
+    );
+
+    let snapshot = capture_from_state_with_runtimes(&state, &terminal_runtimes);
+    let encoded = serde_json::to_string(&snapshot).unwrap();
+    assert!(!encoded.contains("first-pane-history"));
+    assert!(!encoded.contains("second-pane-history"));
+
+    let history_snapshot = capture_history_from_state_with_runtimes(&state, &terminal_runtimes);
+    let tab = &history_snapshot.workspaces[0].tabs[0];
+    let first_history = &tab.panes[&first.raw()];
+    let second_history = &tab.panes[&second.raw()];
+
+    assert!(first_history.ansi.contains("first-pane-history"));
+    assert!(second_history.ansi.contains("second-pane-history"));
+}
+
+#[test]
+fn capture_contract_tracks_hook_authority_agent_session() {
+    let mut state = state_with_workspaces(&["one"]);
+    let session_path = test_session_path("pi-session.jsonl");
+    let root = state.workspaces[0].tabs[0].root_pane;
+    state.ensure_test_terminals();
+    let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+        .attached_terminal_id
+        .clone();
+    let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.set_detected_state(
+        Some(crate::detect::Agent::Pi),
+        crate::detect::AgentState::Idle,
+    );
+    terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+        source: "herdr:pi".into(),
+        agent: "pi".into(),
+        session_ref: crate::agent_resume::AgentSessionRef::path(session_path.clone()).unwrap(),
+    });
+
+    let snapshot = capture_from_state(&state);
+    let agent_session = snapshot.workspaces[0].tabs[0].panes[&root.raw()]
+        .agent_session
+        .as_ref()
+        .expect("agent session should be captured");
+
+    assert_eq!(agent_session.source, "herdr:pi");
+    assert_eq!(agent_session.agent, "pi");
+    assert_eq!(
+        agent_session.kind,
+        crate::agent_resume::AgentSessionRefKind::Path
+    );
+    assert_eq!(agent_session.value, session_path);
+}
+
+#[test]
+fn capture_contract_preserves_restored_agent_session() {
+    let mut state = state_with_workspaces(&["one"]);
+    let root = state.workspaces[0].tabs[0].root_pane;
+    state.ensure_test_terminals();
+    let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+        .attached_terminal_id
+        .clone();
+    state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:opencode".into(),
+            agent: "opencode".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("opencode-session").unwrap(),
+        });
+
+    let snapshot = capture_from_state(&state);
+    let agent_session = snapshot.workspaces[0].tabs[0].panes[&root.raw()]
+        .agent_session
+        .as_ref()
+        .expect("persisted agent session should be captured");
+
+    assert_eq!(agent_session.source, "herdr:opencode");
+    assert_eq!(agent_session.agent, "opencode");
+    assert_eq!(
+        agent_session.kind,
+        crate::agent_resume::AgentSessionRefKind::Id
+    );
+    assert_eq!(agent_session.value, "opencode-session");
+}
+
+#[test]
+fn old_unversioned_snapshot_loads_as_version_0() {
+    let json = r#"{"workspaces":[],"active":null,"selected":0}"#;
+    let snap = parse_snapshot(json).unwrap();
+    assert_eq!(snap.version, 0);
+}
+
+#[test]
+fn future_version_is_rejected() {
+    let json = r#"{"version":999,"workspaces":[],"active":null,"selected":0}"#;
+    assert!(parse_snapshot(json).is_err());
+}
+
+#[test]
+fn active_tab_default_is_zero() {
+    let json = r#"{"custom_name":"test","identity_cwd":"/tmp","tabs":[]}"#;
+    let ws: WorkspaceSnapshot = serde_json::from_str(json).unwrap();
+    assert_eq!(ws.active_tab, 0);
+}
+
+#[test]
+fn restore_falls_back_to_home_when_cwd_missing() {
+    let mut panes = HashMap::new();
+    panes.insert(
+        0,
+        PaneSnapshot {
+            cwd: PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test"),
+            label: None,
+            agent_name: None,
+            managed_agent_kind: None,
+            agent_session: None,
+            launch_argv: None,
+        },
+    );
+    panes.insert(
+        1,
+        PaneSnapshot {
+            cwd: std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("/tmp")),
+            label: None,
+            agent_name: None,
+            managed_agent_kind: None,
+            agent_session: None,
+            launch_argv: None,
+        },
+    );
+
+    let snap = SessionSnapshot {
+        version: SNAPSHOT_VERSION,
+        workspaces: vec![WorkspaceSnapshot {
+            id: Some("test-ws".to_string()),
+            custom_name: Some("fallback test".to_string()),
+            identity_cwd: PathBuf::from("/tmp"),
+            public_pane_numbers: HashMap::new(),
+            next_public_pane_number: 0,
+            public_tab_numbers: Vec::new(),
+            next_public_tab_number: 0,
+            tabs: vec![TabSnapshot {
+                custom_name: None,
+                layout: LayoutSnapshot::Split {
+                    direction: DirectionSnapshot::Horizontal,
+                    ratio: 0.5,
+                    first: Box::new(LayoutSnapshot::Pane(0)),
+                    second: Box::new(LayoutSnapshot::Pane(1)),
+                },
+                panes,
+                zoomed: false,
+                focused: Some(0),
+                root_pane: Some(0),
+            }],
+            active_tab: 0,
+        }],
+        active: Some(0),
+        selected: 0,
+    };
+
+    let json = serde_json::to_string(&snap).unwrap();
+    let restored = parse_snapshot(&json).unwrap();
+    assert_eq!(restored.workspaces.len(), 1);
+    assert_eq!(
+        restored.workspaces[0].tabs[0].panes[&0].cwd,
+        PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test")
+    );
+}

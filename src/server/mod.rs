@@ -1,8 +1,11 @@
 pub(crate) mod api;
 pub(crate) mod app;
 mod app_loop;
+mod app_queries;
+pub(crate) mod app_settings;
 pub(crate) mod app_state;
 pub(crate) mod clients;
+mod config_reload;
 pub mod main_loop;
 pub(crate) mod notifications;
 pub(crate) mod persistence;

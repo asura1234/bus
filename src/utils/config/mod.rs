@@ -1,6 +1,14 @@
+mod advanced;
+mod experimental;
+mod interface;
 mod load;
+#[path = "core.rs"]
 mod model;
+mod server;
+mod session;
 mod sound;
+mod terminal;
+mod toast;
 pub(crate) mod ui;
 
 pub use self::{

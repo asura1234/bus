@@ -599,8 +599,8 @@ fn no_handle_internal_event_bypass_in_module() {
         ("shutdown.rs", include_str!("../shutdown.rs")),
         ("clients/focus.rs", include_str!("../clients/focus.rs")),
         (
-            "clients/endpoint_requests.rs",
-            include_str!("../clients/endpoint_requests.rs"),
+            "clients/requests.rs",
+            include_str!("../clients/requests.rs"),
         ),
         (
             "notifications/delivery.rs",
@@ -614,6 +614,35 @@ fn no_handle_internal_event_bypass_in_module() {
         (
             "rendering/incremental.rs",
             include_str!("../rendering/incremental.rs"),
+        ),
+        (
+            "clients/foreground.rs",
+            include_str!("../clients/foreground.rs"),
+        ),
+        ("clients/writer.rs", include_str!("../clients/writer.rs")),
+        (
+            "clients/events/mod.rs",
+            include_str!("../clients/events/mod.rs"),
+        ),
+        (
+            "clients/events/connection.rs",
+            include_str!("../clients/events/connection.rs"),
+        ),
+        (
+            "clients/events/shell.rs",
+            include_str!("../clients/events/shell.rs"),
+        ),
+        (
+            "api/server_methods.rs",
+            include_str!("../api/server_methods.rs"),
+        ),
+        (
+            "api/terminal_read.rs",
+            include_str!("../api/terminal_read.rs"),
+        ),
+        (
+            "rendering/window_title.rs",
+            include_str!("../rendering/window_title.rs"),
         ),
     ];
     let mut bypass_lines: Vec<String> = Vec::new();

@@ -1,15 +1,16 @@
 use ratatui::layout::Rect;
 
+mod chrome;
 mod draw;
 mod layout;
 mod scrollbar;
+mod selection;
 
 use crate::utils::render::{status_popups as status, widgets};
 use crate::utils::text::width as text;
 
-pub(crate) use self::draw::{
-    apply_pane_chrome, pane_inner_rect, pane_is_scrolled_back, render_selection_highlight,
-};
+pub(crate) use self::chrome::{apply_pane_chrome, pane_inner_rect};
+pub(crate) use self::draw::pane_is_scrolled_back;
 pub(crate) use self::layout::{
     compute_tab_surface, compute_tab_surface_for, render_tab_surface, resize_tab_surface,
     tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceLayout, TabSurfaceTarget, TabSurfaceView,
@@ -20,11 +21,12 @@ pub(crate) use self::scrollbar::{
     render_pane_scrollbar_buffer, scrollbar_offset_from_drag_row, scrollbar_offset_from_row,
     scrollbar_thumb_grab_offset,
 };
+pub(crate) use self::selection::render_selection_highlight;
 use self::status::copy_feedback_rect;
 pub(crate) use self::status::{render_config_diagnostic_buffer, render_copy_feedback_buffer};
-pub(crate) use crate::server::workspaces::agent_panel::{
-    agent_panel_entries_from, AgentPanelEntry,
-};
+pub(crate) use crate::server::workspaces::agent_view::agent_panel_entries_from;
+#[cfg(test)]
+pub(crate) use crate::server::workspaces::agent_view::AgentPanelEntry;
 
 use crate::app::AppState;
 use crate::terminal::TerminalRuntimeRegistry;

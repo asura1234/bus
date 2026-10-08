@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::manifest::regions::validate_region_name;
 
 #[test]
 fn bottom_non_empty_lines_uses_bottom_occurrence_for_repeated_text() {

@@ -104,90 +104,6 @@ pub(crate) fn terminal_grid_size() -> std::io::Result<(u16, u16)> {
     Ok((cols, rows))
 }
 
-#[cfg(not(windows))]
-pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
-    command.spawn().map(|child| child.id())
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn detach_server_daemon_command(command: &mut std::process::Command) {
-    use std::os::unix::process::CommandExt;
-
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn current_process_is_detached_server_daemon() -> bool {
-    unsafe { libc::getsid(0) == libc::getpid() }
-}
-
-/// Raised by the SIGWINCH handler, consumed by the host resize watcher.
-#[cfg(unix)]
-static TERMINAL_RESIZE_SIGNALLED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-#[cfg(unix)]
-extern "C" fn record_terminal_resize_signal(_signal: libc::c_int) {
-    TERMINAL_RESIZE_SIGNALLED.store(true, std::sync::atomic::Ordering::Release);
-}
-
-/// Records SIGWINCH events that size polling can miss.
-#[cfg(unix)]
-pub(crate) fn watch_terminal_resize_signal() {
-    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-    action.sa_sigaction =
-        record_terminal_resize_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
-    // Keep blocking stdin and socket reads from failing with EINTR.
-    action.sa_flags = libc::SA_RESTART;
-    unsafe {
-        libc::sigemptyset(&mut action.sa_mask);
-        libc::sigaction(libc::SIGWINCH, &action, std::ptr::null_mut());
-    }
-}
-
-#[cfg(not(unix))]
-pub(crate) fn watch_terminal_resize_signal() {}
-
-#[cfg(unix)]
-extern "C" fn disregard_signal(_signal: libc::c_int) {}
-
-/// Makes SIGINT harmless to this process. A no-op handler is used instead of
-/// SIG_IGN because exec resets handlers but inherits SIG_IGN, and the client
-/// may spawn a server whose agents must still be interruptible with Ctrl+C.
-#[cfg(unix)]
-pub(crate) fn disregard_interrupt_signal() {
-    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-    action.sa_sigaction = disregard_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
-    action.sa_flags = libc::SA_RESTART;
-    unsafe {
-        libc::sigemptyset(&mut action.sa_mask);
-        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
-    }
-}
-
-/// Raw console mode reads Ctrl+C as input rather than a control event.
-#[cfg(not(unix))]
-pub(crate) fn disregard_interrupt_signal() {}
-
-/// Returns whether a terminal size change was signalled since the last call.
-#[cfg(unix)]
-pub(crate) fn take_terminal_resize_signal() -> bool {
-    TERMINAL_RESIZE_SIGNALLED.swap(false, std::sync::atomic::Ordering::AcqRel)
-}
-
-/// Windows relies on size polling.
-#[cfg(not(unix))]
-pub(crate) fn take_terminal_resize_signal() -> bool {
-    false
-}
-
 #[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardCommand {
@@ -250,6 +166,26 @@ pub(crate) fn read_limited_reader(
 mod unix;
 #[cfg(unix)]
 pub(crate) use unix::begin_cli_output;
+
+mod daemon;
+mod signals;
+#[cfg(not(windows))]
+pub use daemon::launch_server_daemon_command;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use daemon::{current_process_is_detached_server_daemon, detach_server_daemon_command};
+pub(crate) use signals::{
+    disregard_interrupt_signal, take_terminal_resize_signal, watch_terminal_resize_signal,
+};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod desktop;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use desktop::{
+    interactive_shell_command, scrollback_editor_argv, should_draw_host_cursor_by_default,
+    should_query_host_terminal_palette,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use desktop::{open_url, read_clipboard_image, show_desktop_notification, write_clipboard};
 
 mod fs;
 pub(crate) use fs::{create_private_state_file, replace_file, sync_parent_directory};
@@ -401,18 +337,7 @@ fn child_exit_classification_only_checkpoints_interruptions() {
 mod tests {
     use super::*;
 
-    #[test]
-    fn terminal_resize_signal_is_recorded_once_per_delivery() {
-        watch_terminal_resize_signal();
-        assert!(!take_terminal_resize_signal());
-
-        unsafe {
-            libc::raise(libc::SIGWINCH);
-        }
-
-        assert!(take_terminal_resize_signal());
-        assert!(!take_terminal_resize_signal());
-    }
+    include!("tests/signals_test.rs");
 
     #[test]
     fn pane_shell_process_names_reject_exec_replacement_programs() {

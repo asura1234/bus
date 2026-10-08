@@ -255,7 +255,9 @@ impl From<KeyEvent> for TerminalKey {
     }
 }
 
-pub(crate) const KITTY_FLAG_REPORT_ALL_KEYS: u16 = 0b0000_1000;
+#[cfg(test)]
+use super::protocol::KeyboardProtocol;
+pub(crate) use super::protocol::KITTY_FLAG_REPORT_ALL_KEYS;
 
 #[cfg(not(windows))]
 pub fn ime_compatible_keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
@@ -311,30 +313,6 @@ fn host_modify_other_keys_mode_for_env(
     }
 
     None
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyboardProtocol {
-    Legacy,
-    Kitty { flags: u16 },
-}
-
-impl KeyboardProtocol {
-    pub fn from_kitty_flags(flags: u16) -> Self {
-        if flags == 0 {
-            Self::Legacy
-        } else {
-            Self::Kitty { flags }
-        }
-    }
-
-    pub(crate) fn reports_event_types(self) -> bool {
-        matches!(self, Self::Kitty { flags } if flags & 0b0000_0010 != 0)
-    }
-
-    pub(crate) fn reports_all_keys(self) -> bool {
-        matches!(self, Self::Kitty { flags } if flags & KITTY_FLAG_REPORT_ALL_KEYS != 0)
-    }
 }
 
 #[cfg(test)]
@@ -418,21 +396,7 @@ mod tests {
         assert_eq!(key.generated_text.as_deref(), Some("É"));
     }
 
-    #[test]
-    fn protocol_from_zero_flags_is_legacy() {
-        assert_eq!(
-            KeyboardProtocol::from_kitty_flags(0),
-            KeyboardProtocol::Legacy
-        );
-    }
-
-    #[test]
-    fn protocol_from_nonzero_flags_is_kitty() {
-        assert_eq!(
-            KeyboardProtocol::from_kitty_flags(7),
-            KeyboardProtocol::Kitty { flags: 7 }
-        );
-    }
+    include!("tests/protocol_test.rs");
 
     #[cfg(not(windows))]
     #[test]

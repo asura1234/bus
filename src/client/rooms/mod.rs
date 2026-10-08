@@ -1,6 +1,7 @@
 mod chat_search;
 #[path = "dialogs/deletion.rs"]
 mod deletion;
+mod drafts;
 #[path = "widgets/editor.rs"]
 mod editor;
 #[path = "dialogs/forms.rs"]
@@ -17,6 +18,7 @@ mod selection;
 mod state;
 #[path = "render/thumbnails.rs"]
 mod thumbnails;
+mod toast;
 pub(super) use render::layout;
 pub(super) use state::*;
 

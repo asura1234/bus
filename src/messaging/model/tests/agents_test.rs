@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::BTreeSet;
 
 #[test]
 fn agent_color_assignment_maximizes_room_separation_and_reserves_you() {

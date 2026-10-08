@@ -470,3 +470,50 @@ impl HeadlessServer {
         (had_event, changed)
     }
 }
+
+use crate::detect::AgentState;
+use crate::layout::PaneId;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastKind {
+    NeedsAttention,
+    Finished,
+    UpdateInstalled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToastTarget {
+    pub workspace_id: String,
+    pub pane_id: PaneId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToastNotification {
+    pub kind: ToastKind,
+    pub title: String,
+    pub context: String,
+    pub position: Option<crate::config::ToastHerdrPosition>,
+    pub target: Option<ToastTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAgentNotification {
+    pub pane_id: PaneId,
+    pub workspace_id: String,
+    pub agent_label: String,
+    pub known_agent: Option<crate::detect::Agent>,
+    pub kind: ToastKind,
+    pub state: AgentState,
+    pub deadline: std::time::Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentNotificationDelivery {
+    pub pane_id: PaneId,
+    pub workspace_id: String,
+    pub agent_label: String,
+    pub known_agent: Option<crate::detect::Agent>,
+    pub kind: ToastKind,
+    pub toast: Option<ToastNotification>,
+    pub client_notification: Option<ToastNotification>,
+}

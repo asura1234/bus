@@ -1,3 +1,4 @@
+use super::callbacks::MAX_CLIPBOARD_BYTES;
 use super::*;
 
 fn test_clipboard_content(mime: &[u8], data: &[u8]) -> ffi::GhosttyClipboardContent {

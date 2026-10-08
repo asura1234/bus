@@ -93,38 +93,7 @@ pub(super) fn sync_client_shell_keyboard_report_all(
     Ok(())
 }
 
-pub(super) fn install_client_shell_snapshot(
-    state: &mut ClientState,
-    snapshot: Box<crate::protocol::ClientShellSnapshot>,
-    connection: &mut endpoint::ServerConnection,
-) -> Result<(), ClientError> {
-    let Some(shell) = state.shell.as_mut() else {
-        return Ok(());
-    };
-    let previous_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
-    shell.install_snapshot(snapshot);
-    let graphics_cleanup = shell.take_pending_graphics_cleanup();
-    let next_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
-    let composed = shell.compose(state.reported_size.0, state.reported_size.1);
-    let resize = (previous_size != next_size).then(|| {
-        client_shell_resize_message(
-            shell,
-            state.reported_size.0,
-            state.reported_size.1,
-            state.reported_cell_size.0,
-            state.reported_cell_size.1,
-            state.pixel_geometry_exact,
-        )
-    });
-    state.present_graphics(&graphics_cleanup);
-    if let Some(resize) = resize {
-        write_to_server(connection, &resize).map_err(ClientError::ConnectionLost)?;
-    }
-    if let Some(frame) = composed {
-        state.present_frame(frame);
-    }
-    Ok(())
-}
+pub(super) use crate::client::compositor::snapshot::install_client_shell_snapshot;
 
 pub(super) fn finish_client_shell_input(
     state: &mut ClientState,

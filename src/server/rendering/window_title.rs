@@ -98,6 +98,122 @@ impl App {
     }
 }
 
+use crate::api;
+use crate::protocol::ServerMessage;
+use crate::server::main_loop::HeadlessServer;
+use std::collections::HashSet;
+
+impl HeadlessServer {
+    /// Pulls only titles reported dirty by the PTY parser. A focused pane title
+    /// is forwarded as an independent client side effect; only sidebar title
+    /// tokens require a UI render.
+    pub(in crate::server) fn sync_terminal_title_sources(
+        &mut self,
+        sources: &HashSet<crate::layout::PaneId>,
+    ) -> (bool, bool) {
+        let focused_source = self
+            .app
+            .state
+            .active
+            .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
+            .and_then(|workspace| workspace.focused_pane_id())
+            .is_some_and(|pane_id| sources.contains(&pane_id));
+        self.app.sync_terminal_titles(sources);
+        let outer_title_synced = focused_source && self.app.window_title_uses_terminal_title();
+        if outer_title_synced {
+            self.sync_window_title();
+        }
+        (false, outer_title_synced)
+    }
+
+    /// Renders `ui.window_title` against current session state. `None` means
+    /// window titles are disabled or every token resolved empty, which leaves
+    /// the client on Herdr's default title.
+    fn configured_window_title(&self) -> Option<String> {
+        self.app
+            .window_title()
+            .and_then(|title| crate::config::sanitize_window_title_text(&title))
+    }
+
+    /// Pushes the configured outer window title to the foreground client when it
+    /// changed. Herdr consumes each pane's own `OSC 0`/`OSC 2`, so without this
+    /// the host terminal title never follows the session — which is what window
+    /// managers read for tab and group bar labels.
+    pub(in crate::server) fn sync_window_title(&mut self) {
+        let title = match &self.api_window_title {
+            Some(title) => Some(title.clone()),
+            None if self.app.window_title_configured() => self.configured_window_title(),
+            None => return,
+        };
+        if let (Some(client_id), Some((sent_client_id, sent_title))) =
+            (self.foreground_client_id, self.sent_window_title.as_ref())
+        {
+            if *sent_client_id == client_id && *sent_title == title {
+                return;
+            }
+        }
+        self.send_window_title(title);
+    }
+
+    /// Sends a window title and remembers it only when a foreground client took
+    /// it, so the next client to attach is written to rather than skipped.
+    fn send_window_title(&mut self, title: Option<String>) -> bool {
+        let Some(client_id) = self.foreground_client_id else {
+            self.sent_window_title = None;
+            return false;
+        };
+        let sent = self.send_to_client(
+            client_id,
+            ServerMessage::WindowTitle {
+                title: title.clone(),
+            },
+        );
+        self.sent_window_title = sent.then_some((client_id, title));
+        sent
+    }
+
+    pub(in crate::server) fn handle_client_window_title_api(
+        &mut self,
+        id: String,
+        title: Option<String>,
+    ) -> String {
+        use api::schema::{ClientWindowTitleReason, ResponseResult};
+
+        let title = match title {
+            Some(title) => match crate::config::sanitize_window_title_text(&title) {
+                Some(title) => Some(title),
+                None => {
+                    return serde_json::to_string(&api::schema::ErrorResponse {
+                        id,
+                        error: api::schema::ErrorBody {
+                            code: "invalid_params".into(),
+                            message: "window title is empty".into(),
+                        },
+                    })
+                    .unwrap_or_else(|_| "{}".to_string());
+                }
+            },
+            None => None,
+        };
+        let set_title = title.is_some();
+        // An explicit title suppresses `ui.window_title` until it is cleared,
+        // and clearing restores the configured title rather than only "herdr".
+        self.api_window_title = title.clone();
+        let title = title.or_else(|| self.configured_window_title());
+        let changed = self.send_window_title(title);
+        let reason = match (changed, set_title) {
+            (true, true) => ClientWindowTitleReason::Set,
+            (true, false) => ClientWindowTitleReason::Cleared,
+            (false, _) => ClientWindowTitleReason::NoForegroundClient,
+        };
+        serde_json::to_string(&api::schema::SuccessResponse {
+            id,
+            result: ResponseResult::ClientWindowTitle { changed, reason },
+        })
+        .unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::app::App;

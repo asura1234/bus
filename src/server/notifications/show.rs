@@ -64,6 +64,209 @@ fn toast_event_text(kind: app::state::ToastKind) -> &'static str {
     }
 }
 
+use crate::server::api::errors;
+use crate::server::app::{App, ToastKind};
+use std::time::{Duration, Instant};
+
+const API_NOTIFICATION_RATE_LIMIT: Duration = Duration::from_secs(1);
+impl App {
+    pub(crate) fn refresh_new_herdr_toast_context_for_update(
+        &mut self,
+        update: &crate::server::terminals::events::PaneStateUpdate,
+        previous_toast: &Option<crate::server::app_state::ToastNotification>,
+    ) {
+        if !matches!(
+            self.state.toast_config.delivery,
+            crate::config::ToastDelivery::Herdr
+        ) || self.state.toast == *previous_toast
+        {
+            return;
+        }
+
+        let Some(target) = self
+            .state
+            .toast
+            .as_ref()
+            .and_then(|toast| toast.target.as_ref())
+        else {
+            return;
+        };
+        if target.pane_id != update.pane_id {
+            return;
+        }
+        let Some(ws) = self.state.workspaces.get(update.ws_idx) else {
+            return;
+        };
+        if ws.id != target.workspace_id {
+            return;
+        }
+
+        let workspace_label = ws.display_name_from(&self.state.terminals, &self.terminal_runtimes);
+        let context = crate::server::terminals::events::notification_context(
+            ws,
+            &workspace_label,
+            update.ws_idx,
+            update.pane_id,
+        );
+        if let Some(toast) = self.state.toast.as_mut() {
+            toast.context = context;
+        }
+    }
+
+    pub(crate) fn sync_toast_deadline(
+        &mut self,
+        previous_toast: Option<crate::server::app_state::ToastNotification>,
+    ) {
+        if self.state.toast != previous_toast {
+            self.toast_deadline = self.state.toast.as_ref().map(|toast| {
+                let duration = match toast.kind {
+                    ToastKind::NeedsAttention => Duration::from_secs(8),
+                    ToastKind::Finished => Duration::from_secs(5),
+                    ToastKind::UpdateInstalled => Duration::from_secs(3),
+                };
+                Instant::now() + duration
+            });
+        }
+    }
+
+    pub(crate) fn refresh_agent_notification_delivery_contexts(
+        &mut self,
+        deliveries: &mut [crate::server::app_state::AgentNotificationDelivery],
+    ) {
+        for delivery in deliveries {
+            let Some(ws_idx) = self
+                .state
+                .workspaces
+                .iter()
+                .position(|ws| ws.id == delivery.workspace_id)
+            else {
+                continue;
+            };
+            let ws = &self.state.workspaces[ws_idx];
+            let workspace_label =
+                ws.display_name_from(&self.state.terminals, &self.terminal_runtimes);
+            let context = crate::server::terminals::events::notification_context(
+                ws,
+                &workspace_label,
+                ws_idx,
+                delivery.pane_id,
+            );
+            if let Some(toast) = delivery.toast.as_mut() {
+                toast.context = context.clone();
+            }
+            if let Some(toast) = delivery.client_notification.as_mut() {
+                toast.context = context.clone();
+            }
+            if let Some(toast) = self.state.toast.as_mut() {
+                if toast.target.as_ref().is_some_and(|target| {
+                    target.workspace_id == delivery.workspace_id
+                        && target.pane_id == delivery.pane_id
+                }) {
+                    toast.context = context;
+                }
+            }
+        }
+    }
+
+    pub(in crate::server) fn handle_notification_show(
+        &mut self,
+        id: String,
+        params: crate::protocol::api::schema::NotificationShowParams,
+    ) -> String {
+        use crate::protocol::api::schema::{NotificationShowReason, ResponseResult};
+
+        let Some(title) = sanitized_notification_text(&params.title, 80) else {
+            return errors::encode_error(id, "invalid_params", "notification title is empty");
+        };
+        let body = params
+            .body
+            .as_deref()
+            .and_then(|body| sanitized_notification_text(body, 240));
+
+        let reason = match self.state.toast_config.delivery {
+            crate::config::ToastDelivery::Off => NotificationShowReason::Disabled,
+            crate::config::ToastDelivery::Herdr => {
+                if self.state.toast.is_some() {
+                    NotificationShowReason::Busy
+                } else if self.api_notification_rate_limited(Instant::now()) {
+                    NotificationShowReason::RateLimited
+                } else {
+                    let previous_toast = self.state.toast.clone();
+                    self.mark_api_notification_shown(Instant::now());
+                    self.state.toast = Some(crate::server::app_state::ToastNotification {
+                        kind: ToastKind::UpdateInstalled,
+                        title,
+                        context: body.unwrap_or_default(),
+                        position: params.position,
+                        target: None,
+                    });
+                    self.sync_toast_deadline(previous_toast);
+                    NotificationShowReason::Shown
+                }
+            }
+            crate::config::ToastDelivery::Terminal | crate::config::ToastDelivery::System => {
+                NotificationShowReason::NoForegroundClient
+            }
+        };
+
+        errors::encode_success(
+            id,
+            ResponseResult::NotificationShow {
+                shown: matches!(reason, NotificationShowReason::Shown),
+                reason,
+            },
+        )
+    }
+
+    pub(crate) fn api_notification_rate_limited(&self, now: Instant) -> bool {
+        self.last_api_notification_at
+            .is_some_and(|last| now.duration_since(last) < API_NOTIFICATION_RATE_LIMIT)
+    }
+
+    pub(crate) fn mark_api_notification_shown(&mut self, now: Instant) {
+        self.last_api_notification_at = Some(now);
+    }
+}
+
+fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> {
+    let mut sanitized = String::new();
+    let mut previous_space = false;
+    for ch in value.chars() {
+        let replacement = if ch == '\n' || ch == '\r' || ch == '\t' {
+            Some(' ')
+        } else if ch.is_control() {
+            None
+        } else {
+            Some(ch)
+        };
+        let Some(ch) = replacement else {
+            continue;
+        };
+        if ch.is_whitespace() {
+            if previous_space {
+                continue;
+            }
+            previous_space = true;
+            sanitized.push(' ');
+        } else {
+            previous_space = false;
+            sanitized.push(ch);
+        }
+        if sanitized.chars().count() >= max_chars {
+            break;
+        }
+    }
+    let sanitized = sanitized.trim().to_string();
+    (!sanitized.is_empty()).then_some(sanitized)
+}
+
+pub fn split_message(message: &str) -> (&str, Option<&str>) {
+    match message.split_once(": ") {
+        Some((title, body)) if !title.is_empty() && !body.is_empty() => (title, Some(body)),
+        _ => (message, None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
