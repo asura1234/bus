@@ -121,7 +121,7 @@ impl RoomClient {
                 }
             }
         });
-        let client = Self {
+        let mut client = Self {
             child: Some(child),
             master: Some(pair.master),
             base,
@@ -139,6 +139,11 @@ impl RoomClient {
             );
             thread::sleep(Duration::from_millis(25));
         }
+        // The server socket precedes the client's asynchronous default-room
+        // creation. Wait for its notes acknowledgement as well as its header
+        // before test controls can race that startup RoomCreated event.
+        client.observe("Goal: stay in the room to coordinate selected agents.");
+        client.observe_room("bus");
         client
     }
 
@@ -208,6 +213,22 @@ impl RoomClient {
     ) {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
+            assert!(
+                Instant::now() < deadline,
+                "client did not settle {needle:?}: {}",
+                self.screen.rows_text()
+            );
+            if ready(&self.screen) {
+                // Drain trailing output and attest the settled frame, rather
+                // than a transient header preceding another room's repaint.
+                match self.output.recv_timeout(Duration::from_millis(50)) {
+                    Ok(bytes) => {
+                        self.screen.write(&bytes);
+                        continue;
+                    }
+                    Err(_) => return,
+                }
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
             assert!(
                 !remaining.is_zero(),
@@ -221,16 +242,6 @@ impl RoomClient {
                 )
             });
             self.screen.write(&bytes);
-            if ready(&self.screen) {
-                // Drain the same repaint's trailing bytes before observing cells.
-                while Instant::now() < deadline {
-                    match self.output.recv_timeout(Duration::from_millis(50)) {
-                        Ok(bytes) => self.screen.write(&bytes),
-                        Err(_) => return,
-                    }
-                }
-                panic!("client repaint never settled: {}", self.screen.text());
-            }
         }
     }
 }
