@@ -1185,7 +1185,7 @@ fn dev_recipient_sets_and_failed_sends_never_modify_draft_or_broadcast_implicitl
         assert_eq!(worker.state.room(room).unwrap().draft, draft);
         assert_eq!(worker.state.requests().count(), count);
     }
-    worker.storage_failed = true;
+    worker.storage_pause = Some(StoragePause::NeedsRepair);
     assert_eq!(
         call(
             &mut worker,

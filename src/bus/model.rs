@@ -746,6 +746,35 @@ fn backfill_colors(
 }
 
 impl BusState {
+    /// A poll can refresh observation clocks and causal revisions in memory
+    /// without rewriting the durable state. Any status edge, settlement, or
+    /// other model change still needs an atomic save before delivery resumes.
+    pub(crate) fn durable_poll_change_from(&self, previous: &Self) -> bool {
+        if self.next_id != previous.next_id
+            || self.rooms != previous.rooms
+            || self.requests != previous.requests
+            || self.queues != previous.queues
+            || self.consumed_callback_ids != previous.consumed_callback_ids
+            || self.consumed_provider_turns != previous.consumed_provider_turns
+            || self.unrelated_provider_turns != previous.unrelated_provider_turns
+            || self.visible_room != previous.visible_room
+            || self.consumed_dialog_fingerprints != previous.consumed_dialog_fingerprints
+            || self.agents.len() != previous.agents.len()
+        {
+            return true;
+        }
+        self.agents.iter().any(|(id, agent)| {
+            let Some(before) = previous.agents.get(id) else {
+                return true;
+            };
+            let mut durable = agent.clone();
+            durable.status_revision = before.status_revision;
+            durable.busy_revision = before.busy_revision;
+            durable.observed_at_ms = before.observed_at_ms;
+            durable != *before
+        })
+    }
+
     pub(crate) fn is_pristine(&self) -> bool {
         self.next_id == 1
     }
