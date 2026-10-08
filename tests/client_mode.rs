@@ -1690,7 +1690,9 @@ fn client_receives_notify_when_detected_agent_becomes_blocked() {
                     found_blocked_notify = true;
                 }
             }
-            Err(error) if error.contains("timed out") => {}
+            Err(error)
+                if error.contains("timed out")
+                    || error.contains("Resource temporarily unavailable") => {}
             Err(error) => {
                 eprintln!("read error while looking for blocked notification: {error}");
                 break;
