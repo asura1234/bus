@@ -583,3 +583,78 @@ fn codex_pending_question_requires_a_live_queue_and_empty_composer() {
         &below.replace("Ask Codex to do anything", "human draft")
     ));
 }
+
+#[test]
+fn codex_expanded_question_identity_ignores_the_working_timer_above_the_queue() {
+    let expanded = include_str!("../../../tests/fixtures/codex-question/expanded.txt");
+    let ticked = expanded.replace("Working (1m 16s", "Working (1m 17s");
+    assert_ne!(ticked, expanded);
+    let before = parse(expanded).unwrap();
+    let after = parse(&ticked).unwrap();
+    assert_eq!(before.id(), after.id());
+    assert_eq!(before.digest(), after.digest());
+}
+
+#[test]
+fn codex_free_text_answer_with_a_blank_line_keeps_the_question_and_whole_value() {
+    let screen = CODEX_TEXT_QUESTION.replace(
+        "  Type your answer\n",
+        "  first paragraph\n\n  second paragraph\n",
+    );
+    let dialog = parse(&screen).unwrap();
+    assert_eq!(dialog.text, "What token should Bus use?");
+    assert_eq!(dialog.id(), parse(CODEX_TEXT_QUESTION).unwrap().id());
+    let edited = parse(&screen.replace("first paragraph", "edited paragraph")).unwrap();
+    assert_eq!(dialog.id(), edited.id());
+    assert_ne!(dialog.digest(), edited.digest());
+    assert_eq!(
+        dialog.input.unwrap().value,
+        "first paragraph\n\nsecond paragraph"
+    );
+}
+
+#[test]
+fn codex_free_text_wrapped_question_and_count_stay_out_of_the_answer() {
+    let screen = CODEX_TEXT_QUESTION.replace(
+        "What token should Bus use?",
+        "1 of 2\n\n  What token\n  should Bus use?",
+    );
+    let dialog = parse(&screen).unwrap();
+    assert_eq!(dialog.text, "What token\nshould Bus use?");
+    assert_eq!(dialog.input.unwrap().value, "");
+}
+
+#[test]
+fn codex_other_answer_edit_below_a_blank_line_changes_the_digest() {
+    let typed = include_str!("../../../tests/fixtures/codex-question/other-typed.txt");
+    let draft = typed.replace("3. T\n", "3. T\n\n       second paragraph\n");
+    assert_ne!(draft, typed);
+    let edited = draft.replace("second paragraph", "edited paragraph");
+    let draft = parse(&draft).unwrap();
+    let edited = parse(&edited).unwrap();
+    assert_eq!(draft.kind, DialogKind::Question);
+    assert_eq!(draft.id(), edited.id());
+    assert_eq!(draft.input.as_ref().unwrap().value, "T\n\nsecond paragraph");
+    assert_ne!(draft.digest(), edited.digest());
+}
+
+#[test]
+fn codex_other_draft_includes_paragraphs_beyond_the_choice_hint_window() {
+    let typed = include_str!("../../../tests/fixtures/codex-question/other-typed.txt");
+    let screen = typed.replace(
+        "3. T\n",
+        "3. T\n\n       second paragraph\n\n       third paragraph\n       continued\n",
+    );
+    let draft = parse(&screen).unwrap();
+    assert_eq!(draft.kind, DialogKind::Question);
+    assert_eq!(draft.text, "Which capture mode should Bus use?");
+    assert_eq!(draft.id(), parse(typed).unwrap().id());
+    assert_eq!(
+        draft.input.as_ref().unwrap().value,
+        "T\n\nsecond paragraph\n\nthird paragraph\ncontinued"
+    );
+    let edited = parse(&screen.replace("third paragraph", "edited paragraph")).unwrap();
+    assert_ne!(draft.digest(), edited.digest());
+    let joined = parse(&screen.replace("second paragraph\n\n", "second paragraph\n")).unwrap();
+    assert_ne!(draft.digest(), joined.digest());
+}
