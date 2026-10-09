@@ -29,13 +29,18 @@ pub fn encode_focus(event: FocusEvent) -> Result<Vec<u8>, Error> {
 
 pub struct KeyEvent {
     raw: ffi::GhosttyKeyEvent,
+    // The native event stores the UTF-8 pointer without copying, so the event owns the bytes.
+    utf8: String,
 }
 
 impl KeyEvent {
     pub fn new() -> Result<Self, Error> {
         let mut raw = ptr::null_mut();
         unsafe { ffi::ghostty_key_event_new(ptr::null(), &mut raw).into_result()? };
-        Ok(Self { raw })
+        Ok(Self {
+            raw,
+            utf8: String::new(),
+        })
     }
 
     pub fn set_action(&mut self, action: ffi::GhosttyKeyAction) {
@@ -51,8 +56,15 @@ impl KeyEvent {
     }
 
     pub fn set_utf8(&mut self, text: &str) {
+        self.utf8 = text.to_owned();
+        // SAFETY: the buffer lives as long as self; replacing it above happens under &mut self,
+        // so nothing encodes with the stale pointer before this call re-points the event.
         unsafe {
-            ffi::ghostty_key_event_set_utf8(self.raw, text.as_ptr().cast::<c_char>(), text.len())
+            ffi::ghostty_key_event_set_utf8(
+                self.raw,
+                self.utf8.as_ptr().cast::<c_char>(),
+                self.utf8.len(),
+            )
         }
     }
 
