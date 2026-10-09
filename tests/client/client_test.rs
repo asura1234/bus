@@ -22,7 +22,7 @@ mod client_mode {
     use serde_json::Value;
     use support::{
         cleanup_test_base, client_shell_handshake, read_server_message, register_runtime_dir,
-        register_spawned_herdr_pid, unregister_spawned_herdr_pid, wait_for_client_shell_bootstrap,
+        register_spawned_bus_pid, unregister_spawned_bus_pid, wait_for_client_shell_bootstrap,
         wait_for_message_variant, wait_for_message_variants, wait_for_socket, wait_until,
         CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
         SERVER_MESSAGE_PANE_SURFACE_PATCH, SERVER_MESSAGE_SEMANTIC_NOTIFICATION,
@@ -35,23 +35,23 @@ mod client_mode {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         PathBuf::from(format!(
-            "/tmp/herdr-client-test-{}-{nanos}",
+            "/tmp/bus-client-test-{}-{nanos}",
             std::process::id()
         ))
     }
 
-    struct SpawnedHerdr {
+    struct SpawnedBus {
         _master: Option<Box<dyn MasterPty + Send>>,
         child: Box<dyn Child + Send + Sync>,
     }
 
-    impl SpawnedHerdr {
+    impl SpawnedBus {
         fn close_master(&mut self) {
             drop(self._master.take());
         }
     }
 
-    impl Drop for SpawnedHerdr {
+    impl Drop for SpawnedBus {
         fn drop(&mut self) {
             let pid = self.child.process_id();
             let _ = self.child.kill();
@@ -69,12 +69,12 @@ mod client_mode {
                     thread::sleep(Duration::from_millis(20));
                 }
 
-                unregister_spawned_herdr_pid(Some(pid));
+                unregister_spawned_bus_pid(Some(pid));
             }
         }
     }
 
-    fn cleanup_spawned_herdr(spawned: SpawnedHerdr, base: PathBuf) {
+    fn cleanup_spawned_bus(spawned: SpawnedBus, base: PathBuf) {
         drop(spawned);
         cleanup_test_base(&base);
     }
@@ -90,7 +90,7 @@ mod client_mode {
         config_home: &PathBuf,
         runtime_dir: &PathBuf,
         api_socket_path: &PathBuf,
-    ) -> SpawnedHerdr {
+    ) -> SpawnedBus {
         register_runtime_dir(runtime_dir);
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -103,7 +103,7 @@ mod client_mode {
 
         let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
         cmd.arg("client");
-        cmd.env("HERDR_DISABLE_SOUND", "1");
+        cmd.env("BUS_DISABLE_SOUND", "1");
         cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
         cmd.env("XDG_CONFIG_HOME", config_home);
         cmd.env("XDG_RUNTIME_DIR", runtime_dir);
@@ -116,10 +116,10 @@ mod client_mode {
         cmd.env_remove("HERDR_SESSION");
 
         let child = pair.slave.spawn_command(cmd).unwrap();
-        register_spawned_herdr_pid(child.process_id());
+        register_spawned_bus_pid(child.process_id());
         drop(pair.slave);
 
-        SpawnedHerdr {
+        SpawnedBus {
             _master: Some(pair.master),
             child,
         }
@@ -129,7 +129,7 @@ mod client_mode {
         config_home: &PathBuf,
         runtime_dir: &PathBuf,
         api_socket_path: &PathBuf,
-    ) -> SpawnedHerdr {
+    ) -> SpawnedBus {
         spawn_server_with_config(
             config_home,
             runtime_dir,
@@ -143,7 +143,7 @@ mod client_mode {
         runtime_dir: &PathBuf,
         api_socket_path: &PathBuf,
         config: &str,
-    ) -> SpawnedHerdr {
+    ) -> SpawnedBus {
         fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
         fs::create_dir_all(runtime_dir).unwrap();
         register_runtime_dir(runtime_dir);
@@ -171,10 +171,10 @@ mod client_mode {
         cmd.env_remove("HERDR_SESSION");
 
         let child = pair.slave.spawn_command(cmd).unwrap();
-        register_spawned_herdr_pid(child.process_id());
+        register_spawned_bus_pid(child.process_id());
         drop(pair.slave);
 
-        SpawnedHerdr {
+        SpawnedBus {
             _master: Some(pair.master),
             child,
         }
@@ -223,9 +223,9 @@ mod client_mode {
 
     fn app_dir_name() -> &'static str {
         if cfg!(debug_assertions) {
-            "herdr-dev"
+            "bus-dev"
         } else {
-            "herdr"
+            "bus"
         }
     }
 
@@ -256,8 +256,8 @@ mod cross_area {
     use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
     use serde_json::{json, Value};
     use support::{
-        cleanup_test_base, client_shell_handshake, register_runtime_dir,
-        register_spawned_herdr_pid, unregister_spawned_herdr_pid, wait_for_socket,
+        cleanup_test_base, client_shell_handshake, register_runtime_dir, register_spawned_bus_pid,
+        unregister_spawned_bus_pid, wait_for_socket,
         CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_ENDPOINT_CONTROL,
         SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
     };
@@ -268,23 +268,23 @@ mod cross_area {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         PathBuf::from(format!(
-            "/tmp/herdr-cross-area-test-{}-{nanos}",
+            "/tmp/bus-cross-area-test-{}-{nanos}",
             std::process::id()
         ))
     }
 
-    struct SpawnedHerdr {
+    struct SpawnedBus {
         _master: Option<Box<dyn MasterPty + Send>>,
         child: Box<dyn Child + Send + Sync>,
     }
 
-    impl SpawnedHerdr {
+    impl SpawnedBus {
         fn close_master(&mut self) {
             drop(self._master.take());
         }
     }
 
-    impl Drop for SpawnedHerdr {
+    impl Drop for SpawnedBus {
         fn drop(&mut self) {
             let pid = self.child.process_id();
             let _ = self.child.kill();
@@ -302,12 +302,12 @@ mod cross_area {
                     thread::sleep(Duration::from_millis(20));
                 }
 
-                unregister_spawned_herdr_pid(Some(pid));
+                unregister_spawned_bus_pid(Some(pid));
             }
         }
     }
 
-    fn cleanup_spawned_herdr(spawned: SpawnedHerdr, base: PathBuf) {
+    fn cleanup_spawned_bus(spawned: SpawnedBus, base: PathBuf) {
         drop(spawned);
         cleanup_test_base(&base);
     }
@@ -319,11 +319,7 @@ mod cross_area {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn spawn_server(
-        config_home: &Path,
-        runtime_dir: &Path,
-        api_socket_path: &Path,
-    ) -> SpawnedHerdr {
+    fn spawn_server(config_home: &Path, runtime_dir: &Path, api_socket_path: &Path) -> SpawnedBus {
         spawn_server_with_path(config_home, runtime_dir, api_socket_path, None)
     }
 
@@ -332,15 +328,11 @@ mod cross_area {
         runtime_dir: &Path,
         api_socket_path: &Path,
         path_override: Option<&Path>,
-    ) -> SpawnedHerdr {
-        fs::create_dir_all(config_home.join("herdr")).unwrap();
+    ) -> SpawnedBus {
+        fs::create_dir_all(config_home.join("bus")).unwrap();
         fs::create_dir_all(runtime_dir).unwrap();
         register_runtime_dir(runtime_dir);
-        fs::write(
-            config_home.join("herdr/config.toml"),
-            "onboarding = false\n",
-        )
-        .unwrap();
+        fs::write(config_home.join("bus/config.toml"), "onboarding = false\n").unwrap();
 
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -368,10 +360,10 @@ mod cross_area {
         }
 
         let child = pair.slave.spawn_command(cmd).unwrap();
-        register_spawned_herdr_pid(child.process_id());
+        register_spawned_bus_pid(child.process_id());
         drop(pair.slave);
 
-        SpawnedHerdr {
+        SpawnedBus {
             _master: Some(pair.master),
             child,
         }
@@ -381,7 +373,7 @@ mod cross_area {
         config_home: &Path,
         runtime_dir: &Path,
         api_socket_path: &Path,
-    ) -> SpawnedHerdr {
+    ) -> SpawnedBus {
         register_runtime_dir(runtime_dir);
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -394,7 +386,7 @@ mod cross_area {
 
         let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
         cmd.arg("client");
-        cmd.env("HERDR_DISABLE_SOUND", "1");
+        cmd.env("BUS_DISABLE_SOUND", "1");
         cmd.env("XDG_STATE_HOME", runtime_dir.join("state"));
         cmd.env("XDG_CONFIG_HOME", config_home);
         cmd.env("XDG_RUNTIME_DIR", runtime_dir);
@@ -407,10 +399,10 @@ mod cross_area {
         cmd.env_remove("HERDR_SESSION");
 
         let child = pair.slave.spawn_command(cmd).unwrap();
-        register_spawned_herdr_pid(child.process_id());
+        register_spawned_bus_pid(child.process_id());
         drop(pair.slave);
 
-        SpawnedHerdr {
+        SpawnedBus {
             _master: Some(pair.master),
             child,
         }

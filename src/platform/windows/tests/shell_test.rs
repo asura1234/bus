@@ -10,9 +10,9 @@ use windows_sys::Win32::System::Console::{
     AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
 };
 
-const CONSOLE_TEST_CHILD_ENV: &str = "HERDR_TEST_CONSOLE_CHILD_MODE";
-const CONSOLE_TEST_PARENT_PID_ENV: &str = "HERDR_TEST_CONSOLE_PARENT_PID";
-const WMI_DAEMON_TEST_CHILD_ENV: &str = "HERDR_TEST_WMI_DAEMON_CHILD";
+const CONSOLE_TEST_CHILD_ENV: &str = "BUS_TEST_CONSOLE_CHILD_MODE";
+const CONSOLE_TEST_PARENT_PID_ENV: &str = "BUS_TEST_CONSOLE_PARENT_PID";
+const WMI_DAEMON_TEST_CHILD_ENV: &str = "BUS_TEST_WMI_DAEMON_CHILD";
 
 fn console_process_ids() -> Vec<u32> {
     let mut process_ids = vec![0; 8];
@@ -96,7 +96,7 @@ mod input;
 #[test]
 fn private_remote_directory_supports_long_paths() {
     let base = std::env::temp_dir().join(format!(
-        "herdr-private-remote-dir-test-{}",
+        "bus-private-remote-dir-test-{}",
         std::process::id()
     ));
     fs::create_dir_all(&base).expect("create test base");
@@ -160,7 +160,7 @@ fn cmd_agent_command_encodes_edge_arguments_without_cmd_expansion() {
 fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
     let _lock = crate::utils::test_env::env_lock();
     let base = std::env::temp_dir().join(format!(
-        "herdr-agent-argv-{}-{}",
+        "bus-agent-argv-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -171,7 +171,7 @@ fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
     let helper = base.join("pi.cmd");
     fs::write(
         &helper,
-        "@echo off\r\n>\"%HERDR_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\necho(%~7\r\n)\r\n",
+        "@echo off\r\n>\"%BUS_ARGV_CAPTURE%\" (\r\necho(%~1\r\necho(%~2\r\necho(%~3\r\necho(%~4\r\necho(%~5\r\necho(%~6\r\necho(%~7\r\n)\r\n",
     )
     .unwrap();
     let argv = vec![
@@ -198,7 +198,7 @@ fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
         };
         process
             .env("PATH", &path)
-            .env("HERDR_ARGV_CAPTURE", capture)
+            .env("BUS_ARGV_CAPTURE", capture)
             .env("PSExecutionPolicyPreference", "Bypass")
             .status()
             .unwrap()
@@ -229,7 +229,7 @@ fn windows_shells_round_trip_agent_arguments_through_a_real_command() {
     fs::remove_file(helper).unwrap();
     fs::write(
         base.join("pi.ps1"),
-        "Set-Content -LiteralPath $env:HERDR_ARGV_CAPTURE -Value @(\"$($args[0])\", \"$($args[1])\", \"$($args[2])\", \"$($args[3])\", \"$($args[4])\", \"$($args[5])\", \"$($args[6])\")\r\n",
+        "Set-Content -LiteralPath $env:BUS_ARGV_CAPTURE -Value @(\"$($args[0])\", \"$($args[1])\", \"$($args[2])\", \"$($args[3])\", \"$($args[4])\", \"$($args[5])\", \"$($args[6])\")\r\n",
     )
     .unwrap();
     for shell in ["powershell.exe", "cmd.exe"] {
@@ -274,7 +274,7 @@ fn windows_shell_is_available_only_without_descendants() {
 
 #[test]
 fn scrollback_editor_argv_uses_editor_env_and_appends_path() {
-    let path = std::path::Path::new(r"C:\Users\User\AppData\Local\Temp\herdr scrollback.txt");
+    let path = std::path::Path::new(r"C:\Users\User\AppData\Local\Temp\bus scrollback.txt");
     let argv = super::scrollback_editor_argv_with_env(
         path,
         Some(r#""C:\Program Files\Microsoft VS Code\Code.exe" --wait"#),
@@ -288,7 +288,7 @@ fn scrollback_editor_argv_uses_editor_env_and_appends_path() {
 
 #[test]
 fn scrollback_editor_argv_falls_back_to_notepad() {
-    let path = std::path::Path::new(r"C:\Temp\herdr-scrollback.txt");
+    let path = std::path::Path::new(r"C:\Temp\bus-scrollback.txt");
     let argv = super::scrollback_editor_argv_with_env(path, None).unwrap();
 
     assert_eq!(

@@ -8,7 +8,7 @@ pub struct CellData {
     pub fg: u32,
     /// Background color as a packed u32.
     pub bg: u32,
-    /// Bitmask of style modifiers (bold, italic, etc.) plus Herdr extension bits.
+    /// Bitmask of style modifiers (bold, italic, etc.) plus Bus extension bits.
     pub modifier: u16,
     /// Whether this cell should be skipped during diff-based rendering.
     pub skip: bool,

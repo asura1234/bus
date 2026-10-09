@@ -12,7 +12,7 @@ fn capture_shell_output(command: &str, extra_env: &[(&str, &str)]) -> String {
         })
         .unwrap();
     let output_path = std::env::temp_dir().join(format!(
-        "herdr-pane-term-test-{}-{}-{}.txt",
+        "bus-pane-term-test-{}-{}-{}.txt",
         std::process::id(),
         CAPTURE_ID.fetch_add(1, Ordering::Relaxed),
         std::time::SystemTime::now()

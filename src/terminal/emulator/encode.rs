@@ -2,7 +2,7 @@ use super::controls::input::{
     ghostty_key_event_from_terminal_key, ghostty_mouse_encoder_for_terminal,
     ghostty_mouse_event_from_button_kind, ghostty_mouse_event_from_motion_kind,
     ghostty_mouse_event_from_wheel_kind, ghostty_mouse_position_for_terminal,
-    ghostty_prefers_herdr_text_encoding,
+    ghostty_prefers_bus_text_encoding,
 };
 use super::{GhosttyPaneTerminal, PaneTerminal, MODE_MOUSE_ANY_MOTION};
 
@@ -86,7 +86,7 @@ impl GhosttyPaneTerminal {
             return crate::protocol::keys::encode_terminal_key(key, protocol);
         }
 
-        if ghostty_prefers_herdr_text_encoding(&key) {
+        if ghostty_prefers_bus_text_encoding(&key) {
             return crate::protocol::keys::encode_terminal_key(key, protocol);
         }
 

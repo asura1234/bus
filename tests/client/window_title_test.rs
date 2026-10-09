@@ -114,14 +114,14 @@ fn configured_window_title_tracks_all_tokens_and_focused_osc_only() {
     wait_for_window_title(&output, "|W=space-a|T=tab-a|P=pane-a|O=hidden update");
 
     drop(server);
-    cleanup_spawned_herdr(client, base);
+    cleanup_spawned_bus(client, base);
 }
 
 /// Polls until the client exits, then returns only the output captured after
 /// the `since` byte watermark. Panics if the client does not exit within the
 /// deadline.
 fn drain_until_client_exits(
-    thin_client: &mut SpawnedHerdr,
+    thin_client: &mut SpawnedBus,
     output: &SharedOutput,
     since: usize,
 ) -> String {
@@ -145,7 +145,7 @@ fn drain_until_client_exits(
 /// client emits the mouse teardown after that point. The teardown markers also
 /// appear in normal attach output, so only bytes emitted after the trigger
 /// (past the watermark) count.
-fn assert_client_restores_terminal(trigger: impl FnOnce(&mut SpawnedHerdr, &mut SpawnedHerdr)) {
+fn assert_client_restores_terminal(trigger: impl FnOnce(&mut SpawnedBus, &mut SpawnedBus)) {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");
@@ -165,7 +165,7 @@ fn assert_client_restores_terminal(trigger: impl FnOnce(&mut SpawnedHerdr, &mut 
         "client must emit mouse teardown after trigger; output after trigger: {output:?}"
     );
 
-    // SpawnedHerdr::Drop kills and reaps both processes with a bounded wait.
+    // SpawnedBus::Drop kills and reaps both processes with a bounded wait.
     drop(spawned_server);
-    cleanup_spawned_herdr(thin_client, base);
+    cleanup_spawned_bus(thin_client, base);
 }

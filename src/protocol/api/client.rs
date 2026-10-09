@@ -26,7 +26,7 @@ impl ConnectionTarget {
     }
 }
 
-/// Reusable client for Herdr's newline-delimited JSON API.
+/// Reusable client for Bus's newline-delimited JSON API.
 #[derive(Debug, Clone)]
 pub struct ApiClient {
     target: ConnectionTarget,
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn socket_path_target_uses_explicit_path() {
-        let path = PathBuf::from("/tmp/herdr-test.sock");
+        let path = PathBuf::from("/tmp/bus-test.sock");
         let client = ApiClient::for_target(ConnectionTarget::SocketPath(path.clone()));
         assert_eq!(client.socket_path(), path);
     }

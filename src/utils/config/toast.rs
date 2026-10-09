@@ -7,7 +7,8 @@ pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
 pub enum ToastDelivery {
     #[default]
     Off,
-    Herdr,
+    #[serde(rename = "herdr")]
+    Bus,
     Terminal,
     System,
 }
@@ -16,7 +17,7 @@ pub enum ToastDelivery {
     Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema, Default,
 )]
 #[serde(rename_all = "kebab-case")]
-pub enum ToastHerdrPosition {
+pub enum ToastBusPosition {
     TopLeft,
     TopRight,
     BottomLeft,

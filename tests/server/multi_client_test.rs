@@ -12,7 +12,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde_json::Value;
 use support::{
     cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
-    register_spawned_herdr_pid, send_client_shell_focus, send_detach, unregister_spawned_herdr_pid,
+    register_spawned_bus_pid, send_client_shell_focus, send_detach, unregister_spawned_bus_pid,
     wait_for_client_shell_bootstrap, wait_for_message_variant, wait_for_message_variants,
     wait_for_socket, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
     SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
@@ -24,17 +24,17 @@ fn unique_test_dir() -> PathBuf {
         .unwrap()
         .as_nanos();
     PathBuf::from(format!(
-        "/tmp/herdr-multi-client-{}-{nanos}",
+        "/tmp/bus-multi-client-{}-{nanos}",
         std::process::id()
     ))
 }
 
-struct SpawnedHerdr {
+struct SpawnedBus {
     _master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
 }
 
-impl Drop for SpawnedHerdr {
+impl Drop for SpawnedBus {
     fn drop(&mut self) {
         let pid = self.child.process_id();
         let _ = self.child.kill();
@@ -48,7 +48,7 @@ impl Drop for SpawnedHerdr {
                 }
                 thread::sleep(Duration::from_millis(20));
             }
-            unregister_spawned_herdr_pid(Some(pid));
+            unregister_spawned_bus_pid(Some(pid));
         }
     }
 }
@@ -71,11 +71,11 @@ fn wait_for_file(path: &Path, timeout: Duration) {
     panic!("socket did not appear at {}", path.display());
 }
 
-fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
-    fs::create_dir_all(config.join("herdr")).unwrap();
+fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedBus {
+    fs::create_dir_all(config.join("bus")).unwrap();
     fs::create_dir_all(runtime).unwrap();
     register_runtime_dir(runtime);
-    fs::write(config.join("herdr/config.toml"), "onboarding = false\n").unwrap();
+    fs::write(config.join("bus/config.toml"), "onboarding = false\n").unwrap();
     let pair = native_pty_system()
         .openpty(PtySize {
             rows: 24,
@@ -96,15 +96,15 @@ fn spawn_server(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
     cmd.env_remove("BUS_SESSION_ID");
     cmd.env_remove("HERDR_SESSION");
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_bus_pid(child.process_id());
     drop(pair.slave);
-    SpawnedHerdr {
+    SpawnedBus {
         _master: pair.master,
         child,
     }
 }
 
-fn spawn_client(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
+fn spawn_client(config: &Path, runtime: &Path, api: &Path) -> SpawnedBus {
     register_runtime_dir(runtime);
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -116,7 +116,7 @@ fn spawn_client(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
         .unwrap();
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_bus"));
     cmd.arg("client");
-    cmd.env("HERDR_DISABLE_SOUND", "1");
+    cmd.env("BUS_DISABLE_SOUND", "1");
     cmd.env("XDG_CONFIG_HOME", config);
     cmd.env("XDG_RUNTIME_DIR", runtime);
     cmd.env("HERDR_SOCKET_PATH", api);
@@ -127,15 +127,15 @@ fn spawn_client(config: &Path, runtime: &Path, api: &Path) -> SpawnedHerdr {
     cmd.env_remove("BUS_SESSION_ID");
     cmd.env_remove("HERDR_SESSION");
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_bus_pid(child.process_id());
     drop(pair.slave);
-    SpawnedHerdr {
+    SpawnedBus {
         _master: pair.master,
         child,
     }
 }
 
-fn cleanup(server: SpawnedHerdr, base: PathBuf) {
+fn cleanup(server: SpawnedBus, base: PathBuf) {
     drop(server);
     cleanup_test_base(&base);
 }

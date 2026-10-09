@@ -279,7 +279,7 @@ fn shell_forwards_all_keys_to_the_focused_pane() {
             ..
         }] if *modifiers == KeyModifiers::ALT.bits()
     ));
-    // The former herdr prefix is ordinary pane input: no client-owned modes remain.
+    // The former bus prefix is ordinary pane input: no client-owned modes remain.
     let prefix = state.handle_input_bytes(&[0x02]);
     assert!(!prefix.detach);
     assert_eq!(prefix.requests.len(), 1);

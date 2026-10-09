@@ -9,7 +9,7 @@ fn workspace_list_and_create_round_trip() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
 
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let child = spawn_bus(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let empty = send_request(
@@ -217,7 +217,7 @@ fn workspace_list_and_create_round_trip() {
     );
     assert_eq!(timeout["error"]["code"], "timeout");
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -229,7 +229,7 @@ fn tab_methods_round_trip_over_socket() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
 
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let child = spawn_bus(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -336,7 +336,7 @@ fn tab_methods_round_trip_over_socket() {
     );
     assert_eq!(closed["result"]["type"], "ok");
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn tab_create_with_no_focus_preserves_active_tab() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
 
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let child = spawn_bus(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -394,5 +394,5 @@ fn tab_create_with_no_focus_preserves_active_tab() {
     assert_eq!(tabs[1]["tab_id"], second_tab_id);
     assert_eq!(tabs[1]["focused"], false);
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }

@@ -192,17 +192,17 @@ fn api_window_title_wins_until_it_is_cleared() {
     let (mut server, control_rx) = window_title_test_server();
     server.app.configure_window_title("{workspace}");
 
-    server.handle_client_window_title_api("set".into(), Some("herdr api".into()));
+    server.handle_client_window_title_api("set".into(), Some("bus api".into()));
     assert_eq!(
         next_window_title(&control_rx),
-        Some(Some("herdr api".to_string()))
+        Some(Some("bus api".to_string()))
     );
 
     server.app.state.workspaces[0].custom_name = Some("ops".into());
     server.sync_window_title();
     assert!(no_window_title(&control_rx));
 
-    // Clearing hands the title back to ui.window_title, not to "herdr".
+    // Clearing hands the title back to ui.window_title, not to "bus".
     server.handle_client_window_title_api("clear".into(), None);
     assert_eq!(
         next_window_title(&control_rx),
@@ -217,10 +217,10 @@ fn clearing_the_api_title_falls_back_to_herdr_when_window_titles_are_disabled() 
     let (mut server, control_rx) = window_title_test_server();
     server.app.configure_window_title("");
 
-    server.handle_client_window_title_api("set".into(), Some("herdr api".into()));
+    server.handle_client_window_title_api("set".into(), Some("bus api".into()));
     assert_eq!(
         next_window_title(&control_rx),
-        Some(Some("herdr api".to_string()))
+        Some(Some("bus api".to_string()))
     );
 
     server.handle_client_window_title_api("clear".into(), None);

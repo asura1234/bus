@@ -17,7 +17,7 @@ fn unique_test_path(name: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("herdr-{name}-{}-{nanos}", std::process::id()))
+    std::env::temp_dir().join(format!("bus-{name}-{}-{nanos}", std::process::id()))
 }
 
 fn read_line(stream: &mut LocalStream) -> String {
@@ -99,7 +99,7 @@ fn spawn_pane_get_responder(
 #[test]
 fn socket_path_prefers_explicit_env_override() {
     let _guard = env_lock().lock().unwrap();
-    let unique = format!("/tmp/herdr-test-{}.sock", std::process::id());
+    let unique = format!("/tmp/bus-test-{}.sock", std::process::id());
     std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
     crate::utils::paths::clear_explicit_session_for_test();
     std::env::set_var(crate::protocol::api::SOCKET_PATH_ENV_VAR, &unique);

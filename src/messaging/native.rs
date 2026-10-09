@@ -16,12 +16,12 @@ pub(crate) trait Transport: Send {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError>;
 }
 
-pub(crate) struct HerdrTransport {
+pub(crate) struct BusTransport {
     client: ApiClient,
     next_id: u64,
 }
 
-impl HerdrTransport {
+impl BusTransport {
     pub(crate) fn new(target: ConnectionTarget) -> Self {
         Self {
             client: ApiClient::for_target(target),
@@ -30,7 +30,7 @@ impl HerdrTransport {
     }
 }
 
-impl Transport for HerdrTransport {
+impl Transport for BusTransport {
     fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
         self.next_id += 1;
         let request = Request {
@@ -177,7 +177,7 @@ mod tests {
                 writeln!(stream, "{response}").unwrap();
             }
         });
-        let mut client = HerdrTransport::new(ConnectionTarget::SocketPath(path));
+        let mut client = BusTransport::new(ConnectionTarget::SocketPath(path));
         let outcome = client.request(Method::AgentStart(
             crate::protocol::api::schema::AgentStartParams {
                 name: "live".into(),
@@ -241,7 +241,7 @@ mod tests {
             assert_eq!(value["params"]["expected_session_id"], "s");
             writeln!(stream,"{{\"id\":\"bus:1\",\"error\":{{\"code\":\"invalid_request\",\"message\":\"unknown method\"}}}}").unwrap();
         });
-        let mut client = HerdrTransport::new(ConnectionTarget::SocketPath(path));
+        let mut client = BusTransport::new(ConnectionTarget::SocketPath(path));
         let outcome = client.request(Method::AgentPromptIfIdle(
             crate::protocol::api::schema::AgentPromptIfIdleParams {
                 target: "t".into(),

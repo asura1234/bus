@@ -1,12 +1,12 @@
 use super::*;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
-pub struct SpawnedHerdr {
+pub struct SpawnedBus {
     _master: Box<dyn MasterPty + Send>,
     pub child: Box<dyn Child + Send + Sync>,
 }
 
-impl Drop for SpawnedHerdr {
+impl Drop for SpawnedBus {
     fn drop(&mut self) {
         let pid = self.child.process_id();
         let _ = self.child.kill();
@@ -23,27 +23,27 @@ impl Drop for SpawnedHerdr {
                 thread::sleep(Duration::from_millis(20));
             }
 
-            unregister_spawned_herdr_pid(Some(pid));
+            unregister_spawned_bus_pid(Some(pid));
         }
     }
 }
 
-pub fn cleanup_spawned_herdr(spawned: SpawnedHerdr, base: PathBuf) {
+pub fn cleanup_spawned_bus(spawned: SpawnedBus, base: PathBuf) {
     drop(spawned);
     cleanup_test_base(&base);
 }
 
-pub fn spawn_herdr(config_home: &Path, runtime_dir: &Path, socket_path: &Path) -> SpawnedHerdr {
-    spawn_herdr_with_options(config_home, runtime_dir, socket_path, None, "/bin/sh")
+pub fn spawn_bus(config_home: &Path, runtime_dir: &Path, socket_path: &Path) -> SpawnedBus {
+    spawn_bus_with_options(config_home, runtime_dir, socket_path, None, "/bin/sh")
 }
 
-pub fn spawn_herdr_with_path(
+pub fn spawn_bus_with_path(
     config_home: &Path,
     runtime_dir: &Path,
     socket_path: &Path,
     path_override: &Path,
-) -> SpawnedHerdr {
-    spawn_herdr_with_options(
+) -> SpawnedBus {
+    spawn_bus_with_options(
         config_home,
         runtime_dir,
         socket_path,
@@ -53,30 +53,26 @@ pub fn spawn_herdr_with_path(
 }
 
 #[cfg(target_os = "linux")]
-pub fn spawn_herdr_with_shell(
+pub fn spawn_bus_with_shell(
     config_home: &Path,
     runtime_dir: &Path,
     socket_path: &Path,
     shell: &str,
-) -> SpawnedHerdr {
-    spawn_herdr_with_options(config_home, runtime_dir, socket_path, None, shell)
+) -> SpawnedBus {
+    spawn_bus_with_options(config_home, runtime_dir, socket_path, None, shell)
 }
 
-pub fn spawn_herdr_with_options(
+pub fn spawn_bus_with_options(
     config_home: &Path,
     runtime_dir: &Path,
     socket_path: &Path,
     path_override: Option<&Path>,
     shell: &str,
-) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+) -> SpawnedBus {
+    fs::create_dir_all(config_home.join("bus")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
-    fs::write(
-        config_home.join("herdr/config.toml"),
-        "onboarding = false\n",
-    )
-    .unwrap();
+    fs::write(config_home.join("bus/config.toml"), "onboarding = false\n").unwrap();
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -103,9 +99,9 @@ pub fn spawn_herdr_with_options(
     }
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_bus_pid(child.process_id());
 
-    SpawnedHerdr {
+    SpawnedBus {
         _master: pair.master,
         child,
     }

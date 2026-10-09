@@ -37,9 +37,9 @@ fn double_click_word_bounds_cover_terminal_text() {
             "./src/server/terminals/events.rs:795",
         ),
         (
-            "open ../herdr-worktrees/issue-1",
-            "herdr",
-            "../herdr-worktrees/issue-1",
+            "open ../bus-worktrees/issue-1",
+            "bus",
+            "../bus-worktrees/issue-1",
         ),
         (
             "edit src/server/terminals/events.rs,then",
@@ -70,7 +70,7 @@ fn double_click_word_bounds_cover_terminal_text() {
         ),
         ("refs #123 and @owner/name", "#123", "#123"),
         ("refs #123 and @owner/name", "owner", "@owner/name"),
-        ("cargo test --package=herdr", "--package", "--package=herdr"),
+        ("cargo test --package=bus", "--package", "--package=bus"),
         (
             "cargo test server::terminals::events::tests",
             "server::",
@@ -83,7 +83,7 @@ fn double_click_word_bounds_cover_terminal_text() {
         ),
         ("ERROR [worker-1] request_id=abc-123", "worker", "worker-1"),
         (
-            "tmux|newhoo|fixhoo|newmoo|notification|window_bell|herdr",
+            "tmux|newhoo|fixhoo|newmoo|notification|window_bell|bus",
             "newhoo",
             "newhoo",
         ),
@@ -115,7 +115,7 @@ fn double_click_word_bounds_cover_terminal_text() {
 fn double_click_word_bounds_ignore_delimiters() {
     for (row, click) in [
         (
-            "tmux|newhoo|fixhoo|newmoo|notification|window_bell|herdr",
+            "tmux|newhoo|fixhoo|newmoo|notification|window_bell|bus",
             "|",
         ),
         ("alpha,beta;gamma", ","),

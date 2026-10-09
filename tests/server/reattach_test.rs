@@ -51,7 +51,7 @@ fn explicit_detach_message_causes_clean_disconnect() {
         "client connection should be closed after explicit Detach message"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn reattach_after_detach_shows_current_state() {
         "workspace should still exist after detach/reattach: {list_response}"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }
 
 #[test]
@@ -231,7 +231,7 @@ fn processes_survive_during_and_after_detach() {
     support::wait_for_client_shell_bootstrap(&mut stream_b, Duration::from_secs(5))
         .expect("client shell bootstrap");
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn server_persists_after_client_connection_drop() {
     assert_eq!(version, CURRENT_PROTOCOL);
     assert!(error.is_none(), "reattach should succeed: {:?}", error);
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }
 
 #[test]
@@ -380,5 +380,5 @@ fn output_accumulated_while_detached_visible_on_reattach() {
     support::wait_for_client_shell_bootstrap(&mut stream_b, Duration::from_secs(5))
         .expect("client shell bootstrap");
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }

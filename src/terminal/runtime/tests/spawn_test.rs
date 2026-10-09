@@ -305,7 +305,7 @@ fn windows_powershell_pane_shell_predicate_requires_windows_and_non_login() {
 fn login_shell_builder_rejects_missing_shell_instead_of_falling_back() {
     let err = pane_shell_command_builder_for_target(
         PaneShellConfig::new(
-            "/__herdr_missing_shell__",
+            "/__bus_missing_shell__",
             crate::utils::config::ShellModeConfig::Login,
         ),
         ShellLaunchTarget::OtherUnix,
@@ -319,7 +319,7 @@ fn login_shell_builder_rejects_missing_shell_instead_of_falling_back() {
 fn login_shell_builder_resolves_bare_shell_names_from_path() {
     let _lock = self::env::env_lock();
     let base = std::env::temp_dir().join(format!(
-        "herdr-login-shell-path-{}-{}",
+        "bus-login-shell-path-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

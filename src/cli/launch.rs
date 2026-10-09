@@ -1,6 +1,6 @@
-//! Auto-detect launch behavior for the `herdr` command.
+//! Auto-detect launch behavior for the `bus` command.
 //!
-//! When the user runs `herdr` with no subcommand:
+//! When the user runs `bus` with no subcommand:
 //! 1. Check if a server is already listening on the client socket
 //! 2. If no server → spawn one as a background daemon → wait for socket readiness (up to 15s)
 //! 3. Attach as a client to the server
@@ -26,14 +26,14 @@ const SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const STATUS_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Private daemon-start hint used to seed a fresh headless server from the
-/// directory where the user ran `herdr`.
+/// directory where the user ran `bus`.
 use crate::utils::env::STARTUP_CWD_ENV_VAR;
 
 // ---------------------------------------------------------------------------
 // Server detection
 // ---------------------------------------------------------------------------
 
-/// Checks whether a herdr server is currently listening on the client socket.
+/// Checks whether a bus server is currently listening on the client socket.
 ///
 /// This works by attempting to connect to the client socket. If the connection
 /// succeeds, a server is running. If the socket file doesn't exist or the
@@ -44,7 +44,7 @@ pub fn is_server_listening() -> bool {
     is_server_listening_at(&client_socket_path())
 }
 
-/// Checks whether a herdr server is listening at a specific socket path.
+/// Checks whether a bus server is listening at a specific socket path.
 fn is_server_listening_at(socket_path: &Path) -> bool {
     #[cfg(windows)]
     {
@@ -183,7 +183,7 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
 // Server spawning
 // ---------------------------------------------------------------------------
 
-/// Spawns the herdr server as a background daemon process.
+/// Spawns the bus server as a background daemon process.
 ///
 /// The server process is fully detached:
 /// - Runs in its own session (setsid) so it survives the client exiting
@@ -197,7 +197,7 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
     let exe = std::env::current_exe().map_err(|err| {
         io::Error::new(
             err.kind(),
-            format!("failed to determine herdr executable path: {err}"),
+            format!("failed to determine bus executable path: {err}"),
         )
     })?;
 
@@ -207,7 +207,7 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
 
     let pid =
         crate::platform::launch_server_daemon_command(&mut command).map_err(|err: io::Error| {
-            io::Error::new(err.kind(), format!("failed to spawn herdr server: {err}"))
+            io::Error::new(err.kind(), format!("failed to spawn bus server: {err}"))
         })?;
     info!(pid, "server daemon spawned");
 
@@ -272,7 +272,7 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
         format!(
-            "server did not become ready within {}s (socket: {}). The background server may still be starting; try `herdr` again, or check {}",
+            "server did not become ready within {}s (socket: {}). The background server may still be starting; try `bus` again, or check {}",
             timeout.as_secs(),
             socket_path.display(),
             crate::utils::paths::data_dir().join("herdr-server.log").display()
@@ -287,7 +287,7 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
 /// Performs auto-detect launch: check for server, spawn if needed, then
 /// attach as a thin client.
 ///
-/// This is the entry point called from `main.rs` when the user runs `herdr`
+/// This is the entry point called from `main.rs` when the user runs `bus`
 /// without a subcommand.
 ///
 /// Flow:
@@ -367,13 +367,13 @@ mod tests {
         std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
         crate::utils::paths::clear_explicit_session_for_test();
         let args = vec![
-            "herdr".to_string(),
+            "bus".to_string(),
             "--session".to_string(),
             "work".to_string(),
         ];
         crate::utils::paths::configure_from_args(&args).unwrap();
 
-        let command = build_server_daemon_command(PathBuf::from("/tmp/herdr-test"));
+        let command = build_server_daemon_command(PathBuf::from("/tmp/bus-test"));
         let envs: Vec<_> = command.get_envs().collect();
 
         assert!(envs.iter().any(|(key, value)| {
@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn server_daemon_command_passes_current_dir_as_startup_cwd() {
         let expected = std::env::current_dir().unwrap();
-        let command = build_server_daemon_command(PathBuf::from("/tmp/herdr-test"));
+        let command = build_server_daemon_command(PathBuf::from("/tmp/bus-test"));
         let envs: Vec<_> = command.get_envs().collect();
 
         assert!(envs.iter().any(|(key, value)| {

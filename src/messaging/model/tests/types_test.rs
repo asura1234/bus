@@ -49,7 +49,7 @@ fn state_with_room_and_agents() -> (BusState, RoomId, AgentId, AgentId) {
                 launch_id: Some("launch-codex".into()),
                 terminal_id: Some("terminal-1".into()),
                 pane_id: Some("pane-1".into()),
-                session_id: Some("herdr-1".into()),
+                session_id: Some("bus-1".into()),
             },
         )
         .expect("identity");

@@ -148,13 +148,13 @@ fn terminal_delivery_does_not_refresh_existing_targeted_toast() {
     );
     let mut workspace = crate::server::workspaces::Workspace::test_new("stale");
     workspace.custom_name = None;
-    workspace.identity_cwd = "/__herdr_original__".into();
+    workspace.identity_cwd = "/__bus_original__".into();
     let root = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(root).cloned().unwrap();
     let workspace_id = workspace.id.clone();
     app.state.workspaces = vec![workspace];
     app.state.ensure_test_terminals();
-    app.state.terminals.get_mut(&terminal_id).unwrap().cwd = "/__herdr_projects__".into();
+    app.state.terminals.get_mut(&terminal_id).unwrap().cwd = "/__bus_projects__".into();
     app.state.active = None;
     app.state.selected = 0;
     app.state.mode = Mode::Terminal;
@@ -171,7 +171,7 @@ fn terminal_delivery_does_not_refresh_existing_targeted_toast() {
     app.state.toast = Some(crate::server::app_state::ToastNotification {
         kind: ToastKind::Finished,
         title: "codex finished".into(),
-        context: "__herdr_original__ · 1".into(),
+        context: "__bus_original__ · 1".into(),
         position: None,
         target: Some(crate::server::app_state::ToastTarget {
             workspace_id,
@@ -190,6 +190,6 @@ fn terminal_delivery_does_not_refresh_existing_targeted_toast() {
 
     assert_eq!(
         app.state.toast.as_ref().map(|toast| toast.context.as_str()),
-        Some("__herdr_original__ · 1")
+        Some("__bus_original__ · 1")
     );
 }

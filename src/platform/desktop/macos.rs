@@ -67,7 +67,7 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
 
 pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
     let path = std::env::temp_dir().join(format!(
-        "herdr-clipboard-image-{}-{}.png",
+        "bus-clipboard-image-{}-{}.png",
         std::process::id(),
         unique_timestamp_nanos()
     ));

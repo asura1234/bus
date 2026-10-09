@@ -43,7 +43,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
                         seen = true;
                         break;
                     }
-                    if output.to_lowercase().contains("herdr:") {
+                    if output.to_lowercase().contains("bus:") {
                         break;
                     }
                 }
@@ -175,7 +175,7 @@ fn attach_thin_client(
     runtime_dir: &PathBuf,
     api_socket: &PathBuf,
     client_socket: &Path,
-) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
+) -> (SpawnedBus, SpawnedBus, SharedOutput) {
     attach_thin_client_with_config(
         config_home,
         runtime_dir,
@@ -191,7 +191,7 @@ fn attach_thin_client_with_config(
     api_socket: &PathBuf,
     client_socket: &Path,
     config: &str,
-) -> (SpawnedHerdr, SpawnedHerdr, SharedOutput) {
+) -> (SpawnedBus, SpawnedBus, SharedOutput) {
     let spawned_server = spawn_server_with_config(config_home, runtime_dir, api_socket, config);
     wait_for_socket(api_socket, Duration::from_secs(10));
     wait_for_socket(client_socket, Duration::from_secs(10));
@@ -218,7 +218,7 @@ fn attach_thin_client_with_config(
             attached = true;
             break;
         }
-        if out.to_lowercase().contains("herdr:") {
+        if out.to_lowercase().contains("bus:") {
             break;
         }
         thread::sleep(Duration::from_millis(30));
@@ -340,7 +340,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     );
 
     drop(server);
-    cleanup_spawned_herdr(client_b, base);
+    cleanup_spawned_bus(client_b, base);
 }
 
 fn captured_window_titles(output: &SharedOutput) -> Vec<String> {
@@ -414,7 +414,7 @@ fn client_restores_terminal_on_server_eof() {
     assert_client_restores_terminal(|server, _client| {
         // Kill the server unexpectedly; the client socket closes and the
         // client reader hits EOF, mirroring the ssh bridge dying under
-        // `herdr --remote`.
+        // `bus --remote`.
         if let Some(pid) = server.child.process_id() {
             unsafe {
                 libc::kill(pid as libc::pid_t, libc::SIGKILL);
@@ -437,7 +437,7 @@ fn client_restores_terminal_on_sighup() {
     });
 }
 
-fn read_until_client_attaches(client: &SpawnedHerdr) -> String {
+fn read_until_client_attaches(client: &SpawnedBus) -> String {
     let master = client._master.as_ref().expect("thin client master");
     let fd = master.as_raw_fd().expect("thin client PTY file descriptor");
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -523,7 +523,7 @@ fn client_exits_cleanly_when_terminal_and_transport_hang_up() {
     };
 
     drop(spawned_server);
-    cleanup_spawned_herdr(thin_client, base);
+    cleanup_spawned_bus(thin_client, base);
 
     let status = status.expect("thin client should exit after terminal and transport hang up");
     assert!(
@@ -564,7 +564,7 @@ fn client_exits_cleanly_when_terminal_hangs_up() {
     let server_response = ping_socket(&api_socket);
 
     drop(spawned_server);
-    cleanup_spawned_herdr(thin_client, base);
+    cleanup_spawned_bus(thin_client, base);
 
     let status = status.unwrap_or_else(|| {
         panic!("thin client did not exit after PTY hangup; attach output: {attached_output:?}")

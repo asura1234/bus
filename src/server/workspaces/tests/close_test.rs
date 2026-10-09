@@ -56,7 +56,7 @@ fn close_non_focused_workspace_keeps_focus() {
 fn delayed_background_waiting_is_cleared_when_pane_dies() {
     let mut state = app_with_workspaces(&["active", "background"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.toast_config.delay_seconds = 1;
     let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -93,7 +93,7 @@ fn close_pane_removes_from_workspace() {
 #[test]
 fn pane_process_exit_publish_marks_agent_idle_before_pane_removal() {
     let mut state = app_with_workspaces(&["active", "background"]);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.active = Some(1);
     state.ensure_test_terminals();
     let pane_id = state.workspaces[0].tabs[0].root_pane;

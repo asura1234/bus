@@ -19,9 +19,9 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
 
 pub fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
-        "herdr-dev"
+        "bus-dev"
     } else {
-        "herdr"
+        "bus"
     }
 }
 
@@ -228,7 +228,7 @@ pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
         ""
     };
 
-    Some(format!("{target}{impact}; herdr config check"))
+    Some(format!("{target}{impact}; bus config check"))
 }
 
 pub fn load_live_config() -> Result<LoadedConfig, Vec<String>> {

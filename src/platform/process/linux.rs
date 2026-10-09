@@ -44,7 +44,7 @@ pub(crate) use crate::platform::unix::{
     remote_reattach_program, wait_client_stream_readable,
 };
 
-const PROCESS_DETECTION_ENV_VAR: &str = "HERDR_PROCESS_DETECTION";
+const PROCESS_DETECTION_ENV_VAR: &str = "BUS_PROCESS_DETECTION";
 
 const CHILD_GROUPS_SCAN_LIMIT: usize = 64;
 

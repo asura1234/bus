@@ -191,7 +191,7 @@ impl HeadlessServer {
         toast_before: &Option<crate::server::app_state::ToastNotification>,
     ) -> bool {
         // Forward new toast state only when a client-local delivery mode is selected.
-        // Herdr delivery renders the toast in-frame and must not ask clients to
+        // Bus delivery renders the toast in-frame and must not ask clients to
         // show a terminal or system notification.
         let toast_after = self.app.state.toast.clone();
         if should_forward_toast_to_clients(self.app.state.toast_config.delivery)

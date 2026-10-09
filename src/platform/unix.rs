@@ -65,7 +65,7 @@ pub(crate) fn create_remote_private_dir(path: &Path) -> std::io::Result<()> {
 }
 
 pub(crate) fn remote_reattach_program(program: &str) -> String {
-    shell_quote(if program.is_empty() { "herdr" } else { program })
+    shell_quote(if program.is_empty() { "bus" } else { program })
 }
 
 fn shell_quote(value: &str) -> String {

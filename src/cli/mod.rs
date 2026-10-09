@@ -32,7 +32,7 @@ pub(crate) fn logging_options() -> crate::utils::logging::LoggingOptions {
         filter: if dev {
             EnvFilter::new(DEV_FILTER)
         } else {
-            EnvFilter::try_from_env("HERDR_LOG").unwrap_or_else(|_| EnvFilter::new("bus=info"))
+            EnvFilter::try_from_env("BUS_LOG").unwrap_or_else(|_| EnvFilter::new("bus=info"))
         },
         max_bytes: DEFAULT_MAX_LOG_BYTES,
         retained_files: if dev { 3 } else { DEFAULT_RETAINED_LOG_FILES },
@@ -51,7 +51,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     let dev = invocation.dev;
     if dev {
         std::env::set_var("BUS_DEV", "1");
-        std::env::set_var("HERDR_LOG", crate::utils::logging::DEV_FILTER);
+        std::env::set_var("BUS_LOG", crate::utils::logging::DEV_FILTER);
     } else {
         std::env::remove_var("BUS_DEV");
     }
@@ -108,7 +108,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         ));
     }
     if matches!(invocation.action, Action::Run) {
-        // Herdr's session setup would otherwise create a missing explicit root
+        // Bus's session setup would otherwise create a missing explicit root
         // with default permissions, which Bus's private control socket rejects.
         bus_io::private_dir(&root)?;
     }

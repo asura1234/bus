@@ -19,7 +19,7 @@ fn client_connects_and_receives_pane_surface() {
     wait_for_client_shell_bootstrap(&mut stream, Duration::from_secs(10))
         .expect("should receive the shell snapshot and pane surface");
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }
 
 #[test]
@@ -63,10 +63,10 @@ fn client_sees_headless_startup_config_diagnostic() {
     cmd.env_remove("HERDR_SESSION");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_bus_pid(child.process_id());
     drop(pair.slave);
 
-    let spawned = SpawnedHerdr {
+    let spawned = SpawnedBus {
         _master: Some(pair.master),
         child,
     };
@@ -85,14 +85,14 @@ fn client_sees_headless_startup_config_diagnostic() {
     assert!(
         wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
             let output = read_output(&output);
-            output.contains("config.toml") && output.contains("herdr config check")
+            output.contains("config.toml") && output.contains("bus config check")
         }),
         "client shell should render startup config diagnostic; output: {:?}",
         read_output(&output)
     );
 
     drop(spawned);
-    cleanup_spawned_herdr(client, base);
+    cleanup_spawned_bus(client, base);
 }
 
 #[test]
@@ -105,18 +105,14 @@ fn server_unreachable_shows_clear_error() {
     let runtime_dir = base.join("runtime");
     let api_socket = runtime_dir.join("herdr.sock");
 
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join("bus")).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     register_runtime_dir(&runtime_dir);
-    fs::write(
-        config_home.join("herdr/config.toml"),
-        "onboarding = false\n",
-    )
-    .unwrap();
+    fs::write(config_home.join("bus/config.toml"), "onboarding = false\n").unwrap();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_bus"))
         .arg("client")
-        .env("HERDR_DISABLE_SOUND", "1")
+        .env("BUS_DISABLE_SOUND", "1")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         .env("XDG_STATE_HOME", runtime_dir.join("state"))
@@ -139,7 +135,7 @@ fn server_unreachable_shows_clear_error() {
         "stderr should mention connection failure: {stderr}"
     );
     assert!(
-        stderr.contains("Is herdr server running?"),
+        stderr.contains("Is bus server running?"),
         "stderr should include actionable guidance: {stderr}"
     );
     assert!(
@@ -238,5 +234,5 @@ fn pane_spawn_cwd_fallback_in_server() {
     );
 
     drop(spawned);
-    cleanup_spawned_herdr(client_shell, base);
+    cleanup_spawned_bus(client_shell, base);
 }

@@ -204,7 +204,7 @@ fn semantic_notification_roundtrip() {
         workspace_id: Some("w1".into()),
         tab_id: Some("w1:t1".into()),
         pane_id: Some("w1:p1".into()),
-        position: Some(crate::utils::config::ToastHerdrPosition::TopRight),
+        position: Some(crate::utils::config::ToastBusPosition::TopRight),
     });
     let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
     let (decoded, _): (ServerMessage, _) =
@@ -240,7 +240,7 @@ fn server_clipboard_roundtrip() {
 
 #[test]
 fn server_window_title_roundtrip() {
-    for title in [Some("herdr api".to_owned()), None] {
+    for title in [Some("bus api".to_owned()), None] {
         let msg = ServerMessage::WindowTitle { title };
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ServerMessage, _) =

@@ -57,7 +57,7 @@ pub enum ClientMessage {
     /// Graceful disconnect request.
     Detach,
 
-    /// Result of the one armed Herdr-owned direct Kitty transmission.
+    /// Result of the one armed Bus-owned direct Kitty transmission.
     GraphicsTransmissionResult {
         transfer_id: u64,
         image_id: u32,
@@ -172,7 +172,7 @@ pub enum ServerMessage {
 
     /// Set the foreground client's outer terminal window title.
     WindowTitle {
-        /// Sanitized title to write with OSC 0. `None` restores Herdr's default title.
+        /// Sanitized title to write with OSC 0. `None` restores Bus's default title.
         title: Option<String>,
     },
 
@@ -181,7 +181,7 @@ pub enum ServerMessage {
 
     /// Whether the client should currently capture host mouse input.
     MouseCapture {
-        /// True when Herdr mouse UI is enabled or the focused pane app requests mouse reporting.
+        /// True when Bus mouse UI is enabled or the focused pane app requests mouse reporting.
         enabled: bool,
         /// True only while the focused pane requests DEC SGR pixel mode 1016.
         sgr_pixels: bool,
@@ -193,7 +193,7 @@ pub enum ServerMessage {
         count: u16,
     },
 
-    /// One validated Herdr-owned Kitty regular-file RGBA transmission.
+    /// One validated Bus-owned Kitty regular-file RGBA transmission.
     GraphicsFile {
         path: String,
         expected_len: u64,

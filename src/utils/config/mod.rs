@@ -15,8 +15,8 @@ pub use self::{
     load::{config_diagnostic_summary, config_dir, load_live_config, state_dir},
     model::{
         AgentPanelSortConfig, Config, ConfigReloadReport, ConfigReloadStatus, HostCursorModeConfig,
-        NewTerminalCwdConfig, PaneBordersConfig, ShellModeConfig, ToastClipboardPosition,
-        ToastConfig, ToastDelivery, ToastHerdrPosition, MAX_TOAST_DELAY_SECONDS,
+        NewTerminalCwdConfig, PaneBordersConfig, ShellModeConfig, ToastBusPosition,
+        ToastClipboardPosition, ToastConfig, ToastDelivery, MAX_TOAST_DELAY_SECONDS,
     },
     sound::{Sound, SoundConfig},
     ui::{

@@ -28,7 +28,7 @@ fn unique_temp_path(name: &str) -> std::path::PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("herdr-{name}-{}-{stamp}", std::process::id()))
+    std::env::temp_dir().join(format!("bus-{name}-{}-{stamp}", std::process::id()))
 }
 
 fn config_env_lock() -> &'static Mutex<()> {
@@ -37,7 +37,7 @@ fn config_env_lock() -> &'static Mutex<()> {
 
 fn temp_config_path(name: &str) -> std::path::PathBuf {
     let unique = format!(
-        "herdr-{name}-{}-{}",
+        "bus-{name}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -50,14 +50,14 @@ fn temp_config_path(name: &str) -> std::path::PathBuf {
 #[test]
 fn notification_show_api_creates_herdr_toast_with_position() {
     let mut app = test_app();
-    app.state.toast_config.delivery = config::ToastDelivery::Herdr;
+    app.state.toast_config.delivery = config::ToastDelivery::Bus;
 
     let response = app.handle_api_request_after_internal_events_drained(schema::Request {
         id: "notify".into(),
         method: schema::Method::NotificationShow(schema::NotificationShowParams {
             title: "build failed".into(),
             body: Some("api workspace".into()),
-            position: Some(config::ToastHerdrPosition::TopLeft),
+            position: Some(config::ToastBusPosition::TopLeft),
             sound: schema::NotificationShowSound::None,
         }),
     });
@@ -73,7 +73,7 @@ fn notification_show_api_creates_herdr_toast_with_position() {
     let toast = app.state.toast.as_ref().expect("api toast");
     assert_eq!(toast.title, "build failed");
     assert_eq!(toast.context, "api workspace");
-    assert_eq!(toast.position, Some(config::ToastHerdrPosition::TopLeft));
+    assert_eq!(toast.position, Some(config::ToastBusPosition::TopLeft));
     assert!(app.toast_deadline.is_some());
 }
 
@@ -106,7 +106,7 @@ fn notification_show_api_respects_off_delivery() {
 #[test]
 fn notification_show_api_does_not_replace_existing_toast() {
     let mut app = test_app();
-    app.state.toast_config.delivery = config::ToastDelivery::Herdr;
+    app.state.toast_config.delivery = config::ToastDelivery::Bus;
     app.state.toast = Some(crate::server::app_state::ToastNotification {
         kind: crate::server::app_state::ToastKind::NeedsAttention,
         title: "pi needs attention".to_string(),
@@ -142,7 +142,7 @@ fn notification_show_api_does_not_replace_existing_toast() {
 #[test]
 fn notification_show_api_is_rate_limited() {
     let mut app = test_app();
-    app.state.toast_config.delivery = config::ToastDelivery::Herdr;
+    app.state.toast_config.delivery = config::ToastDelivery::Bus;
     app.mark_api_notification_shown(Instant::now());
 
     let response = app.handle_api_request_after_internal_events_drained(schema::Request {
@@ -360,8 +360,8 @@ fn legacy_bare_tab_id_uses_tab_position_not_public_tab_number() {
 #[test]
 fn workspace_creation_in_navigate_mode_uses_selected_workspace_seed_cwd() {
     let mut app = test_app();
-    let mut first = Workspace::test_new("herdr");
-    first.identity_cwd = std::path::PathBuf::from("/tmp/herdr");
+    let mut first = Workspace::test_new("bus");
+    first.identity_cwd = std::path::PathBuf::from("/tmp/bus");
     let mut second = Workspace::test_new("pion");
     second.identity_cwd = std::path::PathBuf::from("/tmp/pion");
 
@@ -381,10 +381,10 @@ fn workspace_creation_in_navigate_mode_uses_selected_workspace_seed_cwd() {
 fn new_terminal_cwd_follow_uses_source_cwd() {
     let cwd = creation::resolve_new_terminal_cwd(
         &config::NewTerminalCwdConfig::Follow,
-        Some(std::path::PathBuf::from("/tmp/herdr-source")),
+        Some(std::path::PathBuf::from("/tmp/bus-source")),
     );
 
-    assert_eq!(cwd, std::path::PathBuf::from("/tmp/herdr-source"));
+    assert_eq!(cwd, std::path::PathBuf::from("/tmp/bus-source"));
 }
 
 #[test]
@@ -401,11 +401,11 @@ fn new_terminal_cwd_follow_without_source_uses_home() {
 #[test]
 fn new_terminal_cwd_path_uses_configured_path() {
     let cwd = creation::resolve_new_terminal_cwd(
-        &config::NewTerminalCwdConfig::Path("/tmp/herdr-fixed".into()),
-        Some(std::path::PathBuf::from("/tmp/herdr-source")),
+        &config::NewTerminalCwdConfig::Path("/tmp/bus-fixed".into()),
+        Some(std::path::PathBuf::from("/tmp/bus-source")),
     );
 
-    assert_eq!(cwd, std::path::PathBuf::from("/tmp/herdr-fixed"));
+    assert_eq!(cwd, std::path::PathBuf::from("/tmp/bus-fixed"));
 }
 
 #[test]

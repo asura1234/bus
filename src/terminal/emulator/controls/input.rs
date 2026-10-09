@@ -37,7 +37,7 @@ pub(in crate::terminal::emulator) fn ghostty_key_event_from_terminal_key(
     Some(event)
 }
 
-pub(in crate::terminal::emulator) fn ghostty_prefers_herdr_text_encoding(
+pub(in crate::terminal::emulator) fn ghostty_prefers_bus_text_encoding(
     key: &crate::protocol::keys::TerminalKey,
 ) -> bool {
     matches!(key.code, crossterm::event::KeyCode::Char(_))

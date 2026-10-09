@@ -89,7 +89,7 @@ pub(crate) fn startup(role: &'static str, dev: bool) {
         pid = std::process::id(),
         dev,
         version = env!("CARGO_PKG_VERSION"),
-        "herdr starting"
+        "bus starting"
     );
 }
 

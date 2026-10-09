@@ -19,10 +19,10 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::warn;
 
-pub(super) const DISABLE_SOUND_ENV: &str = "HERDR_DISABLE_SOUND";
+pub(super) const DISABLE_SOUND_ENV: &str = "BUS_DISABLE_SOUND";
 
 #[cfg(any(windows, test))]
-pub(super) const WINDOWS_SOUND_PATH_ENV: &str = "HERDR_SOUND_PATH";
+pub(super) const WINDOWS_SOUND_PATH_ENV: &str = "BUS_SOUND_PATH";
 
 #[cfg(not(any(windows, target_os = "macos")))]
 pub(super) const AUDIO_PLAYER_TIMEOUT: Duration = Duration::from_secs(15);
@@ -100,7 +100,7 @@ pub(super) fn playback_error(output: &Output) -> String {
 
 pub(super) fn temp_sound_path() -> PathBuf {
     let id = SOUND_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("herdr-sound-{}-{id}.mp3", std::process::id()))
+    std::env::temp_dir().join(format!("bus-sound-{}-{id}.mp3", std::process::id()))
 }
 
 #[cfg(windows)]
@@ -125,8 +125,8 @@ pub(super) fn run_player(path: &Path) -> Result<Output, String> {
 pub(super) fn windows_media_player_script() -> &'static str {
     r#"
 $ErrorActionPreference = 'Stop'
-$Path = [Environment]::GetEnvironmentVariable('HERDR_SOUND_PATH', 'Process')
-if ([string]::IsNullOrWhiteSpace($Path)) { throw 'HERDR_SOUND_PATH is not set' }
+$Path = [Environment]::GetEnvironmentVariable('BUS_SOUND_PATH', 'Process')
+if ([string]::IsNullOrWhiteSpace($Path)) { throw 'BUS_SOUND_PATH is not set' }
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 $resolved = (Resolve-Path -LiteralPath $Path).ProviderPath

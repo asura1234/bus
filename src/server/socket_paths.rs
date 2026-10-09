@@ -11,7 +11,7 @@ const SOCKET_PERMISSION_MODE: u32 = 0o600;
 pub(crate) fn prepare_socket_path(path: &Path) -> io::Result<()> {
     crate::platform::ipc::prepare_socket_path(path, |path| {
         format!(
-            "herdr server is already running (socket busy at {})",
+            "bus server is already running (socket busy at {})",
             path.display()
         )
     })

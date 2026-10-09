@@ -16,7 +16,7 @@ fn agent_start_targets_existing_pane_over_socket() {
     fs::write(&fake_pi, "#!/bin/sh\nHERDR_AGENT=pi exec /bin/sleep 20\n").unwrap();
     fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let child = spawn_herdr_with_path(&config_home, &runtime_dir, &socket_path, &bin);
+    let child = spawn_bus_with_path(&config_home, &runtime_dir, &socket_path, &bin);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     let workspace = send_request(
         &socket_path,
@@ -79,7 +79,7 @@ fn agent_start_targets_existing_pane_over_socket() {
         .unwrap()
         .contains(&terminal_id));
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn agent_methods_round_trip_over_socket() {
 
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
-    let child = spawn_herdr_with_path(
+    let child = spawn_bus_with_path(
         &config_home,
         &runtime_dir,
         &socket_path,
@@ -241,7 +241,7 @@ fn agent_methods_round_trip_over_socket() {
     assert_eq!(focused["result"]["agent"]["tab_id"], second_tab_id);
     assert_eq!(focused["result"]["agent"]["focused"], true);
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -274,7 +274,7 @@ fn reported_agent_session_clears_after_confirmed_process_exit() {
 
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
-    let child = spawn_herdr_with_path(
+    let child = spawn_bus_with_path(
         &config_home,
         &runtime_dir,
         &socket_path,
@@ -379,5 +379,5 @@ fn reported_agent_session_clears_after_confirmed_process_exit() {
         thread::sleep(Duration::from_millis(50));
     }
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }

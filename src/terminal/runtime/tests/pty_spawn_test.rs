@@ -31,8 +31,8 @@ fn portable_pty_setup_leaves_one_parent_pty_fd() {
     let before = parent_pty_fd_count();
     let mut cmd = CommandBuilder::new("/bin/cat");
     cmd.env(
-        crate::utils::env::HERDR_ENV_VAR,
-        crate::utils::env::HERDR_ENV_VALUE,
+        crate::utils::env::BUS_ENV_VAR,
+        crate::utils::env::BUS_ENV_VALUE,
     );
 
     let mut spawned = spawn_with_portable_pty(24, 80, cmd).expect("portable pty setup succeeds");
@@ -41,7 +41,7 @@ fn portable_pty_setup_leaves_one_parent_pty_fd() {
     assert_eq!(
         after_spawn,
         before + 1,
-        "portable-pty setup should leave only the Herdr-owned master fd in the parent: {:?}",
+        "portable-pty setup should leave only the Bus-owned master fd in the parent: {:?}",
         parent_pty_fd_targets()
     );
 

@@ -347,7 +347,7 @@ pub(in crate::platform) fn detach_clipboard_owner(child: std::process::Child) ->
     let child = std::sync::Arc::new(std::sync::Mutex::new(child));
     let reaper_child = std::sync::Arc::clone(&child);
     let reaper = std::thread::Builder::new()
-        .name("herdr-wl-copy-reaper".to_string())
+        .name("bus-wl-copy-reaper".to_string())
         .spawn(move || {
             let wait_result = match reaper_child.lock() {
                 Ok(mut child) => child.wait(),

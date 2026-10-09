@@ -27,7 +27,7 @@ fn windows_wmi_daemon_preserves_environment_and_working_directory() {
     }
 
     let base = std::env::temp_dir().join(format!(
-        "herdr-wmi-daemon-test-{}-{}",
+        "bus-wmi-daemon-test-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

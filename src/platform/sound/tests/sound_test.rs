@@ -114,7 +114,7 @@ fn linux_audio_player_does_not_wait_forever() {
         args: &[
             "-c",
             "printf '%s' \"$$\" > \"$1\"; exec sleep 2",
-            "herdr-sound-timeout-test",
+            "bus-sound-timeout-test",
         ],
     };
     let result = player.output_with_timeout(&pid_path, Duration::from_millis(100));
@@ -143,7 +143,7 @@ fn linux_audio_player_preserves_completed_output() {
         args: &[
             "-c",
             "i=0; while [ \"$i\" -lt 8192 ]; do printf 0123456789abcdef; i=$((i + 1)); done; i=0; while [ \"$i\" -lt 8192 ]; do printf fedcba9876543210; i=$((i + 1)); done >&2; exit 7",
-            "herdr-sound-output-test",
+            "bus-sound-output-test",
         ],
     };
 
@@ -169,7 +169,7 @@ fn windows_media_player_uses_process_environment_and_dispatcher() {
             .flatten()
     });
 
-    assert!(script.contains("GetEnvironmentVariable('HERDR_SOUND_PATH', 'Process')"));
+    assert!(script.contains("GetEnvironmentVariable('BUS_SOUND_PATH', 'Process')"));
     assert!(!script.contains("param([string]$Path)"));
     assert!(script.contains("Resolve-Path -LiteralPath $Path"));
     assert!(script.contains("Dispatcher]::PushFrame"));

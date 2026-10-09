@@ -49,7 +49,7 @@ fn cross_area_client_and_api_workspace_views_are_consistent() {
         "API and client-side state should reference the same created workspace"
     );
 
-    cleanup_spawned_herdr(server, base);
+    cleanup_spawned_bus(server, base);
 }
 
 #[test]
@@ -121,5 +121,5 @@ fn cross_area_two_clients_shared_view_and_single_detach_stability() {
         "server and remaining client flow should stay healthy: {ping}"
     );
 
-    cleanup_spawned_herdr(server, base);
+    cleanup_spawned_bus(server, base);
 }

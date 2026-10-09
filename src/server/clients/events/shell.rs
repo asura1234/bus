@@ -15,7 +15,7 @@ impl HeadlessServer {
                 size,
                 max,
             } => {
-                let detail = format!("Input message is {size} bytes; Herdr's limit is {max} bytes");
+                let detail = format!("Input message is {size} bytes; Bus's limit is {max} bytes");
                 let message = ServerMessage::ClientShellError {
                     message: format!("Paste rejected: {detail}"),
                 };

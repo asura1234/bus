@@ -15,7 +15,7 @@ pub(crate) fn toast_notify_kind(
     match delivery {
         config::ToastDelivery::Terminal => Some(protocol::wire::NotifyKind::Toast),
         config::ToastDelivery::System => Some(protocol::wire::NotifyKind::SystemToast),
-        config::ToastDelivery::Off | config::ToastDelivery::Herdr => None,
+        config::ToastDelivery::Off | config::ToastDelivery::Bus => None,
     }
 }
 
@@ -71,14 +71,14 @@ use std::time::{Duration, Instant};
 
 const API_NOTIFICATION_RATE_LIMIT: Duration = Duration::from_secs(1);
 impl App {
-    pub(crate) fn refresh_new_herdr_toast_context_for_update(
+    pub(crate) fn refresh_new_bus_toast_context_for_update(
         &mut self,
         update: &crate::server::terminals::events::PaneStateUpdate,
         previous_toast: &Option<crate::server::app_state::ToastNotification>,
     ) {
         if !matches!(
             self.state.toast_config.delivery,
-            crate::utils::config::ToastDelivery::Herdr
+            crate::utils::config::ToastDelivery::Bus
         ) || self.state.toast == *previous_toast
         {
             return;
@@ -186,7 +186,7 @@ impl App {
 
         let reason = match self.state.toast_config.delivery {
             crate::utils::config::ToastDelivery::Off => NotificationShowReason::Disabled,
-            crate::utils::config::ToastDelivery::Herdr => {
+            crate::utils::config::ToastDelivery::Bus => {
                 if self.state.toast.is_some() {
                     NotificationShowReason::Busy
                 } else if self.api_notification_rate_limited(Instant::now()) {
@@ -292,15 +292,15 @@ mod tests {
         let root = state.workspaces[0].tabs[0].root_pane;
         let terminal_id = state.workspaces[0].terminal_id(root).cloned().unwrap();
         let temp_root = std::env::temp_dir().join(format!(
-            "herdr-forwarded-toast-context-{}-{}",
+            "bus-forwarded-toast-context-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        let stale_cwd = temp_root.join("__herdr_original__");
-        let live_cwd = temp_root.join("__herdr_projects__");
+        let stale_cwd = temp_root.join("__bus_original__");
+        let live_cwd = temp_root.join("__bus_projects__");
         std::fs::create_dir_all(&stale_cwd).unwrap();
         std::fs::create_dir_all(&live_cwd).unwrap();
         init_repo(&stale_cwd);
@@ -348,7 +348,7 @@ mod tests {
 
         assert_eq!(
             message.as_deref(),
-            Some("codex finished: __herdr_projects__ · 1")
+            Some("codex finished: __bus_projects__ · 1")
         );
 
         for (_, runtime) in terminal_runtimes.drain() {

@@ -2,7 +2,7 @@ use super::*;
 
 fn temp_log_path(name: &str) -> PathBuf {
     let unique = format!(
-        "herdr-logging-tests-{}-{}-{}",
+        "bus-logging-tests-{}-{}-{}",
         name,
         std::process::id(),
         std::time::SystemTime::now()
@@ -10,16 +10,13 @@ fn temp_log_path(name: &str) -> PathBuf {
             .unwrap()
             .as_nanos()
     );
-    std::env::temp_dir().join(unique).join("herdr.log")
+    std::env::temp_dir().join(unique).join("bus.log")
 }
 
 #[test]
 fn rotated_log_path_appends_numeric_suffix() {
-    let path = PathBuf::from("/tmp/herdr.log");
-    assert_eq!(
-        rotated_log_path(&path, 2),
-        PathBuf::from("/tmp/herdr.log.2")
-    );
+    let path = PathBuf::from("/tmp/bus.log");
+    assert_eq!(rotated_log_path(&path, 2), PathBuf::from("/tmp/bus.log.2"));
 }
 
 #[test]
@@ -64,7 +61,7 @@ fn write_replaces_log_without_retained_files_when_size_limit_is_reached() {
         retained_files: 0,
         dev: false,
     };
-    let writer = RotatingFileMakeWriter::new(dir.clone(), "herdr.log", &options).unwrap();
+    let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
     {
         let mut guard = writer.make_writer();
         guard.write_all(b"12345678").unwrap();
@@ -88,7 +85,7 @@ fn supplied_rotation_options_keep_only_requested_generations() {
         retained_files: 2,
         dev: false,
     };
-    let writer = RotatingFileMakeWriter::new(dir.clone(), "herdr.log", &options).unwrap();
+    let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
     {
         let mut guard = writer.make_writer();
         for bytes in [b"11111111", b"22222222", b"33333333", b"44444444"] {
@@ -121,7 +118,7 @@ fn supplied_filter_keeps_normal_events_and_selected_trace() {
         retained_files: DEFAULT_RETAINED_LOG_FILES,
         dev: false,
     };
-    let writer = RotatingFileMakeWriter::new(dir.clone(), "herdr.log", &options).unwrap();
+    let writer = RotatingFileMakeWriter::new(dir.clone(), "bus.log", &options).unwrap();
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(options.filter.clone())
         .with_writer(writer)
@@ -163,7 +160,7 @@ fn startup_records_explicit_dev_and_existing_metadata() {
             &format!("pid={}", std::process::id()),
             &format!("dev={dev}"),
             &format!("version=\"{}\"", env!("CARGO_PKG_VERSION")),
-            "herdr starting",
+            "bus starting",
         ] {
             assert!(logs.contains(field), "missing {field}: {logs}");
         }

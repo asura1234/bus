@@ -85,8 +85,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_OPTIMIZE");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SIMD");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_ZIG_SYSTEM_DIR");
-    println!("cargo:rerun-if-env-changed=HERDR_BUILD_CHANNEL");
-    println!("cargo:rerun-if-env-changed=HERDR_BUILD_ID");
+    println!("cargo:rerun-if-env-changed=BUS_BUILD_CHANNEL");
+    println!("cargo:rerun-if-env-changed=BUS_BUILD_ID");
     println!("cargo:rerun-if-env-changed=ZIG");
 
     let vendored_dir = manifest_dir.join("vendor/libghostty-vt");
@@ -115,7 +115,7 @@ fn main() {
     }
 
     let lib_dir = vendored_dir.join("zig-out/lib");
-    let stamp = lib_dir.join(".herdr-build-stamp");
+    let stamp = lib_dir.join(".bus-build-stamp");
     let stamp_key = format!("{zig} {:?}", command.get_args().collect::<Vec<_>>());
     if !vendored_lib_is_fresh(&vendored_dir, &stamp, &stamp_key) {
         build_vendored_lib(command, &zig);

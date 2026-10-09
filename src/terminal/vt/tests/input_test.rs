@@ -49,12 +49,12 @@ fn terminal_callbacks_report_pty_responses_and_pwd_changes() {
         .set_write_pty_callback(move |bytes| sink.lock().unwrap().extend_from_slice(bytes))
         .unwrap();
 
-    terminal.write(b"\x1b[6n\x1b]7;file:///tmp/herdr\x07");
+    terminal.write(b"\x1b[6n\x1b]7;file:///tmp/bus\x07");
 
     let output = responses.lock().unwrap().clone();
     assert!(!output.is_empty());
     assert!(String::from_utf8_lossy(&output).contains("R"));
-    assert_eq!(terminal.take_pwd_changes(), [b"file:///tmp/herdr".to_vec()]);
+    assert_eq!(terminal.take_pwd_changes(), [b"file:///tmp/bus".to_vec()]);
 }
 
 #[test]

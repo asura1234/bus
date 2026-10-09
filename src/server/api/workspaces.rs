@@ -260,7 +260,7 @@ mod tests {
         shutdown_test_runtimes(&mut app);
 
         let focused_cwd = std::env::temp_dir().join(format!(
-            "herdr-ws-follow-{}-{}",
+            "bus-ws-follow-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -326,7 +326,7 @@ mod tests {
         shutdown_test_runtimes(&mut app);
 
         let source_cwd =
-            std::env::temp_dir().join(format!("herdr-ws-explicit-source-{}", std::process::id()));
+            std::env::temp_dir().join(format!("bus-ws-explicit-source-{}", std::process::id()));
         std::fs::create_dir_all(&source_cwd).unwrap();
         let pane_id = app.state.workspaces[1].focused_pane_id().unwrap();
         let terminal_id = app.state.workspaces[1]

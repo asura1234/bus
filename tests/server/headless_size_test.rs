@@ -32,7 +32,7 @@ fn pane_created_without_client_uses_configured_headless_size() {
 
     assert_eq!(size, (41, 132));
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn pane_created_after_detach_uses_configured_headless_size() {
     assert_eq!(headless_size, (41, 132));
     assert_eq!(preserved_size, attached_size);
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }
 
 #[test]
@@ -160,5 +160,5 @@ fn detached_output_preserves_last_attached_pty_size() {
         "detached renders should not resize live pane PTYs to a fallback size"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }

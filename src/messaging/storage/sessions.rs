@@ -1,4 +1,4 @@
-//! Local Bus session selection above Herdr's native resume machinery.
+//! Local Bus session selection above Bus's native resume machinery.
 
 use serde::{Deserialize, Serialize};
 use std::{

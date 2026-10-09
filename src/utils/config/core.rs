@@ -13,7 +13,7 @@ pub use super::server::ServerConfig;
 pub use super::session::SessionConfig;
 pub use super::terminal::{NewTerminalCwdConfig, ShellModeConfig, TerminalConfig};
 pub use super::toast::{
-    ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition, MAX_TOAST_DELAY_SECONDS,
+    ToastBusPosition, ToastClipboardPosition, ToastConfig, ToastDelivery, MAX_TOAST_DELAY_SECONDS,
 };
 use super::ThemeConfig;
 

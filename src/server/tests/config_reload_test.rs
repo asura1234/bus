@@ -19,10 +19,7 @@ fn reload_config_updates_live_state() {
 
     assert_eq!(report.status, config::ConfigReloadStatus::Applied);
     assert_eq!(app.state.headless_size, (160, 50));
-    assert_eq!(
-        app.state.toast_config.delivery,
-        config::ToastDelivery::Herdr
-    );
+    assert_eq!(app.state.toast_config.delivery, config::ToastDelivery::Bus);
     assert_eq!(
         app.state.agent_panel_sort,
         crate::server::app_state::AgentPanelSort::Priority
@@ -68,7 +65,7 @@ fn reload_config_keeps_kitty_graphics_until_restart() {
     assert_eq!(
         report.diagnostics,
         vec![
-            "terminal.kitty_graphics changes require restarting Herdr; kept current setting"
+            "terminal.kitty_graphics changes require restarting Bus; kept current setting"
                 .to_owned()
         ]
     );
@@ -125,7 +122,7 @@ fn reload_config_rejects_an_unknown_key_and_keeps_the_current_config() {
     assert_eq!(app.state.pane_borders, original_pane_borders);
     assert_eq!(
         app.state.config_diagnostic.as_deref(),
-        Some("config.toml invalid; keeping current config; herdr config check")
+        Some("config.toml invalid; keeping current config; bus config check")
     );
 
     std::env::remove_var(config::CONFIG_PATH_ENV_VAR);

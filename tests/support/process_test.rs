@@ -26,9 +26,9 @@ static CLEANUP_GUARD: OnceLock<CleanupGuard> = OnceLock::new();
 
 const WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 
-const RUNTIME_OWNER_MARKER: &str = ".herdr-test-owner-pid";
+const RUNTIME_OWNER_MARKER: &str = ".bus-test-owner-pid";
 
-pub fn register_spawned_herdr_pid(pid: Option<u32>) {
+pub fn register_spawned_bus_pid(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;
     };
@@ -38,7 +38,7 @@ pub fn register_spawned_herdr_pid(pid: Option<u32>) {
     registry.insert(pid);
 }
 
-pub fn unregister_spawned_herdr_pid(pid: Option<u32>) {
+pub fn unregister_spawned_bus_pid(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;
     };
@@ -93,7 +93,7 @@ pub fn wait_for_socket(path: &Path, timeout: Duration) {
     panic!("socket did not appear at {}", path.display());
 }
 
-pub fn cleanup_registered_herdr_pids() {
+pub fn cleanup_registered_bus_pids() {
     let pids: Vec<u32> = {
         let mut registry = pid_registry_lock();
         registry.drain().collect()
@@ -121,12 +121,12 @@ fn ensure_cleanup_hooks() {
 
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |panic_info| {
-            cleanup_registered_herdr_pids();
+            cleanup_registered_bus_pids();
             previous_hook(panic_info);
         }));
 
         let _ = ctrlc::set_handler(|| {
-            cleanup_registered_herdr_pids();
+            cleanup_registered_bus_pids();
             std::process::exit(130);
         });
 
@@ -181,7 +181,7 @@ fn start_global_watchdog() {
         thread::sleep(WATCHDOG_SCAN_INTERVAL);
 
         if let Err(err) = cleanup_servers_with_missing_runtime_dir() {
-            eprintln!("herdr test cleanup watchdog error: {err}");
+            eprintln!("bus test cleanup watchdog error: {err}");
         }
     });
 }
@@ -250,7 +250,7 @@ fn iter_worktree_server_pids() -> std::io::Result<Vec<u32>> {
             continue;
         }
 
-        if is_test_herdr_server_process(pid) {
+        if is_test_bus_server_process(pid) {
             pids.push(pid);
         }
     }
@@ -258,12 +258,12 @@ fn iter_worktree_server_pids() -> std::io::Result<Vec<u32>> {
     Ok(pids)
 }
 
-fn is_test_herdr_server_process(pid: u32) -> bool {
+fn is_test_bus_server_process(pid: u32) -> bool {
     let Some(exe_path) = proc_link_target(pid, "exe") else {
         return false;
     };
 
-    if !is_test_herdr_binary(&exe_path) {
+    if !is_test_bus_binary(&exe_path) {
         return false;
     }
 
@@ -327,19 +327,19 @@ fn current_checkout_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn is_test_herdr_binary(path: &Path) -> bool {
+fn is_test_bus_binary(path: &Path) -> bool {
     path.ends_with("target/debug/bus") && path.starts_with(current_checkout_root())
 }
 
 extern "C" fn run_atexit_cleanup() {
-    cleanup_registered_herdr_pids();
+    cleanup_registered_bus_pids();
 }
 
 struct CleanupGuard;
 
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
-        cleanup_registered_herdr_pids();
+        cleanup_registered_bus_pids();
     }
 }
 
@@ -449,7 +449,7 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "herdr-watchdog-scoping-{label}-{}-{unique}",
+            "bus-watchdog-scoping-{label}-{}-{unique}",
             std::process::id()
         ))
     }
@@ -481,7 +481,7 @@ mod tests {
     fn test_binary_matcher_accepts_current_checkout_debug_binary() {
         let binary = current_checkout_root().join("target/debug/bus");
         assert!(
-            is_test_herdr_binary(&binary),
+            is_test_bus_binary(&binary),
             "current checkout debug binary should be considered test-owned"
         );
     }
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn test_binary_matcher_rejects_installed_binary() {
         assert!(
-            !is_test_herdr_binary(Path::new("/home/can/.local/bin/bus")),
+            !is_test_bus_binary(Path::new("/home/can/.local/bin/bus")),
             "installed binaries must not be considered test-owned"
         );
     }

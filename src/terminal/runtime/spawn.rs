@@ -44,7 +44,7 @@ pub(super) const PANE_TERM: &str = "xterm-256color";
 pub(super) const PANE_COLORTERM: &str = "truecolor";
 
 pub(super) fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
-    // Each pane is rendered by herdr's own terminal layer, not the outer terminal
+    // Each pane is rendered by bus's own terminal layer, not the outer terminal
     // that launched the app. Advertising the inherited TERM leaks the host terminal
     // identity into shells and across SSH, which breaks redraw and cursor movement
     // when the remote side lacks matching terminfo entries.
@@ -102,8 +102,8 @@ pub(super) fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneL
         cmd.env(key, value);
     }
     cmd.env(
-        crate::utils::env::HERDR_ENV_VAR,
-        crate::utils::env::HERDR_ENV_VALUE,
+        crate::utils::env::BUS_ENV_VAR,
+        crate::utils::env::BUS_ENV_VALUE,
     );
     apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
@@ -114,9 +114,9 @@ pub(super) fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneL
             tab_id,
             pane_id,
         } => {
-            cmd.env(HERDR_WORKSPACE_ID_ENV_VAR, workspace_id);
-            cmd.env(HERDR_TAB_ID_ENV_VAR, tab_id);
-            cmd.env(HERDR_PANE_ID_ENV_VAR, pane_id);
+            cmd.env(BUS_WORKSPACE_ID_ENV_VAR, workspace_id);
+            cmd.env(BUS_TAB_ID_ENV_VAR, tab_id);
+            cmd.env(BUS_PANE_ID_ENV_VAR, pane_id);
         }
     }
     // New panes and cold resumes are independent provider sessions, even when
@@ -360,11 +360,11 @@ pub(super) fn is_powershell_shell(shell: &str) -> bool {
     )
 }
 
-pub(crate) const HERDR_PANE_ID_ENV_VAR: &str = "HERDR_PANE_ID";
+pub(crate) const BUS_PANE_ID_ENV_VAR: &str = "HERDR_PANE_ID";
 
-pub(crate) const HERDR_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
+pub(crate) const BUS_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
 
-pub(crate) const HERDR_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
+pub(crate) const BUS_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(

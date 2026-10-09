@@ -134,10 +134,10 @@ def test_legacy_edges_and_composition_shim(tmp_path):
 
 def test_shared_root_constants_are_not_unknown_components(tmp_path):
     seed(tmp_path)
-    write_source(tmp_path, "src/utils/runtime.rs", 'pub const HERDR_ENV_VAR: &str = "HERDR_ENV";\npub const HERDR_ENV_VALUE: &str = "1";')
+    write_source(tmp_path, "src/utils/runtime.rs", 'pub const BUS_ENV_VAR: &str = "HERDR_ENV";\npub const BUS_ENV_VALUE: &str = "1";')
     write_source(tmp_path, "src/utils/mod.rs", "mod runtime;")
     name = "src/terminal/runtime/mod.rs"
-    write_source(tmp_path, name, "fn spawn() { cmd.env(crate::utils::runtime::HERDR_ENV_VAR, crate::utils::runtime::HERDR_ENV_VALUE); }")
+    write_source(tmp_path, name, "fn spawn() { cmd.env(crate::utils::runtime::BUS_ENV_VAR, crate::utils::runtime::BUS_ENV_VALUE); }")
     assert [(r.target, r.forbidden) for r in references(tmp_path, name)] == [("utils", False)] * 2
 
 

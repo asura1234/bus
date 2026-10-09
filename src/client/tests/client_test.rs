@@ -362,7 +362,7 @@ fn client_error_display_connection_failed() {
         "should mention connection failure: {msg}"
     );
     assert!(
-        msg.contains("herdr server"),
+        msg.contains("bus server"),
         "should suggest starting server: {msg}"
     );
 }
@@ -437,7 +437,7 @@ fn reload_local_client_config_refreshes_local_client_presentation_state() {
     // BUS_DATA_DIR outranks HERDR_CONFIG_PATH, and agents run inside Bus inherit it.
     let _bus = EnvVarsRemovedGuard::new(&["BUS_DATA_DIR"]);
     let path = std::env::temp_dir().join(format!(
-        "herdr-client-config-reload-{}-{}.toml",
+        "bus-client-config-reload-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -475,7 +475,7 @@ fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
     // BUS_DATA_DIR outranks HERDR_CONFIG_PATH, and agents run inside Bus inherit it.
     let _bus = EnvVarsRemovedGuard::new(&["BUS_DATA_DIR"]);
     let path = std::env::temp_dir().join(format!(
-        "herdr-client-invalid-ui-reload-{}-{}.toml",
+        "bus-client-invalid-ui-reload-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

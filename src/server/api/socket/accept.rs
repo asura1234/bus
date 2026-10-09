@@ -89,10 +89,7 @@ pub(super) fn start_server_inner(
 
 pub(super) fn prepare_socket_path(path: &Path) -> std::io::Result<()> {
     crate::platform::ipc::prepare_socket_path(path, |path| {
-        format!(
-            "herdr is already running (socket busy at {})",
-            path.display()
-        )
+        format!("bus is already running (socket busy at {})", path.display())
     })
 }
 

@@ -61,23 +61,23 @@ mod tests {
 
     #[test]
     fn client_socket_path_derived_from_api_socket_override() {
-        let path = client_socket_path_from_overrides(Some("/tmp/test-herdr.sock"), None);
-        assert_eq!(path, PathBuf::from("/tmp/test-herdr-client.sock"));
+        let path = client_socket_path_from_overrides(Some("/tmp/test-bus.sock"), None);
+        assert_eq!(path, PathBuf::from("/tmp/test-bus-client.sock"));
     }
 
     #[test]
     fn client_socket_path_api_override_takes_precedence_over_legacy_client_override() {
         let path = client_socket_path_from_overrides(
-            Some("/tmp/test-herdr.sock"),
+            Some("/tmp/test-bus.sock"),
             Some("/tmp/legacy-client.sock"),
         );
-        assert_eq!(path, PathBuf::from("/tmp/test-herdr-client.sock"));
+        assert_eq!(path, PathBuf::from("/tmp/test-bus-client.sock"));
     }
 
     #[test]
     fn client_socket_path_respects_legacy_client_override_without_api_override() {
-        let path = client_socket_path_from_overrides(None, Some("/tmp/test-herdr-client.sock"));
-        assert_eq!(path, PathBuf::from("/tmp/test-herdr-client.sock"));
+        let path = client_socket_path_from_overrides(None, Some("/tmp/test-bus-client.sock"));
+        assert_eq!(path, PathBuf::from("/tmp/test-bus-client.sock"));
     }
 
     #[test]

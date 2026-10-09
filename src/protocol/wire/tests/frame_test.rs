@@ -270,7 +270,7 @@ fn direct_graphics_messages_roundtrip() {
     assert_eq!(client, decoded);
 
     let server = ServerMessage::GraphicsFile {
-        path: "/run/user/1000/herdr/source/frame".into(),
+        path: "/run/user/1000/bus/source/frame".into(),
         expected_len: 4,
         image_id: 42,
         transfer_id: 7,

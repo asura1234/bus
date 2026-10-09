@@ -49,7 +49,7 @@ impl Default for OscDebugTracker {
 }
 
 pub(super) fn osc_debug_enabled_from_env() -> bool {
-    std::env::var("HERDR_DEBUG_OSC_EVIDENCE")
+    std::env::var("BUS_DEBUG_OSC_EVIDENCE")
         .map(|value| {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),

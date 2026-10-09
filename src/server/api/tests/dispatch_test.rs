@@ -97,15 +97,15 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
     let root = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(root).cloned().unwrap();
     let temp_root = std::env::temp_dir().join(format!(
-        "herdr-toast-context-{}-{}",
+        "bus-toast-context-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    let stale_cwd = temp_root.join("__herdr_original__");
-    let live_cwd = temp_root.join("__herdr_projects__");
+    let stale_cwd = temp_root.join("__bus_original__");
+    let live_cwd = temp_root.join("__bus_projects__");
     std::fs::create_dir_all(&stale_cwd).unwrap();
     std::fs::create_dir_all(&live_cwd).unwrap();
     init_repo(&stale_cwd);
@@ -118,7 +118,7 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
     app.state.active = None;
     app.state.selected = 0;
     app.state.mode = Mode::Terminal;
-    app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     app.state.toast_config.delay_seconds = 0;
 
     let (events, _) = tokio::sync::mpsc::channel(4);
@@ -165,7 +165,7 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
 
     assert_eq!(
         app.state.toast.as_ref().map(|toast| toast.context.as_str()),
-        Some("__herdr_projects__ · 1")
+        Some("__bus_projects__ · 1")
     );
 
     for (_, runtime) in app.terminal_runtimes.drain() {
@@ -191,15 +191,15 @@ async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
     let root = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(root).cloned().unwrap();
     let temp_root = std::env::temp_dir().join(format!(
-        "herdr-delayed-toast-context-{}-{}",
+        "bus-delayed-toast-context-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
     ));
-    let stale_cwd = temp_root.join("__herdr_original__");
-    let live_cwd = temp_root.join("__herdr_projects__");
+    let stale_cwd = temp_root.join("__bus_original__");
+    let live_cwd = temp_root.join("__bus_projects__");
     std::fs::create_dir_all(&stale_cwd).unwrap();
     std::fs::create_dir_all(&live_cwd).unwrap();
     init_repo(&stale_cwd);
@@ -212,7 +212,7 @@ async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
     app.state.active = None;
     app.state.selected = 0;
     app.state.mode = Mode::Terminal;
-    app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     app.state.toast_config.delay_seconds = 1;
 
     let (events, _) = tokio::sync::mpsc::channel(4);
@@ -270,7 +270,7 @@ async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
             .first()
             .and_then(|delivery| delivery.toast.as_ref())
             .map(|toast| toast.context.as_str()),
-        Some("__herdr_projects__ · 1")
+        Some("__bus_projects__ · 1")
     );
 
     for (_, runtime) in app.terminal_runtimes.drain() {

@@ -8,7 +8,7 @@ mod tests {
 
     fn temp_test_dir(name: &str) -> PathBuf {
         let unique = format!(
-            "herdr-workspace-tests-{}-{}-{}",
+            "bus-workspace-tests-{}-{}-{}",
             name,
             std::process::id(),
             SystemTime::now()
@@ -101,8 +101,8 @@ mod tests {
         std::fs::create_dir_all(&seed).unwrap();
         std::fs::create_dir_all(&repo).unwrap();
         run_git(&seed, &["init", "--quiet"]);
-        run_git(&seed, &["config", "user.email", "herdr@example.invalid"]);
-        run_git(&seed, &["config", "user.name", "Herdr Test"]);
+        run_git(&seed, &["config", "user.email", "bus@example.invalid"]);
+        run_git(&seed, &["config", "user.name", "Bus Test"]);
         run_git(
             &seed,
             &["commit", "--quiet", "--allow-empty", "-m", "initial"],

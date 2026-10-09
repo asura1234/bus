@@ -44,9 +44,9 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
                     Some(path) => std::env::set_var("PATH", path),
                     None => std::env::remove_var("PATH"),
                 }
-                std::env::remove_var("HERDR_TEST_WL_COPY_MARKER");
-                std::env::remove_var("HERDR_TEST_WL_COPY_PAYLOAD");
-                std::env::remove_var("HERDR_TEST_WL_COPY_ARGS");
+                std::env::remove_var("BUS_TEST_WL_COPY_MARKER");
+                std::env::remove_var("BUS_TEST_WL_COPY_PAYLOAD");
+                std::env::remove_var("BUS_TEST_WL_COPY_ARGS");
             }
             let _ = std::fs::remove_dir_all(&self.temp_dir);
         }
@@ -57,10 +57,8 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("system time should follow unix epoch")
         .as_nanos();
-    let temp_dir = std::env::temp_dir().join(format!(
-        "herdr-fake-wl-copy-{}-{unique}",
-        std::process::id()
-    ));
+    let temp_dir =
+        std::env::temp_dir().join(format!("bus-fake-wl-copy-{}-{unique}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let mut cleanup = Cleanup {
         old_path: std::env::var_os("PATH"),
@@ -73,7 +71,7 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
     let args = temp_dir.join("args");
     std::fs::write(
         &fake_wl_copy,
-        "#!/bin/sh\ncat > \"$HERDR_TEST_WL_COPY_PAYLOAD\"\nprintf '%s\\n' \"$@\" > \"$HERDR_TEST_WL_COPY_ARGS\"\nprintf '%s' \"$$\" > \"$HERDR_TEST_WL_COPY_MARKER\"\nexec sleep 30\n",
+        "#!/bin/sh\ncat > \"$BUS_TEST_WL_COPY_PAYLOAD\"\nprintf '%s\\n' \"$@\" > \"$BUS_TEST_WL_COPY_ARGS\"\nprintf '%s' \"$$\" > \"$BUS_TEST_WL_COPY_MARKER\"\nexec sleep 30\n",
     )
     .expect("fake wl-copy should be written");
     let mut permissions = std::fs::metadata(&fake_wl_copy)
@@ -93,9 +91,9 @@ fn wl_copy_owner_does_not_block_clipboard_write() {
     };
     unsafe {
         std::env::set_var("PATH", test_path);
-        std::env::set_var("HERDR_TEST_WL_COPY_MARKER", &marker);
-        std::env::set_var("HERDR_TEST_WL_COPY_PAYLOAD", &payload);
-        std::env::set_var("HERDR_TEST_WL_COPY_ARGS", &args);
+        std::env::set_var("BUS_TEST_WL_COPY_MARKER", &marker);
+        std::env::set_var("BUS_TEST_WL_COPY_PAYLOAD", &payload);
+        std::env::set_var("BUS_TEST_WL_COPY_ARGS", &args);
     }
 
     let (result_tx, result_rx) = mpsc::channel();
@@ -175,7 +173,7 @@ fn failed_wl_copy_uses_x11_fallback() {
                     Some(value) => std::env::set_var("DISPLAY", value),
                     None => std::env::remove_var("DISPLAY"),
                 }
-                std::env::remove_var("HERDR_TEST_XCLIP_PAYLOAD");
+                std::env::remove_var("BUS_TEST_XCLIP_PAYLOAD");
             }
             let _ = std::fs::remove_dir_all(&self.temp_dir);
         }
@@ -187,7 +185,7 @@ fn failed_wl_copy_uses_x11_fallback() {
         .expect("system time should follow unix epoch")
         .as_nanos();
     let temp_dir = std::env::temp_dir().join(format!(
-        "herdr-failed-wl-copy-{}-{unique}",
+        "bus-failed-wl-copy-{}-{unique}",
         std::process::id()
     ));
     std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -204,7 +202,7 @@ fn failed_wl_copy_uses_x11_fallback() {
         .expect("fake wl-copy should be written");
     std::fs::write(
         &fake_xclip,
-        "#!/bin/sh\n/bin/cat > \"$HERDR_TEST_XCLIP_PAYLOAD\"\n",
+        "#!/bin/sh\n/bin/cat > \"$BUS_TEST_XCLIP_PAYLOAD\"\n",
     )
     .expect("fake xclip should be written");
     for command in [&fake_wl_copy, &fake_xclip] {
@@ -220,7 +218,7 @@ fn failed_wl_copy_uses_x11_fallback() {
         std::env::set_var("PATH", &temp_dir);
         std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
         std::env::set_var("DISPLAY", ":0");
-        std::env::set_var("HERDR_TEST_XCLIP_PAYLOAD", &payload);
+        std::env::set_var("BUS_TEST_XCLIP_PAYLOAD", &payload);
     }
 
     assert!(write_clipboard(b"clipboard fallback"));
@@ -284,7 +282,7 @@ fn read_clipboard_image_with_spawned_command_rejects_over_limit() {
 #[test]
 fn read_clipboard_image_rejects_xclip_text_served_for_image_target() {
     let _guard = env_lock().lock().unwrap();
-    let temp_dir = std::env::temp_dir().join(format!("herdr-fake-xclip-{}", std::process::id()));
+    let temp_dir = std::env::temp_dir().join(format!("bus-fake-xclip-{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let fake_xclip = temp_dir.join("xclip");
     std::fs::write(&fake_xclip, "#!/bin/sh\nprintf '# Tasks'\n")
@@ -336,7 +334,7 @@ fn read_clipboard_image_rejects_xclip_text_served_for_image_target() {
 fn read_clipboard_image_rejects_wayland_xclip_fallback_text_for_image_target() {
     let _guard = env_lock().lock().unwrap();
     let temp_dir =
-        std::env::temp_dir().join(format!("herdr-fake-wayland-xclip-{}", std::process::id()));
+        std::env::temp_dir().join(format!("bus-fake-wayland-xclip-{}", std::process::id()));
     std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
     let fake_wl_paste = temp_dir.join("wl-paste");
     let fake_xclip = temp_dir.join("xclip");
@@ -408,14 +406,17 @@ fn read_validated_clipboard_image_accepts_real_png_payload() {
 #[test]
 fn read_wsl_clipboard_image_accepts_png_from_windows_command() {
     assert_eq!(
-        read_wsl_clipboard_image_with_command(|program| {
-            assert_eq!(program, "powershell.exe");
-            let mut command = Command::new("sh");
-            command
-                .arg("-c")
-                .arg("printf '\\211PNG\\r\\n\\032\\nrest-of-image'");
-            command
-        }, 16 * 1024 * 1024),
+        read_wsl_clipboard_image_with_command(
+            |program| {
+                assert_eq!(program, "powershell.exe");
+                let mut command = Command::new("sh");
+                command
+                    .arg("-c")
+                    .arg("printf '\\211PNG\\r\\n\\032\\nrest-of-image'");
+                command
+            },
+            16 * 1024 * 1024
+        ),
         Some(ClipboardImage {
             bytes: b"\x89PNG\r\n\x1a\nrest-of-image".to_vec(),
             extension: "png",
@@ -462,14 +463,14 @@ fn desktop_notification_separates_option_like_titles() {
         std::env::set_var("DISPLAY", ":0");
     }
 
-    let path = std::env::temp_dir().join(format!("herdr-notify-send-args-{}", std::process::id()));
-    let script = "printf '%s\\n' \"$@\" > \"$HERDR_NOTIFY_ARGS\"";
+    let path = std::env::temp_dir().join(format!("bus-notify-send-args-{}", std::process::id()));
+    let script = "printf '%s\\n' \"$@\" > \"$BUS_NOTIFY_ARGS\"";
     let shown = show_desktop_notification_with_command("-danger", Some("body"), |_| {
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
             .arg(script)
             .arg("notify-send")
-            .env("HERDR_NOTIFY_ARGS", &path);
+            .env("BUS_NOTIFY_ARGS", &path);
         cmd
     })
     .expect("notification command should run");
@@ -482,11 +483,11 @@ fn desktop_notification_separates_option_like_titles() {
 
 #[test]
 fn scrollback_editor_argv_preserves_unix_editor_shell_semantics() {
-    let path = std::path::Path::new("/tmp/herdr scrollback.txt");
+    let path = std::path::Path::new("/tmp/bus scrollback.txt");
     let argv = scrollback_editor_argv(path).unwrap();
 
     assert_eq!(argv[0], "/bin/sh");
     assert_eq!(argv[1], "-c");
     assert!(argv[2].contains("EDITOR:-vi"));
-    assert!(argv[2].contains("/tmp/herdr scrollback.txt"));
+    assert!(argv[2].contains("/tmp/bus scrollback.txt"));
 }

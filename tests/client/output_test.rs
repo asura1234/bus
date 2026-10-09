@@ -61,7 +61,7 @@ fn client_receives_pane_surface_after_pane_output() {
         "should receive a pane surface update after pane output"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }
 
 #[test]
@@ -136,10 +136,10 @@ fn client_receives_notify_on_agent_state_change() {
     cmd.env_remove("HERDR_SESSION");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_bus_pid(child.process_id());
     drop(pair.slave);
 
-    let spawned = SpawnedHerdr {
+    let spawned = SpawnedBus {
         _master: Some(pair.master),
         child,
     };
@@ -273,7 +273,7 @@ fn client_receives_notify_on_agent_state_change() {
         "client should receive a semantic notification when a background pane transitions Working→Idle"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }
 
 #[test]
@@ -341,10 +341,10 @@ fn client_receives_notify_when_detected_agent_becomes_blocked() {
     cmd.env_remove("HERDR_SESSION");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
+    register_spawned_bus_pid(child.process_id());
     drop(pair.slave);
 
-    let spawned = SpawnedHerdr {
+    let spawned = SpawnedBus {
         _master: Some(pair.master),
         child,
     };
@@ -431,5 +431,5 @@ fn client_receives_notify_when_detected_agent_becomes_blocked() {
         "client should receive a needs-attention notification when a detected agent becomes blocked"
     );
 
-    cleanup_spawned_herdr(spawned, base);
+    cleanup_spawned_bus(spawned, base);
 }

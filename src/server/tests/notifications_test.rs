@@ -206,7 +206,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
         api::schema::NotificationShowParams {
             title: "plugin title".into(),
             body: Some("plugin body".into()),
-            position: Some(crate::utils::config::ToastHerdrPosition::TopLeft),
+            position: Some(crate::utils::config::ToastBusPosition::TopLeft),
             sound: api::schema::NotificationShowSound::Done,
         },
     );
@@ -230,7 +230,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
             workspace_id: None,
             tab_id: None,
             pane_id: None,
-            position: Some(crate::utils::config::ToastHerdrPosition::TopLeft),
+            position: Some(crate::utils::config::ToastBusPosition::TopLeft),
         })
     );
 }
@@ -318,7 +318,7 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
                     api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: Some("api workspace".into()),
-                        position: Some(crate::utils::config::ToastHerdrPosition::TopLeft),
+                        position: Some(crate::utils::config::ToastBusPosition::TopLeft),
                         sound: api::schema::NotificationShowSound::Request,
                     },
                 ),
@@ -497,7 +497,7 @@ fn notification_show_api_includes_sound_in_semantic_event() {
         ),
     );
     server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    server.app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     assert!(

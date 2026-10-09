@@ -80,10 +80,8 @@ pub(super) fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
     let bus = crate::utils::config::test_without_bus_env(&_guard);
     let old_config = std::env::var_os("XDG_CONFIG_HOME");
     let old_state = std::env::var_os("XDG_STATE_HOME");
-    let base = std::env::temp_dir().join(format!(
-        "herdr-manifest-loader-{name}-{}",
-        std::process::id()
-    ));
+    let base =
+        std::env::temp_dir().join(format!("bus-manifest-loader-{name}-{}", std::process::id()));
     let config_dir = base.join("config");
     let state_dir = base.join("state");
     let _ = std::fs::remove_dir_all(&base);

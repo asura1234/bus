@@ -5,7 +5,7 @@ use crate::server::persistence::schema::{
 
 fn temp_session_path(name: &str) -> PathBuf {
     let unique = format!(
-        "herdr-session-tests-{}-{}-{}",
+        "bus-session-tests-{}-{}-{}",
         name,
         std::process::id(),
         std::time::SystemTime::now()

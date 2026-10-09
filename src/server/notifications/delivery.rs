@@ -512,7 +512,7 @@ pub struct ToastNotification {
     pub kind: ToastKind,
     pub title: String,
     pub context: String,
-    pub position: Option<crate::utils::config::ToastHerdrPosition>,
+    pub position: Option<crate::utils::config::ToastBusPosition>,
     pub target: Option<ToastTarget>,
 }
 

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn windows_process_cwd_reads_child_launch_directory() {
-    let cwd = std::env::temp_dir().join(format!("herdr-cwd-test-{}", std::process::id()));
+    let cwd = std::env::temp_dir().join(format!("bus-cwd-test-{}", std::process::id()));
     fs::create_dir_all(&cwd).expect("create cwd fixture");
 
     let shell =
@@ -125,7 +125,7 @@ fn pane_runtime_markers_are_distinct() {
 #[test]
 fn pane_runtime_marker_is_added_only_to_git_bash_environment() {
     let root = std::env::temp_dir().join(format!(
-        "herdr-git-bash-test-{}",
+        "bus-git-bash-test-{}",
         super::super::next_pane_runtime_marker()
     ));
     fs::create_dir_all(root.join("bin")).expect("create Git Bash bin fixture");

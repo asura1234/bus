@@ -8,7 +8,7 @@ fn ping_over_socket_returns_version() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
 
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let child = spawn_bus(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let value = send_request(
@@ -22,7 +22,7 @@ fn ping_over_socket_returns_version() {
     // Changing this value means old clients/servers are no longer compatible.
     assert_eq!(value["result"]["protocol"], 22);
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[cfg(target_os = "linux")]
@@ -34,7 +34,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
 
-    let mut child = spawn_herdr_with_shell(&config_home, &runtime_dir, &socket_path, "/bin/sh");
+    let mut child = spawn_bus_with_shell(&config_home, &runtime_dir, &socket_path, "/bin/sh");
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -98,7 +98,7 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
     child.child.wait().expect("server should stop cleanly");
 
     let session: serde_json::Value = serde_json::from_slice(
-        &fs::read(config_home.join("herdr-dev/session.json")).expect("saved session"),
+        &fs::read(config_home.join("bus-dev/session.json")).expect("saved session"),
     )
     .expect("valid session json");
     assert_eq!(session["workspaces"].as_array().map(Vec::len), Some(1));
@@ -109,5 +109,5 @@ fn shutdown_preserves_session_after_shell_is_signaled() {
         Some(1)
     );
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }

@@ -1,7 +1,7 @@
 //! Outer terminal window title.
 //!
-//! Herdr is a terminal emulator, so `OSC 0`/`OSC 2` written by a pane stops at
-//! Herdr and never reaches the terminal Herdr itself runs in. Without this the
+//! Bus is a terminal emulator, so `OSC 0`/`OSC 2` written by a pane stops at
+//! Bus and never reaches the terminal Bus itself runs in. Without this the
 //! host window title keeps whatever the shell or `ssh` left behind, which is
 //! what window managers show in tab and group bars.
 //!
@@ -29,8 +29,8 @@ impl App {
                 });
     }
 
-    /// Whether `ui.window_title` asks Herdr to own the outer terminal title at
-    /// all. When it does not, Herdr leaves whatever the shell or `ssh` set.
+    /// Whether `ui.window_title` asks Bus to own the outer terminal title at
+    /// all. When it does not, Bus leaves whatever the shell or `ssh` set.
     pub(crate) fn window_title_configured(&self) -> bool {
         self.window_title_template.is_some()
     }
@@ -128,7 +128,7 @@ impl HeadlessServer {
 
     /// Renders `ui.window_title` against current session state. `None` means
     /// window titles are disabled or every token resolved empty, which leaves
-    /// the client on Herdr's default title.
+    /// the client on Bus's default title.
     fn configured_window_title(&self) -> Option<String> {
         self.app
             .window_title()
@@ -136,7 +136,7 @@ impl HeadlessServer {
     }
 
     /// Pushes the configured outer window title to the foreground client when it
-    /// changed. Herdr consumes each pane's own `OSC 0`/`OSC 2`, so without this
+    /// changed. Bus consumes each pane's own `OSC 0`/`OSC 2`, so without this
     /// the host terminal title never follows the session — which is what window
     /// managers read for tab and group bar labels.
     pub(in crate::server) fn sync_window_title(&mut self) {
@@ -197,7 +197,7 @@ impl HeadlessServer {
         };
         let set_title = title.is_some();
         // An explicit title suppresses `ui.window_title` until it is cleared,
-        // and clearing restores the configured title rather than only "herdr".
+        // and clearing restores the configured title rather than only "bus".
         self.api_window_title = title.clone();
         let title = title.or_else(|| self.configured_window_title());
         let changed = self.send_window_title(title);

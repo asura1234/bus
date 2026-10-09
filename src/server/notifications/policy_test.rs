@@ -4,15 +4,15 @@ fn notification_context_formats_resolved_workspace_label() {
     let root = state.workspaces[0].tabs[0].root_pane;
 
     assert_eq!(
-        notification_context(&state.workspaces[0], "__herdr_projects__", 0, root),
-        "__herdr_projects__ · 1"
+        notification_context(&state.workspaces[0], "__bus_projects__", 0, root),
+        "__bus_projects__ · 1"
     );
 }
 
 #[test]
 fn state_changed_idle_in_background_marks_unseen() {
     let mut state = app_with_workspaces(&["active", "background"]);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.active = Some(0);
     let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -95,7 +95,7 @@ fn initial_idle_in_background_stays_seen() {
 #[test]
 fn idle_after_known_unknown_agent_in_background_marks_done() {
     let mut state = app_with_workspaces(&["active", "background"]);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.active = Some(0);
     let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -123,7 +123,7 @@ fn idle_after_known_unknown_agent_in_background_marks_done() {
 #[test]
 fn first_idle_after_process_detection_is_not_completion() {
     let mut state = app_with_workspaces(&["active", "background"]);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.active = Some(0);
     let pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -210,7 +210,7 @@ fn first_idle_after_process_detection_is_not_completion() {
 fn background_waiting_sets_attention_toast() {
     let mut state = app_with_workspaces(&["active", "background"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
     state.handle_app_event(TerminalEvent::StateChanged {
@@ -232,7 +232,7 @@ fn background_waiting_sets_attention_toast() {
 fn delayed_background_waiting_schedules_before_toast() {
     let mut state = app_with_workspaces(&["active", "background"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.toast_config.delay_seconds = 1;
     let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -263,7 +263,7 @@ fn delayed_background_waiting_schedules_before_toast() {
 fn delayed_background_waiting_cancels_when_agent_resumes_working() {
     let mut state = app_with_workspaces(&["active", "background"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.toast_config.delay_seconds = 1;
     let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -295,7 +295,7 @@ fn delayed_background_waiting_cancels_when_agent_resumes_working() {
 fn delayed_background_waiting_is_suppressed_if_pane_becomes_active() {
     let mut state = app_with_workspaces(&["active", "background"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.toast_config.delay_seconds = 1;
     let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -345,7 +345,7 @@ fn delayed_active_tab_unfocused_keeps_client_notification_available() {
 fn background_idle_sets_finished_toast() {
     let mut state = app_with_workspaces(&["active", "background"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
     let bg_terminal_id = state.workspaces[1]
         .panes
@@ -377,7 +377,7 @@ fn background_idle_sets_finished_toast() {
 fn background_toast_includes_tab_name_when_workspace_has_multiple_tabs() {
     let mut state = app_with_workspaces(&["active", "background"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.workspaces[1].tabs[0].set_custom_name("main".into());
     let second_tab = state.workspaces[1].test_add_tab(Some("logs"));
     state.ensure_test_terminals();
@@ -402,7 +402,7 @@ fn background_toast_includes_tab_name_when_workspace_has_multiple_tabs() {
 fn background_tab_in_active_workspace_still_sets_toast() {
     let mut state = app_with_workspaces(&["active"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     state.workspaces[0].tabs[0].set_custom_name("main".into());
     let second_tab = state.workspaces[0].test_add_tab(Some("logs"));
     state.ensure_test_terminals();
@@ -427,7 +427,7 @@ fn background_tab_in_active_workspace_still_sets_toast() {
 fn active_workspace_active_tab_does_not_set_toast() {
     let mut state = app_with_workspaces(&["active"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
 
     state.handle_app_event(TerminalEvent::StateChanged {
@@ -447,7 +447,7 @@ fn active_workspace_active_tab_keeps_herdr_toast_suppressed_when_outer_terminal_
     let mut state = app_with_workspaces(&["active"]);
     state.active = Some(0);
     state.outer_terminal_focus = Some(false);
-    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Bus;
     let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
 
     state.handle_app_event(TerminalEvent::StateChanged {

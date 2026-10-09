@@ -1,8 +1,8 @@
 //! Inherited process facts shared by the component callers.
 use std::path::PathBuf;
 
-pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
-pub(crate) const HERDR_ENV_VALUE: &str = "1";
+pub(crate) const BUS_ENV_VAR: &str = "HERDR_ENV";
+pub(crate) const BUS_ENV_VALUE: &str = "1";
 
 pub const SOCKET_PATH_ENV_VAR: &str = "HERDR_SOCKET_PATH";
 pub(crate) const STARTUP_CWD_ENV_VAR: &str = "HERDR_STARTUP_CWD";

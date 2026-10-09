@@ -33,7 +33,7 @@ pub fn run_server(
     ) {
         Ok(server) => server,
         Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-            eprintln!("error: herdr server is already running");
+            eprintln!("error: bus server is already running");
             eprintln!(
                 "api socket: {}",
                 crate::protocol::api::socket_path().display()
@@ -69,7 +69,7 @@ pub fn run_server(
         ) {
             Ok(server) => server,
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-                eprintln!("error: herdr server is already running");
+                eprintln!("error: bus server is already running");
                 eprintln!("client socket: {}", client_socket_path().display());
                 std::process::exit(1);
             }
@@ -79,7 +79,7 @@ pub fn run_server(
         info!(
             api_socket = %crate::protocol::api::socket_path().display(),
             client_socket = %client_socket_path().display(),
-            "herdr server started"
+            "bus server started"
         );
         print_ready_message(&crate::protocol::api::socket_path(), &client_socket_path());
 
@@ -123,7 +123,7 @@ fn take_startup_cwd() -> Option<PathBuf> {
 }
 
 fn print_ready_message(api_socket: &Path, client_socket: &Path) {
-    eprintln!("herdr server running; you can use any herdr CLI command in another terminal.");
+    eprintln!("bus server running; you can use any bus CLI command in another terminal.");
     eprintln!("api socket: {}", api_socket.display());
     eprintln!("client socket: {}", client_socket.display());
     eprintln!(
@@ -132,7 +132,7 @@ fn print_ready_message(api_socket: &Path, client_socket: &Path) {
             .join("herdr-server.log")
             .display()
     );
-    eprintln!("did you mean to open the Herdr TUI? run `herdr`; you do not need `herdr server`.");
+    eprintln!("did you mean to open the Bus TUI? run `bus`; you do not need `bus server`.");
 }
 
 /// Initialize logging for the server process.

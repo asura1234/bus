@@ -30,7 +30,7 @@ mod detach_reattach {
     use serde_json::Value;
     use support::{
         cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
-        register_spawned_herdr_pid, send_detach, unregister_spawned_herdr_pid, wait_for_disconnect,
+        register_spawned_bus_pid, send_detach, unregister_spawned_bus_pid, wait_for_disconnect,
         wait_for_socket, wait_until, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
     };
 
@@ -51,17 +51,17 @@ pane_scrollbars = false
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         PathBuf::from(format!(
-            "/tmp/herdr-detach-test-{}-{nanos}",
+            "/tmp/bus-detach-test-{}-{nanos}",
             std::process::id()
         ))
     }
 
-    struct SpawnedHerdr {
+    struct SpawnedBus {
         _master: Box<dyn MasterPty + Send>,
         child: Box<dyn Child + Send + Sync>,
     }
 
-    impl Drop for SpawnedHerdr {
+    impl Drop for SpawnedBus {
         fn drop(&mut self) {
             let pid = self.child.process_id();
             let _ = self.child.kill();
@@ -78,12 +78,12 @@ pane_scrollbars = false
                     thread::sleep(Duration::from_millis(20));
                 }
 
-                unregister_spawned_herdr_pid(Some(pid));
+                unregister_spawned_bus_pid(Some(pid));
             }
         }
     }
 
-    fn cleanup_spawned_herdr(spawned: SpawnedHerdr, base: PathBuf) {
+    fn cleanup_spawned_bus(spawned: SpawnedBus, base: PathBuf) {
         drop(spawned);
         cleanup_test_base(&base);
     }
@@ -99,7 +99,7 @@ pane_scrollbars = false
         config_home: &PathBuf,
         runtime_dir: &PathBuf,
         api_socket_path: &PathBuf,
-    ) -> SpawnedHerdr {
+    ) -> SpawnedBus {
         spawn_server_with_config(
             config_home,
             runtime_dir,
@@ -113,11 +113,11 @@ pane_scrollbars = false
         runtime_dir: &PathBuf,
         api_socket_path: &PathBuf,
         config: &str,
-    ) -> SpawnedHerdr {
-        fs::create_dir_all(config_home.join("herdr")).unwrap();
+    ) -> SpawnedBus {
+        fs::create_dir_all(config_home.join("bus")).unwrap();
         fs::create_dir_all(runtime_dir).unwrap();
         register_runtime_dir(runtime_dir);
-        fs::write(config_home.join("herdr/config.toml"), config).unwrap();
+        fs::write(config_home.join("bus/config.toml"), config).unwrap();
 
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -134,7 +134,7 @@ pane_scrollbars = false
         cmd.env("XDG_RUNTIME_DIR", runtime_dir);
         cmd.env("HERDR_SOCKET_PATH", api_socket_path);
         cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
-        cmd.env("HERDR_CONFIG_PATH", config_home.join("herdr/config.toml"));
+        cmd.env("HERDR_CONFIG_PATH", config_home.join("bus/config.toml"));
         cmd.env("SHELL", "/bin/sh");
         cmd.env_remove("HERDR_ENV");
         cmd.env_remove("BUS_DATA_DIR");
@@ -142,10 +142,10 @@ pane_scrollbars = false
         cmd.env_remove("HERDR_SESSION");
 
         let child = pair.slave.spawn_command(cmd).unwrap();
-        register_spawned_herdr_pid(child.process_id());
+        register_spawned_bus_pid(child.process_id());
         drop(pair.slave);
 
-        SpawnedHerdr {
+        SpawnedBus {
             _master: pair.master,
             child,
         }

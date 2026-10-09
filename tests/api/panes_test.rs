@@ -13,7 +13,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
 
-    let child = spawn_herdr_with_shell(&config_home, &runtime_dir, &socket_path, "/bin/bash");
+    let child = spawn_bus_with_shell(&config_home, &runtime_dir, &socket_path, "/bin/bash");
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -106,7 +106,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
         foreground.display().to_string()
     );
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[cfg(target_os = "linux")]
@@ -124,7 +124,7 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
 
-    let child = spawn_herdr_with_shell(&config_home, &runtime_dir, &socket_path, "/bin/bash");
+    let child = spawn_bus_with_shell(&config_home, &runtime_dir, &socket_path, "/bin/bash");
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -246,5 +246,5 @@ fn new_terminal_cwd_follow_ignores_nonleader_group_member_cwd() {
         base.display().to_string()
     );
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }

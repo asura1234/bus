@@ -16,7 +16,7 @@ fn cross_area_detach_and_reattach_preserves_state() {
     client_shell_handshake(&mut client_a, CURRENT_PROTOCOL, 100, 30).expect("shell handshake");
     assert!(wait_for_frame(&mut client_a, Duration::from_secs(2)));
 
-    // Use herdr: create a workspace and write output into its pane.
+    // Use bus: create a workspace and write output into its pane.
     let create = workspace_create(&api_socket, "cross-ssh-state");
     let workspace_id = create["result"]["workspace"]["workspace_id"]
         .as_str()
@@ -69,7 +69,7 @@ fn cross_area_detach_and_reattach_preserves_state() {
         "pane output should include detached-period output: {readback}"
     );
 
-    cleanup_spawned_herdr(server, base);
+    cleanup_spawned_bus(server, base);
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
         "agent status should remain working after reattach"
     );
 
-    cleanup_spawned_herdr(server, base);
+    cleanup_spawned_bus(server, base);
 }
 
 #[test]
@@ -308,5 +308,5 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
         "restarted server should respond over API: {ping}"
     );
 
-    cleanup_spawned_herdr(server2, base);
+    cleanup_spawned_bus(server2, base);
 }

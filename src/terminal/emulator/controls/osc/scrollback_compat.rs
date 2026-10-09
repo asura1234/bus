@@ -52,7 +52,7 @@ pub(in crate::terminal::emulator) fn maybe_filter_primary_screen_scrollback_clea
     foreground_job: Option<&crate::platform::ForegroundJob>,
 ) -> Cow<'a, [u8]> {
     // Droid redraws its primary-screen TUI with CSI 3 J, which erases pane
-    // scrollback inside herdr. Keep the hack scoped to Droid on the primary
+    // scrollback inside bus. Keep the hack scoped to Droid on the primary
     // screen so normal terminal clear-history behavior still works elsewhere.
     if alternate_screen
         || !contains_scrollback_clear_sequence(bytes)

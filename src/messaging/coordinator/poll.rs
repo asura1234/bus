@@ -21,7 +21,7 @@ impl Worker {
                 }
                 self.save(state)?;
                 return Err(format!(
-                    "Herdr unavailable; queues and active requests retained: {other:?}"
+                    "Bus unavailable; queues and active requests retained: {other:?}"
                 ));
             }
         };

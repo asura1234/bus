@@ -27,7 +27,7 @@ use crate::messaging::{
         ProviderCallback, Request, RequestId, RequestPhase, Room, RoomAgent, RoomId, RoomKind,
         RuntimeStatus, SubmissionOutcome,
     },
-    native::{HerdrTransport, Transport},
+    native::{BusTransport, Transport},
     orchestration as orchestrator,
     prefs::settings,
     storage::{io, state_store::JsonStore},
@@ -170,7 +170,7 @@ impl BusHandle {
     }
 
     pub(crate) fn start(data_dir: PathBuf, target: ConnectionTarget) -> Result<Self, String> {
-        let mut worker = Worker::open(data_dir.clone(), Box::new(HerdrTransport::new(target)))?;
+        let mut worker = Worker::open(data_dir.clone(), Box::new(BusTransport::new(target)))?;
         worker.dev_enabled = diagnostics::dev_enabled();
         worker.settings_path = settings::path();
         if let Err(error) = worker.apply_global_settings() {

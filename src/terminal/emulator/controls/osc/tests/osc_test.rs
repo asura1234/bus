@@ -86,12 +86,12 @@ fn default_color_tracker_ignores_osc_queries() {
 #[test]
 fn reported_cwd_parses_file_uri_and_bare_paths() {
     assert_eq!(
-        parse_reported_cwd(b"file:///tmp/herdr%20repo"),
-        Some(std::path::PathBuf::from("/tmp/herdr repo"))
+        parse_reported_cwd(b"file:///tmp/bus%20repo"),
+        Some(std::path::PathBuf::from("/tmp/bus repo"))
     );
     assert_eq!(
-        parse_reported_cwd(b"C:\\Users\\herdr\\src\\herdr"),
-        Some(std::path::PathBuf::from("C:\\Users\\herdr\\src\\herdr"))
+        parse_reported_cwd(b"C:\\Users\\bus\\src\\bus"),
+        Some(std::path::PathBuf::from("C:\\Users\\bus\\src\\bus"))
     );
     assert_eq!(
         parse_reported_cwd(b"\"C:\\my proj\""),

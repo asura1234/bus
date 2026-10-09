@@ -86,7 +86,7 @@ fn run_client_with_mode(
     } = initial_client_connection(&socket_path, &loop_config)?;
 
     let terminal_guard = setup_terminal(mouse_capture).map_err(|err| {
-        eprintln!("herdr: failed to set up terminal: {err}");
+        eprintln!("bus: failed to set up terminal: {err}");
         err
     })?;
 
@@ -233,7 +233,7 @@ fn finish_client_run(
     stopped: Result<(), String>,
 ) -> io::Result<()> {
     if let Err(err) = result {
-        let _ = writeln!(io::stderr(), "herdr: {err}");
+        let _ = writeln!(io::stderr(), "bus: {err}");
         rt.shutdown_timeout(Duration::from_millis(100));
         crate::utils::logging::shutdown("client");
 

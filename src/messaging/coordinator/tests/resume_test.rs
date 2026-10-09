@@ -13,7 +13,7 @@ fn resumed_info(provider: Provider) -> schema::AgentInfo {
 
 #[test]
 fn cold_resume_rebinds_same_conversation_and_persists_new_terminal_for_each_provider() {
-    // Herdr restores the same provider conversation in a newly allocated PTY.
+    // Bus restores the same provider conversation in a newly allocated PTY.
     // Requiring the old PTY ID incorrectly makes the restored agent unavailable.
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
         let (mut worker, agent, _room, dir, _calls) = fixture(

@@ -10,11 +10,11 @@ use crate::server::workspaces::Workspace;
 
 fn session_fixture(name: &str) -> &'static str {
     match name {
-        "current-herdr" => {
-            include_str!("../../../tests/fixtures/session/current-herdr-session.json")
+        "current" => {
+            include_str!("../../../tests/fixtures/session/current-session.json")
         }
-        "current-herdr-dev" => {
-            include_str!("../../../tests/fixtures/session/current-herdr-dev-session.json")
+        "current-dev" => {
+            include_str!("../../../tests/fixtures/session/current-dev-session.json")
         }
         other => panic!("unknown session fixture: {other}"),
     }
@@ -151,7 +151,7 @@ fn round_trip_full_workspace_snapshot() {
     panes.insert(
         0,
         PaneSnapshot {
-            cwd: PathBuf::from("/home/can/Projects/herdr"),
+            cwd: PathBuf::from("/home/can/Projects/bus"),
             label: None,
             agent_name: None,
             managed_agent_kind: None,
@@ -175,7 +175,7 @@ fn round_trip_full_workspace_snapshot() {
         workspaces: vec![WorkspaceSnapshot {
             id: Some("wproj".to_string()),
             custom_name: Some("pi-mono".to_string()),
-            identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
+            identity_cwd: PathBuf::from("/home/can/Projects/bus"),
             public_pane_numbers: HashMap::from([(0, 1), (1, 2)]),
             next_public_pane_number: 3,
             public_tab_numbers: vec![1],
@@ -213,7 +213,7 @@ fn round_trip_full_workspace_snapshot() {
     assert_eq!(restored.workspaces[0].tabs[0].panes.len(), 2);
     assert_eq!(
         restored.workspaces[0].tabs[0].panes[&0].cwd,
-        PathBuf::from("/home/can/Projects/herdr")
+        PathBuf::from("/home/can/Projects/bus")
     );
     assert_eq!(
         restored.workspaces[0].tabs[0].panes[&1].label.as_deref(),
@@ -223,7 +223,7 @@ fn round_trip_full_workspace_snapshot() {
 
 #[test]
 fn current_session_fixture_parses() {
-    let snap = parse_snapshot(session_fixture("current-herdr")).unwrap();
+    let snap = parse_snapshot(session_fixture("current")).unwrap();
 
     assert_eq!(snap.version, 3);
     assert_eq!(snap.workspaces.len(), 2);
@@ -238,7 +238,7 @@ fn current_session_fixture_parses() {
 
 #[test]
 fn current_dev_session_fixture_parses_additive_fields() {
-    let snap = parse_snapshot(session_fixture("current-herdr-dev")).unwrap();
+    let snap = parse_snapshot(session_fixture("current-dev")).unwrap();
 
     assert_eq!(snap.version, 3);
     assert_eq!(snap.workspaces.len(), 2);
@@ -441,14 +441,14 @@ fn capture_contract_tracks_workspace_identity_and_pane_cwds() {
     let second_terminal_id = state.workspaces[0].tabs[0].panes[&second]
         .attached_terminal_id
         .clone();
-    state.terminals.get_mut(&second_terminal_id).unwrap().cwd = PathBuf::from("/tmp/herdr");
+    state.terminals.get_mut(&second_terminal_id).unwrap().cwd = PathBuf::from("/tmp/bus");
 
     let snapshot = capture_from_state(&state);
     let workspace = &snapshot.workspaces[0];
     let tab = &workspace.tabs[0];
     assert_eq!(workspace.identity_cwd, PathBuf::from("/tmp/pion"));
     assert_eq!(tab.panes[&root.raw()].cwd, PathBuf::from("/tmp/pion"));
-    assert_eq!(tab.panes[&second.raw()].cwd, PathBuf::from("/tmp/herdr"));
+    assert_eq!(tab.panes[&second.raw()].cwd, PathBuf::from("/tmp/bus"));
 }
 
 #[tokio::test]
@@ -623,7 +623,7 @@ fn restore_falls_back_to_home_when_cwd_missing() {
     panes.insert(
         0,
         PaneSnapshot {
-            cwd: PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test"),
+            cwd: PathBuf::from("/tmp/this-directory-does-not-exist-for-bus-test"),
             label: None,
             agent_name: None,
             managed_agent_kind: None,
@@ -679,6 +679,6 @@ fn restore_falls_back_to_home_when_cwd_missing() {
     assert_eq!(restored.workspaces.len(), 1);
     assert_eq!(
         restored.workspaces[0].tabs[0].panes[&0].cwd,
-        PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test")
+        PathBuf::from("/tmp/this-directory-does-not-exist-for-bus-test")
     );
 }

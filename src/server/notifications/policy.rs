@@ -263,7 +263,7 @@ impl AppState {
     ) {
         if matches!(
             self.toast_config.delivery,
-            crate::utils::config::ToastDelivery::Herdr
+            crate::utils::config::ToastDelivery::Bus
         ) {
             if let Some(toast) = delivery.toast.clone() {
                 self.toast = Some(toast);

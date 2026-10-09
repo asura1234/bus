@@ -7,7 +7,7 @@ async fn cwd_returns_accepted_report_without_rechecking_filesystem() {
         .expect("clock should be after unix epoch")
         .as_nanos();
     let cwd = std::env::temp_dir().join(format!(
-        "herdr-reported-cwd-cache-{}-{stamp}",
+        "bus-reported-cwd-cache-{}-{stamp}",
         std::process::id()
     ));
     std::fs::create_dir(&cwd).expect("create reported cwd");
@@ -36,7 +36,7 @@ fn process_cwd_does_not_require_traversing_the_directory_path() {
         .expect("clock should be after unix epoch")
         .as_nanos();
     let base = std::env::temp_dir().join(format!(
-        "herdr-process-cwd-no-stat-{}-{stamp}",
+        "bus-process-cwd-no-stat-{}-{stamp}",
         std::process::id()
     ));
     let private = base.join("private");

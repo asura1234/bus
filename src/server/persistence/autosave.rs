@@ -74,7 +74,7 @@ impl App {
         self.pane_exit_checkpoint_pending = false;
         self.session_save_deadline = None;
         match std::thread::Builder::new()
-            .name("herdr-session-save".into())
+            .name("bus-session-save".into())
             .spawn(move || run_session_save_job(job))
         {
             Ok(thread) => self.session_save_thread = Some(thread),

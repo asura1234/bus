@@ -23,7 +23,7 @@ fn unique_test_path(name: &str) -> std::path::PathBuf {
     }
     #[cfg(windows)]
     {
-        std::env::temp_dir().join(format!("herdr-{name}-{filename}"))
+        std::env::temp_dir().join(format!("bus-{name}-{filename}"))
     }
 }
 

@@ -23,7 +23,7 @@ fn shared_api_method_labels_match_serialized_requests() {
         ("pane.get", serde_json::json!({"pane_id": "w1:p1"})),
         (
             "pane.send_text",
-            serde_json::json!({"pane_id": "w1:p1", "text": "herdr"}),
+            serde_json::json!({"pane_id": "w1:p1", "text": "bus"}),
         ),
     ] {
         let request: Request = serde_json::from_value(serde_json::json!({
@@ -152,7 +152,7 @@ fn notification_show_request_parses() {
     assert_eq!(params.body.as_deref(), Some("api workspace"));
     assert_eq!(
         params.position,
-        Some(crate::utils::config::ToastHerdrPosition::TopLeft)
+        Some(crate::utils::config::ToastBusPosition::TopLeft)
     );
     assert_eq!(params.sound, NotificationShowSound::Request);
 }
@@ -173,12 +173,12 @@ fn client_window_title_requests_round_trip() {
     let set = Request {
         id: "req_title_set".into(),
         method: Method::ClientWindowTitleSet(ClientWindowTitleSetParams {
-            title: "herdr api".into(),
+            title: "bus api".into(),
         }),
     };
     let json = serde_json::to_value(&set).unwrap();
     assert_eq!(json["method"], "client.window_title.set");
-    assert_eq!(json["params"]["title"], "herdr api");
+    assert_eq!(json["params"]["title"], "bus api");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, set);
 

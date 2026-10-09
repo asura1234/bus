@@ -143,7 +143,7 @@ fn terminal_cwd_report_updates_terminal_cwd_and_marks_session_dirty() {
         .unwrap()
         .attached_terminal_id
         .clone();
-    let cwd = std::env::temp_dir().join(format!("herdr-cwd-report-test-{}", std::process::id()));
+    let cwd = std::env::temp_dir().join(format!("bus-cwd-report-test-{}", std::process::id()));
     std::fs::create_dir_all(&cwd).unwrap();
     state.session_dirty = false;
 

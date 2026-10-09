@@ -26,7 +26,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
 
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
-    let child = spawn_herdr_with_path(
+    let child = spawn_bus_with_path(
         &config_home,
         &runtime_dir,
         &socket_path,
@@ -141,7 +141,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
     assert_eq!(renamed_event["data"]["tab_id"], second_tab_id);
     assert_eq!(renamed_event["data"]["label"], "logs");
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -153,7 +153,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
 
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let child = spawn_bus(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -224,7 +224,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
     );
     assert_eq!(pane_closed["data"]["pane_id"], split_pane_id);
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -236,7 +236,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
 
-    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let child = spawn_bus(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -307,7 +307,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
     let workspace_closed = wait_for_event(&mut reader, "workspace_closed", Duration::from_secs(2));
     assert_eq!(workspace_closed["data"]["workspace_id"], workspace_id);
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
 
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
-    let child = spawn_herdr_with_path(
+    let child = spawn_bus_with_path(
         &config_home,
         &runtime_dir,
         &socket_path,
@@ -430,7 +430,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
     assert_eq!(agent_idle["data"]["agent_status"], "idle");
     assert_eq!(agent_idle["data"]["agent"], "pi");
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }
 
 #[test]
@@ -462,7 +462,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
 
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
-    let child = spawn_herdr_with_path(
+    let child = spawn_bus_with_path(
         &config_home,
         &runtime_dir,
         &socket_path,
@@ -579,5 +579,5 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
 
     fs::write(&stop_file, "stop").unwrap();
 
-    cleanup_spawned_herdr(child, base);
+    cleanup_spawned_bus(child, base);
 }

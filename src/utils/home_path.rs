@@ -142,7 +142,7 @@ mod tests {
         assert_eq!(
             home_dir_from_env(true, |key| match key {
                 "HOMEDRIVE" => Some("C:".into()),
-                "HOMEPATH" => Some("Users\\herdr".into()),
+                "HOMEPATH" => Some("Users\\bus".into()),
                 _ => None,
             }),
             Err(())

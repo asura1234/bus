@@ -1,4 +1,4 @@
-//! Headless server mode — runs the herdr event loop without a real terminal.
+//! Headless server mode — runs the bus event loop without a real terminal.
 //!
 //! The server:
 //! - Does not enter raw mode or read stdin
@@ -96,7 +96,7 @@ const CLIENT_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 // Headless server
 // ---------------------------------------------------------------------------
 
-/// The headless server — runs the herdr event loop without a real terminal.
+/// The headless server — runs the bus event loop without a real terminal.
 // Sibling loop, lifecycle, client, rendering and test modules share this state.
 pub struct HeadlessServer {
     pub(super) app: app::App,

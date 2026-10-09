@@ -62,17 +62,15 @@ fn terminal_notifier_command_includes_icon_and_activation() {
 
 #[test]
 fn terminal_notifier_success_skips_osascript() {
-    let path = std::env::temp_dir().join(format!(
-        "herdr-terminal-notifier-args-{}",
-        std::process::id()
-    ));
-    let script = "printf '%s:%s\\n' \"$0\" \"$*\" >> \"$HERDR_NOTIFY_ARGS\"";
+    let path =
+        std::env::temp_dir().join(format!("bus-terminal-notifier-args-{}", std::process::id()));
+    let script = "printf '%s:%s\\n' \"$0\" \"$*\" >> \"$BUS_NOTIFY_ARGS\"";
     let mut command = |program: &str| {
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
             .arg(script)
             .arg(program)
-            .env("HERDR_NOTIFY_ARGS", &path);
+            .env("BUS_NOTIFY_ARGS", &path);
         cmd
     };
 
@@ -94,19 +92,19 @@ fn terminal_notifier_success_skips_osascript() {
 
 #[test]
 fn desktop_notification_falls_back_to_osascript_when_terminal_notifier_fails() {
-    let path = std::env::temp_dir().join(format!("herdr-osascript-args-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("bus-osascript-args-{}", std::process::id()));
     let script = r#"
 if [ "$0" = "terminal-notifier" ]; then
   exit 1
 fi
-printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
+printf '%s\n' "$@" > "$BUS_NOTIFY_ARGS"
 "#;
     let mut command = |program: &str| {
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
             .arg(script)
             .arg(program)
-            .env("HERDR_NOTIFY_ARGS", &path);
+            .env("BUS_NOTIFY_ARGS", &path);
         cmd
     };
     let shown = show_desktop_notification_with_command("title", Some("body"), &mut command)
@@ -123,11 +121,11 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
 
 #[test]
 fn scrollback_editor_argv_preserves_unix_editor_shell_semantics() {
-    let path = std::path::Path::new("/tmp/herdr scrollback.txt");
+    let path = std::path::Path::new("/tmp/bus scrollback.txt");
     let argv = scrollback_editor_argv(path).unwrap();
 
     assert_eq!(argv[0], "/bin/sh");
     assert_eq!(argv[1], "-c");
     assert!(argv[2].contains("EDITOR:-vi"));
-    assert!(argv[2].contains("/tmp/herdr scrollback.txt"));
+    assert!(argv[2].contains("/tmp/bus scrollback.txt"));
 }

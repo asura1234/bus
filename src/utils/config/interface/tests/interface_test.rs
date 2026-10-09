@@ -13,7 +13,7 @@ agent_panel_sort = "priority"
     assert_eq!(config.ui.agent_panel_sort, AgentPanelSortConfig::Priority);
 
     let retired = toml::from_str::<Config>("[ui]\nagent_panel_sort = \"workspaces\"");
-    assert!(retired.is_err(), "the herdr-era alias is gone");
+    assert!(retired.is_err(), "the bus-era alias is gone");
 }
 
 #[test]

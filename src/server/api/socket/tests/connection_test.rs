@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver};
 
 fn local_stream_pair(name: &str) -> (LocalStream, LocalStream, PathBuf) {
     let path = std::env::temp_dir().join(format!(
-        "herdr-api-{name}-{}-{}.sock",
+        "bus-api-{name}-{}-{}.sock",
         std::process::id(),
         Instant::now().elapsed().as_nanos()
     ));

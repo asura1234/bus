@@ -39,7 +39,7 @@ impl App {
                 .state
                 .publish_pane_process_exit_if_agent(*pane_id, false)
             {
-                self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+                self.refresh_new_bus_toast_context_for_update(&update, &previous_toast);
                 self.emit_pane_state_update(&update);
             }
             if self.runtime_exit_action(*pane_id) == RuntimeExitAction::RespawnShell
@@ -99,7 +99,7 @@ impl App {
             self.render_notify.notify_one();
         }
         for update in &pane_updates {
-            self.refresh_new_herdr_toast_context_for_update(update, &previous_toast);
+            self.refresh_new_bus_toast_context_for_update(update, &previous_toast);
             self.emit_pane_state_update(update);
         }
         if let Some((

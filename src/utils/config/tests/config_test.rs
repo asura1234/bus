@@ -4,7 +4,7 @@ use super::*;
 fn leaf_config_load_keeps_caller_overrides_outside_the_loader() {
     let guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let _bus = crate::utils::config::test_without_bus_env(&guard);
-    let root = std::env::temp_dir().join(format!("herdr-config-leaf-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("bus-config-leaf-{}", std::process::id()));
     std::fs::create_dir_all(root.join("herdr-config")).unwrap();
     std::fs::write(
         root.join("herdr-config/config.toml"),
@@ -35,7 +35,7 @@ fn config_diagnostic_summary_uses_compact_actionable_banner() {
 
     assert_eq!(
         config_diagnostic_summary(&diagnostics).as_deref(),
-        Some("config.toml; herdr config check")
+        Some("config.toml; bus config check")
     );
 }
 
@@ -48,13 +48,13 @@ fn config_diagnostic_summary_reports_unknown_keys_as_invalid() {
     ];
     assert_eq!(
         config_diagnostic_summary(&startup).as_deref(),
-        Some("config.toml invalid; using defaults; herdr config check")
+        Some("config.toml invalid; using defaults; bus config check")
     );
 
     let reload = vec!["unknown config key ui.mouse_captur; keeping current config".to_string()];
     assert_eq!(
         config_diagnostic_summary(&reload).as_deref(),
-        Some("config.toml invalid; keeping current config; herdr config check")
+        Some("config.toml invalid; keeping current config; bus config check")
     );
 }
 
@@ -68,7 +68,7 @@ fn config_diagnostic_summary_keeps_mixed_diagnostics_generic() {
 
     assert_eq!(
         config_diagnostic_summary(&diagnostics).as_deref(),
-        Some("config.toml; herdr config check")
+        Some("config.toml; bus config check")
     );
 }
 
@@ -82,7 +82,7 @@ fn config_diagnostic_summary_reports_default_fallback() {
 
     assert_eq!(
         config_diagnostic_summary(&diagnostics).as_deref(),
-        Some("config.toml invalid; using defaults; herdr config check")
+        Some("config.toml invalid; using defaults; bus config check")
     );
 }
 
@@ -92,13 +92,13 @@ fn config_diagnostic_summary_reports_unreadable_config_impact() {
     let startup = vec!["config read error: permission denied; using defaults".to_string()];
     assert_eq!(
         config_diagnostic_summary(&startup).as_deref(),
-        Some("config.toml unreadable; using defaults; herdr config check")
+        Some("config.toml unreadable; using defaults; bus config check")
     );
 
     let reload = vec!["config read error: permission denied; keeping current config".to_string()];
     assert_eq!(
         config_diagnostic_summary(&reload).as_deref(),
-        Some("config.toml unreadable; keeping current config; herdr config check")
+        Some("config.toml unreadable; keeping current config; bus config check")
     );
 }
 
@@ -112,7 +112,7 @@ fn config_diagnostic_summary_reports_retained_live_config() {
 
     assert_eq!(
         config_diagnostic_summary(&diagnostics).as_deref(),
-        Some("config.toml invalid; keeping current config; herdr config check")
+        Some("config.toml invalid; keeping current config; bus config check")
     );
 }
 
@@ -120,7 +120,7 @@ fn config_diagnostic_summary_reports_retained_live_config() {
 fn config_loaders_report_unreadable_path() {
     let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let _bus = crate::utils::config::test_without_bus_env(&_guard);
-    let path = std::env::temp_dir().join(format!("herdr-config-unreadable-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("bus-config-unreadable-{}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
 
@@ -283,7 +283,7 @@ fn startup_config_falls_back_to_defaults_on_a_retired_key() {
     let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let _bus = crate::utils::config::test_without_bus_env(&_guard);
     let path = std::env::temp_dir().join(format!(
-        "herdr-config-retired-agent-panel-scope-{}.toml",
+        "bus-config-retired-agent-panel-scope-{}.toml",
         std::process::id()
     ));
     std::fs::write(
@@ -313,7 +313,7 @@ fn startup_config_falls_back_to_defaults_on_an_unknown_section() {
     let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let _bus = crate::utils::config::test_without_bus_env(&_guard);
     let path = std::env::temp_dir().join(format!(
-        "herdr-config-unknown-section-{}.toml",
+        "bus-config-unknown-section-{}.toml",
         std::process::id()
     ));
     std::fs::write(

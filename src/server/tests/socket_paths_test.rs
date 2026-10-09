@@ -58,7 +58,7 @@ fn prepare_socket_path_rejects_live_socket() {
     assert_eq!(
         error.to_string(),
         format!(
-            "herdr server is already running (socket busy at {})",
+            "bus server is already running (socket busy at {})",
             socket_path.display()
         )
     );

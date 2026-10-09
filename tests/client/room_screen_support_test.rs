@@ -76,8 +76,8 @@ impl RoomClient {
         let config = base.join("config");
         // Let Bus create its private root; do not precreate a shared control directory.
         fs::create_dir_all(&base).unwrap();
-        fs::create_dir_all(config.join("herdr")).unwrap();
-        fs::write(config.join("herdr/config.toml"), "onboarding = false\n").unwrap();
+        fs::create_dir_all(config.join("bus")).unwrap();
+        fs::write(config.join("bus/config.toml"), "onboarding = false\n").unwrap();
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 30,

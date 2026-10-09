@@ -184,7 +184,7 @@ pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Re
     let body = body.unwrap_or(&title).to_owned();
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new()
-        .name("herdr-windows-notification".into())
+        .name("bus-windows-notification".into())
         .spawn(move || show_desktop_notification_on_thread(&title, &body, ready_tx))?;
     ready_rx
         .recv_timeout(Duration::from_secs(2))
@@ -205,7 +205,7 @@ pub(in crate::platform::windows) fn show_desktop_notification_on_thread(
     ready_tx: std::sync::mpsc::SyncSender<std::io::Result<bool>>,
 ) {
     let class_name = wide_null("STATIC");
-    let window_name = wide_null("Herdr notifications");
+    let window_name = wide_null("Bus notifications");
     let hwnd = unsafe {
         CreateWindowExW(
             0,
@@ -236,11 +236,11 @@ pub(in crate::platform::windows) fn show_desktop_notification_on_thread(
     if !notification.hIcon.is_null() {
         notification.uFlags |= NIF_ICON;
     }
-    copy_wide_truncated(&mut notification.szTip, "Herdr");
+    copy_wide_truncated(&mut notification.szTip, "Bus");
 
     if unsafe { Shell_NotifyIconW(NIM_ADD, &notification) } == 0 {
         let _ = ready_tx.send(Err(std::io::Error::other(
-            "failed to add Herdr notification-area icon",
+            "failed to add Bus notification-area icon",
         )));
         unsafe {
             DestroyWindow(hwnd);
@@ -258,7 +258,7 @@ pub(in crate::platform::windows) fn show_desktop_notification_on_thread(
             DestroyWindow(hwnd);
         }
         let _ = ready_tx.send(Err(std::io::Error::other(
-            "failed to show Herdr desktop notification",
+            "failed to show Bus desktop notification",
         )));
         return;
     }

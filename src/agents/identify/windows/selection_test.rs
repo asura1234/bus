@@ -256,7 +256,7 @@ fn windows_process_tree_selects_wrapped_agent_descendant() {
             "node.exe",
             &[
                 "node.exe",
-                "C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\codex\\bin\\codex.js",
+                "C:\\Users\\bus\\AppData\\Roaming\\npm\\node_modules\\codex\\bin\\codex.js",
             ],
         ),
     ];
@@ -280,7 +280,7 @@ fn windows_process_tree_selects_cmd_wrapped_agent_descendant() {
                 "/D",
                 "/S",
                 "/C",
-                "C:\\Users\\herdr\\AppData\\Roaming\\npm\\codex.cmd --model gpt-5",
+                "C:\\Users\\bus\\AppData\\Roaming\\npm\\codex.cmd --model gpt-5",
             ],
         ),
     ];
@@ -301,14 +301,14 @@ fn windows_process_tree_selects_topmost_codex_process_in_single_agent_chain() {
             "node.exe",
             &[
                 "node.exe",
-                "C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+                "C:\\Users\\bus\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
             ],
         ),
         test_entry(
             30,
             20,
             "codex.exe",
-            &["C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe"],
+            &["C:\\Users\\bus\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe"],
         ),
         test_entry(40, 30, "node_repl.exe", &["node_repl.exe"]),
         test_entry(

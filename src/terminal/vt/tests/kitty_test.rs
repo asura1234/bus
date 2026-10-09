@@ -187,10 +187,8 @@ fn kitty_graphics_local_media_are_enabled() {
 fn kitty_graphics_file_medium_rgba_placement_is_queryable() {
     use base64::Engine;
 
-    let dir = std::env::temp_dir().join(format!(
-        "herdr-kitty-file-medium-test-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("bus-kitty-file-medium-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("pixel.rgba");
     std::fs::write(&path, [255, 0, 0, 255]).unwrap();
@@ -223,10 +221,8 @@ fn kitty_graphics_file_medium_rgba_placement_is_queryable() {
 #[cfg(unix)]
 #[test]
 fn kitty_graphics_file_upload_can_be_placed_later() {
-    let dir = std::env::temp_dir().join(format!(
-        "herdr-kitty-file-upload-test-{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("bus-kitty-file-upload-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("pixel.rgba");
     std::fs::write(&path, [255, 0, 0, 255]).unwrap();

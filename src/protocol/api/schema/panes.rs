@@ -19,7 +19,8 @@ use super::common::{AgentStatus, ReadFormat, ReadSource};
 #[serde(rename_all = "snake_case")]
 pub enum PaneRightClickTarget {
     #[default]
-    Herdr,
+    #[serde(rename = "herdr")]
+    Bus,
     Pane,
 }
 
