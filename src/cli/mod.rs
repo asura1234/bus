@@ -89,6 +89,17 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             let session = registry.resume(target.clone()).map_err(io::Error::other)?;
             (session.root, Some(session.id))
         }
+        // With no session ever recorded there is no server to stop.
+        Action::Stop
+            if explicit_root.is_none()
+                && matches!(
+                    std::fs::symlink_metadata(base.join("last-session")),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound
+                ) =>
+        {
+            help::write_stdout_line(format_args!("{}", serde_json::json!({"stopped": false})));
+            return Ok(());
+        }
         // Stop targets the same session as control commands.
         Action::Control(_) | Action::Stop => match explicit_root {
             Some(root) => (root, None),
