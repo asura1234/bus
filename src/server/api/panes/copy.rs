@@ -304,7 +304,9 @@ fn line_copy_motion_target(
                     ch as u32,
                 ))
             })
-            .unwrap_or(0)
+            .map_or(Some(0), |_| {
+                last_character_cell(runtime, pane_id, cursor.row, width, &text)
+            })?
         }
         PaneCopyMotion::FirstNonBlank => {
             crate::utils::text::copy_motion::first_non_blank_col(&text, |ch| {
@@ -320,4 +322,27 @@ fn line_copy_motion_target(
         row: cursor.row,
         col: col.min(width.saturating_sub(1)),
     })
+}
+
+/// Grapheme clusters can span fewer cells than their codepoints' widths add up to, so ask the
+/// terminal: the last character starts at the first column whose prefix already reads the whole row.
+fn last_character_cell(
+    runtime: &crate::terminal::TerminalRuntime,
+    pane_id: crate::utils::ids::PaneId,
+    row: u32,
+    width: u16,
+    text: &str,
+) -> Option<u16> {
+    let (mut low, mut high) = (0u16, width.saturating_sub(1));
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let prefix =
+            crate::utils::text::selection::Selection::absolute_range(pane_id, (row, 0), (row, mid));
+        if runtime.extract_selection(&prefix)? == text {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    Some(low)
 }
