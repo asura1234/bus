@@ -273,6 +273,15 @@ pub(super) fn resolve_shell_for_login_mode(shell: &str) -> io::Result<String> {
                 .map(|dir| dir.join(shell))
                 .find(|candidate| is_executable_file(candidate))
         })
+        // A relative PATH entry is resolved against Bus's cwd here, but the
+        // login shell is exec'd after changing into the pane's directory.
+        .and_then(|path| {
+            if path.is_absolute() {
+                Some(path)
+            } else {
+                std::path::absolute(path).ok()
+            }
+        })
         .and_then(|path| path.into_os_string().into_string().ok())
         .ok_or_else(|| {
             io::Error::new(

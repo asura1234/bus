@@ -358,6 +358,71 @@ fn login_shell_builder_resolves_bare_shell_names_from_path() {
 
 #[cfg(unix)]
 #[test]
+fn login_shell_from_relative_path_runs_in_the_pane_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = self::env::env_lock();
+    let base = std::env::temp_dir().join(format!(
+        "bus-relative-login-shell-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let bin = base.join("bin");
+    let pane_cwd = base.join("pane");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&pane_cwd).unwrap();
+    let shell = bin.join("fake-shell");
+    std::fs::write(&shell, "#!/bin/sh\nexit 17\n").unwrap();
+    std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut relative_bin = std::path::PathBuf::new();
+    for component in std::env::current_dir().unwrap().components() {
+        if matches!(component, std::path::Component::Normal(_)) {
+            relative_bin.push("..");
+        }
+    }
+    relative_bin.push(bin.strip_prefix("/").unwrap());
+    let original_path = std::env::var_os("PATH");
+    std::env::set_var("PATH", &relative_bin);
+
+    let spawn_exit = |configured_shell: &str| {
+        let mut cmd = pane_shell_command_builder_for_target(
+            PaneShellConfig::new(
+                configured_shell,
+                crate::utils::config::ShellModeConfig::Login,
+            ),
+            ShellLaunchTarget::OtherUnix,
+        )?;
+        cmd.cwd(&pane_cwd);
+        let mut spawned = crate::terminal::runtime::spawn::spawn_with_portable_pty(24, 80, cmd)?;
+        spawned.child.wait()
+    };
+    let absolute_result = spawn_exit(shell.to_str().unwrap());
+    let result = spawn_exit("fake-shell");
+
+    match original_path {
+        Some(path) => std::env::set_var("PATH", path),
+        None => std::env::remove_var("PATH"),
+    }
+    std::fs::remove_dir_all(&base).unwrap();
+
+    assert_eq!(
+        absolute_result.unwrap().exit_code(),
+        17,
+        "the fixture shell must run successfully from the pane cwd"
+    );
+    assert!(
+        result.is_ok(),
+        "a login shell found on PATH must launch after changing to the pane cwd: {result:?}"
+    );
+    assert_eq!(result.unwrap().exit_code(), 17);
+}
+
+#[cfg(unix)]
+#[test]
 fn login_shell_resolution_preserves_shell_paths() {
     assert_eq!(resolve_shell_for_login_mode("/bin/sh").unwrap(), "/bin/sh");
 }
