@@ -125,7 +125,8 @@ fn parse_rgb_color(value: &str) -> Option<RgbColor> {
 
     if let Some(hex) = value.strip_prefix('#') {
         let digits = hex.len() / 3;
-        if !matches!(digits, 1..=4) || hex.len() != digits * 3 {
+        // Byte slicing below needs ASCII; host replies are untrusted text.
+        if !hex.is_ascii() || !matches!(digits, 1..=4) || hex.len() != digits * 3 {
             return None;
         }
         return Some(RgbColor {
