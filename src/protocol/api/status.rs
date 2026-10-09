@@ -37,6 +37,8 @@ pub fn read_runtime_status_at(
                 io::ErrorKind::ConnectionRefused
                     | io::ErrorKind::NotFound
                     | io::ErrorKind::TimedOut
+                    // Unix socket receive timeouts surface as EAGAIN.
+                    | io::ErrorKind::WouldBlock
             ) =>
         {
             return Ok(None);
