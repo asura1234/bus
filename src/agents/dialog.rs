@@ -147,7 +147,7 @@ fn option_line(full: &str) -> Option<OptionLine> {
     }
     let number = rest[..digits].parse().ok()?;
     let after_dot = rest[digits..].strip_prefix('.')?;
-    // `1.Yes` 不是选项；`1.` 或 `1. ` 是选项正文被折到下一行。
+    // `1.Yes` is not an option; `1.` or `1. ` can wrap the label to the next line.
     let wrapped = after_dot.trim().is_empty();
     if !wrapped && !after_dot.starts_with([' ', '\t']) {
         return None;
@@ -546,7 +546,7 @@ fn numbered_options(lines: &[&str], start: usize) -> (Vec<OptionLine>, usize) {
             if option.number as usize != options.len() + 1 {
                 break;
             }
-            // Codex 把放不下的选项正文折到下一行，编号行上只剩 `› 1.`。
+            // Codex can wrap the whole label, leaving only `› 1.` on this line.
             if option.label.is_empty()
                 && !lines.get(index + 1).is_some_and(|next| {
                     let text = unboxed(next);
