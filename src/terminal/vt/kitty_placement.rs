@@ -8,10 +8,12 @@ use super::{
     KittyPlacementRenderInfo, Terminal, KITTY_UNICODE_PLACEHOLDER,
 };
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 use std::{mem, ptr};
+
+const SYNTHETIC_PLACEMENT_ID_SPAN: u32 = 900_000;
 
 static KITTY_PLACEHOLDER_DIACRITICS: OnceLock<HashMap<u32, u32>> = OnceLock::new();
 
@@ -162,6 +164,7 @@ impl Terminal {
     pub(super) fn kitty_virtual_image_placements<F>(
         &self,
         graphics: ffi::GhosttyKittyGraphics,
+        ordinary: &[KittyImagePlacement],
         needs_data: &mut F,
     ) -> Result<Vec<KittyImagePlacement>, Error>
     where
@@ -178,6 +181,12 @@ impl Terminal {
         let cell_height = (self.height_px()? / u32::from(viewport_rows)).max(1);
         let runs = self.kitty_virtual_runs(viewport_cols, viewport_rows)?;
 
+        // Synthetic fragment IDs share the child's placement-ID namespace, and
+        // host identity is (image, placement); skip IDs already in use.
+        let mut used_ids: HashSet<(u32, u32)> = ordinary
+            .iter()
+            .map(|placement| (placement.image_id, placement.placement_id))
+            .collect();
         let mut placements = Vec::new();
         for run in runs {
             let image_id = run.image_id();
@@ -213,7 +222,7 @@ impl Terminal {
             ) else {
                 continue;
             };
-            let placement_id = run.synthetic_placement_id();
+            let placement_id = run.synthetic_placement_id(&mut used_ids);
             let (descriptor, data) = self.kitty_image_descriptor_and_data(
                 image,
                 image_id,
@@ -603,7 +612,7 @@ impl KittyVirtualRun {
         self.placement_id.unwrap_or(0)
     }
 
-    fn synthetic_placement_id(self) -> u32 {
+    fn synthetic_placement_id(self, used_ids: &mut HashSet<(u32, u32)>) -> u32 {
         let mut hasher = DefaultHasher::new();
         self.image_id().hash(&mut hasher);
         self.placement_id().hash(&mut hasher);
@@ -612,6 +621,11 @@ impl KittyVirtualRun {
         self.width.hash(&mut hasher);
         self.x.hash(&mut hasher);
         self.y.hash(&mut hasher);
-        1 + ((hasher.finish() as u32) % 900_000)
+        let start = (hasher.finish() as u32) % SYNTHETIC_PLACEMENT_ID_SPAN;
+        // Probe deterministically so an unchanged snapshot keeps the same IDs.
+        (0..SYNTHETIC_PLACEMENT_ID_SPAN)
+            .map(|step| 1 + (start + step) % SYNTHETIC_PLACEMENT_ID_SPAN)
+            .find(|id| used_ids.insert((self.image_id(), *id)))
+            .unwrap_or(1 + start)
     }
 }

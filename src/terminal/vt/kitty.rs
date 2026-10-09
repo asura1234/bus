@@ -131,7 +131,9 @@ impl Terminal {
             return Ok(Vec::new());
         }
 
-        placements.extend(self.kitty_virtual_image_placements(graphics, &mut needs_data)?);
+        let virtual_placements =
+            self.kitty_virtual_image_placements(graphics, &placements, &mut needs_data)?;
+        placements.extend(virtual_placements);
         placements.sort_by_key(|placement| placement.z);
         self.prune_kitty_fingerprints(&placements);
         Ok(placements)

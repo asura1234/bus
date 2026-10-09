@@ -154,6 +154,85 @@ fn clipped_scrolled_placement_crops_after_subcell_offset() {
 }
 
 #[test]
+fn direct_placement_and_unicode_fragment_keep_distinct_host_identities() {
+    use crate::protocol::kitty::apc::encode_kitty_data;
+    use crate::terminal::vt::Terminal;
+
+    let mut terminal = Terminal::new(10, 5, 0).unwrap();
+    terminal.enable_kitty_graphics().unwrap();
+    terminal.resize(10, 5, 10, 10).unwrap();
+    let mut upload = Vec::new();
+    encode_kitty_data(
+        &mut upload,
+        "a=T,U=1,t=d,f=32,s=20,v=10,i=42,c=2,r=1,q=2",
+        &vec![255; 20 * 10 * 4],
+    );
+    terminal.write(&upload);
+    terminal.write(
+        "\x1b[1;1H\x1b[38;5;42m\u{10eeee}\u{0305}\u{0305}\u{10eeee}\u{0305}\u{030d}\x1b[0m"
+            .as_bytes(),
+    );
+    let initial = terminal
+        .kitty_image_placements_with_data_filter(|_| true)
+        .unwrap();
+    assert_eq!(initial.len(), 1);
+    let fragment_id = initial[0].placement_id;
+
+    // Direct placement IDs belong to the child application; a valid chosen
+    // ID must not overwrite the separately displayed Unicode fragment.
+    terminal
+        .write(format!("\x1b[3;5H\x1b_Ga=p,i=42,p={fragment_id},c=2,r=1,C=1,q=2\x1b\\").as_bytes());
+    let placements = terminal
+        .kitty_image_placements_with_data_filter(|_| true)
+        .unwrap();
+    assert_eq!(placements.len(), 2);
+    let placements = placements
+        .into_iter()
+        .map(|image| HostPlacement {
+            pane_id: PaneId::from_raw(1),
+            host_image_id: None,
+            area: Rect::new(0, 0, 10, 5),
+            cell_size: HostCellSize {
+                width_px: 10,
+                height_px: 10,
+            },
+            source_key: HostSourceKey::Terminal {
+                pane_id: PaneId::from_raw(1),
+                image_id: image.image_id,
+            },
+            placement: image,
+            scrollback_offset: 0,
+        })
+        .collect::<Vec<_>>();
+
+    let mut host_terminal = Terminal::new(10, 5, 0).unwrap();
+    host_terminal.enable_kitty_graphics().unwrap();
+    host_terminal.resize(10, 5, 10, 10).unwrap();
+    let mut cache = HostGraphicsCache::default();
+    let mut incomplete = true;
+    for _ in 0..4 {
+        let encoded = encode_graphics_update_incremental(&mut cache, &placements, None, false);
+        host_terminal.write(&encoded.bytes);
+        incomplete = encoded.incomplete;
+        if !incomplete {
+            break;
+        }
+    }
+    assert!(
+        !incomplete,
+        "two unchanged placements must finish rendering"
+    );
+    assert_eq!(
+        host_terminal
+            .kitty_image_placements_with_data_filter(|_| true)
+            .unwrap()
+            .len(),
+        2,
+        "the host terminal must display both placements"
+    );
+}
+
+#[test]
 fn clipped_placement_crops_after_left_subcell_offset() {
     let mut placement = test_placement(-1, 0);
     placement.placement.x_offset = 4;
