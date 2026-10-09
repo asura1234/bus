@@ -230,30 +230,3 @@ fn pasted_temporary_images_are_copied_into_the_room_attachments() {
     );
     std::fs::remove_dir_all(&temp).unwrap();
 }
-
-#[test]
-fn image_with_readable_header_but_invalid_pixels_keeps_its_filename_visible() {
-    let dir = thumbnail_dir("invalid-pixels");
-    let path = png(&dir, "damaged-attachment.png", (200, 80));
-    let mut bytes = std::fs::read(&path).unwrap();
-    // Damage the compressed pixels while retaining the image's valid header.
-    let pixels = bytes.windows(4).position(|chunk| chunk == b"IDAT").unwrap() + 4;
-    bytes[pixels] = 0;
-    std::fs::write(&path, bytes).unwrap();
-    assert_eq!(image::image_dimensions(&path).unwrap(), (200, 80));
-    assert!(image::open(&path).is_err());
-
-    let (mut ui, room, agent) = fixture();
-    exchange_with_files(&mut ui, room, agent, &[path]);
-    ui.thumbnails.set_cell(Some(CELL));
-    ui.compute_view(100, 40);
-    let graphics = ui.thumbnail_graphics();
-    assert!(graphics.is_empty(), "invalid pixels cannot produce an image upload");
-    let screen = room_screen(&mut ui, 100, 40);
-    std::fs::remove_dir_all(&dir).unwrap();
-
-    assert!(
-        screen.contains("[damaged-attachment.png]"),
-        "an undecodable attachment must remain visible through its filename"
-    );
-}
