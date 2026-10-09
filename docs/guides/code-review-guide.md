@@ -21,6 +21,19 @@ Code review's position in the workflow determines its default posture. A diff th
 
 ## Review scope
 
+`review-pr --scope <FILE_LIST|chunk.json>` selects a production chunk instead of the branch diff.
+Its locked production-review Goal authorizes reviewing the complete committed contents of every
+declared file across all 9 dimensions in Round 1; the diff-line and feature-specific admission limits
+below apply to branch mode. In chunk mode, relate findings to the declared production assignment and
+concrete consequences. Direct dependencies may supply read-only evidence, but findings reference chunk
+files. Dimension 6 checks the declared assignment's boundary; historical code inside it is not a new
+secondary PR purpose to size or split. No unrelated branch change enters the chunk.
+Round 2+ uses only unresolved findings, the author's per-file delta since this lane's previous round,
+its direct consequences, and explicitly unfinished Round 1 coverage. The proof standard is unchanged:
+dimensions 2 / 3 / 7 need red probes, restricted to the chunk's dedicated test allowlist; all other
+dimensions are read-only. Whole-file mode does not authorize changing verified behavior without proof.
+The full format and manifest rules are in review-pr/SKILL.md.
+
 All changes under `docs/plans/**` are excluded from code review scope: they do not enter the diff snapshot / delta, the touched-file
 set, findings, the sync list, or the PR single-purpose judgment. The linked plan may still be read explicitly via `review-pr --plan`, but only as
 input for the locked goal, non-goals, and archived decisions; the reviewer does not review, comment on, or request corrections to the plan file
@@ -419,7 +432,8 @@ The review agent must distinguish nitpicking from real findings. The severity ma
 - suggesting optional logs, comments, docstrings
 - proposing a tiny refactor that affects correctness neither when done nor when skipped
 - suggesting error handling / empty-value fallback / fallback for a scenario that cannot happen, or whose failure is app-fatal (no meaningful degradation path) — the former should fail fast in place (`panic!` / `unreachable!` / an error returned at the owner), the latter should be allowed to crash at a reasonable boundary; demanding local fallback is reverse over-defense (note: when you find **existing** fallback of this kind, the direction is the opposite — make it a dimension 8 finding requiring removal)
-- commenting on code the diff does not touch when no architecture issue is involved
+- in branch mode, commenting on code the diff does not touch when no architecture issue is involved;
+  in scope mode, commenting outside the declared chunk or outside a later round's closed delta boundary
 
 **The following is not nitpicking (must be acted on):**
 - any item in this guide's 9 review dimensions whose severity maps to abandon

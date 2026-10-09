@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Iterative code review in which the reviewer proves suspicions in the correctness / security / bug dimensions by writing tests that run red (write access is limited to test files; all other dimensions are read-only). Round 1 fully reviews the current branch's committed diff against base, excluding plans/; Round 2+ only reconciles the prior round and reviews this round's delta and its direct consequences. Supports stable reviewer lanes, an optional associated plan, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review a PR, review code, or re-review the current branch.
+description: Iterative code review in which the reviewer proves suspicions in the correctness / security / bug dimensions by writing tests that run red (write access is limited to test files; all other dimensions are read-only). Round 1 fully reviews the current branch's committed diff against base, excluding plans/, or a fixed chunk's whole committed files with --scope; Round 2+ only reconciles the prior round and reviews this round's delta and its direct consequences. Supports stable reviewer lanes, an optional associated plan, author triage ledgers, adversarial posture, and narrow subagent fan-out; the final review.md is deterministically rendered by a script into the chat reply. Use when the user asks to review a PR, production chunk, review code, or re-review the current branch.
 ---
 
 Review principles are in [guide.md](./guide.md); the SOT for the 9 review dimensions, severity, and guardrails is
@@ -9,9 +9,26 @@ Review principles are in [guide.md](./guide.md); the SOT for the 9 review dimens
 ```text
 INPUT $ARGUMENTS =
   [--base <ref>] [--reviewer <lane>] [--devils-advocate] [--plan <plan-file>]
+  [--scope <FILE_LIST|chunk.json>]
 
 DEFAULT base = origin/master
 DEFAULT reviewer = default (only when the prologue can select a lane unambiguously)
+DEFAULT target = branch (unchanged committed diff against base)
+
+--scope selects a fixed whole-file chunk, not a filter over the branch diff.
+FILE_LIST is UTF-8, one repo-relative file path per line; blank lines and # comments are ignored.
+Alternatively, a JSON manifest declares the full file set and exact probe write allowlist:
+  {"files":["src/example.rs","src/example_test.rs"],"test_files":["src/example_test.rs"]}
+Dedicated *_test files in FILE_LIST (or files without explicit test_files) form the probe allowlist.
+Explicit test_files may include new, not-yet-committed *_test paths; they become part of the chunk.
+All other files must exist as ordinary UTF-8 committed files in HEAD on Round 1.
+No directories, globs, binary files, symlinks, plans/ (including docs/plans/), or temp artifacts; paths are repo-relative
+(absolute paths within this repo are also accepted), independent of the manifest's location.
+The canonical file set + test allowlist determines SCOPE_HASH; reordering / duplicates / manifest
+location do not change identity. Changing membership or permissions starts a separate full review.
+Use the same manifest and reviewer lane for continuation. A chunk still uses the named feature
+branch, resolvable base, and exact branch-level Goal/Non-goals locks; no branch diff is required.
+For production review the developer's locked Goal must authorize reviewing the entire chunk.
 
 ========== 1. VERIFICATION BOUNDARY ==========
 
@@ -24,6 +41,8 @@ MAY:
     from skills/pr/scripts/pr_goal_context.py
   - write test files: create new ones, or **add** your own cases to existing test files
     (only dimensions 2 correctness / 3 security / 7 bug need this; other dimensions judge source read-only)
+    In scope mode, write only the exact SCOPE_TEST_FILES paths; no inline production-file edits,
+    no new test path outside the manifest, and no dependency/config wiring edits.
   - run read-only queries: git, grep, reading files
   - run tests narrowly: Rust with `just test-one <filter>`, a skill's Python tests with
     `python3 -m pytest <test file>::<test name>`
@@ -43,7 +62,8 @@ MUST NOT:
 
 Run:
   python3 skills/review-pr/scripts/review_round.py \
-    [--base <ref>] [--reviewer <lane>] [--devils-advocate] [--plan <plan-file>]
+    [--base <ref>] [--reviewer <lane>] [--devils-advocate] [--plan <plan-file>] \
+    [--scope <FILE_LIST|chunk.json>]
 
 IF exit != 0 AND output says multiple / named lanes make a bare invocation ambiguous:
   IF the developer supplied a lane, or said "use the previous lane" and this conversation has the REVIEWER of a prior successful prologue:
@@ -66,23 +86,39 @@ ELSE IF exit != 0:
   relay stdout/stderr verbatim, then STOP.
 
 IF NOTE says the working tree has uncommitted changes:
-  first tell the developer this round reviews only the committed diff.
-  Probe tests written this round likewise stay only in the working tree and do not enter diff scope, finding counts, or the verdict.
+  first tell the developer this round reviews only committed code (branch diff or whole chunk files).
+  Probe tests written this round likewise stay only in the working tree and do not enter the snapshot or author delta.
+  Red probes remain finding evidence; they are not themselves reviewed author changes.
 
 Capture:
   ROUND, MODE, POSTURE, REVIEWER, BRANCH, BASE, HEAD, STATE_DIR,
   DIFF_SNAPSHOT, DIFF_DELTA, PREV_REVIEWS, PLAN, LOCKED_GOAL_FILE,
   LOCKED_NON_GOALS_FILE, TRIAGE_LEDGER
+  For --scope also capture TARGET_KIND=scope, SCOPE_HASH, SCOPE_FILE, SCOPE_SNAPSHOT, SCOPE_TEST_FILES;
+  without --scope, TARGET_KIND is branch and these extra fields are absent.
 
 `DIFF_SNAPSHOT` / `DIFF_DELTA` already mechanically exclude `plans/**` in the prologue. Even when a plan file
 changes in the committed branch diff, it does not enter touched-file scope, findings, the sync list, or the PR single-purpose judgment.
+
+In scope mode STATE_DIR is temp/review-pr/<branch_slug>/scopes/<SCOPE_HASH>/<reviewer>/.
+SCOPE_FILE is the canonical scope.json shared by those lanes; SCOPE_SNAPSHOT stores complete file
+contents, modes, and the pinned HEAD. DIFF_SNAPSHOT shows every line of those committed files;
+read the complete files from SCOPE_SNAPSHOT rather than dirty working-tree source.
+Round 2+ DIFF_DELTA is a per-file diff against this lane's previous completed snapshot, including
+adopted tests and deletions. Unchanged content yields an empty delta even after a rebase.
+Missing/corrupt prior snapshots fail closed. PREV_REVIEWS and TRIAGE_LEDGER are confined to this
+branch + chunk; branch reviews, other chunks, and other reviewer histories never enter the lane.
 
 ========== 3. LOAD LOCKED CONTEXT ==========
 
 Read(skills/review-pr/guide.md) completely
 Read(docs/guides/code-review-guide.md) completely
 Read(docs/guides/architecture-principles.md) completely
-diff = Read(DIFF_SNAPSHOT)
+IF TARGET_KIND == scope:
+  Read(SCOPE_FILE).
+  IF MODE == full: Read(SCOPE_SNAPSHOT) completely.
+  ELSE: Read(DIFF_DELTA); read snapshot file contents only for eligible prior items / changes / direct consequences.
+ELSE: diff = Read(DIFF_SNAPSHOT)
 
 IF PLAN != none:
   plan = Read(PLAN) completely
@@ -104,6 +140,10 @@ may you output one "decision-premise challenge" sentence for the developer to ru
 Before investigating, establish goal relevance and a concrete consequence per code-review-guide "goal-relevance admission", noted briefly in the candidate's "impact".
 Without relevance, stop investigating other dimensions, write no probe, and do not delegate; if it is in the committed diff, still output
 a scope comment under dimension 6, and beyond that leave at most one observation sentence in the file-only exploration record.
+In scope mode the admitted target is every line of the chunk's whole files, including unchanged
+production code, under the locked production-review Goal. Do not narrow it to the feature diff.
+Outside files are read-only direct-contract context; findings reference chunk files. Dimension 6
+checks the declared assignment's boundary; historical code is not a new incidental PR purpose.
 
 IF TRIAGE_LEDGER != none:
   decided = Read every comma-separated TRIAGE_LEDGER, oldest to newest
@@ -122,9 +162,14 @@ ELSE:
 ========== 5. MODE = full ==========
 
 IF MODE == full:
-  Inspect the non-plan diff, partition goal-serving and out-of-goal slices, and read every eligible
-  goal-serving touched file in full. For out-of-goal slices, inspect only enough evidence to establish
-  purpose, cumulative size, and affected paths for dimension 6.
+  IF TARGET_KIND == scope:
+    Review every declared whole committed file across all 9 dimensions, including code absent from
+    the branch diff; record any incomplete coverage explicitly. Declared new probe paths have no
+    committed code yet. Only dimensions 2 / 3 / 7 write and run red probes, restricted to SCOPE_TEST_FILES.
+  ELSE:
+    Inspect the non-plan diff, partition goal-serving and out-of-goal slices, and read every eligible
+    goal-serving touched file in full. For out-of-goal slices, inspect only enough evidence to establish
+    purpose, cumulative size, and affected paths for dimension 6.
   Use only direct callers, tests, and applicable architecture sources of truth as the upstream/downstream evidence needed for judgment;
   untouched modules with no direct contract relationship do not enter finding scope.
 
@@ -142,6 +187,8 @@ IF MODE == full:
       - obey §1 VERIFICATION BOUNDARY: only the correctness group writes a suspicion as a test and runs it narrowly
         before deciding whether to report, writing only test files and running no quality gates; structure / hygiene groups are read-only
       - the main agent first assigns non-overlapping test files; name them semantically, never putting lane, dimension group, or round into test names
+        In scope mode every assignment is a subset of SCOPE_TEST_FILES; all groups receive the same
+        SCOPE_FILE / SCOPE_SNAPSHOT, whole-file target, and permissions, including fresh-eyes.
       - the main agent passes locked_goal / non_goals / archived_decisions and a goal-related narrow task; the structure group additionally
         does only dimension 6 classification on out-of-goal diff; other groups stop investigating on any unrelated item
       - return raw candidates: path:line / dimension / observation / evidence / impact / optional remediation
@@ -168,6 +215,9 @@ IF MODE == full:
 IF MODE == incremental:
   prev_reviews = Read every file in PREV_REVIEWS
   delta = Read(DIFF_DELTA)
+  In scope mode use only the chunk's author delta since this lane's previous completed round,
+  plus direct consequences and prior unresolved / explicitly unfinished coverage. Do not start
+  another full-file sweep merely because the target is a production chunk. Keep probes within SCOPE_TEST_FILES.
 
   FOR EACH prior-round finding not yet closed:
     reread current source and delta, recheck goal relevance first; your own out-of-scope items become withdrawn, an accepted author scope rejection becomes rejected.
@@ -216,6 +266,8 @@ REPORT:
 
   Before completion, Read(docs/guides/review-format.md) completely.
   Write <round-NN/review.md> strictly per the PR template.
+  In scope mode add **范围哈希**：<SCOPE_HASH> and **范围文件**：<SCOPE_FILE> to the header;
+  the existing sections, reconciliation table, finding format, and verdicts stay the same.
 
 ========== 8. DETERMINISTIC RESPONSE GATE ==========
 

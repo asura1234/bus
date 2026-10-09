@@ -39,6 +39,14 @@ the `review-pr` prologue should fail for having no reviewable code.
 Round 1 first identifies the diff's relationship to the goal, reads every eligible touched file in full, checks all 9 dimensions, and records uncovered areas explicitly in the ledger.
 Upstream/downstream reading serves goal-related judgment and does not expand into a general audit of touched modules.
 
+With `--scope`, the assignment is a fixed set of whole committed files, including unchanged production
+code. The production-review Goal admits all their contents; Round 1 covers all 9 dimensions there.
+The canonical file list and exact test allowlist identify the chunk, independently of manifest path
+or ordering. Branch and chunk histories, and histories of different chunks, stay isolated. Round 2+
+uses this lane's prior whole-file snapshot and the author's committed per-file delta; rebases or
+uncommitted reviewer probes alone do not produce a delta. Direct dependencies remain read-only context,
+and findings reference chunk files. The same closed-world rule below applies to both target kinds.
+
 Round 2+ is a CLOSED WORLD:
 
 - first check goal relevance of open prior-round problems, then reconcile;
@@ -65,6 +73,8 @@ build — and the unfiltered full test suite all belong to CI and `gate-and-fix`
 
 **Write access covers only test files**: you may create test files or add your own cases to existing test files. Production code,
 config, build scripts, and docs are never touched; adjusting the implementation to make a test red manufactures evidence, and the hypothesis fails.
+In scope mode those writes are further limited to the exact `SCOPE_TEST_FILES` allowlist, including
+declared new dedicated test files; a missing harness connection does not authorize production wiring.
 Do not write tests to pad numbers either — a probe must have a meaningful failure mode and turn red when the implementation is wrong; asserting the harness's own output
 or a just-configured mock is not proof.
 

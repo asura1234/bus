@@ -59,6 +59,15 @@ do not rewrite a troubleshooting need into a product defect or an unbounded tool
 
 ## Input sanitation and the sync list
 
+For a production chunk, pass the same `--scope` file list / manifest to `prepare_review_input.py`.
+Structured inputs must carry its matching scope hash; branch artifacts and different chunks cannot
+be merged. The declared whole files, under the locked production-review Goal, are the author-side
+admission boundary: an existing defect in a chunk file is not rejected merely for being absent from
+the branch diff. Gate (d) remains closed after Round 1, using the prior chunk snapshot and author delta.
+Free-form scoped input has known file membership but no round provenance, so gate (d) remains
+undecidable and must be recorded as such. Triage and remediation stay in the chunk namespace and
+exact file allowlist; ordinary branch mode is unchanged.
+
 - `address-review-comments` must first use `prepare_review_input.py` to validate the mode and target identity of all explicit review files, and read only the two fixed sections after sanitation. **Review sources are not limited to this repo's review skills**: free-form text such as GitHub reviews, pasted comments, or any prompt is equally valid input (`--free-form-file` + explicit `--mode`); the adjudication discipline does not depend on who wrote the review. Free-form input lacks round provenance and SCOPE_HASH, so it **must not** be judged `review-scope-violation`, and its goal must also be given explicitly by the caller, not inferred from the diff or the PR description; the other verification and classification gates apply as usual. Prior-round reconciliation, the exploration area, the verdict, and the preamble do not take part in author adjudication; the source label keeps lane, round, file, and finding id as provenance.
 - "同步清单（CONSISTENCY drift，非阻塞）" (the sync list) is also actionable input, and must not be discarded because it is non-blocking. When verified to hold and within scope, correct the documentation, naming, or comment as APPLY-SAFE; when it does not hold or is out of scope, record it by the same disposition table. It does not change the review verdict, and does not by itself trigger a new round.
 - The first metadata field of every disposition ledger is fixed as `**模式**：plan|pr`.
