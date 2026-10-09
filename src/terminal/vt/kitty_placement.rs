@@ -500,68 +500,32 @@ fn kitty_virtual_placement_geometry(
     }
     .max(1);
 
-    if run.col >= grid_cols || run.row >= grid_rows || image_width == 0 || image_height == 0 {
+    if run.col >= grid_cols || run.row >= grid_rows {
         return None;
     }
     let visible_cols = run.width.min(grid_cols.saturating_sub(run.col)).max(1);
-
-    // Fit the whole image into the placeholder grid preserving its aspect
-    // ratio and center it, as the Kitty spec and libghostty's renderer do.
-    let grid_width = u64::from(grid_cols) * u64::from(cell_width);
-    let grid_height = u64::from(grid_rows) * u64::from(cell_height);
-    let (fit_width, fit_height) =
-        if u64::from(image_width) * grid_height > u64::from(image_height) * grid_width {
-            let height = u64::from(image_height) * grid_width / u64::from(image_width);
-            (grid_width, height.max(1))
-        } else {
-            let width = u64::from(image_width) * grid_height / u64::from(image_height);
-            (width.max(1), grid_height)
-        };
-    let fit_x = (grid_width - fit_width) / 2;
-    let fit_y = (grid_height - fit_height) / 2;
-
-    // Intersect this run's cells with the fitted image rectangle.
-    let run_x = u64::from(run.col) * u64::from(cell_width);
-    let run_y = u64::from(run.row) * u64::from(cell_height);
-    let left = run_x.max(fit_x);
-    let right = (run_x + u64::from(visible_cols) * u64::from(cell_width)).min(fit_x + fit_width);
-    let top = run_y.max(fit_y);
-    let bottom = (run_y + u64::from(cell_height)).min(fit_y + fit_height);
-    if left >= right || top >= bottom {
-        return None;
-    }
-
-    let source_x = scale_u64(left - fit_x, image_width, fit_width);
-    let source_y = scale_u64(top - fit_y, image_height, fit_height);
-    let source_width = scale_u64(right - fit_x, image_width, fit_width)
-        .saturating_sub(source_x)
+    let visible_rows = 1;
+    let source_x = scale_u32(run.col, image_width, grid_cols);
+    let source_y = scale_u32(run.row, image_height, grid_rows);
+    let source_width = scale_u32(visible_cols, image_width, grid_cols)
         .max(1)
         .min(image_width.saturating_sub(source_x));
-    let source_height = scale_u64(bottom - fit_y, image_height, fit_height)
-        .saturating_sub(source_y)
+    let source_height = scale_u32(visible_rows, image_height, grid_rows)
         .max(1)
         .min(image_height.saturating_sub(source_y));
     if source_width == 0 || source_height == 0 {
         return None;
     }
 
-    // Padding may cover whole leading cells; anchor at the first cell the
-    // image touches so the pixel offsets stay within one cell.
-    let skipped_cols = (left - run_x) / u64::from(cell_width);
-    let x_offset = ((left - run_x) % u64::from(cell_width)) as u32;
-    let y_offset = (top - run_y) as u32;
-    let pixel_width = (right - left) as u32;
-    let pixel_height = (bottom - top) as u32;
-
     Some(KittyVirtualPlacementGeometry {
-        x_offset,
-        y_offset,
+        x_offset: 0,
+        y_offset: 0,
         render: KittyPlacementRenderInfo {
-            pixel_width,
-            pixel_height,
-            grid_cols: (x_offset + pixel_width).div_ceil(cell_width),
-            grid_rows: 1,
-            viewport_col: i32::from(run.x) + skipped_cols as i32,
+            pixel_width: visible_cols.saturating_mul(cell_width).max(1),
+            pixel_height: visible_rows.saturating_mul(cell_height).max(1),
+            grid_cols: visible_cols,
+            grid_rows: visible_rows,
+            viewport_col: i32::from(run.x),
             viewport_row: i32::from(run.y),
             source_x,
             source_y,
@@ -571,8 +535,9 @@ fn kitty_virtual_placement_geometry(
     })
 }
 
-fn scale_u64(value: u64, source: u32, dest: u64) -> u32 {
-    (value.saturating_mul(u64::from(source)) / dest.max(1)).min(u64::from(u32::MAX)) as u32
+fn scale_u32(value: u32, source: u32, dest: u32) -> u32 {
+    ((u64::from(value)).saturating_mul(u64::from(source)) / u64::from(dest.max(1)))
+        .min(u64::from(u32::MAX)) as u32
 }
 
 impl KittyVirtualRun {
