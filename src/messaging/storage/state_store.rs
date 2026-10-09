@@ -1,5 +1,7 @@
 pub(crate) use crate::platform::fs::AtomicWriteStage as SaveStage;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 

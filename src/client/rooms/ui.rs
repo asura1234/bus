@@ -245,49 +245,7 @@ impl BusUi {
         match event {
             BusEvent::DevQuitRequested => self.request_quit(),
             BusEvent::SettingsChanged(settings) => self.settings = settings,
-            BusEvent::StorageRecovered => {
-                if self
-                    .snapshot
-                    .error
-                    .as_deref()
-                    .is_some_and(|error| error.starts_with("Storage paused;"))
-                {
-                    self.dismissed_snapshot_error = self.snapshot.error.clone();
-                }
-                if self
-                    .error
-                    .as_deref()
-                    .is_some_and(|error| error.starts_with("Storage paused;"))
-                {
-                    self.error = None;
-                }
-                let failed = std::mem::take(&mut self.failed);
-                for pending in failed {
-                    let storage_error = matches!(
-                        pending.result.as_ref(),
-                        Some(Err(error)) if error.starts_with("Storage paused;")
-                    );
-                    if !storage_error {
-                        self.failed.push(pending);
-                        continue;
-                    }
-                    match pending.effect {
-                        Effect::Text(room, _) => self.text_changed(room),
-                        Effect::Notes(room, _) => self.notes_changed(room),
-                        Effect::Recipients(room, _) => self.recipients_changed(room),
-                        effect => {
-                            self.queue(pending.command, effect);
-                        }
-                    }
-                }
-                if let Some(agent) = self
-                    .terminal
-                    .filter(|agent| self.snapshot.state.agent(*agent).is_some())
-                {
-                    self.queue(BusCommand::FocusTerminal(agent), Effect::None);
-                }
-                self.show_toast("Storage recovered");
-            }
+            BusEvent::StorageRecovered => self.receive_storage_recovered(),
             BusEvent::DevFocusRequested { room, agent } => {
                 if let Some(agent) = agent {
                     // Show this agent's room in the sidebar without marking the
@@ -350,6 +308,50 @@ impl BusUi {
             _ => {}
         }
     }
+    fn receive_storage_recovered(&mut self) {
+        if self
+            .snapshot
+            .error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("Storage paused;"))
+        {
+            self.dismissed_snapshot_error = self.snapshot.error.clone();
+        }
+        if self
+            .error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("Storage paused;"))
+        {
+            self.error = None;
+        }
+        let failed = std::mem::take(&mut self.failed);
+        for pending in failed {
+            let storage_error = matches!(
+                pending.result.as_ref(),
+                Some(Err(error)) if error.starts_with("Storage paused;")
+            );
+            if !storage_error {
+                self.failed.push(pending);
+                continue;
+            }
+            match pending.effect {
+                Effect::Text(room, _) => self.text_changed(room),
+                Effect::Notes(room, _) => self.notes_changed(room),
+                Effect::Recipients(room, _) => self.recipients_changed(room),
+                effect => {
+                    self.queue(pending.command, effect);
+                }
+            }
+        }
+        if let Some(agent) = self
+            .terminal
+            .filter(|agent| self.snapshot.state.agent(*agent).is_some())
+        {
+            self.queue(BusCommand::FocusTerminal(agent), Effect::None);
+        }
+        self.show_toast("Storage recovered");
+    }
+
     pub fn receive_snapshot(&mut self, snapshot: Arc<BusSnapshot>) {
         crate::messaging::diagnostics::replies(
             &self.snapshot.state,
