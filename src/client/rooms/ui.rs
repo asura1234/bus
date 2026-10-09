@@ -426,18 +426,20 @@ impl BusUi {
                 Some(Err(error)) => {
                     self.settle_deletion(pending.id, Some(error));
                     let recovered = self.recovered_storage_failures.remove(&pending.id);
-                    if !recovered {
+                    let keep =
+                        matches!(
+                            pending.effect,
+                            Effect::Text(..)
+                                | Effect::Notes(..)
+                                | Effect::Recipients(..)
+                                | Effect::Files(..)
+                        ) && super::deletion::target_exists(&pending.command, &self.snapshot.state);
+                    // Only a command that is retried hides its rejection.
+                    if !(recovered && keep) {
                         self.error = Some(error.clone());
                     }
                     self.send_intent = None;
-                    if matches!(
-                        pending.effect,
-                        Effect::Text(..)
-                            | Effect::Notes(..)
-                            | Effect::Recipients(..)
-                            | Effect::Files(..)
-                    ) && super::deletion::target_exists(&pending.command, &self.snapshot.state)
-                    {
+                    if keep {
                         if recovered {
                             self.retry_storage_failure(pending);
                         } else {

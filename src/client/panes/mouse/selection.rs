@@ -19,16 +19,7 @@ impl ClientShellState {
         &self,
         hit: &PaneHit,
     ) -> Option<crate::utils::render::widgets::ScrollMetrics> {
-        let mut metrics = hit.scroll?;
-        // While a scroll request is unanswered, the latest requested position
-        // is where the next step starts, so quick wheel steps accumulate.
-        if let Some(target) = self
-            .pane_scroll_targets
-            .get(&hit.pane_id)
-            .filter(|_| self.pane_scroll_in_flight.contains_key(&hit.pane_id))
-        {
-            metrics.offset_from_bottom = (*target).min(metrics.max_offset_from_bottom);
-        }
+        let metrics = hit.scroll?;
         Some(
             self.selection_autoscroll
                 .as_ref()
@@ -189,13 +180,6 @@ impl ClientShellState {
                 mouse.row,
                 Some(projected),
             );
-            if let Some(autoscroll) = self
-                .selection_autoscroll
-                .as_mut()
-                .filter(|autoscroll| autoscroll.pane_id == hit.pane_id)
-            {
-                autoscroll.offset_from_bottom = offset_from_bottom;
-            }
             self.push_pane_scroll_offset(hit.pane_id, offset_from_bottom, outcome);
             outcome.repaint = true;
         }

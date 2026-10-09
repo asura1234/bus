@@ -177,3 +177,114 @@ fn enter_retry_after_failed_queued_send_uses_immediate_delivery() {
         ui.pending
     );
 }
+
+#[test]
+fn recovered_draft_saves_wait_for_snapshot_and_retry_the_latest_edits() {
+    let (mut ui, room, _) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("initial draft");
+    ui.text_changed(room);
+    ui.locals.get_mut(&room).unwrap().notes.insert("room notes");
+    ui.notes_changed(room);
+    let ids: Vec<_> = ui
+        .pending
+        .iter_mut()
+        .map(|pending| {
+            pending.enqueued = true;
+            pending.id
+        })
+        .collect();
+    for id in &ids {
+        ui.receive_event(BusEvent::CommandFinished {
+            command_id: *id,
+            result: Err("Storage paused; retrying".into()),
+        });
+    }
+    ui.receive_event(BusEvent::StorageRecovered);
+    ui.settle();
+    assert_eq!(
+        ui.pending.len(),
+        2,
+        "recovery must preserve the snapshot barrier"
+    );
+    assert!(ui.pending.iter().all(|pending| ids.contains(&pending.id)));
+
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert(" plus newer edit");
+    ui.text_changed(room);
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = *ids.last().unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+
+    assert!(ui.failed.is_empty());
+    assert!(ui.error.is_none());
+    assert_eq!(
+        ui.pending.len(),
+        2,
+        "coalesce retries to the latest save per field"
+    );
+    assert!(ui.pending.iter().any(|pending| {
+        matches!(&pending.command, BusCommand::SetDraftText(id, text)
+            if *id == room && text == "initial draft plus newer edit")
+    }));
+    assert!(ui.pending.iter().any(|pending| {
+        matches!(&pending.command, BusCommand::SetNotes(id, text)
+            if *id == room && text == "room notes")
+    }));
+    assert!(ui
+        .pending
+        .iter()
+        .all(|pending| pending.result.is_none() && !pending.enqueued));
+}
+
+#[test]
+fn storage_recovery_keeps_a_rejected_room_creation_error_visible() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::NewRoom);
+    for c in "new room".chars() {
+        key(&mut ui, KeyCode::Char(c), KeyModifiers::NONE);
+    }
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(ui.pending.iter().any(|pending| {
+        matches!(&pending.command, BusCommand::CreateRoom(name) if name == "new room")
+    }));
+    let ids: Vec<_> = ui
+        .pending
+        .iter_mut()
+        .map(|pending| {
+            pending.enqueued = true;
+            pending.id
+        })
+        .collect();
+    for id in &ids {
+        ui.receive_event(BusEvent::CommandFinished {
+            command_id: *id,
+            result: Err("Storage paused; retrying".into()),
+        });
+    }
+    ui.receive_event(BusEvent::StorageRecovered);
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = *ids.last().unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+
+    assert!(!ui
+        .snapshot
+        .state
+        .rooms()
+        .any(|room| room.name == "new room"));
+    assert!(ui.pending.is_empty(), "room creation has not been retried");
+    assert!(
+        ui.visible_error().is_some(),
+        "recovery must not hide rejection of an operation that was not retried"
+    );
+}
