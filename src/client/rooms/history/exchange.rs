@@ -14,6 +14,10 @@ struct Exchange<'a> {
     requests: BTreeMap<AgentId, &'a Request>,
 }
 
+#[cfg(test)]
+#[path = "../tests/history_group_test.rs"]
+mod group_tests;
+
 impl History {
     pub fn lines(
         &mut self,
@@ -195,10 +199,16 @@ impl History {
                 continue;
             };
             let request = exchange.requests.get(agent_id).copied();
-            // A group's messages share one reply, shown under its newest one.
+            // A group's messages share one reply per room, shown under that
+            // room's newest visible message even when the group spans MASTER.
             if let Some(request) = request {
                 let members = state.group_members(request.group.unwrap_or(request.id));
-                if members.last().is_some_and(|last| *last != request.id) {
+                let newest = members.iter().rev().find(|id| {
+                    state
+                        .request(**id)
+                        .is_some_and(|member| member.room_id == room.id && !member.delivery_only())
+                });
+                if newest.is_some_and(|last| *last != request.id) {
                     continue;
                 }
             }

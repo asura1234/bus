@@ -921,11 +921,10 @@ fn text_typed_into_a_turn_the_agent_began_itself_binds_to_that_turn() {
     worker.submit_ready().unwrap();
     assert_eq!(
         worker.state.agent(agent).unwrap().current_request,
-        None,
-        "Bus must not type into a turn the agent just began"
+        Some(request),
+        "Claude accepts a follow-up without waiting for the own-turn grace"
     );
-    // Had it typed anyway, the provider reports the text inside that turn.
-    worker.own_turns.clear();
+    // A second pass must not paste twice; the provider reports this turn's input.
     worker.submit_ready().unwrap();
     assert_eq!(
         worker.state.agent(agent).unwrap().current_request,

@@ -6,7 +6,11 @@ use super::{
 };
 
 impl BusState {
-    pub(crate) fn accept_callback(&mut self, callback: ProviderCallback) -> CallbackDisposition {
+    pub(crate) fn accept_callback(
+        &mut self,
+        mut callback: ProviderCallback,
+    ) -> CallbackDisposition {
+        self.match_owned_claude_paste(&mut callback);
         let agent = callback.agent_id;
         let occurred_at_ms = callback.occurred_at_ms;
         let current = self.agents.get(&agent).and_then(|a| a.current_request);
@@ -32,6 +36,35 @@ impl BusState {
             self.record_busy_edge(agent);
         }
         disposition
+    }
+
+    fn match_owned_claude_paste(&self, callback: &mut ProviderCallback) {
+        if !matches!(callback.kind, CallbackEventKind::PromptStarted) {
+            return;
+        }
+        let Some(agent) = self.agents.get(&callback.agent_id) else {
+            return;
+        };
+        if agent.provider != super::Provider::ClaudeCode {
+            return;
+        }
+        let Some(request) = agent.current_request.and_then(|id| self.requests.get(&id)) else {
+            return;
+        };
+        let candidate = callback
+            .prompt_payload
+            .as_deref()
+            .and_then(crate::agents::providers::claude_code::hooks::claude_paste_candidate);
+        if let Some(candidate) = candidate.filter(|text| {
+            request.matches_callback_payload(text)
+                || self.group_members(request.id).iter().any(|id| {
+                    self.requests.get(id).is_some_and(|member| {
+                        member.steered && !member.settled() && member.matches_callback_payload(text)
+                    })
+                })
+        }) {
+            callback.prompt_payload = Some(candidate);
+        }
     }
 
     /// Marks `agent` busy at a fresh status revision, as a Working poll would.
@@ -425,30 +458,12 @@ impl BusState {
         {
             return Ok(false);
         }
-        let room_id = request.room_id;
-        let delivery_only = request.delivery_only();
         let turn_key = provider_turn_key(
             request.expected_launch_id.as_deref().unwrap_or_default(),
             pending.provider_session_id.as_deref(),
             pending.provider_turn_id.as_deref(),
         );
-        let reply = Reply {
-            request_id,
-            agent_id,
-            text: pending.text.clone(),
-            received_at_ms: pending.received_at_ms,
-        };
-        let room = self
-            .rooms
-            .get_mut(&room_id)
-            .ok_or(ModelError::UnknownRoom(room_id))?;
-        // The reply to a delivery-only dialog notice is as hidden as the notice.
-        if !delivery_only {
-            room.latest_replies.insert(agent_id, reply);
-            if self.visible_room != Some(room_id) {
-                room.unread_count = room.unread_count.saturating_add(1);
-            }
-        }
+        self.publish_group_reply(request_id, &members, &pending)?;
         for member in members {
             if let Some(member) = self.requests.get_mut(&member).filter(|m| !m.settled()) {
                 member.phase = RequestPhase::Completed;
@@ -472,6 +487,43 @@ impl BusState {
         agent.current_request = None;
         agent.actionable_error = None;
         Ok(true)
+    }
+
+    /// One shared turn can answer messages in a work room and MASTER. Publish
+    /// once per visible room, under that room's newest participating request.
+    fn publish_group_reply(
+        &mut self,
+        lead: RequestId,
+        members: &[RequestId],
+        pending: &PendingFinal,
+    ) -> Result<(), ModelError> {
+        let mut replies = std::collections::BTreeMap::new();
+        for id in std::iter::once(&lead).chain(members) {
+            let request = self
+                .requests
+                .get(id)
+                .ok_or(ModelError::UnknownRequest(*id))?;
+            if request.delivery_only() || request.settled() {
+                continue;
+            }
+            replies.insert(
+                request.room_id,
+                Reply {
+                    request_id: *id,
+                    agent_id: request.agent_id,
+                    text: pending.text.clone(),
+                    received_at_ms: pending.received_at_ms,
+                },
+            );
+        }
+        for (id, reply) in replies {
+            let room = self.rooms.get_mut(&id).ok_or(ModelError::UnknownRoom(id))?;
+            room.latest_replies.insert(reply.agent_id, reply);
+            if self.visible_room != Some(id) {
+                room.unread_count = room.unread_count.saturating_add(1);
+            }
+        }
+        Ok(())
     }
 }
 

@@ -102,6 +102,30 @@ fn claude_adapter_keeps_malformed_or_surrounded_paste_frames_literal() {
 }
 
 #[test]
+fn paste_correlation_candidate_preserves_the_whole_body_and_rejects_ambiguous_frames() {
+    use super::claude_paste_candidate;
+    let frame =
+        |body: &str| format!("<pasted_content id=\"a1\">\n{body}\n</pasted_content id=\"a1\">");
+    assert_eq!(
+        claude_paste_candidate(&format!("\n\n{}\n\na", frame("owned\n\nbody"))),
+        Some("owned\n\nbody".into())
+    );
+    assert_eq!(
+        claude_paste_candidate(&format!("[Image #1]\n{}\nextra", frame("owned"))),
+        Some("[Image #1]owned".into())
+    );
+    for prompt in [
+        "<pasted_content id=\"a1\">\nowned\n</pasted_content id=\"b2\">".to_owned(),
+        "<pasted_content id=\"\">\nowned\n</pasted_content id=\"\">".to_owned(),
+        format!("{}\n{}", frame("owned"), frame("other")),
+        frame(&frame("owned")),
+        format!("prefix\n{}", frame("owned")),
+    ] {
+        assert_eq!(claude_paste_candidate(&prompt), None, "{prompt}");
+    }
+}
+
+#[test]
 fn claude_adapter_image_prefix_counts_only_consecutive_ascii_numbered_placeholders() {
     let prefix = "[Image #01][Image #2]";
     assert_eq!(

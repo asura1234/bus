@@ -105,6 +105,29 @@ fn unwrap_claude_paste(prompt: String) -> String {
     }
 }
 
+/// A complete leading paste can coexist with text typed beside its atomic
+/// composer element. Return that paste as a correlation candidate; callers
+/// must still match its entire body to their owned submission, never a substring.
+pub(crate) fn claude_paste_candidate(prompt: &str) -> Option<String> {
+    let placeholders = claude_image_placeholders(prompt).0;
+    let (images, body) = prompt.split_at(placeholders);
+    let framed = body.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let rest = framed.strip_prefix("<pasted_content id=\"")?;
+    let (id, rest) = rest.split_once("\">\n")?;
+    if id.is_empty() || id.contains(['"', '<', '>', '\n']) {
+        return None;
+    }
+    let (text, suffix) = rest.split_once(&format!("\n</pasted_content id=\"{id}\">"))?;
+    if text.contains("<pasted_content")
+        || text.contains("</pasted_content")
+        || suffix.contains("<pasted_content")
+        || suffix.contains("</pasted_content")
+    {
+        return None;
+    }
+    Some(format!("{images}{text}"))
+}
+
 /// Byte length and count of consecutive leading `[Image #N]` placeholders.
 /// Messaging may use this provider fact without copying its normalization.
 pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {

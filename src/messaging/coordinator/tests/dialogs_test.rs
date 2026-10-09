@@ -214,6 +214,24 @@ fn polls(worker: &mut Worker, count: usize) {
 }
 
 #[test]
+fn a_blocked_screen_without_an_open_dialog_does_not_queue_an_orchestrator_request() {
+    let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
+    screen.lock().unwrap().blocked = true;
+    polls(&mut worker, 3);
+    assert_eq!(
+        sent_by(&worker, room, agent),
+        [(Vec::new(), BLOCKED_MESSAGE.to_owned())]
+    );
+    assert!(worker
+        .state
+        .queued_requests(orchestrator.unwrap())
+        .is_empty());
+    assert_eq!(worker.state.requests().count(), 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_blocked_worker_tells_its_orchestrator_once_per_episode() {
     let (mut worker, agent, room, orchestrator, screen, dir) = worker(true);
     let orchestrator = orchestrator.unwrap();

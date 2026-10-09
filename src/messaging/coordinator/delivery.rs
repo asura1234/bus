@@ -45,29 +45,47 @@ impl Worker {
                 }
                 continue;
             }
+            let own_turn = self
+                .own_turns
+                .get(&agent.id)
+                .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE);
+            // Claude accepts follow-ups during a turn it started outside Bus,
+            // including while the native idle status still lags its start hook.
+            // The new request binds only when its own payload is reported.
+            let steer_unbound = agent.provider == Provider::ClaudeCode
+                && agent.current_request.is_none()
+                && !agent.dialog
+                && matches!(agent.status, RuntimeStatus::Idle | RuntimeStatus::Working)
+                && (agent.status == RuntimeStatus::Working || own_turn)
+                && self.state.next_queued_request(agent.id).is_some_and(|id| {
+                    self.state
+                        .request(id)
+                        .is_some_and(|request| !request.queue_only)
+                });
             // The native status lags a turn the agent just began on its own (a
             // task notification, say); text typed then joins that turn and is
             // never seen starting. Its Stop, or the status catching up, ends this.
-            if self
-                .own_turns
-                .get(&agent.id)
-                .is_some_and(|at| at.elapsed() < OWN_TURN_GRACE)
-            {
+            if own_turn && !steer_unbound {
                 continue;
             }
-            if agent.status != RuntimeStatus::Idle
+            if (agent.status != RuntimeStatus::Idle && !steer_unbound)
                 || !agent.hook_setup_confirmed
                 || agent.session_binding_invalidated
                 || agent.deletion_pending
             {
                 continue;
             }
-            self.deliver_idle_request(&agent, waited)?;
+            self.deliver_request(&agent, waited, steer_unbound)?;
         }
         Ok(())
     }
 
-    fn deliver_idle_request(&mut self, agent: &RoomAgent, waited: bool) -> Result<(), String> {
+    fn deliver_request(
+        &mut self,
+        agent: &RoomAgent,
+        waited: bool,
+        steer: bool,
+    ) -> Result<(), String> {
         let identity = &agent.runtime_identity;
         let (Some(launch), Some(terminal), Some(pane)) = (
             &identity.launch_id,
@@ -112,7 +130,7 @@ impl Worker {
             payload_bytes = text.len(),
             "Bus payload metadata"
         );
-        let method = submission_method(agent, text, terminal, pane);
+        let method = submission_method(agent, text, terminal, pane, steer);
         let outcome = match self.transport.request(method) {
             Ok(ResponseResult::AgentPrompted { .. }) => SubmissionOutcome::Confirmed {
                 provider_session_id: identity.session_id.clone(),
@@ -178,6 +196,7 @@ impl Worker {
             .map_err(|e| e.to_string())?;
         self.save(state)?;
         diagnostics::request(&self.state, request, "bus.delivery.start", "steer");
+        let started = std::time::Instant::now();
         let outcome = match self.transport.request(Method::AgentPromptIfIdle(
             schema::AgentPromptIfIdleParams {
                 target: pane.clone(),
@@ -204,7 +223,8 @@ impl Worker {
             },
         };
         tracing::info!(event = "bus.delivery.result", request_id = request.0, lead_id = lead.0,
-            mode = "steer", outcome = ?outcome, "Typed into the running turn");
+            mode = "steer", outcome = ?outcome,
+            elapsed_ms = started.elapsed().as_millis() as u64, "Typed into the running turn");
         let mut state = self.state.clone();
         state
             .record_steering(request, outcome)
@@ -213,7 +233,13 @@ impl Worker {
     }
 }
 
-fn submission_method(agent: &RoomAgent, text: String, terminal: &str, pane: &str) -> Method {
+fn submission_method(
+    agent: &RoomAgent,
+    text: String,
+    terminal: &str,
+    pane: &str,
+    steer: bool,
+) -> Method {
     if let Some(session) = &agent.runtime_identity.session_id {
         Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
             target: pane.to_owned(),
@@ -222,7 +248,7 @@ fn submission_method(agent: &RoomAgent, text: String, terminal: &str, pane: &str
             expected_pane_id: pane.to_owned(),
             expected_agent: launch::provider_kind(agent.provider).into(),
             expected_session_id: session.clone(),
-            steer: false,
+            steer,
         })
     } else {
         Method::AgentPromptIfUnbound(schema::AgentPromptIfUnboundParams {

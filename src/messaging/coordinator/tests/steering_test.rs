@@ -12,6 +12,9 @@ use std::sync::{
 #[path = "turn_settlement_test.rs"]
 mod turn_settlement_tests;
 
+#[path = "delivery_batch_test.rs"]
+mod delivery_batch_tests;
+
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Records every native method; prompt writes succeed.

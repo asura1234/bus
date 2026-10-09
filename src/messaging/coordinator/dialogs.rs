@@ -68,7 +68,7 @@ impl Worker {
             let starts = wait.is_some();
             let mut state = self.state.clone();
             if starts {
-                post_blocked(&mut state, id)?;
+                post_blocked(&mut state, id, wait.as_deref() != Some(BLOCKED))?;
             }
             state
                 .set_dialog_notice(id, wait)
@@ -85,7 +85,7 @@ impl Worker {
 /// orchestrator, which delivers it like any agent message and wakes the
 /// orchestrator, or else to the Human. A blocked MASTER orchestrator tells
 /// the Human directly, since MASTER cannot itself be orchestrated.
-fn post_blocked(state: &mut BusState, id: AgentId) -> Result<(), String> {
+fn post_blocked(state: &mut BusState, id: AgentId, open_dialog: bool) -> Result<(), String> {
     let agent = state.agent(id).ok_or("Unknown agent")?;
     let room = agent.room_id;
     if state.room(room).is_none() {
@@ -94,7 +94,9 @@ fn post_blocked(state: &mut BusState, id: AgentId) -> Result<(), String> {
     let now = crate::messaging::storage::io::now_ms();
     let orchestrator = state
         .orchestrator_of(room)
-        .filter(|orchestrator| orchestrator.id != id && !orchestrator.deletion_pending)
+        .filter(|orchestrator| {
+            open_dialog && orchestrator.id != id && !orchestrator.deletion_pending
+        })
         .map(|orchestrator| orchestrator.id);
     match orchestrator {
         Some(orchestrator) => state
