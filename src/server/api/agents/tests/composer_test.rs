@@ -153,3 +153,16 @@ fn claude_input_check_ignores_suggestions_and_finds_typed_text() {
         );
     }
 }
+
+#[test]
+fn wrapped_cursor_prompt_keeps_model_name_at_start_of_continuation() {
+    let screen = " > Compare outputs for\n   GPT-6 and Claude\n / commands · @ files";
+    assert_eq!(
+        observe(
+            AgentKind::Cursor,
+            screen,
+            "Compare outputs for GPT-6 and Claude"
+        ),
+        InputObservation::Pending
+    );
+}
