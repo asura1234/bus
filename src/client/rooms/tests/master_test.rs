@@ -295,6 +295,28 @@ fn master_room_cannot_be_deleted_from_the_ui() {
 }
 
 #[test]
+fn repeated_master_navigation_then_opening_agent_never_raises_rename_error() {
+    let (mut ui, master, _, _, agent) = master_fixture();
+    ui.compute_view(100, 30);
+    click(&mut ui, 1);
+    ui.compute_view(100, 30);
+    click(&mut ui, 1);
+    assert_eq!(ui.room, Some(master));
+    ui.compute_view(100, 30);
+    let agent_row = hit_rows(&ui, render::Action::Agent(agent))[0];
+    click(&mut ui, agent_row);
+    let screen = room_screen(&mut ui, 100, 30);
+    assert_eq!(ui.terminal, Some(agent));
+    assert!(ui.rename.is_none());
+    assert!(
+        ui.visible_error().is_none(),
+        "navigation must not try to rename MASTER"
+    );
+    assert!(!screen.contains("The MASTER room cannot"));
+    assert!(ui.toast.is_none());
+}
+
+#[test]
 fn adding_an_agent_in_master_asks_which_unorchestrated_room_it_orchestrates() {
     let (mut ui, master, _, other, _) = master_fixture();
     ui.open_room(master);

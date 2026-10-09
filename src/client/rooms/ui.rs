@@ -70,6 +70,8 @@ pub(in crate::client) struct BusUi {
     pub(super) failed: Vec<Pending>,
     pub(super) terminal: Option<AgentId>,
     pub(super) target_pane: Option<String>,
+    pub(super) native_focus_pending: bool,
+    pub(super) terminal_navigation: u64,
     pub(super) form: Option<Form>,
     pub(super) deletion: Option<super::deletion::DeleteDialog>,
     pub(super) rename: Option<Rename>,
@@ -163,6 +165,8 @@ impl BusUi {
             failed: Vec::new(),
             terminal: None,
             target_pane: None,
+            native_focus_pending: false,
+            terminal_navigation: 0,
             form: None,
             deletion: None,
             rename: None,
@@ -280,8 +284,20 @@ impl BusUi {
                 self.form = None;
                 self.open_terminal(agent);
             }
-            BusEvent::TerminalFocused { agent, pane_id } if self.terminal == Some(agent) => {
+            BusEvent::TerminalFocused { agent, pane_id }
+                if self.terminal == Some(agent)
+                    && self
+                        .target_pane
+                        .as_deref()
+                        .is_none_or(|target| target == pane_id) =>
+            {
                 self.target_pane = Some(pane_id);
+            }
+            BusEvent::TerminalFocused { .. } => {
+                // A newly launched agent's worker request can finish after a later
+                // client-side selection. Restore that selection instead of allowing
+                // the old native focus to strand its terminal behind the preview.
+                self.native_focus_pending = self.terminal_pane().is_some();
             }
             BusEvent::Suggestions { query_id, result } if query_id == self.suggestions.query_id => {
                 match result {

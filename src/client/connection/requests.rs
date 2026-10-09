@@ -336,6 +336,17 @@ impl ClientShellState {
         }
         match pending.kind {
             PendingEndpointKind::Generic => {}
+            PendingEndpointKind::BusTerminalFocus {
+                pane_id,
+                navigation,
+            } => {
+                return (
+                    result.err().is_some_and(|error| {
+                        self.bus_terminal_focus_failed(&pane_id, navigation, error.message)
+                    }),
+                    Vec::new(),
+                );
+            }
             PendingEndpointKind::PaneScroll { pane_id, serial } => {
                 let mut outcome = ClientShellInput::default();
                 let repaint = self.complete_pane_scroll(pane_id, serial, result, &mut outcome);

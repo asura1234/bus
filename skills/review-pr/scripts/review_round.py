@@ -9,8 +9,9 @@ What it does:
   1. Prereq (unmet prerequisite → FAIL):
      - inside a git work tree, on a named branch that is not main/master
      - base ref (default origin/master) resolvable
-     - committed non-plan diff is non-empty (nothing to review otherwise); `plans/**`
-       is excluded because plans are locked review context, not code-review targets
+     - branch mode: committed non-plan diff is non-empty; `plans/**` is excluded
+     - --scope mode: a fixed file list / JSON chunk manifest replaces that diff;
+       ordinary UTF-8 committed files are reviewed in full, even without branch changes
      - both branch-level locks, `.locked-goal` and `.locked-non-goals`, exist and are
        nonblank; with an associated plan both must equal the plan's Goal/Non-goals
 
@@ -38,7 +39,13 @@ What it does:
 
   3. Mode: "full" if this lane has no completed rounds; "incremental" otherwise.
 
-  Uncommitted working-tree changes are OUT of review scope (reported as NOTE).
+  With --scope, lanes live under <branch>/scopes/<canonical manifest hash>/<reviewer>.
+  Whole committed file snapshots replace the branch diff; later deltas compare the same lane's
+  file contents and modes, including deletions / adopted tests. Missing prior snapshots fail closed.
+  SCOPE_FILE, SCOPE_HASH, SCOPE_SNAPSHOT, and SCOPE_TEST_FILES are extra stdout fields.
+  New declared dedicated test paths may be absent until adopted; probes may write only this allowlist.
+
+  Uncommitted working-tree changes are OUT of both target kinds (reported as NOTE).
 
 stdout on success (KEY=VALUE, one per line; paths repo-relative):
   ROUND=2
@@ -64,11 +71,14 @@ Exit codes:
 Usage:
     python3 skills/review-pr/scripts/review_round.py \
         [--base <ref>] [--reviewer <lane>] [--devils-advocate] [--plan <plan.md>]
+        [--scope <FILE_LIST|chunk.json>]
 """
 
 import argparse
 import difflib
+import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,6 +100,13 @@ from review_round_common import (  # noqa: E402
 )
 from review_round_common import (
     triage_ledgers as _triage_ledgers,
+)
+from review_scope import (  # noqa: E402
+    ReviewScopeError,
+    load_review_scope,
+    load_scope_snapshot,
+    scope_patch,
+    snapshot_scope,
 )
 
 PR_SCRIPTS = REPO_ROOT / "skills" / "pr" / "scripts"
@@ -172,11 +189,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--reviewer", default=None)
     parser.add_argument("--devils-advocate", action="store_true", dest="devils_advocate")
     parser.add_argument("--plan", default=None)
+    parser.add_argument("--scope", type=Path, default=None)
     try:
         args = parser.parse_args(argv[1:])
     except SystemExit:
         print(
-            "usage: review_round.py [--base <ref>] [--reviewer <lane>] [--devils-advocate] [--plan <plan.md>]",
+            "usage: review_round.py [--base <ref>] [--reviewer <lane>] [--devils-advocate] [--plan <plan.md>] [--scope <file-list|manifest.json>]",
             file=sys.stderr,
         )
         return 2
@@ -205,6 +223,14 @@ def main(argv: list[str]) -> int:
             print(f"error: --plan {plan_path} not found", file=sys.stderr)
             return 2
 
+    scope = None
+    if args.scope is not None:
+        try:
+            scope = load_review_scope(args.scope, REPO_ROOT)
+        except (ReviewScopeError, OSError, UnicodeError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+
     failures: list[str] = []
     branch = git("branch", "--show-current").stdout.strip()
     if not branch:
@@ -215,7 +241,7 @@ def main(argv: list[str]) -> int:
         failures.append(f"base ref '{args.base}' 无法解析（是否需要先 git fetch origin？）")
 
     diff_text = ""
-    if not failures:
+    if not failures and scope is None:
         diff_proc = git(
             "diff",
             f"{args.base}...HEAD",
@@ -249,9 +275,26 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
+    # Branch locks remain owned by pr_goal_context; chunks isolate only round/ledger history.
+    snapshot = None
+    scope_head = None
+    if scope is not None:
+        lane_root = lane_root / "scopes" / scope.scope_hash
+        scope_head = git("rev-parse", "HEAD").stdout.strip()
+        try:
+            snapshot = snapshot_scope(scope, REPO_ROOT, scope_head)
+        except (ReviewScopeError, OSError, subprocess.CalledProcessError) as error:
+            print("FAIL")
+            print(f"- {error}")
+            return 1
+
     notes: list[str] = []
     if git("status", "--porcelain").stdout.strip():
-        notes.append("工作树存在未提交变更——它们不在审查范围内（审查只覆盖已提交的 diff）")
+        notes.append(
+            "工作树存在未提交变更——它们不在审查范围内（scope 审查只覆盖已提交的完整文件）"
+            if scope is not None else
+            "工作树存在未提交变更——它们不在审查范围内（审查只覆盖已提交的 diff）"
+        )
 
     if default_lane:
         # Ownership safety: a bare call auto-continues only with "no history" or "only default has
@@ -300,10 +343,35 @@ def main(argv: list[str]) -> int:
             current.mkdir(exist_ok=True)
     round_n = int(current.name.split("-")[1])
 
-    (current / "diff-snapshot.patch").write_text(diff_text)
+    if scope is None:
+        (current / "diff-snapshot.patch").write_text(diff_text)
 
     delta_path: Path | None = None
-    if completed:
+    if scope is not None:
+        try:
+            previous = load_scope_snapshot(completed[-1] / "scope-snapshot.json", scope) if completed else None
+            if previous is None:
+                if not any(entry is not None for entry in snapshot["files"].values()):
+                    raise ReviewScopeError("scope 在 HEAD 中没有可审查的完整文件")
+                missing = [p for p, entry in snapshot["files"].items() if entry is None and p not in scope.test_files]
+                if missing:
+                    raise ReviewScopeError("scope 首轮文件不在 HEAD 中: " + ",".join(missing))
+            diff_text = scope_patch(None, snapshot)
+            if previous is not None:
+                delta_path = current / "diff-delta.patch"
+                delta_text = scope_patch(previous, snapshot)
+                delta_path.write_text(delta_text, encoding="utf-8", newline="\n")
+                if not delta_text:
+                    notes.append("chunk 代码自上一轮审查以来无任何改动")
+            scope.write(lane_root / "scope.json")
+            (current / "scope-snapshot.json").write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+            )
+        except (ReviewScopeError, OSError) as error:
+            print("FAIL")
+            print(f"- {error}")
+            return 1
+    elif completed:
         prev_snapshot = completed[-1] / "diff-snapshot.patch"
         if prev_snapshot.is_file():
             delta_lines = list(
@@ -321,8 +389,11 @@ def main(argv: list[str]) -> int:
         else:
             notes.append(f"{completed[-1].name} 缺少 diff-snapshot.patch，本轮无增量 delta")
 
+    if scope is not None:
+        (current / "diff-snapshot.patch").write_text(diff_text, encoding="utf-8", newline="\n")
+
     base_sha = git("rev-parse", "--short", args.base).stdout.strip()
-    head_sha = git("rev-parse", "--short", "HEAD").stdout.strip()
+    head_sha = git("rev-parse", "--short", scope_head or "HEAD").stdout.strip()
 
     print(f"ROUND={round_n}")
     # MODE depends on whether this lane has a completed round, not on the round number: a leftover
@@ -341,7 +412,13 @@ def main(argv: list[str]) -> int:
     print(f"PLAN={rel(plan_path) if plan_path else 'none'}")
     print(f"LOCKED_GOAL_FILE={rel(locked.goal_file)}")
     print(f"LOCKED_NON_GOALS_FILE={rel(locked.non_goals_file)}")
-    triage = triage_ledgers(branch_slug)
+    if scope is not None:
+        print("TARGET_KIND=scope")
+        print(f"SCOPE_HASH={scope.scope_hash}")
+        print(f"SCOPE_FILE={rel(lane_root / 'scope.json')}")
+        print(f"SCOPE_SNAPSHOT={rel(current / 'scope-snapshot.json')}")
+        print(f"SCOPE_TEST_FILES={','.join(scope.test_files) if scope.test_files else 'none'}")
+    triage = triage_ledgers(f"{branch_slug}/scopes/{scope.scope_hash}" if scope is not None else branch_slug)
     print(f"TRIAGE_LEDGER={','.join(rel(t) for t in triage) if triage else 'none'}")
     for note in notes:
         print(f"NOTE={note}")

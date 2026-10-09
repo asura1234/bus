@@ -1,6 +1,6 @@
 ---
 name: address-review-comments
-description: Author-side adjudication and handling of plan/PR review comments. Deterministically sanitize inputs and deduplicate by root cause, then obtain first-party verification evidence for each claim (the main agent decides whether to self-verify or delegate to read-only subagents), decide APPLY / REJECT / FLAG / HOUSEKEEPING centrally, and finally remediate grouped by related root cause. Plan and PR modes land through commit-and-push by default. Use when asked to address or respond to review comments.
+description: Author-side adjudication and handling of plan/PR review comments, including fixed whole-file chunks with the same --scope as review-pr. Deterministically sanitize inputs and deduplicate by root cause, then obtain first-party verification evidence for each claim (the main agent decides whether to self-verify or delegate to read-only subagents), decide APPLY / REJECT / FLAG / HOUSEKEEPING centrally, and finally remediate grouped by related root cause. Plan and PR modes land through commit-and-push by default. Use when asked to address or respond to review comments.
 ---
 
 Respond to `/review-plan`, `/review-pr`, or any free-form review. Reviewer and author are peer decision-makers in a convergence process: the reviewer raises a problem and may suggest a repair, the author independently judges the problem and the correct repair, and a later reviewer verifies the result; this skill is author-side adjudication + remediation and does not treat review as a command.
@@ -18,6 +18,7 @@ Before execution, read completely:
 ```text
 INPUT = [plan | pr] [--round latest|N] [--github] [--pr <n>] [--review-file <path>]...
         [--free-form-file <path>]... [--label <name>]... [--no-commit-and-push]
+        [--scope <FILE_LIST|chunk.json>]
 
 HARD RULES
 - Automatically modify only claims finally adjudicated APPLY; REJECT / FLAG / HOUSEKEEPING do not change the repository.
@@ -39,71 +40,24 @@ HARD RULES
 IF --review-file / --free-form-file is given explicitly: canonicalize in argument order and deduplicate.
 ELSE: only legacy plan/pr lane discovery is allowed.
 
-========== PASS 0a: GITHUB LANE (mode == pr, and no explicit --review-file / --free-form-file) ==========
+IF --scope: mode is pr; use exactly the same file list / manifest as review-pr (format and permissions
+in that skill). Canonical files + test_files must match the review header's SCOPE_HASH. Findings may
+reference unchanged chunk files; absence from <base>...HEAD is not a scope violation.
+Read the declared whole-file target and production-review Goal, not a feature-diff-only assignment.
+Do not mix branch artifacts, other chunks, or plan reviews. No GitHub diff-lane fetch occurs in scope
+mode; --github / --pr are not chunk inputs. Use explicit --review-file, or discover only
+temp/review-pr/<slug>/scopes/<SCOPE_HASH>/*/round-*/review.md with the same latest / round rules.
+No work outside that chunk is admitted merely because it is a direct dependency.
 
-The GitHub machine reviewer is one reviewer lane of the PR; its output just lives remotely instead of in `temp/`. Fetch it and
-transcribe it into a `review.md` like everyone else's, and from then on **it is no longer special**: the lane discovery glob already scans it,
-and deduplication, evidence gathering, and adjudication all follow the same path.
+========== PASS 0a: GITHUB LANE (mode == pr, no --scope, and no explicit --review-file / --free-form-file) ==========
 
-`<pr>` = the number given by `--pr`; if not given, take the current branch's PR via `gh pr view --json number`; if that fails, STOP.
--- Both commands in this section need the PR number, which previously did not exist in INPUT at all, so the flow had no way to obtain it here.
---   The caller (merge-pr) has already resolved the number itself; passing it explicitly is more reliable than letting this skill guess again.
-
-Run:
-  python3 skills/address-review-comments/scripts/github_review_lane.py fetch --pr <pr>
-
-`status` has four values: `head-moved` (race, fewest fields), `no-comments`, `created`, `reused`.
-Only the last two provide `roundDir`, `source` (verbatim source dump + per-item timestamps), `baseRef` / `baseSha`,
-and `reviewExists`; the first two lack these fields and each has its own branch below; **never let them fall into the later branches**.
--- Round identity is judged by **content** (id set + `updated_at` + body digest), and location uses `original_line`;
---   the reasons for both and the pitfalls hit are in [guide.md](guide.md) "Round identity is judged by content" and "Location uses original_line".
-
-**One round has two lanes: inline comments (`commentCount`) and review bodies (`reviewCount`).** A body whose verdict is not 🟢
-is always an outstanding comment and forms a round on its own; see [guide.md](guide.md) "The review body is itself a lane of comments".
-
-IF `status == head-moved`:
-  STOP. Someone pushed between fetching HEAD and fetching comments, so this snapshot is a race artifact: `fetch` explicitly **does not return**
-  `roundIsCurrentHead`, `roundDir`, `source`, or `reviewExists`. Discard it and fetch again; do not infer a round.
-  -- Why this must fail closed: [guide.md](guide.md) "head-moved must fail closed".
-
-IF `status == no-comments`:
-  This lane has no output: inline comments and outstanding review bodies are **both** zero. **IF `--github`: there is nothing to address in this run; return normally**
-  (0 claims, no triage written, no ledger posted) and let the caller continue; never proceed to sanitize, where the lack of input would STOP.
-  ELSE: skip this section and use the local lanes as usual.
-  -- "The review is clean" is the most common case. Turning it into a STOP would halt merge-pr exactly when it should continue.
-
-IF `roundIsCurrentHead == false` AND `cleanReviewAtHead == false`:
-  STOP. Commits were pushed after the review ran: **no review has seen the tree about to be merged**.
-  -- This must stop here and cannot wait for the caller to check afterwards: transcription, adjudication, and landing all happen inside this skill,
-  --   and by the time merge-pr gets the return value, a stale review may already have been landed by commit-and-push.
-
-IF `cleanReviewAtHead == true`:
-  The current HEAD has a re-review **with no inline comments and a clean verdict**: the reviewer looked at this tree and had no comments.
-  Inline comment groups sitting on old anchors is normal, not "nobody looked".
-  -- No need to judge the verdict yourself: 🟡 / 🔵 / unrecognized bodies would already occupy the current HEAD, and this branch would be unreachable.
-  -- It looks the same in `rounds` as "commits were pushed after the review ran"; the difference and consequences are in
-  --   [guide.md](guide.md) "A clean re-review is not 'nobody looked'".
-  IF the latest round has `triaged == true`: nothing to address in this run; handle it the same as `no-comments`.
-  ELSE: address that round as usual (it is an unfinished set of comments on an old anchor).
-
-IF `reviewExists == false`:
-  Read `<roundDir>/source.md` and write `<roundDir>/review.md` per
-  [github-lane-transcription](references/github-lane-transcription.md).
-  That file specifies the header field values (`**分支**` uses the anchor, not head; `**判定**` is always Needs Refinement; etc.),
-  the finding structure, and the fixed prior-round closure wording.
-  -- **This is the agent's job, not the script's job**: you have to understand what each comment says, which dimension it falls in, and where the evidence points
-  --   before you can write a finding; a script can only move text around.
-
-IF `--github`: use **only** this lane in this run, skip legacy local lane discovery, and pass
-`<roundDir>/review.md` as the **sole** `--review-file` to the sanitize step below.
--- It cannot remain a placeholder: `--github` skips legacy discovery, which is the only place that would fill in a concrete path;
---   without binding it, sanitize gets no input file and exits, and the GitHub lane never reaches PASS 1.
-ELSE: this lane enters the discovery below together with the local lanes (it lives under `temp/review-pr/<slug>/github/`,
-which the glob already scans).
+IF mode == pr AND no --scope AND no explicit --review-file / --free-form-file:
+  Read(skills/address-review-comments/scripts/github_lane.md) completely and execute its procedure.
+  Continue below for sanitization unless the procedure returns normally or STOPs.
 
 RUN `python3 skills/address-review-comments/scripts/prepare_review_input.py \
   [--review-file <path>...] [--free-form-file <path>...] [--mode plan|pr] \
-  [--label <name>...] --output <run-root>/sanitized.md`
+  [--label <name>...] [--scope <FILE_LIST|chunk.json>] --output <run-root>/sanitized.md`
 -- With `--github` this is verbatim `--review-file <roundDir>/review.md --mode pr`.
 IF exit != 0: STOP; never bypass the script to read the original review.
 
@@ -119,12 +73,22 @@ Legacy discovery rules:
 
 Read only sanitized's "新问题与建议" and the complete "同步清单（CONSISTENCY drift，非阻塞）":
 - structured lanes must agree on mode, target, base, locked goal, and plan identity; any mismatch STOPs;
-- free-form requires an explicit mode; its round is `n/a`; plan/pr SCOPE_HASH is fixed at `n/a` and must not be judged review-scope-violation; the locked goal must be given explicitly by the caller/developer, STOP if it cannot be obtained, and never guess it from the diff, commits, or PR description;
+- structured chunk inputs require the matching --scope; sanitized provenance carries the canonical
+  SCOPE_HASH, whole file list, and exact test allowlist. Cross-chunk / branch mixing fails closed;
+- free-form requires an explicit mode; its round is `n/a`; without --scope its SCOPE_HASH is `n/a`.
+  An explicit --scope supplies file membership, not prior-round provenance; the closed incremental
+  gate remains undecidable. The locked goal must be given explicitly by the caller/developer, STOP
+  if it cannot be obtained, and never guess it from the diff, commits, or PR description;
 - free-form lacks round provenance and SCOPE_HASH, so the closed incremental gate (d) **has no mechanical criterion available**. This is not "this round happened not to hit it"; the gate is undecidable at this entry point and must be written explicitly in triage as one line `**闸 (d)**：free-form 输入不可判`, so the gap leaves a trace instead of silently taking effect. The guardrail's gate (a′) already has a similar skip clause, and gate (d) is recorded following the same precedent;
 - plan reads the full plan text and archived decisions; PR reads `<base>...HEAD`, the locked goal, the optional associated plan, and round provenance, plus the complete files and direct dependency context each claim needs;
+- scoped PR reads the committed whole chunk files and its previous-round snapshot / delta instead of
+  using the branch diff as finding admission; all evidence still targets current HEAD. Closed-round
+  gate (d), truth assessment, disposition, and author-selected repair rules remain unchanged;
 - when plan/pr landing is needed while on master, create a feature branch first.
 
 run root: plan/pr is `temp/address-review-comments/<slug>/<YYYYMMDD-HHmmss>/`.
+With --scope it is `temp/address-review-comments/<slug>/scopes/<SCOPE_HASH>/<YYYYMMDD-HHmmss>/`;
+put **范围哈希**：<SCOPE_HASH> in triage.md so author decisions stay tied to the chunk.
 
 IF mode == pr: combine the test paths in sanitized findings with the current Git working tree to identify new test files the reviewer left and
 new cases in existing test files; record the source claim and original red/green state; stay read-only at this point and do not treat them as unrelated dirty files
@@ -187,6 +151,9 @@ For PR, each ruling briefly notes in its first-party citation and action the goa
 Plan mode fixed state transition: if the status is `create-plan-complete`, change it to `review-plan-in-progress`; if it is already `review-plan-in-progress` or `review-plan-complete`, leave it, and never move back to `create-plan-in-progress`. With no APPLY, the status change still follows the landing rules.
 
 Take only final APPLY claims and form remediation groups by **related root cause + touched files + dependency order**: claims sharing a root cause, sharing files, or depending on each other must be in the same group. Compute an exact file allowlist per group. Implementation follows the repair direction main independently determined; never use the reviewer's original suggestion directly as a task specification.
+With --scope each remediation allowlist stays within the chunk's files / test_files. If a verified
+repair needs another production or test file, STOP that repair and obtain an explicit new assignment;
+do not expand the manifest or the locked Goal yourself. Adopt only probes from the chunk's test allowlist.
 
 IF mode == pr: include the reviewer test files/case hunks for APPLY claims in the allowlist; after the repair, narrowly run those tests and
 directly related regressions, confirming red turns green without weakening effective assertions. When landing, commit and push the repair together with the

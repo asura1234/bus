@@ -119,8 +119,58 @@ impl crate::client::compositor::ClientShellState {
         self.bus = Some(bus);
         Ok(())
     }
-    pub(crate) fn tick_bus(&mut self) -> bool {
-        self.bus.as_mut().is_some_and(BusUi::tick)
+    pub(crate) fn tick_bus(&mut self, outcome: &mut super::compositor::ClientShellInput) -> bool {
+        let changed = self.bus.as_mut().is_some_and(BusUi::tick);
+        self.dispatch_bus_terminal_focus(outcome);
+        changed
+    }
+
+    pub(super) fn dispatch_bus_terminal_focus(
+        &mut self,
+        outcome: &mut super::compositor::ClientShellInput,
+    ) {
+        if self.snapshot.is_none() {
+            return;
+        }
+        let Some((pane_id, navigation)) = self.bus.as_mut().and_then(|bus| {
+            std::mem::take(&mut bus.native_focus_pending)
+                .then(|| bus.target_pane.clone())
+                .flatten()
+                .filter(|_| bus.terminal.is_some() && bus.form.is_none())
+                .map(|pane| (pane, bus.terminal_navigation))
+        }) else {
+            return;
+        };
+        self.push_endpoint_method_with_kind(
+            crate::protocol::api::schema::Method::PaneFocus(
+                crate::protocol::api::schema::PaneTarget {
+                    pane_id: pane_id.clone(),
+                },
+            ),
+            super::compositor::PendingEndpointKind::BusTerminalFocus {
+                pane_id,
+                navigation,
+            },
+            outcome,
+        );
+    }
+
+    pub(super) fn bus_terminal_focus_failed(
+        &mut self,
+        pane_id: &str,
+        navigation: u64,
+        error: String,
+    ) -> bool {
+        let Some(bus) = self.bus.as_mut().filter(|bus| {
+            bus.terminal.is_some()
+                && bus.target_pane.as_deref() == Some(pane_id)
+                && bus.terminal_navigation == navigation
+        }) else {
+            return false;
+        };
+        bus.target_pane = None;
+        bus.error = Some(error);
+        true
     }
     pub(crate) fn bus_exit_ready(&self) -> bool {
         self.bus.as_ref().is_some_and(|bus| bus.exit_ready)
@@ -155,6 +205,17 @@ impl crate::client::compositor::ClientShellState {
                 .iter()
                 .any(|p| Some(p.pane_id.as_str()) == snapshot.focused_pane_id.as_deref())
         }) && bus.terminal_ready(snapshot.focused_pane_id.as_deref())
+    }
+}
+
+impl BusUi {
+    pub(super) fn terminal_pane(&self) -> Option<&str> {
+        (self.terminal.is_some()
+            && self.deletion.is_none()
+            && self.form.is_none()
+            && self.rename.is_none())
+        .then_some(self.target_pane.as_deref())
+        .flatten()
     }
 }
 

@@ -52,6 +52,7 @@ from cli_extensions.review_artifact import (  # noqa: E402
     parse_review_artifact,
     validate_compatible,
 )
+from cli_extensions.review_scope import ReviewScopeError, load_review_scope  # noqa: E402
 
 
 PreparationError = ReviewArtifactError
@@ -113,12 +114,15 @@ def _normalize_structured_target(
 ) -> dict[str, str]:
     if mode != "pr":
         return dict(target)
-    return {
+    normalized = {
         "branch": _review_ref(target["branch"], "branch"),
         "base": _review_ref(target["base"], "base"),
         "plan": "n/a" if target["plan"] == "无" else target["plan"],
         "locked_goal": target["locked_goal"],
     }
+    if "scope_hash" in target:
+        normalized.update(scope_hash=target["scope_hash"], scope_file=target["scope_file"])
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -208,7 +212,7 @@ def _render(
     input_kind: str,
     target: Mapping[str, str],
 ) -> str:
-    identity_target = {} if input_kind == "free-form" else target
+    identity_target = {} if input_kind == "free-form" and "scope_hash" not in target else target
     lines = [
         preparation_identity_line(mode, input_kind, identity_target),
         "",
@@ -228,6 +232,7 @@ def prepare_review_input(
     free_form_files: Sequence[Path] | None = None,
     mode: str | None = None,
     labels: Sequence[str] | None = None,
+    scope_file: Path | None = None,
 ) -> PreparedReviewInput:
     """Validate and sanitize review input, producing two-section sanitized Markdown.
 
@@ -281,6 +286,24 @@ def prepare_review_input(
             )
         resolved_mode = mode
         target = {}
+
+    if scope_file is not None:
+        if resolved_mode != "pr":
+            raise PreparationError("--scope 只接受 pr mode")
+        try:
+            scope = load_review_scope(scope_file, REPO_ROOT)
+        except (ReviewScopeError, OSError, UnicodeError) as error:
+            raise PreparationError(str(error)) from error
+        if structured and target.get("scope_hash") != scope.scope_hash:
+            raise PreparationError("--scope 与 structured review scope 不一致（或该 review 是 branch mode）")
+        target = dict(target)
+        target.update(
+            scope_hash=scope.scope_hash,
+            scope_files=json.dumps(list(scope.files), ensure_ascii=False),
+            scope_test_files=json.dumps(list(scope.test_files), ensure_ascii=False),
+        )
+    elif "scope_hash" in target:
+        raise PreparationError("chunk review 必须提供相同的 --scope 文件清单或 manifest")
 
     label_list = list(labels or [])
     if label_list and len(label_list) != len(free_form_paths):
@@ -355,6 +378,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Source label for free-form input (e.g. copilot / codex / a person's name), matched in order; defaults to the file name",
     )
     parser.add_argument("--output", type=Path, required=True, help="Sanitized output path")
+    parser.add_argument("--scope", type=Path, help="Same fixed file list / chunk manifest used by review-pr (pr mode only)")
     return parser
 
 
@@ -366,10 +390,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.free_form_file,
             args.mode,
             args.label,
+            args.scope,
         )
         output = args.output.expanduser().resolve()
         if output in prepared.review_files:
             raise PreparationError("output 不得覆盖输入 review file")
+        if args.scope is not None and output == args.scope.expanduser().resolve():
+            raise PreparationError("output 不得覆盖输入 scope manifest")
         atomic_write(output, prepared.content)
     except (PreparationError, OSError) as error:
         sys.stderr.write(f"prepare-review-input error: {error}\n")

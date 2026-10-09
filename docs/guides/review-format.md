@@ -88,6 +88,14 @@ Fixed criteria for the plan verdict: it is 可执行 (Ready) when this round's `
 
 The artifact is written to `temp/review-pr/<branch>/<reviewer>/round-NN/review.md`. The reviewer is read-only over production code, with write access limited to test files (probe tests stay in the working tree and are not committed; see code-review-guide "Verification boundary"); with a related plan, record its goal verbatim; without a plan, record the branch-level locked goal verbatim.
 
+For `review-pr --scope`, use `temp/review-pr/<branch>/scopes/<SCOPE_HASH>/<reviewer>/round-NN/review.md`
+and the identical PR template below. Add the following two header fields before `**审查者**`:
+`**范围哈希**：<64-character SCOPE_HASH>` and `**范围文件**：<canonical SCOPE_FILE>`.
+Both are required together; branch artifacts omit both. They identify the whole-file chunk and its
+probe allowlist, and are preserved verbatim by the deterministic renderer. Findings reference chunk
+files, regardless of whether those lines appeared in the branch diff. The fixed sections, prior-round
+ledger, proof evidence, verdicts, and response gate are unchanged.
+
 ```markdown
 # Review Round <N> — 代码审查
 

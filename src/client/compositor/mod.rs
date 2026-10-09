@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+mod agent_preview;
 mod compose;
 mod config;
 mod hits;
@@ -203,6 +204,10 @@ pub(crate) struct ClientShellInput {
 
 #[derive(Debug)]
 pub(in crate::client) enum PendingEndpointKind {
+    BusTerminalFocus {
+        pane_id: String,
+        navigation: u64,
+    },
     Generic,
     SelectionCopy,
     PaneScroll {
@@ -288,6 +293,9 @@ pub(crate) struct ClientShellState {
     /// A future projection surface waits here until its matching snapshot arrives. The visible
     /// pane surface always remains an exact snapshot pair.
     pub(in crate::client) pending_pane_surface: Option<PaneSurfaceFrame>,
+    /// Last terminal surface per tab, used only for presentation during agent navigation.
+    bus_terminal_surfaces: HashMap<String, PaneSurfaceFrame>,
+    presented_bus_terminal: Option<String>,
     pub(in crate::client) graphics: crate::client::host_terminal::kitty::scene::ClientState,
     pub(in crate::client) graphics_cell_size: crate::protocol::kitty::placement::HostCellSize,
     pub(in crate::client) chrome_drag: Option<ClientChromeDrag>,
@@ -332,6 +340,8 @@ impl ClientShellState {
             snapshot: None,
             pane_surface: None,
             pending_pane_surface: None,
+            bus_terminal_surfaces: HashMap::new(),
+            presented_bus_terminal: None,
             graphics: crate::client::host_terminal::kitty::scene::ClientState::default(),
             graphics_cell_size: crate::protocol::kitty::placement::HostCellSize {
                 width_px: 1,
