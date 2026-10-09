@@ -357,6 +357,9 @@ pub(crate) struct Request {
     pub(crate) agent_id: AgentId,
     pub(crate) prompt: Prompt,
     pub(crate) phase: RequestPhase,
+    /// A queued request closed before typing, retained for status and restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failure_reason: Option<String>,
     pub(crate) expected_launch_id: Option<String>,
     pub(crate) submission_boundary: Option<u64>,
     pub(crate) submission_status_revision: u64,

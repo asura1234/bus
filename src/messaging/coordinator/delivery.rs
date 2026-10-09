@@ -14,6 +14,7 @@ impl Worker {
         &mut self,
         mut can_deliver: impl FnMut() -> bool,
     ) -> Result<(), String> {
+        self.expire_queued_now()?;
         self.delivery_waits
             .retain(|id, _| self.state.agent(*id).is_some());
         let agents: Vec<_> = self.state.agents().cloned().collect();

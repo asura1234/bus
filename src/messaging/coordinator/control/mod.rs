@@ -291,6 +291,10 @@ mod tests;
 #[path = "../tests/focus_test.rs"]
 mod focus_tests;
 
+pub(super) fn is_mutation(method: &str) -> bool {
+    dev_method_fields(method).is_some_and(|(_, mutation)| mutation)
+}
+
 fn dev_method_fields(method: &str) -> Option<(&'static [&'static str], bool)> {
     Some(match method {
         "state" | "diagnostics" | "sounds" | "settings" => (&[], false),

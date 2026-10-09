@@ -114,7 +114,7 @@ impl Fixture {
                     recipient_ids: [to].into(),
                 },
                 author,
-                2,
+                crate::messaging::storage::io::now_ms(),
             )
             .unwrap()[0];
         self.worker.save(state).unwrap();

@@ -504,7 +504,9 @@ fn message_status_names_recipients_waiting_on_a_dialog() {
     let mut state = worker.state.clone();
     state.set_draft_text(room, "build it").unwrap();
     state.set_draft_recipients(room, [agent]).unwrap();
-    let request = state.submit_draft(room, 2).unwrap()[0];
+    let request = state
+        .submit_draft(room, crate::messaging::storage::io::now_ms())
+        .unwrap()[0];
     worker.save(state).unwrap();
     let message = worker.state.request(request).unwrap().prompt.id;
     let status = |worker: &mut Worker| worker.dev_message(message).unwrap();

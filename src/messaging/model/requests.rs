@@ -115,6 +115,7 @@ impl BusState {
                     agent_id,
                     prompt: prompt.clone(),
                     phase: RequestPhase::Queued,
+                    failure_reason: None,
                     expected_launch_id: None,
                     submission_boundary: None,
                     submission_status_revision: 0,
@@ -293,8 +294,8 @@ impl BusState {
     /// Why `request` is stuck, once it has made no progress for a grace
     /// period, or `None`. A Working or Blocked agent is never stalled: a long
     /// turn is normal, and a blocked one waits on an answer, not on Bus (see
-    /// `blocked_unanswered`). Recovery stays explicit (`request recover`);
-    /// this only reports.
+    /// `blocked_unanswered`). This only reports; the coordinator closes queued
+    /// stalls before delivery, while typed work needs explicit recovery.
     pub(crate) fn stall_reason(&self, request: &Request, now_ms: u64) -> Option<String> {
         // A member typed into another request's turn shares that turn's fate.
         let lead = match request.group {
@@ -616,97 +617,6 @@ impl BusState {
             return None;
         }
         self.queues.get(&agent)?.first().copied()
-    }
-
-    pub(crate) fn recover_idle_request(
-        &mut self,
-        request: RequestId,
-        recovered_at_ms: u64,
-    ) -> Result<(), ModelError> {
-        let request_state = self
-            .requests
-            .get(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        let agent_id = request_state.agent_id;
-        if request_state.phase == RequestPhase::Queued {
-            let agent = self
-                .agents
-                .get(&agent_id)
-                .ok_or(ModelError::UnknownAgent(agent_id))?;
-            if agent.status != RuntimeStatus::Idle {
-                return Err(ModelError::AgentNotIdle);
-            }
-            let clear_error = agent.current_request.is_none();
-            let queue = self
-                .queues
-                .get_mut(&agent_id)
-                .ok_or(ModelError::InvalidTransition)?;
-            let position = queue
-                .iter()
-                .position(|id| *id == request)
-                .ok_or(ModelError::InvalidTransition)?;
-            queue.remove(position);
-            let request_state = self
-                .requests
-                .get_mut(&request)
-                .ok_or(ModelError::UnknownRequest(request))?;
-            request_state.phase = RequestPhase::Abandoned;
-            request_state.pending_final = None;
-            request_state.completed_at_ms = Some(recovered_at_ms);
-            if position == 0 && clear_error {
-                if let Some(agent) = self.agents.get_mut(&agent_id) {
-                    agent.delivery_rejection = None;
-                    agent.actionable_error = None;
-                }
-            }
-            return Ok(());
-        }
-        if !matches!(
-            request_state.phase,
-            RequestPhase::Submitting | RequestPhase::Active
-        ) {
-            return Err(ModelError::InvalidTransition);
-        }
-        let agent = self
-            .agents
-            .get(&agent_id)
-            .ok_or(ModelError::UnknownAgent(agent_id))?;
-        if agent.current_request != Some(request) {
-            return Err(ModelError::InvalidTransition);
-        }
-        if agent.status != RuntimeStatus::Idle {
-            return Err(ModelError::AgentNotIdle);
-        }
-        self.abandon_current_request(request, recovered_at_ms)
-    }
-
-    /// Abandons `request`, its agent's current one, with its group, and frees the agent.
-    pub(super) fn abandon_current_request(
-        &mut self,
-        request: RequestId,
-        recovered_at_ms: u64,
-    ) -> Result<(), ModelError> {
-        let request_state = self
-            .requests
-            .get_mut(&request)
-            .ok_or(ModelError::UnknownRequest(request))?;
-        let agent_id = request_state.agent_id;
-        request_state.phase = RequestPhase::Abandoned;
-        request_state.pending_final = None;
-        request_state.completed_at_ms = Some(recovered_at_ms);
-        for member in self.group_members(request) {
-            if let Some(member) = self.requests.get_mut(&member).filter(|m| !m.settled()) {
-                member.phase = RequestPhase::Abandoned;
-                member.completed_at_ms = Some(recovered_at_ms);
-            }
-        }
-        let agent = self
-            .agents
-            .get_mut(&agent_id)
-            .ok_or(ModelError::UnknownAgent(agent_id))?;
-        agent.current_request = None;
-        agent.actionable_error = None;
-        Ok(())
     }
 
     pub(crate) fn queued_requests(&self, agent: AgentId) -> &[RequestId] {

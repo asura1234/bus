@@ -300,11 +300,16 @@ The per-agent `stage` explains how far delivery progressed:
 | `delivered` | A trusted provider turn started and Bus is awaiting its final reply. |
 | `joined` | The message joined another message's turn; see `group`. |
 | `replied` | Bus recorded the final reply for that recipient. |
+| `abandoned` | The request is closed and will not run later; `reason` explains a queued delivery failure. |
 | `stalled` | The message made no progress for a grace period; `reason` says why and `stalled_from` names the stage it stalled in. |
 
 ### Stalled messages
 
-A message is `stalled` when it stops moving while its agent is not working:
+A message stalls when it stops moving while its agent is not working or
+blocked. Bus closes an untyped queued request after its grace period: its
+stage becomes `abandoned`, `complete` becomes `true`, and `reason` records the
+failure. It cannot fire later, even after a restart. Fix the cause and send a
+new message when ready. Typed requests remain `stalled` for explicit recovery.
 
 | `stalled_from` | After | `reason` |
 | --- | --- | --- |
@@ -316,10 +321,11 @@ A message is `stalled` when it stops moving while its agent is not working:
 A Working agent never stalls, however long its turn. A Blocked agent does not
 stall either: it already asked for help. After 5 minutes blocked, `reason`
 reads `blocked_unanswered` so the block shows in `message status`, but the stage
-stays as it was and `send --async` keeps waiting. Bus never re-sends a stalled
-message: fix the cause (clear the input box, answer the agent, restart it), or
-recover the request explicitly with `request recover`. `wait` and `send
---async` stop at a stall with exit code 3 and the reason on stderr; for `--async`
+stays as it was and `send --async` keeps waiting. For a typed stalled request,
+fix the cause (clear the input box, answer the agent, restart it), or recover
+the request explicitly with `request recover`. `wait` and `send --async` stop
+at a typed stall with exit code 3 and the reason on stderr; an abandoned
+queued request exits with code 1. For `--async`,
 a finished turn whose reply was not captured counts as done, not stalled.
 
 Treat `complete: true` from `message status` or `wait` as the settlement signal.
@@ -573,8 +579,12 @@ recovery after checking its identity and revision facts:
 bus request recover "$request_id" --confirm
 ```
 
-The generic form is `request recover REQUEST_ID --confirm`. It abandons only the
-exact confirmed current request and does not choose what happens to queued work.
+The generic form is `request recover REQUEST_ID --confirm`. For an untyped
+queued request, it removes only that request, even if the agent is working,
+blocked, launching, or unavailable. It preserves any current turn and other
+queued work. Recovering an already abandoned request succeeds without replaying
+it. A typed current request still requires confirmed idle state and recovery
+closes its joined group.
 
 Bus also releases a request on its own when the agent never started it as a
 turn. This happens when Bus typed the message while the agent ran a turn of its

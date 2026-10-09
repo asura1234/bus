@@ -36,6 +36,9 @@ fn recover_queued_request_preserves_another_current_owner() {
     state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
     let current = submit_text(&mut state, room, agent, "current request");
     state.begin_submission(current, "launch-codex", 5).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Working, 6)
+        .unwrap();
     let queued = submit_text(&mut state, room, agent, "queued request");
     state
         .set_agent_error(agent, Some("current request error".into()))
@@ -58,7 +61,7 @@ fn recover_queued_request_preserves_another_current_owner() {
 }
 
 #[test]
-fn recover_not_submitted_request_still_requires_an_idle_agent() {
+fn recover_not_submitted_request_is_safe_while_the_agent_is_not_idle() {
     for status in [
         RuntimeStatus::Working,
         RuntimeStatus::Blocked,
@@ -68,11 +71,62 @@ fn recover_not_submitted_request_still_requires_an_idle_agent() {
         let (mut state, room, agent, _) = state_with_room_and_agents();
         let request = submit_text(&mut state, room, agent, "not submitted");
         state.observe_status(agent, status, 1).unwrap();
-        let before = state.clone();
+        state
+            .recover_idle_request(request, 20)
+            .expect("nothing was typed; queued recovery is safe");
         assert_eq!(
-            state.recover_idle_request(request, 20),
-            Err(ModelError::AgentNotIdle)
+            state.request(request).unwrap().phase,
+            RequestPhase::Abandoned
         );
-        assert_eq!(state, before);
+        assert!(state.queued_requests(agent).is_empty());
+        assert_eq!(state.agent(agent).unwrap().status, status);
+    }
+}
+
+#[test]
+fn queued_expiry_preserves_busy_work_and_captures_each_rejection_reason() {
+    for status in [RuntimeStatus::Working, RuntimeStatus::Blocked] {
+        let (mut state, room, agent, _) = state_with_room_and_agents();
+        let request = submit_text(&mut state, room, agent, "waiting on work");
+        state.observe_status(agent, status, 1).unwrap();
+        assert!(state
+            .expire_stalled_queued_requests(10 + QUEUED_STALL_MS)
+            .unwrap()
+            .is_empty());
+        assert_eq!(state.queued_requests(agent), &[request]);
+    }
+
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.observe_status(agent, RuntimeStatus::Idle, 1).unwrap();
+    let lead = submit_text(&mut state, room, agent, "lead");
+    let member = submit_text(&mut state, room, agent, "member");
+    assert!(state.coalesce_queue(lead).is_some());
+    state.begin_submission(lead, "launch-codex", 5).unwrap();
+    state
+        .record_submission(
+            lead,
+            SubmissionOutcome::DefinitelyRejected {
+                message: "input box is not empty".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(state.queued_requests(agent), &[lead, member]);
+    let expired = state
+        .expire_stalled_queued_requests(10 + QUEUED_STALL_MS)
+        .unwrap();
+    assert_eq!(expired, vec![lead, member]);
+    assert!(state.queued_requests(agent).is_empty());
+    for id in expired {
+        let request = state.request(id).unwrap();
+        assert_eq!(request.phase, RequestPhase::Abandoned);
+        assert_eq!(
+            request.failure_reason.as_deref(),
+            Some("input_box_not_empty")
+        );
+        let reason = request.failure_reason.clone();
+        state
+            .recover_idle_request(id, 20 + QUEUED_STALL_MS)
+            .unwrap();
+        assert_eq!(state.request(id).unwrap().failure_reason, reason);
     }
 }

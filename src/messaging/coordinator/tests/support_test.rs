@@ -165,7 +165,7 @@ pub(super) fn queue(worker: &mut Worker, room: RoomId, agent: AgentId, text: &st
     let mut state = worker.state.clone();
     state.set_draft_text(room, text).unwrap();
     state.set_draft_recipients(room, [agent]).unwrap();
-    let request = state.submit_draft(room, 2).unwrap()[0];
+    let request = state.submit_draft(room, io::now_ms()).unwrap()[0];
     worker.save(state).unwrap();
     request
 }

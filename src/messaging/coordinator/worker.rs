@@ -49,6 +49,9 @@ impl Worker {
         state.ensure_master_room();
         // Visibility belongs to the attached client, not its persisted session.
         state.leave_room_view();
+        state
+            .expire_stalled_queued_requests(io::now_ms())
+            .map_err(|e| e.to_string())?;
         // Recovered idle is not fresh settlement evidence; the next API poll owns it.
         let ids: Vec<_> = state.agents().map(|a| a.id).collect();
         for id in ids {
@@ -126,11 +129,11 @@ impl Worker {
     ) {
         let interval = Duration::from_millis(500);
         let mut next_poll = std::time::Instant::now();
-        let mut pending_command = None;
+        let mut pending_commands = std::collections::VecDeque::new();
         loop {
             let timeout = next_poll.saturating_duration_since(std::time::Instant::now());
-            match pending_command
-                .take()
+            match pending_commands
+                .pop_front()
                 .map(Ok)
                 .unwrap_or_else(|| commands.recv_timeout(timeout))
             {
@@ -182,19 +185,12 @@ impl Worker {
             // Apply already-confirmed user commands before delivering queued
             // work. In particular, Submit followed by Delete must not send in
             // the background between those two commands.
-            pending_command = commands.try_recv().ok();
-            if pending_command.is_none() && std::time::Instant::now() >= next_poll {
+            let can_poll = collect_delivery_commands(&commands, &mut pending_commands);
+            if can_poll && std::time::Instant::now() >= next_poll {
                 if !self.storage_failed {
-                    if let Err(error) =
-                        self.tick_with_delivery_check(|| match commands.try_recv() {
-                            Ok(command) => {
-                                pending_command = Some(command);
-                                false
-                            }
-                            Err(mpsc::TryRecvError::Empty) => true,
-                            Err(mpsc::TryRecvError::Disconnected) => false,
-                        })
-                    {
+                    if let Err(error) = self.tick_with_delivery_check(|| {
+                        collect_delivery_commands(&commands, &mut pending_commands)
+                    }) {
                         self.error = Some(error);
                     }
                 }
@@ -216,6 +212,7 @@ impl Worker {
         &mut self,
         can_deliver: impl FnMut() -> bool,
     ) -> Result<(), String> {
+        self.expire_queued_now()?;
         self.poll().inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",
@@ -261,5 +258,41 @@ impl Worker {
             self.save(state)?;
         }
         Ok(())
+    }
+}
+
+/// Reads are answered after this tick, without suppressing its delivery. A
+/// mutation still returns to command dispatch first, in FIFO order. Bound the
+/// drain by the input channel's capacity so a read flood cannot trap this loop.
+fn collect_delivery_commands(
+    commands: &mpsc::Receiver<(u64, BusCommand)>,
+    pending: &mut std::collections::VecDeque<(u64, BusCommand)>,
+) -> bool {
+    if pending
+        .iter()
+        .any(|(_, command)| interrupts_delivery(command))
+    {
+        return false;
+    }
+    for _ in 0..super::COMMAND_QUEUE_CAPACITY {
+        match commands.try_recv() {
+            Ok(command) => {
+                let barrier = interrupts_delivery(&command.1);
+                pending.push_back(command);
+                if barrier {
+                    return false;
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => return true,
+            Err(mpsc::TryRecvError::Disconnected) => return false,
+        }
+    }
+    true
+}
+
+fn interrupts_delivery(command: &BusCommand) -> bool {
+    match command {
+        BusCommand::Dev(call) => dev_control::is_mutation(&call.request.method),
+        _ => true,
     }
 }

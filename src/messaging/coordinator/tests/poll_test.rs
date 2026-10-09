@@ -35,6 +35,9 @@ mod persistence_tests;
 #[path = "recovery_test.rs"]
 mod recovery_tests;
 
+#[path = "scheduling_test.rs"]
+mod scheduling_tests;
+
 #[test]
 fn claude_statusline_refresh_is_identity_bound_and_does_not_change_delivery_state() {
     for mismatch in [

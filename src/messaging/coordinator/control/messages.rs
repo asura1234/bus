@@ -196,10 +196,12 @@ impl Worker {
     }
 
     pub(in crate::messaging::coordinator) fn dev_message(
-        &self,
+        &mut self,
         message: PromptId,
     ) -> Result<Value, String> {
-        self.dev_message_at(message, crate::messaging::storage::io::now_ms())
+        let now_ms = crate::messaging::storage::io::now_ms();
+        self.expire_queued_requests(now_ms)?;
+        self.dev_message_at(message, now_ms)
     }
 
     /// `message status` as of `now_ms`, which stall detection measures against.
@@ -233,6 +235,7 @@ impl Worker {
             let stage = if stall.is_some() { "stalled" } else { phase_stage };
             // The native server's last refusal explains a queued wait best.
             let reason = stall
+                .or_else(|| r.failure_reason.clone())
                 .or_else(|| self.state.blocked_unanswered(r, now_ms).then(|| "blocked_unanswered".into()))
                 .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
             json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"group":r.group,"queue":r.queue_only,"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})

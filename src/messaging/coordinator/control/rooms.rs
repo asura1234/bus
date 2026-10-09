@@ -66,6 +66,8 @@ impl Worker {
             }
             "room.history" => {
                 let room = self.dev_room(required(p, "room")?)?;
+                let now = super::super::io::now_ms();
+                self.expire_queued_requests(now)?;
                 let messages = self
                     .state
                     .requests()
@@ -73,7 +75,7 @@ impl Worker {
                     .map(|r| (r.prompt.id, &r.prompt))
                     .collect::<BTreeMap<_, _>>();
                 Ok(
-                    json!({"room_id":room,"messages":messages.iter().map(|(id,prompt)|json!({"prompt":prompt,"delivery":self.dev_message(*id).ok()})).collect::<Vec<_>>()}),
+                    json!({"room_id":room,"messages":messages.iter().map(|(id,prompt)|json!({"prompt":prompt,"delivery":self.dev_message_at(*id, now).ok()})).collect::<Vec<_>>()}),
                 )
             }
             _ => Err("Unknown method".into()),

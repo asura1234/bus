@@ -1,6 +1,7 @@
 //! The single Bus coordinator. UI commands/snapshots contain data only.
 pub(crate) mod agents;
 mod delivery;
+mod expiry;
 mod poll;
 mod worker;
 use worker::Worker;
@@ -150,13 +151,14 @@ pub(crate) const MASTER_AGENT_NEEDS_ROOM: &str = "A MASTER agent orchestrates ex
 /// How long Bus holds delivery after an agent begins a turn of its own,
 /// unless that turn's Stop arrives first.
 const OWN_TURN_GRACE: Duration = Duration::from_secs(10);
+const COMMAND_QUEUE_CAPACITY: usize = 256;
 
 impl BusHandle {
     #[cfg(test)]
     pub(crate) fn test_channel(
         snapshot: Arc<BusSnapshot>,
     ) -> (Self, mpsc::Receiver<(u64, BusCommand)>) {
-        let (commands, receiver) = mpsc::sync_channel(256);
+        let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
         let (_, events) = mpsc::channel();
         (
             Self {
@@ -178,7 +180,7 @@ impl BusHandle {
             worker.error = Some(error);
         }
         let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
-        let (commands, receiver) = mpsc::sync_channel(256);
+        let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
         let dev_control = control::start(worker.dev_enabled, &data_dir, commands.clone())?;
         let (event_tx, events) = mpsc::channel();
         let shared = Arc::clone(&snapshots);
