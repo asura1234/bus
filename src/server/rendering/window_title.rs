@@ -10,6 +10,7 @@
 //! pushes the result to the foreground client, which writes the `OSC 0`.
 
 use crate::server::app::App;
+use crate::server::rendering::surface::TabSurfaceTarget;
 use crate::utils::config::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken};
 
 impl App {
@@ -43,14 +44,11 @@ impl App {
             .is_some_and(|(template, _)| template.uses(WindowTitleToken::TerminalTitle))
     }
 
-    /// Renders the configured outer window title, or `None` when window titles
-    /// are disabled or every token resolved empty.
-    pub(crate) fn window_title(&self) -> Option<String> {
+    /// Renders the configured outer window title for the tab `target` shows,
+    /// or `None` when window titles are disabled or every token resolved empty.
+    pub(crate) fn window_title(&self, target: Option<TabSurfaceTarget>) -> Option<String> {
         let (template, hostname) = self.window_title_template.as_ref()?;
-        let workspace = self
-            .state
-            .active
-            .and_then(|ws_idx| self.state.workspaces.get(ws_idx));
+        let workspace = target.and_then(|target| self.state.workspaces.get(target.workspace_index));
 
         let mut title = String::new();
         for part in template.parts() {
@@ -65,13 +63,15 @@ impl App {
                     }
                 }
                 WindowTitlePart::Token(WindowTitleToken::Tab) => {
-                    if let Some(name) = workspace.and_then(|ws| ws.active_tab_display_name()) {
+                    if let Some(name) = target.and_then(|target| {
+                        workspace.and_then(|ws| ws.tab_display_name(target.tab_index))
+                    }) {
                         title.push_str(&name);
                     }
                 }
                 WindowTitlePart::Token(WindowTitleToken::Pane) => {
                     if let Some(label) = self
-                        .focused_terminal_state()
+                        .focused_terminal_state(target)
                         .and_then(|terminal| terminal.manual_label.as_deref())
                     {
                         title.push_str(label);
@@ -79,7 +79,7 @@ impl App {
                 }
                 WindowTitlePart::Token(WindowTitleToken::TerminalTitle) => {
                     if let Some(terminal_title) = self
-                        .focused_terminal_state()
+                        .focused_terminal_state(target)
                         .and_then(|terminal| terminal.terminal_title_stripped())
                     {
                         title.push_str(&terminal_title);
@@ -91,9 +91,18 @@ impl App {
         Some(title)
     }
 
-    fn focused_terminal_state(&self) -> Option<&crate::terminal::TerminalState> {
-        let workspace = self.state.workspaces.get(self.state.active?)?;
-        let terminal_id = workspace.terminal_id(workspace.focused_pane_id()?)?;
+    fn focused_terminal_state(
+        &self,
+        target: Option<TabSurfaceTarget>,
+    ) -> Option<&crate::terminal::TerminalState> {
+        let target = target?;
+        let tab = self
+            .state
+            .workspaces
+            .get(target.workspace_index)?
+            .tabs
+            .get(target.tab_index)?;
+        let terminal_id = tab.terminal_id(tab.layout.focused())?;
         self.state.terminals.get(terminal_id)
     }
 }
@@ -112,12 +121,16 @@ impl HeadlessServer {
         sources: &HashSet<crate::utils::ids::PaneId>,
     ) -> (bool, bool) {
         let focused_source = self
-            .app
-            .state
-            .active
-            .and_then(|ws_idx| self.app.state.workspaces.get(ws_idx))
-            .and_then(|workspace| workspace.focused_pane_id())
-            .is_some_and(|pane_id| sources.contains(&pane_id));
+            .window_title_target()
+            .and_then(|target| {
+                self.app
+                    .state
+                    .workspaces
+                    .get(target.workspace_index)?
+                    .tabs
+                    .get(target.tab_index)
+            })
+            .is_some_and(|tab| sources.contains(&tab.layout.focused()));
         self.app.sync_terminal_titles(sources);
         let outer_title_synced = focused_source && self.app.window_title_uses_terminal_title();
         if outer_title_synced {
@@ -126,12 +139,21 @@ impl HeadlessServer {
         (false, outer_title_synced)
     }
 
+    /// The tab whose state names the outer window: the one the foreground
+    /// client shows, which may differ from the shared app focus when several
+    /// clients view different tabs.
+    fn window_title_target(&self) -> Option<TabSurfaceTarget> {
+        self.foreground_client_id
+            .and_then(|client_id| self.shell_target_for_client(client_id))
+            .or_else(|| self.default_shell_target())
+    }
+
     /// Renders `ui.window_title` against current session state. `None` means
     /// window titles are disabled or every token resolved empty, which leaves
     /// the client on Bus's default title.
     fn configured_window_title(&self) -> Option<String> {
         self.app
-            .window_title()
+            .window_title(self.window_title_target())
             .and_then(|title| crate::utils::config::sanitize_window_title_text(&title))
     }
 
@@ -220,6 +242,12 @@ mod tests {
     use crate::server::workspaces::Workspace;
     use crate::utils::config::Config;
 
+    const TARGET: Option<crate::server::rendering::surface::TabSurfaceTarget> =
+        Some(crate::server::rendering::surface::TabSurfaceTarget {
+            workspace_index: 0,
+            tab_index: 0,
+        });
+
     fn test_app() -> App {
         let event_hub = crate::server::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -241,10 +269,10 @@ mod tests {
         let mut app = test_app();
         app.configure_window_title("{workspace}/{tab}");
 
-        assert_eq!(app.window_title().as_deref(), Some("herd/1"));
+        assert_eq!(app.window_title(TARGET).as_deref(), Some("herd/1"));
 
         app.state.workspaces[0].tabs[0].custom_name = Some("build".into());
-        assert_eq!(app.window_title().as_deref(), Some("herd/build"));
+        assert_eq!(app.window_title(TARGET).as_deref(), Some("herd/build"));
     }
 
     #[test]
@@ -264,7 +292,7 @@ mod tests {
         terminal.manual_label = Some("api".into());
         terminal.set_terminal_title(Some("⠋ building".into()));
 
-        assert_eq!(app.window_title().as_deref(), Some("api|building"));
+        assert_eq!(app.window_title(TARGET).as_deref(), Some("api|building"));
     }
 
     #[test]
@@ -272,7 +300,7 @@ mod tests {
         let mut app = test_app();
         app.configure_window_title("");
 
-        assert_eq!(app.window_title(), None);
+        assert_eq!(app.window_title(TARGET), None);
     }
 
     #[test]
@@ -280,7 +308,7 @@ mod tests {
         let mut app = test_app();
         app.configure_window_title("{nope}");
 
-        assert_eq!(app.window_title(), None);
+        assert_eq!(app.window_title(TARGET), None);
     }
 
     #[test]
@@ -288,6 +316,6 @@ mod tests {
         let mut app = test_app();
         app.configure_window_title("[{pane}]");
 
-        assert_eq!(app.window_title().as_deref(), Some("[]"));
+        assert_eq!(app.window_title(TARGET).as_deref(), Some("[]"));
     }
 }
