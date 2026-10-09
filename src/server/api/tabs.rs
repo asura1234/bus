@@ -104,12 +104,9 @@ impl App {
                 );
                 if let Some(label) = label {
                     let workspace_id = self.state.workspaces[ws_idx].id.clone();
-                    let tab_id = self.public_tab_id(ws_idx, tab_idx).unwrap_or_else(|| {
-                        crate::server::workspaces::public_tab_id_for_number(
-                            &workspace_id,
-                            tab_idx + 1,
-                        )
-                    });
+                    let tab_id = self
+                        .public_tab_id(ws_idx, tab_idx)
+                        .expect("new tab should have a public id");
                     if let Some(tab) = self
                         .state
                         .workspaces
@@ -153,9 +150,9 @@ impl App {
             return tab_not_found(id, &params.tab_id);
         };
         let workspace_id = self.state.workspaces[ws_idx].id.clone();
-        let tab_id = self.public_tab_id(ws_idx, tab_idx).unwrap_or_else(|| {
-            crate::server::workspaces::public_tab_id_for_number(&workspace_id, tab_idx + 1)
-        });
+        let tab_id = self
+            .public_tab_id(ws_idx, tab_idx)
+            .expect("resolved tab should have a public id");
         let Some(tab) = self
             .state
             .workspaces
