@@ -1,5 +1,51 @@
 use super::*;
 
+#[test]
+fn cwd_report_retries_delivery_after_event_queue_was_full() {
+    let pane_id = PaneId::from_raw(42);
+    let cwd = std::env::temp_dir();
+    let reported_cwd = Arc::new(Mutex::new(None));
+    let mut published_cwd = None;
+    let (events, mut event_rx) = mpsc::channel(1);
+    events
+        .try_send(TerminalEvent::ClipboardWrite {
+            content: Vec::new(),
+        })
+        .unwrap();
+
+    publish_reported_cwd(
+        pane_id,
+        cwd.clone(),
+        &reported_cwd,
+        &mut published_cwd,
+        &events,
+    );
+    assert!(matches!(
+        event_rx.try_recv().unwrap(),
+        TerminalEvent::ClipboardWrite { .. }
+    ));
+
+    // A shell reports the same directory at every prompt. Once backpressure
+    // clears, the next report must reach persisted state and workspace labels.
+    publish_reported_cwd(
+        pane_id,
+        cwd.clone(),
+        &reported_cwd,
+        &mut published_cwd,
+        &events,
+    );
+    assert!(
+        matches!(
+            event_rx.try_recv(),
+            Ok(TerminalEvent::TerminalCwdReported {
+                pane_id: delivered_pane,
+                cwd: delivered_cwd,
+            }) if delivered_pane == pane_id && delivered_cwd == cwd
+        ),
+        "a CWD report dropped by backpressure must remain eligible for delivery"
+    );
+}
+
 #[tokio::test]
 async fn cwd_returns_accepted_report_without_rechecking_filesystem() {
     let stamp = std::time::SystemTime::now()
@@ -14,7 +60,13 @@ async fn cwd_returns_accepted_report_without_rechecking_filesystem() {
 
     let (runtime, _rx) = TerminalRuntime::test_with_channel(80, 24);
     let (events, _event_rx) = mpsc::channel(1);
-    publish_reported_cwd(runtime.pane_id, cwd.clone(), &runtime.reported_cwd, &events);
+    publish_reported_cwd(
+        runtime.pane_id,
+        cwd.clone(),
+        &runtime.reported_cwd,
+        &mut None,
+        &events,
+    );
     assert_eq!(
         runtime.reported_cwd.lock().unwrap().as_ref(),
         Some(&cwd),
