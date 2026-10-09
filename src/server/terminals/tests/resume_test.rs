@@ -554,3 +554,49 @@ fn shell_command_from_argv_quotes_resume_arguments() {
         "claude --resume 'session with '\\'' quote'"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pending_agent_resume_shell_spawn_failure_keeps_saved_conversation() {
+    let _env = test_support::ProcessEnvironment::enter(None, None);
+    let mut app = test_app();
+    let workspace = crate::server::workspaces::Workspace::test_new("failed-resume-shell");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+    app.state.view.pane_infos = workspace.tabs[0].layout.panes(Rect::new(0, 0, 100, 30));
+    app.state.view.terminal_area = Rect::new(0, 0, 100, 30);
+    app.state.workspaces = vec![workspace];
+    app.state.active = Some(0);
+    app.state.ensure_test_terminals();
+    let missing_shell = std::env::temp_dir().join(format!(
+        "bus-missing-resume-shell-{}-{}",
+        std::process::id(),
+        crate::utils::time::now_ns()
+    ));
+    assert!(!missing_shell.exists());
+    app.state.default_shell = missing_shell.to_string_lossy().into_owned();
+    app.state.shell_mode = crate::utils::config::ShellModeConfig::Login;
+    let session = crate::agents::resume::catalog::PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("recoverable-session")
+            .unwrap(),
+    };
+    let plan =
+        crate::agents::resume::catalog::plan(&session.source, &session.agent, &session.session_ref)
+            .unwrap();
+    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.restore_managed_agent("saved-worker".into(), crate::agents::AgentKind::Codex);
+    terminal.set_persisted_agent_session(session.clone());
+    terminal.pending_agent_resume_plan = Some(plan);
+
+    assert!(!app.start_pending_agent_resumes(true));
+    assert!(app.terminal_runtimes.get(&terminal_id).is_none());
+    let terminal = &app.state.terminals[&terminal_id];
+    assert_eq!(
+        terminal.persisted_agent_session,
+        Some(session),
+        "a shell that never started must not erase the saved conversation"
+    );
+    assert_eq!(terminal.agent_name.as_deref(), Some("saved-worker"));
+}
