@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use super::*;
 
+#[path = "send_recovery_test.rs"]
+mod send_recovery_tests;
+
 fn master_agent(state: &mut BusState, name: &str) -> AgentId {
     let master = state.ensure_master_room();
     state
