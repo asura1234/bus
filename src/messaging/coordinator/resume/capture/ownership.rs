@@ -8,6 +8,24 @@ use crate::agents::providers::{
 };
 use crate::messaging::{identity, model::RoomAgent};
 
+pub(super) fn unstarted_owner<'a>(
+    state: &'a crate::messaging::model::BusState,
+    facts: &NativeResumeFacts,
+) -> Result<&'a RoomAgent, String> {
+    let mut owners = state.agents().filter(|agent| {
+        facts.agent_name.as_deref()
+            == Some(identity::managed_name(agent.room_id, agent.id).as_str())
+            && super::super::is_unstarted_codex(state, agent)
+    });
+    let agent = owners
+        .next()
+        .ok_or("Bus resume has no matching unstarted Codex owner")?;
+    if owners.next().is_some() {
+        return Err("Bus resume unstarted ownership is ambiguous".into());
+    }
+    Ok(agent)
+}
+
 pub(super) fn verified_capture(
     root: &Path,
     agent: &RoomAgent,

@@ -192,6 +192,44 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    let mut identity = fixture.state.agent(fixture.agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    fixture.state.set_agent_runtime_identity(fixture.agent, identity).unwrap();
+    fixture.facts.session = None;
+    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
+        &fixture.facts, None,
+    ).unwrap();
+    fixture.save();
+    let extras = fixture.load().unwrap();
+    assert_eq!(extras.env, fixture.expected_env());
+    assert!(extras.session.is_none());
+    assert!(fixture.state.agent(fixture.agent).unwrap().runtime_identity.session_id.is_none());
+
+    std::fs::write(fixture.root.join("callbacks/owned-launch/adopted-session"), "reserved-session").unwrap();
+    assert_eq!(fixture.load().unwrap_err(),
+        "Bus resume cannot replace an adopted session with an empty launch");
+}
+
+#[test]
+fn unstarted_resume_rejects_a_bound_owner_and_noninteractive_argv() {
+    let mut fixture = Fixture::new(Provider::Codex);
+    fixture.facts.session = None;
+    fixture.plan = crate::messaging::coordinator::resume::unstarted_codex_plan(
+        &fixture.facts, None,
+    ).unwrap();
+    assert!(fixture.load().is_err(), "a bound owner must keep its conversation");
+    for argv in [vec!["codex", "resume", "previous"], vec!["codex", "exec", "prompt"],
+        vec!["codex", "--config", "x=y"]] {
+        let argv: Vec<String> = argv.into_iter().map(str::to_owned).collect();
+        assert!(crate::messaging::coordinator::resume::unstarted_codex_plan(
+            &fixture.facts, Some(&argv),
+        ).is_none());
+    }
+}
+
+#[test]
 fn bus_resume_restores_existing_capture_for_each_provider_without_rewriting_plan() {
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
         let fixture = Fixture::new(provider);

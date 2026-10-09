@@ -142,6 +142,31 @@ fn shell_descriptions_execute_once_and_keep_pending_agent_deferred() {
 }
 
 #[test]
+fn unstarted_managed_codex_restores_a_pending_launch_without_a_provider_session() {
+    let mut snapshot = snapshot();
+    let pane = snapshot.workspaces[0].tabs[1].panes.get_mut(&30).unwrap();
+    pane.agent_name = Some("bus-r1-a2".into());
+    pane.managed_agent_kind = Some("codex".into());
+    pane.agent_session = None;
+    let restored = plan(&snapshot, true);
+    let terminal = restored
+        .terminals
+        .values()
+        .find(|terminal| terminal.agent_name.as_deref() == Some("bus-r1-a2"))
+        .expect("unstarted Codex keeps its managed identity");
+    assert!(terminal.persisted_agent_session.is_none());
+    assert_eq!(
+        terminal.pending_agent_resume_plan.as_ref().unwrap().argv,
+        vec!["codex", "--no-daemon"]
+    );
+    assert_eq!(
+        restored.launches.len(),
+        2,
+        "agent is deferred until capture is verified"
+    );
+}
+
+#[test]
 fn failed_shell_launch_prunes_layout_focus_root_and_public_numbers() {
     let restored = plan(&snapshot(), false);
     let survivor = restored.workspaces[0].tabs[0].layout.pane_ids()[1];

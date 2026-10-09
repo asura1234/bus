@@ -7,4 +7,4 @@ pub(crate) mod scrollback_read;
 mod theme_sync;
 mod titles;
 
-pub(crate) use resume::api_session_kind;
+pub(crate) use resume::{api_session_kind, unstarted_restore_plan};

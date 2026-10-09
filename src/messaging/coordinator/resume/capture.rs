@@ -84,12 +84,18 @@ pub(crate) fn load(
     if !context.is_bus_server() {
         return Err("Bus resume context belongs to another server session".into());
     }
-    let session = saved_session(facts, plan)?;
     let state = JsonStore::new(root.join("state.json"))
         .load()
         .map_err(|_| "Bus resume state is unreadable")?
         .ok_or("Bus resume state is missing")?;
-    let (agent, corrected) = ownership::resume_owner(&state, facts, session)?;
+    let (agent, corrected) = if facts.session.is_none() {
+        if super::unstarted_codex_plan(facts, Some(&plan.argv)).as_ref() != Some(plan) {
+            return Err("Bus resume has no saved provider session".into());
+        }
+        (ownership::unstarted_owner(&state, facts)?, None)
+    } else {
+        ownership::resume_owner(&state, facts, saved_session(facts, plan)?)?
+    };
     if agent.deletion_pending
         || state
             .room(agent.room_id)
@@ -99,6 +105,11 @@ pub(crate) fn load(
         return Err("Bus resume is suspended by deletion or invalidated identity".into());
     }
     let hooks = ownership::verified_capture(root, agent, &context.binary)?;
+    if facts.session.is_none()
+        && crate::agents::providers::launch::reserved_session(&hooks.spool).is_some()
+    {
+        return Err("Bus resume cannot replace an adopted session with an empty launch".into());
+    }
     let (path, mut args, rebound) = capture_args(agent.provider, &hooks, &context.project)?;
     if rebound {
         tracing::info!(event = "bus.resume.hooks_rebound", agent_id = agent.id.0,

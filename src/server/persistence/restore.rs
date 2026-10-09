@@ -377,7 +377,24 @@ fn restore_tab_pane(
             enabled: model_context.resume_agents_on_restore,
             resumed_sessions: resumed_agent_sessions,
         };
-        pane_restore_startup(saved_agent_session, saved_history, &mut agent_restore)
+        let mut startup =
+            pane_restore_startup(saved_agent_session, saved_history, &mut agent_restore);
+        if model_context.resume_agents_on_restore && saved_agent_session.is_none() {
+            startup.restore_plan = crate::server::terminals::unstarted_restore_plan(
+                saved_agent_name.as_deref(),
+                saved_managed_agent,
+                saved_pane.and_then(|pane| pane.launch_argv.as_deref()),
+            )
+            .filter(|plan| {
+                agent_restore
+                    .resumed_sessions
+                    .insert(plan.dedupe_key.clone())
+            });
+            if startup.restore_plan.is_some() {
+                startup.initial_history_ansi = None;
+            }
+        }
+        startup
     };
     let restored_agent_session =
         restored_terminal_agent_session(saved_agent_session, startup.duplicate_agent_session);
@@ -453,9 +470,11 @@ fn restored_pending_agent_terminal(
     saved_managed_agent: Option<crate::agents::AgentKind>,
 ) -> TerminalState {
     let initial_restore_agent = crate::agents::parse_agent_label(&plan.agent);
+    let launch_argv = plan.argv.clone();
     let terminal_id = TerminalId::alloc();
     let mut terminal =
         TerminalState::new(terminal_id.clone(), cwd).with_pending_agent_resume_plan(plan);
+    terminal.launch_argv = Some(launch_argv);
     if let Some(label) = saved_label {
         terminal.set_manual_label(label);
     }

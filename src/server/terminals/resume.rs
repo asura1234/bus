@@ -17,6 +17,21 @@ fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeRes
     }
 }
 
+pub(crate) fn unstarted_restore_plan(
+    agent_name: Option<&str>,
+    managed_agent: Option<crate::agents::AgentKind>,
+    argv: Option<&[String]>,
+) -> Option<crate::agents::resume::catalog::AgentResumePlan> {
+    let facts = NativeResumeFacts {
+        agent_name: agent_name.map(str::to_owned),
+        managed_agent: managed_agent
+            .map(crate::agents::agent_label)
+            .map(str::to_owned),
+        session: None,
+    };
+    crate::messaging::coordinator::resume::unstarted_codex_plan(&facts, argv)
+}
+
 fn for_native_resume(
     terminal: &crate::terminal::TerminalState,
     plan: &crate::agents::resume::catalog::AgentResumePlan,

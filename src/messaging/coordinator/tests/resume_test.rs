@@ -52,6 +52,53 @@ fn cold_resume_rebinds_same_conversation_and_persists_new_terminal_for_each_prov
 }
 
 #[test]
+fn cold_resume_rebinds_unstarted_codex_and_delivers_its_first_prompt_once() {
+    let mut info = resumed_info(Provider::Codex);
+    info.agent_session = None;
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::Codex,
+        vec![
+            Ok(ResponseResult::AgentList {
+                agents: vec![info.clone()],
+            }),
+            Ok(ResponseResult::AgentInfo { agent: info }),
+            Ok(ResponseResult::Ok {}),
+        ],
+    );
+    let mut state = worker.state.clone();
+    let mut identity = state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    state.set_agent_runtime_identity(agent, identity).unwrap();
+    worker.save(state).unwrap();
+    let request = queue(&mut worker, room, agent, "first prompt after restart");
+    worker.poll().unwrap();
+    let restored = worker.state.agent(agent).unwrap();
+    assert_eq!(restored.status, RuntimeStatus::Idle);
+    assert_eq!(
+        restored.runtime_identity.terminal_id.as_deref(),
+        Some("restored-terminal")
+    );
+    assert!(restored.runtime_identity.session_id.is_none());
+    worker.submit_ready().unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| **method == "agent.prompt_if_unbound")
+            .count(),
+        1
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn cold_resume_rejects_foreign_missing_and_ambiguous_ownership() {
     for case in [
         "name",
