@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn non_ascii_hex_color_in_custom_theme_uses_invalid_color_fallback() {
+    let config: Config = toml::from_str("[theme.custom]\naccent = '#aéaaa'\n").unwrap();
+    let runtime = crate::utils::theme::theme_runtime_config(&config, false);
+    let (palette, _) = crate::utils::theme::resolve_effective_theme(&runtime, None);
+
+    assert_eq!(palette.accent, ratatui::style::Color::Cyan);
+}
+
+#[test]
 fn leaf_config_load_keeps_caller_overrides_outside_the_loader() {
     let guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let _bus = crate::utils::config::test_without_bus_env(&guard);
