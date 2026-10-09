@@ -214,3 +214,20 @@ fn the_composer_caret_counts_a_joined_emoji_as_two_cells() {
 
     assert_eq!((cursor.x, cursor.y), (rect.x + 4, rect.y));
 }
+
+#[test]
+fn the_composer_caret_stays_on_the_row_when_a_joined_emoji_fits_at_its_edge() {
+    let (mut ui, room, _) = fixture();
+    ui.compute_view(100, 30);
+    let width = composer_rect(&ui).width;
+    let draft = format!("{}👩‍💻b", "a".repeat(usize::from(width - 3)));
+    ui.locals.get_mut(&room).unwrap().text.insert(&draft);
+    ui.compute_view(100, 30);
+    let rect = composer_rect(&ui);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let cursor = ui.cursor().expect("composer caret");
+
+    assert_eq!((cursor.x, cursor.y), (rect.right() - 1, rect.y));
+    assert_eq!(buffer[(rect.right() - 1, rect.y)].symbol(), "b");
+}

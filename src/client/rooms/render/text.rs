@@ -69,12 +69,14 @@ pub(in crate::client::rooms) fn wrap_ranges(text: &str, width: u16) -> Vec<Range
         let mut start = base;
         let mut used = 0;
         let mut breakpoint = None;
-        for (offset, c) in source.char_indices() {
-            let index = base + offset;
-            let size = cell_width(c);
-            if c == ' ' || c == '\t' {
+        // Whole grapheme clusters, measured as the buffer draws them, so a
+        // joined emoji never splits across rows.
+        for (range, size) in graphemes(source) {
+            let index = base + range.start;
+            let end = base + range.end;
+            if matches!(&source[range], " " | "\t") {
                 used += size;
-                breakpoint = Some(index + c.len_utf8());
+                breakpoint = Some(end);
                 continue;
             }
             if size > 1 {
@@ -102,7 +104,7 @@ pub(in crate::client::rooms) fn wrap_ranges(text: &str, width: u16) -> Vec<Range
             }
             used += size;
             if size > 1 {
-                breakpoint = Some(index + c.len_utf8());
+                breakpoint = Some(end);
             }
         }
         base += source.len();

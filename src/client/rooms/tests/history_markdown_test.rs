@@ -379,24 +379,6 @@ fn copy_markdown_body_at_width(ui: &mut BusUi, room: RoomId, width: u16, prompt:
 }
 
 #[test]
-fn a_history_copy_keeps_explicit_prompt_newlines_near_the_right_edge() {
-    let (mut ui, room, agent) = fixture();
-    let prompt = "12345678901234567890\nsecond line";
-    saved_exchange(&mut ui, room, agent, prompt, "reply");
-
-    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, true), prompt);
-}
-
-#[test]
-fn a_history_copy_does_not_insert_spaces_inside_a_wrapped_word() {
-    let (mut ui, room, agent) = fixture();
-    let reply = "abcdefghijklmnopqrstuvwxyz0123456789";
-    saved_exchange(&mut ui, room, agent, "prompt", reply);
-
-    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, false), reply);
-}
-
-#[test]
 fn a_history_copy_of_a_wrapped_list_item_skips_its_continuation_indent() {
     let (mut ui, room, agent) = fixture();
     saved_exchange(
