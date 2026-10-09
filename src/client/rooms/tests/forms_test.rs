@@ -434,3 +434,32 @@ fn path_completion_uses_the_first_result_after_the_query_changes() {
         "/nested/"
     );
 }
+
+#[test]
+fn provider_menu_erases_the_pwd_suffix_under_its_choice() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::NewAgent);
+    if let Some(forms::Form::Agent { cwd, .. }) = &mut ui.form {
+        *cwd = editor::Editor::new("/projects/underlying-directory-suffix".into());
+    }
+    ui.action(render::Action::Field(1));
+    ui.compute_view(100, 30);
+    let choice = ui
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::Provider(Provider::Cursor))
+        .expect("the provider menu offers Cursor")
+        .rect;
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let label: String = (choice.x..choice.right())
+        .map(|x| buffer[(x, choice.y)].symbol())
+        .collect();
+
+    assert_eq!(
+        label.trim(),
+        "Cursor",
+        "a provider choice must erase the PWD text that its menu covers"
+    );
+}

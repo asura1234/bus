@@ -59,7 +59,7 @@ impl BusUi {
             width,
         );
         let chat_search = self.chat_search.clone();
-        let layout = self.composer_layout(view, main, local, &recipients, &status);
+        let layout = self.composer_layout(view, main, room, local, &recipients, &status);
         self.recipient_scroll = self.recipient_scroll.min(view.recipient_max_scroll);
         let history_y = self.room_header(view, main, room, local, layout);
         self.notes_view(view, local);
@@ -166,6 +166,7 @@ impl BusUi {
         &self,
         view: &mut View,
         main: Rect,
+        room: &Room,
         local: &LocalRoom,
         recipients: &RecipientLayout,
         status: &str,
@@ -202,6 +203,23 @@ impl BusUi {
             }
         }
         .min(max_height);
+        // Open search owns the keyboard, so its panel above the history must
+        // stay on screen: shrink a tall draft (not its saved size) to leave
+        // the header, notes and search panel their rows while search is open.
+        let text_height = if self.chat_search.is_some() {
+            let has_notes = room.kind != RoomKind::Master;
+            let header = if has_notes {
+                let note_lines = wrap(&local.notes.text, width).len().max(1);
+                5 + note_lines.min(usize::from((main.height / 4).max(1))) as u16
+            } else {
+                3
+            };
+            let search_max =
+                composer_bottom.saturating_sub(bar_height + 5 + SEARCH_BOX_HEIGHT + header);
+            text_height.min(search_max.max(3.min(text_height)))
+        } else {
+            text_height
+        };
         let composer_y = composer_bottom.saturating_sub(text_height + bar_height + 3);
         view.composer_box = Rect::new(
             main.x + 1,

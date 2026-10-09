@@ -149,12 +149,29 @@ impl Thumbnails {
         if !is_image(path) {
             return None;
         }
-        let (width, height) = *self
-            .dims
-            .entry(path.to_owned())
-            .or_insert_with(|| dimensions(path))
-            .as_ref()?;
-        Some(fit((width, height), cell, max_cols.min(MAX_COLS), MAX_ROWS))
+        if let Some(dims) = self.dims.get(path) {
+            return dims.map(|dims| fit(dims, cell, max_cols.min(MAX_COLS), MAX_ROWS));
+        }
+        // A readable header does not make the pixels decodable, and history
+        // drops the name row for a thumbnail. Decode now so an undecodable
+        // image keeps its name, and keep this size's thumbnail for encode.
+        let Some(image) = decode(path) else {
+            self.dims.insert(path.to_owned(), None);
+            return None;
+        };
+        let dims = (image.width(), image.height());
+        self.dims.insert(path.to_owned(), Some(dims));
+        let (cols, rows) = fit(dims, cell, max_cols.min(MAX_COLS), MAX_ROWS);
+        let key = (path.to_owned(), cols, rows);
+        if !self.images.contains_key(&key) {
+            let id = thumbnail(&image, cell, cols, rows).map(|data| {
+                let id = self.next_image_id();
+                self.decoded.insert(id, data);
+                id
+            });
+            self.images.insert(key, id);
+        }
+        Some((cols, rows))
     }
 
     /// Graphics commands that move the visible thumbnails from the previous
@@ -383,7 +400,9 @@ pub(super) fn fit(
     (cols, rows)
 }
 
-fn dimensions(path: &Path) -> Option<(u32, u32)> {
+/// Decodes `path` (the first frame of an animation), or None when it is not a
+/// small enough file or its pixels cannot be decoded.
+fn decode(path: &Path) -> Option<image::DynamicImage> {
     let metadata = std::fs::metadata(path).ok()?;
     if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
         return None;
@@ -392,20 +411,22 @@ fn dimensions(path: &Path) -> Option<(u32, u32)> {
         .ok()?
         .with_guessed_format()
         .ok()?
-        .into_dimensions()
+        .decode()
+        .map_err(|error| tracing::warn!(event = "bus.thumbnail.decode_failed", %error))
         .ok()
 }
 
-/// Decodes `path` (the first frame of an animation) and re-encodes it as a PNG
-/// no larger than the cells it covers.
+/// Decodes `path` and re-encodes it as a PNG no larger than the cells it covers.
 fn thumbnail_png(path: &Path, cell: HostCellSize, cols: u16, rows: u16) -> Option<Vec<u8>> {
-    let image = image::ImageReader::open(path)
-        .ok()?
-        .with_guessed_format()
-        .ok()?
-        .decode()
-        .map_err(|error| tracing::warn!(event = "bus.thumbnail.decode_failed", %error))
-        .ok()?;
+    thumbnail(&decode(path)?, cell, cols, rows)
+}
+
+fn thumbnail(
+    image: &image::DynamicImage,
+    cell: HostCellSize,
+    cols: u16,
+    rows: u16,
+) -> Option<Vec<u8>> {
     let image = image.thumbnail(
         u32::from(cols) * cell.width_px,
         u32::from(rows) * cell.height_px,

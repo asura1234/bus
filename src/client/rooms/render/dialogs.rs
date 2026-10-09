@@ -650,12 +650,11 @@ impl BusUi {
                 .copied()
                 .enumerate()
             {
-                view.row(
+                view.overlay_row(
                     Rect::new(x, top + index as u16, width, 1),
-                    provider(kind),
+                    provider(kind).to_owned(),
                     Some(Action::Provider(kind)),
                     *provider_cursor == kind,
-                    false,
                 );
             }
         }
