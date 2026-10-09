@@ -78,10 +78,13 @@ Your room: {{ROOM_NAME}} (id {{ROOM_ID}}). Your agent name: {{AGENT_NAME}}.
   shared branch with file boundaries per agent and "ask me before writing file
   X" for shared files; a separate worktree only when it is a must.
 - Use different models for review. Keep a provider for review only once its
-  weekly allowance is below about 25% (`bus state` shows usage). After 5
-  compactions, have a worker write a handover note, run `bus agent clear` on
-  it, and have it continue from the note. Run `bus agent clear` before giving a
-  worker an unrelated task too.
+  weekly allowance is below about 25% (`bus state` shows usage). Bus sends a
+  worker's `reached N compactions` notice once at the configured **Max
+  compactions per agent** (default 5). On that notice, ask the agent to write a
+  handover note in `temp/`, add a fresh agent with the same provider and role,
+  brief it from the note, then delete the old agent with
+  `bus agent delete AGENT --confirm` and log the replacement. Run
+  `bus agent clear` before giving a worker an unrelated task.
   This applies to workers only: never clear or replace yourself; you keep the
   context for the whole effort.
 - Ask the human before: merging, pushing to shared branches, publishing,

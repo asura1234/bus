@@ -64,9 +64,14 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   provider (Bus types `/clear` or `/new-chat` and keeps the agent bound). Never
   send `/clear` with `bus send`. *Why:* leftover context from the old task costs
   tokens and misleads the agent.
-- **At most 5 compactions per worker terminal.** `bus state` shows each agent's
-  `compactions.count`. At 5, have the worker write a handover note to a file,
-  run `bus agent clear` on it, and have it continue from the note. *Why:* each
+- **Replace a worker on its compaction-limit notice.** Bus counts compactions
+  and sends `AGENT -> orchestrator: reached N compactions; get a handover note
+  and replace it.` once when a worker reaches **Max compactions per agent** in
+  Settings (default 5). On `reached N compactions`, ask the agent to write a
+  handover note in `temp/`, add a fresh agent with the same provider and role,
+  brief it from the note, then delete the old agent with
+  `bus agent delete AGENT --confirm`. Record the replacement in the workflow
+  log. Do not clear the old agent as a substitute for replacement. *Why:* each
   compaction loses detail, and quality drops after several.
 - **Never clear or replace yourself.** The two rules above apply to workers
   only: the orchestrator never resets its own context and is never replaced

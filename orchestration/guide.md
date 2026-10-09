@@ -151,9 +151,11 @@ Write the choice in the workflow's Coordination section.
 - **Move work when a provider runs out.** If an agent hits a usage limit, add an
   agent on another provider (`bus agent add`) and hand the work over.
 - **Watch context health.** `bus state` shows how many times each agent's
-  context has been compacted. After 5 compactions, ask a worker to write a
-  handover note to a file, run `bus agent clear` on it, and have it continue
-  from that note. Clear a worker the same way before an unrelated task. This
+  context has been compacted. Bus posts a `reached N compactions` notice at the
+  configured **Max compactions per agent** (Settings, default 5). On that
+  notice, ask the worker to write a handover note in `temp/`, add a fresh agent
+  with the same provider and role, brief it from the note, then delete the old
+  agent and log the replacement. Clear a worker before an unrelated task. This
   limit is for workers only: the orchestrator never clears itself and is never
   replaced for compactions, because it carries the context of the whole effort.
 

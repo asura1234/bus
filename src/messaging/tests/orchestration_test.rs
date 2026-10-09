@@ -49,6 +49,28 @@ fn embedded_docs_match_the_repository_copies() {
 }
 
 #[test]
+fn compaction_notice_instructions_replace_the_worker_from_a_temp_handover_note() {
+    let rules = DOCS
+        .iter()
+        .find(|(name, _)| *name == "orchestrator-rules.md")
+        .unwrap()
+        .1;
+    for text in [DEFAULT_PROMPT, rules] {
+        for phrase in [
+            "reached N compactions",
+            "temp/",
+            "same provider and role",
+            "brief it from the note",
+            "delete the old agent",
+        ] {
+            assert!(text.contains(phrase), "missing {phrase}: {text}");
+        }
+        assert!(!text.contains("At most 5 compactions"));
+        assert!(!text.contains("After 5"));
+    }
+}
+
+#[test]
 fn fill_replaces_every_placeholder() {
     let data = Path::new("/data");
     let text = fill(DEFAULT_PROMPT, &values(Some(("pr-123", 7)), data));
