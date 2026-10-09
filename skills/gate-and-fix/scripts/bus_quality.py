@@ -236,6 +236,13 @@ def lint() -> int:
     return int(any(results))
 
 
+def llvm_cov_target(env) -> Path:
+    """Mirror cargo-llvm-cov's output directory so tests run the binary it built."""
+    if env.get("CARGO_LLVM_COV_TARGET_DIR"):
+        return ROOT / env["CARGO_LLVM_COV_TARGET_DIR"]
+    return ROOT / env.get("CARGO_TARGET_DIR", "target") / "llvm-cov-target"
+
+
 def unit() -> int:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     # Never let a failed/new round reuse yesterday's successful report.
@@ -255,9 +262,7 @@ def unit() -> int:
         "--",
         "--help",
     )
-    target = Path(
-        os.environ.get("CARGO_LLVM_COV_TARGET_DIR", ROOT / "target/llvm-cov-target")
-    )
+    target = llvm_cov_target(os.environ)
     test_env = dict(
         os.environ,
         BUS_TEST_BINARY=str(
