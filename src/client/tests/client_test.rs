@@ -610,3 +610,108 @@ fn forward_clipboard_uses_local_clipboard_path() {
         std::env::remove_var("SSH_CONNECTION");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn failed_frame_write_keeps_full_repaint_pending() {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::net::UnixStream;
+
+    const CHILD_ENV: &str = "BUS_FRAME_WRITE_FAILURE_PROBE";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "client::tests::failed_frame_write_keeps_full_repaint_pending",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "failed frame presentation consumed its repaint request: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    struct RestoreStdout(OwnedFd);
+    impl Drop for RestoreStdout {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.0.as_raw_fd(), libc::STDOUT_FILENO);
+            }
+        }
+    }
+
+    let mut state = super::state::ClientState {
+        blit_encoder: crate::protocol::ansi::BlitEncoder::new(),
+        mouse_capture_active: false,
+        endpoint_mouse_capture_requested: false,
+        endpoint_sgr_pixels_requested: false,
+        host_palette_query_pending: Default::default(),
+        host_palette_query_progress: Default::default(),
+        shell_mouse_capture_preference: false,
+        pane_keyboard_report_all: false,
+        keyboard_report_all_active: false,
+        reported_size: (1, 1),
+        reported_cell_size: (0, 0),
+        sound_config: Default::default(),
+        kitty_graphics_enabled: false,
+        pixel_geometry_enabled: false,
+        pixel_geometry_exact: false,
+        redraw_on_focus_gained: false,
+        repaint_pending: true,
+        draw_host_cursor: false,
+        detached_process_children: Vec::new(),
+        shell: None,
+    };
+    let frame = crate::protocol::wire::FrameData {
+        cells: vec![crate::protocol::wire::CellData {
+            symbol: "X".into(),
+            fg: 0,
+            bg: 0,
+            modifier: 0,
+            skip: false,
+            hyperlink: None,
+        }],
+        width: 1,
+        height: 1,
+        cursor: None,
+        hyperlinks: Vec::new(),
+        graphics: Vec::new(),
+    };
+
+    // Isolate the process-wide descriptor change from all other test cases.
+    let (broken_output, reader) = UnixStream::pair().unwrap();
+    drop(reader);
+    let mut stdout = io::stdout().lock();
+    stdout.flush().unwrap();
+    let saved_fd = unsafe { libc::dup(libc::STDOUT_FILENO) };
+    assert!(saved_fd >= 0);
+    let restore = RestoreStdout(unsafe { OwnedFd::from_raw_fd(saved_fd) });
+    assert_eq!(
+        unsafe { libc::dup2(broken_output.as_raw_fd(), libc::STDOUT_FILENO) },
+        libc::STDOUT_FILENO
+    );
+    let failed_write = unsafe { libc::write(libc::STDOUT_FILENO, b"X".as_ptr().cast(), 1) };
+    let output_error = io::Error::last_os_error();
+    state.present_frame(frame.clone());
+    let presentation_after_failure = (
+        state.repaint_pending,
+        state.blit_encoder.clears_before(&frame),
+    );
+    drop(restore);
+    stdout.flush().unwrap();
+    drop(stdout);
+
+    assert_eq!(failed_write, -1);
+    assert_eq!(output_error.kind(), io::ErrorKind::BrokenPipe);
+    assert_eq!(
+        presentation_after_failure,
+        (true, true),
+        "failed stdout writes must keep the repaint pending and the blit baseline uncommitted"
+    );
+}
