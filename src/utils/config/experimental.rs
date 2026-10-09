@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+/// Cursor shape (DECSCUSR) used for the forced IME anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImeCursorShape {
