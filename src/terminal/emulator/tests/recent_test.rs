@@ -97,3 +97,33 @@ fn trim_trailing_blank_rows_drops_empty_viewport_tail() {
     trim_trailing_blank_rows(&mut rows);
     assert_eq!(rows, vec!["hello".to_string()]);
 }
+
+#[test]
+fn history_snapshot_unwrap_preserves_spaces_at_soft_wrap_boundaries() {
+    let mut terminal = crate::terminal::vt::Terminal::new(6, 3, 100).unwrap();
+    terminal.write(b"hello world");
+    let rows = terminal.screen_text_rows().unwrap();
+    assert!(rows[0].soft_wrapped);
+    assert_eq!(
+        terminal.read_text_screen((0, 0), (5, 2), false).unwrap(),
+        "hello world"
+    );
+
+    assert_eq!(
+        crate::terminal::snapshot_text(&rows, rows.len(), true, false).text,
+        "hello world\n"
+    );
+}
+
+#[test]
+fn history_snapshot_unwrap_skips_wide_char_spacer_head_at_soft_wrap() {
+    let mut terminal = crate::terminal::vt::Terminal::new(5, 3, 100).unwrap();
+    terminal.write("abcd中".as_bytes());
+    let rows = terminal.screen_text_rows().unwrap();
+    assert!(rows[0].soft_wrapped);
+
+    assert_eq!(
+        crate::terminal::snapshot_text(&rows, rows.len(), true, false).text,
+        "abcd中\n"
+    );
+}
