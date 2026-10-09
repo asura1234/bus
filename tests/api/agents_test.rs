@@ -381,3 +381,102 @@ fn reported_agent_session_clears_after_confirmed_process_exit() {
 
     cleanup_spawned_bus(child, base);
 }
+
+#[test]
+fn agent_wait_reports_not_running_when_agent_tab_is_closed() {
+    assert_agent_wait_reports_not_running_when_container_is_closed(false);
+}
+
+#[test]
+fn agent_wait_reports_not_running_when_agent_workspace_is_closed() {
+    assert_agent_wait_reports_not_running_when_container_is_closed(true);
+}
+
+fn assert_agent_wait_reports_not_running_when_container_is_closed(close_workspace: bool) {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let bin_dir = base.join("bin");
+    write_fake_agent(&bin_dir, "codex", "sleep 30\n");
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
+    let child = spawn_bus_with_path(
+        &config_home,
+        &runtime_dir,
+        &socket_path,
+        Path::new(&path_override),
+    );
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let created = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"close_wait_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            base.display()
+        ),
+    );
+    let workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let tab_created = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"close_wait_tab","method":"tab.create","params":{{"workspace_id":"{}","focus":false}}}}"#,
+            workspace_id
+        ),
+    );
+    let agent_tab_id = tab_created["result"]["tab"]["tab_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let agent_pane_id = tab_created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    start_pane_command(&socket_path, &agent_pane_id, "codex");
+    wait_for_pane_agent(&socket_path, &agent_pane_id, "codex", "idle");
+
+    let mut wait = JsonLineReader::connect(&socket_path);
+    wait.send_line(
+        &serde_json::json!({
+            "id": "close_wait",
+            "method": "agent.wait",
+            "params": { "target": agent_pane_id, "until": ["working"] }
+        })
+        .to_string(),
+    );
+    std::thread::sleep(Duration::from_millis(300));
+
+    let close_request = if close_workspace {
+        serde_json::json!({
+            "id": "close_wait_close", "method": "workspace.close",
+            "params": { "workspace_id": workspace_id }
+        })
+    } else {
+        serde_json::json!({
+            "id": "close_wait_close", "method": "tab.close",
+            "params": { "tab_id": agent_tab_id }
+        })
+    };
+    let closed = send_request(&socket_path, &close_request.to_string());
+    assert_eq!(closed["result"]["type"], "ok", "{closed}");
+
+    let response = wait.try_read_json_line(Duration::from_secs(5));
+    assert!(
+        response.is_some(),
+        "agent.wait kept waiting after its container was closed"
+    );
+    let response = response.unwrap();
+    assert_eq!(response["id"], "close_wait");
+    assert_eq!(response["error"]["code"], "agent_not_running");
+    assert_eq!(
+        response["error"]["message"],
+        "agent is no longer running in the target pane"
+    );
+
+    cleanup_spawned_bus(child, base);
+}

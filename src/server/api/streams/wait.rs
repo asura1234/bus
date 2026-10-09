@@ -373,6 +373,11 @@ fn scan_agent_wait_events(
                     .map(AgentWaitOutcome::Response)
                     .map(AgentWaitEventScan::Outcome);
             }
+            EventData::TabClosed { .. } | EventData::WorkspaceClosed { .. } => {
+                // Container closes remove their panes without pane lifecycle events.
+                // Recheck the target rather than treating an unrelated close as exit.
+                should_probe = true;
+            }
             _ => {}
         }
     }
