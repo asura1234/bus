@@ -132,3 +132,48 @@ fn composer_yank_rotation_replaces_the_yanked_selection_without_corrupting_unico
 
     assert_eq!(ui.locals[&room].text.text, "oldertail");
 }
+
+#[test]
+fn enter_retry_after_failed_queued_send_uses_immediate_delivery() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    key(&mut ui, KeyCode::Char('x'), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Enter, KeyModifiers::ALT);
+    let failed_save = ui.pending.front().expect("draft save").id;
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: failed_save,
+        result: Err("Storage paused; retrying".into()),
+    });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = failed_save;
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+    assert!(ui.send_intent.is_none());
+    assert_eq!(ui.locals[&room].text.text, "x");
+
+    ui.receive_event(BusEvent::StorageRecovered);
+    assert!(ui.failed.is_empty());
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    let saved = ui.pending.front().expect("retried draft save").id;
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id: saved,
+        result: Ok(()),
+    });
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_text(room, "x").unwrap();
+    snapshot.last_command_id = saved;
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+    assert!(
+        ui.pending
+            .iter()
+            .any(|pending| { matches!(pending.command, BusCommand::Submit(id) if id == room) }),
+        "Enter should submit immediately after recovery, got {:?}",
+        ui.pending
+    );
+}

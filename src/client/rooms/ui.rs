@@ -12,7 +12,7 @@ use crate::messaging::{
     model::{AgentId, RoomId, RoomKind, RuntimeStatus},
 };
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
 
@@ -68,6 +68,9 @@ pub(in crate::client) struct BusUi {
     pub(super) observed_notice: Option<String>,
     pub(super) toast_animation_last_tick: Option<std::time::Instant>,
     pub(super) failed: Vec<Pending>,
+    // Storage recovered after these commands were rejected but before they
+    // settled; settling retries them instead of keeping them failed.
+    recovered_storage_failures: BTreeSet<u64>,
     pub(super) terminal: Option<AgentId>,
     pub(super) target_pane: Option<String>,
     pub(super) native_focus_pending: bool,
@@ -157,6 +160,7 @@ impl BusUi {
             next_id: 1,
             send_intent: None,
             send_queued: false,
+            recovered_storage_failures: BTreeSet::new(),
             error: None,
             dismissed_snapshot_error: None,
             toast: None,
@@ -342,23 +346,20 @@ impl BusUi {
         }
         let failed = std::mem::take(&mut self.failed);
         for pending in failed {
-            let storage_error = matches!(
-                pending.result.as_ref(),
-                Some(Err(error)) if error.starts_with("Storage paused;")
-            );
-            if !storage_error {
+            if storage_paused(&pending) {
+                self.retry_storage_failure(pending);
+            } else {
                 self.failed.push(pending);
-                continue;
-            }
-            match pending.effect {
-                Effect::Text(room, _) => self.text_changed(room),
-                Effect::Notes(room, _) => self.notes_changed(room),
-                Effect::Recipients(room, _) => self.recipients_changed(room),
-                effect => {
-                    self.queue(pending.command, effect);
-                }
             }
         }
+        // The worker can report a rejection and recover in the same loop,
+        // before its snapshot lets that rejection settle.
+        let unsettled = self
+            .pending
+            .iter()
+            .filter(|pending| storage_paused(pending))
+            .map(|pending| pending.id);
+        self.recovered_storage_failures.extend(unsettled);
         if let Some(agent) = self
             .terminal
             .filter(|agent| self.snapshot.state.agent(*agent).is_some())
@@ -366,6 +367,17 @@ impl BusUi {
             self.queue(BusCommand::FocusTerminal(agent), Effect::None);
         }
         self.show_toast("Storage recovered");
+    }
+
+    fn retry_storage_failure(&mut self, pending: Pending) {
+        match pending.effect {
+            Effect::Text(room, _) => self.text_changed(room),
+            Effect::Notes(room, _) => self.notes_changed(room),
+            Effect::Recipients(room, _) => self.recipients_changed(room),
+            effect => {
+                self.queue(pending.command, effect);
+            }
+        }
     }
 
     pub fn receive_snapshot(&mut self, snapshot: Arc<BusSnapshot>) {
@@ -413,7 +425,10 @@ impl BusUi {
             match pending.result.as_ref() {
                 Some(Err(error)) => {
                     self.settle_deletion(pending.id, Some(error));
-                    self.error = Some(error.clone());
+                    let recovered = self.recovered_storage_failures.remove(&pending.id);
+                    if !recovered {
+                        self.error = Some(error.clone());
+                    }
                     self.send_intent = None;
                     if matches!(
                         pending.effect,
@@ -423,7 +438,11 @@ impl BusUi {
                             | Effect::Files(..)
                     ) && super::deletion::target_exists(&pending.command, &self.snapshot.state)
                     {
-                        self.failed.push(pending);
+                        if recovered {
+                            self.retry_storage_failure(pending);
+                        } else {
+                            self.failed.push(pending);
+                        }
                     }
                 }
                 Some(Ok(())) => {
@@ -461,6 +480,11 @@ impl BusUi {
                 }
                 None => {}
             }
+        }
+        if !self.recovered_storage_failures.is_empty() {
+            let pending = &self.pending;
+            self.recovered_storage_failures
+                .retain(|id| pending.iter().any(|pending| pending.id == *id));
         }
         if self.pending.is_empty() {
             if let Some(room) = self.send_intent.take() {
@@ -600,6 +624,13 @@ impl BusUi {
             }
         }
     }
+}
+
+fn storage_paused(pending: &Pending) -> bool {
+    matches!(
+        pending.result.as_ref(),
+        Some(Err(error)) if error.starts_with("Storage paused;")
+    )
 }
 
 #[cfg(test)]

@@ -344,3 +344,107 @@ fn word_selection_result_survives_focus_snapshot_lag() {
         .as_ref()
         .is_some_and(crate::utils::text::selection::Selection::is_visible));
 }
+
+#[test]
+fn selection_wheel_accumulates_scroll_steps_before_endpoint_acknowledgement() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.config.mouse_scroll_lines = 3;
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+    let pointer = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x + 1,
+        row: pane.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    };
+    state.handle_raw_events(vec![RawInputEvent::Mouse(pointer)]);
+    let wheel = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        ..pointer
+    };
+    let first = state.handle_raw_events(vec![RawInputEvent::Mouse(wheel)]);
+    let request_id = match &first.actions[..] {
+        [ClientShellAction::Endpoint { request, .. }] => request.id.clone(),
+        _ => panic!("expected initial selection scroll"),
+    };
+    state.handle_raw_events(vec![RawInputEvent::Mouse(wheel)]);
+    let (_, actions) =
+        state.handle_endpoint_result("boot-1", &request_id, Ok(pane_scroll_result(3, 20, 2)));
+    let [ClientShellAction::Endpoint { request, .. }] = &actions[..] else {
+        panic!("expected accumulated queued selection scroll");
+    };
+    assert!(
+        matches!(
+            &request.method,
+            crate::protocol::api::schema::Method::PaneScroll(params)
+                if params.offset_from_bottom == 6
+        ),
+        "two wheel steps should scroll six rows, got {:?}",
+        request.method
+    );
+}
+
+#[test]
+fn selection_wheel_during_edge_autoscroll_continues_from_the_wheel_position() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.config.mouse_scroll_lines = 3;
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    // Leave a row above the pane so the drag can leave its top edge.
+    pane_surface.panes[0].rect.y = 1;
+    pane_surface.panes[0].inner_rect.y = 1;
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    let above = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y.saturating_sub(1),
+        modifiers: KeyModifiers::empty(),
+    };
+    let drag = state.handle_raw_events(vec![RawInputEvent::Mouse(above)]);
+    let request_id = match &drag.actions[..] {
+        [ClientShellAction::Endpoint { request, .. }] => request.id.clone(),
+        _ => panic!("expected edge autoscroll request"),
+    };
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        ..above
+    })]);
+    let now = std::time::Instant::now();
+    state.selection_autoscroll_deadline = Some(now);
+    state.tick_selection_autoscroll(now);
+    let (_, actions) =
+        state.handle_endpoint_result("boot-1", &request_id, Ok(pane_scroll_result(3, 20, 2)));
+    let [ClientShellAction::Endpoint { request, .. }] = &actions[..] else {
+        panic!("expected queued selection scroll");
+    };
+    assert!(
+        matches!(
+            &request.method,
+            crate::protocol::api::schema::Method::PaneScroll(params)
+                if params.offset_from_bottom == 7
+        ),
+        "autoscroll should continue one row past the wheel step, got {:?}",
+        request.method
+    );
+}

@@ -469,6 +469,42 @@ fn notes_room_navigation_and_all_recipients_remain_room_local() {
 }
 
 #[test]
+fn storage_recovery_in_the_failed_command_batch_requeues_the_unsaved_draft() {
+    let (mut ui, room, _) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("retained draft");
+    ui.text_changed(room);
+    let command_id = ui.pending.front().unwrap().id;
+    ui.pending.front_mut().unwrap().enqueued = true;
+
+    // The worker can acknowledge a command while storage is paused, then
+    // recover in the same loop before it publishes the resulting snapshot.
+    ui.receive_event(BusEvent::CommandFinished {
+        command_id,
+        result: Err("Storage paused; retrying".into()),
+    });
+    ui.receive_event(BusEvent::StorageRecovered);
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.last_command_id = command_id;
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.settle();
+
+    assert!(
+        ui.pending.iter().any(|pending| {
+            matches!(&pending.command, BusCommand::SetDraftText(id, text)
+                if *id == room && text == "retained draft")
+        }),
+        "recovery must retry the rejected local edit even before it was settled"
+    );
+    assert!(ui.failed.is_empty());
+    assert!(ui.error.is_none());
+}
+
+#[test]
 fn deleting_a_recalled_prompt_keeps_the_edit_as_the_live_draft() {
     let (mut ui, room, _) = fixture();
     ui.locals.get_mut(&room).unwrap().recall = vec!["previous prompt".into()];

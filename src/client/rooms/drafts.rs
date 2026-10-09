@@ -148,6 +148,9 @@ impl BusUi {
             local.live_draft = None;
         }
         self.send_intent = Some(room);
+        // Each send picks its own delivery; a cancelled Option+Enter must not
+        // turn a later plain Enter into a queued send.
+        self.send_queued = false;
         self.history_follow_tail = true;
     }
 
