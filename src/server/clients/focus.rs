@@ -367,10 +367,25 @@ impl HeadlessServer {
         HashMap<String, ShellFocusTarget>,
     ) {
         let focused_tabs_after = self.focused_shell_tabs();
+        // A surface lease change deactivates or activates a viewer, so compare over clients
+        // active on either side; an inactive viewer has no effective focus target.
+        let mut focus_after = self
+            .shell_focus_targets()
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let activated = focus_after
+            .keys()
+            .filter(|client_id| {
+                !focus_before
+                    .iter()
+                    .any(|(before_id, _)| before_id == *client_id)
+            })
+            .map(|&client_id| (client_id, None))
+            .collect::<Vec<_>>();
         let mut lost = HashMap::<String, ShellFocusTarget>::new();
         let mut gained = HashMap::<String, ShellFocusTarget>::new();
-        for (client_id, before) in focus_before {
-            let after = self.shell_focus_target(client_id);
+        for (client_id, before) in focus_before.into_iter().chain(activated) {
+            let after = focus_after.remove(&client_id).flatten();
             let (lost_target, gained_target) = classify_shell_focus_transition(
                 before.as_ref(),
                 after.as_ref(),

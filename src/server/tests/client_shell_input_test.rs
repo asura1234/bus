@@ -319,3 +319,73 @@ async fn client_shell_mouse_motion_promotes_and_requests_render() {
     );
     shutdown_test_runtimes(&mut server);
 }
+
+#[cfg(unix)]
+#[test]
+fn clipboard_image_staging_rejects_symlink_directory() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    const CHILD_ROOT: &str = "BUS_CLIPBOARD_STAGING_SYMLINK_TEST_ROOT";
+    const TEST_NAME: &str =
+        "server::tests::client_shell_input_tests::clipboard_image_staging_rejects_symlink_directory";
+
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let root = std::path::PathBuf::from(root);
+        let victim = root.join("victim");
+        let before = std::fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+        let unrelated_file = victim.join("unrelated-document.txt");
+
+        let staged = crate::server::clients::clipboard_images::stage(11, "png", b"image");
+
+        let after = std::fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            (after, unrelated_file.exists(), staged.is_err()),
+            (before, true, true),
+            "clipboard staging must reject a preexisting staging-directory symlink without chmod or deletion in its target"
+        );
+        return;
+    }
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bus-clipboard-staging-symlink-test-{}-{unique}",
+        std::process::id()
+    ));
+    let shared_temp = root.join("shared-temp");
+    let victim = root.join("victim");
+    std::fs::create_dir_all(&shared_temp).unwrap();
+    std::fs::create_dir(&victim).unwrap();
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let unrelated_file = std::fs::File::create(victim.join("unrelated-document.txt")).unwrap();
+    unrelated_file
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1)),
+        )
+        .unwrap();
+    let user_id = unsafe { libc::geteuid() };
+    symlink(
+        &victim,
+        shared_temp.join(format!("bus-clipboard-images-{user_id}")),
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg(TEST_NAME)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("TMPDIR", &shared_temp)
+        .env(CHILD_ROOT, &root)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    assert!(
+        output.status.success(),
+        "isolated staging probe failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
