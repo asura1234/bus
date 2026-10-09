@@ -1,0 +1,14 @@
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+writable_roots = [
+  "/Users/dylanliu/.cargo",
+  "/Users/dylanliu/.cache/uv",
+  "/Users/dylanliu/work/bus/target",
+  "/private/tmp",
+]
+
+[shell_environment_policy.set]
+CARGO_TARGET_DIR = "/Users/dylanliu/work/bus/target"
