@@ -11,6 +11,10 @@ fn recover_not_submitted_queued_request_releases_only_that_request() {
         stall_at(&state, failed, 10 + QUEUED_STALL_MS).as_deref(),
         Some("not_submitted")
     );
+    state.agents.get_mut(&agent).unwrap().delivery_rejection = Some("delivery_rejected".into());
+    state
+        .set_agent_error(agent, Some("prior refusal".into()))
+        .unwrap();
     state
         .recover_idle_request(failed, 20)
         .expect("queued not_submitted is recoverable");
@@ -21,6 +25,8 @@ fn recover_not_submitted_queued_request_releases_only_that_request() {
     assert_eq!(state.request(failed).unwrap().completed_at_ms, Some(20));
     assert_eq!(state.queued_requests(agent), &[next]);
     assert_eq!(state.next_queued_request(agent), Some(next));
+    assert_eq!(state.agent(agent).unwrap().delivery_rejection, None);
+    assert_eq!(state.agent(agent).unwrap().actionable_error, None);
     assert!(state.room(room).unwrap().latest_replies.is_empty());
 }
 
@@ -31,8 +37,15 @@ fn recover_queued_request_preserves_another_current_owner() {
     let current = submit_text(&mut state, room, agent, "current request");
     state.begin_submission(current, "launch-codex", 5).unwrap();
     let queued = submit_text(&mut state, room, agent, "queued request");
+    state
+        .set_agent_error(agent, Some("current request error".into()))
+        .unwrap();
     state.recover_idle_request(queued, 20).unwrap();
     assert_eq!(state.agent(agent).unwrap().current_request, Some(current));
+    assert_eq!(
+        state.agent(agent).unwrap().actionable_error.as_deref(),
+        Some("current request error")
+    );
     assert_eq!(
         state.request(current).unwrap().phase,
         RequestPhase::Submitting

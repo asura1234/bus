@@ -34,9 +34,7 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
             status => Ok(Parsed::Failure {
                 session,
                 turn,
-                message: format!(
-                    "Cursor turn {status}; inspect its terminal. Request remains owned."
-                ),
+                message: format!("Cursor turn {status}; inspect its terminal."),
             }),
         },
         _ => Err(format!("Unsupported Bus hook event {event}")),

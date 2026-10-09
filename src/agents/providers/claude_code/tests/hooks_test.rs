@@ -161,14 +161,14 @@ fn claude_adapter_background_stop_holds_non_shell_tasks_and_crons_only() {
 }
 
 #[test]
-fn claude_adapter_stop_failure_retains_turn_ownership_without_requiring_reply_text() {
+fn claude_adapter_stop_failure_reports_turn_identity_without_requiring_reply_text() {
     let value = json!({"hook_event_name":"StopFailure","session_id":"s","prompt_id":"p"});
     assert_eq!(
         parse(&value).unwrap(),
         Parsed::Failure {
             session: "s".into(),
             turn: "p".into(),
-            message: "Provider turn failed; inspect its terminal. Request remains owned.".into(),
+            message: "Provider turn failed; inspect its terminal.".into(),
         }
     );
     assert_eq!(

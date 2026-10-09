@@ -63,7 +63,7 @@ fn codex_interactive_hooks_keep_opaque_binding_and_verbatim_prompt() {
         Parsed::Failure {
             session: "s".into(),
             turn: "t".into(),
-            message: "Provider turn failed; inspect its terminal. Request remains owned.".into()
+            message: "Provider turn failed; inspect its terminal.".into()
         }
     );
     let mut malformed = hook("Stop");

@@ -174,7 +174,7 @@ fn busy_rejection_restores_exact_fifo_and_blocked_does_not_submit() {
 }
 
 #[test]
-fn late_old_identical_codex_final_cannot_bind_and_provider_error_holds_queue() {
+fn late_old_identical_codex_final_cannot_bind_and_matched_provider_error_releases_queue() {
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::Codex,
         vec![Err(TransportError {
@@ -220,9 +220,10 @@ fn late_old_identical_codex_final_cannot_bind_and_provider_error_holds_queue() {
     worker
         .consume_callbacks(agent, &dir.join("callbacks/launch"))
         .unwrap();
+    assert_eq!(worker.state.agent(agent).unwrap().current_request, None);
     assert_eq!(
-        worker.state.agent(agent).unwrap().current_request,
-        Some(request)
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Abandoned
     );
     assert_eq!(worker.state.queued_requests(agent), &[next]);
     assert!(worker

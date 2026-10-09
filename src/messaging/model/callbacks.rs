@@ -164,6 +164,7 @@ impl BusState {
         let continuation = matches!(callback.kind, CallbackEventKind::PromptStarted)
             && request.trusted_start_bound
             && request.pending_final.is_none()
+            && request.turn_ended_at_ms.is_none()
             && request.provider_session_id.is_some()
             && callback.provider_session_id == request.provider_session_id
             && request.provider_turn_id.is_some()
@@ -237,6 +238,8 @@ impl BusState {
                 request.phase = RequestPhase::Active;
                 request.uncertain_outcome = false;
                 request.pending_final = None;
+                request.turn_ended_at_ms = None;
+                request.awaiting_background = false;
                 if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
                     agent.actionable_error = None;
                 }
@@ -257,6 +260,8 @@ impl BusState {
                     return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
                 };
                 request.pending_final = None;
+                request.turn_ended_at_ms = None;
+                request.awaiting_background = true;
                 CallbackDisposition::AcceptedProgress
             }
             CallbackEventKind::Final { text } => {
@@ -285,6 +290,7 @@ impl BusState {
                     provider_session_id: callback.provider_session_id,
                     provider_turn_id: callback.provider_turn_id,
                 });
+                request.awaiting_background = false;
                 if settled_after_submission {
                     match self.complete_pending_final(callback.agent_id, callback.occurred_at_ms) {
                         Ok(true) => CallbackDisposition::AcceptedCompleted,
@@ -295,13 +301,38 @@ impl BusState {
                     CallbackDisposition::AcceptedPendingSettlement
                 }
             }
-            CallbackEventKind::Error { message } => {
-                if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
-                    agent.actionable_error = Some(message);
-                }
-                CallbackDisposition::AcceptedError
+            CallbackEventKind::Error { .. } => {
+                self.apply_error_callback(request_id, callback, turn_key)
             }
         }
+    }
+
+    fn apply_error_callback(
+        &mut self,
+        request_id: RequestId,
+        callback: ProviderCallback,
+        turn_key: Option<String>,
+    ) -> CallbackDisposition {
+        let CallbackEventKind::Error { message } = callback.kind else {
+            return CallbackDisposition::Rejected(CallbackRejection::WrongTurn);
+        };
+        if self
+            .requests
+            .get(&request_id)
+            .is_some_and(|r| r.trusted_start_bound)
+        {
+            if self
+                .abandon_current_request(request_id, callback.occurred_at_ms)
+                .is_err()
+            {
+                return CallbackDisposition::Rejected(CallbackRejection::NoActiveRequest);
+            }
+            self.consumed_provider_turns.extend(turn_key);
+        }
+        if let Some(agent) = self.agents.get_mut(&callback.agent_id) {
+            agent.actionable_error = Some(message);
+        }
+        CallbackDisposition::AcceptedError
     }
 
     fn apply_callback_steering(
@@ -333,6 +364,8 @@ impl BusState {
                     member.provider_turn_id = callback.provider_turn_id.clone();
                 }
                 if let Some(lead) = self.requests.get_mut(&request_id) {
+                    lead.turn_ended_at_ms = None;
+                    lead.awaiting_background = false;
                     if callback.provider_turn_id.is_some()
                         && callback.provider_turn_id != lead.provider_turn_id
                     {

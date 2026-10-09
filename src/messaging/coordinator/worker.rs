@@ -240,6 +240,7 @@ impl Worker {
                     })?;
             }
         }
+        self.settle_requests()?;
         self.submit_ready_while(can_deliver).inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",
@@ -247,5 +248,18 @@ impl Worker {
                 "Submission could not finish"
             );
         })
+    }
+
+    pub(super) fn settle_requests(&mut self) -> Result<(), String> {
+        let mut state = self.state.clone();
+        let agents: Vec<_> = state.agents().map(|a| (a.id, a.observed_at_ms)).collect();
+        let mut changed = false;
+        for (agent, observed_at_ms) in agents {
+            changed |= state.settle_ended_request(agent, observed_at_ms).is_some();
+        }
+        if changed {
+            self.save(state)?;
+        }
+        Ok(())
     }
 }

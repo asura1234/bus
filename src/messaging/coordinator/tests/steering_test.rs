@@ -9,6 +9,9 @@ use std::sync::{
     Arc, Mutex,
 };
 
+#[path = "turn_settlement_test.rs"]
+mod turn_settlement_tests;
+
 static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Records every native method; prompt writes succeed.
@@ -162,6 +165,7 @@ impl Fixture {
     fn consume(&mut self) {
         let spool = self.dir.join("callbacks/launch");
         self.worker.consume_callbacks(self.agent, &spool).unwrap();
+        self.worker.settle_requests().unwrap();
     }
 
     fn request(&self, id: RequestId) -> &Request {
@@ -438,12 +442,20 @@ fn old_saved_requests_load_without_group_fields() {
     let request = fixture.send("old", false);
     let mut value = serde_json::to_value(&fixture.worker.state).unwrap();
     let saved = &mut value["requests"][request.0.to_string()];
-    for field in ["queue_only", "group", "steered", "submitted_payload"] {
+    for field in [
+        "queue_only",
+        "group",
+        "steered",
+        "submitted_payload",
+        "turn_ended_at_ms",
+        "awaiting_background",
+    ] {
         saved.as_object_mut().unwrap().remove(field);
     }
     let loaded: BusState = serde_json::from_value(value).unwrap();
     let request = loaded.request(request).unwrap();
     assert!(!request.queue_only && !request.steered);
+    assert!(request.turn_ended_at_ms.is_none() && !request.awaiting_background);
     assert_eq!(
         (request.group, request.submitted_payload.as_deref()),
         (None, None)

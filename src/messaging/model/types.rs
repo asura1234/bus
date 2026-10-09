@@ -392,6 +392,12 @@ pub(crate) struct Request {
     /// Stall detection counts idle time from here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) progress_at_ms: Option<u64>,
+    /// First settled observation after this turn, while reply capture catches up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) turn_ended_at_ms: Option<u64>,
+    /// A provider explicitly paused this turn for background work that will resume it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) awaiting_background: bool,
 }
 
 impl Request {
@@ -426,6 +432,9 @@ pub(crate) const STEERING_SETTLE_MS: u64 = 5_000;
 /// gives up on a request it typed but never saw start. A queued prompt starts
 /// within milliseconds of the turn before it ending.
 pub(crate) const UNBOUND_SETTLE_MS: u64 = 5_000;
+
+/// Allow completion hooks and transcript writes to arrive after the idle poll.
+pub(crate) const TURN_SETTLE_MS: u64 = 5_000;
 
 /// Local wall-clock `HH:MM` of a millisecond timestamp, for coalesced prompts.
 pub(super) fn clock(at_ms: u64) -> String {

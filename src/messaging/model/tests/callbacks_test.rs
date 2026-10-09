@@ -622,7 +622,7 @@ fn error_callback_is_visible_and_never_becomes_a_reply() {
     );
     assert_eq!(
         state.request(request).expect("request").phase,
-        RequestPhase::Active
+        RequestPhase::Abandoned
     );
 }
 

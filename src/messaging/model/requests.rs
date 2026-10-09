@@ -131,6 +131,8 @@ impl BusState {
                     submitted_payload: None,
                     foreign_turn_settled_at_ms: None,
                     progress_at_ms: None,
+                    turn_ended_at_ms: None,
+                    awaiting_background: false,
                 },
             );
             self.queues.entry(agent_id).or_default().push(request_id);
@@ -388,9 +390,10 @@ impl BusState {
             return false;
         }
         self.agents.get(&request.agent_id).is_some_and(|agent| {
-            agent.busy_revision > request.submission_status_revision
-                && agent.status == RuntimeStatus::Idle
-                && agent.status_revision > agent.busy_revision
+            request.turn_ended_at_ms.is_some()
+                || (agent.busy_revision > request.submission_status_revision
+                    && agent.status == RuntimeStatus::Idle
+                    && agent.status_revision > agent.busy_revision)
         })
     }
 
@@ -449,6 +452,7 @@ impl BusState {
         if lead.phase != RequestPhase::Active
             || !lead.trusted_start_bound
             || lead.pending_final.is_some()
+            || lead.turn_ended_at_ms.is_some()
         {
             return None;
         }
@@ -623,13 +627,46 @@ impl BusState {
             .requests
             .get(&request)
             .ok_or(ModelError::UnknownRequest(request))?;
+        let agent_id = request_state.agent_id;
+        if request_state.phase == RequestPhase::Queued {
+            let agent = self
+                .agents
+                .get(&agent_id)
+                .ok_or(ModelError::UnknownAgent(agent_id))?;
+            if agent.status != RuntimeStatus::Idle {
+                return Err(ModelError::AgentNotIdle);
+            }
+            let clear_error = agent.current_request.is_none();
+            let queue = self
+                .queues
+                .get_mut(&agent_id)
+                .ok_or(ModelError::InvalidTransition)?;
+            let position = queue
+                .iter()
+                .position(|id| *id == request)
+                .ok_or(ModelError::InvalidTransition)?;
+            queue.remove(position);
+            let request_state = self
+                .requests
+                .get_mut(&request)
+                .ok_or(ModelError::UnknownRequest(request))?;
+            request_state.phase = RequestPhase::Abandoned;
+            request_state.pending_final = None;
+            request_state.completed_at_ms = Some(recovered_at_ms);
+            if position == 0 && clear_error {
+                if let Some(agent) = self.agents.get_mut(&agent_id) {
+                    agent.delivery_rejection = None;
+                    agent.actionable_error = None;
+                }
+            }
+            return Ok(());
+        }
         if !matches!(
             request_state.phase,
             RequestPhase::Submitting | RequestPhase::Active
         ) {
             return Err(ModelError::InvalidTransition);
         }
-        let agent_id = request_state.agent_id;
         let agent = self
             .agents
             .get(&agent_id)

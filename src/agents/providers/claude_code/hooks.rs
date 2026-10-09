@@ -78,7 +78,7 @@ pub(crate) fn parse(value: &Value) -> Result<Parsed, String> {
         "StopFailure" => Ok(Parsed::Failure {
             session,
             turn,
-            message: "Provider turn failed; inspect its terminal. Request remains owned.".into(),
+            message: "Provider turn failed; inspect its terminal.".into(),
         }),
         _ => Err(format!("Unsupported Bus hook event {event}")),
     }

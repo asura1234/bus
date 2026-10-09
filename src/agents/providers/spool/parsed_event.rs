@@ -34,7 +34,7 @@ pub(crate) enum Parsed {
     /// Successful completion without a settled reply in this callback.
     /// This must not settle a request without the coordinator's reply resolution.
     Completed { session: String, turn: String },
-    /// Provider failure; the coordinator retains existing request ownership.
+    /// Provider failure; the coordinator closes a matching bound request.
     Failure {
         session: String,
         turn: String,

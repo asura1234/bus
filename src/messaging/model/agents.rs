@@ -231,10 +231,19 @@ impl BusState {
         agent: AgentId,
         dialog: bool,
     ) -> Result<(), ModelError> {
-        self.agents
+        let agent_state = self
+            .agents
             .get_mut(&agent)
-            .ok_or(ModelError::UnknownAgent(agent))?
-            .dialog = dialog;
+            .ok_or(ModelError::UnknownAgent(agent))?;
+        agent_state.dialog = dialog;
+        if dialog {
+            if let Some(request) = agent_state
+                .current_request
+                .and_then(|id| self.requests.get_mut(&id))
+            {
+                request.turn_ended_at_ms = None;
+            }
+        }
         Ok(())
     }
 
@@ -291,6 +300,7 @@ impl BusState {
         agent_state.observed_at_ms = now_ms;
         if status == RuntimeStatus::Idle {
             self.complete_pending_final(agent, now_ms)?;
+            self.note_turn_end(agent, now_ms);
             let settled_idle = self.unbound_request(agent).is_some_and(|request| {
                 request
                     .foreign_turn_settled_at_ms
