@@ -704,3 +704,136 @@ fn no_handle_internal_event_bypass_in_module() {
         bypass_lines.join("\n  ")
     );
 }
+
+#[test]
+fn scheduled_tasks_settle_due_managed_agent_deadline_so_idle_loop_does_not_spin() {
+    let mut server = test_headless_server();
+    let workspace = crate::server::workspaces::Workspace::test_new("active");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.tabs[0].panes[&pane_id]
+        .attached_terminal_id
+        .clone();
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+
+    let started = Instant::now();
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .expect("test terminal")
+        .begin_managed_agent(
+            "worker".into(),
+            crate::agents::AgentKind::Codex,
+            started,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        );
+
+    // The managed agent stays silent: no terminal event arrives after the settle delay.
+    let before_settle = started + Duration::from_secs(2);
+    assert!(!server.handle_scheduled_tasks_headless(before_settle, false));
+    assert!(!server.app.state.session_dirty);
+    assert!(server.app.event_hub.events_after(0).is_empty());
+
+    let after_settle = started + Duration::from_secs(3) + Duration::from_millis(1);
+    assert!(server.handle_scheduled_tasks_headless(after_settle, false));
+    let next = server.app.next_headless_loop_deadline(after_settle, false);
+    assert!(
+        next.is_none_or(|deadline| deadline > after_settle),
+        "a due managed-agent deadline must be consumed by the scheduler, \
+         otherwise the loop sleeps until a past instant and spins: next={next:?} now={after_settle:?}"
+    );
+    assert!(server.app.state.session_dirty);
+    assert_eq!(server.app.event_hub.events_after(0).len(), 1);
+
+    let after_timeout = started + Duration::from_secs(30) + Duration::from_millis(1);
+    assert!(server.handle_scheduled_tasks_headless(after_timeout, false));
+    assert_eq!(
+        server.app.state.terminals[&terminal_id].next_managed_agent_deadline(),
+        None,
+        "a silent managed launch past its timeout should be released by the scheduler"
+    );
+    assert!(server.app.state.terminals[&terminal_id]
+        .agent_name
+        .is_none());
+    let events = server.app.event_hub.events_after(0);
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|(_, event)| matches!(
+        event.event,
+        crate::protocol::api::schema::EventKind::PaneUpdated
+    )));
+    assert!(!server.handle_scheduled_tasks_headless(after_timeout, false));
+    assert_eq!(server.app.event_hub.events_after(0).len(), 2);
+}
+
+#[test]
+fn scheduled_tasks_make_a_silent_idle_managed_agent_ready_after_settle() {
+    let mut server = test_headless_server();
+    let workspace = crate::server::workspaces::Workspace::test_new("agent");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.tabs[0].panes[&pane_id]
+        .attached_terminal_id
+        .clone();
+    let unrelated = crate::server::workspaces::Workspace::test_new("unrelated");
+    let unrelated_pane = unrelated.tabs[0].root_pane;
+    let unrelated_terminal_id = unrelated.tabs[0].panes[&unrelated_pane]
+        .attached_terminal_id
+        .clone();
+    server.app.state.workspaces = vec![workspace, unrelated];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    let started = Instant::now();
+    let terminal = server.app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.begin_managed_agent(
+        "worker".into(),
+        crate::agents::AgentKind::Codex,
+        started,
+        Duration::from_secs(3),
+        Duration::from_secs(30),
+    );
+    terminal.set_detected_state(
+        Some(crate::agents::AgentKind::Codex),
+        crate::agents::AgentState::Idle,
+    );
+    let later_terminal = server
+        .app
+        .state
+        .terminals
+        .get_mut(&unrelated_terminal_id)
+        .unwrap();
+    later_terminal.begin_managed_agent(
+        "later".into(),
+        crate::agents::AgentKind::Codex,
+        started,
+        Duration::from_secs(20),
+        Duration::from_secs(30),
+    );
+    later_terminal.set_detected_state(
+        Some(crate::agents::AgentKind::Codex),
+        crate::agents::AgentState::Idle,
+    );
+
+    let after_settle = started + Duration::from_secs(3);
+    assert!(server.handle_scheduled_tasks_headless(after_settle, false));
+    let terminal = &server.app.state.terminals[&terminal_id];
+    assert!(terminal.managed_agent_interactive_ready());
+    assert_eq!(terminal.agent_name.as_deref(), Some("worker"));
+    assert_eq!(terminal.next_managed_agent_deadline(), None);
+    let later_terminal = &server.app.state.terminals[&unrelated_terminal_id];
+    assert!(later_terminal.managed_agent_launch_pending());
+    assert_eq!(
+        later_terminal.next_managed_agent_deadline(),
+        Some(started + Duration::from_secs(20))
+    );
+    assert!(server.app.state.session_dirty);
+    let events = server.app.event_hub.events_after(0);
+    assert_eq!(events.len(), 1, "only the affected pane should be updated");
+    let crate::protocol::api::schema::EventData::PaneUpdated { pane } = &events[0].1.data else {
+        panic!("expected readiness to publish a pane update");
+    };
+    assert_eq!(pane.pane_id, server.app.public_pane_id(0, pane_id).unwrap());
+    assert!(!server.handle_scheduled_tasks_headless(after_settle, false));
+}

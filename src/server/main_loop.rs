@@ -609,6 +609,15 @@ impl HeadlessServer {
         if self
             .app
             .state
+            .next_managed_agent_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            changed |= self.app.reconcile_managed_agents_at(now);
+        }
+
+        if self
+            .app
+            .state
             .next_pending_agent_notification_deadline()
             .is_some_and(|deadline| now >= deadline)
         {
