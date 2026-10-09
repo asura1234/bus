@@ -729,3 +729,21 @@ fn background_progress_and_same_session_continuation_wait_for_the_later_final() 
         "Ready"
     );
 }
+
+#[test]
+fn an_idle_codex_approval_dialog_keeps_the_recipient_turn_unfinished() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, agent, "run the requested command");
+    start_request(&mut state, request, "launch-codex", 10);
+    state.observe_status(agent, RuntimeStatus::Working, 12).unwrap();
+    state.observe_dialog(agent, true).unwrap();
+    // Codex reports Idle while its approval dialog remains open.
+    state.observe_status(agent, RuntimeStatus::Idle, 13).unwrap();
+
+    assert_eq!(state.agent(agent).unwrap().shown_status(), RuntimeStatus::Blocked);
+    assert_eq!(state.request(request).unwrap().phase, RequestPhase::Active);
+    assert!(
+        !state.turn_ended(state.request(request).unwrap()),
+        "a recipient waiting for approval must keep send --async waiting"
+    );
+}
