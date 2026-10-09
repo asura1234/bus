@@ -1,5 +1,141 @@
 use super::*;
 
+struct FreshLaunchNative {
+    commands: mpsc::Sender<(u64, BusCommand)>,
+    submitted: mpsc::Sender<schema::AgentPromptIfUnboundParams>,
+    state_path: PathBuf,
+    info: schema::AgentInfo,
+    polls: usize,
+}
+
+impl Transport for FreshLaunchNative {
+    fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+        match method {
+            Method::TabCreate(_) => Ok(ResponseResult::TabCreated {
+                tab: serde_json::from_value(json!({
+                    "tab_id":"t1", "workspace_id":"w1", "number":1,
+                    "label":"fresh", "focused":false, "pane_count":1,
+                    "agent_status":"unknown"
+                }))
+                .unwrap(),
+                root_pane: serde_json::from_value(json!({
+                    "pane_id":"fresh-pane", "terminal_id":"terminal",
+                    "workspace_id":"w1", "tab_id":"t1", "focused":false,
+                    "agent_status":"unknown", "revision":1
+                }))
+                .unwrap(),
+            }),
+            Method::AgentStart(params) => {
+                self.info.name = Some(params.name);
+                Ok(ResponseResult::AgentStarted {
+                    agent: self.info.clone(),
+                    argv: params.args,
+                })
+            }
+            Method::AgentList(_) => {
+                self.polls += 1;
+                self.info.launch_pending = self.polls == 1;
+                self.info.interactive_ready = self.polls > 1;
+                let state = JsonStore::new(self.state_path.clone())
+                    .load()
+                    .unwrap()
+                    .unwrap();
+                let request = state.requests().next().unwrap();
+                let (reply, _) = mpsc::sync_channel(1);
+                self.commands
+                    .send((
+                        1,
+                        BusCommand::Dev(crate::messaging::control::server::DevCall {
+                            request: crate::messaging::control::Request {
+                                id: format!("fresh-status-{}", self.polls),
+                                method: "message.status".into(),
+                                params: json!({"message":request.prompt.id.0.to_string()}),
+                            },
+                            reply,
+                        }),
+                    ))
+                    .unwrap();
+                Ok(ResponseResult::AgentList {
+                    agents: vec![self.info.clone()],
+                })
+            }
+            Method::AgentPromptIfUnbound(params) => {
+                assert!(self.polls > 1, "must wait for native launch readiness");
+                let state = JsonStore::new(self.state_path.clone())
+                    .load()
+                    .unwrap()
+                    .unwrap();
+                let fresh = state.agents().find(|agent| agent.name == "fresh").unwrap();
+                assert!(fresh.hook_setup_confirmed);
+                assert_eq!(fresh.runtime_identity.session_id, None);
+                self.submitted.send(params).unwrap();
+                Ok(ResponseResult::AgentPrompted {
+                    agent: self.info.clone(),
+                })
+            }
+            other => panic!("unexpected fresh launch operation: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn freshly_added_codex_gets_its_first_prompt_without_a_session_or_prior_hooks() {
+    let (mut worker, _, room, dir, _) = fixture(Provider::Codex, vec![]);
+    worker.dev_enabled = true;
+    let (commands, receiver) = mpsc::channel();
+    let (submitted, observed) = mpsc::channel();
+    let mut info = native_info("fresh-pane", "codex", "unused");
+    info.agent_session = None;
+    worker.transport = Box::new(FreshLaunchNative {
+        commands: commands.clone(),
+        submitted,
+        state_path: dir.join("state.json"),
+        info,
+        polls: 0,
+    });
+    let (events, _) = mpsc::channel();
+    worker
+        .command(
+            BusCommand::AddAgent(AddAgent {
+                room,
+                name: "fresh".into(),
+                provider: Provider::Codex,
+                cwd: dir.to_string_lossy().into_owned(),
+                extra_args: String::new(),
+                consent_project_hooks: true,
+            }),
+            &events,
+        )
+        .unwrap();
+    let fresh = worker
+        .state
+        .agents()
+        .find(|agent| agent.name == "fresh")
+        .unwrap()
+        .clone();
+    assert_eq!(fresh.status, RuntimeStatus::Launching);
+    assert!(!fresh.hook_setup_confirmed);
+    assert_eq!(fresh.runtime_identity.session_id, None);
+    let spool = dir
+        .join("callbacks")
+        .join(fresh.runtime_identity.launch_id.as_ref().unwrap());
+    assert_eq!(callbacks::boundary(&spool).unwrap(), 0);
+    queue(&mut worker, room, fresh.id, "first fresh prompt");
+    let snapshot = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+    let thread = std::thread::spawn(move || worker.run(receiver, events, snapshot));
+    let result = observed.recv_timeout(Duration::from_secs(3));
+    commands.send((2, BusCommand::Shutdown)).unwrap();
+    thread.join().unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    let params = result.expect("fresh ready agent must not be starved by async status polls");
+    assert_eq!(params.text, "first fresh prompt");
+    assert_eq!(params.target, "fresh-pane");
+    assert_eq!(
+        params.expected_managed_name,
+        format!("bus-r{}-a{}", room.0, fresh.id.0)
+    );
+}
+
 struct PollingNative {
     commands: mpsc::Sender<(u64, BusCommand)>,
     submitted: mpsc::Sender<()>,
