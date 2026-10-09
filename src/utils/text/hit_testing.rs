@@ -116,6 +116,11 @@ pub(crate) fn visible_text_cells(
         }
 
         let width = width(ch);
+        // The terminal moves a wide character to the next row instead of splitting it at the edge.
+        if width > 1 && width <= pane_width && screen_col.saturating_add(width) > pane_width {
+            screen_row = screen_row.saturating_add(1);
+            screen_col = 0;
+        }
         cells.push(VisibleTextCell {
             byte_index,
             ch,
