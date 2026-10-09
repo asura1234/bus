@@ -249,6 +249,24 @@ fn cursor_state_returns_terminal_default_after_decscusr_reset() {
 }
 
 #[test]
+fn cursor_shape_tracker_ignores_oversized_decscusr_parameter() {
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+
+    pane.process_pty_bytes(
+        PaneId::from_raw(1),
+        0,
+        b"\x1b[65537 qstill alive",
+        &tx,
+        |_| None,
+    );
+
+    assert!(pane.visible_text().contains("still alive"));
+    assert_eq!(pane.cursor_state().unwrap().shape, 0);
+}
+
+#[test]
 fn cursor_shape_tracker_handles_split_decscusr_sequences() {
     let (tx, _rx) = mpsc::channel(4);
     let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
