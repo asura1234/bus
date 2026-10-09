@@ -318,6 +318,11 @@ pub(crate) struct RoomAgent {
     pub(crate) orchestrates: Option<RoomId>,
     #[serde(default)]
     pub(crate) compactions: Compactions,
+    /// The launch and spool sequence of the last compaction hook counted. State
+    /// is saved before the envelope is unlinked, so a crash between the two
+    /// replays it; identical hooks reuse one callback id, so the sequence is the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_compaction_callback: Option<(String, u64)>,
     /// `agent clear` reset the provider context: the next callback that names a
     /// different provider session rebinds this agent to it instead of being rejected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

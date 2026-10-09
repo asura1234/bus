@@ -68,6 +68,72 @@ fn cleanup(worker: Worker, dir: PathBuf) {
 }
 
 #[test]
+fn persisted_compaction_callback_is_not_counted_again_after_spool_replay() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let spool = dir.join("callbacks/launch");
+    record(
+        &dir,
+        Provider::ClaudeCode,
+        json!({"hook_event_name":"SessionStart", "session_id":"session", "source":"compact"}),
+    );
+    let records = callbacks::records(&spool).unwrap();
+    assert_eq!(records.len(), 1);
+    let path = records[0].0.clone();
+    let original_record = std::fs::read(&path).unwrap();
+    worker.consume_callbacks(agent, &spool).unwrap();
+    assert_eq!(worker.state.agent(agent).unwrap().compactions.count, 1);
+    drop(worker);
+
+    // A crash after saving state but before unlinking leaves this exact envelope.
+    std::fs::write(&path, original_record).unwrap();
+    let mut recovered = reopen_saved(&dir);
+    recovered.consume_callbacks(agent, &spool).unwrap();
+    let count = recovered.state.agent(agent).unwrap().compactions.count;
+    cleanup(recovered, dir);
+    assert_eq!(count, 1, "a persisted compaction must not be counted twice");
+}
+
+#[test]
+fn state_saved_before_the_compaction_marker_loads_and_still_counts() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::ClaudeCode, vec![]);
+    let spool = dir.join("callbacks/launch");
+    let compact =
+        json!({"hook_event_name":"SessionStart", "session_id":"session", "source":"compact"});
+    record(&dir, Provider::ClaudeCode, compact.clone());
+    worker.consume_callbacks(agent, &spool).unwrap();
+    drop(worker);
+
+    // Rewrite the saved state into the shape older builds wrote.
+    let path = dir.join("state.json");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("\"last_compaction_callback\""));
+    let mut document: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("last_compaction_callback");
+                map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    strip(&mut document);
+    std::fs::write(&path, document.to_string()).unwrap();
+
+    let mut recovered = reopen_saved(&dir);
+    let loaded = recovered.state.agent(agent).unwrap();
+    assert_eq!(loaded.compactions.count, 1);
+    assert_eq!(loaded.last_compaction_callback, None);
+    // An agent without the marker counts its next compaction as before.
+    record(&dir, Provider::ClaudeCode, compact);
+    recovered.consume_callbacks(agent, &spool).unwrap();
+    let count = recovered.state.agent(agent).unwrap().compactions.count;
+    cleanup(recovered, dir);
+    assert_eq!(count, 2);
+}
+
+#[test]
 fn a_compaction_hook_posts_the_notice_in_the_same_worker_tick() {
     let (mut worker, agent, room, dir, _) = fixture(
         Provider::ClaudeCode,

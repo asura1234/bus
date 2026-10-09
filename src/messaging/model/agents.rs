@@ -61,6 +61,7 @@ impl BusState {
                 deletion_pending: false,
                 orchestrates: None,
                 compactions: Compactions::default(),
+                last_compaction_callback: None,
                 session_reset_pending: false,
                 status_since_ms: 0,
                 observed_at_ms: 0,
@@ -80,6 +81,27 @@ impl BusState {
         compactions.count = compactions.count.saturating_add(1);
         compactions.last_at_ms = Some(at_ms);
         Ok(())
+    }
+
+    /// Counts the compaction hook spooled at `sequence` of `launch` once,
+    /// even when its envelope is replayed after the count was saved.
+    pub(crate) fn record_compaction_callback(
+        &mut self,
+        id: AgentId,
+        launch: &str,
+        sequence: u64,
+        at_ms: u64,
+    ) -> Result<(), ModelError> {
+        let agent = self
+            .agents
+            .get_mut(&id)
+            .ok_or(ModelError::UnknownAgent(id))?;
+        let key = (launch.to_owned(), sequence);
+        if agent.last_compaction_callback.as_ref() == Some(&key) {
+            return Ok(());
+        }
+        agent.last_compaction_callback = Some(key);
+        self.record_compaction(id, at_ms)
     }
 
     pub(crate) fn rename_agent(&mut self, id: AgentId, name: &str) -> Result<(), ModelError> {

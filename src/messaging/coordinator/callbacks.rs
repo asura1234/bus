@@ -301,7 +301,12 @@ impl Worker {
         // Identical hooks share one spool file, so a hook retry counts once.
         if source.as_deref() == Some("compact") {
             state
-                .record_compaction(id, record.at_ms)
+                .record_compaction_callback(
+                    id,
+                    &record.manifest.launch_id,
+                    record.sequence,
+                    record.at_ms,
+                )
                 .map_err(|e| e.to_string())?;
         }
         if agent.current_request.is_none() {
