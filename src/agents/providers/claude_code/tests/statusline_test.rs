@@ -183,3 +183,57 @@ fn capture_is_launch_bound_bounded_and_missing_data_replaces_old_windows() {
         b"Claude | Bus\n"
     );
 }
+
+#[test]
+fn resume_rebinds_statusline_to_the_current_executable_without_losing_user_hud() {
+    use crate::agents::providers::hook_json::{self, HookContext, HookContract};
+
+    let fixture = Fixture::new();
+    let old_binary = fixture.0.join("old bus");
+    let current_binary = fixture.0.join("current bus");
+    let path = fixture.0.join("claude-settings.json");
+    let contract = HookContract::for_provider(ProviderKind::ClaudeCode);
+    hook_json::install_hooks(&path, contract, &old_binary).unwrap();
+    let original = json!({"type":"command","command":"printf user-hud","padding":2});
+    install_with_settings(&fixture.0, &old_binary, original.clone()).unwrap();
+
+    let hooks = HookContext {
+        binary: current_binary.clone(),
+        spool: fixture.0.clone(),
+        launch_id: "launch".into(),
+    };
+    let (_, _, rebound) =
+        crate::agents::providers::claude_code::resume::capture_args(&hooks, &fixture.0).unwrap();
+    assert!(rebound);
+    let settings = read_json(&path).unwrap();
+    assert_eq!(
+        settings["hooks"]["Stop"][0]["hooks"][0]["command"],
+        contract.command(&current_binary)
+    );
+    assert_eq!(read_json(&fixture.0.join(ORIGINAL)).unwrap(), original);
+    assert_eq!(settings["statusLine"]["padding"], 2);
+    assert_eq!(
+        settings["statusLine"]["command"],
+        callback_command(&current_binary),
+        "resume must move the status-line callback along with the observation hooks"
+    );
+}
+
+#[test]
+fn resume_leaves_absent_or_user_status_lines_untouched() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("claude-settings.json");
+    let binary = fixture.0.join("current bus");
+    let before = std::fs::read(&path).unwrap();
+    assert!(!rebind(&fixture.0, &binary).unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+
+    std::fs::write(
+        &path,
+        br#"{"statusLine":{"type":"command","command":"printf user-hud"}}"#,
+    )
+    .unwrap();
+    let before = std::fs::read(&path).unwrap();
+    assert!(!rebind(&fixture.0, &binary).unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}

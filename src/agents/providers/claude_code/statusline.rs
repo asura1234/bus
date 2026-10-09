@@ -98,6 +98,31 @@ fn install_with_settings(spool: &Path, binary: &Path, original: Value) -> io::Re
     atomic_write(&path, &serde_json::to_vec_pretty(&settings)?)
 }
 
+/// Resume moves only an existing Bus-owned tap to this executable. The saved
+/// original HUD is left alone so the tap is never captured as the user's HUD.
+pub(crate) fn rebind(spool: &Path, binary: &Path) -> io::Result<bool> {
+    let path = spool.join("claude-settings.json");
+    let mut settings = read_json(&path)?;
+    let command = callback_command(binary);
+    let Some(status) = settings
+        .get_mut("statusLine")
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(false);
+    };
+    let owned = status.get("type").and_then(Value::as_str) == Some("command")
+        && status
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|c| c != command && c.ends_with(" --bus-callback claude-statusline"));
+    if !owned {
+        return Ok(false);
+    }
+    status.insert("command".into(), json!(command));
+    atomic_write(&path, &serde_json::to_vec_pretty(&settings)?)?;
+    Ok(true)
+}
+
 fn callback_command(binary: &Path) -> String {
     let program = binary.to_string_lossy();
     #[cfg(windows)]

@@ -6,6 +6,7 @@ use super::super::{
     hook_json::{resume_hooks, HookContext, HookContract},
     ProviderKind,
 };
+use super::statusline;
 
 pub(crate) fn capture_args(
     hooks: &HookContext,
@@ -17,6 +18,8 @@ pub(crate) fn capture_args(
         HookContract::for_provider(ProviderKind::ClaudeCode),
         &hooks.binary,
     )?;
+    let rebound =
+        statusline::rebind(&hooks.spool, &hooks.binary).map_err(|e| e.to_string())? || rebound;
     let args = vec!["--settings".into(), path.to_string_lossy().into_owned()];
     Ok((path, args, rebound))
 }
