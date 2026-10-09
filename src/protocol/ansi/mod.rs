@@ -31,8 +31,8 @@ mod diff;
 mod style;
 
 use crate::protocol::wire::{CursorState, FrameData, PaneSurfacePatchRow};
-use cursor::clamp_cursor_position;
 pub(crate) use cursor::frame_with_drawn_cursor;
+use cursor::{clamp_cursor_position, drawn_cursor_column};
 #[cfg(test)]
 pub(crate) use diff::blit_frame_to;
 #[cfg(test)]
@@ -41,7 +41,7 @@ use diff::{
 };
 use diff::{
     blit_frame_to_with_cursor_memory_and_clear_policy, blit_patch_to, compute_prof_blit_stats,
-    frame_cell_index, patch_cell_mut, patch_row_fits, patch_rows_overlap,
+    frame_cell_index, patch_cell, patch_cell_mut, patch_row_fits, patch_rows_overlap,
     repeat_ime_anchor_after_sync,
 };
 #[cfg(test)]
@@ -201,14 +201,28 @@ impl BlitEncoder {
     ) -> Option<Vec<PaneSurfacePatchRow>> {
         let frame = self.last_frame.as_ref()?;
         let mut rows = rows.to_vec();
+        // The previous cursor was drawn on the presented frame; the next one
+        // is drawn on that frame with these rows applied.
         let previous = frame
             .cursor
             .as_ref()
             .filter(|cursor| cursor.visible)
-            .map(|cursor| clamp_cursor_position(frame, cursor.x, cursor.y));
+            .map(|cursor| clamp_cursor_position(frame, cursor.x, cursor.y))
+            .map(|(x, y)| {
+                let x =
+                    drawn_cursor_column(x, |col| frame.cells.get(frame_cell_index(frame, col, y)?));
+                (x, y)
+            });
         let next = cursor
             .filter(|cursor| cursor.visible)
-            .map(|cursor| clamp_cursor_position(frame, cursor.x, cursor.y));
+            .map(|cursor| clamp_cursor_position(frame, cursor.x, cursor.y))
+            .map(|(x, y)| {
+                let x = drawn_cursor_column(x, |col| {
+                    patch_cell(&rows, col, y)
+                        .or_else(|| frame.cells.get(frame_cell_index(frame, col, y)?))
+                });
+                (x, y)
+            });
 
         if let Some((x, y)) = previous.filter(|position| Some(*position) != next) {
             if patch_cell_mut(&mut rows, x, y).is_none() {

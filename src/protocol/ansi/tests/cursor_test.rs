@@ -496,3 +496,44 @@ fn blit_frame_hides_previous_visible_cursor_when_next_frame_has_none() {
         "diff redraw should hide a previously visible cursor when the next frame has none"
     );
 }
+
+#[test]
+fn retained_drawn_cursor_patch_remains_visible_on_wide_continuation() {
+    let mut previous = make_frame(
+        3,
+        1,
+        vec![
+            make_cell("界", 0, 0, 0),
+            make_cell("", 0, 0, 0),
+            make_cell(" ", 0, 0, 0),
+        ],
+    );
+    previous.cursor = Some(CursorState {
+        x: 2,
+        y: 0,
+        visible: true,
+        shape: 0,
+    });
+    let drawn = frame_with_drawn_cursor(previous);
+    let mut encoder = BlitEncoder::new();
+    let initial = encoder.encode_with_suppressed_visible_cursor(&drawn, false);
+    encoder.commit(drawn, initial);
+
+    let cursor = Some(CursorState {
+        x: 1,
+        y: 0,
+        visible: true,
+        shape: 0,
+    });
+    let rows = encoder
+        .patch_rows_with_drawn_cursor(&[], cursor.as_ref())
+        .expect("cursor-only retained patch");
+    let patch = encoder
+        .encode_patch(&rows, cursor, true)
+        .expect("valid cursor-only patch");
+    let bytes = String::from_utf8(patch.bytes).unwrap();
+    assert!(
+        bytes.contains("\x1b[0;7;39;49m界"),
+        "moving the drawn cursor onto a wide continuation must repaint its visible glyph: {bytes:?}"
+    );
+}

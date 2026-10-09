@@ -151,6 +151,15 @@ pub(super) fn frame_cell_index(frame: &FrameData, x: u16, y: u16) -> Option<usiz
         .then(|| usize::from(y) * usize::from(frame.width) + usize::from(x))
 }
 
+pub(super) fn patch_cell(rows: &[PaneSurfacePatchRow], x: u16, y: u16) -> Option<&CellData> {
+    rows.iter().rev().find_map(|row| {
+        if row.y != y || x < row.x {
+            return None;
+        }
+        row.cells.get(usize::from(x - row.x))
+    })
+}
+
 pub(super) fn patch_cell_mut(
     rows: &mut [PaneSurfacePatchRow],
     x: u16,
