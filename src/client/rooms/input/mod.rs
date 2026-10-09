@@ -399,6 +399,9 @@ impl BusUi {
             .agent(agent)
             .and_then(|agent| agent.runtime_identity.pane_id.clone());
         self.native_focus_pending = self.target_pane.is_some();
+        self.pending.retain(|pending| {
+            pending.enqueued || !matches!(pending.command, BusCommand::FocusTerminal(_))
+        });
         self.form = None;
         self.rename = None;
         self.recipient_menu = false;

@@ -206,6 +206,50 @@ fn native_focus_errors_apply_only_to_the_current_navigation_even_for_the_same_ag
 }
 
 #[test]
+fn late_coordinator_focus_cannot_override_a_newer_native_agent_selection() {
+    use crate::client::compositor::{ClientShellAction, ClientShellInput};
+    let (mut ui, room, selected) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let launching = snapshot
+        .state
+        .create_agent(room, "launching", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    // This new agent has no identity yet, so the worker owns its focus request.
+    ui.open_terminal(launching);
+    ui.pending.back_mut().unwrap().enqueued = true;
+    bind_pane(&mut ui, selected, "pane_1");
+    ui.open_terminal(selected);
+    let mut shell = shell_with(ui);
+    let mut initial = ClientShellInput::default();
+    shell.tick_bus(&mut initial);
+    assert_eq!(initial.actions.len(), 1);
+    // The old worker completes after the client already requested the new selection.
+    shell
+        .bus
+        .as_mut()
+        .unwrap()
+        .receive_event(BusEvent::TerminalFocused {
+            agent: launching,
+            pane_id: "pane_2".into(),
+        });
+    let mut outcome = ClientShellInput::default();
+    shell.tick_bus(&mut outcome);
+    assert!(
+        outcome.actions.iter().any(|action| matches!(action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::protocol::api::schema::Method::PaneFocus(target)
+                    if target.pane_id == "pane_1")
+        )),
+        "reassert the user's newer selection after a late worker focus"
+    );
+    assert_eq!(
+        shell.bus.as_ref().unwrap().target_pane.as_deref(),
+        Some("pane_1")
+    );
+}
+
+#[test]
 fn native_shell_composes_bus_before_any_server_frame_and_uses_same_resize_geometry() {
     let (ui, _, _) = fixture();
     let mut shell = crate::client::compositor::ClientShellState::new(
