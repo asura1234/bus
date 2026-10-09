@@ -1,4 +1,4 @@
-//! Home-relative path expansion for configured paths such as `ui.new_terminal_cwd`.
+//! Home-relative path expansion for configured paths such as `terminal.new_cwd`.
 
 use std::ffi::OsString;
 #[cfg(test)]
@@ -40,7 +40,8 @@ fn join_tilde_rest(home: PathBuf, rest: &str, is_windows: bool) -> PathBuf {
             .filter(|component| !component.is_empty())
             .fold(home, |path, component| path.join(component))
     } else {
-        home.join(rest)
+        // `~//x` means `$HOME//x`; a leading `/` left in `rest` would make join replace HOME.
+        home.join(rest.trim_start_matches('/'))
     }
 }
 
