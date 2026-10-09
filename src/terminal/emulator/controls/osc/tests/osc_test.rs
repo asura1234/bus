@@ -659,3 +659,68 @@ fn restore_host_terminal_theme_reapplies_cached_colors() {
     assert_eq!(pane_default_theme(&pane).background, host_theme.background);
     assert_eq!(pane_default_theme(&pane).foreground, host_theme.foreground);
 }
+
+#[cfg(unix)]
+#[test]
+fn reported_cwd_accepts_file_uri_naming_the_local_host() {
+    let host = crate::platform::hostname().expect("local hostname");
+
+    assert_eq!(
+        parse_reported_cwd(format!("file://{host}/tmp/bus").as_bytes()),
+        Some(std::path::PathBuf::from("/tmp/bus"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reported_cwd_accepts_local_hostname_case_and_decodes_the_path() {
+    let host = crate::platform::hostname().expect("local hostname");
+
+    assert_eq!(
+        parse_reported_cwd(
+            format!("file://{}/tmp/bus%20repo", host.to_ascii_uppercase()).as_bytes()
+        ),
+        Some(std::path::PathBuf::from("/tmp/bus repo"))
+    );
+    assert_eq!(
+        parse_reported_cwd(b"file://LOCALHOST/tmp/bus%20repo"),
+        Some(std::path::PathBuf::from("/tmp/bus repo"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reported_cwd_rejects_remote_hosts_sharing_the_local_hostname_prefix() {
+    let host = crate::platform::hostname().expect("local hostname");
+
+    for remote in [format!("{host}.invalid"), format!("{host}-remote")] {
+        assert_eq!(
+            parse_reported_cwd(format!("file://{remote}/tmp/bus").as_bytes()),
+            None,
+            "remote={remote}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn reported_cwd_local_host_updates_from_split_osc7() {
+    let host = crate::platform::hostname().expect("local hostname");
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+    let pane_id = PaneId::from_raw(1);
+    let sequence = format!("\x1b]7;file://{host}/tmp/bus%20");
+
+    let partial = pane.process_pty_bytes(pane_id, 0, sequence.as_bytes(), &tx, |_| None);
+    assert_eq!(partial.reported_cwd, None);
+    let complete = pane.process_pty_bytes(pane_id, 0, b"repo\x1b\\", &tx, |_| None);
+    assert_eq!(
+        complete.reported_cwd,
+        Some(std::path::PathBuf::from("/tmp/bus repo"))
+    );
+
+    let remote_sequence = format!("\x1b]7;file://{host}.invalid/tmp/remote\x07");
+    let remote = pane.process_pty_bytes(pane_id, 0, remote_sequence.as_bytes(), &tx, |_| None);
+    assert_eq!(remote.reported_cwd, None);
+}

@@ -15,7 +15,11 @@ pub(super) fn parse_file_uri_cwd(uri: &str) -> Option<PathBuf> {
         rest
     } else if let Some(slash) = rest.find('/') {
         let host = &rest[..slash];
-        if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) {
+        if !(host.is_empty()
+            || host.eq_ignore_ascii_case("localhost")
+            || crate::platform::hostname()
+                .is_some_and(|local_host| host.eq_ignore_ascii_case(&local_host)))
+        {
             return None;
         }
         &rest[slash..]
