@@ -539,11 +539,15 @@ impl Worker {
         {
             if let Some(owner) = self.state.agents().find(|agent| {
                 let identity = &agent.runtime_identity;
-                identity.session_id.as_deref() == Some(session.as_str())
-                    || identity.launch_id.as_ref().is_some_and(|launch| {
+                match identity.session_id.as_deref() {
+                    Some(bound) => bound == session,
+                    // The reservation outlives its launch's first bind, so a
+                    // bound agent (rebound by clear, too) owns only that session.
+                    None => identity.launch_id.as_ref().is_some_and(|launch| {
                         launch::reserved_session(&self.data_dir.join("callbacks").join(launch))
                             .is_some_and(|reserved| reserved == session)
-                    })
+                    }),
+                }
             }) {
                 return Err(format!(
                     "Session {session} already belongs to Bus agent {}",
