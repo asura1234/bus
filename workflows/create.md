@@ -56,6 +56,10 @@ elsewhere (for example tracked in a repository). Fill every section:
   different providers.
 - **Coordination:** shared branch, separate worktrees (created by an agent with
   `worktree-new`), or "ask me before writing file X" for a few shared files.
+  For each worktree, record the checkpoint through which it must be retained
+  and where needed baselines and metrics will be archived. Delegate free-space
+  checks on the data volume at kickoff and each phase boundary; below 30 GiB,
+  hold builds, benchmarks and large copies until cleanup restores space.
 - **Gates** and **decision rules** from step 1.
 - **Log:** one dated line: "Drafted with the human."
 

@@ -22,6 +22,14 @@ pub struct AgentSendKeysParams {
     pub keys: Vec<String>,
 }
 
+/// Observing is read-only unless the caller explicitly opens a queued question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentDialogObserveParams {
+    pub target: String,
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub open_pending_question: bool,
+}
+
 /// One numbered option of a choice dialog on an agent's screen.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentDialogOption {
@@ -59,6 +67,9 @@ pub struct AgentDialog {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentDialogObservation {
+    /// A queued Codex question is still collapsed, possibly awaiting its redraw.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub pending_question: bool,
     pub terminal_id: String,
     pub pane_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

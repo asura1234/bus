@@ -205,3 +205,128 @@ async fn agent_dialog_choose_sends_nothing_for_stale_missing_or_foreign_dialogs(
     assert!(!chosen(&choose(&mut app, &idle, Some("session"), &digest, 1)).written);
     assert!(writes.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn codex_queued_question_observation_opens_the_fixture_panel() {
+    let screen = include_str!("../../../../../tests/fixtures/codex-question/collapsed.txt");
+    let (mut app, _) = app_with_dialog(b"", None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+        .attached_terminal_id
+        .clone();
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_agent_name("reviewer".into());
+    let (runtime, mut writes) =
+        crate::terminal::runtime::TerminalRuntime::test_with_channel(131, 45);
+    runtime.test_process_pty_bytes(screen.replace('\n', "\r\n").as_bytes());
+    app.state.insert_test_runtime(pane, runtime);
+    let request: crate::protocol::api::schema::Request =
+        serde_json::from_value(serde_json::json!({
+            "id": "open-question", "method": "agent.dialog.observe",
+            "params": {"target": "reviewer", "open_pending_question": true}
+        }))
+        .unwrap();
+    let crate::protocol::api::schema::Method::AgentDialogObserve(params) = request.method else {
+        panic!("observe request");
+    };
+    assert!(crate::agents::dialog::codex_question_pending(screen));
+    let response = app.handle_agent_dialog_observe(request.id, params);
+    assert!(
+        serde_json::from_str::<SuccessResponse>(&response).is_ok(),
+        "{response}"
+    );
+    assert_eq!(
+        writes
+            .try_recv()
+            .expect("observation must open the queued question"),
+        Bytes::from_static(b"\x1b[1;2D")
+    );
+    assert!(writes.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn codex_queued_question_native_controls_are_guarded_and_answer_focused_other() {
+    let (mut app, _) = app_with_dialog(b"", None);
+    let pane = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+        .attached_terminal_id
+        .clone();
+    let (runtime, mut writes) =
+        crate::terminal::runtime::TerminalRuntime::test_with_channel(131, 45);
+    let collapsed = include_str!("../../../../../tests/fixtures/codex-question/collapsed.txt");
+    runtime.test_process_pty_bytes(collapsed.replace('\n', "\r\n").as_bytes());
+    app.state.insert_test_runtime(pane, runtime);
+    let observe = |app: &mut App, open| {
+        app.handle_agent_dialog_observe(
+            "observe".into(),
+            crate::protocol::api::schema::AgentDialogObserveParams {
+                target: "reviewer".into(),
+                open_pending_question: open,
+            },
+        )
+    };
+    // The same screen in a different provider must not receive Codex navigation.
+    observe(&mut app, true);
+    assert!(writes.try_recv().is_err());
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Working);
+    app.state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_agent_name("reviewer".into());
+    let passive: SuccessResponse = serde_json::from_str(&observe(&mut app, false)).unwrap();
+    let ResponseResult::AgentDialog {
+        observation: passive,
+    } = passive.result
+    else {
+        panic!("observation");
+    };
+    assert!(passive.pending_question);
+    assert!(passive.dialog.is_none());
+    assert!(writes.try_recv().is_err());
+    let other = include_str!("../../../../../tests/fixtures/codex-question/other-selected.txt");
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{}", other.replace('\n', "\r\n")).as_bytes());
+    let observation = observe_dialog(&mut app);
+    assert_eq!(
+        observation.dialog.as_ref().unwrap().kind,
+        AgentDialogKind::Question
+    );
+    let params = answer_params(&observation, Some("fixture answer"), false);
+    let choice = chosen(&app.handle_agent_dialog_answer("answer".into(), params));
+    assert!(choice.written);
+    assert_eq!(
+        writes.recv().await.unwrap(),
+        Bytes::from_static(b"fixture answer")
+    );
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), writes.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Bytes::from_static(b"\r")
+    );
+    let typed = include_str!("../../../../../tests/fixtures/codex-question/other-typed.txt");
+    app.lookup_runtime_sender(0, pane)
+        .unwrap()
+        .test_process_pty_bytes(format!("\x1b[2J\x1b[H{}", typed.replace('\n', "\r\n")).as_bytes());
+    let stale = chosen(&app.handle_agent_dialog_answer(
+        "stale".into(),
+        answer_params(&observation, Some("do not send"), false),
+    ));
+    assert!(!stale.written);
+    assert!(writes.try_recv().is_err());
+}

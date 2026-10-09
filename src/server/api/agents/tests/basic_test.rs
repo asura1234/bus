@@ -130,8 +130,9 @@ fn app_with_dialog(
 fn observe_dialog(app: &mut App) -> AgentDialogObservation {
     let observed = app.handle_agent_dialog_observe(
         "observe".into(),
-        AgentTarget {
+        crate::protocol::api::schema::AgentDialogObserveParams {
             target: "reviewer".into(),
+            open_pending_question: false,
         },
     );
     let success: SuccessResponse = serde_json::from_str(&observed).unwrap();

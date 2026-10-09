@@ -139,6 +139,7 @@ fn agent_dialog_observation_round_trips_with_and_without_a_dialog() {
     ] {
         let result = ResponseResult::AgentDialog {
             observation: AgentDialogObservation {
+                pending_question: false,
                 terminal_id: "terminal-1".into(),
                 pane_id: "w1:p2".into(),
                 session_id: Some("session-1".into()),

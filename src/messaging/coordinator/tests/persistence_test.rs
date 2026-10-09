@@ -1,4 +1,7 @@
 use super::*;
+use crate::messaging::coordinator::storage::{STORAGE_NEEDS_REPAIR, STORAGE_RETRYING};
+use crate::messaging::storage::state_store::SaveStage;
+use std::time::Instant;
 
 #[test]
 fn delete_agent_stops_terminal_before_removing_persisted_work() {
@@ -109,7 +112,10 @@ fn storage_failure_prevents_send_and_startup_failure_releases_coordinator() {
     io::atomic_write(&dir.join("state.json"), b"corrupt").unwrap();
     assert!(worker.submit_ready().is_err());
     assert!(calls.lock().unwrap().is_empty());
-    assert!(worker.storage_failed);
+    assert!(matches!(
+        worker.storage_pause.as_ref(),
+        Some(StoragePause::NeedsRepair)
+    ));
     drop(worker);
     let fake = || {
         Box::new(FakeTransport {
@@ -196,6 +202,256 @@ fn master_session_saved_before_sound_and_compactions_keeps_its_orchestrators() {
     let agent = worker.state.agent(orchestrator).unwrap();
     assert_eq!(agent.orchestrates, Some(work));
     assert_eq!(agent.compactions.count, 0);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn status_only_polls_skip_disk_writes_and_recovery_checks_the_last_commit() {
+    let (mut worker, agent, _, dir, _) = fixture(Provider::Codex, vec![]);
+    let before = std::fs::read(worker.store.path()).unwrap();
+    let committed = worker.durable_state.clone();
+    let mut observed = worker.state.clone();
+    observed
+        .observe_status(agent, RuntimeStatus::Idle, 42)
+        .unwrap();
+    worker.store.fail_once_at(SaveStage::TempSync);
+    worker.apply_poll(observed).unwrap();
+    assert_eq!(std::fs::read(worker.store.path()).unwrap(), before);
+    assert_eq!(worker.durable_state, committed);
+    assert_eq!(worker.state.agent(agent).unwrap().observed_at_ms, 42);
+
+    let mut changed = worker.state.clone();
+    changed
+        .observe_status(agent, RuntimeStatus::Working, 43)
+        .unwrap();
+    assert_eq!(worker.apply_poll(changed).unwrap_err(), STORAGE_RETRYING);
+    assert_eq!(std::fs::read(worker.store.path()).unwrap(), before);
+    let (events, received) = mpsc::channel();
+    worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+    assert!(matches!(
+        received.try_recv(),
+        Ok(BusEvent::StorageRecovered)
+    ));
+    assert_eq!(worker.store.load().unwrap(), Some(worker.state.clone()));
+    assert_eq!(worker.state.agent(agent).unwrap().observed_at_ms, 42);
+
+    let mut changed = worker.state.clone();
+    changed
+        .observe_status(agent, RuntimeStatus::Working, 44)
+        .unwrap();
+    worker.apply_poll(changed).unwrap();
+    assert_eq!(worker.store.load().unwrap(), Some(worker.state.clone()));
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn skipped_observation_is_saved_before_submission_and_survives_restart() {
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let request = queue(&mut worker, room, agent, "keep ownership");
+    let before = std::fs::read(worker.store.path()).unwrap();
+    let mut observed = worker.state.clone();
+    observed
+        .observe_status(agent, RuntimeStatus::Idle, 85)
+        .unwrap();
+    worker.apply_poll(observed).unwrap();
+    assert_eq!(std::fs::read(worker.store.path()).unwrap(), before);
+
+    let mut submitting = worker.state.clone();
+    submitting.begin_submission(request, "launch", 0).unwrap();
+    worker.save(submitting).unwrap();
+    let on_disk = worker.store.load().unwrap().unwrap();
+    assert_eq!(
+        on_disk.request(request).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert_eq!(on_disk.request(request).unwrap().progress_at_ms, Some(85));
+    assert_eq!(
+        on_disk.request(request).unwrap().submission_status_revision,
+        worker.state.agent(agent).unwrap().status_revision
+    );
+    assert!(calls.lock().unwrap().is_empty());
+
+    // A duplicated descriptor keeps a flock alive after the original handle
+    // closes. Coordinator teardown must explicitly unlock before reopening.
+    let held_clone = worker._lease.0.try_clone().unwrap();
+    assert!(io::lock(&dir.join("coordinator.lock")).is_err());
+    drop(worker);
+    let recovered = Worker::open(
+        dir.clone(),
+        Box::new(FakeTransport {
+            replies: VecDeque::new(),
+            calls: calls.clone(),
+            state_path: dir.join("state.json"),
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        recovered.state.request(request).unwrap().phase,
+        RequestPhase::Submitting
+    );
+    assert!(calls.lock().unwrap().is_empty());
+    drop(recovered);
+    drop(held_clone);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn temporary_state_write_failures_pause_then_recover_without_replaying_a_mutation() {
+    for stage in [
+        SaveStage::TempCreate,
+        SaveStage::TempWrite,
+        SaveStage::TempSync,
+    ] {
+        let (mut worker, _, room, dir, calls) = fixture(Provider::Codex, vec![]);
+        let committed = worker.state.clone();
+        let mut changed = committed.clone();
+        changed.set_room_notes(room, "not committed").unwrap();
+        worker.store.fail_once_at(stage);
+        let capture = crate::utils::logging::test_capture::Capture::default();
+        capture.run(|| assert_eq!(worker.save(changed).unwrap_err(), STORAGE_RETRYING));
+        assert!(matches!(
+            worker.storage_pause.as_ref(),
+            Some(StoragePause::Retrying { .. })
+        ));
+        assert_eq!(worker.store.load().unwrap(), Some(committed.clone()));
+        assert_eq!(worker.state, committed);
+        assert!(calls.lock().unwrap().is_empty());
+        let logs = capture.text();
+        assert!(logs.contains(stage.name()), "{logs}");
+        assert!(logs.contains("raw_os_error=Some(28)"), "{logs}");
+        assert!(logs.contains("bytes="), "{logs}");
+
+        let (events, received) = mpsc::channel();
+        worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+        assert!(worker.storage_pause.is_none());
+        assert!(worker.error.is_none());
+        assert!(matches!(
+            received.try_recv(),
+            Ok(BusEvent::StorageRecovered)
+        ));
+        assert_eq!(worker.store.load().unwrap(), Some(committed));
+        assert!(calls.lock().unwrap().is_empty());
+        assert!(!std::fs::read_dir(&dir).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".state.json.tmp-")
+        }));
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn post_replace_failure_never_overwrites_an_ambiguous_commit() {
+    let (mut worker, _, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let committed = worker.state.clone();
+    let mut changed = committed.clone();
+    changed.set_room_notes(room, "maybe committed").unwrap();
+    worker.store.fail_once_at(SaveStage::ParentSync);
+    assert_eq!(worker.save(changed.clone()).unwrap_err(), STORAGE_RETRYING);
+    assert_eq!(worker.store.load().unwrap(), Some(changed));
+    assert_eq!(worker.state, committed);
+    let before = std::fs::read(worker.store.path()).unwrap();
+    let (events, received) = mpsc::channel();
+    worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+    assert!(matches!(
+        worker.storage_pause.as_ref(),
+        Some(StoragePause::NeedsRepair)
+    ));
+    assert_eq!(worker.error.as_deref(), Some(STORAGE_NEEDS_REPAIR));
+    assert_eq!(std::fs::read(worker.store.path()).unwrap(), before);
+    assert!(received.try_recv().is_err());
+    assert!(calls.lock().unwrap().is_empty());
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn recovery_refuses_corrupt_durable_state() {
+    let (mut worker, _, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let mut changed = worker.state.clone();
+    changed.set_room_notes(room, "not committed").unwrap();
+    worker.store.fail_once_at(SaveStage::TempWrite);
+    assert!(worker.save(changed).is_err());
+    std::fs::write(worker.store.path(), b"{corrupt").unwrap();
+    let (events, _) = mpsc::channel();
+    worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+    assert!(matches!(
+        worker.storage_pause.as_ref(),
+        Some(StoragePause::NeedsRepair)
+    ));
+    assert_eq!(std::fs::read(worker.store.path()).unwrap(), b"{corrupt");
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn recovered_storage_does_not_resubmit_uncertain_delivery() {
+    let (mut worker, agent, room, dir, calls) = fixture(
+        Provider::Codex,
+        vec![Err(TransportError {
+            message: "submit outcome unknown".into(),
+            code: None,
+            definitely_rejected: false,
+        })],
+    );
+    let request = queue(&mut worker, room, agent, "one delivery");
+    worker.submit_ready().unwrap();
+    assert!(worker.state.request(request).unwrap().uncertain_outcome);
+    let calls_before = calls.lock().unwrap().len();
+    worker.store.fail_once_at(SaveStage::TempSync);
+    assert!(worker.save(worker.state.clone()).is_err());
+    let (events, _) = mpsc::channel();
+    worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+    worker.submit_ready().unwrap();
+    assert_eq!(calls.lock().unwrap().len(), calls_before);
+    assert!(worker.state.request(request).unwrap().uncertain_outcome);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn paused_worker_rejects_send_without_touching_native_transport() {
+    let (mut worker, _, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    worker.store.fail_once_at(SaveStage::TempCreate);
+    assert!(worker.save(worker.state.clone()).is_err());
+    let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+    let (commands, receiver) = mpsc::sync_channel(4);
+    let (events, received) = mpsc::channel();
+    commands.send((1, BusCommand::Submit(room))).unwrap();
+    commands.send((2, BusCommand::Shutdown)).unwrap();
+    worker.run(receiver, events, snapshots);
+    assert!(received.try_iter().any(|event| {
+        matches!(event, BusEvent::CommandFinished { command_id: 1, result: Err(error) } if error == STORAGE_RETRYING)
+    }));
+    assert!(calls.lock().unwrap().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn storage_retry_delay_doubles_and_stops_at_thirty_seconds() {
+    let (mut worker, _, _, dir, _) = fixture(Provider::Codex, vec![]);
+    worker.store.fail_once_at(SaveStage::TempCreate);
+    assert!(worker.save(worker.state.clone()).is_err());
+    let (events, _) = mpsc::channel();
+    let mut now = Instant::now() + Duration::from_secs(1);
+    for expected in [2, 4, 8, 16, 30, 30] {
+        worker.store.fail_once_at(SaveStage::TempSync);
+        worker.retry_storage(now, &events);
+        let Some(StoragePause::Retrying { next_retry, delay }) = worker.storage_pause.as_ref()
+        else {
+            panic!("retry should remain scheduled");
+        };
+        assert_eq!(*delay, Duration::from_secs(expected));
+        assert_eq!(*next_retry, now + *delay);
+        now = *next_retry;
+    }
+    worker.retry_storage(now, &events);
+    assert!(worker.storage_pause.is_none());
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }

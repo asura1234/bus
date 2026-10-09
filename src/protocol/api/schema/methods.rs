@@ -1,7 +1,7 @@
 use super::{
-    AgentDialogAnswerParams, AgentDialogChooseParams, AgentPromptIfIdleParams,
-    AgentPromptIfUnboundParams, AgentPromptParams, AgentReadParams, AgentRenameParams,
-    AgentSendKeysParams, AgentStartParams, AgentTarget, AgentWaitParams,
+    AgentDialogAnswerParams, AgentDialogChooseParams, AgentDialogObserveParams,
+    AgentPromptIfIdleParams, AgentPromptIfUnboundParams, AgentPromptParams, AgentReadParams,
+    AgentRenameParams, AgentSendKeysParams, AgentStartParams, AgentTarget, AgentWaitParams,
     ClientShellSurfaceSetParams, ClientWindowTitleSetParams, EmptyParams, EventsSubscribeParams,
     EventsWaitParams, LayoutSetSplitRatioParams, NotificationShowParams, PaneCloseIfIdentityParams,
     PaneCopyMotionParams, PaneCopySearchParams, PaneCurrentParams, PaneFocusDirectionParams,
@@ -76,7 +76,7 @@ pub enum Method {
     #[serde(rename = "agent.read")]
     AgentRead(AgentReadParams),
     #[serde(rename = "agent.dialog.observe")]
-    AgentDialogObserve(AgentTarget),
+    AgentDialogObserve(AgentDialogObserveParams),
     #[serde(rename = "agent.dialog.choose")]
     AgentDialogChoose(AgentDialogChooseParams),
     #[serde(rename = "agent.dialog.answer")]

@@ -139,13 +139,14 @@ impl Worker {
         request: &ControlRequest,
         mutation: bool,
     ) -> Result<usize, Response> {
-        if mutation && self.storage_failed {
+        if mutation && self.storage_pause.is_some() {
             return Err(Response::failure(
                 &request.id,
                 "storage_unavailable",
-                "Fix Bus storage and restart before making changes",
+                self.storage_notice(),
             ));
         }
+
         // A receipt lets a retry replay its response instead of launching or
         // sending twice. Retries come within seconds, so receipts older than
         // the retention window make room; younger ones are never evicted.

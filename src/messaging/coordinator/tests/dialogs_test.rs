@@ -75,6 +75,7 @@ impl Transport for FakeServer {
             }),
             Method::AgentDialogObserve(_) => Ok(ResponseResult::AgentDialog {
                 observation: schema::AgentDialogObservation {
+                    pending_question: false,
                     terminal_id: "terminal".into(),
                     pane_id: "pane".into(),
                     session_id: None,
@@ -98,6 +99,7 @@ impl Transport for FakeServer {
                         reason: None,
                         keys: vec!["enter".into()],
                         observation: schema::AgentDialogObservation {
+                            pending_question: false,
                             terminal_id: "terminal".into(),
                             pane_id: "pane".into(),
                             session_id: None,

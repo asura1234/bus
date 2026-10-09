@@ -95,12 +95,16 @@ impl Worker {
         pane_id: &str,
         terminal_id: &str,
         session_id: Option<&str>,
+        open_pending_question: bool,
     ) -> Result<schema::AgentDialogObservation, String> {
         let response = self
             .transport
-            .request(Method::AgentDialogObserve(schema::AgentTarget {
-                target: pane_id.into(),
-            }))
+            .request(Method::AgentDialogObserve(
+                schema::AgentDialogObserveParams {
+                    target: pane_id.into(),
+                    open_pending_question,
+                },
+            ))
             .map_err(|error| error.message)?;
         let ResponseResult::AgentDialog { observation } = response else {
             return Err("Unexpected native dialog response".into());
@@ -119,7 +123,18 @@ impl Worker {
         id: AgentId,
     ) -> Result<Value, String> {
         let (room_id, launch_id, terminal_id, pane_id, session_id) = self.dialog_identity(id)?;
-        let observation = self.native_dialog(&pane_id, &terminal_id, session_id.as_deref())?;
+        let mut observation =
+            self.native_dialog(&pane_id, &terminal_id, session_id.as_deref(), true)?;
+        // Shift+Left is queued once. Wait for Codex's redraw without blocking
+        // the native app thread or sending navigation again on every poll.
+        for _ in 0..DIALOG_SETTLE_POLLS {
+            if !observation.pending_question {
+                break;
+            }
+            std::thread::sleep(DIALOG_SETTLE_INTERVAL);
+            observation =
+                self.native_dialog(&pane_id, &terminal_id, session_id.as_deref(), false)?;
+        }
         let fingerprint = match &observation.dialog {
             Some(dialog) => Some(encode_dialog_fingerprint(&DialogFingerprintClaims {
                 room_id,
@@ -277,7 +292,8 @@ impl Worker {
             if poll > 0 {
                 std::thread::sleep(DIALOG_SETTLE_INTERVAL);
             }
-            let Ok(observation) = self.native_dialog(pane_id, terminal_id, session_id) else {
+            let Ok(observation) = self.native_dialog(pane_id, terminal_id, session_id, false)
+            else {
                 outcome = "unknown";
                 break;
             };

@@ -19,7 +19,7 @@ impl Worker {
                         .observe_status(id, RuntimeStatus::Unavailable, io::now_ms())
                         .map_err(|e| e.to_string())?;
                 }
-                self.save(state)?;
+                self.apply_poll(state)?;
                 return Err(format!(
                     "Bus unavailable; queues and active requests retained: {other:?}"
                 ));
@@ -84,7 +84,7 @@ impl Worker {
                 update_polled_metadata(&mut state, agent, info, &mut self.branch_checks)?;
             }
         }
-        self.save(state)?;
+        self.apply_poll(state)?;
         for (agent, previous, current) in rebound {
             tracing::info!(event = "bus.resume.rebound", agent_id = agent.0,
                 previous_terminal_id = ?previous, terminal_id = current,

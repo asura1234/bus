@@ -139,6 +139,13 @@ Decide how agents share the repository before sending parallel work:
 
 Write the choice in the workflow's Coordination section.
 
+Record which worktrees must remain until each checkpoint in the workflow.
+Delegate a data-volume `df` check at kickoff and each phase boundary. If free
+space falls below 30 GiB, declare a `DISK HOLD` and pause builds, benchmarks and
+large copies. Delegate cleanup under the rules in `orchestrator-rules.md`, then
+check space again before lifting the hold. Bus builds use a separate
+`CARGO_TARGET_DIR` so the running Bus binary is not replaced.
+
 ## Choose agents and models
 
 - **Use different models for review.** Reviewers on different providers catch

@@ -993,6 +993,21 @@
           ],
           "type": "object"
         },
+        "AgentDialogObserveParams": {
+          "description": "Observing is read-only unless the caller explicitly opens a queued question.",
+          "properties": {
+            "open_pending_question": {
+              "type": "boolean"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
         "AgentPromptIfIdleParams": {
           "description": "A separate method makes older servers reject the safety guard, never ignore it.",
           "properties": {
@@ -3284,7 +3299,7 @@
               "type": "string"
             },
             "params": {
-              "$ref": "#/schemas/request/$defs/AgentTarget"
+              "$ref": "#/schemas/request/$defs/AgentDialogObserveParams"
             }
           },
           "required": [
@@ -4271,6 +4286,10 @@
             },
             "pane_id": {
               "type": "string"
+            },
+            "pending_question": {
+              "description": "A queued Codex question is still collapsed, possibly awaiting its redraw.",
+              "type": "boolean"
             },
             "session_id": {
               "type": [

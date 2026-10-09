@@ -2,7 +2,8 @@
 use super::agent_not_found;
 use crate::protocol::api::schema::{
     AgentDialog, AgentDialogAnswerParams, AgentDialogChooseParams, AgentDialogChooseResult,
-    AgentDialogKind, AgentDialogObservation, AgentDialogOption, AgentTarget, ResponseResult,
+    AgentDialogKind, AgentDialogObservation, AgentDialogObserveParams, AgentDialogOption,
+    ResponseResult,
 };
 use crate::server::api::errors::{encode_error, encode_error_body, encode_success};
 use crate::server::app::App;
@@ -11,7 +12,7 @@ impl App {
     pub(in crate::server::api) fn handle_agent_dialog_observe(
         &mut self,
         id: String,
-        target: AgentTarget,
+        target: AgentDialogObserveParams,
     ) -> String {
         self.reconcile_managed_agent_target(&target.target);
         let agent = match self.agent_info_for_target(&target.target) {
@@ -25,6 +26,11 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
             return agent_not_found(id, &target.target);
         };
+        if target.open_pending_question && agent.agent.as_deref() == Some("codex") {
+            if let Err(error) = runtime.try_open_pending_codex_question() {
+                return encode_error(id, "dialog_write_failed", error);
+            }
+        }
         let Some(observation) = dialog_observation(&agent, runtime) else {
             return encode_error(
                 id,
@@ -182,6 +188,8 @@ fn dialog_observation(
 ) -> Option<AgentDialogObservation> {
     let (screen, content_revision) = runtime.visible_ansi_snapshot_with_seq()?;
     Some(AgentDialogObservation {
+        pending_question: agent.agent.as_deref() == Some("codex")
+            && crate::agents::dialog::codex_question_pending(&screen),
         terminal_id: agent.terminal_id.clone(),
         pane_id: agent.pane_id.clone(),
         session_id: agent

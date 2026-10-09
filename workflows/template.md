@@ -89,6 +89,10 @@ weekly allowance falls below about 25%.
 
 - <Which agents share a branch, which need a worktree, and which files need
   "ask before you write" handoffs between agents.>
+- <Worktree retention: which paths stay until which checkpoint; where required
+  baselines and metrics are archived before cleanup.>
+- <Delegate data-volume free-space checks at kickoff and each phase boundary;
+  below 30 GiB, hold builds, benchmarks and large copies until cleanup restores space.>
 
 ## Decision rules
 

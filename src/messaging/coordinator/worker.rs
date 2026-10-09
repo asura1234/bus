@@ -1,20 +1,22 @@
 //! Coordinator worker ownership.
 use super::{
     dev_control, diagnostics, io, mpsc, usage, AgentId, Arc, BTreeMap, BusCommand, BusEvent,
-    BusSnapshot, BusState, Duration, JsonStore, Mutex, PathBuf, RequestId, RuntimeStatus,
-    Transport,
+    BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf, RequestId,
+    RuntimeStatus, StoragePause, Transport,
 };
 
 pub(super) struct Worker {
     pub(super) state: BusState,
+    /// Exact last committed model; observation-only polls may advance state.
+    pub(super) durable_state: BusState,
     pub(super) store: JsonStore,
     pub(super) data_dir: PathBuf,
-    pub(super) _lease: std::fs::File,
+    pub(super) _lease: CoordinatorLease,
     pub(super) transport: Box<dyn Transport>,
     pub(super) revision: u64,
     pub(super) last_command_id: u64,
     pub(super) error: Option<String>,
-    pub(super) storage_failed: bool,
+    pub(super) storage_pause: Option<StoragePause>,
     pub(super) branch_checks: BTreeMap<AgentId, std::time::Instant>,
     /// Each agent's latest dialog wait and how many polls it has held.
     pub(super) dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
@@ -43,6 +45,7 @@ impl Worker {
         let lease = io::lock(&data_dir.join("coordinator.lock")).map_err(|e| {
             format!("Another Bus coordinator owns this data directory, or it is inaccessible: {e}")
         })?;
+        let lease = CoordinatorLease(lease);
         let store = JsonStore::new(data_dir.join("state.json"));
         let mut state = store.load().map_err(|e| e.to_string())?.unwrap_or_default();
         // Sessions saved before MASTER existed gain it here, once, before any client sees them.
@@ -61,6 +64,7 @@ impl Worker {
         }
         store.save(&state).map_err(|e| e.to_string())?;
         Ok(Self {
+            durable_state: state.clone(),
             state,
             store,
             data_dir,
@@ -69,7 +73,7 @@ impl Worker {
             revision: 0,
             last_command_id: 0,
             error: None,
-            storage_failed: false,
+            storage_pause: None,
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
@@ -96,13 +100,8 @@ impl Worker {
 
     pub(super) fn save(&mut self, state: BusState) -> Result<(), String> {
         if let Err(error) = self.store.save(&state) {
-            self.storage_failed = true;
-            tracing::error!(
-                event = "bus.storage.failed",
-                reason = "save_failed",
-                "Sending suspended; state not persisted"
-            );
-            return Err(format!("Bus storage failed at {}; sending is suspended. Fix storage and restart Bus: {error}",self.store.path().display()));
+            self.pause_storage(&error);
+            return Err(self.storage_notice().into());
         }
         diagnostics::replies(&self.state, &state, "bus.reply.persisted");
         for agent in state.agents() {
@@ -116,6 +115,7 @@ impl Worker {
                     status = ?agent.status, "Bus status changed");
             }
         }
+        self.durable_state = state.clone();
         self.state = state;
         self.revision += 1;
         Ok(())
@@ -158,8 +158,8 @@ impl Worker {
                     let submitting =
                         matches!(command, BusCommand::Submit(_) | BusCommand::SubmitQueued(_));
                     let _span = tracing::debug_span!("bus.command", command_id = id).entered();
-                    let result = if self.storage_failed {
-                        Err("Bus storage unavailable; restart after fixing storage".into())
+                    let result = if self.storage_pause.is_some() {
+                        Err(self.storage_notice().into())
                     } else {
                         self.command(command, &events)
                     };
@@ -182,16 +182,19 @@ impl Worker {
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
+            self.retry_storage(std::time::Instant::now(), &events);
             // Apply already-confirmed user commands before delivering queued
             // work. In particular, Submit followed by Delete must not send in
             // the background between those two commands.
             let can_poll = collect_delivery_commands(&commands, &mut pending_commands);
             if can_poll && std::time::Instant::now() >= next_poll {
-                if !self.storage_failed {
+                if self.storage_pause.is_none() {
                     if let Err(error) = self.tick_with_delivery_check(|| {
                         collect_delivery_commands(&commands, &mut pending_commands)
                     }) {
-                        self.error = Some(error);
+                        if self.storage_pause.is_none() {
+                            self.error = Some(error);
+                        }
                     }
                 }
                 next_poll = std::time::Instant::now() + interval;

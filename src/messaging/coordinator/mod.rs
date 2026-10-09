@@ -3,7 +3,9 @@ pub(crate) mod agents;
 mod delivery;
 mod expiry;
 mod poll;
+mod storage;
 mod worker;
+use storage::{CoordinatorLease, StoragePause};
 use worker::Worker;
 
 #[path = "callbacks.rs"]
@@ -112,6 +114,7 @@ pub(crate) enum BusEvent {
         agent: AgentId,
         pane_id: String,
     },
+    StorageRecovered,
     SetupRequired {
         input: AddAgent,
         orchestrator: Option<orchestrator::OrchestratorSpec>,

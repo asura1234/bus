@@ -1,0 +1,14 @@
+BUS_WORKTREES = [
+    "/Users/dylanliu/work/bus",
+    "/Users/dylanliu/work/bus-chore-codex-allowlist",
+]
+GIT = ["git", "/opt/homebrew/bin/git"]
+
+prefix_rule(pattern=[["cargo", "/Users/dylanliu/.cargo/bin/cargo"], ["test", "build"]], decision="allow")
+prefix_rule(pattern=["/Users/dylanliu/work/bus/target/debug/bus", ["send", "history", "state"]], decision="allow")
+prefix_rule(pattern=[GIT, "-C", BUS_WORKTREES, ["status", "log", "diff", "add", "commit"]], decision="allow")
+prefix_rule(pattern=[GIT, "-C", BUS_WORKTREES, "push"], decision="prompt")
+prefix_rule(pattern=[GIT, "push"], decision="prompt")
+prefix_rule(pattern=[["/Users/dylanliu/work/bus/.codex/bin/git-push-feature", "/Users/dylanliu/work/bus-chore-codex-allowlist/.codex/bin/git-push-feature"]], decision="allow")
+prefix_rule(pattern=[["gh", "/opt/homebrew/bin/gh"], "pr", "view"], decision="allow")
+prefix_rule(pattern=[["ps", "/bin/ps", "pgrep", "/usr/bin/pgrep", "rg", "/opt/homebrew/bin/rg", "df", "/bin/df"]], decision="allow")
