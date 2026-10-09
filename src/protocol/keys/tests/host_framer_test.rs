@@ -239,6 +239,53 @@ fn chunked_kitty_sequence_waits_for_completion() {
 }
 
 #[test]
+fn bracketed_paste_routes_split_osc_replies_without_parsing_literal_escape_text() {
+    let payload = b"first\n\n\x1b]4;7;rgb:1111/2222/3333\x1b\\second\x1b]10;rgb:aaaa/bbbb/cccc\x07\n\nthird\x1b]11;rgb:0000/1111/2222\x1b\\\x1b[A\x1b]0;literal title\x07\n\x1b[201~z";
+    for split in 0..payload.len() - 1 {
+        let mut framer = RawInputFramer::for_host_input();
+        assert!(framer.push(b"\x1b[200~").is_empty());
+        let mut events = framer.push(&payload[..split]);
+        events.extend(framer.flush_timeout());
+        events.extend(framer.push(&payload[split..]));
+        events.extend(framer.flush_timeout());
+        let pastes: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                RawInputEvent::Paste(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            pastes,
+            ["first\n\nsecond\n\nthird\x1b[A\x1b]0;literal title\x07\n"],
+            "split {split}"
+        );
+        assert_eq!(events.len(), 5, "split {split}");
+        assert!(
+            matches!(&events[0], RawInputEvent::HostPaletteColors { colors } if colors == &vec![(7, RgbColor { r: 0x11, g: 0x22, b: 0x33 })])
+        );
+        assert!(matches!(
+            events[1],
+            RawInputEvent::HostDefaultColor {
+                kind: DefaultColorKind::Foreground,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[2],
+            RawInputEvent::HostDefaultColor {
+                kind: DefaultColorKind::Background,
+                ..
+            }
+        ));
+        let RawInputEvent::Key(key) = &events[4] else {
+            panic!("expected trailing key");
+        };
+        assert_eq!(key.code, KeyCode::Char('z'));
+    }
+}
+
+#[test]
 fn chunked_bracketed_paste_waits_for_terminator() {
     let mut framer = RawInputFramer::default();
 

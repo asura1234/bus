@@ -82,6 +82,11 @@ impl BusUi {
     }
 
     pub(super) fn insert(&mut self, text: &str) {
+        // Host paste can use CR or CRLF; draft editors use LF for line breaks.
+        let normalized = text
+            .contains('\r')
+            .then(|| text.replace("\r\n", "\n").replace('\r', "\n"));
+        let text = normalized.as_deref().unwrap_or(text);
         if let Some(rename) = &mut self.rename {
             rename.editor.insert(text);
             return;

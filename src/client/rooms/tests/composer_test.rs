@@ -1,4 +1,74 @@
 #[test]
+fn multi_paragraph_bracketed_paste_with_host_color_replies_round_trips_into_draft() {
+    let expected = "First paragraph.\n\n第二段 🚌\n\nThird @author + paragraph.\n\nFourth paragraph.\n\nFifth paragraph.\n";
+    for terminator in ["\x1b\\", "\x07"] {
+        let mut payload = format!("\x1b]10;rgb:eeee/dddd/cccc{terminator}");
+        for (index, ch) in expected.chars().enumerate() {
+            payload.push(ch);
+            if index == 20 {
+                for palette_index in 0..=255 {
+                    payload.push_str(&format!(
+                        "\x1b]4;{palette_index};rgb:1111/2222/3333{terminator}"
+                    ));
+                }
+            }
+        }
+        payload.push_str(&format!("\x1b]11;rgb:0000/1111/2222{terminator}"));
+        payload.push_str("\x1b[201~");
+
+        for chunk_size in [1, 7, payload.len()] {
+            let (mut ui, room, _) = fixture();
+            let mut framer = crate::protocol::keys::host::RawInputByteFramer::for_host_input();
+            framer.host_color_query_sent();
+            assert!(framer.push(b"\x1b[200~").is_empty());
+            let mut chunks = Vec::new();
+            for chunk in payload.as_bytes().chunks(chunk_size) {
+                chunks.extend(framer.push(chunk));
+            }
+            chunks.extend(framer.flush_timeout());
+            let mut replies = 0;
+            let mut pastes = 0;
+            for chunk in chunks {
+                for event in crate::protocol::keys::host::parse_raw_input_bytes_sync(&chunk) {
+                    match &event {
+                        RawInputEvent::HostDefaultColor { .. }
+                        | RawInputEvent::HostPaletteColors { .. } => replies += 1,
+                        RawInputEvent::Paste(_) => pastes += 1,
+                        other => panic!("unexpected paste input: {other:?}"),
+                    }
+                    ui.input(&event, false, &mut Default::default());
+                }
+            }
+            assert_eq!(
+                ui.locals[&room].text.text, expected,
+                "chunk size {chunk_size}"
+            );
+            assert_eq!(replies, 258, "host replies must retain their routing");
+            assert_eq!(pastes, 1, "one paste must remain one edit");
+            assert!(ui.send_intent.is_none());
+            assert!(ui.pending.iter().all(|pending| !matches!(
+                pending.command,
+                BusCommand::Submit(_) | BusCommand::AttachFile(..)
+            )));
+        }
+    }
+}
+
+#[test]
+fn multi_paragraph_bracketed_paste_preserves_terminal_line_endings_in_draft() {
+    let expected = "\nFirst paragraph.\n\n第二段 🚌\n\nThird paragraph.\n\nFourth paragraph.\n\nFifth paragraph.\n";
+    for line_ending in ["\n", "\r", "\r\n"] {
+        let (mut ui, room, _) = fixture();
+        let raw = format!("\x1b[200~{}\x1b[201~", expected.replace('\n', line_ending));
+        for event in crate::protocol::keys::host::parse_raw_input_bytes_sync(raw.as_bytes()) {
+            ui.input(&event, false, &mut Default::default());
+        }
+        assert_eq!(ui.locals[&room].text.text, expected, "{line_ending:?}");
+        assert!(ui.send_intent.is_none());
+    }
+}
+
+#[test]
 fn typing_plus_in_the_composer_inserts_plus() {
     for input in shifted_symbol_encodings('+', '=') {
         let (mut ui, room, _) = fixture();

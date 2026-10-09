@@ -7,8 +7,9 @@ use super::mouse::{
     starts_with_incomplete_sgr_mouse_sequence,
 };
 use super::replies::{
-    discard_host_reply_csi_tail, starts_with_incomplete_default_color_response,
-    starts_with_incomplete_host_cell_size_report, starts_with_incomplete_host_color_scheme_report,
+    discard_host_reply_csi_tail, split_paste_color_replies,
+    starts_with_incomplete_default_color_response, starts_with_incomplete_host_cell_size_report,
+    starts_with_incomplete_host_color_scheme_report,
 };
 use super::sequence::{
     control_string, control_string_terminator_for_family, find_subsequence, plausible_osc_tail,
@@ -421,6 +422,16 @@ impl RawInputByteFramer {
             if self.split_coalesced_escape && self.buffer.starts_with(b"\x1b\x1b") {
                 chunks.push(vec![ESC]);
                 self.buffer.drain(..1);
+                continue;
+            }
+
+            if let Some((paste_chunks, consumed)) = split_paste_color_replies(&self.buffer) {
+                let replies = u16::try_from(paste_chunks.len() - 1).unwrap_or(u16::MAX);
+                self.host_color_replies_awaited =
+                    self.host_color_replies_awaited.saturating_sub(replies);
+                self.held_pending_host_reply_esc = false;
+                chunks.extend(paste_chunks);
+                self.buffer.drain(..consumed);
                 continue;
             }
 
