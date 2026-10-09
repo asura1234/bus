@@ -70,6 +70,8 @@ impl ClientShellState {
         self.hits = ShellHitMap::default();
         self.pane_surface = None;
         self.pending_pane_surface = None;
+        self.bus_terminal_surfaces.clear();
+        self.presented_bus_terminal = None;
         self.input_leases = ClientInputLeases::default();
         self.chrome_drag = None;
         self.last_composed_size = None;
@@ -121,6 +123,14 @@ impl ClientShellState {
         {
             self.hits = ShellHitMap::default();
         }
+        if !boot_changed
+            && self
+                .snapshot
+                .as_ref()
+                .is_some_and(|previous| previous.focused_tab_id != snapshot.focused_tab_id)
+        {
+            self.retain_bus_terminal_surface();
+        }
         if boot_changed {
             self.reset_endpoint_projection();
         } else if let Some(previous) = self
@@ -155,6 +165,7 @@ impl ClientShellState {
             .retain(|pane_id, _| pane_exists(pane_id));
 
         self.snapshot = Some(snapshot);
+        self.prune_bus_terminal_surfaces();
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {
             let matching = self.snapshot.as_ref().is_some_and(|snapshot| {
@@ -273,6 +284,12 @@ impl ClientShellState {
         }
         self.graphics
             .set_scene(std::mem::take(&mut surface.graphics));
+        if self.pane_surface.as_ref().is_some_and(|previous| {
+            previous.panes.first().map(|pane| &pane.pane_id)
+                != surface.panes.first().map(|pane| &pane.pane_id)
+        }) {
+            self.retain_bus_terminal_surface();
+        }
         self.pane_surface = Some(surface);
     }
 }

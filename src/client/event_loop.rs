@@ -502,7 +502,7 @@ impl ClientLoopDriver {
         let expired = self.endpoint_commands.expire(now);
         self.apply_shell_input(|shell| {
             let mut outcome = shell.tick_selection_autoscroll(now);
-            outcome.repaint |= shell.tick_bus();
+            outcome.repaint |= shell.tick_bus(&mut outcome);
             outcome.detach |= shell.bus_exit_ready();
             if let Some(expired) = expired {
                 let (repaint, actions) = shell.handle_endpoint_result(

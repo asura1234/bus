@@ -4,6 +4,7 @@ use super::{
 };
 use crate::protocol::wire::FrameData;
 use ratatui::layout::Rect;
+use ratatui::widgets::{Clear, Widget};
 
 impl ClientShellState {
     fn compose_unavailable(&mut self, cols: u16, rows: u16) -> FrameData {
@@ -33,8 +34,25 @@ impl ClientShellState {
         self.last_composed_size = Some((cols, rows));
         let bus_ready = self.bus_terminal_ready();
         self.compute_bus_view(cols, rows);
+        let newly_opened = self
+            .bus
+            .as_ref()
+            .and_then(|bus| bus.terminal_pane())
+            .is_some_and(|target| self.presented_bus_terminal.as_deref() != Some(target));
+        let awaiting_pair = self.pending_pane_surface.is_some()
+            || self
+                .snapshot
+                .as_deref()
+                .zip(self.pane_surface.as_ref())
+                .is_none_or(|(snapshot, surface)| snapshot.revision != surface.projection_revision);
+        if !bus_ready || (newly_opened && awaiting_pair) {
+            if let Some(frame) = self.compose_bus_terminal_preview(cols, rows) {
+                return Some(frame);
+            }
+        }
         if let Some(bus) = self.bus.as_mut() {
             if !bus_ready {
+                self.presented_bus_terminal = None;
                 self.hits = ShellHitMap::default();
                 let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
                 bus.render(&mut buffer);
@@ -62,6 +80,7 @@ impl ClientShellState {
         if let Some(bus) = self.bus.as_ref() {
             bus.render(&mut buffer);
         }
+        Clear.render(layout.pane_surface, &mut buffer);
         self.hits = ShellHitMap::default();
         self.hits.panes = surface
             .panes
@@ -83,6 +102,7 @@ impl ClientShellState {
         self.compose_graphics(&mut frame, layout);
         if let Some(bus) = self.bus.as_mut() {
             frame.graphics.extend(bus.thumbnail_graphics());
+            self.presented_bus_terminal = bus.terminal_pane().map(str::to_owned);
         }
         Some(frame)
     }

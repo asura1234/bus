@@ -134,11 +134,12 @@ impl ClientShellState {
         let mut outcome = ClientShellInput::default();
         for event in events {
             let ready = self.bus_terminal_ready();
-            if self
+            let consumed = self
                 .bus
                 .as_mut()
-                .is_some_and(|bus| bus.input(&event, ready, &mut outcome))
-            {
+                .is_some_and(|bus| bus.input(&event, ready, &mut outcome));
+            self.dispatch_bus_terminal_focus(&mut outcome);
+            if consumed {
                 continue;
             }
             if let Some(update) = host_theme_update(&event) {

@@ -159,7 +159,9 @@ impl BusUi {
                 self.last_click = Some((action.clone(), std::time::Instant::now()));
                 if double {
                     match action {
-                        Action::Room(room) => self.start_rename(RenameTarget::Room(room)),
+                        Action::Room(room) if !self.is_master_room(room) => {
+                            self.start_rename(RenameTarget::Room(room));
+                        }
                         Action::Agent(agent) => self.start_rename(RenameTarget::Agent(agent)),
                         _ => self.action(action),
                     }
@@ -378,6 +380,7 @@ impl BusUi {
         self.terminal.is_some()
             && self.deletion.is_none()
             && self.form.is_none()
+            && self.rename.is_none()
             && self
                 .target_pane
                 .as_deref()
@@ -387,11 +390,23 @@ impl BusUi {
     pub fn open_terminal(&mut self, agent: AgentId) {
         self.clear_selection();
         self.terminal = Some(agent);
-        self.target_pane = None;
+        self.terminal_navigation = self.terminal_navigation.wrapping_add(1);
+        // The coordinator already knows this terminal. Do not hide its retained surface
+        // while LeaveRoom, background polling and the native focus round-trip finish.
+        self.target_pane = self
+            .snapshot
+            .state
+            .agent(agent)
+            .and_then(|agent| agent.runtime_identity.pane_id.clone());
+        self.native_focus_pending = self.target_pane.is_some();
         self.form = None;
+        self.rename = None;
         self.recipient_menu = false;
         self.queue(BusCommand::LeaveRoom, Effect::None);
-        self.queue(BusCommand::FocusTerminal(agent), Effect::None);
+        if self.target_pane.is_none() {
+            // A newly created agent may precede the snapshot carrying its identity.
+            self.queue(BusCommand::FocusTerminal(agent), Effect::None);
+        }
     }
     pub fn open_room(&mut self, room: RoomId) {
         self.clear_selection();
@@ -410,6 +425,7 @@ impl BusUi {
         self.room = Some(room);
         self.terminal = None;
         self.target_pane = None;
+        self.native_focus_pending = false;
         self.form = None;
         self.rename = None;
         self.notes_focus = false;

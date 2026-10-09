@@ -1,5 +1,210 @@
 use super::*;
 
+fn bind_pane(ui: &mut BusUi, agent: AgentId, pane: &str) {
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                pane_id: Some(pane.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+}
+
+#[test]
+fn opening_known_agent_renders_retained_terminal_before_focus_acknowledgement() {
+    let (mut ui, _, agent) = fixture();
+    bind_pane(&mut ui, agent, "pane_1");
+    let mut shell = shell_with(ui);
+    let hit = shell
+        .bus
+        .as_ref()
+        .unwrap()
+        .view
+        .hits
+        .iter()
+        .find(|hit| hit.action == render::Action::Agent(agent))
+        .unwrap()
+        .rect;
+    let outcome =
+        shell.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: hit.x,
+            row: hit.y,
+            modifiers: KeyModifiers::NONE,
+        })]);
+    let frame = shell.compose(100, 30).unwrap();
+    let text: String = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect();
+    assert!(
+        text.contains("LIVE"),
+        "render existing terminal without a coordinator event: {text}"
+    );
+    assert!(!text.contains("Opening agent"));
+    assert!(
+        outcome.actions.iter().any(|action| matches!(action,
+            crate::client::compositor::ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::protocol::api::schema::Method::PaneFocus(target)
+                    if target.pane_id == "pane_1")
+        )),
+        "focus must be asynchronous on the client connection"
+    );
+    assert!(!shell
+        .bus
+        .as_ref()
+        .unwrap()
+        .pending
+        .iter()
+        .any(|pending| matches!(pending.command, BusCommand::FocusTerminal(_))));
+}
+
+#[test]
+fn switching_agents_renders_cached_target_and_holds_input_until_server_focus() {
+    use crate::client::compositor::tests::{snapshot, surface};
+    let (mut ui, room, first) = fixture();
+    let mut bus_snapshot = (*ui.snapshot).clone();
+    let second = bus_snapshot
+        .state
+        .create_agent(room, "second", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(bus_snapshot));
+    bind_pane(&mut ui, first, "pane_1");
+    bind_pane(&mut ui, second, "pane_2");
+    let mut shell = shell_with(ui);
+    // Cache the first agent's coherent surface before receiving the second tab.
+    shell.apply_active_snapshot(Box::new(snapshot()));
+    shell.set_pane_surface(surface());
+    let mut next = snapshot();
+    next.revision = 2;
+    next.focused_tab_id = Some("tab_2".into());
+    next.focused_pane_id = Some("pane_2".into());
+    let mut pane = next.panes[0].clone();
+    pane.pane_id = "pane_2".into();
+    pane.tab_id = "tab_2".into();
+    next.panes.push(pane);
+    shell.apply_active_snapshot(Box::new(next));
+    let mut second_surface = surface();
+    second_surface.projection_revision = 2;
+    second_surface.panes[0].pane_id = "pane_2".into();
+    second_surface.frame.cells[0].symbol = "2".into();
+    shell.set_pane_surface(second_surface);
+    shell.bus.as_mut().unwrap().open_terminal(second);
+    shell.compose(100, 30).unwrap();
+    shell.bus.as_mut().unwrap().open_terminal(first);
+    let frame = shell
+        .compose(100, 30)
+        .expect("cached target appears immediately");
+    let text: String = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect();
+    assert!(
+        text.contains("LIVE"),
+        "show first agent, not the previous pane: {text}"
+    );
+    assert!(!text.contains("Opening agent"));
+    assert!(
+        shell.handle_input_bytes(b"x").requests.is_empty(),
+        "never type into pane_2 while opening pane_1"
+    );
+
+    let mut removed = shell.snapshot.as_deref().unwrap().clone();
+    removed.revision += 1;
+    removed.panes.retain(|pane| pane.pane_id != "pane_1");
+    shell.apply_active_snapshot(Box::new(removed));
+    let frame = shell.compose(100, 30).unwrap();
+    assert!(
+        !frame.cells.iter().any(|cell| cell.symbol == "L"),
+        "removed panes must not reappear from the cache"
+    );
+}
+
+#[test]
+fn reopening_agent_during_projection_lag_uses_retained_text_and_clears_on_new_boot() {
+    use crate::client::compositor::tests::{snapshot, surface};
+    let (mut ui, _, agent) = fixture();
+    bind_pane(&mut ui, agent, "pane_1");
+    let mut shell = shell_with(ui);
+    shell.apply_active_snapshot(Box::new(snapshot()));
+    shell.set_pane_surface(surface());
+    let mut ahead = snapshot();
+    ahead.revision += 1;
+    shell.apply_active_snapshot(Box::new(ahead.clone()));
+    shell.bus.as_mut().unwrap().open_terminal(agent);
+    let frame = shell
+        .compose(100, 30)
+        .expect("reopening must not hold the room frame");
+    let text: String = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect();
+    assert!(text.contains("LIVE"));
+    assert!(!text.contains("Opening agent"));
+    ahead.boot_id = "new-boot".into();
+    shell.apply_active_snapshot(Box::new(ahead));
+    let frame = shell.compose(100, 30).unwrap();
+    let text: String = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect();
+    assert!(
+        !text.contains("LIVE"),
+        "a new server cannot borrow the previous boot's terminal"
+    );
+    assert!(text.contains("Opening agent"));
+}
+
+#[test]
+fn native_focus_errors_apply_only_to_the_current_navigation_even_for_the_same_agent() {
+    use crate::client::compositor::{
+        ClientShellAction, ClientShellEndpointError, ClientShellInput,
+    };
+    let (mut ui, _, agent) = fixture();
+    bind_pane(&mut ui, agent, "pane_1");
+    let mut shell = shell_with(ui);
+    let mut requests = Vec::new();
+    for _ in 0..2 {
+        shell.bus.as_mut().unwrap().open_terminal(agent);
+        let mut outcome = ClientShellInput::default();
+        shell.tick_bus(&mut outcome);
+        let ClientShellAction::Endpoint { boot_id, request } = outcome.actions.remove(0) else {
+            panic!("native focus request");
+        };
+        requests.push((boot_id, request.id));
+    }
+    for (index, (boot, request)) in requests.into_iter().enumerate() {
+        let (repaint, actions) = shell.handle_endpoint_result(
+            &boot,
+            &request,
+            Err(ClientShellEndpointError {
+                code: Some("pane_not_found".into()),
+                message: "Agent terminal no longer exists".into(),
+            }),
+        );
+        assert!(actions.is_empty());
+        assert_eq!(repaint, index == 1);
+        let ui = shell.bus.as_ref().unwrap();
+        if index == 0 {
+            assert_eq!(ui.target_pane.as_deref(), Some("pane_1"));
+            assert!(ui.visible_error().is_none());
+        } else {
+            assert!(ui.target_pane.is_none());
+            assert_eq!(ui.visible_error(), Some("Agent terminal no longer exists"));
+        }
+    }
+}
+
 #[test]
 fn native_shell_composes_bus_before_any_server_frame_and_uses_same_resize_geometry() {
     let (ui, _, _) = fixture();
