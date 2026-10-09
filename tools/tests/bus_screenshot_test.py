@@ -13,13 +13,16 @@ W = shot.Window
 
 class TitleTest(unittest.TestCase):
     def test_bus_client_titles_match_and_repo_shells_do_not(self) -> None:
-        for title in ("bogon: bus", "bus", "host: bus --dev", "herdr"):
+        for title in ("bogon: bus", "bus", "host: bus --dev"):
             self.assertTrue(shot.is_bus_title(title), title)
         for title in (
             "~/work/bus",
             "dylanliu@bogon:~/work/bus",
             "bogon: business",
             "claude",
+            # Legacy branding must not select a window after the cutover.
+            "herdr",
+            "host: herdr --dev",
         ):
             self.assertFalse(shot.is_bus_title(title), title)
 

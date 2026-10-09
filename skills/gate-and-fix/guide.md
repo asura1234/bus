@@ -58,7 +58,8 @@ replace `rebase-origin-main` or PR creation.
   wrapper argv and its logs record every underlying command.
 - Coverage reports live in ignored `temp/gate-and-fix/coverage/`; instrumented Cargo output stays
   in `target/llvm-cov-target/`. Tests run only once per round; coverage consumes their profiles.
-  The gate retains the parent `BUS_DATA_DIR`, `BUS_SESSION_ID`, and `HERDR_SESSION`; tests that
+  The gate retains the parent `BUS_DATA_DIR`, `BUS_SESSION_ID`, and the native-session
+  compatibility key `HERDR_SESSION`; tests that
   model isolated config roots clear and restore those variables within their fixture boundaries.
 - Rust coverage includes host-compiled first-party `src/` executable lines. Vendor/dependencies,
   build.rs, generated files from `lint-policy.toml`'s `generated_files`, `tests/` and inline

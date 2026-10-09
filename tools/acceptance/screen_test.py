@@ -4,7 +4,7 @@ import re
 ROWS, COLS, SIDEBAR = 40, 120, 28
 
 def terminal_frame(raw):
-    """Read Herdr's absolute-cell capture; this is not the app's renderer."""
+    """Read Bus's absolute-cell capture; this is not the app's renderer."""
     screen = [[" "] * COLS for _ in range(ROWS)]
     x = y = i = 0
     text = raw.decode("utf-8", errors="replace")

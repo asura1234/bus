@@ -191,7 +191,7 @@ number** counts:
 - size / line-count baselines
 - snapshots, golden files, generated-artifact inventories (Bus's agent detection manifest checked by
   `scripts/agent_detection_manifest_check.py`, the configuration reference checked by `scripts/config_reference_check.py`,
-  the socket API schema `src/protocol/api/schema/herdr-api.schema.json`), CODEOWNERS-style path tables
+  the socket API schema `src/protocol/api/schema/bus-api.schema.json`), CODEOWNERS-style path tables
 
 Rules:
 
@@ -218,7 +218,7 @@ that holds the list. Both cases go through `HANDOFF`, and the reason states whic
 `CONFIRMED` requires a whole-repository grep and an understanding of the counterexamples below; otherwise it can only be
 `LIKELY`, and `LIKELY` is never deleted.
 
-- **Reachable through strings**: socket API method names (`src/protocol/api/schema`, `herdr-api.schema.json`), wire-protocol message
+- **Reachable through strings**: socket API method names (`src/protocol/api/schema`, `bus-api.schema.json`), wire-protocol message
   names, CLI subcommand and flag names, config keys (including `serde` renames), integration asset names and plugin
   discovery, `include_str!` / `include_bytes!` assets, macro-generated names, `justfile` recipes and command lines in CI
   workflow YAML, FFI / `#[no_mangle]` exports, dynamic `import()` in TypeScript. Search the bare name, the quoted name, and

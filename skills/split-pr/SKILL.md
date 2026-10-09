@@ -94,7 +94,8 @@ FOR part in order:
   Verify in that worktree:
     git diff --check <start>...HEAD
     cargo check, plus focused tests for the touched modules (unset BUS_* and
-    HERDR_* for test runs); for skill or script parts, their python suites.
+    HERDR_* for test runs, including retained pane/session compatibility keys);
+    for skill or script parts, their python suites.
   IF verification fails because the part needs another part's code:
     the dependency was missed: STOP building, add the edge, back to CONFIRM.
   H record PLAN --part <id> [--onto <merge sha> for several open parents]

@@ -61,9 +61,9 @@ def is_bus_title(title: str) -> bool:
     """The shell titles a window `host: command` while a command runs, so the
     Bus client's window ends in `: bus` (or `: bus --dev`). A shell that only
     sits in the repo shows its directory (`~/work/bus`) and must not match.
-    `herdr` is the title Bus sets itself until the rename lands."""
+    The default client title is `bus`."""
     command = title.rsplit(": ", 1)[-1].strip()
-    return re.fullmatch(r"(bus|herdr)(\s.*)?", command) is not None
+    return re.fullmatch(r"bus(\s.*)?", command) is not None
 
 
 def list_windows() -> list[Window]:

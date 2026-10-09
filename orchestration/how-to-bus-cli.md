@@ -526,7 +526,7 @@ bus settings room-sound --on --sound Glass
 Bus stores the name, not the path, and plays the sound once from the client
 running the session. A sound that is no longer installed or fails to play
 falls back to the default ding, which honors a custom `[ui.sound]` `path` or
-`done_path`. `HERDR_DISABLE_SOUND` silences all of them.
+`done_path`. `BUS_DISABLE_SOUND` silences all of them.
 
 ## Inspect rooms, replies, and terminals
 
@@ -900,7 +900,8 @@ Each run starts its own Bus from `target/debug/bus` (or `--binary PATH`)
 in a pseudo-terminal with a fresh owner-only
 `BUS_DATA_DIR` under `temp/e2e/<timestamp>/`, after removing every inherited
 `BUS_*`, `HERDR_*` and `CLAUDE_CODE_*` variable, so it never touches another
-Bus. It drives that Bus only through these control commands, and the agents
+Bus. Retained pane/session compatibility keys are scrubbed too.
+It drives that Bus only through these control commands, and the agents
 work in a scratch repository it recreates at `temp/e2e/workspace`. Folder
 trust and update prompts are answered with `agent dialog` and `agent choose`.
 At the end it quits Bus, stops its server, and kills any process still holding

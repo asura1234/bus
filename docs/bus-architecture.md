@@ -1,9 +1,8 @@
 # Bus restructure
 
-Status: decided. It describes the target folder and module layout of the repository. Bus is a prototype: it keeps no fallbacks and no
-backward compatibility with older saves, configs, peers or herdr-era names, and it has no CI.
+Status: decided. It describes the target folder and module layout of the repository. Bus is a prototype with no general backward compatibility and no CI. S13 retains a specific set of disk, injected environment and wire spellings so the existing local session can resume; this does not restore legacy Rust import paths.
 
-S12 checkpoint: canonical imports and AgentKind/TerminalEvent/RoomAgent spellings are in place; compatibility wiring is removed and the final import graph is enforced. Shared filesystem mechanics, neutral provider harnesses, restore planning and package input closure are complete. The enforced limit is
+S13 pre-cutover checkpoint: canonical imports and AgentKind/TerminalEvent/RoomAgent spellings are in place; compatibility wiring is removed and the final import graph is enforced. Shared filesystem mechanics, neutral provider harnesses, restore planning and package input closure are complete. The enforced limit is
 800 handwritten production lines per file, with shared test scopes and the generated FFI exception. H14 production
 Clippy rules are active at 100 function lines, cognitive complexity 25 and 11 arguments; tests are exempt from these
 selected rules. Python retains Ruff E9,F and has no complexity lint policy.
@@ -400,4 +399,21 @@ installed `share/bus` default directory, runtime source-file lookup or user-file
 remain supported. `orchestration/README.md` documents the source-to-emitted filename map, the placeholders Bus fills
 (`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}`, `{{DOCS}}`), and the control CLI as the only way to drive Bus.
 
-S11 packaging closure: Cargo includes all Rust sources, registered integration suites and fixtures, authored Markdown, native Ghostty sources/metadata and the build script. Zig caches, dependency caches and built outputs are excluded. Nix retains the patched portable-pty dependency as a path source; Cargo registry normalization removes the local patch table, so registry publication is a distinct dependency contract, not the Nix/repository build. No runtime resolver or installed default directory is added. The final import graph is enforced, including grouped/aliased/relative paths and physical owners reached through re-exports. Unknown paths fail; generated or procedural macro expansion still requires compiler verification. Live hook commands and herdr/HERDR operational spellings remain unchanged until S13.
+S11 packaging closure: Cargo includes all Rust sources, registered integration suites and fixtures, authored Markdown, native Ghostty sources/metadata and the build script. Zig caches, dependency caches and built outputs are excluded. Nix retains the patched portable-pty dependency as a path source; Cargo registry normalization removes the local patch table, so registry publication is a distinct dependency contract, not the Nix/repository build. No runtime resolver or installed default directory is added. The final import graph is enforced, including grouped/aliased/relative paths and physical owners reached through re-exports. Unknown paths fail; generated or procedural macro expansion still requires compiler verification. S13 uses Bus operational branding while retaining the explicitly documented live session directory/socket/log names, injected runtime keys, native session source identifiers and serialized enum tags. The callback command and executable path stay unchanged through the human-controlled cutover.
+
+## S13 live-session compatibility
+
+Bus branding and build/debug knobs use Bus names. No startup migration is introduced. The human cutover must reuse the same HOME, local session ID and callback executable path. These retained literals preserve the existing session and injected agents:
+
+| Contract | Retained spelling |
+| --- | --- |
+| Session-local native config/state | `herdr-config`, `herdr-config/sessions/bus`, `herdr-state` |
+| Native IPC endpoints | `herdr.sock`, `herdr-client.sock` |
+| Logs and numbered rotations | `herdr-server.log`, `herdr-client.log` |
+| Injected environment | `HERDR_ENV`, `HERDR_SESSION`, `HERDR_SOCKET_PATH`, `HERDR_CLIENT_SOCKET_PATH`, `HERDR_CONFIG_PATH`, `HERDR_STARTUP_CWD`, `HERDR_AGENT`, `HERDR_BIN_PATH`, `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, `HERDR_PANE_ID`, `HERDR_PANE_RUNTIME_ID` |
+| Environment isolation and shell prompt marker | `HERDR_` scrub prefixes; `__HerdrOriginalPrompt` |
+| Persisted native provider sources | `herdr:<provider>` prefixes, aliases and replacement rules |
+| Serialized delivery and right-click tags | `herdr` |
+| Already-injected callback command | `/Users/dylanliu/work/bus/target/debug/bus --bus-callback` and the existing provider hook subcommands |
+
+`BUS_DATA_DIR`, `BUS_SESSION_ID`, `BUS_CALLBACK_DIR` and `BUS_LAUNCH_ID` keep their existing meanings. Native `HERDR_SESSION=bus` is distinct from the local Bus session ID. Persisted rooms, agents, callback manifests, queues and consumed callback/turn IDs are not rekeyed. Upstream attribution and provenance, frozen test identities and explicit negative legacy-title fixtures also retain their original spelling. Windows packaging and the maintained ConPTY loader now agree on `conpty/bus-conpty.json` and `BUS_WINDOWS_CONPTY`; no old marker fallback is added.
