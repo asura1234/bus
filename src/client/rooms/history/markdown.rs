@@ -1,7 +1,7 @@
 //! Markdown message preparation, style preservation and copyable row layout.
 use super::super::render::{display, wrap_ranges};
 use super::{History, Line, MarkdownSource, RowAnchor, Tone};
-use markdown_ratatui::{DocumentRow, LayoutOptions, MarkdownView, Theme, ViewState};
+use markdown_ratatui::{DocumentRow, Layout, LayoutOptions, MarkdownView, Theme, ViewState};
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -13,6 +13,9 @@ pub(super) struct MarkdownBlock {
     view: Option<MarkdownView>,
     width: Option<u16>,
     lines: Vec<Line>,
+    /// Rows laid out without a width limit: one per logical line, so only
+    /// hard breaks and block boundaries separate them. Width independent.
+    unwrapped: Option<Option<Vec<String>>>,
 }
 
 impl History {
@@ -39,17 +42,7 @@ impl MarkdownBlock {
         };
         let view = match MarkdownView::new(&rendered) {
             Ok(mut view) => {
-                view.set_options(LayoutOptions {
-                    theme: Theme {
-                        text: Style::default(),
-                        heading: Style::new().bold(),
-                        link: Style::new().fg(Color::Cyan).underlined(),
-                        code: Style::new().fg(Color::Cyan),
-                        muted: Style::new().add_modifier(Modifier::DIM),
-                        selected: Style::default(),
-                    },
-                    ..LayoutOptions::default()
-                });
+                view.set_options(layout_options());
                 Some(view)
             }
             Err(error) => {
@@ -62,6 +55,7 @@ impl MarkdownBlock {
             view,
             width: None,
             lines: Vec::new(),
+            unwrapped: None,
         }
     }
 
@@ -76,11 +70,26 @@ impl MarkdownBlock {
             return &self.lines;
         }
         let content_width = width.saturating_sub(indent.len() as u16).max(1);
+        let unwrapped = self.unwrapped.get_or_insert_with(|| {
+            let view = self.view.as_ref()?;
+            Layout::new(view.document(), u16::MAX, &layout_options())
+                .ok()
+                .map(|layout| layout.plain_lines())
+        });
         self.lines = self
             .view
             .as_mut()
             .and_then(|view| {
                 prepared_markdown_lines(view, content_width, request, &self.source, indent, anchor)
+            })
+            .map(|mut lines| {
+                mark_soft_wraps(
+                    &mut lines,
+                    unwrapped.as_deref(),
+                    content_width,
+                    indent.len(),
+                );
+                lines
             })
             .unwrap_or_else(|| {
                 literal_reply_lines(&self.source, content_width, request, indent, anchor)
@@ -136,15 +145,80 @@ fn prepared_markdown_lines(
         }
         first += usize::from(height);
     }
-    mark_soft_wraps(&mut lines, width, indent.len());
     Some(lines)
 }
 
-/// Marks which rendered Markdown rows continue a soft-wrapped line. The
-/// renderer keeps no such flag and trims the space at each wrap, so a row
+fn layout_options() -> LayoutOptions {
+    LayoutOptions {
+        theme: Theme {
+            text: Style::default(),
+            heading: Style::new().bold(),
+            link: Style::new().fg(Color::Cyan).underlined(),
+            code: Style::new().fg(Color::Cyan),
+            muted: Style::new().add_modifier(Modifier::DIM),
+            selected: Style::default(),
+        },
+        ..LayoutOptions::default()
+    }
+}
+
+/// Marks which rendered Markdown rows continue a soft-wrapped line, so copying
+/// rejoins them instead of inserting a line end. The renderer keeps no such
+/// flag, so the rows are matched against the unwrapped layout: a row that
+/// continues the current logical line is a wrap, and it rejoins with a space
+/// only when the wrap dropped one there (a long word breaks without one).
+/// Copying skips the continuation prefix (list indent, quote or code bar).
+fn mark_soft_wraps(lines: &mut [Line], unwrapped: Option<&[String]>, width: u16, indent: usize) {
+    if unwrapped.is_some_and(|unwrapped| match_wraps(lines, unwrapped, indent)) {
+        return;
+    }
+    guess_soft_wraps(lines, width, indent);
+}
+
+fn match_wraps(lines: &mut [Line], unwrapped: &[String], indent: usize) -> bool {
+    let mut flags = Vec::with_capacity(lines.len());
+    let mut logical = unwrapped.iter().map(|line| line.trim_end());
+    let mut rest = "";
+    for line in lines.iter() {
+        let row = line.text.get(indent..).unwrap_or_default();
+        let content = rest.trim_start();
+        if let Some(len) = continuation_len(row, content) {
+            // The continuation prefix before the matched text is layout.
+            let copy_from = indent + row.len() - len;
+            flags.push((true, content.len() < rest.len(), copy_from));
+            rest = &content[len..];
+            continue;
+        }
+        // Not a continuation (a rule's row leaves its unlimited remainder):
+        // the row must start the next logical line.
+        let Some(after) = logical.next().and_then(|next| next.strip_prefix(row)) else {
+            return false;
+        };
+        flags.push((false, false, line.copy_from));
+        rest = after;
+    }
+    for (line, (continued, rejoin_space, copy_from)) in lines.iter_mut().zip(flags) {
+        line.continued = continued;
+        line.rejoin_space = rejoin_space;
+        line.copy_from = copy_from;
+    }
+    true
+}
+
+/// Bytes of `content` that `row` ends with after its continuation prefix:
+/// the longest nonempty match, or `None` when the row does not continue it.
+fn continuation_len(row: &str, content: &str) -> Option<usize> {
+    let limit = row.len().min(content.len());
+    (1..=limit)
+        .rev()
+        .filter(|len| content.is_char_boundary(*len))
+        .find(|len| row.ends_with(&content[..*len]))
+}
+
+/// Fallback when the rows cannot be matched to the unwrapped layout: a row
 /// counts as a wrap of the one above when its first word could not have fit
-/// on that row. Copying then rejoins it with one space instead of a line end.
-fn mark_soft_wraps(lines: &mut [Line], width: u16, indent: usize) {
+/// on that row, and copying rejoins it with one space.
+fn guess_soft_wraps(lines: &mut [Line], width: u16, indent: usize) {
     use unicode_width::UnicodeWidthStr;
     for index in 1..lines.len() {
         let previous = lines[index - 1].text.get(indent..).unwrap_or_default();

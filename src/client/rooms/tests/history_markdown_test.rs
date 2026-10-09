@@ -343,3 +343,72 @@ fn narrow_markdown_keeps_unicode_styles_and_table_content_within_width() {
             .any(|(run, style)| run.contains("強調") && style.add_modifier.contains(Modifier::BOLD))
     }));
 }
+
+fn copy_markdown_body_at_width(ui: &mut BusUi, room: RoomId, width: u16, prompt: bool) -> String {
+    let snapshot = Arc::clone(&ui.snapshot);
+    ui.history.lines(
+        &snapshot.state,
+        snapshot.state.room(room).unwrap(),
+        width,
+        snapshot.revision,
+        2_000,
+        &mut Default::default(),
+    );
+    let body = |line: &history::Line| {
+        let matches_source = match line.raw_markdown.as_ref() {
+            Some((history::MarkdownSource::Prompt(_), _)) => prompt,
+            Some((history::MarkdownSource::Reply(_), _)) => !prompt,
+            None => false,
+        };
+        matches_source && !line.text.trim().is_empty()
+    };
+    let lines = ui.history.cached();
+    let start = lines.iter().position(body).expect("first body row");
+    let end = lines.iter().rposition(body).expect("last body row");
+    ui.history_selection = Some((
+        selection::Point {
+            line: start,
+            offset: lines[start].copy_from,
+        },
+        selection::Point {
+            line: end,
+            offset: lines[end].text.len(),
+        },
+    ));
+    ui.selected_text().expect("selected body text")
+}
+
+#[test]
+fn a_history_copy_keeps_explicit_prompt_newlines_near_the_right_edge() {
+    let (mut ui, room, agent) = fixture();
+    let prompt = "12345678901234567890\nsecond line";
+    saved_exchange(&mut ui, room, agent, prompt, "reply");
+
+    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, true), prompt);
+}
+
+#[test]
+fn a_history_copy_does_not_insert_spaces_inside_a_wrapped_word() {
+    let (mut ui, room, agent) = fixture();
+    let reply = "abcdefghijklmnopqrstuvwxyz0123456789";
+    saved_exchange(&mut ui, room, agent, "prompt", reply);
+
+    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, false), reply);
+}
+
+#[test]
+fn a_history_copy_of_a_wrapped_list_item_skips_its_continuation_indent() {
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        "prompt",
+        "- alpha beta gamma delta epsilon zeta",
+    );
+
+    assert_eq!(
+        copy_markdown_body_at_width(&mut ui, room, 20, false),
+        "• alpha beta gamma delta epsilon zeta"
+    );
+}
