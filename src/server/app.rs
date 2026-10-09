@@ -154,16 +154,7 @@ impl App {
                 (Vec::new(), None, 0)
             } else {
                 crate::utils::logging::session_restored(ws.len(), "ok");
-                let restored_index = |idx: usize| {
-                    if ws.len() == snap.workspaces.len() {
-                        return (idx < ws.len()).then_some(idx);
-                    }
-                    let id = snap.workspaces.get(idx)?.id.as_ref()?;
-                    ws.iter().position(|workspace| &workspace.id == id)
-                };
-                let active = snap.active.and_then(restored_index);
-                let selected = restored_index(snap.selected)
-                    .unwrap_or_else(|| snap.selected.min(ws.len().saturating_sub(1)));
+                let (active, selected) = Self::restored_focus(&snap, &ws);
                 (ws, active, selected)
             }
         } else {
@@ -215,6 +206,25 @@ impl App {
         };
         app.configure_window_title(&config.ui.window_title);
         app
+    }
+
+    /// Maps the snapshot's saved active/selected indices onto the workspaces
+    /// that survived restore, which may have pruned some of them.
+    fn restored_focus(
+        snap: &crate::server::persistence::SessionSnapshot,
+        ws: &[crate::server::workspaces::Workspace],
+    ) -> (Option<usize>, usize) {
+        let restored_index = |idx: usize| {
+            if ws.len() == snap.workspaces.len() {
+                return (idx < ws.len()).then_some(idx);
+            }
+            let id = snap.workspaces.get(idx)?.id.as_ref()?;
+            ws.iter().position(|workspace| &workspace.id == id)
+        };
+        let active = snap.active.and_then(restored_index);
+        let selected = restored_index(snap.selected)
+            .unwrap_or_else(|| snap.selected.min(ws.len().saturating_sub(1)));
+        (active, selected)
     }
 
     fn initial_state(
