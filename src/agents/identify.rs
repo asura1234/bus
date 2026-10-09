@@ -139,11 +139,14 @@ pub(super) fn wrapped_agent_name_from_runtime_argv(
     let runtime_name = normalized_agent_lookup_name(path_basename(runtime));
 
     match runtime_name.as_str() {
-        "node" => cursor_agent_name_from_bundled_node_argv(argv)
-            .or_else(|| script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[])),
-        "bun" => script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[]),
-        name if is_python_runtime(name) => script_arg_agent_name(argv, &["-c"], &["-m"]),
-        "sh" | "bash" | "zsh" | "fish" => script_arg_agent_name(argv, &["-c"], &[]),
+        "node" => cursor_agent_name_from_bundled_node_argv(argv).or_else(|| {
+            script_arg_agent_name(&runtime_name, argv, &["-e", "--eval", "-p", "--print"], &[])
+        }),
+        "bun" => {
+            script_arg_agent_name(&runtime_name, argv, &["-e", "--eval", "-p", "--print"], &[])
+        }
+        name if is_python_runtime(name) => script_arg_agent_name(name, argv, &["-c"], &["-m"]),
+        "sh" | "bash" | "zsh" | "fish" => script_arg_agent_name(&runtime_name, argv, &["-c"], &[]),
         "cmd" => windows_cmd_arg_agent_name(argv),
         "powershell" | "pwsh" => powershell_arg_agent_name(argv),
         "tmux" => None,
@@ -259,6 +262,7 @@ fn command_text_token(input: &str) -> Option<(&str, &str)> {
 }
 
 fn script_arg_agent_name(
+    runtime: &str,
     argv: &[String],
     eval_flags: &[&str],
     module_flags: &[&str],
@@ -276,7 +280,7 @@ fn script_arg_agent_name(
         }
 
         if arg.starts_with('-') {
-            if option_takes_value(arg) {
+            if option_takes_value(runtime, arg) {
                 let _ = args.next();
             }
             continue;
@@ -308,7 +312,10 @@ fn long_flag_value(arg: &str, flag: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('='))
 }
 
-fn option_takes_value(arg: &str) -> bool {
+fn option_takes_value(runtime: &str, arg: &str) -> bool {
+    if arg == "-S" && is_python_runtime(runtime) {
+        return false;
+    }
     matches!(
         arg,
         "-r" | "--require"
