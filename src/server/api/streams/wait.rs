@@ -1,4 +1,4 @@
-//! Stream handlers remain visible to the sibling socket dispatcher within server::api.
+//! Blocking output, agent lifecycle and event-match waits.
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -626,27 +626,12 @@ fn event_match_subscription(
     }
 }
 
-fn wait_matched_response(request_id: &str, event: serde_json::Value) -> std::io::Result<String> {
-    let Ok(event) = serde_json::from_value::<SubscriptionEventEnvelope>(event) else {
-        return serde_json::to_string(&ErrorResponse {
-            id: request_id.into(),
-            error: ErrorBody {
-                code: "internal_error".into(),
-                message: "failed to decode matched event".into(),
-            },
-        })
-        .map_err(std::io::Error::other);
-    };
-
+fn wait_matched_response(
+    request_id: &str,
+    event: SubscriptionEventEnvelope,
+) -> std::io::Result<String> {
     let SubscriptionEventData::PaneAgentStatusChanged(data) = event.data else {
-        return serde_json::to_string(&ErrorResponse {
-            id: request_id.into(),
-            error: ErrorBody {
-                code: "unsupported_event_wait_match".into(),
-                message: "events.wait currently supports pane agent status matches".into(),
-            },
-        })
-        .map_err(std::io::Error::other);
+        unreachable!("events.wait only admits agent status subscriptions");
     };
 
     serde_json::to_string(&SuccessResponse {

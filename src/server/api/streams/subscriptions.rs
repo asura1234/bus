@@ -1,4 +1,4 @@
-//! Stream handlers remain visible to the sibling socket dispatcher within server::api.
+//! Subscription setup, event replay and snapshot polling state.
 use regex::Regex;
 
 use crate::protocol::api::schema::{
@@ -277,12 +277,10 @@ impl ActiveSubscription {
         &mut self,
         api_tx: &ApiRequestSender,
         event_hub: &EventHub,
-    ) -> Result<Option<serde_json::Value>, ErrorResponse> {
+    ) -> Result<Option<SubscriptionEventEnvelope>, ErrorResponse> {
         match self {
-            Self::AgentStatusChanged(subscription) => Ok(subscription
-                .poll_result(api_tx, event_hub)?
-                .and_then(|event| serde_json::to_value(event).ok())),
-            _ => Ok(self.poll(api_tx, event_hub)),
+            Self::AgentStatusChanged(subscription) => subscription.poll_result(api_tx, event_hub),
+            _ => unreachable!("events.wait only admits agent status subscriptions"),
         }
     }
 }
