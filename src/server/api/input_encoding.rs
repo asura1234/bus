@@ -108,7 +108,9 @@ pub(in crate::server) fn pane_agent_status(
 }
 
 pub(crate) use super::terminal_read::limit_snapshot_lines;
-pub(in crate::server) use super::terminal_read::read_terminal_snapshot;
+pub(in crate::server) use super::terminal_read::{
+    observe_snapshot, read_terminal_snapshot, TerminalReadObservation,
+};
 
 pub(in crate::server) fn normalize_reported_agent_label(agent: &str) -> Option<String> {
     let trimmed = agent.trim();

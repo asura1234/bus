@@ -59,17 +59,41 @@ pub(in crate::server) fn read_terminal_snapshot(
     let (rows, columns) = visible_facts
         .map(|(rows, columns, _)| (rows, columns))
         .unwrap_or_else(|| terminal.current_size());
-    let rendered_rows = snapshot.text.split_inclusive('\n').count() as u32;
-    let recent = matches!(source, ReadSource::Recent | ReadSource::RecentUnwrapped);
-    let available_lines = recent.then(|| {
-        terminal
-            .scroll_metrics()
-            .map_or(rendered_rows as u64, |metrics| {
+    observe_snapshot(
+        snapshot,
+        source,
+        lines,
+        (rows, columns),
+        || {
+            terminal.scroll_metrics().map(|metrics| {
                 metrics
                     .max_offset_from_bottom
                     .saturating_add(metrics.viewport_rows) as u64
             })
-    });
+        },
+        || {
+            visible_facts
+                .map(|(_, _, revision)| revision)
+                .unwrap_or_else(|| terminal.content_seq())
+        },
+    )
+}
+
+/// Derive a read's range facts from the one snapshot its text came from, so a
+/// frozen read and a live read report facts the same way.
+pub(in crate::server) fn observe_snapshot(
+    snapshot: crate::terminal::emulator::TerminalReadSnapshot,
+    source: schema::ReadSource,
+    lines: Option<u32>,
+    (rows, columns): (u16, u16),
+    scrollable_lines: impl FnOnce() -> Option<u64>,
+    revision: impl FnOnce() -> u64,
+) -> TerminalReadObservation {
+    use schema::ReadSource;
+
+    let rendered_rows = snapshot.text.split_inclusive('\n').count() as u32;
+    let recent = matches!(source, ReadSource::Recent | ReadSource::RecentUnwrapped);
+    let available_lines = recent.then(|| scrollable_lines().unwrap_or(rendered_rows as u64));
     let returned_lines = if recent {
         available_lines
             .unwrap_or_default()
@@ -86,9 +110,7 @@ pub(in crate::server) fn read_terminal_snapshot(
         returned_lines,
         available_lines,
         exhausted: recent.then_some(!snapshot.truncated),
-        revision: visible_facts
-            .map(|(_, _, revision)| revision)
-            .unwrap_or_else(|| terminal.content_seq()),
+        revision: revision(),
     }
 }
 
@@ -122,7 +144,7 @@ pub(in crate::server) struct AltScreenReadSpec {
 
 pub(in crate::server) enum AltScreenReadConflict {
     None,
-    Frozen(crate::terminal::emulator::TerminalReadSnapshot),
+    Frozen(TerminalReadObservation),
     Defer,
 }
 
@@ -288,7 +310,7 @@ impl HeadlessServer {
             return AltScreenReadConflict::None;
         };
         if format == schema::ReadFormat::Text {
-            AltScreenReadConflict::Frozen(pending.frozen_snapshot(source, lines))
+            AltScreenReadConflict::Frozen(pending.frozen_read(source, lines))
         } else {
             AltScreenReadConflict::Defer
         }

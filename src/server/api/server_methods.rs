@@ -64,7 +64,7 @@ impl HeadlessServer {
 
         let frozen_alt_screen_read = match self.alt_screen_read_conflict(&msg.request) {
             AltScreenReadConflict::None => None,
-            AltScreenReadConflict::Frozen(snapshot) => Some(snapshot),
+            AltScreenReadConflict::Frozen(frozen) => Some(frozen),
             AltScreenReadConflict::Defer => {
                 self.deferred_alt_screen_reads.push(msg);
                 return false;
@@ -111,11 +111,19 @@ impl HeadlessServer {
             return changed | deferred_changed;
         }
         let mut response = self.dispatch_foreground_api_request(msg.request);
-        if let Some(snapshot) = frozen_alt_screen_read {
+        if let Some(frozen) = frozen_alt_screen_read {
             if let Ok(mut success) = serde_json::from_str::<schema::SuccessResponse>(&response) {
                 if let schema::ResponseResult::PaneRead { read } = &mut success.result {
-                    read.text = snapshot.text;
-                    read.truncated = snapshot.truncated;
+                    // Every fact must describe the frozen text, not the live redraw.
+                    read.text = frozen.text;
+                    read.truncated = frozen.truncated;
+                    read.revision = frozen.revision;
+                    read.viewport_rows = frozen.viewport_rows;
+                    read.viewport_columns = frozen.viewport_columns;
+                    read.requested_lines = frozen.requested_lines;
+                    read.returned_lines = frozen.returned_lines;
+                    read.available_lines = frozen.available_lines;
+                    read.exhausted = frozen.exhausted;
                     if let Ok(serialized) = serde_json::to_string(&success) {
                         response = serialized;
                     }
