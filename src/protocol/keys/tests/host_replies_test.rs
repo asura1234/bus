@@ -499,3 +499,20 @@ fn stops_holding_lone_escape_after_host_color_reply_completes() {
     assert!(framer.push(b"\x1b").is_empty());
     assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
 }
+
+#[test]
+fn awaited_palette_color_reply_survives_idle_between_chunks() {
+    let reply = b"\x1b]4;7;rgb:1111/2222/3333\x1b\\";
+    for split in 4..reply.len() {
+        let mut framer = RawInputByteFramer::default();
+        framer.host_color_query_sent();
+
+        assert!(framer.push(&reply[..split]).is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert_eq!(
+            framer.push(&reply[split..]),
+            vec![reply.to_vec()],
+            "palette reply split at byte {split}"
+        );
+    }
+}
