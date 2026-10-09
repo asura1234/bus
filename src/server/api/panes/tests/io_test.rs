@@ -240,6 +240,129 @@ async fn alternate_screen_harvest_reports_range_facts_for_captured_rows() {
     assert!(read.available_lines.is_none_or(|available| available >= 8));
 }
 
+fn harvested_read_from_eight_row_history(
+    requested_lines: u32,
+) -> crate::protocol::api::schema::PaneReadResult {
+    use std::time::{Duration, Instant};
+
+    let (mut app, public_pane_id) = app_with_test_workspace();
+    let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0]
+        .terminal_id(pane_id)
+        .unwrap()
+        .clone();
+    let (runtime, mut input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            20,
+            5,
+            0,
+            b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[2J\x1b[H16\r\n17\r\n18\r\n19\r\n20",
+            8,
+        );
+    app.state.insert_test_runtime(pane_id, runtime);
+    let fallback = app.handle_pane_read(
+        "range-boundary".into(),
+        PaneReadParams {
+            pane_id: public_pane_id,
+            source: crate::protocol::api::schema::ReadSource::Recent,
+            lines: Some(requested_lines),
+            format: crate::protocol::api::schema::ReadFormat::Text,
+            strip_ansi: true,
+            intent: crate::protocol::api::schema::ReadIntent::Interactive,
+        },
+    );
+    let passive: SuccessResponse = serde_json::from_str(&fallback).unwrap();
+    let ResponseResult::PaneRead { read } = passive.result else {
+        panic!("expected passive pane read");
+    };
+    let runtime = app.lookup_runtime_sender(0, pane_id).unwrap();
+    let (_, initial, content_seq) = runtime.screen_text_snapshot_with_seq().unwrap();
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    let started = Instant::now();
+    let pending = crate::server::terminals::scrollback_read::PendingAltScreenRead::start(
+        terminal_id,
+        "range-boundary".into(),
+        respond_to,
+        fallback,
+        read,
+        requested_lines as usize,
+        false,
+        initial.clone(),
+        content_seq,
+        started,
+    );
+    let pending = pending
+        .poll(Some(runtime), started + Duration::from_millis(10))
+        .unwrap();
+    input_rx.try_recv().expect("bottom wheel probe");
+    let pending = pending
+        .poll(Some(runtime), started + Duration::from_millis(130))
+        .unwrap();
+    input_rx.try_recv().expect("upward wheel batch");
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H13\r\n14\r\n15\r\n16\r\n17");
+    let pending = pending
+        .poll(Some(runtime), started + Duration::from_millis(131))
+        .unwrap();
+    let pending = pending
+        .poll(Some(runtime), started + Duration::from_millis(141))
+        .unwrap();
+    input_rx.try_recv().expect("next wheel batch");
+    let (pending, restore_at) = if requested_lines > 8 {
+        // The next upward wheel cannot move past the eight-row history's top.
+        let pending = pending
+            .poll(Some(runtime), started + Duration::from_millis(261))
+            .unwrap();
+        input_rx
+            .try_recv()
+            .expect("restore wheel batch after reaching top");
+        (pending, 261)
+    } else {
+        (pending, 141)
+    };
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H16\r\n17\r\n18\r\n19\r\n20");
+    let pending = pending
+        .poll(
+            Some(runtime),
+            started + Duration::from_millis(restore_at + 1),
+        )
+        .unwrap();
+    assert!(pending
+        .poll(
+            Some(runtime),
+            started + Duration::from_millis(restore_at + 11)
+        )
+        .is_none());
+    assert_eq!(runtime.screen_text_snapshot().unwrap().1, initial);
+    assert!(input_rx.try_recv().is_err());
+    let response: SuccessResponse = serde_json::from_str(&response_rx.try_recv().unwrap()).unwrap();
+    let ResponseResult::PaneRead { read } = response.result else {
+        panic!("expected harvested pane read");
+    };
+    read
+}
+
+#[tokio::test]
+async fn alternate_screen_harvest_reports_exact_available_rows_after_reaching_top() {
+    let read = harvested_read_from_eight_row_history(12);
+    assert_eq!(read.text, "13\n14\n15\n16\n17\n18\n19\n20\n");
+    assert_eq!(read.requested_lines, Some(12));
+    assert_eq!(read.returned_lines, 8);
+    assert_eq!(read.available_lines, Some(8));
+    assert_eq!(read.exhausted, Some(true));
+    assert!(!read.truncated);
+}
+
+#[tokio::test]
+async fn alternate_screen_harvest_limits_returned_count_when_wheel_batch_overshoots() {
+    let read = harvested_read_from_eight_row_history(6);
+    assert_eq!(read.text, "15\n16\n17\n18\n19\n20\n");
+    assert_eq!(read.requested_lines, Some(6));
+    assert_eq!(read.returned_lines, 6);
+    assert_eq!(read.available_lines, Some(8));
+    assert_eq!(read.exhausted, Some(false));
+    assert!(read.truncated);
+}
+
 #[tokio::test]
 async fn api_pane_read_honors_recent_line_requests_above_one_thousand() {
     let (mut app, public_pane_id) = app_with_test_workspace();

@@ -424,3 +424,33 @@ fn a_room_without_report_turns_saves_without_the_field() {
     let saved = std::fs::read_to_string(bus.dir.join("state.json")).unwrap();
     assert!(!saved.contains("report_turns"), "{saved}");
 }
+
+#[test]
+fn persisted_report_turn_boundary_separates_the_next_report_after_restart() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let orchestrator = bus.orchestrator;
+    bus.claude_turn(
+        orchestrator,
+        "before-restart",
+        "First background build finished",
+        "All tests passed.",
+    );
+    assert_eq!(bus.reports(), ["All tests passed."]);
+
+    let elsewhere = bus.dir.with_extension("restart-placeholder");
+    drop(std::mem::replace(
+        &mut bus.worker,
+        Worker::open(elsewhere.clone(), Box::new(Accepting)).unwrap(),
+    ));
+    let reopened = Worker::open(bus.dir.clone(), Box::new(Accepting)).unwrap();
+    drop(std::mem::replace(&mut bus.worker, reopened));
+    std::fs::remove_dir_all(elsewhere).unwrap();
+
+    bus.claude_turn(
+        orchestrator,
+        "after-restart",
+        "Second background build finished",
+        "All tests passed.",
+    );
+    assert_eq!(bus.reports(), ["All tests passed.", "All tests passed."]);
+}

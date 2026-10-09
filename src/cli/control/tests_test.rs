@@ -1176,3 +1176,73 @@ fn agent_read_reports_server_busy_after_its_retry_budget() {
     assert_eq!(response["id"], "read-a1");
     assert_eq!(response["error"]["code"], "server_busy");
 }
+
+#[test]
+fn wait_preserves_last_status_when_server_busy_persists_until_deadline() {
+    let pending = status(vec![recipient(1, "queued", false)]);
+    let started = std::time::Instant::now();
+    let mut calls = 0;
+    let (outcome, response) = run_captured(
+        &[
+            "wait",
+            "--message",
+            "19",
+            "--timeout",
+            "1",
+            "--request-id",
+            "wait-19",
+        ],
+        |request, timeout| {
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "wait must retain its deadline"
+            );
+            assert!(timeout.is_some_and(|remaining| remaining <= Duration::from_secs(1)));
+            calls += 1;
+            Ok(if calls == 1 {
+                Response::success(&request.id, pending.clone())
+            } else {
+                Response::failure("", "server_busy", "Development connection limit reached")
+            })
+        },
+    );
+    assert!(outcome.is_err());
+    assert!(calls >= 2);
+    assert_eq!(response["id"], "wait-19");
+    assert_eq!(response["error"]["code"], "timeout");
+    assert_eq!(response["result"], pending);
+}
+
+#[test]
+fn async_following_caps_overload_backoff_and_recovers_after_extended_server_busy() {
+    let mut calls = 0;
+    let mut pauses = Vec::new();
+    let completed = status(vec![recipient(1, "delivered", true)]);
+    let response = follow_message(
+        "follow-19",
+        &json!(19),
+        &mut |request: &Request, timeout| {
+            assert_eq!(request.method, "message.status");
+            assert_eq!(request.params, json!({"message": "19"}));
+            assert!(timeout.is_none());
+            calls += 1;
+            assert!(calls <= 9, "following must end after the turn completes");
+            Ok(if calls <= 8 {
+                Response::failure("", "server_busy", "Development connection limit reached")
+            } else {
+                Response::success(&request.id, completed.clone())
+            })
+        },
+        &mut |pause| pauses.push(pause),
+    );
+    assert!(response.ok);
+    assert_eq!(response.result, completed);
+    assert_eq!(calls, 9);
+    assert_eq!(pauses.len(), 8);
+    assert_eq!(pauses[0], Duration::from_millis(100));
+    assert!(pauses.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert!(pauses.iter().all(|pause| *pause <= Duration::from_secs(2)));
+    assert!(pauses[5..]
+        .iter()
+        .all(|pause| *pause == Duration::from_secs(2)));
+}

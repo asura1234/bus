@@ -352,3 +352,43 @@ fn partial_hello_does_not_extend_the_five_second_handshake_deadline() {
         "an incomplete hello must close within five seconds even when its prefix arrives later"
     );
 }
+
+#[test]
+fn fragmented_hello_within_deadline_preserves_shell_registration() {
+    let (mut client_stream, server_stream, _path) = local_stream_pair("fragmented-hello");
+    let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+    let should_quit = Arc::new(AtomicBool::new(false));
+    let handle = std::thread::spawn(move || {
+        handle_client_handshake(server_stream, 43, &server_event_tx, &should_quit)
+    });
+    let mut frame = Vec::new();
+    protocol::write_message(&mut frame, &endpoint_hello(80, 29)).unwrap();
+    let midpoint = 4 + (frame.len() - 4) / 2;
+    for chunk in [&frame[..2], &frame[2..midpoint], &frame[midpoint..]] {
+        client_stream.write_all(chunk).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let welcome =
+        endpoint_welcome(protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).unwrap());
+    assert!(welcome.error.is_none());
+    let ServerEvent::ClientShellConnected {
+        client_id,
+        surface_cols,
+        surface_rows,
+        writer,
+        ..
+    } = recv_server_event(&mut server_event_rx, "fragmented hello registration")
+    else {
+        panic!("expected shell connection");
+    };
+    assert_eq!(client_id, 43);
+    assert_eq!((surface_cols, surface_rows), (80, 29));
+    protocol::write_message(&mut client_stream, &ClientMessage::Detach).unwrap();
+    assert!(matches!(
+        recv_server_event(&mut server_event_rx, "detach after fragmented hello"),
+        ServerEvent::ClientDetach { client_id: 43 }
+    ));
+    drop(writer);
+    handle.join().unwrap().unwrap();
+}

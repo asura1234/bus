@@ -164,3 +164,51 @@ fn terminal_image_data_requests_deduplicate_and_reconsider_changed_signatures() 
         &mut requested,
     ));
 }
+
+#[test]
+fn subcell_crop_keeps_unclipped_axes_and_zero_offset_geometry() {
+    for (col, row) in [(2, 2), (18, 8)] {
+        let placement = test_placement(col, row);
+        let (plain, format) = clipped_placement(&placement).expect("visible zero-offset image");
+        let mut offset = placement;
+        offset.placement.x_offset = 4;
+        offset.placement.y_offset = 5;
+        let (clipped, offset_format) = clipped_placement(&offset).expect("visible offset image");
+        assert_eq!(offset_format, format);
+        assert_eq!(
+            (
+                clipped.x,
+                clipped.y,
+                clipped.cols,
+                clipped.rows,
+                clipped.source_x,
+                clipped.source_y,
+                clipped.source_width,
+                clipped.source_height,
+            ),
+            (
+                plain.x,
+                plain.y,
+                plain.cols,
+                plain.rows,
+                plain.source_x,
+                plain.source_y,
+                plain.source_width,
+                plain.source_height,
+            ),
+        );
+        assert_eq!((clipped.x_offset, clipped.y_offset), (4, 5));
+    }
+
+    let placement = test_placement(-1, -1);
+    let (clipped, _) = clipped_placement(&placement).expect("clipped zero-offset image");
+    assert_eq!((clipped.source_x, clipped.source_y), (10, 10));
+    assert_eq!((clipped.source_width, clipped.source_height), (20, 20));
+    assert_eq!((clipped.x_offset, clipped.y_offset), (0, 0));
+
+    let mut offset = test_placement(-1, -1);
+    offset.placement.x_offset = 4;
+    let (clipped, _) = clipped_placement(&offset).expect("left-offset image");
+    assert_eq!((clipped.source_x, clipped.source_y), (6, 10));
+    assert_eq!((clipped.source_width, clipped.source_height), (20, 20));
+}

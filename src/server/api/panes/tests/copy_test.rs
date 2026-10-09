@@ -287,3 +287,51 @@ async fn api_line_end_motion_keeps_ascii_wide_combining_and_blank_rows() {
         assert_eq!(cursor, PaneTextPoint { row, col: expected }, "row {row}");
     }
 }
+
+#[tokio::test]
+async fn api_line_end_motion_preserves_right_edge_and_trailing_blanks() {
+    for (width, text, expected) in [
+        (1, "x".to_owned(), 0),
+        (2, "界".to_owned(), 0),
+        (4, "a界".to_owned(), 1),
+        (4, "abc ".to_owned(), 2),
+        (6, "   x  ".to_owned(), 3),
+        (6, "      ".to_owned(), 0),
+        (8, "x👨\u{200d}👩\u{200d}👧 ".to_owned(), 1),
+        (4096, "a".repeat(4096), 4095),
+        (4096, format!("{}界", "a".repeat(4094)), 4094),
+    ] {
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        app.state.insert_test_runtime(
+            pane_id,
+            crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+                width,
+                5,
+                1000,
+                text.as_bytes(),
+            ),
+        );
+        let response = app.handle_pane_copy_motion(
+            "line-end".into(),
+            PaneCopyMotionParams {
+                pane_id: public_pane_id,
+                cursor: PaneTextPoint { row: 0, col: 0 },
+                motion: PaneCopyMotion::LineEnd,
+                content_revision: None,
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneCopyMotion { cursor, .. } = success.result else {
+            panic!("expected copy motion response");
+        };
+        assert_eq!(
+            cursor,
+            PaneTextPoint {
+                row: 0,
+                col: expected
+            },
+            "width {width}"
+        );
+    }
+}

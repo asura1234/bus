@@ -470,6 +470,76 @@ async fn client_shell_disconnect_releases_only_accepted_batch_presses() {
     shutdown_test_runtimes(&mut server);
 }
 
+#[tokio::test]
+async fn hidden_pane_failed_release_retains_disconnect_cleanup() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::server::workspaces::Workspace::test_new("hidden-release");
+    let runtime_pane_id = workspace.tabs[0].root_pane;
+    let other_tab = workspace.test_add_tab(Some("other"));
+    let (runtime, mut input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[>3u",
+            1,
+        );
+    workspace.insert_test_runtime(runtime_pane_id, runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    let pane_id = server.app.public_pane_id(0, runtime_pane_id).unwrap();
+    let other_tab_id = server.app.public_tab_id(0, other_tab).unwrap();
+    let (control_rx, _render_rx) = connect_test_shell(&mut server, 11, 80, 24);
+    let _ = control_rx.recv().expect("initial snapshot");
+    let key = |kind| crate::protocol::wire::ClientPaneInputEvent::Key {
+        code: crate::protocol::wire::ClientKeyCode::Char('x'),
+        modifiers: 0,
+        kind,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text: None,
+        tracks_release: true,
+        physical_key_id: Some(0x2d),
+        windows_record: None,
+    };
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: pane_id.clone(),
+        events: vec![key(crate::protocol::wire::ClientKeyKind::Press)],
+    });
+    assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"x"));
+    assert!(server.focus_shell_client_on_tab(11, &other_tab_id));
+    assert!(!server.shell_client_views_pane(11, 0, runtime_pane_id));
+    server
+        .app
+        .state
+        .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, runtime_pane_id)
+        .unwrap()
+        .try_send_bytes(Bytes::from_static(b"pending"))
+        .unwrap();
+    let activity_before = server.clients[&11].last_activity;
+
+    assert!(
+        !server.handle_server_event(ServerEvent::ClientShellPaneInput {
+            client_id: 11,
+            pane_id,
+            events: vec![key(crate::protocol::wire::ClientKeyKind::Release)],
+        })
+    );
+    assert_eq!(server.clients[&11].last_activity, activity_before);
+    assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"pending"));
+    assert!(input_rx.try_recv().is_err());
+
+    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 11 });
+    assert_eq!(
+        input_rx.try_recv().expect("hidden held key cleanup"),
+        Bytes::from_static(b"\x1b[120;1:3u")
+    );
+    assert!(input_rx.try_recv().is_err());
+    shutdown_test_runtimes(&mut server);
+}
+
 #[cfg(unix)]
 #[test]
 fn clipboard_image_staging_rejects_symlink_directory() {
