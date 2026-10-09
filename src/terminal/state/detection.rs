@@ -14,7 +14,6 @@ impl TerminalState {
         agent: AgentKind,
         now: Instant,
     ) -> TerminalStateMutation {
-        let starts_acquisition = self.recent_agent_process_exit.is_none();
         let mutation = self.set_detected_state_with_screen_signals_at(
             Some(agent),
             AgentState::Unknown,
@@ -22,9 +21,9 @@ impl TerminalState {
             false,
             now,
         );
-        if starts_acquisition {
-            self.agent_process_acquisition_pending = true;
-        }
+        // A replacement after a reported exit is a new process too; its first
+        // idle screen is readiness, not finished work.
+        self.agent_process_acquisition_pending = true;
         mutation
     }
 
