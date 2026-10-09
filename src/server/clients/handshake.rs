@@ -15,7 +15,7 @@ use interprocess::TryClone as _;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -84,6 +84,33 @@ fn set_client_recv_timeout(
     stream.set_recv_timeout(timeout)
 }
 
+/// Bounds the whole hello frame by one deadline. A socket receive timeout alone bounds each
+/// read, so a client trickling bytes could keep an unregistered connection open indefinitely.
+struct HandshakeReader<'a> {
+    stream: &'a mut LocalStream,
+    deadline: Instant,
+    client_id: u64,
+}
+
+impl io::Read for HandshakeReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "client handshake deadline elapsed",
+            ));
+        }
+        set_client_recv_timeout(
+            self.stream,
+            Some(remaining),
+            "client handshake read timeout unavailable",
+            self.client_id,
+        )?;
+        io::Read::read(self.stream, buf)
+    }
+}
+
 /// Handles the client handshake on a blocking thread.
 ///
 /// Requires an endpoint hello from the same build, sends its welcome, and
@@ -106,7 +133,12 @@ pub(crate) fn handle_client_handshake(
         client_id,
     )?;
 
-    let hello: ClientMessage = match protocol::read_message(&mut stream, MAX_FRAME_SIZE) {
+    let mut hello_reader = HandshakeReader {
+        stream: &mut stream,
+        deadline: Instant::now() + HANDSHAKE_TIMEOUT,
+        client_id,
+    };
+    let hello: ClientMessage = match protocol::read_message(&mut hello_reader, MAX_FRAME_SIZE) {
         Ok(msg) => msg,
         Err(protocol::FramingError::UnexpectedEof) => {
             debug!(target: "bus::server::clients::transport", client_id, "client disconnected before handshake");

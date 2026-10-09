@@ -177,7 +177,6 @@ pub(crate) struct ClientConnection {
     /// Surface projection epoch that owned the in-flight command. Deferred navigation may run
     /// only if this exact presentation lease is still active when its response arrives.
     pub(crate) shell_endpoint_command_surface_revision: Option<u64>,
-    /// Request id and buffered response for a deferred worktree-created navigation.
     /// Whether this shell uses the endpoint-owned keymap rather than a client-owned keymap.
     pub(crate) shell_uses_endpoint_keybindings: bool,
     /// Channels for sending framed ServerMessage data to the client writer thread.

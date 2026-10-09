@@ -320,3 +320,35 @@ fn handshake_timeout_is_within_five_second_deadline() {
         HANDSHAKE_TIMEOUT
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn partial_hello_does_not_extend_the_five_second_handshake_deadline() {
+    let (mut client_stream, server_stream, _path) = local_stream_pair("partial-hello-deadline");
+    let (server_event_tx, mut server_event_rx) = mpsc::channel(4);
+    let should_quit = Arc::new(AtomicBool::new(false));
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        started_tx.send(started).unwrap();
+        let result = handle_client_handshake(server_stream, 43, &server_event_tx, &should_quit);
+        let _ = done_tx.send(());
+        result
+    });
+
+    let started = started_rx.recv().unwrap();
+    std::thread::sleep(Duration::from_secs(3));
+    // A complete length prefix followed by no payload is still an incomplete hello.
+    let _ = client_stream.write_all(&1_u32.to_le_bytes());
+    let remaining = Duration::from_secs(5).saturating_sub(started.elapsed());
+    let closed_by_deadline = done_rx.recv_timeout(remaining).is_ok();
+
+    drop(client_stream);
+    handle.join().unwrap().unwrap();
+    assert!(server_event_rx.try_recv().is_err());
+    assert!(
+        closed_by_deadline,
+        "an incomplete hello must close within five seconds even when its prefix arrives later"
+    );
+}

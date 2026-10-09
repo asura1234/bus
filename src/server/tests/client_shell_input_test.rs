@@ -320,6 +320,156 @@ async fn client_shell_mouse_motion_promotes_and_requests_render() {
     shutdown_test_runtimes(&mut server);
 }
 
+#[tokio::test]
+async fn client_shell_failed_release_retains_disconnect_cleanup() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::server::workspaces::Workspace::test_new("failed-release");
+    let runtime_pane_id = workspace.tabs[0].root_pane;
+    let (runtime, mut input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[>3u",
+            1,
+        );
+    workspace.insert_test_runtime(runtime_pane_id, runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    let pane_id = server.app.public_pane_id(0, runtime_pane_id).unwrap();
+    server.clients.insert(
+        11,
+        ClientConnection::new(
+            (80, 24),
+            crate::protocol::kitty::HostCellSize::default(),
+            1,
+            unread_test_writer(),
+        ),
+    );
+    let key = |kind| crate::protocol::wire::ClientPaneInputEvent::Key {
+        code: crate::protocol::wire::ClientKeyCode::Char('x'),
+        modifiers: 0,
+        kind,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text: None,
+        tracks_release: true,
+        physical_key_id: Some(0x2d),
+        windows_record: None,
+    };
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: pane_id.clone(),
+        events: vec![key(crate::protocol::wire::ClientKeyKind::Press)],
+    });
+    assert_eq!(
+        input_rx.try_recv().expect("press must reach the live PTY"),
+        Bytes::from_static(b"x")
+    );
+
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: pane_id.clone(),
+        events: vec![crate::protocol::wire::ClientPaneInputEvent::TextCommit(
+            "pending".into(),
+        )],
+    });
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id,
+        events: vec![key(crate::protocol::wire::ClientKeyKind::Release)],
+    });
+    assert_eq!(
+        input_rx
+            .try_recv()
+            .expect("queued input must survive saturation"),
+        Bytes::from_static(b"pending")
+    );
+    assert!(input_rx.try_recv().is_err(), "release was not queued");
+
+    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 11 });
+    assert_eq!(
+        input_rx
+            .try_recv()
+            .expect("disconnect must release the key after the live PTY queue recovers"),
+        Bytes::from_static(b"\x1b[120;1:3u")
+    );
+    assert!(input_rx.try_recv().is_err());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn client_shell_disconnect_releases_only_accepted_batch_presses() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::server::workspaces::Workspace::test_new("partial-input-batch");
+    let runtime_pane_id = workspace.tabs[0].root_pane;
+    let (runtime, mut input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[>3u",
+            2,
+        );
+    workspace.insert_test_runtime(runtime_pane_id, runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    let pane_id = server.app.public_pane_id(0, runtime_pane_id).unwrap();
+    server.clients.insert(
+        11,
+        ClientConnection::new(
+            (80, 24),
+            crate::protocol::kitty::HostCellSize::default(),
+            1,
+            unread_test_writer(),
+        ),
+    );
+    let key = |character, physical_key_id| crate::protocol::wire::ClientPaneInputEvent::Key {
+        code: crate::protocol::wire::ClientKeyCode::Char(character),
+        modifiers: 0,
+        kind: crate::protocol::wire::ClientKeyKind::Press,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text: None,
+        tracks_release: true,
+        physical_key_id: Some(physical_key_id),
+        windows_record: None,
+    };
+
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: pane_id.clone(),
+        events: vec![crate::protocol::wire::ClientPaneInputEvent::TextCommit(
+            "pending".into(),
+        )],
+    });
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id,
+        events: vec![key('x', 0x2d), key('y', 0x15)],
+    });
+    assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"pending"));
+    assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"x"));
+    assert!(
+        input_rx.try_recv().is_err(),
+        "the second press was not queued"
+    );
+
+    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 11 });
+    let mut releases = Vec::new();
+    while let Ok(bytes) = input_rx.try_recv() {
+        releases.push(bytes);
+    }
+    assert_eq!(
+        releases,
+        vec![Bytes::from_static(b"\x1b[120;1:3u")],
+        "disconnect must not release a key whose press was rejected by the full live PTY queue"
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
 #[cfg(unix)]
 #[test]
 fn clipboard_image_staging_rejects_symlink_directory() {
