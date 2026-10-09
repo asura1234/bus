@@ -30,7 +30,7 @@ def preparation_identity_line(
     `claim_verification_support` that used to parse it was deleted together with the per-claim
     verification protocol, and nothing in the repo reads it now. mode/target consistency is decided
     directly by this script when merging multiple inputs, without reading this line back. The format is
-    still pinned by test_prepare_review_input.py; before changing it, first confirm no downstream has
+    still pinned by prepare_review_input_test.py; before changing it, first confirm no downstream has
     started parsing it again.
     """
 

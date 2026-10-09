@@ -1,0 +1,577 @@
+use super::*;
+
+#[test]
+fn non_overlay_ctrl_v_is_forwarded_to_the_focused_pane() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let key = crate::protocol::keys::TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Key(key)]);
+
+    assert!(matches!(
+        &outcome.requests[..],
+        [ClientMessage::ClientShellPaneInput { pane_id, events }]
+            if pane_id == "pane_1"
+                && matches!(&events[..], [ClientPaneInputEvent::Key { .. }])
+    ));
+}
+
+#[test]
+fn composition_places_the_surface_at_its_origin() {
+    let config = ClientShellConfig::from_config(&Config::default());
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("LIVE"));
+    assert!(!text.contains("1 1"));
+    assert_eq!(
+        frame.cursor.as_ref().map(|cursor| (cursor.x, cursor.y)),
+        Some((1, 1))
+    );
+}
+
+#[test]
+fn focus_loss_releases_held_pane_keys_before_reporting_focus() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let key = crate::protocol::keys::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
+        .with_generated_text(Some("x".to_owned()))
+        .with_windows_record(crate::protocol::keys::WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 1,
+            virtual_key_code: 0x58,
+            virtual_scan_code: 0x2d,
+            unicode: 'x' as u16,
+            control_key_state: 0,
+        });
+    let press = state.handle_raw_events(vec![RawInputEvent::Key(key)]);
+    assert!(matches!(
+        &press.requests[..],
+        [ClientMessage::ClientShellPaneInput { .. }]
+    ));
+
+    let lost = state.handle_raw_events(vec![RawInputEvent::OuterFocusLost]);
+    assert!(matches!(
+        &lost.requests[..],
+        [
+            ClientMessage::ClientShellPaneInput { events, .. },
+            ClientMessage::ClientShellFocus { focused: false }
+        ] if matches!(
+            &events[..],
+            [ClientPaneInputEvent::Key {
+                kind: crate::protocol::wire::ClientKeyKind::Release,
+                ..
+            }]
+        )
+    ));
+    assert!(state.input_leases.is_empty());
+}
+
+#[test]
+fn focus_loss_releases_active_pane_mouse_before_reporting_focus() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].mouse_reporting = true;
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("pane frame");
+    let pane = state.hits.panes[0].clone();
+
+    let down = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x + 2,
+        row: pane.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(matches!(
+        &down.requests[..],
+        [ClientMessage::ClientShellPaneInput { .. }]
+    ));
+    assert!(state.pane_mouse_gesture.is_some());
+
+    let lost = state.handle_raw_events(vec![RawInputEvent::OuterFocusLost]);
+    assert!(matches!(
+        &lost.requests[..],
+        [
+            ClientMessage::ClientShellPaneInput { pane_id, events },
+            ClientMessage::ClientShellFocus { focused: false }
+        ] if pane_id == "pane_1" && matches!(
+            &events[..],
+            [ClientPaneInputEvent::Mouse {
+                kind: crate::protocol::wire::ClientMouseKind::Up(
+                    crate::protocol::wire::ClientMouseButton::Left
+                ),
+                position: ClientMousePosition::Cell { column: 2, row: 1 },
+                ..
+            }]
+        )
+    ));
+    assert!(state.pane_mouse_gesture.is_none());
+}
+
+#[test]
+fn focus_gain_reports_focus_and_honors_redraw_policy() {
+    let mut config = Config::default();
+    config.ui.redraw_on_focus_gained = false;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let gained = state.handle_raw_events(vec![RawInputEvent::OuterFocusGained]);
+    assert!(!gained.repaint);
+    assert!(gained.query_host_appearance);
+    assert!(matches!(
+        &gained.requests[..],
+        [ClientMessage::ClientShellFocus { focused: true }]
+    ));
+}
+
+#[test]
+fn shell_refuses_mismatched_projection_and_clears_stale_hits_in_either_order() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(106, 20).expect("initial frame");
+    assert!(!state.hits.panes.is_empty());
+
+    let mut replacement = snapshot();
+    replacement.revision = 2;
+    state.set_snapshot(Box::new(replacement));
+    assert!(state.hits.panes.is_empty());
+    assert!(state.compose(106, 20).is_none());
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(106, 20).expect("initial frame");
+    let mut replacement_surface = surface();
+    replacement_surface.projection_revision = 2;
+    state.set_pane_surface(replacement_surface);
+    assert!(state.hits.panes.is_empty());
+    assert!(state.compose(106, 20).is_none());
+}
+
+#[test]
+fn shell_ignores_older_same_boot_snapshot_and_surface() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let mut current_snapshot = snapshot();
+    current_snapshot.revision = 2;
+    current_snapshot.workspaces[0].label = "current".into();
+    state.set_snapshot(Box::new(current_snapshot));
+    let mut current_surface = surface();
+    current_surface.projection_revision = 2;
+    current_surface.frame.cells[0].symbol = "N".into();
+    state.set_pane_surface(current_surface);
+    state.compose(106, 20).expect("current shell");
+    assert!(!state.hits.panes.is_empty());
+    let held_key =
+        crate::protocol::keys::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty());
+    assert!(matches!(
+        &state
+            .handle_raw_events(vec![RawInputEvent::Key(held_key.clone())])
+            .requests[..],
+        [ClientMessage::ClientShellPaneInput { .. }]
+    ));
+
+    let mut stale_snapshot = snapshot();
+    stale_snapshot.workspaces[0].label = "stale".into();
+    state.set_snapshot(Box::new(stale_snapshot));
+    let mut stale_surface = surface();
+    stale_surface.frame.cells[0].symbol = "O".into();
+    state.set_pane_surface(stale_surface);
+
+    let installed_snapshot = state.snapshot.as_deref().expect("current snapshot");
+    assert_eq!(installed_snapshot.revision, 2);
+    assert_eq!(installed_snapshot.workspaces[0].label, "current");
+    let installed_surface = state.pane_surface.as_ref().expect("current pane surface");
+    assert_eq!(installed_surface.projection_revision, 2);
+    assert_eq!(installed_surface.frame.cells[0].symbol, "N");
+
+    let mut ahead_surface = surface();
+    ahead_surface.projection_revision = 4;
+    ahead_surface.frame.cells[0].symbol = "A".into();
+    state.set_pane_surface(ahead_surface);
+    let mut delayed_surface = surface();
+    delayed_surface.projection_revision = 3;
+    delayed_surface.frame.cells[0].symbol = "D".into();
+    state.set_pane_surface(delayed_surface);
+    let installed_surface = state.pane_surface.as_ref().expect("newest pane surface");
+    assert_eq!(installed_surface.projection_revision, 4);
+    assert_eq!(installed_surface.frame.cells[0].symbol, "A");
+
+    let mut replacement_boot = snapshot();
+    replacement_boot.boot_id = "boot-2".into();
+    state.set_snapshot(Box::new(replacement_boot));
+    assert!(state.pane_surface.is_none());
+    assert!(state.hits.panes.is_empty());
+    let release = state.handle_raw_events(vec![RawInputEvent::Key(
+        held_key.with_kind(crossterm::event::KeyEventKind::Release),
+    )]);
+    assert!(
+        release.requests.is_empty(),
+        "boot replacement must discard held input leases"
+    );
+    let mut prior_boot_surface = surface();
+    prior_boot_surface.projection_revision = u64::MAX;
+    state.set_pane_surface(prior_boot_surface);
+    assert!(
+        state.pane_surface.is_none(),
+        "an old endpoint surface must not cross the boot boundary"
+    );
+}
+
+#[test]
+fn resize_invalidation_drops_stale_hits_but_preserves_gesture_release() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].mouse_reporting = true;
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x + 1,
+        row: pane.inner_rect.y + 1,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(state.pane_mouse_gesture.is_some());
+
+    state.invalidate_pane_surface();
+    assert!(state.pane_surface.is_none());
+    assert!(state.hits.panes.is_empty());
+    let stale_click =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 27,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(stale_click.requests.is_empty());
+    assert!(stale_click.actions.is_empty());
+
+    let release =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: pane.inner_rect.x + 1,
+            row: pane.inner_rect.y + 1,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(matches!(
+        &release.requests[..],
+        [ClientMessage::ClientShellPaneInput { pane_id, events }]
+            if pane_id == "pane_1"
+                && matches!(
+                    &events[..],
+                    [ClientPaneInputEvent::Mouse {
+                        kind: crate::protocol::wire::ClientMouseKind::Up(
+                            crate::protocol::wire::ClientMouseButton::Left
+                        ),
+                        ..
+                    }]
+                )
+    ));
+    assert!(state.pane_mouse_gesture.is_none());
+}
+
+#[test]
+fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scrollbar_rect = Some(SurfaceRect {
+        x: 3,
+        y: 0,
+        width: 1,
+        height: 2,
+    });
+    pane_surface.panes[0].scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+    let pane = state.hits.panes[0].clone();
+    let track = pane.scrollbar_rect.expect("scrollbar track");
+    let metrics = pane.scroll.expect("scroll metrics");
+
+    let track_click =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: track.x,
+            row: track.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    let expected =
+        crate::utils::render::widgets::scrollbar_offset_from_row(metrics, track, track.y);
+    assert!(track_click.requests.is_empty());
+    assert!(matches!(
+        &track_click.actions[..],
+        [
+            ClientShellAction::Endpoint { request: focus, .. },
+            ClientShellAction::Endpoint { request: scroll, .. }
+        ] if matches!(
+            &focus.method,
+            crate::protocol::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1"
+        ) && matches!(
+            &scroll.method,
+            crate::protocol::api::schema::Method::PaneScroll(params)
+                if params.pane_id == "pane_1"
+                    && params.offset_from_bottom == expected as u64
+        )
+    ));
+    let track_scroll_id = match &track_click.actions[1] {
+        ClientShellAction::Endpoint { request, .. } => request.id.clone(),
+        _ => unreachable!(),
+    };
+    state.handle_endpoint_result(
+        "boot-1",
+        &track_scroll_id,
+        Ok(pane_scroll_result(expected as u64, 20, 2)),
+    );
+
+    let thumb =
+        crate::utils::render::widgets::scrollbar_thumb(metrics, track).expect("scrollbar thumb");
+    let thumb_down =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: track.x,
+            row: thumb.top,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(matches!(
+        &thumb_down.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::protocol::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1"
+            )
+    ));
+    assert!(matches!(
+        state.chrome_drag,
+        Some(ClientChromeDrag::PaneScrollbar { .. })
+    ));
+
+    let drag = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: track.x,
+        row: track.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    let expected =
+        crate::utils::render::widgets::scrollbar_offset_from_drag_row(metrics, track, track.y, 0);
+    assert!(matches!(
+        &drag.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::protocol::api::schema::Method::PaneScroll(params)
+                    if params.pane_id == "pane_1"
+                        && params.offset_from_bottom == expected as u64
+            )
+    ));
+    let release =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert!(release.actions.is_empty());
+    assert!(state.chrome_drag.is_none());
+}
+
+#[test]
+fn pending_scroll_target_does_not_relabel_an_older_surface() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface.clone());
+    let mut outcome = ClientShellInput::default();
+    state.push_pane_scroll_offset("pane_1".into(), 10, &mut outcome);
+    state.set_pane_surface(pane_surface);
+    assert_eq!(
+        state
+            .pane_surface
+            .as_ref()
+            .and_then(|surface| surface.panes[0].scroll)
+            .map(|scroll| scroll.offset_from_bottom),
+        Some(0)
+    );
+    assert_eq!(state.pane_scroll_targets.get("pane_1"), Some(&10));
+}
+
+#[test]
+fn retained_surface_patch_updates_only_pane_cells_without_recomposing_chrome() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let pane_surface = surface();
+    let mut updated_pane = pane_surface.panes[0].clone();
+    updated_pane.content_revision = 2;
+    state.set_pane_surface(pane_surface);
+    let composed = state.compose(100, 30).expect("initial composed frame");
+    let layout = state.layout(100, 30);
+    let patch = crate::protocol::wire::PaneSurfacePatch {
+        boot_id: "boot-1".into(),
+        projection_revision: 1,
+        base_surface_revision: 1,
+        surface_revision: 2,
+        rows: vec![crate::protocol::wire::PaneSurfacePatchRow {
+            x: 0,
+            y: 0,
+            cells: vec![
+                crate::protocol::wire::CellData {
+                    symbol: "N".into(),
+                    fg: 0,
+                    bg: 0,
+                    modifier: 0,
+                    skip: false,
+                    hyperlink: None,
+                };
+                4
+            ],
+        }],
+        panes: vec![updated_pane],
+        cursor: None,
+    };
+
+    let ClientPaneSurfacePatchOutcome::Applied(Some(patch)) = state.apply_pane_surface_patch(patch)
+    else {
+        panic!("expected fast retained patch");
+    };
+    let patched = apply_composed_surface_patch(&composed, patch).expect("apply composed patch");
+    let pane_index = usize::from(layout.pane_surface.y) * usize::from(patched.width)
+        + usize::from(layout.pane_surface.x);
+    assert_eq!(patched.cells[pane_index].symbol, "N");
+    let outside_pane = usize::from(patched.width) * 10 + 50;
+    assert_eq!(
+        patched.cells[outside_pane], composed.cells[outside_pane],
+        "cells outside the pane changed"
+    );
+    assert_eq!(state.pane_surface.as_ref().unwrap().surface_revision, 2);
+
+    let mut forced_full = surface();
+    forced_full.surface_revision = 3;
+    forced_full.frame.cells[0].symbol = "F".into();
+    state.set_pane_surface(forced_full);
+    assert_eq!(state.pane_surface.as_ref().unwrap().surface_revision, 3);
+    assert_eq!(
+        state.pane_surface.as_ref().unwrap().frame.cells[0].symbol,
+        "F"
+    );
+}
+
+#[test]
+fn retained_surface_patch_updates_scrollbar_cells_and_pane_hit_metadata() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
+        &Buffer::with_lines(["LIVE ", "PANE "]),
+        None,
+        &[],
+    );
+    pane_surface.panes[0].rect.width = 5;
+    state.set_pane_surface(pane_surface.clone());
+    let composed = state.compose(100, 30).expect("initial composed frame");
+    let layout = state.layout(100, 30);
+    let mut updated_pane = pane_surface.panes[0].clone();
+    updated_pane.scrollbar_rect = Some(SurfaceRect {
+        x: 4,
+        y: 0,
+        width: 1,
+        height: 2,
+    });
+    updated_pane.scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 2,
+        max_offset_from_bottom: 8,
+        viewport_rows: 2,
+    });
+    updated_pane.mouse_reporting = true;
+    updated_pane.sgr_pixel_mouse = true;
+    let patch = crate::protocol::wire::PaneSurfacePatch {
+        boot_id: "boot-1".into(),
+        projection_revision: 1,
+        base_surface_revision: 1,
+        surface_revision: 2,
+        rows: vec![crate::protocol::wire::PaneSurfacePatchRow {
+            x: 4,
+            y: 0,
+            cells: vec![crate::protocol::wire::CellData {
+                symbol: "▐".into(),
+                fg: 0,
+                bg: 0,
+                modifier: 0,
+                skip: false,
+                hyperlink: None,
+            }],
+        }],
+        panes: vec![updated_pane],
+        cursor: None,
+    };
+
+    let ClientPaneSurfacePatchOutcome::Applied(Some(patch)) = state.apply_pane_surface_patch(patch)
+    else {
+        panic!("expected fast retained patch");
+    };
+    let patched = apply_composed_surface_patch(&composed, patch).expect("apply composed patch");
+    let scrollbar_index = usize::from(layout.pane_surface.y) * usize::from(patched.width)
+        + usize::from(layout.pane_surface.x + 4);
+    assert_eq!(patched.cells[scrollbar_index].symbol, "▐");
+    let hit = state
+        .hits
+        .panes
+        .iter()
+        .find(|hit| hit.pane_id == "pane_1")
+        .expect("pane hit");
+    assert_eq!(
+        hit.scrollbar_rect,
+        Some(Rect::new(
+            layout.pane_surface.x + 4,
+            layout.pane_surface.y,
+            1,
+            2,
+        ))
+    );
+    assert_eq!(
+        hit.scroll.map(|scroll| scroll.max_offset_from_bottom),
+        Some(8)
+    );
+    assert!(hit.mouse_reporting);
+    assert!(hit.sgr_pixel_mouse);
+}
+
+#[test]
+fn retained_surface_patch_rejects_stale_base_without_mutating_surface() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let before = state.pane_surface.clone();
+    let outcome = state.apply_pane_surface_patch(crate::protocol::wire::PaneSurfacePatch {
+        boot_id: "boot-1".into(),
+        projection_revision: 1,
+        base_surface_revision: 0,
+        surface_revision: 2,
+        rows: Vec::new(),
+        panes: Vec::new(),
+        cursor: None,
+    });
+    assert!(matches!(outcome, ClientPaneSurfacePatchOutcome::Rejected));
+    assert_eq!(state.pane_surface, before);
+}

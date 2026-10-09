@@ -3,18 +3,30 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tools.quality.rust_source import mask_comments_and_literals as mask_comments_and_literals
+from tools.quality.scopes import is_test_path, production_code
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # Stage integration updates these globs as their owners move/split Rust files.
 SOURCES = {
-    "hot_path": ("src/ui.rs", "src/ui/**/*.rs", "src/server/render_stream.rs"),
-    "app_server": ("src/app/**/*.rs", "src/server/**/*.rs"),
+    "hot_path": (
+        "src/server/rendering/surface/**/*.rs",
+        "src/server/workspaces/agent_view.rs",
+        "src/server/rendering/stream.rs",
+        "src/utils/render/widgets.rs",
+        "src/utils/render/widgets/selection.rs",
+        "src/utils/render/feedback.rs",
+        "src/utils/render/diagnostic.rs",
+        "src/utils/text/width.rs",
+    ),
+    "app_server": (
+        "src/cli/launch.rs",
+        "src/server/mod.rs",
+        "src/server/**/*.rs",
+        "src/utils/paths/socket.rs",
+    ),
 }
-TEST_MODULE = re.compile(
-    r"(?m)^[ \t]*#\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*"
-    r"(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{"
-)
-CHAR_LITERAL = re.compile(r"'(?:\\(?:u\{[0-9a-fA-F_]+\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'")
 INPUT_STATE_CALL = re.compile(r"(?:\.|::)input_state\b")
 KEYBOARD_STATE_ANSI_CALL = re.compile(
     r"(?:\.|::)(?:keyboard_state_ansi|kitty_keyboard_state_ansi)\b"
@@ -36,99 +48,6 @@ FORBIDDEN_CALLS = (
 )
 
 
-def blank_non_newlines(chars: list[str], start: int, end: int) -> None:
-    for index in range(start, end):
-        if chars[index] != "\n":
-            chars[index] = " "
-
-
-def mask_comments_and_literals(source: str) -> str:
-    chars = list(source)
-    index = 0
-    while index < len(source):
-        if source.startswith("//", index):
-            end = source.find("\n", index + 2)
-            end = len(source) if end == -1 else end
-            blank_non_newlines(chars, index, end)
-            index = end
-            continue
-
-        if source.startswith("/*", index):
-            depth = 1
-            end = index + 2
-            while end < len(source) and depth > 0:
-                if source.startswith("/*", end):
-                    depth += 1
-                    end += 2
-                elif source.startswith("*/", end):
-                    depth -= 1
-                    end += 2
-                else:
-                    end += 1
-            blank_non_newlines(chars, index, end)
-            index = end
-            continue
-
-        if source[index] == "r":
-            quote = index + 1
-            while quote < len(source) and source[quote] == "#":
-                quote += 1
-            if quote < len(source) and source[quote] == '"':
-                suffix = '"' + "#" * (quote - index - 1)
-                end = source.find(suffix, quote + 1)
-                end = len(source) if end == -1 else end + len(suffix)
-                blank_non_newlines(chars, index, end)
-                index = end
-                continue
-
-        if source[index] == '"':
-            end = index + 1
-            while end < len(source):
-                if source[end] == "\\":
-                    end += 2
-                elif source[end] == '"':
-                    end += 1
-                    break
-                else:
-                    end += 1
-            blank_non_newlines(chars, index, min(end, len(source)))
-            index = end
-            continue
-
-        if source[index] == "'" and (literal := CHAR_LITERAL.match(source, index)):
-            blank_non_newlines(chars, index, literal.end())
-            index = literal.end()
-            continue
-
-        index += 1
-
-    return "".join(chars)
-
-
-def production_code(source: str) -> str:
-    code = mask_comments_and_literals(source)
-    chars = list(code)
-    search_from = 0
-
-    while test_module := TEST_MODULE.search(code, search_from):
-        depth = 0
-        end = test_module.end() - 1
-        while end < len(code):
-            if code[end] == "{":
-                depth += 1
-            elif code[end] == "}":
-                depth -= 1
-                if depth == 0:
-                    end += 1
-                    break
-            end += 1
-        blank_non_newlines(chars, test_module.start(), end)
-        code = "".join(chars)
-        search_from = end
-
-    return code
-
-
 def source_paths(group: str, root: Path = PROJECT_ROOT) -> tuple[Path, ...]:
     paths = {
         path
@@ -136,6 +55,7 @@ def source_paths(group: str, root: Path = PROJECT_ROOT) -> tuple[Path, ...]:
         for path in root.glob(pattern)
         if path.is_file()
         and path.suffix == ".rs"
+        and not is_test_path(path.relative_to(root))
         and "tests" not in path.relative_to(root / "src").parts
         and path.name != "tests.rs"
         and not path.stem.endswith("_tests")

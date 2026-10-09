@@ -3,17 +3,50 @@ name = "bus"
 version = "0.9.0"
 edition = "2021"
 build = "build.rs"
+autotests = false
 description = "coordinate selected AI coding agents in native terminal rooms (built on Herdr)"
 license = "Apache-2.0"
 keywords = ["terminal", "tui", "ai", "agents", "multiplexer"]
 categories = ["command-line-utilities"]
 include = [
     "src/**/*",
+    "tests/**/*",
+    "orchestration/**/*",
+    "workflows/**/*",
+    "vendor/libghostty-vt/**/*",
+    "!vendor/libghostty-vt/.zig-cache/**/*",
+    "!vendor/libghostty-vt/zig-out/**/*",
+    "!vendor/libghostty-vt/zig-pkg/**/*",
+    "vendor/libghostty-vt.vendor.json",
+    "build.rs",
+    ".cargo/config.toml",
+    "rust-toolchain.toml",
+    "clippy.toml",
     "assets/sounds/*",
     "README.md",
     "LICENSE",
     "Cargo.toml",
 ]
+
+[[test]]
+name = "api"
+path = "tests/api/api_test.rs"
+
+[[test]]
+name = "client"
+path = "tests/client/client_test.rs"
+
+[[test]]
+name = "server"
+path = "tests/server/server_test.rs"
+
+[[test]]
+name = "cli"
+path = "tests/cli/cli_test.rs"
+
+[[test]]
+name = "room-screen"
+path = "tests/client/room_screen_test.rs"
 
 [dependencies]
 base64 = "0.22.1"

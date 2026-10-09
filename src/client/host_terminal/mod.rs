@@ -1,0 +1,8 @@
+pub(crate) mod effects;
+pub(super) mod frame_output;
+pub(super) mod geometry;
+pub(super) mod input;
+pub(crate) mod kitty;
+pub(crate) mod modes;
+pub(crate) mod notify;
+pub(super) mod setup;

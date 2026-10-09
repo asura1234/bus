@@ -1,0 +1,147 @@
+use super::*;
+use crate::protocol::api::schema::AgentStatus;
+use crate::protocol::wire::ClientShellWorkspace;
+use crate::protocol::wire::{
+    ClientShellPane, ClientShellTab, PaneSurfacePane, PaneSurfaceSplit, PaneSurfaceSplitDirection,
+    SurfaceRect,
+};
+use crossterm::event::MouseEvent;
+
+// Relocated pane and connection tests share the same coherent snapshot/surface fixtures.
+pub(in crate::client) fn snapshot() -> ClientShellSnapshot {
+    ClientShellSnapshot {
+        boot_id: "boot-1".into(),
+        revision: 1,
+        config_diagnostic: None,
+        focused_workspace_id: Some("ws_1".into()),
+        focused_tab_id: Some("tab_1".into()),
+        focused_pane_id: Some("pane_1".into()),
+        agent_view_label: None,
+        agent_order: Vec::new(),
+        workspaces: vec![ClientShellWorkspace {
+            workspace_id: "ws_1".into(),
+            active_tab_id: "tab_1".into(),
+            new_workspace_cwd: "/repo".into(),
+            number: 1,
+            label: "client-shell".into(),
+            custom_label: false,
+            tokens: Vec::new(),
+            focused: true,
+            agent_status: AgentStatus::Idle,
+        }],
+        tabs: vec![ClientShellTab {
+            tab_id: "tab_1".into(),
+            workspace_id: "ws_1".into(),
+            number: 1,
+            label: "1".into(),
+            custom_label: false,
+            zoomed: false,
+            focused: true,
+            agent_status: AgentStatus::Idle,
+        }],
+        panes: vec![ClientShellPane {
+            pane_id: "pane_1".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            label: None,
+            cwd: Some("/repo".into()),
+            foreground_cwd: Some("/repo".into()),
+            focused: true,
+            right_click_passthrough: false,
+        }],
+        agents: Vec::new(),
+    }
+}
+
+pub(in crate::client) fn surface() -> PaneSurfaceFrame {
+    let surface_buffer = Buffer::with_lines(["LIVE", "PANE"]);
+    PaneSurfaceFrame {
+        boot_id: "boot-1".into(),
+        projection_revision: 1,
+        surface_revision: 1,
+        frame: FrameData::from_ratatui_buffer_with_hyperlinks(
+            &surface_buffer,
+            Some(crate::protocol::wire::CursorState {
+                x: 1,
+                y: 1,
+                visible: true,
+                shape: 2,
+            }),
+            &[],
+        ),
+        panes: vec![PaneSurfacePane {
+            pane_id: "pane_1".into(),
+            content_revision: 0,
+            rect: SurfaceRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 2,
+            },
+            inner_rect: SurfaceRect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 2,
+            },
+            scrollbar_rect: None,
+            scroll: None,
+            focused: true,
+            mouse_reporting: false,
+            sgr_pixel_mouse: false,
+            alternate_screen_active: false,
+            pixel_width: 0,
+            pixel_height: 0,
+        }],
+        splits: Vec::new(),
+        graphics: crate::protocol::wire::SurfaceGraphicsScene::default(),
+    }
+}
+
+pub(in crate::client) fn pane_scroll_result(
+    offset_from_bottom: u64,
+    max_offset_from_bottom: u64,
+    viewport_rows: u64,
+) -> crate::protocol::api::schema::ResponseResult {
+    crate::protocol::api::schema::ResponseResult::PaneInfo {
+        pane: crate::protocol::api::schema::PaneInfo {
+            pane_id: "pane_1".into(),
+            terminal_id: "terminal_1".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            focused: true,
+            cwd: None,
+            foreground_cwd: None,
+            label: None,
+            agent: None,
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            display_agent: None,
+            agent_status: crate::protocol::api::schema::AgentStatus::Unknown,
+            state_labels: HashMap::new(),
+            tokens: HashMap::new(),
+            agent_session: None,
+            scroll: Some(crate::protocol::api::schema::PaneScrollInfo {
+                offset_from_bottom,
+                max_offset_from_bottom,
+                viewport_rows,
+            }),
+            revision: 0,
+        },
+    }
+}
+
+#[path = "focus_projection_test.rs"]
+mod focus_projection;
+#[path = "startup_diagnostics_test.rs"]
+mod startup_diagnostics;
+
+#[path = "../../connection/tests/requests_test.rs"]
+mod endpoint_requests;
+#[path = "../../panes/tests/input_test.rs"]
+mod input_domain;
+#[path = "../../panes/tests/mouse_selection_test.rs"]
+mod mouse_selection;
+#[path = "../../panes/tests/selection_copy_test.rs"]
+mod selection_copy;

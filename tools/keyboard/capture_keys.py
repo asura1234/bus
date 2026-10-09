@@ -18,8 +18,11 @@ from __future__ import annotations
 
 import select
 import sys
-import termios
-import tty
+
+if __package__:
+    from .rawtty import saved_mode, enter_raw, restore_mode
+else:
+    from rawtty import saved_mode, enter_raw, restore_mode
 
 IDLE_TIMEOUT_S = 0.020
 EXIT_BYTE = b"\x07"  # Ctrl+G
@@ -68,14 +71,14 @@ def read_sequence() -> bytes:
 
 def main() -> int:
     fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
+    old = saved_mode(fd)
     print("capture-keys: raw mode enabled", file=sys.stderr)
     print("capture-keys: press Ctrl+G to quit", file=sys.stderr)
     print("family\thex\tescaped", file=sys.stdout)
     sys.stdout.flush()
 
     try:
-        tty.setraw(fd)
+        enter_raw(fd)
         while True:
             data = read_sequence()
             if not data:
@@ -86,7 +89,7 @@ def main() -> int:
             print(f"captured\t{to_hex(data)}\t{escaped(data)}", file=sys.stdout)
             sys.stdout.flush()
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        restore_mode(fd, old)
 
 
 if __name__ == "__main__":

@@ -1,46 +1,14 @@
 use std::io;
 
-pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
-pub(crate) const HERDR_ENV_VALUE: &str = "1";
-
-mod agent_resume;
-mod api;
-mod app;
-mod build_info;
-mod bus;
+mod agents;
+mod cli;
 mod client;
-mod config;
-mod copy_mode;
-mod detect;
-mod events;
-mod ghostty;
-mod home_path;
-mod input;
-mod ipc;
-mod kitty_graphics;
-mod layout;
-mod logging;
-#[cfg(any(windows, test))]
-mod noninteractive_process;
-mod pane;
-mod persist;
+mod messaging;
 mod platform;
 mod protocol;
-mod pty;
-mod raw_input;
-mod render_prof;
-mod render_signal;
-mod selection;
 mod server;
-mod session;
-mod sound;
 mod terminal;
-mod terminal_effects;
-mod terminal_modes;
-mod terminal_notify;
-mod terminal_theme;
-mod ui;
-mod workspace;
+mod utils;
 
 fn args_as_utf8<I>(args: I) -> Result<Vec<String>, String>
 where
@@ -63,32 +31,44 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
-    if let Some(result) = bus::callbacks::dispatch(&raw_args) {
-        return result;
+    if raw_args.get(1).map(String::as_str) == Some("--bus-callback") {
+        let logging_options = cli::logging_options();
+        let diagnostics_dir = std::env::var_os("BUS_CALLBACK_DIR").map(std::path::PathBuf::from);
+        if let Some(result) = agents::providers::callback_entry::dispatch(
+            &raw_args,
+            diagnostics_dir,
+            &logging_options,
+        ) {
+            return result;
+        }
     }
     match raw_args.get(1).map(String::as_str) {
         // Hidden entry the client spawns for the persistent daemon.
         Some("server") if raw_args.len() == 2 => {
             configure_session(&raw_args);
-            server::headless::run_server()
+            server::main_loop::run_server(cli::logging_options(), cli::config_override())
         }
         // Hidden entry that attaches a thin client to the running daemon.
         Some("client") if raw_args.len() == 2 => {
             configure_session(&raw_args);
-            client::run_client()
+            client::run_client(
+                cli::logging_options(),
+                cli::config_override(),
+                cli::stop::stop_active_server,
+            )
         }
         Some("--version" | "-V") if raw_args.len() == 2 => {
             platform::begin_cli_output();
-            println!("bus {}", crate::build_info::version());
+            cli::help::write_stdout_line(format_args!("bus {}", utils::version::version()));
             Ok(())
         }
-        _ => bus::entry::run(&raw_args[1..]),
+        _ => cli::run(&raw_args[1..]),
     }
 }
 
 /// Applies the daemon session selected through the environment before a hidden entry runs.
 fn configure_session(args: &[String]) {
-    if let Err(err) = session::configure_from_args(args) {
+    if let Err(err) = utils::paths::configure_from_args(args) {
         eprintln!("error: {err}");
         std::process::exit(2);
     }
@@ -96,7 +76,7 @@ fn configure_session(args: &[String]) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::args_as_utf8;
 
     #[cfg(unix)]
     fn invalid_utf8_arg() -> std::ffi::OsString {

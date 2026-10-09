@@ -22,7 +22,7 @@ local files:
 
 - `vendor/libghostty-vt/src/terminal/c/terminal.zig`
 
-reason: Herdr renders terminal cells directly and requires DEC private mode
+reason: Bus renders terminal cells directly and requires DEC private mode
 2027 to store flags, ZWJ emoji, and other multi-codepoint grapheme clusters in
 one cell. This patch makes clustering active for new terminals and keeps it as
 the reset default so RIS (`ESC c`) does not disable it.

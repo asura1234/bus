@@ -1,7 +1,19 @@
-use super::*;
+use crate::client::{
+    connection::{bootstrap as endpoint, write_to_server},
+    effects::client_shell_resize_message,
+    errors::ClientError,
+    host_terminal::setup::should_draw_host_cursor,
+    state::ClientState,
+};
+use crate::protocol::wire::ClientMessage;
+use tracing::{debug, warn};
 
-pub(super) fn init_logging() {
-    crate::logging::init_file_logging("herdr-client.log");
+pub(super) fn init_logging(options: &crate::utils::logging::LoggingOptions) {
+    crate::utils::logging::init_file_logging_at(
+        crate::utils::paths::data_dir(),
+        "herdr-client.log",
+        options,
+    );
 }
 
 pub(super) fn apply_reload(
@@ -58,12 +70,12 @@ pub(super) fn apply_reload(
 }
 
 pub(super) fn reload_local_client_config(
-    sound_config: &mut crate::config::SoundConfig,
+    sound_config: &mut crate::utils::config::SoundConfig,
     redraw_on_focus_gained: &mut bool,
     draw_host_cursor: &mut bool,
     mouse_capture: &mut bool,
 ) {
-    match crate::config::load_live_config() {
+    match crate::utils::config::load_live_config() {
         Ok(loaded) => {
             let invalid_section = |section: &str| {
                 loaded

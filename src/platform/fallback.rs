@@ -145,7 +145,7 @@ pub fn open_url(_url: &str) -> std::io::Result<Option<std::process::Child>> {
 }
 
 /// Unsupported platform stub.
-pub fn read_clipboard_image() -> Option<ClipboardImage> {
+pub fn read_clipboard_image(_max_bytes: usize) -> Option<ClipboardImage> {
     None
 }
 

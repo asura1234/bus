@@ -27,10 +27,13 @@ import platform
 import re
 import select
 import sys
-import termios
 import time
-import tty
 from pathlib import Path
+
+if __package__:
+    from .rawtty import RawMode
+else:
+    from rawtty import RawMode
 
 IDLE_TIMEOUT_S = 0.025
 ABORT_CAPTURE = b"\x07"  # Ctrl+G
@@ -104,17 +107,6 @@ def read_sequence() -> bytes:
             break
         chunks.append(chunk)
     return b"".join(chunks)
-
-
-class RawMode:
-    def __enter__(self) -> "RawMode":
-        self.fd = sys.stdin.fileno()
-        self.old = termios.tcgetattr(self.fd)
-        tty.setraw(self.fd)
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
 
 
 def detect_os() -> str:

@@ -26,7 +26,7 @@ from consumer_fallout_analysis import (  # noqa: E402
     candidate_record,
     high_confidence_summary,
     is_test,
-    test_subject_stem,
+    subject_stem,
 )
 from task_graph_validation import (  # noqa: E402
     _declared_path_value,
@@ -210,7 +210,7 @@ def build_inventory(repo: Path, plan: Path) -> dict[str, Any]:
     }
     tests_by_stem: dict[str, list[str]] = {}
     for path in texts:
-        if (stem := test_subject_stem(path)) is not None:
+        if (stem := subject_stem(path)) is not None:
             tests_by_stem.setdefault(stem, []).append(path)
     frozen_tests = {
         stem: tuple(sorted(paths))

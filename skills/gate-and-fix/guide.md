@@ -22,14 +22,17 @@ replace `rebase-origin-main` or PR creation.
   files changed. No changed-file filter can remove a category or a skill test.
   - **Lint**: Cargo fmt, all-target Clippy with warnings denied, Ruff `E9,F` over all first-party
     Python, and the static hot-path architecture contract. The lint lane runs the hot-path and
-    import-boundary pytest suites under `tools/tests/`, then prints the import-boundary report.
-    Boundaries are report-only until S12 enables enforcement. These checks read source text;
+    import-boundary pytest suites under `tools/tests/`, then checks test placement and file sizes before enforcing the final import graph.
+    Unknown source/target owners and forbidden component or inner edges fail the lane. These checks read source text;
     they are not UI tests. Rust formatting and Python syntax/pyflakes violations fail the gate.
     Python style-only rules and LibTV's TypeScript-specific complexity limits are not imported. All
-    first-party Rust/Python files (including tests) have a 3,000 physical-line cap. Existing
-    oversized handwritten files are individually exempted in
-    [lint-policy.toml](references/lint-policy.toml), each marked for splitting during the
-    restructure; generated Ghostty bindings are separately named. New/non-exempt files fail.
+    first-party handwritten production Rust/Python files have an 800-line cap. Comments and blank lines count;
+    shared `*_test.*` / `tests` paths and Rust `cfg(test)` scopes are exempt. Generated Ghostty FFI declarations are
+    separately named in [lint-policy.toml](references/lint-policy.toml); no handwritten per-file exemptions remain.
+    Production Clippy runs first with function length 100, cognitive complexity 25 and argument threshold 11,
+    plus wildcard imports, stdout print macros, dbg/todo/unimplemented, get-unwrap and unwrap denied. All-target
+    Clippy follows with only those selected rules allowed for test compilation; other default warnings still fail.
+    `just windows-lint` uses the same production/test policy on the Windows target.
   - **Unit**: instrumented Bus binary tests, excluding the `IN_PROCESS_SERVER_TESTS` prefix in
     `bus_quality.py`, followed by every `test_*.py` / `*_test.py` in its existing `PYTHON_ROOTS`
     (`scripts/`, `skills/`, `cli_extensions/`, `tools/`, `packaging/`) with pytest. They must pass;
@@ -55,7 +58,8 @@ replace `rebase-origin-main` or PR creation.
   wrapper argv and its logs record every underlying command.
 - Coverage reports live in ignored `temp/gate-and-fix/coverage/`; instrumented Cargo output stays
   in `target/llvm-cov-target/`. Tests run only once per round; coverage consumes their profiles.
-  The gate retains the parent `BUS_DATA_DIR`, `BUS_SESSION_ID`, and `HERDR_SESSION`; tests that
+  The gate retains the parent `BUS_DATA_DIR`, `BUS_SESSION_ID`, and the native-session
+  compatibility key `HERDR_SESSION`; tests that
   model isolated config roots clear and restore those variables within their fixture boundaries.
 - Rust coverage includes host-compiled first-party `src/` executable lines. Vendor/dependencies,
   build.rs, generated files from `lint-policy.toml`'s `generated_files`, `tests/` and inline

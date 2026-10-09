@@ -1,13 +1,17 @@
 # Bus restructure
 
-Status: decided. It describes the target folder and module layout of the repository. Bus is a prototype: it keeps no fallbacks and no
-backward compatibility with older saves, configs, peers or herdr-era names, and it has no CI.
+Status: decided. It describes the target folder and module layout of the repository. Bus is a prototype with no general backward compatibility and no CI. S13 retains a specific set of disk, injected environment and wire spellings so the existing local session can resume; this does not restore legacy Rust import paths.
+
+S13 pre-cutover checkpoint: canonical imports and AgentKind/TerminalEvent/RoomAgent spellings are in place; compatibility wiring is removed and the final import graph is enforced. Shared filesystem mechanics, neutral provider harnesses, restore planning and package input closure are complete. The enforced limit is
+800 handwritten production lines per file, with shared test scopes and the generated FFI exception. H14 production
+Clippy rules are active at 100 function lines, cognitive complexity 25 and 11 arguments; tests are exempt from these
+selected rules. Python retains Ruff E9,F and has no complexity lint policy.
 
 ## 1. Repository root
 
 - `src/`: the Bus terminal application (Rust), described in section 2
 - `orchestration/`: Markdown only; how a MASTER orchestrator agent works
-  - `README.md`: the contract between Bus and these files (placeholders, lookup order, control CLI)
+  - `README.md`: the contract between Bus and these files (placeholders, compiled-in defaults, control CLI)
   - `prompt.md`: the MASTER system prompt
   - `rules.md`, `guide.md`, `how-to-bus-cli.md`: binding rules, working guide, control CLI reference
 - `workflows/`: Markdown only; the standard workflow library
@@ -18,29 +22,30 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
   - one folder per skill: `SKILL.md`, `guide.md`, `references/` and the skill's own `scripts/` (quality lanes, review lanes, PR signals,
     ledgers and plan checks stay with the skill that runs them; their tests are `scripts/tests/*_test.py`)
 - `cli_extensions/`: shared Python for the review skills (artifact parser and renderer, round and lane ownership)
+- `scripts/`: skill-referenced shared tooling; `conventional_commits.py` and the skill-migration contract test stay here
 - `docs/`: repo-development docs
   - `bus-architecture.md`: this document
   - `guides/`: architecture principles, code review, plan review, review format and response, consumer-fallout format
   - `templates/`: `plan-template.md`
-- `tests/`: black-box integration tests against the built `bus` binary. Each folder is one test target whose root is
-  `<folder>/<folder>_test.rs`, declared with `[[test]]` in `Cargo.toml`
+- `tests/`: black-box integration tests against the built `bus` binary. Targets are declared with `[[test]]` in `Cargo.toml`;
+  the cross-platform `room-screen` target uses `client/room_screen_test.rs`
   - `support/`: `process_test.rs` (pid and dir hygiene), `spawn_test.rs` (one `spawn_server`/`spawn_client`), `wire_test.rs`,
     `json_test.rs`; each target includes them with `#[path]`
   - `api/`: `api_test.rs`, `server_test.rs`, `workspaces_tabs_test.rs`, `panes_test.rs`, `agents_test.rs`, `events_test.rs`
   - `server/`: `server_test.rs`, `lifecycle_test.rs`, `reattach_test.rs`, `headless_size_test.rs`, `multi_client_test.rs`
   - `client/`: `client_test.rs`, `startup_test.rs`, `lifecycle_test.rs`, `window_title_test.rs`, `output_test.rs`,
-    `persistence_test.rs`, `shared_view_test.rs`
+    `persistence_test.rs`, `shared_view_test.rs`, `room_screen_test.rs`, `room_screen_support_test.rs`, `screen_support_test.rs`
   - `cli/`: `cli_test.rs`, `callbacks_test.rs` (`--bus-callback` spooling), `paths_test.rs` (`--paths` and data-dir isolation)
   - `fixtures/`: key corpora, endpoint golden JSON, session files (data files keep their names)
 - `tools/`: repo-level tooling that belongs to no single skill, one Python package and one test root
-  - `quality/`: UI hot-path check and the import-boundary check that enforces graph 3a
+  - `quality/`: UI hot-path check and the enforced import-boundary audit for graph 3a
   - `acceptance/`: `harness_test.py`, `existing_instance_test.py`, `e2e_test.py`, `live_ui_test.py`, `screen_test.py` (e2e and
     live-UI tests and their helpers, all test code)
   - `keyboard/`: raw-tty helper and the key capture tools
   - `vendor/`: re-vendor (`--source-repo` required) and hand-build libghostty-vt, vendored-tree checks
-  - `git/conventional_commits.py`, `windows/check.ps1` (local Windows build check), `tests/` (`*_test.py`)
-- `packaging/`: release plumbing; every package installs the binary with `orchestration/` and `workflows/` beside it
-  - `nix/package.nix`: `buildRustPackage`, installs the two folders into `share/bus/`
+  - `windows/check.ps1` (local Windows build check), `tests/` (`*_test.py`)
+- `packaging/`: release plumbing; orchestration and workflow defaults are compiled into the binary
+  - `nix/package.nix`: `buildRustPackage`; its source fileset includes both embedded Markdown folders, registered test sources/fixtures, native sources/metadata and patched portable-pty
   - `windows/`: `conpty.json`, `licenses/`, `package_conpty.py`, `package_conpty.ps1`, `tests/` (`*_test.py`)
 - `vendor/`: `libghostty-vt/` (with `build.zig.zon.nix`), `portable-pty/`, `patches/` (libghostty-vt carries patch 0001 only), the patch indexes and
   `libghostty-vt.vendor.json`
@@ -51,9 +56,10 @@ backward compatibility with older saves, configs, peers or herdr-era names, and 
 ## 2. `src/` layout
 
 Nine components, listed in reading order. The dependency rule is graph 3a, not this order; `main.rs` is the composition root above all
-of them. Production code has at most 800 handwritten lines per file (generated bindings are not handwritten) and keeps every
-complexity lint: clippy's `too_many_lines`, `type_complexity`, `cognitive_complexity`, `too_many_arguments` and the like, plus the
-Python complexity checks.
+of them. The final target is at most 800 handwritten production lines per file (generated bindings are not handwritten).
+The gate retains the default Clippy rules and enforces production function length 100, cognitive complexity 25 and argument
+threshold 11, plus no wildcard imports, stdout print macros, dbg/todo/unimplemented macros, get-unwrap or unwrap calls.
+Production checking runs before test-target compilation, where only those selected rules are exempt.
 
 Every test file in the repository, Rust or Python, is named `*_test.<ext>`: `*_test.rs` and `*_test.py`. Shared test helpers are
 test code and follow the same rule (`support_test.rs`). Data fixtures such as `.json` keep their names inside a test folder. A
@@ -64,7 +70,8 @@ A file is a test file, and so exempt from the 800-line cap and the complexity li
 (file level) or it sits inside a test directory: any folder named `tests`, at any depth, including the top-level `tests/`
 (directory level). Inline `#[cfg(test)]` modules in production files are exempt by their test scope and stay where they are; they
 are not moved out just for the cap. Both levels are patterns in the lint policy and the clippy and test-scope config, never a
-per-file list.
+per-file list. The same shared classifier drives length, coverage and architecture checks; no handwritten file-length
+exemptions remain.
 
 An enforced lint check fails the gate when test code (a `#[test]` fn, or a pytest test function or file) is in none of those three
 places: a `*_test.*` file, a `tests` directory or an inline `#[cfg(test)]` module. Pytest (`python_files`) and the gate's Python
@@ -76,12 +83,14 @@ Files are split by ownership, not by helper.
 - `utils/`: shared basics; a leaf that imports no other component
   - `ids.rs` (`PaneId`, `TerminalId`), `version.rs`, `paths.rs` (owns the path table for every on-disk
     file and socket under `BUS_DATA_DIR`, including `bus.sock`)
-  - `logging.rs` (takes its filter from `cli`), `log_events.rs`, `home_path.rs`, `url.rs` (safe web URL check)
+  - `logging.rs` (takes explicit filter/rotation/dev options from startup composition), `log_events.rs`, `env.rs` (shared inherited path/key facts), `time.rs`, `home_path.rs`, `url.rs` (safe web URL check)
   - `config/`: `mod.rs`, `load.rs` (TOML, live reload; an unknown key fails with a diagnostic), `session.rs`, `server.rs`,
-    `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `sound.rs` (ding paths), `ui/{theme,window_title,keys}.rs`, `tests/`
+    `terminal.rs`, `advanced.rs`, `experimental.rs`, `toast.rs`, `interface.rs` (UI settings), `sound.rs` (ding paths),
+    `ui/{theme,window_title,keys}.rs`, section-owned `tests/`; `core.rs` retains the logical `model` namespace
   - `theme/`: `color.rs` (`RgbColor`, `TerminalTheme`, `HostAppearance`), `palette.rs`, `builtin.rs`, `resolve.rs`
-  - `text/`: `selection.rs` (`Selection`, `ScrollMetrics`), `hit_test.rs` (URL, word, quoted path), `copy_motion.rs`, `width.rs`
-  - `render/`: `signal.rs` (redraw requests), `prof.rs`, `widgets.rs` (highlight, popups, scrollbar math)
+  - `paths/`: `session_args.rs`, `socket.rs`; CLI help/stop policy lives in `cli`; detached attach guidance lives in client errors; shared paths contain calculation only
+  - `text/`: `selection.rs` (`Selection`), `notification.rs` (message splitting), `hit_testing.rs` (URL, word, quoted path), `copy_motion.rs`, `width.rs`
+  - `render/`: `signal.rs` (redraw requests), `prof.rs`, `widgets.rs` (`ScrollMetrics`, `CopyFeedback`, scrollbar/overlap math), `widgets/selection.rs` (highlight math), `feedback.rs`, `diagnostic.rs`
 - `platform/`: the operating system
   - `mod.rs`: shared types (`ForegroundJob`, `Signal`, `ChildExitReason`, `ClipboardImage`) and the facade; returns raw process and
     environment facts and leaves their meaning to `agents`
@@ -123,7 +132,7 @@ Files are split by ownership, not by helper.
   - `resume/`: `catalog.rs` (resume argv per agent), `session_ref.rs`, `tests/`
   - `providers/`: agent harnesses Bus launches and observes, one folder each
     - `mod.rs` (`ProviderKind`, match dispatch into each harness), `launch.rs` (room-free `LaunchSpec` to `PreparedLaunch`),
-      `spool.rs` (`--bus-callback` records, parsed into neutral provider events), `hook_json.rs` (shared hook-file merge and consent),
+      `callback_entry.rs` (early hook process entry), `spool.rs` (`--bus-callback` records, parsed into neutral provider events), `hook_json.rs` (shared hook-file merge and consent),
       `suggest.rs` (cwd suggestions), `tests/`
     - each harness passes a prompt file to its CLI and never reads room state; `resume.rs` rebuilds launch extras from verified facts
     - `claude_code/`: `launch.rs` (args, per-launch settings), `hooks.rs` (install, parse, prompt normalization), `system_prompt.rs`,
@@ -135,18 +144,18 @@ Files are split by ownership, not by helper.
 - `terminal/`: one live terminal, from PTY to server-owned state
   - `mod.rs`, `registry.rs`, `events.rs` (`TerminalEvent`, the one stream runtimes and API handlers send to the server),
     `history.rs` (alt-screen scrollback merge)
-  - `vt/`: safe wrapper over libghostty-vt
-    - `mod.rs` (errors, re-exports), `ffi.rs` (generated bindings), `consts.rs`, `types.rs` (cells, colors, cursor, scrollbar)
-    - `callbacks.rs` (C trampolines, clipboard, PNG decode), `terminal.rs` (lifecycle, write, modes, reads, scrolling)
-    - `render.rs` (render state, row and cell iterators), `input.rs` (key, mouse, focus encoders), `kitty.rs` (image types and getters),
-      `kitty_placement.rs` (virtual placement geometry, placeholder tables)
+  - `vt/`: safe libghostty-vt facade and cohesive handle/protocol owners
+    - `mod.rs` (stable re-exports), `ffi.rs` (generated bindings), `consts.rs`, `types.rs` (cells, colors, cursor, scrollbar)
+    - `terminal.rs` (handle, lifecycle, modes), `callbacks.rs` (C trampolines, clipboard, PNG decode), `input.rs` (focus/key/mouse encoders)
+    - `render.rs` (render state), `read.rs` (terminal queries), `read/rows.rs` (borrowed row and cell iterators)
+    - `kitty.rs` (image data/cache/storage), `kitty_placement.rs` (ordinary/virtual placement geometry)
     - `tests/{terminal_test,render_test,input_test,kitty_test}.rs`
-  - `pty/`: `spawn.rs`, `fd.rs` (wake pipe, poll, resize), `actor/{mod,unix,windows}.rs` (per-terminal I/O thread),
+  - `pty/`: `fd.rs` (wake pipe, poll, resize), `actor/{mod,unix,windows}.rs` (per-terminal I/O thread),
     `actor/submission.rs` (paced text, delay and Enter), `tests/{unix_actor_test,submission_test}.rs`
   - `emulator/`: PTY bytes into the VT, frames and text out
-    - `mod.rs` (core, locking, modes, scroll state), `write.rs` (PTY input, ordered replies, history seeding)
-    - `color_replies.rs` (OSC color queries from the host theme), `encode.rs` (keys and mouse)
-    - `render.rs` (ratatui render, dirty-row cell patches), `read.rs` (visible, recent and detection text and ANSI)
+    - `mod.rs` retains core/locking and the mode/state facade; `write.rs` owns ordered writes/replies and response draining
+    - `color_replies.rs` (theme ownership and queries), `encode.rs` (key/mouse encoders), `render.rs` (full painting),
+      `dirty_patch.rs` (bounded dirty preparation, collection and clearing), `read.rs` (visible, recent and detection text and ANSI)
     - `text_motion.rs` (retained text, search, word and paragraph motion), `windows.rs`, `conpty_recent_cache.rs`
     - `controls/`: `osc/{default_colors,agent,cwd,scrollback_compat,debug,collector}.rs`, `osc/tests/`, `xtgettcap.rs`, `kitty_keyboard.rs`
       (kitty flags and the modifyOtherKeys 0/1/2 tracker),
@@ -155,7 +164,8 @@ Files are split by ownership, not by helper.
       a real VT)
   - `runtime/`: `TerminalRuntime`, the only handle to a live terminal
     - `mod.rs` (struct, I/O wiring, drop), `spawn.rs` (shell resolution, launch env, PTY spawn), `io.rs` (input, resize, scroll)
-    - `read.rs` (snapshots, render, cwd), `detection_task.rs` (agent probe loop), `detection_policy.rs` (debounce, publish rules)
+    - `read.rs` (snapshots, render, cwd, PTY callback), `detection_task.rs` (agent probe loop),
+      `detection_process.rs` (process observation), `detection_policy.rs` (debounce, publish rules)
     - `compression.rs` (idle scrollback), `shutdown.rs` (close and release), `dialog.rs` (answer agent dialogs)
     - `tests/{support_test,spawn_test,detection_test,compression_test,shutdown_test,io_test}.rs`
   - `state/`: `TerminalState`, the arbiter of effective agent state
@@ -183,14 +193,14 @@ Files are split by ownership, not by helper.
   - `control/`: `server.rs` (control socket, started only with `--dev`; `send --as` must name an agent in the room or its
     orchestrator, other commands trust the caller), `protocol.rs` (framing)
   - `prefs/`: `settings.rs` (`settings.json`), `colors.rs` (agent palette)
-  - `orchestration.rs`: resolve `orchestration/` and `workflows/` (a user file in the data root replaces the default of the same name;
-    defaults come from the checkout in debug builds and from `share/bus` beside the executable in release builds) and fill MASTER
-    prompt placeholders
+  - `orchestration.rs`: embed `orchestration/` and `workflows/`, write the docs into the Bus data root, and fill MASTER
+    prompt placeholders; compiled-in copies are the only defaults in every build
 - `server/`: the `bus server` daemon
-  - `mod.rs` (`Server`, the main loop), `app.rs` (`App`, `AppState`, `AppSettings`), `startup.rs`, `shutdown.rs`, `config_reload.rs`
+  - `mod.rs` (wiring and stable server tests), `main_loop.rs` (`Server`), `app_loop.rs`, `app.rs` (`App`), `app_state.rs`,
+    `app_settings.rs`, `app_queries.rs`, `startup.rs`, `shutdown.rs`, `config_reload.rs`
   - `workspaces/`: workspaces, tabs and the split layout
     - `mod.rs` (`Workspace`), `tab.rs`, `pane.rs` (`PaneState`), `layout/{tree,geometry,nav,layout_test}.rs`,
-    `agent_view.rs` (agent-panel entries and the agent-view filter)
+    `agent_view.rs` (ordered agent-panel entries; no filter DSL)
     - `ids.rs` (public `w`/`t`/`p` ids, target resolution), `navigation.rs` (focus, switch, move, zoom), `moves.rs` (move panes
       across tabs), `close.rs`, `attention.rs`, `git_label.rs`, `cwd.rs`, `tests/` (with `support_test.rs`)
   - `terminals/`: live terminals and the agents in them
@@ -198,7 +208,7 @@ Files are split by ownership, not by helper.
       facts, ask `messaging` to validate, then the provider for launch extras), `respawn.rs` (shell after an agent exits), `titles.rs`, `theme_sync.rs`
     - `scrollback_read.rs`: paged scrollback read of full-screen agent TUIs
     - `tests/{events_test,agents_test,resume_test,respawn_test,scrollback_read_test}.rs`
-  - `persistence/`: `schema.rs`, `capture.rs`, `store.rs`, `restore.rs` (snapshot to model plus a launch plan the main loop runs),
+  - `persistence/`: `schema.rs`, `capture.rs`, `store.rs`, `restore.rs` (pure snapshot-to-model/TerminalState/launch descriptions; startup executes them through `terminals/restore_launch.rs`),
     `autosave.rs`, `tests/{schema_test,store_test,restore_test}.rs`
   - `api/`: handlers for every API method
     - `socket/{accept,connection}.rs` (API socket, one thread per connection), `streams/{event_hub,subscriptions,wait,prompt_wait}.rs`
@@ -212,7 +222,8 @@ Files are split by ownership, not by helper.
       reports)
     - `panes/tests/{layout_test,navigation_test,copy_test,io_test,session_test,close_test}.rs`
   - `clients/`: connected TUI clients
-    - `accept.rs`, `handshake.rs`, `read_loop.rs`, `writer.rs` (control and render lanes), `events.rs` (`ServerEvent` and its handling)
+    - `accept.rs`, `handshake.rs`, `read_loop.rs`, `writer.rs` (control and render lanes),
+      `events/{mod,connection,shell}.rs` (`ServerEvent` and its handling)
     - `connection.rs` (per-client record), `foreground.rs`, `input.rs`, `requests.rs` (client request allow-list and dispatch)
     - `focus.rs`, `geometry.rs`, `surface_lease.rs`, `clipboard_images.rs`,
       `tests/{handshake_test,read_loop_test,writer_test}.rs`
@@ -239,18 +250,24 @@ Files are split by ownership, not by helper.
   - `compositor/`: `mod.rs`, `compose.rs`, `patch.rs`, `hits.rs`, `config.rs`, `snapshot.rs`, `tests/`
   - `panes/`: `router.rs`, `keys.rs`, `input_lease.rs`, `mouse/{hit,selection,scroll,splits,forward}.rs`, `tests/`
   - `rooms/`: the room UI
-    - `mod.rs` (compositor hooks, coordinator start), `ui.rs`, `drafts.rs`, `toast.rs`, `ring.rs`, `help.rs`, `selection.rs`
+    - `mod.rs` (compositor hooks, coordinator start), `ui.rs` (snapshot/events and settlement),
+      `drafts.rs` (per-room editors and save/send intent), `toast.rs` (notices and expiry), `chat_search.rs`, `ring.rs`, `help.rs`, `selection.rs`
     - `widgets/{editor,recipients}.rs`, `dialogs/{forms,deletion}.rs`
     - `input/`: `mod.rs`, `composer.rs`, `history.rs`, `forms.rs`, `settings.rs`
     - `history/`: `mod.rs`, `exchange.rs`, `markdown.rs`
-    - `render/`: `view.rs`, `text.rs`, `sidebar.rs`, `layout.rs`, `room.rs`, `dialogs.rs`, `paint.rs`, `thumbnails.rs`
+    - `render/`: `mod.rs` (view model and hits), `view.rs`, `text.rs`, `sidebar.rs`, `layout.rs`, `room.rs`, `dialogs.rs`, `paint.rs`, `thumbnails.rs`
     - `tests/`: `support_test.rs` (fixtures, input drivers, screen capture), `deletion_test.rs`, `sidebar_test.rs`, `toasts_test.rs`,
       `composer_test.rs`, `forms_test.rs`, `layout_test.rs`, `native_shell_test.rs`, `attachments_test.rs`, `selection_test.rs`,
       `history_markdown_test.rs`, `history_slots_test.rs`, `history_scroll_test.rs`, `keys_test.rs`, `master_test.rs`, `sound_test.rs`,
-      `focus_test.rs`
+      `focus_test.rs`, `chat_search_test.rs`
 - `cli/`: the `bus` command
   - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
   - `control.rs` (control commands used by orchestrators and humans), `help.rs`, `tests/{parse_test,execute_test}.rs`
+
+Local test moves use literal includes where needed to retain their full S9b names. In particular, CLI stop/guidance tests keep
+`utils::paths::tests`, the runtime PTY setup case keeps `terminal::pty::spawn::unix::tests`, and graphics tests keep their Kitty
+parent. Shared writer, lease and room support implementations are instantiated once. Python acceptance helpers and raw-tty
+tools remain importable without launching live UI tests during collection.
 
 ## 3. Dependency graphs
 
@@ -334,7 +351,7 @@ flowchart TD
 
 **utils**. Ids, version, the path table, logging, config loading, colors, text selection and small render helpers. It is a leaf: it
 imports no other component, though it holds small shared state such as the redraw signal. `config` stores agent names as plain
-strings; `agents` validates them. `logging` takes its filter from `cli`.
+strings; `agents` validates them. `logging` consumes explicit startup options.
 
 **platform**. Every OS call: processes, signals, clipboard, URLs, notifications, local sockets, file primitives, sound playback and the
 Windows backend. It returns raw facts and must not know about agents or protocols; callers pass limits (such as the clipboard image
@@ -376,7 +393,27 @@ prompt and request ids (`messaging/model`).
 **orchestration/ and workflows/** (Markdown, outside `src/`). How MASTER agents work, and the workflows they run. Bus gives each agent the
 context its job needs: MASTER agents know they are in Bus and command the agents in the room they are attached to, so they get the prompt,
 rules, guide, control CLI reference and workflow library. Work-room agents do ordinary software work and get only the messages sent to them.
-Both folders are installed beside the binary as defaults. A user layer in the Bus data root (default `~/.local/share/bus/`) overrides them
-file by file (defaults come from the checkout in debug builds and from `share/bus` beside the executable in release builds), so anyone can design their own way of working on top of the defaults. `orchestration/README.md` documents the contract:
-the placeholders Bus fills (`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}`, `{{DOCS}}`), the lookup order, and the control CLI as the
-only way to drive Bus.
+Both folders are compiled into the binary with `include_str!`; debug, release and Nix builds use the same defaults. Bus writes the
+embedded docs under `<BUS_DATA_DIR>/docs/` for agents to read, and the filled prompt into each launch's callback folder. There is no
+installed `share/bus` default directory, runtime source-file lookup or user-file override layer. Explicit per-launch custom prompts
+remain supported. `orchestration/README.md` documents the source-to-emitted filename map, the placeholders Bus fills
+(`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}`, `{{DOCS}}`), and the control CLI as the only way to drive Bus.
+
+S11 packaging closure: Cargo includes all Rust sources, registered integration suites and fixtures, authored Markdown, native Ghostty sources/metadata and the build script. Zig caches, dependency caches and built outputs are excluded. Nix retains the patched portable-pty dependency as a path source; Cargo registry normalization removes the local patch table, so registry publication is a distinct dependency contract, not the Nix/repository build. No runtime resolver or installed default directory is added. The final import graph is enforced, including grouped/aliased/relative paths and physical owners reached through re-exports. Unknown paths fail; generated or procedural macro expansion still requires compiler verification. S13 uses Bus operational branding while retaining the explicitly documented live session directory/socket/log names, injected runtime keys, native session source identifiers and serialized enum tags. The callback command and executable path stay unchanged through the human-controlled cutover.
+
+## S13 live-session compatibility
+
+Bus branding and build/debug knobs use Bus names. No startup migration is introduced. The human cutover must reuse the same HOME, local session ID and callback executable path. These retained literals preserve the existing session and injected agents:
+
+| Contract | Retained spelling |
+| --- | --- |
+| Session-local native config/state | `herdr-config`, `herdr-config/sessions/bus`, `herdr-state` |
+| Native IPC endpoints | `herdr.sock`, `herdr-client.sock` |
+| Logs and numbered rotations | `herdr-server.log`, `herdr-client.log` |
+| Injected environment | `HERDR_ENV`, `HERDR_SESSION`, `HERDR_SOCKET_PATH`, `HERDR_CLIENT_SOCKET_PATH`, `HERDR_CONFIG_PATH`, `HERDR_STARTUP_CWD`, `HERDR_AGENT`, `HERDR_BIN_PATH`, `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, `HERDR_PANE_ID`, `HERDR_PANE_RUNTIME_ID` |
+| Environment isolation and shell prompt marker | `HERDR_` scrub prefixes; `__HerdrOriginalPrompt` |
+| Persisted native provider sources | `herdr:<provider>` prefixes, aliases and replacement rules |
+| Serialized delivery and right-click tags | `herdr` |
+| Already-injected callback command | `/Users/dylanliu/work/bus/target/debug/bus --bus-callback` and the existing provider hook subcommands |
+
+`BUS_DATA_DIR`, `BUS_SESSION_ID`, `BUS_CALLBACK_DIR` and `BUS_LAUNCH_ID` keep their existing meanings. Native `HERDR_SESSION=bus` is distinct from the local Bus session ID. Persisted rooms, agents, callback manifests, queues and consumed callback/turn IDs are not rekeyed. Upstream attribution and provenance, frozen test identities and explicit negative legacy-title fixtures also retain their original spelling. Windows packaging and the maintained ConPTY loader now agree on `conpty/bus-conpty.json` and `BUS_WINDOWS_CONPTY`; no old marker fallback is added.

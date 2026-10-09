@@ -2,14 +2,14 @@ use std::io;
 
 use tracing::{debug, warn};
 
-use crate::protocol::NotifyKind;
+use crate::protocol::wire::NotifyKind;
 
 pub(super) fn handle_notify(kind: NotifyKind, message: &str, body: Option<&str>) {
     handle_notify_with_notifiers(
         kind,
         message,
         body,
-        crate::terminal_notify::show_notification,
+        super::host_terminal::notify::show_notification,
         crate::platform::show_desktop_notification,
     );
 }
@@ -24,7 +24,7 @@ pub(super) fn forward_terminal_bells(
     if bus_shell {
         return Ok(());
     }
-    crate::terminal_effects::write_terminal_bells(writer, count)
+    super::host_terminal::effects::write_terminal_bells(writer, count)
 }
 
 pub(super) fn handle_notify_with_notifiers(

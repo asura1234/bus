@@ -29,7 +29,7 @@ the interactive UI must be started by the developer in a terminal they keep open
 #   `./run dev-control state` otherwise returns control_unavailable.
 #   Read the instance's real value with `ps eww -p <pid> | tr ' ' '\n' | grep BUS_DATA_DIR`.
 export BUS_DATA_DIR=/absolute/path/matching/the/running/instance
-cd "<bus repository root>"         # control commands go through ./run dev-control COMMAND; do not call herdr directly
+cd "<bus repository root>"         # control commands go through ./run dev-control COMMAND; do not call bus directly
 
 ./run dev-control state            # first see which rooms and agents exist; reuse existing ones, do not create duplicates
 room=$(./run dev-control room create "<topic>" | jq -r '.result.room_id')
