@@ -1,6 +1,6 @@
 use crate::protocol::api::schema;
 
-use crate::server::api::terminal_read::AltScreenReadConflict;
+use crate::server::api::terminal_read::{AltScreenReadConflict, TerminalReadObservation};
 use crate::server::clients::connection::{latest_shell_client, ClientConnectionMode};
 use crate::server::main_loop::{non_empty_body, HeadlessServer};
 use crate::server::notifications::show::{should_forward_toast_to_clients, toast_notify_kind};
@@ -8,6 +8,27 @@ use ratatui::layout::Rect;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tracing::debug;
+
+/// Rewrites a successful pane read so every fact describes the frozen text, not the live redraw.
+fn apply_frozen_pane_read(response: &mut String, frozen: TerminalReadObservation) {
+    let Ok(mut success) = serde_json::from_str::<schema::SuccessResponse>(response) else {
+        return;
+    };
+    if let schema::ResponseResult::PaneRead { read } = &mut success.result {
+        read.text = frozen.text;
+        read.truncated = frozen.truncated;
+        read.revision = frozen.revision;
+        read.viewport_rows = frozen.viewport_rows;
+        read.viewport_columns = frozen.viewport_columns;
+        read.requested_lines = frozen.requested_lines;
+        read.returned_lines = frozen.returned_lines;
+        read.available_lines = frozen.available_lines;
+        read.exhausted = frozen.exhausted;
+        if let Ok(serialized) = serde_json::to_string(&success) {
+            *response = serialized;
+        }
+    }
+}
 
 type PaneApiState = (
     usize,
@@ -112,23 +133,7 @@ impl HeadlessServer {
         }
         let mut response = self.dispatch_foreground_api_request(msg.request);
         if let Some(frozen) = frozen_alt_screen_read {
-            if let Ok(mut success) = serde_json::from_str::<schema::SuccessResponse>(&response) {
-                if let schema::ResponseResult::PaneRead { read } = &mut success.result {
-                    // Every fact must describe the frozen text, not the live redraw.
-                    read.text = frozen.text;
-                    read.truncated = frozen.truncated;
-                    read.revision = frozen.revision;
-                    read.viewport_rows = frozen.viewport_rows;
-                    read.viewport_columns = frozen.viewport_columns;
-                    read.requested_lines = frozen.requested_lines;
-                    read.returned_lines = frozen.returned_lines;
-                    read.available_lines = frozen.available_lines;
-                    read.exhausted = frozen.exhausted;
-                    if let Ok(serialized) = serde_json::to_string(&success) {
-                        response = serialized;
-                    }
-                }
-            }
+            apply_frozen_pane_read(&mut response, frozen);
         }
         if let Some(spec) = alt_screen_read_spec {
             if let Ok(success) = serde_json::from_str::<schema::SuccessResponse>(&response) {

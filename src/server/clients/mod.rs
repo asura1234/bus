@@ -14,3 +14,4 @@ pub(crate) mod read_loop;
 pub(crate) mod writer;
 
 mod foreground;
+mod shell_request_kinds;
