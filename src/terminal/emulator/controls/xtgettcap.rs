@@ -3,6 +3,7 @@ use bytes::Bytes;
 #[derive(Debug, Default)]
 pub(in crate::terminal::emulator) struct XtgettcapQueryTracker {
     state: XtgettcapTrackerState,
+    utf8_remaining: u8,
     body: Vec<u8>,
     pending: Vec<XtgettcapResponse>,
 }
@@ -33,16 +34,28 @@ enum XtgettcapTrackerState {
 impl XtgettcapQueryTracker {
     pub(in crate::terminal::emulator) fn observe(&mut self, bytes: &[u8]) {
         for (index, &byte) in bytes.iter().enumerate() {
+            // UTF-8 may span writes; its continuation bytes are not raw C1 controls.
+            let utf8_continuation = self.utf8_remaining > 0 && matches!(byte, 0x80..=0xbf);
+            self.utf8_remaining = if utf8_continuation {
+                self.utf8_remaining - 1
+            } else {
+                match byte {
+                    0xc2..=0xdf => 1,
+                    0xe0..=0xef => 2,
+                    0xf0..=0xf4 => 3,
+                    _ => 0,
+                }
+            };
             match self.state {
                 XtgettcapTrackerState::Ground => {
                     if byte == 0x1b {
                         self.state = XtgettcapTrackerState::Escape;
-                    } else if byte == 0x90 {
+                    } else if byte == 0x90 && !utf8_continuation {
                         self.body.clear();
                         self.state = XtgettcapTrackerState::DcsIntro;
-                    } else if byte == 0x9d {
+                    } else if byte == 0x9d && !utf8_continuation {
                         self.state = XtgettcapTrackerState::IgnoreOsc;
-                    } else if matches!(byte, 0x98 | 0x9e | 0x9f) {
+                    } else if matches!(byte, 0x98 | 0x9e | 0x9f) && !utf8_continuation {
                         self.state = XtgettcapTrackerState::IgnoreString;
                     }
                 }
@@ -65,18 +78,18 @@ impl XtgettcapQueryTracker {
                 XtgettcapTrackerState::DcsIntro => match byte {
                     b'+' => self.state = XtgettcapTrackerState::DcsIntroPlus,
                     0x1b => self.state = XtgettcapTrackerState::IgnoreStringEscape,
-                    0x9c => self.state = XtgettcapTrackerState::Ground,
+                    0x9c if !utf8_continuation => self.state = XtgettcapTrackerState::Ground,
                     _ => self.state = XtgettcapTrackerState::IgnoreString,
                 },
                 XtgettcapTrackerState::DcsIntroPlus => match byte {
                     b'q' => self.state = XtgettcapTrackerState::DcsBody,
                     0x1b => self.state = XtgettcapTrackerState::IgnoreStringEscape,
-                    0x9c => self.state = XtgettcapTrackerState::Ground,
+                    0x9c if !utf8_continuation => self.state = XtgettcapTrackerState::Ground,
                     _ => self.state = XtgettcapTrackerState::IgnoreString,
                 },
                 XtgettcapTrackerState::DcsBody => match byte {
                     0x1b => self.state = XtgettcapTrackerState::DcsEscape,
-                    0x9c => {
+                    0x9c if !utf8_continuation => {
                         self.finalize(index + 1);
                         self.state = XtgettcapTrackerState::Ground;
                     }
@@ -96,7 +109,9 @@ impl XtgettcapQueryTracker {
                 | XtgettcapTrackerState::IgnoreString
                 | XtgettcapTrackerState::IgnoreStringEscape
                 | XtgettcapTrackerState::OversizedDcs
-                | XtgettcapTrackerState::OversizedDcsEscape => self.observe_ignored_string(byte),
+                | XtgettcapTrackerState::OversizedDcsEscape => {
+                    self.observe_ignored_string(byte, utf8_continuation);
+                }
             }
 
             if self.body.len() > 1024 {
@@ -107,12 +122,12 @@ impl XtgettcapQueryTracker {
     }
 
     /// Discard unrelated/oversized control strings until their original terminator.
-    fn observe_ignored_string(&mut self, byte: u8) {
+    fn observe_ignored_string(&mut self, byte: u8, utf8_continuation: bool) {
         match self.state {
             XtgettcapTrackerState::IgnoreOsc => {
                 if byte == 0x1b {
                     self.state = XtgettcapTrackerState::IgnoreOscEscape;
-                } else if matches!(byte, 0x07 | 0x9c) {
+                } else if byte == 0x07 || (byte == 0x9c && !utf8_continuation) {
                     self.state = XtgettcapTrackerState::Ground;
                 }
             }
@@ -126,7 +141,7 @@ impl XtgettcapQueryTracker {
             XtgettcapTrackerState::IgnoreString => {
                 if byte == 0x1b {
                     self.state = XtgettcapTrackerState::IgnoreStringEscape;
-                } else if byte == 0x9c {
+                } else if byte == 0x9c && !utf8_continuation {
                     self.state = XtgettcapTrackerState::Ground;
                 }
             }
@@ -140,7 +155,7 @@ impl XtgettcapQueryTracker {
             XtgettcapTrackerState::OversizedDcs => {
                 if byte == 0x1b {
                     self.state = XtgettcapTrackerState::OversizedDcsEscape;
-                } else if byte == 0x9c {
+                } else if byte == 0x9c && !utf8_continuation {
                     self.state = XtgettcapTrackerState::Ground;
                 }
             }
