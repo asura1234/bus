@@ -695,3 +695,84 @@ fn windows_conpty_native_encoder_preserves_semantic_shift_enter_fallback() {
         None
     );
 }
+
+#[test]
+fn kitty_navigation_release_preserves_non_keypad_identity() {
+    let key = TerminalKey::new(KeyCode::Up, KeyModifiers::CONTROL)
+        .with_kind(crossterm::event::KeyEventKind::Release);
+    assert_eq!(
+        encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 3 }),
+        b"\x1b[1;5:3A"
+    );
+}
+
+#[test]
+fn kitty_function_key_release_retains_event_phase() {
+    let key = TerminalKey::new(KeyCode::F(5), KeyModifiers::CONTROL)
+        .with_kind(crossterm::event::KeyEventKind::Release);
+    assert_eq!(
+        encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 3 }),
+        b"\x1b[15;5:3~"
+    );
+}
+
+#[test]
+fn kitty_modified_f3_tilde_report_decodes_as_function_key() {
+    let parsed =
+        parse_terminal_key_sequence("\x1b[13;5:2~").expect("modified F3 repeat report must decode");
+    assert_terminal_key_eq(
+        parsed,
+        KeyCode::F(3),
+        KeyModifiers::CONTROL,
+        crossterm::event::KeyEventKind::Repeat,
+        None,
+    );
+}
+
+#[test]
+fn kitty_functional_key_events_roundtrip_through_decoder() {
+    let cases = [
+        KeyCode::Up,
+        KeyCode::Down,
+        KeyCode::Left,
+        KeyCode::Right,
+        KeyCode::Home,
+        KeyCode::End,
+        KeyCode::PageUp,
+        KeyCode::PageDown,
+        KeyCode::Insert,
+        KeyCode::Delete,
+        KeyCode::F(1),
+        KeyCode::F(2),
+        KeyCode::F(3),
+        KeyCode::F(4),
+        KeyCode::F(5),
+        KeyCode::F(12),
+    ];
+    let kinds = [
+        crossterm::event::KeyEventKind::Press,
+        crossterm::event::KeyEventKind::Repeat,
+        crossterm::event::KeyEventKind::Release,
+    ];
+
+    for code in cases {
+        for kind in kinds {
+            let key = TerminalKey::new(code, KeyModifiers::ALT).with_kind(kind);
+            let encoded = encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 3 });
+            let text = std::str::from_utf8(&encoded).unwrap();
+            let parsed = parse_terminal_key_sequence(text)
+                .unwrap_or_else(|| panic!("{code:?} {kind:?} encoded as {text:?}"));
+            assert_terminal_key_eq(parsed, code, KeyModifiers::ALT, kind, None);
+        }
+    }
+}
+
+#[test]
+fn kitty_f3_uses_tilde_form_instead_of_cursor_report_final() {
+    let key = TerminalKey::new(KeyCode::F(3), KeyModifiers::CONTROL)
+        .with_kind(crossterm::event::KeyEventKind::Release);
+    assert_eq!(
+        encode_terminal_key(key, KeyboardProtocol::Kitty { flags: 3 }),
+        b"\x1b[13;5:3~"
+    );
+}

@@ -230,6 +230,7 @@ fn parse_xterm_modified_special_sequence(data: &str) -> Option<TerminalKey> {
         "3" => KeyCode::Delete,
         "5" => KeyCode::PageUp,
         "6" => KeyCode::PageDown,
+        "13" => KeyCode::F(3),
         "15" => KeyCode::F(5),
         "17" => KeyCode::F(6),
         "18" => KeyCode::F(7),

@@ -106,6 +106,18 @@ fn try_encode_csi_u(key: &TerminalKey, flags: u16) -> Option<Vec<u8>> {
         _ => {}
     }
 
+    // Kitty keeps the legacy letter/tilde finals for these keys and only adds
+    // modifiers and the event type; codepoints 57417+ name the keypad variants.
+    if let Some((number, final_char)) = kitty_functional_key(key.code) {
+        let modifier = kitty_modifier(mods);
+        let mut sequence = format!("\x1b[{number};{modifier}");
+        if let Some(event) = event_suffix {
+            write!(&mut sequence, ":{event}").ok()?;
+        }
+        sequence.push(final_char);
+        return Some(sequence.into_bytes());
+    }
+
     let (codepoint, alternate_shifted) = match key.code {
         KeyCode::Char(c) => {
             let base = canonical_kitty_char(c, mods);
@@ -116,16 +128,6 @@ fn try_encode_csi_u(key: &TerminalKey, flags: u16) -> Option<Vec<u8>> {
         KeyCode::Tab => (9, None),
         KeyCode::Backspace => (127, None),
         KeyCode::Esc => (27, None),
-        KeyCode::Left => (57417, None),
-        KeyCode::Right => (57418, None),
-        KeyCode::Up => (57419, None),
-        KeyCode::Down => (57420, None),
-        KeyCode::PageUp => (57421, None),
-        KeyCode::PageDown => (57422, None),
-        KeyCode::Home => (57423, None),
-        KeyCode::End => (57424, None),
-        KeyCode::Insert => (57425, None),
-        KeyCode::Delete => (57426, None),
         _ => return None, // fall back to legacy for unhandled keys
     };
 
@@ -188,39 +190,48 @@ fn encode_modified_special(code: KeyCode, mods: KeyModifiers) -> Option<Vec<u8>>
         return None; // no modifiers to encode
     }
 
+    let (number, final_char) = xterm_functional_key(code)?;
+    Some(format!("\x1b[{number};{modifier}{final_char}").into_bytes())
+}
+
+/// Kitty functional keys: the xterm table, except F3 is `CSI 13 ~` because
+/// `CSI 1;{mod}R` collides with a cursor position report.
+fn kitty_functional_key(code: KeyCode) -> Option<(u8, char)> {
+    match code {
+        KeyCode::F(3) => Some((13, '~')),
+        _ => xterm_functional_key(code),
+    }
+}
+
+/// xterm `CSI {number};{mod}{final}` parameters for modifiable special keys.
+fn xterm_functional_key(code: KeyCode) -> Option<(u8, char)> {
     match code {
         // CSI 1;{mod}{letter} format
-        KeyCode::Up => Some(format!("\x1b[1;{modifier}A").into_bytes()),
-        KeyCode::Down => Some(format!("\x1b[1;{modifier}B").into_bytes()),
-        KeyCode::Right => Some(format!("\x1b[1;{modifier}C").into_bytes()),
-        KeyCode::Left => Some(format!("\x1b[1;{modifier}D").into_bytes()),
-        KeyCode::Home => Some(format!("\x1b[1;{modifier}H").into_bytes()),
-        KeyCode::End => Some(format!("\x1b[1;{modifier}F").into_bytes()),
+        KeyCode::Up => Some((1, 'A')),
+        KeyCode::Down => Some((1, 'B')),
+        KeyCode::Right => Some((1, 'C')),
+        KeyCode::Left => Some((1, 'D')),
+        KeyCode::Home => Some((1, 'H')),
+        KeyCode::End => Some((1, 'F')),
         // CSI {n};{mod}~ format
-        KeyCode::Insert => Some(format!("\x1b[2;{modifier}~").into_bytes()),
-        KeyCode::Delete => Some(format!("\x1b[3;{modifier}~").into_bytes()),
-        KeyCode::PageUp => Some(format!("\x1b[5;{modifier}~").into_bytes()),
-        KeyCode::PageDown => Some(format!("\x1b[6;{modifier}~").into_bytes()),
+        KeyCode::Insert => Some((2, '~')),
+        KeyCode::Delete => Some((3, '~')),
+        KeyCode::PageUp => Some((5, '~')),
+        KeyCode::PageDown => Some((6, '~')),
         // F1-F4: CSI 1;{mod}{P-S}
-        KeyCode::F(1) => Some(format!("\x1b[1;{modifier}P").into_bytes()),
-        KeyCode::F(2) => Some(format!("\x1b[1;{modifier}Q").into_bytes()),
-        KeyCode::F(3) => Some(format!("\x1b[1;{modifier}R").into_bytes()),
-        KeyCode::F(4) => Some(format!("\x1b[1;{modifier}S").into_bytes()),
+        KeyCode::F(1) => Some((1, 'P')),
+        KeyCode::F(2) => Some((1, 'Q')),
+        KeyCode::F(3) => Some((1, 'R')),
+        KeyCode::F(4) => Some((1, 'S')),
         // F5-F12: CSI {n};{mod}~
-        KeyCode::F(n @ 5..=12) => {
-            let code = match n {
-                5 => 15,
-                6 => 17,
-                7 => 18,
-                8 => 19,
-                9 => 20,
-                10 => 21,
-                11 => 23,
-                12 => 24,
-                _ => unreachable!(),
-            };
-            Some(format!("\x1b[{code};{modifier}~").into_bytes())
-        }
+        KeyCode::F(5) => Some((15, '~')),
+        KeyCode::F(6) => Some((17, '~')),
+        KeyCode::F(7) => Some((18, '~')),
+        KeyCode::F(8) => Some((19, '~')),
+        KeyCode::F(9) => Some((20, '~')),
+        KeyCode::F(10) => Some((21, '~')),
+        KeyCode::F(11) => Some((23, '~')),
+        KeyCode::F(12) => Some((24, '~')),
         _ => None,
     }
 }
