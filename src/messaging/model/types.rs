@@ -299,7 +299,7 @@ pub(crate) struct RoomAgent {
     /// The reported dialog was answered through Bus, so its closing is expected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) dialog_answered: bool,
-    /// 通过 Bus 选定的选项号，关闭通知要写明是哪一项。
+    /// The option chosen through Bus, so the closing notice can name it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) dialog_answer: Option<u32>,
     pub(crate) actionable_error: Option<String>,

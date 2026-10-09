@@ -50,7 +50,7 @@ impl Transport for BusTransport {
                 .client
                 .request_value_with_timeout(&request, Duration::from_secs(3))
                 .and_then(crate::protocol::api::client::parse_response_value);
-            // TabCreate can return while the login shell is running startup
+            // AgentStart can be rejected while the login shell is running startup
             // children. This precise rejection occurs before any PTY input or
             // managed launch mutation. Never retry a timeout, input failure,
             // readiness failure after launch, or any prompt submission.
