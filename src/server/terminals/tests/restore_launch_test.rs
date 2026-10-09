@@ -157,7 +157,7 @@ fn unstarted_managed_codex_restores_a_pending_launch_without_a_provider_session(
     assert!(terminal.persisted_agent_session.is_none());
     assert_eq!(
         terminal.pending_agent_resume_plan.as_ref().unwrap().argv,
-        vec!["codex", "--no-daemon"]
+        vec!["codex"]
     );
     assert_eq!(
         restored.launches.len(),

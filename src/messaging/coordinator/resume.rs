@@ -32,7 +32,6 @@ pub(crate) fn unstarted_codex_plan(
         .ok()?;
     }
     args.insert(0, "codex".into());
-    args.push("--no-daemon".into());
     Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: args,

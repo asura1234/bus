@@ -204,6 +204,8 @@ fn unstarted_codex_resume_restores_capture_without_inventing_a_session() {
     fixture.save();
     let extras = fixture.load().unwrap();
     assert_eq!(extras.env, fixture.expected_env());
+    let argv: Vec<_> = fixture.plan.argv.iter().chain(extras.args.iter()).collect();
+    assert_eq!(argv.iter().filter(|arg| arg.as_str() == "--no-daemon").count(), 1);
     assert!(extras.session.is_none());
     assert!(fixture.state.agent(fixture.agent).unwrap().runtime_identity.session_id.is_none());
 
