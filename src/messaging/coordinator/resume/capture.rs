@@ -86,7 +86,12 @@ pub(crate) fn load(
     }
     let state = JsonStore::new(root.join("state.json"))
         .load()
-        .map_err(|_| "Bus resume state is unreadable")?
+        .map_err(|error| {
+            let (stage, raw_os_error, _) = error.diagnostic();
+            tracing::warn!(event = "bus.resume.state_unreadable", stage, raw_os_error = ?raw_os_error,
+                "Bus resume state load failed");
+            "Bus resume state is unreadable"
+        })?
         .ok_or("Bus resume state is missing")?;
     let (agent, corrected) = if facts.session.is_none() {
         if super::unstarted_codex_plan(facts, Some(&plan.argv)).as_ref() != Some(plan) {
