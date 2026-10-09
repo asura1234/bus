@@ -464,3 +464,40 @@ fn vti_nonzero_vk_surrogate_pair_inside_paste_preserves_emoji() {
         }]
     );
 }
+
+#[test]
+fn vti_mouse_press_after_focus_return_does_not_require_an_unseen_release() {
+    use crate::protocol::wire::{ClientInputEvent, ClientMouseButton, ClientMouseKind};
+
+    let mut translator = WindowsInputTranslator::default();
+    let pressed = WindowsInputRecord::Mouse(WindowsMouseRecord {
+        x: 3,
+        y: 2,
+        button_state: 0x0001,
+        control_key_state: 0,
+        event_flags: 0,
+    });
+    let expected = vec![ClientInputEvent::Mouse {
+        kind: ClientMouseKind::Down(ClientMouseButton::Left),
+        column: 3,
+        row: 2,
+        modifiers: 0,
+    }];
+    assert_eq!(translator.translate(pressed), expected);
+    assert_eq!(
+        translator.translate(WindowsInputRecord::Focus(false)),
+        vec![ClientInputEvent::FocusLost]
+    );
+
+    // Console mouse records require focus and an in-window pointer, so a release
+    // after switching away does not reach the console input buffer.
+    assert_eq!(
+        translator.translate(WindowsInputRecord::Focus(true)),
+        vec![ClientInputEvent::FocusGained]
+    );
+    assert_eq!(
+        translator.translate(pressed),
+        expected,
+        "the first click after focus returns must start a new mouse gesture"
+    );
+}
