@@ -520,3 +520,73 @@ fn agent_only_clears_after_confirmation_misses() {
     assert!(changed, "last confirmation miss should clear the agent");
     assert_eq!(presence.current_agent(), None);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn restored_agent_exit_is_published_while_transcript_viewer_remains_visible() {
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.arg("-c");
+    command.arg("read line");
+    command.env("HERDR_AGENT", "");
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    let pid = child.process_id().unwrap();
+    let viewer = "• Working (4s • esc to interrupt)\r\n› transcript\r\n↑/↓ to scroll · pgup/pgdn to move · home/end to jump · q to quit · esc to edit prev\r\n";
+    let runtime = TerminalRuntime::test_with_screen_bytes(120, 24, viewer.as_bytes());
+    assert!(crate::agents::should_skip_state_update(
+        Some(AgentKind::Codex),
+        &runtime.terminal.detection_text(),
+    ));
+    let (events, mut received) = mpsc::channel(8);
+    let detector = crate::terminal::runtime::detection_task::spawn_detection_task(
+        PaneId::from_raw(0),
+        AgentDetection::Enabled,
+        Some(AgentKind::Codex),
+        Arc::new(AtomicU32::new(pid)),
+        runtime.terminal.clone(),
+        events,
+        Arc::new(AtomicU64::new(0)),
+        Arc::new(Notify::new()),
+        Arc::new(RenderSignal::new()),
+    )
+    .unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), received.recv()).await;
+    let after_viewer_clear = if result.is_err() {
+        runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H");
+        Some(tokio::time::timeout(std::time::Duration::from_secs(2), received.recv()).await)
+    } else {
+        None
+    };
+    detector.abort();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(
+        after_viewer_clear.is_none() || matches!(
+            after_viewer_clear,
+            Some(Ok(Some(TerminalEvent::StateChanged {
+                process_exited: true,
+                ..
+            })))
+        ),
+        "clearing the retained viewer must unblock the same foreground-shell exit: {after_viewer_clear:?}",
+    );
+    assert!(
+        matches!(
+            result,
+            Ok(Some(TerminalEvent::StateChanged {
+                agent: Some(AgentKind::Codex),
+                state: AgentState::Idle,
+                process_exited: true,
+                ..
+            }))
+        ),
+        "a returned foreground shell must publish the restored agent's exit even if its transcript viewer remains: {result:?}",
+    );
+}
