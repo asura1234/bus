@@ -471,6 +471,19 @@ impl PendingAltScreenRead {
             crate::terminal::snapshot_text(&self.history, self.lines, self.unwrap, truncated);
         self.read.text = snapshot.text;
         self.read.truncated = snapshot.truncated;
+        // The passive response described only the initial viewport; restate
+        // the range for the harvested window. Below the top the harvested
+        // rows are only a lower bound on what exists.
+        let harvested = self.history.len();
+        self.read.returned_lines = harvested.min(self.lines) as u32;
+        self.read.available_lines = self.read.available_lines.map(|passive| {
+            if self.reached_top {
+                harvested as u64
+            } else {
+                passive.max(harvested as u64)
+            }
+        });
+        self.read.exhausted = self.read.exhausted.map(|_| !snapshot.truncated);
         let response = serde_json::to_string(&SuccessResponse {
             id: self.request_id,
             result: ResponseResult::PaneRead { read: self.read },

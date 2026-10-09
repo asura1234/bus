@@ -155,6 +155,92 @@ async fn api_pane_read_reports_when_older_rows_are_omitted() {
 }
 
 #[tokio::test]
+async fn alternate_screen_harvest_reports_range_facts_for_captured_rows() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, public_pane_id) = app_with_test_workspace();
+    let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+    let terminal_id = app.state.workspaces[0]
+        .terminal_id(pane_id)
+        .unwrap()
+        .clone();
+    let initial_bytes = b"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[2J\x1b[H16\r\n17\r\n18\r\n19\r\n20";
+    let (runtime, mut input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            20,
+            5,
+            0,
+            initial_bytes,
+            8,
+        );
+    app.state.insert_test_runtime(pane_id, runtime);
+    let fallback = app.handle_pane_read(
+        "harvest".into(),
+        PaneReadParams {
+            pane_id: public_pane_id,
+            source: crate::protocol::api::schema::ReadSource::Recent,
+            lines: Some(8),
+            format: crate::protocol::api::schema::ReadFormat::Text,
+            strip_ansi: true,
+            intent: crate::protocol::api::schema::ReadIntent::Interactive,
+        },
+    );
+    let passive: SuccessResponse = serde_json::from_str(&fallback).unwrap();
+    let ResponseResult::PaneRead { read } = passive.result else {
+        panic!("expected passive pane read");
+    };
+    let runtime = app.lookup_runtime_sender(0, pane_id).unwrap();
+    let (_, initial, content_seq) = runtime.screen_text_snapshot_with_seq().unwrap();
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    let started = Instant::now();
+    let pending = crate::server::terminals::scrollback_read::PendingAltScreenRead::start(
+        terminal_id,
+        "harvest".into(),
+        respond_to,
+        fallback,
+        read,
+        8,
+        false,
+        initial,
+        content_seq,
+        started,
+    );
+    let pending = pending
+        .poll(Some(runtime), started + Duration::from_millis(10))
+        .unwrap();
+    input_rx.try_recv().expect("bottom wheel probe");
+    let pending = pending
+        .poll(Some(runtime), started + Duration::from_millis(130))
+        .unwrap();
+    input_rx.try_recv().expect("upward wheel batch");
+
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H13\r\n14\r\n15\r\n16\r\n17");
+    let pending = pending
+        .poll(Some(runtime), started + Duration::from_millis(131))
+        .unwrap();
+    let pending = pending
+        .poll(Some(runtime), started + Duration::from_millis(141))
+        .unwrap();
+    input_rx.try_recv().expect("restore wheel batch");
+    runtime.test_process_pty_bytes(b"\x1b[2J\x1b[H16\r\n17\r\n18\r\n19\r\n20");
+    let pending = pending
+        .poll(Some(runtime), started + Duration::from_millis(142))
+        .unwrap();
+    assert!(pending
+        .poll(Some(runtime), started + Duration::from_millis(152))
+        .is_none());
+
+    let success: SuccessResponse = serde_json::from_str(&response_rx.try_recv().unwrap()).unwrap();
+    let ResponseResult::PaneRead { read } = success.result else {
+        panic!("expected harvested pane read");
+    };
+    assert_eq!(read.text, "13\n14\n15\n16\n17\n18\n19\n20\n");
+    assert!(read.truncated);
+    assert_eq!((read.returned_lines, read.exhausted), (8, Some(false)));
+    assert!(read.available_lines.is_none_or(|available| available >= 8));
+}
+
+#[tokio::test]
 async fn api_pane_read_honors_recent_line_requests_above_one_thousand() {
     let (mut app, public_pane_id) = app_with_test_workspace();
     let pane_id = app.state.workspaces[0].tabs[0].root_pane;
