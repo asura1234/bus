@@ -38,6 +38,7 @@ class ReviewPrRoundTests(unittest.TestCase):
         shared = repo / "cli_extensions/review_round_common.py"
         shared.parent.mkdir(parents=True)
         shutil.copy2(REVIEW_ROUND_COMMON, shared)
+        shutil.copy2(REPO_ROOT / "cli_extensions/review_scope.py", shared.parent / "review_scope.py")
         pr = repo / "skills/pr/scripts/pr_goal_context.py"
         pr.parent.mkdir(parents=True)
         shutil.copy2(PR_GOAL_CONTEXT, pr)
@@ -100,6 +101,28 @@ class ReviewPrRoundTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("排除 plans 后没有可审查的已提交变更", result.stdout)
+
+    def test_branch_incremental_round_keeps_diff_snapshot_semantics(self) -> None:
+        source = self.repo / "source.txt"
+        source.write_text("first version\n")
+        self._commit("source.txt")
+        first = self._review_round()
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        state = self.repo / "temp/review-pr/feat-review-test/test"
+        (state / "round-01/review.md").write_text("completed review\n")
+        source.write_text("author fix\n")
+        self._commit("source.txt")
+        (self.repo / "README.md").write_text("uncommitted work\n")
+        second = self._review_round()
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertIn("MODE=incremental", second.stdout)
+        self.assertNotIn("SCOPE_HASH=", second.stdout)
+        snapshot = (state / "round-02/diff-snapshot.patch").read_text()
+        expected = _run(self.repo, "git", "diff", "main...HEAD", "--", ".", ":(exclude)plans/**").stdout
+        self.assertEqual(snapshot, expected)
+        delta = (state / "round-02/diff-delta.patch").read_text()
+        self.assertTrue(delta.startswith("--- round-01/diff-snapshot.patch\n+++ round-02/diff-snapshot.patch\n"))
+        self.assertNotIn("uncommitted work", snapshot + delta)
 
 
 if __name__ == "__main__":

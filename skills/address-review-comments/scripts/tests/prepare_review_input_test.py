@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +15,8 @@ from prepare_review_input import (  # noqa: E402
     PreparationError,
     prepare_review_input,
 )
+from cli_extensions.review_artifact import parse_review_artifact, render_chat_response  # noqa: E402
+from cli_extensions.review_scope import load_review_scope  # noqa: E402
 
 
 def _write(path: Path, text: str) -> Path:
@@ -377,6 +381,154 @@ def _pr_review(path: Path, *, lane: str, goal: str) -> Path:
 - **判定**：Ready
 """,
     )
+
+
+def _scope_manifest(tmp_path: Path, *, owner: str = "owner") -> Path:
+    return _write(tmp_path / f"{owner}.json", json.dumps({
+        "files": [f"src/{owner}.rs"],
+        "test_files": [f"src/{owner}_test.rs"],
+    }))
+
+
+def _chunk_review(tmp_path: Path, scope_file: Path, lane: str = "default") -> Path:
+    scope = load_review_scope(scope_file, tmp_path)
+    review = _pr_review(tmp_path / lane / "round-01/review.md", lane=lane, goal="审查指定 chunk 的全部生产代码。")
+    text = review.read_text().replace(
+        "**审查者**：", f"**范围哈希**：{scope.scope_hash}\n**范围文件**：{scope_file}\n**审查者**：", 1
+    ).replace(
+        "## 新问题与建议\n\n无。",
+        "## 新问题与建议\n\n### 1. 既有生产代码的问题\n- **位置**：src/owner.rs:7\n- **维度**：1\n- **观察**：既有契约冲突。\n- **证据**：src/owner.rs:7\n- **影响**：破坏 chunk 的契约。",
+    )
+    return _write(review, text)
+
+
+def test_scope_sanitizes_findings_in_whole_files_without_branch_diff(tmp_path) -> None:
+    manifest = _scope_manifest(tmp_path)
+    review = _chunk_review(tmp_path, manifest)
+    prepared = prepare_review_input(review_files=[review], scope_file=manifest)
+    assert prepared.mode == "pr"
+    assert prepared.target["scope_hash"] == load_review_scope(manifest, tmp_path).scope_hash
+    assert json.loads(prepared.target["scope_files"]) == ["src/owner.rs", "src/owner_test.rs"]
+    assert json.loads(prepared.target["scope_test_files"]) == ["src/owner_test.rs"]
+    assert "src/owner.rs:7" in prepared.content
+    assert "scope_hash" in prepared.content.splitlines()[0]
+
+
+def test_scope_renderer_keeps_identity_and_deterministic_sections(tmp_path) -> None:
+    manifest = _scope_manifest(tmp_path)
+    review = _chunk_review(tmp_path, manifest)
+    artifact = parse_review_artifact(review)
+    rendered = render_chat_response(artifact)
+    assert f"**范围哈希**：{artifact.target['scope_hash']}" in rendered
+    assert f"**范围文件**：{manifest}" in rendered
+    assert "src/owner.rs:7" in rendered
+    assert "## 本轮探索区域" not in rendered
+    assert rendered == render_chat_response(parse_review_artifact(review))
+
+
+def test_documented_scope_sanitize_and_render_entrypoints(tmp_path) -> None:
+    manifest = _scope_manifest(tmp_path)
+    review = _chunk_review(tmp_path, manifest)
+    root = Path(__file__).resolve().parents[4]
+    sanitized = tmp_path / "sanitized.md"
+    chat = tmp_path / "chat-response.md"
+    result = subprocess.run([
+        sys.executable, str(root / "skills/address-review-comments/scripts/prepare_review_input.py"),
+        "--mode", "pr", "--scope", str(manifest), "--review-file", str(review), "--output", str(sanitized),
+    ], cwd=root, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "scope_hash" in sanitized.read_text()
+    result = subprocess.run([
+        sys.executable, str(root / "cli_extensions/review_artifact.py"), "render-response",
+        "--review-file", str(review), "--output", str(chat),
+    ], cwd=root, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert chat.read_text() == render_chat_response(parse_review_artifact(review))
+
+
+def test_scope_round_two_uses_existing_reconciliation_renderer(tmp_path) -> None:
+    manifest = _scope_manifest(tmp_path)
+    first = _chunk_review(tmp_path, manifest)
+    review = _write(tmp_path / "default/round-02/review.md", first.read_text().replace(
+        "# Review Round 1", "# Review Round 2", 1
+    ).replace(
+        "## 前轮问题核销\n\n无。",
+        "## 前轮问题核销\n\n| # | 来源 | 问题 | 核销状态 | 证据 / 去向 |\n"
+        "|---|------|------|----------|-------------|\n"
+        "| 1 | R1-1 | 契约冲突 | satisfactory | src/owner.rs:7 |\n\n"
+        "> 总结：R1-1 satisfactory。",
+    ))
+    rendered = render_chat_response(parse_review_artifact(review))
+    assert "> 总结：R1-1 satisfactory。" in rendered
+    assert "| 1 | R1-1" not in rendered
+    assert "**范围哈希**：" in rendered
+
+
+@pytest.mark.parametrize("scope_first", [False, True])
+def test_branch_and_chunk_reviews_cannot_mix_in_either_order(tmp_path, scope_first) -> None:
+    manifest = _scope_manifest(tmp_path)
+    chunk = _chunk_review(tmp_path, manifest)
+    branch = _pr_review(tmp_path / "branch/round-01/review.md", lane="branch", goal="审查指定 chunk 的全部生产代码。")
+    paths = [chunk, branch] if scope_first else [branch, chunk]
+    with pytest.raises(PreparationError, match="scope conflict"):
+        prepare_review_input(review_files=paths, scope_file=manifest)
+
+
+def test_different_chunks_cannot_mix(tmp_path) -> None:
+    first = _chunk_review(tmp_path, _scope_manifest(tmp_path), lane="first")
+    second = _chunk_review(tmp_path, _scope_manifest(tmp_path, owner="other"), lane="second")
+    with pytest.raises(PreparationError, match="scope conflict"):
+        prepare_review_input(review_files=[first, second])
+
+
+def test_same_chunk_multiple_lanes_sanitize_together(tmp_path) -> None:
+    manifest = _scope_manifest(tmp_path)
+    first = _chunk_review(tmp_path, manifest, lane="first")
+    second = _chunk_review(tmp_path, manifest, lane="second")
+    prepared = prepare_review_input(review_files=[first, second], scope_file=manifest)
+    assert "lane=first" in prepared.content and "lane=second" in prepared.content
+
+
+def test_chunk_requires_matching_explicit_scope(tmp_path) -> None:
+    manifest = _scope_manifest(tmp_path)
+    chunk = _chunk_review(tmp_path, manifest)
+    with pytest.raises(PreparationError, match="必须提供相同的 --scope"):
+        prepare_review_input(review_files=[chunk])
+    with pytest.raises(PreparationError, match="scope 不一致"):
+        prepare_review_input(review_files=[chunk], scope_file=_scope_manifest(tmp_path, owner="other"))
+
+
+def test_scope_cannot_reinterpret_branch_review(tmp_path) -> None:
+    branch = _pr_review(tmp_path / "branch/round-01/review.md", lane="branch", goal="原始目标。")
+    with pytest.raises(PreparationError, match="branch mode"):
+        prepare_review_input(review_files=[branch], scope_file=_scope_manifest(tmp_path))
+
+
+def test_free_form_scope_keeps_explicit_file_identity_without_forging_round(tmp_path) -> None:
+    source = _write(tmp_path / "external.md", "src/owner.rs:7 契约冲突。\n")
+    manifest = _scope_manifest(tmp_path)
+    prepared = prepare_review_input(free_form_files=[source], mode="pr", scope_file=manifest)
+    assert prepared.input_kind == "free-form"
+    assert prepared.target["scope_hash"] == load_review_scope(manifest, tmp_path).scope_hash
+    assert "scope_hash" in prepared.content.splitlines()[0]
+    assert "round=n/a" in prepared.content
+    with pytest.raises(PreparationError, match="只接受 pr mode"):
+        prepare_review_input(free_form_files=[source], mode="plan", scope_file=manifest)
+
+
+@pytest.mark.parametrize("replace", ["missing-hash", "missing-file", "invalid-hash"])
+def test_partial_or_invalid_scope_header_fails_closed(tmp_path, replace) -> None:
+    review = _chunk_review(tmp_path, _scope_manifest(tmp_path))
+    lines = review.read_text().splitlines(keepends=True)
+    if replace == "missing-hash":
+        lines = [line for line in lines if not line.startswith("**范围哈希**：")]
+    elif replace == "missing-file":
+        lines = [line for line in lines if not line.startswith("**范围文件**：")]
+    else:
+        lines = ["**范围哈希**：bad\n" if line.startswith("**范围哈希**：") else line for line in lines]
+    _write(review, "".join(lines))
+    with pytest.raises(PreparationError, match="范围"):
+        prepare_review_input(review_files=[review])
 
 
 def test_wrapped_locked_goal_survives_instead_of_being_truncated(tmp_path) -> None:

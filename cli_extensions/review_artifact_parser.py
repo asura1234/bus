@@ -113,12 +113,18 @@ def _target_and_lane(
     if mode == "plan":
         return {"plan": _require_field(fields, "计划", path)}, _require_field(fields, "审查者", path)
     if mode == "pr":
-        return {
+        target = {
             "branch": _require_field(fields, "分支", path),
             "base": _require_field(fields, "基线", path),
             "plan": _require_field(fields, "计划（如有）", path),
             "locked_goal": _require_field(fields, "锁定目标", path),
-        }, _require_field(fields, "审查者", path)
+        }
+        if "范围哈希" in fields or "范围文件" in fields:
+            scope_hash = _require_field(fields, "范围哈希", path)
+            if re.fullmatch(r"[0-9a-f]{64}", scope_hash) is None:
+                raise ReviewArtifactError(f"范围哈希必须是 SHA-256: {path}")
+            target.update(scope_hash=scope_hash, scope_file=_require_field(fields, "范围文件", path))
+        return target, _require_field(fields, "审查者", path)
     raise ReviewArtifactError(f"不支持的 review mode: {mode} ({path})")
 
 
@@ -304,6 +310,9 @@ def validate_compatible(artifacts: Sequence[ReviewArtifact]) -> None:
     for artifact in artifacts:
         if artifact.mode != first.mode:
             raise ReviewArtifactError(f"review mode conflict: {first.mode} != {artifact.mode}")
+        # Check symmetrically: a branch artifact listed first must not absorb a chunk artifact.
+        if artifact.target.get("scope_hash") != first.target.get("scope_hash"):
+            raise ReviewArtifactError("review scope conflict: branch / chunk 或不同 chunk 不得混用")
         for key in first.target:
             expected = first.target[key]
             actual = artifact.target.get(key)
