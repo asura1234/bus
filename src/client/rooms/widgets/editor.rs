@@ -151,9 +151,10 @@ impl Editor {
         };
         self.record_undo();
         self.last_kill = None;
-        let start = self.cursor;
+        // A selection is replaced at its lower end, so the yank starts there,
+        // not at the pre-insert cursor.
         self.insert_raw(&text);
-        self.last_yank = Some((start, text.len()));
+        self.last_yank = Some((self.cursor - text.len(), text.len()));
         self.kill_index = self.kill.len().saturating_sub(1);
     }
     fn yank_pop(&mut self) {

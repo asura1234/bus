@@ -467,3 +467,45 @@ fn notes_room_navigation_and_all_recipients_remain_room_local() {
     ui.open_room(room);
     assert_eq!(ui.locals[&room].notes.text, "notes @literal");
 }
+
+#[test]
+fn deleting_a_recalled_prompt_keeps_the_edit_as_the_live_draft() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().recall = vec!["previous prompt".into()];
+    ui.input(
+        &RawInputEvent::Paste("unfinished draft".into()),
+        false,
+        &mut Default::default(),
+    );
+
+    key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+    assert_eq!(ui.locals[&room].text.text, "previous prompt");
+    key(&mut ui, KeyCode::Backspace, KeyModifiers::NONE);
+    assert_eq!(ui.locals[&room].text.text, "previous promp");
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+
+    assert_eq!(
+        ui.locals[&room].text.text, "previous promp",
+        "editing recalled text must end recall navigation, as typing does"
+    );
+    assert_eq!(ui.locals[&room].history_index, None);
+}
+
+#[test]
+fn deleting_the_line_continuation_marker_restores_enter_to_send() {
+    let (mut ui, room, agent) = fixture();
+    ui.locals.get_mut(&room).unwrap().recipients.insert(agent);
+    ui.input(
+        &RawInputEvent::Paste("ready to send".into()),
+        false,
+        &mut Default::default(),
+    );
+
+    key(&mut ui, KeyCode::Char('\\'), KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Backspace, KeyModifiers::NONE);
+    assert_eq!(ui.locals[&room].text.text, "ready to send");
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+
+    assert_eq!(ui.locals[&room].text.text, "ready to send");
+    assert_eq!(ui.send_intent, Some(room));
+}

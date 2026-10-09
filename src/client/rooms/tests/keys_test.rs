@@ -102,3 +102,33 @@ fn apply_external_edit_replaces_the_draft() {
     ui.apply_external_edit(room, "from editor".into());
     assert_eq!(ui.locals[&room].text.text, "from editor");
 }
+
+#[test]
+fn composer_yank_rotation_replaces_the_yanked_selection_without_corrupting_unicode() {
+    let (mut ui, room, _) = fixture();
+    for text in ["older", "界"] {
+        ui.input(
+            &RawInputEvent::Paste(text.into()),
+            false,
+            &mut Default::default(),
+        );
+        key(&mut ui, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    }
+    ui.input(
+        &RawInputEvent::Paste("atail".into()),
+        false,
+        &mut Default::default(),
+    );
+    ui.compute_view(100, 30);
+    let rect = composer_rect(&ui);
+    assert_eq!(
+        drag_copy(&mut ui, (rect.x, rect.y), (rect.x, rect.y)).as_deref(),
+        Some("a")
+    );
+
+    key(&mut ui, KeyCode::Char('y'), KeyModifiers::CONTROL);
+    assert_eq!(ui.locals[&room].text.text, "界tail");
+    key(&mut ui, KeyCode::Char('y'), KeyModifiers::ALT);
+
+    assert_eq!(ui.locals[&room].text.text, "oldertail");
+}

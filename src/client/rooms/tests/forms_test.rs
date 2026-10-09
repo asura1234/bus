@@ -395,3 +395,42 @@ fn add_agent_provider_selection_exposes_all_choices_as_mouse_targets() {
         "{text}"
     );
 }
+
+#[test]
+fn path_completion_uses_the_first_result_after_the_query_changes() {
+    use crate::agents::providers::suggest::PathSuggestion;
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Files);
+    ui.receive_event(BusEvent::Suggestions {
+        query_id: ui.suggestions.query_id,
+        result: Ok(["/first", "/second", "/third"]
+            .into_iter()
+            .map(|path| PathSuggestion {
+                path: path.into(),
+                is_directory: true,
+            })
+            .collect()),
+    });
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    assert_eq!(ui.suggestions.selected, 2);
+    ui.input(
+        &RawInputEvent::Paste("nested".into()),
+        false,
+        &mut Default::default(),
+    );
+    ui.receive_event(BusEvent::Suggestions {
+        query_id: ui.suggestions.query_id,
+        result: Ok(vec![PathSuggestion {
+            path: "/nested".into(),
+            is_directory: true,
+        }]),
+    });
+
+    key(&mut ui, KeyCode::Tab, KeyModifiers::NONE);
+
+    assert_eq!(
+        ui.form.as_mut().unwrap().editor_mut().unwrap().text,
+        "/nested/"
+    );
+}
