@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tracing::warn;
 
+#[derive(Clone)]
 pub(super) enum PaneRuntimeIo {
     Actor(PtyIoActorHandle),
     #[cfg(test)]
@@ -107,13 +108,19 @@ impl PaneRuntimeIo {
                 let sender = sender.clone();
                 let (reply_tx, reply_rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = sender
-                        .try_send(text)
-                        .map_err(std::io::Error::other)
-                        .and_then(|()| {
-                            std::thread::sleep(delay);
+                    let result = (if text.is_empty() {
+                        Ok(())
+                    } else {
+                        sender.try_send(text).map_err(std::io::Error::other)
+                    })
+                    .and_then(|()| {
+                        std::thread::sleep(delay);
+                        if enter.is_empty() {
+                            Ok(())
+                        } else {
                             sender.try_send(enter).map_err(std::io::Error::other)
-                        });
+                        }
+                    });
                     let _ = reply_tx.send(result);
                 });
                 Ok(reply_rx)

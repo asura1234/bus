@@ -6,48 +6,9 @@ use crate::server::app::App;
 use bytes::Bytes;
 use std::time::Duration;
 
+mod composer;
+
 pub(super) const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
-
-pub(super) fn codex_composer_is_empty(screen: &str) -> bool {
-    let Some(body) = screen
-        .lines()
-        .rev()
-        .find_map(|line| line.trim_start().strip_prefix('›').map(|body| body.trim()))
-    else {
-        return false;
-    };
-
-    body.is_empty()
-        || matches!(
-            body,
-            "Ask Codex to do anything" | "Use /skills to list available skills"
-        )
-}
-
-/// Whether Claude Code's input box (the `❯` line between the two rules at the
-/// bottom of its screen, plus any wrapped lines down to the closing rule)
-/// holds no typed text. Typing into a box the Human already wrote in would
-/// merge both into one prompt Bus cannot match, or be swallowed, so a Bus
-/// delivery waits instead. Claude's dimmed prompt suggestion and the inverse
-/// cursor cell are not typed text. No visible box counts as not empty.
-pub(super) fn claude_input_is_empty(screen_ansi: &str) -> bool {
-    let lines: Vec<Vec<(char, bool)>> = screen_ansi.lines().map(styled_chars).collect();
-    let plain = |line: &[(char, bool)]| line.iter().map(|(c, _)| *c).collect::<String>();
-    let is_rule = |line: &[(char, bool)]| plain(line).trim().starts_with('─');
-    let Some(start) = (1..lines.len()).rev().find(|&index| {
-        is_rule(&lines[index - 1]) && plain(&lines[index]).trim_start().starts_with('❯')
-    }) else {
-        return false;
-    };
-    let mut body = lines[start..].iter().take_while(|line| !is_rule(line));
-    let first = body
-        .next()
-        .into_iter()
-        .flat_map(|line| line.iter().skip_while(|(c, _)| *c != '❯').skip(1));
-    first
-        .chain(body.flatten())
-        .all(|(c, faint)| *faint || c.is_whitespace())
-}
 
 /// Each visible character of an ANSI screen line, with whether it is drawn
 /// dimmed or inverse.
@@ -206,7 +167,7 @@ impl App {
         let started = std::time::Instant::now();
         let queued = match request.method {
             crate::protocol::api::schema::Method::AgentPrompt(params) => {
-                self.queue_agent_prompt(request.id, params)
+                self.queue_agent_prompt(request.id, params, false)
             }
             crate::protocol::api::schema::Method::AgentPromptIfIdle(params) => {
                 self.queue_agent_prompt_if_idle(request.id, params)
@@ -279,6 +240,7 @@ impl App {
                 text: params.text,
                 wait: None,
             },
+            true,
         )
     }
 
@@ -301,39 +263,6 @@ impl App {
         if let Err((code, message)) = check_prompt_identity_and_idle(&agent, &params) {
             return Err(encode_error(id, code, message));
         }
-        if agent.agent.as_deref() == Some("codex") {
-            let resolved = self
-                .resolve_agent_target(&params.target)
-                .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
-            let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)
-            else {
-                return Err(agent_not_found(id, &params.target));
-            };
-            if !codex_composer_is_empty(&runtime.visible_text()) {
-                return Err(encode_error(
-                    id,
-                    "agent_not_ready",
-                    "Codex composer is not empty; prompt was not sent",
-                ));
-            }
-        }
-        if agent.agent.as_deref() == Some("claude") {
-            let resolved = self
-                .resolve_agent_target(&params.target)
-                .map_err(|err| encode_error_body(id.clone(), self.agent_target_error_body(err)))?;
-            let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)
-            else {
-                return Err(agent_not_found(id, &params.target));
-            };
-            // A rejection keeps the Bus message queued for a later attempt.
-            if !claude_input_is_empty(&runtime.visible_ansi()) {
-                return Err(encode_error(
-                    id,
-                    "agent_not_ready",
-                    "Claude input box is not empty; prompt was not sent",
-                ));
-            }
-        }
         self.queue_agent_prompt(
             id,
             AgentPromptParams {
@@ -341,6 +270,7 @@ impl App {
                 text: params.text,
                 wait: None,
             },
+            true,
         )
     }
 
@@ -348,6 +278,7 @@ impl App {
         &mut self,
         id: String,
         params: AgentPromptParams,
+        observe: bool,
     ) -> Result<
         (
             String,
@@ -429,19 +360,57 @@ impl App {
                 return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
             }
         }
-        let (text, enter) =
-            crate::server::api::input_encoding::encode_api_submission_parts(runtime, &params.text);
         let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
             return Err(agent_not_found(id, &params.target));
         };
-        let completion = runtime
-            .queue_user_input_submission(
-                Bytes::from(text),
-                Bytes::from(enter),
-                submit_delay,
-                submit_deadline,
-            )
-            .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
+        let completion = queue_prompt_input(
+            runtime,
+            expected_agent,
+            params.text,
+            observe,
+            submit_delay,
+            submit_deadline,
+        )
+        .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
         Ok((id, agent, completion))
     }
+}
+
+fn queue_prompt_input(
+    runtime: &crate::terminal::TerminalRuntime,
+    kind: crate::agents::AgentKind,
+    text: String,
+    observe: bool,
+    delay: Duration,
+    deadline: Option<std::time::Instant>,
+) -> std::io::Result<std::sync::mpsc::Receiver<std::io::Result<()>>> {
+    use crate::agents::AgentKind;
+    let (encoded, enter) =
+        crate::server::api::input_encoding::encode_api_submission_parts(runtime, &text);
+    if !observe
+        || !matches!(
+            kind,
+            AgentKind::Codex | AgentKind::Claude | AgentKind::Cursor
+        )
+    {
+        return runtime.queue_user_input_submission(
+            Bytes::from(encoded),
+            Bytes::from(enter),
+            delay,
+            deadline,
+        );
+    }
+    let clear = crate::server::api::input_encoding::encode_api_keys(
+        runtime,
+        &["ctrl+a".into(), "ctrl+k".into(), "ctrl+u".into()],
+    )
+    .map_err(|key| std::io::Error::other(format!("Invalid clear key: {key}")))?;
+    runtime.queue_observed_input_submission(
+        Bytes::from(encoded),
+        Bytes::from(enter),
+        clear.into_iter().map(Bytes::from).collect(),
+        delay,
+        deadline,
+        composer::observer(kind, text),
+    )
 }

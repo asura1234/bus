@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "submission_test.rs"]
+mod submission_tests;
+
 #[test]
 fn prompt_delay_only_scales_for_windows_codex() {
     let codex_delay = agent_prompt_submit_delay(AgentKind::Codex, 4_096);
@@ -13,62 +16,9 @@ fn prompt_delay_only_scales_for_windows_codex() {
     );
 }
 
-#[test]
-fn codex_composer_check_accepts_only_empty_prompt_states() {
-    for screen in [
-        "history\n›\n  gpt-5.6-sol",
-        "history\n› Ask Codex to do anything\n  gpt-5.6-sol",
-        "history\n› Use /skills to list available skills\n  gpt-5.6-sol",
-    ] {
-        assert!(codex_composer_is_empty(screen), "{screen}");
-    }
-    for screen in [
-        "",
-        "history without a prompt",
-        "history\n› draft already present\n  gpt-5.6-sol",
-        "history\n› check the logs\n  hello?\n  gpt-5.6-sol",
-    ] {
-        assert!(!codex_composer_is_empty(screen), "{screen}");
-    }
-}
-
-#[test]
-fn claude_input_check_ignores_suggestions_and_finds_typed_text() {
-    let rule = "─".repeat(20);
-    let screen = |input: &str| format!("● done\n\n{rule}\n{input}\n{rule}\n  ⏵⏵ auto mode on");
-    for empty in [
-        screen("❯\u{a0}"),
-        // Claude's dimmed prompt suggestion, as captured from a live pane.
-        screen("❯\u{a0}\x1b[0m\x1b[2madd the just linux-lint recipe\x1b[0m"),
-        // The cursor cell drawn inverse over the suggestion's first letter.
-        screen("❯ \x1b[7ma\x1b[0m\x1b[2mdd the recipe\x1b[0m"),
-        // An earlier prompt in the history above the box is not the box.
-        format!("❯ ok is it merged?\n\n{rule}\n❯\u{a0}\n{rule}"),
-    ] {
-        assert!(claude_input_is_empty(&empty), "{empty:?}");
-    }
-    for typed in [
-        screen("❯\u{a0}master is where I coordinate"),
-        // A 24-bit color's "2" is not dim.
-        screen("❯ \x1b[38;2;200;200;200mtyped\x1b[0m"),
-        // A wrapped second line holds the typed text.
-        format!("{rule}\n❯\u{a0}\n  second line\n{rule}"),
-        // No visible input box: Bus cannot tell, so it waits.
-        "● working".to_owned(),
-    ] {
-        assert!(!claude_input_is_empty(&typed), "{typed:?}");
-    }
-}
-
 #[tokio::test]
-async fn guarded_claude_prompt_waits_while_the_input_box_holds_typed_text() {
-    let (mut app, params, mut writes) =
-        claude_agent_with_input("❯\u{a0}master is where I coordinate");
-    let response = prompt_if_idle(&mut app, params);
-    // agent_not_ready is a definite rejection: the Bus message stays queued.
-    assert!(response.contains("agent_not_ready"), "{response}");
-    assert!(response.contains("input box is not empty"), "{response}");
-    assert!(writes.try_recv().is_err(), "nothing may be typed");
+async fn guarded_claude_prompt_clears_stranded_text_before_delivery() {
+    submission_tests::stranded_draft(AgentKind::Claude, true);
 }
 
 #[tokio::test]
@@ -78,13 +28,13 @@ async fn guarded_claude_prompt_types_into_an_empty_input_box() {
         "❯\u{a0}\x1b[2madd the just linux-lint recipe\x1b[0m",
     ] {
         let (mut app, params, mut writes) = claude_agent_with_input(input);
-        let response = prompt_if_idle(&mut app, params);
-        assert!(response.contains("agent_prompted"), "{input:?}: {response}");
-        assert_eq!(
-            writes.try_recv().unwrap(),
-            Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
+        let response = submission_tests::start(
+            &mut app,
+            crate::protocol::api::schema::Method::AgentPromptIfIdle(params),
         );
-        assert_eq!(writes.try_recv().unwrap(), Bytes::from_static(b"\r"));
+        submission_tests::accept_paste(&app, AgentKind::Claude, "from bus", &mut writes);
+        let response = response.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(response.contains("agent_prompted"), "{input:?}: {response}");
     }
 }
 
@@ -109,7 +59,7 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
     terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
     let (runtime, mut rx) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 2);
-    runtime.test_process_pty_bytes(b"\x1b[?2004h");
+    runtime.test_process_pty_bytes("\x1b[?2004h\x1b[2J\x1b[H›".as_bytes());
     app.state.insert_test_runtime(pane_id, runtime);
     let info = app.agent_info(0, pane_id).unwrap();
     let params = AgentPromptIfUnboundParams {
@@ -128,12 +78,15 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
             },
             tx
         ));
-        rx.recv_timeout(Duration::from_secs(2)).unwrap()
+        rx
     };
     for name in ["", "different-launch"] {
         let mut wrong = params.clone();
         wrong.expected_managed_name = name.into();
-        assert!(run(&mut app, wrong).contains("agent_identity_changed"));
+        assert!(run(&mut app, wrong)
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .contains("agent_identity_changed"));
         assert!(rx.try_recv().is_err());
     }
     for state in [AgentState::Working, AgentState::Blocked] {
@@ -142,7 +95,10 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
             .get_mut(&terminal_id)
             .unwrap()
             .set_detected_state(Some(AgentKind::Codex), state);
-        assert!(run(&mut app, params.clone()).contains("agent_not_idle"));
+        assert!(run(&mut app, params.clone())
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .contains("agent_not_idle"));
         assert!(rx.try_recv().is_err());
     }
     app.state
@@ -161,17 +117,23 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
     assert!(check_unbound_prompt_identity_and_idle(&wrong, &params).is_err());
     let mut wrong = params.clone();
     wrong.expected_terminal_id = "different".into();
-    assert!(run(&mut app, wrong).contains("agent_identity_changed"));
+    assert!(run(&mut app, wrong)
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .contains("agent_identity_changed"));
     let mut wrong = params.clone();
     wrong.expected_pane_id = "different".into();
-    assert!(run(&mut app, wrong).contains("agent_identity_changed"));
+    assert!(run(&mut app, wrong)
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .contains("agent_identity_changed"));
     assert!(rx.try_recv().is_err());
-    assert!(run(&mut app, params.clone()).contains("agent_prompted"));
-    assert_eq!(
-        rx.try_recv().unwrap(),
-        Bytes::from_static(b"\x1b[200~first room prompt\x1b[201~")
-    );
-    assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\r"));
+    let response = run(&mut app, params.clone());
+    submission_tests::accept_paste(&app, AgentKind::Codex, "first room prompt", &mut rx);
+    assert!(response
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .contains("agent_prompted"));
     app.state
         .terminals
         .get_mut(&terminal_id)
@@ -183,7 +145,10 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
             Some(1),
             None,
         );
-    assert!(run(&mut app, params).contains("agent_identity_changed"));
+    assert!(run(&mut app, params)
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .contains("agent_identity_changed"));
     assert!(rx.try_recv().is_err());
 }
 
@@ -264,72 +229,14 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
         .set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     let response = run(&mut app, params);
     assert!(response.try_recv().is_err());
+    submission_tests::accept_paste(&app, AgentKind::Codex, "literal @x $HOME", &mut rx);
     let result = response.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(result.contains("agent_prompted"), "{result}");
-    assert_eq!(
-        rx.try_recv().unwrap(),
-        Bytes::from_static(b"\x1b[200~literal @x $HOME\x1b[201~")
-    );
-    assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\r"));
 }
 
 #[tokio::test]
-async fn guarded_codex_prompt_rejects_nonempty_composer_without_writing() {
-    use crate::protocol::api::schema::{AgentPromptIfIdleParams, Method, Request};
-
-    let mut app = app_with_agent();
-    let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-    let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
-        .attached_terminal_id
-        .clone();
-    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
-    let now = std::time::Instant::now();
-    terminal.begin_managed_agent(
-        "bus-r1-a2".into(),
-        AgentKind::Codex,
-        now,
-        Duration::ZERO,
-        Duration::from_secs(10),
-    );
-    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
-    terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
-    terminal.set_agent_session_ref_for_session_start(
-        "bus".into(),
-        "codex".into(),
-        crate::agents::resume::catalog::AgentSessionRef::id("session"),
-        Some(1),
-        None,
-    );
-    let (runtime, mut writes) =
-        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 2);
-    runtime.test_process_pty_bytes("\x1b[?2004h\x1b[2J\x1b[H› draft already present".as_bytes());
-    app.state.insert_test_runtime(pane_id, runtime);
-    let info = app.agent_info(0, pane_id).unwrap();
-    let (respond_to, response_rx) = std::sync::mpsc::channel();
-
-    assert!(app.handle_deferred_agent_api_request(
-        Request {
-            id: "guard-nonempty".into(),
-            method: Method::AgentPromptIfIdle(AgentPromptIfIdleParams {
-                target: info.pane_id.clone(),
-                text: "hello?".into(),
-                expected_terminal_id: info.terminal_id,
-                expected_pane_id: info.pane_id,
-                expected_agent: "codex".into(),
-                expected_session_id: "session".into(),
-                steer: false,
-            }),
-        },
-        respond_to,
-    ));
-
-    let response = response_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(response.contains("agent_not_ready"), "{response}");
-    assert!(response.contains("composer is not empty"), "{response}");
-    assert!(
-        writes.try_recv().is_err(),
-        "prompt bytes must not be written"
-    );
+async fn guarded_codex_prompt_clears_stranded_text_before_delivery() {
+    submission_tests::stranded_draft(AgentKind::Codex, true);
 }
 
 #[tokio::test]

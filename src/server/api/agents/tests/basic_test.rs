@@ -97,22 +97,6 @@ fn claude_agent_with_input(
     (app, params, writes)
 }
 
-fn prompt_if_idle(
-    app: &mut App,
-    params: crate::protocol::api::schema::AgentPromptIfIdleParams,
-) -> String {
-    use crate::protocol::api::schema::{Method, Request};
-    let (respond_to, response) = std::sync::mpsc::channel();
-    assert!(app.handle_deferred_agent_api_request(
-        Request {
-            id: "claude-guard".into(),
-            method: Method::AgentPromptIfIdle(params),
-        },
-        respond_to,
-    ));
-    response.recv_timeout(Duration::from_secs(2)).unwrap()
-}
-
 const CLAUDE_BASH_DIALOG: &[u8] = b" Do you want to proceed?\r\n \xe2\x9d\xaf 1. Yes\r\n   2. Yes, and don't ask again for: curl *\r\n   3. No\r\n\r\n Esc to cancel \xc2\xb7 Tab to amend\r\n";
 
 /// A named Claude agent showing `screen`; `session` is unset while launching.

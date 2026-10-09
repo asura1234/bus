@@ -30,10 +30,7 @@ use crate::protocol::api::schema::{
 #[cfg(test)]
 use crate::server::app::App;
 #[cfg(test)]
-use prompt::{
-    agent_prompt_submit_delay, check_unbound_prompt_identity_and_idle, claude_input_is_empty,
-    codex_composer_is_empty,
-};
+use prompt::{agent_prompt_submit_delay, check_unbound_prompt_identity_and_idle};
 
 #[cfg(test)]
 #[path = "tests/basic_test.rs"]
