@@ -277,34 +277,29 @@ fn text_question(lines: &[&str]) -> Option<Dialog> {
                 .trim()
                 .eq_ignore_ascii_case("Queued follow-up inputs")
         })?;
-        let question_start = (header + 1..footer).find(|&index| {
-            let line = unboxed(lines[index]).trim();
-            let words: Vec<_> = line.split_whitespace().collect();
-            !line.is_empty()
-                && !matches!(words.as_slice(), [n, "of", m]
-                    if n.parse::<u32>().is_ok() && m.parse::<u32>().is_ok())
-        })?;
-        let question_end =
-            (question_start..footer).find(|&index| unboxed(lines[index]).trim().is_empty())?;
-        let question = lines[question_start..question_end]
+        let input =
+            (header + 1..footer).rfind(|&index| !unboxed(lines[index]).trim().is_empty())?;
+        let mut input_start = input;
+        while input_start > header + 1 && !unboxed(lines[input_start - 1]).trim().is_empty() {
+            input_start -= 1;
+        }
+        let value = lines[input_start..=input]
             .iter()
             .map(|line| unboxed(line).trim())
             .collect::<Vec<_>>()
             .join("\n");
-        let input_start =
-            (question_end..footer).find(|&index| !unboxed(lines[index]).trim().is_empty())?;
-        let value = lines[input_start..footer]
+        let question = lines[header + 1..input_start]
             .iter()
             .map(|line| unboxed(line).trim())
+            .filter(|line| {
+                let words: Vec<_> = line.split_whitespace().collect();
+                !line.is_empty()
+                    && !matches!(words.as_slice(), [n, "of", m]
+                        if n.parse::<u32>().is_ok() && m.parse::<u32>().is_ok())
+            })
             .collect::<Vec<_>>()
             .join("\n");
-        return question_dialog(
-            question,
-            hint,
-            value.trim_end(),
-            "Type your answer",
-            "ctrl+]",
-        );
+        return question_dialog(question, hint, &value, "Type your answer", "ctrl+]");
     }
     // Cursor's Other input is editable only while that checkbox row is focused.
     if hint == "↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip"

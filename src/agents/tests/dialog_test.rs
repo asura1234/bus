@@ -658,3 +658,36 @@ fn codex_other_draft_includes_paragraphs_beyond_the_choice_hint_window() {
     let joined = parse(&screen.replace("second paragraph\n\n", "second paragraph\n")).unwrap();
     assert_ne!(draft.digest(), joined.digest());
 }
+
+#[test]
+fn codex_free_text_question_with_two_paragraphs_keeps_the_empty_placeholder_answer() {
+    let screen = CODEX_TEXT_QUESTION.replace(
+        "  What token should Bus use?\n",
+        "  What token should Bus use?\n\n  It must be a hex string.\n",
+    );
+    let dialog = parse(&screen).unwrap();
+    assert_eq!(dialog.input.unwrap().value, "");
+    assert!(
+        dialog.text.contains("It must be a hex string."),
+        "{}",
+        dialog.text
+    );
+}
+
+#[test]
+fn codex_free_text_question_paragraphs_and_identity_survive_editing_the_placeholder() {
+    let screen = CODEX_TEXT_QUESTION.replace(
+        "  What token should Bus use?\n",
+        "  What token should Bus use?\n\n  It must be a hex string.\n",
+    );
+    let untouched = parse(&screen).unwrap();
+    let edited = parse(&screen.replace("Type your answer", "MY_TOKEN")).unwrap();
+    assert_eq!(
+        edited.text,
+        "What token should Bus use?\nIt must be a hex string."
+    );
+    assert_eq!(untouched.text, edited.text);
+    assert_eq!(untouched.id(), edited.id());
+    assert_ne!(untouched.digest(), edited.digest());
+    assert_eq!(edited.input.unwrap().value, "MY_TOKEN");
+}
