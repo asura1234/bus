@@ -96,25 +96,30 @@ pub(in crate::platform::windows) fn descendant_entries(
     snapshot: &ProcessSnapshot,
 ) -> Vec<&WindowsProcessEntry> {
     let mut output = Vec::new();
-    let mut queue = VecDeque::new();
+    let root_creation_time = snapshot
+        .entry(root_pid)
+        .and_then(|entry| entry.command().creation_time);
+    let mut queue = VecDeque::from([(root_pid, root_creation_time)]);
     let mut visited = HashSet::new();
     visited.insert(root_pid);
-    if let Some(root_children) = snapshot.children_by_parent.get(&root_pid) {
-        for &index in root_children {
-            let entry = &snapshot.entries[index];
-            if visited.insert(entry.pid) {
-                queue.push_back(entry);
+    while let Some((parent_pid, parent_creation_time)) = queue.pop_front() {
+        let Some(children) = snapshot.children_by_parent.get(&parent_pid) else {
+            continue;
+        };
+        for &index in children {
+            let child = &snapshot.entries[index];
+            let child_creation_time = child.command().creation_time;
+            // ToolHelp retains the original parent PID after its exit. An older child
+            // belongs to a previous owner of the parent's reused PID, not this tree.
+            if child_creation_time
+                .zip(parent_creation_time)
+                .is_some_and(|(child, parent)| child < parent)
+            {
+                continue;
             }
-        }
-    }
-    while let Some(entry) = queue.pop_front() {
-        output.push(entry);
-        if let Some(next) = snapshot.children_by_parent.get(&entry.pid) {
-            for &index in next {
-                let child = &snapshot.entries[index];
-                if visited.insert(child.pid) {
-                    queue.push_back(child);
-                }
+            if visited.insert(child.pid) {
+                output.push(child);
+                queue.push_back((child.pid, child_creation_time));
             }
         }
     }

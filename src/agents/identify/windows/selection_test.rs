@@ -2,10 +2,20 @@ use super::*;
 use crate::platform::WindowsProcessCommand;
 
 fn test_entry(pid: u32, parent_pid: u32, name: &str, argv: &[&str]) -> WindowsProcessEntry {
+    test_entry_with_creation_time(pid, parent_pid, name, argv, None)
+}
+
+fn test_entry_with_creation_time(
+    pid: u32,
+    parent_pid: u32,
+    name: &str,
+    argv: &[&str],
+    creation_time: Option<u64>,
+) -> WindowsProcessEntry {
     let command = OnceLock::new();
     command
         .set(WindowsProcessCommand {
-            creation_time: None,
+            creation_time,
             argv0: argv.first().map(|value| (*value).to_string()),
             argv: Some(argv.iter().map(|value| (*value).to_string()).collect()),
             cmdline: Some(argv.join(" ")),
@@ -17,6 +27,26 @@ fn test_entry(pid: u32, parent_pid: u32, name: &str, argv: &[&str]) -> WindowsPr
         name: name.to_string(),
         command,
     }
+}
+
+#[test]
+fn windows_process_tree_does_not_identify_an_orphan_of_a_reused_shell_pid() {
+    let snapshot = AgentProcessSnapshot::new(vec![
+        test_entry_with_creation_time(10, 1, "powershell.exe", &["powershell.exe"], Some(200)),
+        test_entry_with_creation_time(20, 10, "codex.exe", &["codex.exe"], Some(100)),
+        test_entry_with_creation_time(30, 20, "node.exe", &["codex.exe"], Some(300)),
+    ]);
+
+    let job = select_pane_foreground_job_from_snapshot_with_runtime_inspection(
+        10,
+        &snapshot,
+        |_| false,
+        |_| panic!("a stale orphan must not trigger runtime inspection"),
+    )
+    .unwrap();
+
+    assert_eq!(job.process_group_id, 10);
+    assert_eq!(job.processes[0].name, "powershell.exe");
 }
 
 #[test]
