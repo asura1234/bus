@@ -32,7 +32,7 @@ fn protocol_schema_document() -> serde_json::Value {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Herdr API",
         "schema_version": 1,
-        "protocol": crate::protocol::PROTOCOL_VERSION,
+        "protocol": crate::protocol::wire::PROTOCOL_VERSION,
         "schemas": {
             "request": protocol_schema_entry::<Request>("request"),
             "success_response": protocol_schema_entry::<SuccessResponse>("success_response"),

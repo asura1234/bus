@@ -1,6 +1,6 @@
 #[test]
 fn moved_agent_detection_routes_through_production_dispatch() {
-    let detection = detect_agent_with_osc(Some(Agent::Pi), "Working...", "", "");
+    let detection = detect_agent_with_osc(Some(AgentKind::Pi), "Working...", "", "");
 
     assert_eq!(detection.state, AgentState::Working);
     assert!(detection.visible_working);
@@ -9,12 +9,12 @@ fn moved_agent_detection_routes_through_production_dispatch() {
 #[test]
 fn session_identity_integrations_leave_state_to_screen_detection() {
     for (source, label, agent) in [
-        ("herdr:hermes", "hermes", Agent::Hermes),
-        ("herdr:qwen", "qwen", Agent::Qwen),
-        ("herdr:antigravity_cli", "agy", Agent::Antigravity),
+        ("herdr:hermes", "hermes", AgentKind::Hermes),
+        ("herdr:qwen", "qwen", AgentKind::Qwen),
+        ("herdr:antigravity_cli", "agy", AgentKind::Antigravity),
     ] {
         assert!(session_identity_only_integration(source, label));
-        assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&agent));
+        assert!(AgentKind::SCREEN_MANIFEST_AGENTS.contains(&agent));
     }
 }
 

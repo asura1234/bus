@@ -1,10 +1,9 @@
 use super::*;
 use crate::{
-    api::schema::{AgentStatus, SuccessResponse},
-    config::Config,
-    detect::{Agent, AgentState},
-    server::app::Mode,
-    workspace::Workspace,
+    agents::{AgentKind, AgentState},
+    protocol::api::schema::{AgentStatus, SuccessResponse},
+    server::{app::Mode, workspaces::Workspace},
+    utils::config::Config,
 };
 
 fn app_with_agent() -> App {
@@ -63,17 +62,17 @@ fn claude_agent_with_input(
     let now = std::time::Instant::now();
     terminal.begin_managed_agent(
         "bus-r1-a2".into(),
-        Agent::Claude,
+        AgentKind::Claude,
         now,
         Duration::ZERO,
         Duration::from_secs(10),
     );
-    terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+    terminal.set_detected_state(Some(AgentKind::Claude), AgentState::Idle);
     terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
     terminal.set_agent_session_ref_for_session_start(
         "bus".into(),
         "claude".into(),
-        crate::agent_resume::AgentSessionRef::id("session"),
+        crate::agents::resume::catalog::AgentSessionRef::id("session"),
         Some(1),
         None,
     );
@@ -128,12 +127,12 @@ fn app_with_dialog(
         .clone();
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.set_agent_name("reviewer".into());
-    terminal.set_detected_state(Some(Agent::Claude), AgentState::Blocked);
+    terminal.set_detected_state(Some(AgentKind::Claude), AgentState::Blocked);
     if let Some(session) = session {
         terminal.set_agent_session_ref_for_session_start(
             "bus".into(),
             "claude".into(),
-            crate::agent_resume::AgentSessionRef::id(session),
+            crate::agents::resume::catalog::AgentSessionRef::id(session),
             Some(1),
             None,
         );
@@ -219,7 +218,7 @@ async fn agent_send_keys_validates_every_key_before_writing() {
         .clone();
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.set_agent_name("reviewer".into());
-    terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+    terminal.set_detected_state(Some(AgentKind::Pi), AgentState::Idle);
     let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
     app.state.insert_test_runtime(pane_id, runtime);
 
@@ -261,7 +260,7 @@ fn agent_focus_marks_already_focused_done_agent_seen() {
         .terminals
         .get_mut(&terminal_id)
         .unwrap()
-        .set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        .set_detected_state(Some(AgentKind::Pi), AgentState::Idle);
     app.state.workspaces[0].tabs[0]
         .panes
         .get_mut(&pane_id)
@@ -292,7 +291,7 @@ fn agent_rename_does_not_replace_the_pane_label() {
         .clone();
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.set_manual_label("shell-pane".into());
-    terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+    terminal.set_detected_state(Some(AgentKind::Pi), AgentState::Idle);
     let target = app.public_pane_id(0, pane_id).unwrap();
 
     for name in [Some("reviewer".to_string()), None] {

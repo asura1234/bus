@@ -1,5 +1,5 @@
 use super::{ClientShellConfig, ClientShellState, Config};
-use crate::protocol::ClientSurfaceSize;
+use crate::protocol::wire::ClientSurfaceSize;
 
 pub(super) fn merged_config_diagnostic(
     local: Option<&str>,
@@ -28,7 +28,7 @@ impl ClientShellState {
     }
 
     pub(crate) fn reload_client_config(&mut self) {
-        match crate::config::load_live_config() {
+        match crate::utils::config::load_live_config() {
             Ok(loaded) => {
                 let diagnostics = self.config.apply_live_config(
                     &loaded.config,
@@ -72,7 +72,7 @@ impl ClientShellConfig {
     }
 
     pub(super) fn local_config_diagnostic(&self, diagnostics: &[String]) -> Option<String> {
-        crate::config::config_diagnostic_summary(diagnostics)
+        crate::utils::config::config_diagnostic_summary(diagnostics)
     }
 
     pub(super) fn apply_live_config(

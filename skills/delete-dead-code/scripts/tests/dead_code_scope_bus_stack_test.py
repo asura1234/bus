@@ -27,22 +27,22 @@ def test_directory_map_ignores_untracked_build_output(tmp_path: Path) -> None:
 
 def test_rust_and_python_assertion_rewrites_are_flagged(tmp_path: Path) -> None:
     repository = _repo(tmp_path)
-    integration = "tests/cli.rs"
-    sibling = "src/bus/runtime_tests.rs"
-    module_tests = "src/api/schema/tests.rs"
-    python = "scripts/test_changelog.py"
+    integration = "tests/cli/cli_test.rs"
+    sibling = "src/utils/theme/theme_test.rs"
+    module_tests = "src/protocol/api/schema/tests/golden_test.rs"
+    python = "scripts/skill_migration_contract_test.py"
     _write(repository, integration, "assert_eq!(one, 1);\n")
     _write(repository, sibling, "assert!(ready);\n")
     _write(repository, module_tests, "assert_ne!(one, 2);\n")
     _write(repository, python, "self.assertEqual(one, 1)\n")
-    _write(repository, "src/bus/runtime.rs", "debug_assert!(ready);\n")
+    _write(repository, "src/messaging/coordinator/poll.rs", "debug_assert!(ready);\n")
     _commit(repository, "base")
     _write(repository, integration, "assert_eq!(one, 2);\n")
     _write(repository, sibling, "assert!(!ready);\n")
     _write(repository, module_tests, "assert_ne!(one, 3);\n")
     _write(repository, python, "self.assertEqual(one, 2)\n")
     # Production sources are not test paths, even when they contain assertion macros.
-    _write(repository, "src/bus/runtime.rs", "debug_assert!(!ready);\n")
+    _write(repository, "src/messaging/coordinator/poll.rs", "debug_assert!(!ready);\n")
     assert rewritten_assertions(repository) == [
         (python, 1),
         (module_tests, 1),

@@ -1,6 +1,6 @@
-use crate::layout::PaneId;
 use crate::terminal::emulator::PaneTerminal;
 use crate::terminal::emulator::TerminalCompressionStep;
+use crate::utils::ids::PaneId;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

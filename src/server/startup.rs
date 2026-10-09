@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 use crate::server::main_loop::HeadlessServer;
 use crate::utils::socket_paths::client_socket_path;
-use crate::{api, app, config};
+use crate::{server::app, utils::config};
 
 /// Run the headless server. This is the entry point called from main.rs.
 pub fn run_server(
@@ -22,11 +22,11 @@ pub fn run_server(
         apply(&mut loaded_config.config);
     }
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-    let event_hub = api::EventHub::default();
+    let event_hub = crate::server::api::EventHub::default();
     let should_quit = Arc::new(AtomicBool::new(false));
 
     // Start the JSON API socket server.
-    let _api_server = match api::start_server_with_stop_control(
+    let _api_server = match crate::server::api::start_server_with_stop_control(
         api_tx.clone(),
         event_hub.clone(),
         should_quit.clone(),
@@ -34,7 +34,10 @@ pub fn run_server(
         Ok(server) => server,
         Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
             eprintln!("error: herdr server is already running");
-            eprintln!("api socket: {}", api::socket_path().display());
+            eprintln!(
+                "api socket: {}",
+                crate::protocol::api::socket_path().display()
+            );
             std::process::exit(1);
         }
         Err(err) => return Err(err),
@@ -74,18 +77,18 @@ pub fn run_server(
         };
 
         info!(
-            api_socket = %api::socket_path().display(),
+            api_socket = %crate::protocol::api::socket_path().display(),
             client_socket = %client_socket_path().display(),
             "herdr server started"
         );
-        print_ready_message(&api::socket_path(), &client_socket_path());
+        print_ready_message(&crate::protocol::api::socket_path(), &client_socket_path());
 
         crate::utils::logging::startup("server", logging_options.dev);
         server.run().await
     });
 
     rt.shutdown_timeout(Duration::from_millis(100));
-    crate::logging::shutdown("server");
+    crate::utils::logging::shutdown("server");
     result
 }
 
@@ -125,7 +128,7 @@ fn print_ready_message(api_socket: &Path, client_socket: &Path) {
     eprintln!("client socket: {}", client_socket.display());
     eprintln!(
         "logs: {}",
-        crate::session::data_dir()
+        crate::utils::paths::data_dir()
             .join("herdr-server.log")
             .display()
     );

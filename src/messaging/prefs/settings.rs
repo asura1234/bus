@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn registry_sessions_share_one_file_and_an_explicit_data_dir_stays_isolated() {
-        let _guard = crate::config::test_config_env_lock()
+        let _guard = crate::utils::config::test_config_env_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous: Vec<_> = ["BUS_DATA_DIR", "BUS_SESSION_ID"]

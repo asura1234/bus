@@ -1,4 +1,4 @@
-use crate::agents::Agent;
+use crate::agents::AgentKind;
 use crate::terminal::emulator::PaneTerminal;
 
 /// Runtime detection owns process selection; emulator consumers receive only
@@ -32,7 +32,7 @@ pub(super) const PROCESS_ACQUISITION_IDLE_RESET: std::time::Duration =
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct AgentDetectionPresence {
-    pub(super) current_agent: Option<Agent>,
+    pub(super) current_agent: Option<AgentKind>,
     pub(super) consecutive_misses: u8,
 }
 
@@ -75,8 +75,8 @@ pub(super) enum ForegroundShellAgentAction {
 }
 
 pub(super) fn foreground_shell_agent_action(
-    previous_agent: Option<Agent>,
-    new_agent: Option<Agent>,
+    previous_agent: Option<AgentKind>,
+    new_agent: Option<AgentKind>,
     foreground_is_pane_shell: bool,
     process_exit_reported: bool,
 ) -> ForegroundShellAgentAction {
@@ -111,7 +111,7 @@ pub(super) fn foreground_shell_agent_action(
 /// emitted before the process probe recognized it.
 pub(super) fn clear_osc_evidence_for_agent_transition(
     terminal: &PaneTerminal,
-    previous_agent: Option<Agent>,
+    previous_agent: Option<AgentKind>,
 ) {
     if previous_agent.is_some() {
         terminal.clear_agent_osc_state();
@@ -121,8 +121,8 @@ pub(super) fn clear_osc_evidence_for_agent_transition(
 pub(super) fn apply_foreground_shell_agent_action(
     agent_presence: &mut AgentDetectionPresence,
     action: ForegroundShellAgentAction,
-    previous_agent: Option<Agent>,
-    new_agent: Option<Agent>,
+    previous_agent: Option<AgentKind>,
+    new_agent: Option<AgentKind>,
     pending_foreground_shell_clear: &mut bool,
     foreground_shell_exit_reported: &mut bool,
 ) -> bool {
@@ -152,7 +152,7 @@ pub(super) fn apply_foreground_shell_agent_action(
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ProcessProbeInput {
-    pub(super) current_agent: Option<Agent>,
+    pub(super) current_agent: Option<AgentKind>,
     pub(super) foreground_pgid: Option<u32>,
     pub(super) last_foreground_pgid: Option<u32>,
     pub(super) has_process_probe: bool,
@@ -224,7 +224,7 @@ pub(super) fn should_probe_foreground_job(input: ProcessProbeInput) -> bool {
 }
 
 pub(super) fn sync_content_change_acquisition(
-    current_agent: Option<Agent>,
+    current_agent: Option<AgentKind>,
     process_group_changed: bool,
     content_changed: bool,
     now: std::time::Instant,
@@ -268,22 +268,22 @@ pub(super) fn sync_content_change_acquisition(
 pub(super) struct ProcessProbeResult {
     pub(super) process_group_id: Option<u32>,
     pub(super) foreground_is_pane_shell: bool,
-    pub(super) agent: Option<Agent>,
+    pub(super) agent: Option<AgentKind>,
     pub(super) process_name: Option<String>,
 }
 
 pub(super) fn agent_hint_for_foreground_job_members(
     job: &crate::platform::ForegroundJob,
-    read_hint: impl Fn(u32) -> Option<Agent>,
-) -> Option<Agent> {
+    read_hint: impl Fn(u32) -> Option<AgentKind>,
+) -> Option<AgentKind> {
     read_hint(job.process_group_id)
         .or_else(|| agent_hint_for_non_leader_foreground_job_members(job, read_hint))
 }
 
 pub(super) fn agent_hint_for_non_leader_foreground_job_members(
     job: &crate::platform::ForegroundJob,
-    read_hint: impl Fn(u32) -> Option<Agent>,
-) -> Option<Agent> {
+    read_hint: impl Fn(u32) -> Option<AgentKind>,
+) -> Option<AgentKind> {
     job.processes
         .iter()
         .filter(|process| process.pid != job.process_group_id)
@@ -292,7 +292,7 @@ pub(super) fn agent_hint_for_non_leader_foreground_job_members(
 
 pub(super) fn identify_process_group_leader_in_job(
     job: &crate::platform::ForegroundJob,
-) -> Option<(Agent, String)> {
+) -> Option<(AgentKind, String)> {
     let leader = job
         .processes
         .iter()
@@ -307,7 +307,7 @@ pub(super) fn identify_process_group_leader_in_job(
 pub(super) fn process_probe_result(
     job: &crate::platform::ForegroundJob,
     pid: u32,
-    agent: Agent,
+    agent: AgentKind,
     process_name: String,
 ) -> ProcessProbeResult {
     ProcessProbeResult {
@@ -321,7 +321,7 @@ pub(super) fn process_probe_result(
 pub(super) fn hinted_process_probe_result(
     job: &crate::platform::ForegroundJob,
     pid: u32,
-    read_hint: impl Fn(u32) -> Option<Agent>,
+    read_hint: impl Fn(u32) -> Option<AgentKind>,
 ) -> Option<ProcessProbeResult> {
     let agent = agent_hint_for_foreground_job_members(job, read_hint)?;
     Some(process_probe_result(
@@ -337,7 +337,7 @@ pub(super) fn probe_foreground_process_from_jobs(
     foreground_pgid: Option<u32>,
     leader_job: Option<crate::platform::ForegroundJob>,
     foreground_job: impl FnOnce() -> Option<crate::platform::ForegroundJob>,
-    read_hint: impl Fn(u32) -> Option<Agent> + Copy,
+    read_hint: impl Fn(u32) -> Option<AgentKind> + Copy,
 ) -> ProcessProbeResult {
     if let Some(job) = leader_job.as_ref() {
         if let Some(hinted) = hinted_process_probe_result(job, pid, read_hint) {
@@ -401,14 +401,14 @@ pub(super) fn probe_foreground_process(
 }
 
 impl AgentDetectionPresence {
-    pub(super) fn from_agent(current_agent: Option<Agent>) -> Self {
+    pub(super) fn from_agent(current_agent: Option<AgentKind>) -> Self {
         Self {
             current_agent,
             consecutive_misses: 0,
         }
     }
 
-    pub(super) fn current_agent(&self) -> Option<Agent> {
+    pub(super) fn current_agent(&self) -> Option<AgentKind> {
         self.current_agent
     }
 
@@ -422,7 +422,7 @@ impl AgentDetectionPresence {
         true
     }
 
-    pub(super) fn observe_process_probe(&mut self, identified_agent: Option<Agent>) -> bool {
+    pub(super) fn observe_process_probe(&mut self, identified_agent: Option<AgentKind>) -> bool {
         match identified_agent {
             Some(agent) => {
                 self.consecutive_misses = 0;

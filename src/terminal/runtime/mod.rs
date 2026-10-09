@@ -8,27 +8,22 @@ mod read;
 mod shutdown;
 pub(crate) mod spawn;
 
-// The former local runtime name remains available to its unchanged tests.
-#[cfg(test)]
-pub type PaneRuntime = TerminalRuntime;
 #[cfg(all(test, unix))]
 pub(crate) mod env {
     pub(crate) use super::tests::env_lock;
 }
 #[cfg(test)]
-use self::terminal::GhosttyPaneTerminal;
-use self::terminal::PaneTerminal;
-#[cfg(test)]
-use crate::agents::Agent;
+use crate::agents::AgentKind;
 #[cfg(test)]
 use crate::agents::AgentState;
-use crate::layout::PaneId;
-use crate::pane_state as state;
-use crate::terminal::emulator as terminal;
 #[cfg(test)]
-use crate::terminal::events::AppEvent;
+use crate::terminal::emulator::GhosttyPaneTerminal;
+use crate::terminal::emulator::PaneTerminal;
+#[cfg(test)]
+use crate::terminal::events::TerminalEvent;
 use crate::terminal::runtime::compression::TerminalCompressionTask;
 use crate::terminal::runtime::io::PaneRuntimeIo;
+use crate::utils::ids::PaneId;
 #[cfg(all(test, unix))]
 use crate::utils::render::signal::RenderSignal;
 #[cfg(test)]
@@ -130,16 +125,6 @@ use tokio::sync::watch;
 use tokio::sync::Notify;
 
 mod detection_policy;
-
-pub(crate) use self::terminal::{
-    TerminalDirtyPatch, TerminalDirtyPatchOutcome, TerminalReadSnapshot, TerminalSearchDirection,
-    TerminalSearchWindow, TerminalTextPoint, TerminalWordMotion,
-};
-
-pub use self::{
-    state::PaneState,
-    terminal::{ScrollMetrics, TerminalCursorState},
-};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentDetection {

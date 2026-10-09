@@ -1,12 +1,12 @@
 use std::time::{Duration, Instant};
 
 use super::{AgentNameOwner, ManagedAgent, ManagedAgentPhase, TerminalState};
-use crate::detect::{Agent, AgentState};
+use crate::agents::{AgentKind, AgentState};
 
 impl TerminalState {
     pub fn set_managed_agent_launch_session(
         &mut self,
-        session: crate::agent_resume::PersistedAgentSession,
+        session: crate::agents::resume::catalog::PersistedAgentSession,
     ) {
         self.persisted_agent_session = Some(session.clone());
         self.managed_agent_launch_session = Some(session);
@@ -34,14 +34,14 @@ impl TerminalState {
     pub fn begin_managed_agent(
         &mut self,
         name: String,
-        kind: Agent,
+        kind: AgentKind,
         now: Instant,
         settle_delay: Duration,
         timeout: Duration,
     ) {
         self.set_agent_name(name);
         self.agent_name_owner = Some(AgentNameOwner {
-            agent_label: crate::detect::agent_label(kind).to_string(),
+            agent_label: crate::agents::agent_label(kind).to_string(),
             session_ref: None,
         });
         self.managed_agent = Some(ManagedAgent {
@@ -68,7 +68,7 @@ impl TerminalState {
             .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))
     }
 
-    pub fn managed_agent_kind(&self) -> Option<Agent> {
+    pub fn managed_agent_kind(&self) -> Option<AgentKind> {
         self.managed_agent.map(|managed| managed.kind)
     }
 
@@ -168,10 +168,10 @@ impl TerminalState {
         false
     }
 
-    pub fn restore_managed_agent(&mut self, name: String, kind: Agent) {
+    pub fn restore_managed_agent(&mut self, name: String, kind: AgentKind) {
         self.set_agent_name(name);
         self.agent_name_owner = Some(AgentNameOwner {
-            agent_label: crate::detect::agent_label(kind).to_string(),
+            agent_label: crate::agents::agent_label(kind).to_string(),
             session_ref: None,
         });
         self.managed_agent = Some(ManagedAgent {
@@ -197,13 +197,13 @@ impl TerminalState {
     pub(super) fn reconcile_agent_name_owner(
         &mut self,
         agent_label: &str,
-        session_ref: Option<&crate::agent_resume::AgentSessionRef>,
+        session_ref: Option<&crate::agents::resume::catalog::AgentSessionRef>,
     ) {
         if self.agent_name.is_none() {
             return;
         }
         if self.managed_agent.is_some_and(|managed| {
-            crate::detect::parse_agent_label(agent_label) == Some(managed.kind)
+            crate::agents::parse_agent_label(agent_label) == Some(managed.kind)
         }) {
             return;
         }

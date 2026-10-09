@@ -94,7 +94,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::Sound;
-    use crate::config::{config_path, Config};
+    use crate::utils::config::{config_path, Config};
 
     #[test]
     fn sound_table_config_parses() {

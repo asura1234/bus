@@ -68,13 +68,13 @@ mod tabs;
 pub(crate) mod terminal_read;
 mod workspaces;
 
-#[cfg(test)]
-use crate::events::AppEvent;
 use crate::server::app::App;
 #[cfg(test)]
 use crate::server::app::{Mode, OverlayPaneState, ToastKind};
 #[cfg(all(test, windows))]
 use crate::server::terminals::respawn::RuntimeExitAction;
+#[cfg(test)]
+use crate::terminal::events::TerminalEvent;
 
 impl App {
     #[cfg(test)]

@@ -51,7 +51,7 @@ pub struct Palette {
 impl Palette {
     /// Resolve a theme by name. Returns None for unknown names.
     pub fn from_name(name: &str) -> Option<Self> {
-        match crate::config::canonical_theme_name(name)? {
+        match crate::utils::config::canonical_theme_name(name)? {
             "catppuccin" => Some(Self::catppuccin()),
             "catppuccin-latte" => Some(Self::catppuccin_latte()),
             "terminal" => Some(Self::terminal()),
@@ -75,8 +75,8 @@ impl Palette {
     }
 
     /// Apply custom color overrides on top of this palette.
-    pub fn with_overrides(mut self, custom: &crate::config::CustomThemeColors) -> Self {
-        use crate::config::parse_color;
+    pub fn with_overrides(mut self, custom: &crate::utils::config::CustomThemeColors) -> Self {
+        use crate::utils::config::parse_color;
         if let Some(c) = &custom.accent {
             self.accent = parse_color(c);
         }
@@ -137,8 +137,8 @@ impl Palette {
         self
     }
 
-    pub fn with_mode_overrides(mut self, custom: &crate::config::ModeThemeColors) -> Self {
-        use crate::config::parse_color;
+    pub fn with_mode_overrides(mut self, custom: &crate::utils::config::ModeThemeColors) -> Self {
+        use crate::utils::config::parse_color;
         if let Some(c) = &custom.accent {
             self.accent = parse_color(c);
         }

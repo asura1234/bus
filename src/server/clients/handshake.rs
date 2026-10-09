@@ -4,12 +4,12 @@ use super::read_loop::client_read_loop;
 use super::writer::{
     client_writer_loop, ClientControlWriter, ClientRenderWriter, ClientWriter, ClientWriterQueue,
 };
-use crate::ipc::LocalStream;
-use crate::protocol::endpoint::{
+use crate::platform::ipc::LocalStream;
+use crate::protocol::wire::handshake::{
     EndpointClientHello, EndpointServerWelcome, ENDPOINT_HELLO_KIND, ENDPOINT_PROTOCOL_GENERATION,
     ENDPOINT_WELCOME_KIND,
 };
-use crate::protocol::{self, ClientMessage, ServerMessage, MAX_FRAME_SIZE};
+use crate::protocol::wire::{self as protocol, ClientMessage, ServerMessage, MAX_FRAME_SIZE};
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::TryClone as _;
 use std::io;
@@ -30,7 +30,7 @@ const MAX_CLIENT_SHELL_CELLS: u32 = 1_000_000;
 pub(super) const MAX_CLIENT_CELL_SIZE_PX: u32 = 4096;
 
 pub(super) fn client_shell_geometry_error(
-    surface_size: crate::protocol::ClientSurfaceSize,
+    surface_size: crate::protocol::wire::ClientSurfaceSize,
     cell_width_px: u32,
     cell_height_px: u32,
 ) -> Option<&'static str> {
@@ -231,7 +231,7 @@ fn validate_endpoint_hello(
             return None;
         }
     };
-    let server_version = crate::build_info::version();
+    let server_version = crate::utils::version::version();
     if hello.client_version != server_version {
         write_endpoint_rejection(
             stream,

@@ -251,10 +251,10 @@ pub(in crate::client) fn store_reported_cell_size(
 
 #[cfg(any(unix, test))]
 pub(in crate::client) fn reported_cell_size_from_events(
-    events: &[crate::raw_input::RawInputEvent],
+    events: &[crate::protocol::keys::host::RawInputEvent],
 ) -> Option<(u32, u32)> {
     events.iter().rev().find_map(|event| match event {
-        crate::raw_input::RawInputEvent::HostCellSizeReport {
+        crate::protocol::keys::host::RawInputEvent::HostCellSizeReport {
             width_px,
             height_px,
         } => Some((*width_px, *height_px)),

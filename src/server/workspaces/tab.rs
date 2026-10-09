@@ -5,12 +5,15 @@ use std::sync::Arc;
 use ratatui::layout::Direction;
 use tokio::sync::{mpsc, Notify};
 
-use crate::events::AppEvent;
-use crate::render_signal::RenderSignal;
-use crate::server::workspaces::layout::{PaneId, TileLayout};
 use crate::server::workspaces::pane::PaneState;
-use crate::terminal::runtime::PaneLaunchEnv;
-use crate::terminal::{TerminalId, TerminalRuntime, TerminalRuntimeRegistry, TerminalState};
+use crate::terminal::events::TerminalEvent;
+use crate::terminal::runtime::spawn::PaneLaunchEnv;
+use crate::utils::render::signal::RenderSignal;
+use crate::{server::workspaces::layout::TileLayout, utils::ids::PaneId};
+use crate::{
+    terminal::{TerminalRuntime, TerminalRuntimeRegistry, TerminalState},
+    utils::ids::TerminalId,
+};
 
 pub(crate) type DetachedPane = (PaneId, TerminalId);
 
@@ -38,7 +41,7 @@ pub struct Tab {
     #[cfg(test)]
     pub runtimes: HashMap<PaneId, TerminalRuntime>,
     pub zoomed: bool,
-    pub events: mpsc::Sender<AppEvent>,
+    pub events: mpsc::Sender<TerminalEvent>,
     pub(crate) render_notify: Arc<Notify>,
     pub(crate) render_dirty: Arc<RenderSignal>,
 }
@@ -52,11 +55,11 @@ impl Tab {
         rows: u16,
         cols: u16,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
@@ -86,10 +89,10 @@ impl Tab {
         cols: u16,
         argv: &[String],
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
         launch_env: &PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
@@ -101,7 +104,10 @@ impl Tab {
             scrollback_limit_bytes,
             host_terminal_theme,
             host_terminal_appearance,
-            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
+            crate::terminal::runtime::spawn::PaneShellConfig::new(
+                "",
+                crate::utils::config::ShellModeConfig::NonLogin,
+            ),
             launch_env,
             events,
             render_notify,
@@ -117,11 +123,11 @@ impl Tab {
         rows: u16,
         cols: u16,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
         argv: Option<&[String]>,
@@ -135,7 +141,7 @@ impl Tab {
                 initial_cwd.clone(),
                 argv,
                 launch_env,
-                crate::pane::AgentDetection::Enabled,
+                crate::terminal::runtime::AgentDetection::Enabled,
                 scrollback_limit_bytes,
                 host_terminal_theme,
                 host_terminal_appearance,
@@ -211,9 +217,9 @@ impl Tab {
         cols: u16,
         cwd: Option<PathBuf>,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
     ) -> std::io::Result<NewPane> {
         self.split_pane_with_runtime(
@@ -248,8 +254,8 @@ impl Tab {
         argv: &[String],
         launch_env: &PaneLaunchEnv,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
     ) -> std::io::Result<NewPane> {
         self.split_pane_with_runtime(
             target,
@@ -262,7 +268,10 @@ impl Tab {
             scrollback_limit_bytes,
             host_terminal_theme,
             host_terminal_appearance,
-            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
+            crate::terminal::runtime::spawn::PaneShellConfig::new(
+                "",
+                crate::utils::config::ShellModeConfig::NonLogin,
+            ),
             launch_env,
             Some(SplitCommand::Argv { argv, launch_env }),
         )
@@ -280,9 +289,9 @@ impl Tab {
         cols: u16,
         cwd: Option<PathBuf>,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
         command: Option<SplitCommand<'_>>,
     ) -> std::io::Result<NewPane> {
@@ -310,7 +319,7 @@ impl Tab {
                 actual_cwd.clone(),
                 argv,
                 launch_env,
-                crate::pane::AgentDetection::Enabled,
+                crate::terminal::runtime::AgentDetection::Enabled,
                 scrollback_limit_bytes,
                 host_terminal_theme,
                 host_terminal_appearance,

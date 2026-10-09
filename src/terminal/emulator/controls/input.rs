@@ -1,22 +1,22 @@
 pub(in crate::terminal::emulator) fn ghostty_key_event_from_terminal_key(
-    key: &crate::input::TerminalKey,
-) -> Option<crate::ghostty::KeyEvent> {
-    let mut event = crate::ghostty::KeyEvent::new().ok()?;
+    key: &crate::protocol::keys::TerminalKey,
+) -> Option<crate::terminal::vt::KeyEvent> {
+    let mut event = crate::terminal::vt::KeyEvent::new().ok()?;
     event.set_action(match key.kind {
         crossterm::event::KeyEventKind::Press => {
-            crate::ghostty::ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS
+            crate::terminal::vt::ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS
         }
         crossterm::event::KeyEventKind::Release => {
-            crate::ghostty::ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE
+            crate::terminal::vt::ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE
         }
         crossterm::event::KeyEventKind::Repeat => {
-            crate::ghostty::ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_REPEAT
+            crate::terminal::vt::ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_REPEAT
         }
     });
     let mut mods = ghostty_mods_from_key_modifiers(key.modifiers);
     if matches!(key.code, crossterm::event::KeyCode::BackTab) {
         // Ghostty represents backtab as Tab with Shift rather than a distinct key.
-        mods |= crate::ghostty::MOD_SHIFT;
+        mods |= crate::terminal::vt::MOD_SHIFT;
     }
     event.set_mods(mods);
     event.set_key(ghostty_key_from_crossterm_key_code(
@@ -38,7 +38,7 @@ pub(in crate::terminal::emulator) fn ghostty_key_event_from_terminal_key(
 }
 
 pub(in crate::terminal::emulator) fn ghostty_prefers_herdr_text_encoding(
-    key: &crate::input::TerminalKey,
+    key: &crate::protocol::keys::TerminalKey,
 ) -> bool {
     matches!(key.code, crossterm::event::KeyCode::Char(_))
 }
@@ -48,41 +48,41 @@ pub(in crate::terminal::emulator) fn ghostty_mods_from_key_modifiers(
 ) -> u16 {
     let mut ghostty_mods = 0u16;
     if modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
-        ghostty_mods |= crate::ghostty::MOD_SHIFT;
+        ghostty_mods |= crate::terminal::vt::MOD_SHIFT;
     }
     if modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
-        ghostty_mods |= crate::ghostty::MOD_CTRL;
+        ghostty_mods |= crate::terminal::vt::MOD_CTRL;
     }
     if modifiers.contains(crossterm::event::KeyModifiers::ALT) {
-        ghostty_mods |= crate::ghostty::MOD_ALT;
+        ghostty_mods |= crate::terminal::vt::MOD_ALT;
     }
     if modifiers.contains(crossterm::event::KeyModifiers::SUPER) {
-        ghostty_mods |= crate::ghostty::MOD_SUPER;
+        ghostty_mods |= crate::terminal::vt::MOD_SUPER;
     }
     ghostty_mods
 }
 
 pub(in crate::terminal::emulator) fn ghostty_mouse_encoder_for_terminal(
-    terminal: &crate::ghostty::Terminal,
-    position: crate::input::mouse::Position,
-) -> Option<crate::ghostty::MouseEncoder> {
-    let mut encoder = crate::ghostty::MouseEncoder::new().ok()?;
+    terminal: &crate::terminal::vt::Terminal,
+    position: crate::protocol::keys::mouse::Position,
+) -> Option<crate::terminal::vt::MouseEncoder> {
+    let mut encoder = crate::terminal::vt::MouseEncoder::new().ok()?;
     encoder.set_from_terminal(terminal);
     let cols = terminal.cols().ok()? as u32;
     let rows = terminal.rows().ok()? as u32;
     let sgr_pixels = terminal
-        .mode_get(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
+        .mode_get(crate::terminal::vt::MODE_MOUSE_SGR_PIXELS)
         .ok()?;
     match position {
-        crate::input::mouse::Position::Cell { .. } => {
+        crate::protocol::keys::mouse::Position::Cell { .. } => {
             if sgr_pixels {
-                encoder.set_format(crate::ghostty::MOUSE_FORMAT_SGR);
+                encoder.set_format(crate::terminal::vt::MOUSE_FORMAT_SGR);
             }
             encoder.set_size(cols, rows, 1, 1);
         }
-        crate::input::mouse::Position::Pixels { .. } => {
+        crate::protocol::keys::mouse::Position::Pixels { .. } => {
             if sgr_pixels {
-                encoder.set_format(crate::ghostty::MOUSE_FORMAT_SGR_PIXELS);
+                encoder.set_format(crate::terminal::vt::MOUSE_FORMAT_SGR_PIXELS);
             }
             let width_px = terminal.width_px().ok()?;
             let height_px = terminal.height_px().ok()?;
@@ -96,11 +96,13 @@ pub(in crate::terminal::emulator) fn ghostty_mouse_encoder_for_terminal(
 }
 
 pub(in crate::terminal::emulator) fn ghostty_mouse_position_for_terminal(
-    position: crate::input::mouse::Position,
+    position: crate::protocol::keys::mouse::Position,
 ) -> Option<(f32, f32)> {
     match position {
-        crate::input::mouse::Position::Pixels { x, y } => Some((x as f32, y as f32)),
-        crate::input::mouse::Position::Cell { column, row } => Some((column as f32, row as f32)),
+        crate::protocol::keys::mouse::Position::Pixels { x, y } => Some((x as f32, y as f32)),
+        crate::protocol::keys::mouse::Position::Cell { column, row } => {
+            Some((column as f32, row as f32))
+        }
     }
 }
 
@@ -109,44 +111,44 @@ pub(in crate::terminal::emulator) fn ghostty_mouse_event_from_button_kind(
     column: u16,
     row: u16,
     modifiers: crossterm::event::KeyModifiers,
-) -> Option<crate::ghostty::MouseEvent> {
-    let mut event = crate::ghostty::MouseEvent::new().ok()?;
+) -> Option<crate::terminal::vt::MouseEvent> {
+    let mut event = crate::terminal::vt::MouseEvent::new().ok()?;
     let (action, button) = match kind {
         crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => (
-            crate::ghostty::MOUSE_ACTION_PRESS,
-            Some(crate::ghostty::MOUSE_BUTTON_LEFT),
+            crate::terminal::vt::MOUSE_ACTION_PRESS,
+            Some(crate::terminal::vt::MOUSE_BUTTON_LEFT),
         ),
         crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Middle) => (
-            crate::ghostty::MOUSE_ACTION_PRESS,
-            Some(crate::ghostty::MOUSE_BUTTON_MIDDLE),
+            crate::terminal::vt::MOUSE_ACTION_PRESS,
+            Some(crate::terminal::vt::MOUSE_BUTTON_MIDDLE),
         ),
         crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Right) => (
-            crate::ghostty::MOUSE_ACTION_PRESS,
-            Some(crate::ghostty::MOUSE_BUTTON_RIGHT),
+            crate::terminal::vt::MOUSE_ACTION_PRESS,
+            Some(crate::terminal::vt::MOUSE_BUTTON_RIGHT),
         ),
         crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left) => (
-            crate::ghostty::MOUSE_ACTION_RELEASE,
-            Some(crate::ghostty::MOUSE_BUTTON_LEFT),
+            crate::terminal::vt::MOUSE_ACTION_RELEASE,
+            Some(crate::terminal::vt::MOUSE_BUTTON_LEFT),
         ),
         crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Middle) => (
-            crate::ghostty::MOUSE_ACTION_RELEASE,
-            Some(crate::ghostty::MOUSE_BUTTON_MIDDLE),
+            crate::terminal::vt::MOUSE_ACTION_RELEASE,
+            Some(crate::terminal::vt::MOUSE_BUTTON_MIDDLE),
         ),
         crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Right) => (
-            crate::ghostty::MOUSE_ACTION_RELEASE,
-            Some(crate::ghostty::MOUSE_BUTTON_RIGHT),
+            crate::terminal::vt::MOUSE_ACTION_RELEASE,
+            Some(crate::terminal::vt::MOUSE_BUTTON_RIGHT),
         ),
         crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left) => (
-            crate::ghostty::MOUSE_ACTION_MOTION,
-            Some(crate::ghostty::MOUSE_BUTTON_LEFT),
+            crate::terminal::vt::MOUSE_ACTION_MOTION,
+            Some(crate::terminal::vt::MOUSE_BUTTON_LEFT),
         ),
         crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Middle) => (
-            crate::ghostty::MOUSE_ACTION_MOTION,
-            Some(crate::ghostty::MOUSE_BUTTON_MIDDLE),
+            crate::terminal::vt::MOUSE_ACTION_MOTION,
+            Some(crate::terminal::vt::MOUSE_BUTTON_MIDDLE),
         ),
         crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Right) => (
-            crate::ghostty::MOUSE_ACTION_MOTION,
-            Some(crate::ghostty::MOUSE_BUTTON_RIGHT),
+            crate::terminal::vt::MOUSE_ACTION_MOTION,
+            Some(crate::terminal::vt::MOUSE_BUTTON_RIGHT),
         ),
         _ => return None,
     };
@@ -166,13 +168,13 @@ pub(in crate::terminal::emulator) fn ghostty_mouse_event_from_motion_kind(
     column: u16,
     row: u16,
     modifiers: crossterm::event::KeyModifiers,
-) -> Option<crate::ghostty::MouseEvent> {
+) -> Option<crate::terminal::vt::MouseEvent> {
     if kind != crossterm::event::MouseEventKind::Moved {
         return None;
     }
 
-    let mut event = crate::ghostty::MouseEvent::new().ok()?;
-    event.set_action(crate::ghostty::MOUSE_ACTION_MOTION);
+    let mut event = crate::terminal::vt::MouseEvent::new().ok()?;
+    event.set_action(crate::terminal::vt::MOUSE_ACTION_MOTION);
     event.clear_button();
     event.set_mods(ghostty_mods_from_key_modifiers(modifiers));
     event.set_position(column as f32, row as f32);
@@ -184,14 +186,20 @@ pub(in crate::terminal::emulator) fn ghostty_mouse_event_from_wheel_kind(
     column: u16,
     row: u16,
     modifiers: crossterm::event::KeyModifiers,
-) -> Option<crate::ghostty::MouseEvent> {
-    let mut event = crate::ghostty::MouseEvent::new().ok()?;
-    event.set_action(crate::ghostty::MOUSE_ACTION_PRESS);
+) -> Option<crate::terminal::vt::MouseEvent> {
+    let mut event = crate::terminal::vt::MouseEvent::new().ok()?;
+    event.set_action(crate::terminal::vt::MOUSE_ACTION_PRESS);
     let button = match kind {
-        crossterm::event::MouseEventKind::ScrollUp => crate::ghostty::MOUSE_BUTTON_WHEEL_UP,
-        crossterm::event::MouseEventKind::ScrollDown => crate::ghostty::MOUSE_BUTTON_WHEEL_DOWN,
-        crossterm::event::MouseEventKind::ScrollLeft => crate::ghostty::MOUSE_BUTTON_WHEEL_LEFT,
-        crossterm::event::MouseEventKind::ScrollRight => crate::ghostty::MOUSE_BUTTON_WHEEL_RIGHT,
+        crossterm::event::MouseEventKind::ScrollUp => crate::terminal::vt::MOUSE_BUTTON_WHEEL_UP,
+        crossterm::event::MouseEventKind::ScrollDown => {
+            crate::terminal::vt::MOUSE_BUTTON_WHEEL_DOWN
+        }
+        crossterm::event::MouseEventKind::ScrollLeft => {
+            crate::terminal::vt::MOUSE_BUTTON_WHEEL_LEFT
+        }
+        crossterm::event::MouseEventKind::ScrollRight => {
+            crate::terminal::vt::MOUSE_BUTTON_WHEEL_RIGHT
+        }
         _ => return None,
     };
     event.set_button(button);
@@ -200,7 +208,7 @@ pub(in crate::terminal::emulator) fn ghostty_mouse_event_from_wheel_kind(
     Some(event)
 }
 
-fn ghostty_key_text(key: &crate::input::TerminalKey) -> Option<String> {
+fn ghostty_key_text(key: &crate::protocol::keys::TerminalKey) -> Option<String> {
     match key.code {
         crossterm::event::KeyCode::Char(c) => Some(
             key.shifted_codepoint
@@ -212,7 +220,7 @@ fn ghostty_key_text(key: &crate::input::TerminalKey) -> Option<String> {
     }
 }
 
-fn ghostty_unshifted_codepoint(key: &crate::input::TerminalKey) -> Option<u32> {
+fn ghostty_unshifted_codepoint(key: &crate::protocol::keys::TerminalKey) -> Option<u32> {
     match key.code {
         crossterm::event::KeyCode::Char(c) => Some(c as u32),
         _ => None,
@@ -223,7 +231,7 @@ fn ghostty_key_from_crossterm_key_code(
     code: crossterm::event::KeyCode,
     shifted_codepoint: Option<u32>,
 ) -> Option<u32> {
-    use crate::ghostty::ffi;
+    use crate::terminal::vt::ffi;
     use crossterm::event::KeyCode;
 
     match code {
@@ -262,7 +270,7 @@ fn ghostty_key_from_crossterm_key_code(
 }
 
 fn ghostty_key_from_char(c: char, shifted_codepoint: Option<u32>) -> Option<u32> {
-    use crate::ghostty::ffi;
+    use crate::terminal::vt::ffi;
 
     let base = if let Some(shifted) = shifted_codepoint.and_then(char::from_u32) {
         ghostty_unshifted_ascii_pair(shifted).unwrap_or(c)

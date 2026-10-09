@@ -1,6 +1,6 @@
 //! Coordinator delivery ownership.
 use super::{
-    callbacks, diagnostics, launch, schema, Agent, Method, Provider, RequestId, ResponseResult,
+    callbacks, diagnostics, launch, schema, Method, Provider, RequestId, ResponseResult, RoomAgent,
     RuntimeStatus, SubmissionOutcome, Worker, OWN_TURN_GRACE,
 };
 
@@ -66,7 +66,7 @@ impl Worker {
         Ok(())
     }
 
-    fn deliver_idle_request(&mut self, agent: &Agent, waited: bool) -> Result<(), String> {
+    fn deliver_idle_request(&mut self, agent: &RoomAgent, waited: bool) -> Result<(), String> {
         let identity = &agent.runtime_identity;
         let (Some(launch), Some(terminal), Some(pane)) = (
             &identity.launch_id,
@@ -154,7 +154,7 @@ impl Worker {
     /// while an agent works, so it joins `lead`'s group and shares its reply.
     pub(super) fn steer(
         &mut self,
-        agent: &Agent,
+        agent: &RoomAgent,
         request: RequestId,
         lead: RequestId,
     ) -> Result<(), String> {
@@ -212,7 +212,7 @@ impl Worker {
     }
 }
 
-fn submission_method(agent: &Agent, text: String, terminal: &str, pane: &str) -> Method {
+fn submission_method(agent: &RoomAgent, text: String, terminal: &str, pane: &str) -> Method {
     if let Some(session) = &agent.runtime_identity.session_id {
         Method::AgentPromptIfIdle(schema::AgentPromptIfIdleParams {
             target: pane.to_owned(),

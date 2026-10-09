@@ -27,7 +27,7 @@ impl App {
             .retain_mut(|child| retain_detached_process_after_wait(child.id(), child.try_wait()));
     }
 
-    pub(crate) fn shutdown_terminal_runtime(&mut self, terminal_id: crate::terminal::TerminalId) {
+    pub(crate) fn shutdown_terminal_runtime(&mut self, terminal_id: crate::utils::ids::TerminalId) {
         if let Some(runtime) = self.terminal_runtimes.remove(&terminal_id) {
             runtime.shutdown();
         }

@@ -1,9 +1,10 @@
 //! Decode and bound client-shell input before forwarding ordered server events.
 use super::events::ServerEvent;
 use super::handshake::client_shell_geometry_error;
-use crate::ipc::LocalStream;
-use crate::protocol::{
-    self, ClientMessage, ClientPaneInputEvent, MAX_CLIPBOARD_IMAGE_PAYLOAD, MAX_GRAPHICS_FRAME_SIZE,
+use crate::platform::ipc::LocalStream;
+use crate::protocol::wire::{
+    self as protocol, ClientMessage, ClientPaneInputEvent, MAX_CLIPBOARD_IMAGE_PAYLOAD,
+    MAX_GRAPHICS_FRAME_SIZE,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,7 +18,7 @@ struct EndpointRequestHead {
 }
 
 pub(super) enum DecodedEndpointRequest {
-    Dispatch(Box<crate::api::schema::Request>),
+    Dispatch(Box<crate::protocol::api::schema::Request>),
     Error {
         request_id: String,
         code: &'static str,
@@ -35,7 +36,7 @@ pub(super) fn decode_endpoint_request(request: &str) -> serde_json::Result<Decod
         });
     }
     Ok(
-        match serde_json::from_str::<crate::api::schema::Request>(request) {
+        match serde_json::from_str::<crate::protocol::api::schema::Request>(request) {
             Ok(request) => DecodedEndpointRequest::Dispatch(Box::new(request)),
             Err(error) => DecodedEndpointRequest::Error {
                 request_id: head.id,
@@ -68,8 +69,8 @@ pub(super) fn pane_input_event_limit(events: &[ClientPaneInputEvent]) -> InputEv
             ClientPaneInputEvent::Key { repeat_count, .. } => usize::from((*repeat_count).max(1)),
             ClientPaneInputEvent::Mouse {
                 kind:
-                    crate::protocol::ClientMouseKind::ScrollUp
-                    | crate::protocol::ClientMouseKind::ScrollDown,
+                    crate::protocol::wire::ClientMouseKind::ScrollUp
+                    | crate::protocol::wire::ClientMouseKind::ScrollDown,
                 lines,
                 ..
             } => usize::from((*lines).max(1)),
@@ -239,7 +240,7 @@ fn decode_client_message(msg: ClientMessage, client_id: u64) -> Result<Option<Se
         ClientMessage::ClientShellHostTheme { update } => {
             if matches!(
                 &update,
-                crate::protocol::ClientHostThemeUpdate::PaletteColors(colors)
+                crate::protocol::wire::ClientHostThemeUpdate::PaletteColors(colors)
                     if colors.len() > 256
             ) {
                 warn!(target: "bus::server::clients::transport", client_id, "invalid client shell host theme update, closing");
@@ -260,7 +261,7 @@ fn decode_client_message(msg: ClientMessage, client_id: u64) -> Result<Option<Se
             return decode_client_endpoint_request(client_id, boot_id, request).map(Some);
         }
         ClientMessage::EndpointControl { kind, data }
-            if kind == crate::protocol::endpoint::PRESENTATION_EFFECTS_SYNC_KIND =>
+            if kind == crate::protocol::wire::handshake::PRESENTATION_EFFECTS_SYNC_KIND =>
         {
             ServerEvent::ClientShellPresentationSync {
                 client_id,

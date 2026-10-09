@@ -82,7 +82,11 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-pub(super) fn native_info(pane: &str, agent: &str, session: &str) -> crate::api::schema::AgentInfo {
+pub(super) fn native_info(
+    pane: &str,
+    agent: &str,
+    session: &str,
+) -> crate::protocol::api::schema::AgentInfo {
     serde_json::from_value(json!({
         "terminal_id": "terminal",
         "pane_id": pane,
@@ -259,7 +263,9 @@ impl Transport for NativeBoundClose {
                 .load()
                 .unwrap()
                 .unwrap();
-            let kind = crate::bus::launch::provider_kind(saved.agents().next().unwrap().provider);
+            let kind = crate::agents::providers::launch::provider_kind(
+                saved.agents().next().unwrap().provider,
+            );
             return Ok(ResponseResult::AgentInfo {
                 agent: native_info(&target.target, kind, &self.session),
             });
@@ -362,7 +368,7 @@ pub(super) fn claude_task_notification_turn(
     ]
 }
 
-pub(super) fn agent_of(worker: &Worker, agent: AgentId) -> &crate::bus::model::Agent {
+pub(super) fn agent_of(worker: &Worker, agent: AgentId) -> &crate::messaging::model::RoomAgent {
     worker.state.agent(agent).unwrap()
 }
 

@@ -1,6 +1,6 @@
 //! CLI help text kept separate from parsing and transport.
 use super::session_pick::USAGE;
-pub(crate) use crate::client::local_attach_command;
+pub(crate) use crate::client::errors::local_attach_command;
 use std::io::{self, Write};
 
 /// CLI and observation-hook replies use the same locked stdout writer as the
@@ -122,7 +122,7 @@ pub fn active_restart_after_update_guidance() -> String {
 #[cfg(test)]
 mod tests {
     use super::restart_after_update_guidance;
-    use crate::client::attach_command_for;
+    use crate::client::errors::attach_command_for;
 
     include!("tests/session_guidance_test.rs");
 }

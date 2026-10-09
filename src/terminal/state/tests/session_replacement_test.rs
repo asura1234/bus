@@ -1,8 +1,8 @@
 #[test]
 fn claude_resume_replaces_the_persisted_session() {
     let mut terminal = test_terminal();
-    terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
-    terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+    terminal.set_detected_state(Some(AgentKind::Claude), AgentState::Idle);
+    terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
         source: "herdr:claude".into(),
         agent: "claude".into(),
         session_ref: session_id("old"),
@@ -25,8 +25,8 @@ fn claude_resume_replaces_the_persisted_session() {
 #[test]
 fn claude_startup_does_not_replace_an_existing_session() {
     let mut terminal = test_terminal();
-    terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
-    terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+    terminal.set_detected_state(Some(AgentKind::Claude), AgentState::Idle);
+    terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
         source: "herdr:claude".into(),
         agent: "claude".into(),
         session_ref: session_id("old"),
@@ -48,8 +48,8 @@ fn claude_startup_does_not_replace_an_existing_session() {
 #[test]
 fn a_different_owner_does_not_replace_the_session_without_the_foreground_agent() {
     let mut terminal = test_terminal();
-    terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
-    terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
+    terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
         source: "herdr:codex".into(),
         agent: "codex".into(),
         session_ref: session_id("codex"),

@@ -1,18 +1,16 @@
 //! Input, resize, timer, and connection event coordination.
 #[cfg(not(windows))]
-use super::query_host_terminal_appearance;
-use super::{
-    client_shell_resize_message, endpoint, endpoint_commands, finish_client_shell_input, handshake,
-    host_cell_size_query_required, input, query_host_cell_size, query_host_terminal_theme,
-    resize_poll_loop, server_messages, set_mouse_capture, shell, should_draw_host_cursor,
-    should_query_host_terminal_theme, start_endpoint_transport, timer, write_to_server,
-    ClientError, ClientInputLifecycle, ClientLoopConfig, ClientLoopEvent, ClientState,
-};
+use crate::client::host_terminal::geometry::query_host_terminal_appearance;
 #[cfg(unix)]
-use super::{reported_cell_size_from_events, store_reported_cell_size};
+use crate::client::host_terminal::geometry::{
+    reported_cell_size_from_events, store_reported_cell_size,
+};
 use crate::{
-    ipc::LocalStream,
-    protocol::{render_ansi, ClientMessage, MAX_GRAPHICS_FRAME_SIZE},
+    platform::ipc::LocalStream,
+    protocol::{
+        ansi as render_ansi,
+        wire::{ClientMessage, MAX_GRAPHICS_FRAME_SIZE},
+    },
 };
 use std::{
     io::{self, Write as _},
@@ -23,6 +21,29 @@ use std::{
     time::Duration,
 };
 use tracing::{info, warn};
+use {
+    super::{server_messages, timer},
+    crate::client::{
+        compositor as shell,
+        connection::{
+            bootstrap as endpoint, handshake, requests as endpoint_commands,
+            start_endpoint_transport, write_to_server,
+        },
+        effects::{client_shell_resize_message, finish_client_shell_input},
+        errors::ClientError,
+        events::ClientLoopEvent,
+        host_terminal::{
+            geometry::{
+                host_cell_size_query_required, query_host_cell_size, query_host_terminal_theme,
+                resize_poll_loop, should_query_host_terminal_theme,
+            },
+            input,
+            setup::{set_mouse_capture, should_draw_host_cursor},
+        },
+        run::{ClientInputLifecycle, ClientLoopConfig},
+        state::ClientState,
+    },
+};
 
 /// The main client event loop.
 ///
@@ -167,7 +188,7 @@ fn start_client_loop(
     let max_frame_size = if state.kitty_graphics_enabled {
         MAX_GRAPHICS_FRAME_SIZE
     } else {
-        crate::protocol::MAX_FRAME_SIZE
+        crate::protocol::wire::MAX_FRAME_SIZE
     };
     let transport = start_endpoint_transport(stream, (), event_tx, max_frame_size)?;
     let mut write_stream = endpoint::ServerConnection::new(transport);
@@ -320,7 +341,7 @@ impl ClientLoopDriver {
             #[cfg(unix)]
             ClientLoopEvent::StdinInput(data) => {
                 if self.state.shell.is_some() && self.will_query_host_cell_size {
-                    let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
+                    let events = crate::protocol::keys::host::parse_raw_input_bytes_sync(&data);
                     if let Some((width_px, height_px)) = reported_cell_size_from_events(&events) {
                         store_reported_cell_size(&self.reported_cell_size, width_px, height_px);
                     }

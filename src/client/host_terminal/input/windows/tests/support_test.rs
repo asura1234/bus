@@ -120,30 +120,30 @@ fn key_vk_up_with_scan_unicode(
 
 fn translate(
     records: impl IntoIterator<Item = WindowsInputRecord>,
-) -> Vec<crate::protocol::ClientInputEvent> {
+) -> Vec<crate::protocol::wire::ClientInputEvent> {
     semantic_only(translate_with_provenance(records))
 }
 
 fn semantic_only(
-    events: impl IntoIterator<Item = crate::protocol::ClientInputEvent>,
-) -> Vec<crate::protocol::ClientInputEvent> {
+    events: impl IntoIterator<Item = crate::protocol::wire::ClientInputEvent>,
+) -> Vec<crate::protocol::wire::ClientInputEvent> {
     events
         .into_iter()
         .map(|event| match event {
-            crate::protocol::ClientInputEvent::Key {
+            crate::protocol::wire::ClientInputEvent::Key {
                 code,
                 modifiers,
                 kind,
                 repeat_count,
                 generated_text,
                 ..
-            } => crate::protocol::ClientInputEvent::Key {
+            } => crate::protocol::wire::ClientInputEvent::Key {
                 code,
                 modifiers,
                 kind,
                 repeat_count,
                 generated_text,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
             event => event,
         })
@@ -152,7 +152,7 @@ fn semantic_only(
 
 fn translate_with_provenance(
     records: impl IntoIterator<Item = WindowsInputRecord>,
-) -> Vec<crate::protocol::ClientInputEvent> {
+) -> Vec<crate::protocol::wire::ClientInputEvent> {
     let mut translator = WindowsInputTranslator::default();
     records
         .into_iter()

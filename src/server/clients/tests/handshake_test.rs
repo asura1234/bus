@@ -30,8 +30,8 @@ fn unique_test_path(name: &str) -> std::path::PathBuf {
 fn local_stream_pair(name: &str) -> (LocalStream, LocalStream, TestSocketPath) {
     let path = unique_test_path(name);
     let _ = std::fs::remove_file(&path);
-    let listener = crate::ipc::bind_local_listener(&path).unwrap();
-    let client = crate::ipc::connect_local_stream(&path).unwrap();
+    let listener = crate::platform::ipc::bind_local_listener(&path).unwrap();
+    let client = crate::platform::ipc::connect_local_stream(&path).unwrap();
     let server = listener.accept().unwrap();
     (client, server, TestSocketPath(path))
 }
@@ -58,10 +58,10 @@ fn start_client_read_loop(
 fn endpoint_hello(surface_cols: u16, surface_rows: u16) -> ClientMessage {
     let hello = EndpointClientHello {
         generation: ENDPOINT_PROTOCOL_GENERATION,
-        client_version: crate::build_info::version(),
+        client_version: crate::utils::version::version(),
         cell_width_px: 8,
         cell_height_px: 16,
-        surface_size: crate::protocol::ClientSurfaceSize {
+        surface_size: crate::protocol::wire::ClientSurfaceSize {
             cols: surface_cols,
             rows: surface_rows,
         },
@@ -70,10 +70,10 @@ fn endpoint_hello(surface_cols: u16, surface_rows: u16) -> ClientMessage {
         endpoint_keybindings: true,
         mouse_capture: true,
         surface_active: true,
-        snapshot_codecs: vec![crate::protocol::endpoint::SNAPSHOT_CODEC_V1.into()],
-        surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
-        input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
-        blob_codecs: vec![crate::protocol::endpoint::BLOB_CODEC_V1.into()],
+        snapshot_codecs: vec![crate::protocol::wire::handshake::SNAPSHOT_CODEC_V1.into()],
+        surface_codecs: vec![crate::protocol::wire::handshake::SURFACE_CODEC_V1.into()],
+        input_codecs: vec![crate::protocol::wire::handshake::INPUT_CODEC_V1.into()],
+        blob_codecs: vec![crate::protocol::wire::handshake::BLOB_CODEC_V1.into()],
     };
     ClientMessage::EndpointControl {
         kind: ENDPOINT_HELLO_KIND.into(),
@@ -148,7 +148,7 @@ mod writer;
 
 #[test]
 fn handshake_rejects_different_builds_and_names_both_versions() {
-    let server_version = crate::build_info::version();
+    let server_version = crate::utils::version::version();
     for client_version in ["older-build", "newer-build", ""] {
         let ClientMessage::EndpointControl { kind, data } = endpoint_hello(80, 24) else {
             unreachable!();
@@ -190,7 +190,7 @@ fn handshake_requires_a_client_version_without_a_fallback() {
 #[test]
 fn handshake_rejects_direct_terminal_hello() {
     let welcome = rejected_handshake(ClientMessage::TerminalHello {
-        version: crate::protocol::PROTOCOL_VERSION,
+        version: crate::protocol::wire::PROTOCOL_VERSION,
         cols: 80,
         rows: 24,
         cell_width_px: 8,
@@ -203,13 +203,13 @@ fn handshake_rejects_direct_terminal_hello() {
 #[test]
 fn client_shell_geometry_rejects_unsafe_dimensions_and_cell_sizes() {
     assert!(client_shell_geometry_error(
-        crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 },
+        crate::protocol::wire::ClientSurfaceSize { cols: 80, rows: 24 },
         8,
         16,
     )
     .is_none());
     assert!(client_shell_geometry_error(
-        crate::protocol::ClientSurfaceSize {
+        crate::protocol::wire::ClientSurfaceSize {
             cols: MAX_CLIENT_SHELL_DIMENSION,
             rows: MAX_CLIENT_SHELL_DIMENSION,
         },
@@ -218,7 +218,7 @@ fn client_shell_geometry_rejects_unsafe_dimensions_and_cell_sizes() {
     )
     .is_some());
     assert!(client_shell_geometry_error(
-        crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 },
+        crate::protocol::wire::ClientSurfaceSize { cols: 80, rows: 24 },
         MAX_CLIENT_CELL_SIZE_PX + 1,
         16,
     )
@@ -242,7 +242,7 @@ fn dedicated_client_shell_handshake_uses_surface_viewport() {
         protocol::read_message(&mut client_stream, MAX_FRAME_SIZE).expect("read welcome");
     let welcome = endpoint_welcome(welcome);
     assert_eq!(welcome.generation, ENDPOINT_PROTOCOL_GENERATION);
-    assert_eq!(welcome.server_version, crate::build_info::version());
+    assert_eq!(welcome.server_version, crate::utils::version::version());
     assert!(welcome.error.is_none());
     match server_event_rx
         .blocking_recv()

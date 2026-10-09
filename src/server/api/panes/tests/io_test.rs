@@ -354,7 +354,7 @@ fn api_pane_focus_marks_already_focused_done_pane_seen() {
     let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
         .attached_terminal_id
         .clone();
-    app.state.terminals.get_mut(&terminal_id).unwrap().state = crate::detect::AgentState::Idle;
+    app.state.terminals.get_mut(&terminal_id).unwrap().state = crate::agents::AgentState::Idle;
     app.state.workspaces[0].tabs[0]
         .panes
         .get_mut(&pane_id)

@@ -8,13 +8,13 @@ use interprocess::local_socket::traits::Stream as _;
 use tracing::debug;
 use tracing::info;
 
-use crate::ipc::LocalStream;
-use crate::protocol::endpoint::{
+use crate::platform::ipc::LocalStream;
+use crate::protocol::wire::handshake::{
     EndpointClientHello, EndpointServerWelcome, BLOB_CODEC_V1, ENDPOINT_HELLO_KIND,
     ENDPOINT_PROTOCOL_GENERATION, ENDPOINT_WELCOME_KIND, INPUT_CODEC_V1, SNAPSHOT_CODEC_V1,
     SURFACE_CODEC_V1,
 };
-use crate::protocol::{self, ClientMessage, ServerMessage, MAX_FRAME_SIZE};
+use crate::protocol::wire::{self, ClientMessage, ServerMessage, MAX_FRAME_SIZE};
 
 #[cfg(unix)]
 use crate::client::host_terminal::setup::is_ssh_session;
@@ -95,7 +95,7 @@ pub(in crate::client) fn do_handshake(
     cell_width_px: u32,
     cell_height_px: u32,
     exact_cell_size: bool,
-    shell_surface_size: crate::protocol::ClientSurfaceSize,
+    shell_surface_size: crate::protocol::wire::ClientSurfaceSize,
     endpoint_keybindings: bool,
     mouse_capture: bool,
 ) -> Result<HandshakeResult, ClientError> {
@@ -103,7 +103,7 @@ pub(in crate::client) fn do_handshake(
         .set_nonblocking(false)
         .map_err(ClientError::ConnectionFailed)?;
 
-    let client_build = crate::build_info::version();
+    let client_build = crate::utils::version::version();
     let hello = EndpointClientHello {
         generation: ENDPOINT_PROTOCOL_GENERATION,
         client_version: client_build.clone(),
@@ -129,7 +129,7 @@ pub(in crate::client) fn do_handshake(
             ClientError::ConnectionFailed(io::Error::new(io::ErrorKind::InvalidData, error))
         })?,
     };
-    protocol::write_message(stream, &hello)
+    wire::write_message(stream, &hello)
         .map_err(|e| ClientError::ConnectionFailed(io::Error::other(e.to_string())))?;
 
     set_handshake_recv_timeout(
@@ -137,7 +137,7 @@ pub(in crate::client) fn do_handshake(
         Some(LOCAL_HANDSHAKE_READ_TIMEOUT),
         "client handshake read timeout unavailable",
     )?;
-    let welcome: ServerMessage = protocol::read_message(stream, MAX_FRAME_SIZE)?;
+    let welcome: ServerMessage = wire::read_message(stream, MAX_FRAME_SIZE)?;
     set_handshake_recv_timeout(
         stream,
         None,
@@ -145,17 +145,17 @@ pub(in crate::client) fn do_handshake(
     )?;
 
     let ServerMessage::EndpointControl { kind, data } = welcome else {
-        return Err(ClientError::Protocol(protocol::FramingError::Io(
+        return Err(ClientError::Protocol(wire::FramingError::Io(
             io::Error::new(io::ErrorKind::InvalidData, "expected endpoint welcome"),
         )));
     };
     if kind != ENDPOINT_WELCOME_KIND {
-        return Err(ClientError::Protocol(protocol::FramingError::Io(
+        return Err(ClientError::Protocol(wire::FramingError::Io(
             io::Error::new(io::ErrorKind::InvalidData, "expected endpoint welcome"),
         )));
     }
     let welcome: EndpointServerWelcome = serde_json::from_str(&data).map_err(|error| {
-        ClientError::Protocol(protocol::FramingError::Io(io::Error::new(
+        ClientError::Protocol(wire::FramingError::Io(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("invalid endpoint welcome: {error}"),
         )))

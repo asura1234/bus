@@ -1,6 +1,6 @@
 //! Sound settings and the settings/help scroll windows.
 use super::super::{forms::Form, render::SoundTarget, BusUi, Effect};
-use crate::bus::runtime::BusCommand;
+use crate::messaging::coordinator::BusCommand;
 
 impl BusUi {
     pub(super) fn toggle_sound(&mut self, target: SoundTarget) {
@@ -54,7 +54,7 @@ impl BusUi {
         };
         let choice = choices.swap_remove(next);
         if let Some(config) = &self.sound_config {
-            crate::sound::play_named(choice.as_deref(), config);
+            crate::platform::sound::play_named(choice.as_deref(), config);
         }
         let command = match target {
             SoundTarget::Room(room) => BusCommand::SetRoomSoundName(room, choice),
@@ -69,7 +69,7 @@ impl BusUi {
     /// A sound name as Settings shows it, noting one no longer installed.
     pub(in crate::client::rooms) fn sound_label(&self, name: Option<&str>) -> String {
         match name {
-            None => crate::sound::DEFAULT_SOUND_NAME.into(),
+            None => crate::platform::sound::DEFAULT_SOUND_NAME.into(),
             Some(name)
                 if self.system_sounds.as_ref().is_some_and(|sounds| {
                     !sounds.iter().any(|sound| sound.eq_ignore_ascii_case(name))

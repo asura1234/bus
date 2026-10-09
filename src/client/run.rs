@@ -1,10 +1,18 @@
 #[cfg(unix)]
-use super::finish_terminal_input;
-use super::{
-    client_socket_path, do_handshake, handshake, init_logging, initial_terminal_geometry,
-    run_client_loop, setup_terminal, shell, stop_server_after_quit, ClientError,
+use crate::client::host_terminal::setup::finish_terminal_input;
+use crate::platform::ipc::LocalStream;
+use crate::{
+    client::{
+        compositor as shell,
+        config_reload::init_logging,
+        connection::handshake::{self, do_handshake},
+        effects::stop_server_after_quit,
+        errors::ClientError,
+        event_loop::run_client_loop,
+        host_terminal::{geometry::initial_terminal_geometry, setup::setup_terminal},
+    },
+    utils::socket_paths::client_socket_path,
 };
-use crate::ipc::LocalStream;
 use std::{
     io::{self, Write as _},
     sync::{
@@ -18,7 +26,7 @@ use tracing::{info, warn};
 /// Runs the thin client and enters the main event loop.
 pub fn run_client(
     logging_options: crate::utils::logging::LoggingOptions,
-    config_override: Option<fn(&mut crate::config::Config)>,
+    config_override: Option<fn(&mut crate::utils::config::Config)>,
     stop_server: fn() -> Result<(), String>,
 ) -> io::Result<()> {
     run_client_with_mode(
@@ -30,10 +38,10 @@ pub fn run_client(
 }
 
 pub(super) struct ClientLoopConfig {
-    pub(super) sound_config: crate::config::SoundConfig,
+    pub(super) sound_config: crate::utils::config::SoundConfig,
     pub(super) mouse_scroll_lines: usize,
     pub(super) redraw_on_focus_gained: bool,
-    pub(super) host_cursor: crate::config::HostCursorModeConfig,
+    pub(super) host_cursor: crate::utils::config::HostCursorModeConfig,
     pub(super) kitty_graphics_enabled: bool,
     pub(super) pixel_geometry_enabled: bool,
     pub(super) pixel_geometry_fallback: bool,
@@ -51,16 +59,16 @@ pub(super) struct ClientInputLifecycle {
 fn run_client_with_mode(
     log_message: &'static str,
     logging_options: crate::utils::logging::LoggingOptions,
-    config_override: Option<fn(&mut crate::config::Config)>,
+    config_override: Option<fn(&mut crate::utils::config::Config)>,
     stop_server: fn() -> Result<(), String>,
 ) -> io::Result<()> {
     init_logging(&logging_options);
 
-    let mut loaded_config = crate::config::Config::load();
+    let mut loaded_config = crate::utils::config::Config::load();
     if let Some(apply) = config_override {
         apply(&mut loaded_config.config);
     }
-    crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+    crate::client::host_terminal::modes::clear_host_mouse_reporting(&mut io::stdout())?;
     let socket_path = client_socket_path();
     let loop_config = client_loop_config(loaded_config.config, &loaded_config.diagnostics);
     let mouse_capture = loop_config.mouse_capture_active;
@@ -156,7 +164,7 @@ fn initial_client_connection(
     socket_path: &std::path::Path,
     loop_config: &ClientLoopConfig,
 ) -> io::Result<InitialClientConnection> {
-    let initial_stream = match crate::ipc::connect_local_stream(socket_path) {
+    let initial_stream = match crate::platform::ipc::connect_local_stream(socket_path) {
         Ok(stream) => Some(stream),
         Err(error) => {
             return Err(io::Error::other(
@@ -227,7 +235,7 @@ fn finish_client_run(
     if let Err(err) = result {
         let _ = writeln!(io::stderr(), "herdr: {err}");
         rt.shutdown_timeout(Duration::from_millis(100));
-        crate::logging::shutdown("client");
+        crate::utils::logging::shutdown("client");
 
         let detached = matches!(
             &err,
@@ -245,12 +253,15 @@ fn finish_client_run(
     }
 
     rt.shutdown_timeout(Duration::from_millis(100));
-    crate::logging::shutdown("client");
+    crate::utils::logging::shutdown("client");
     stopped.map_err(io::Error::other)
 }
 
-fn client_loop_config(config: crate::config::Config, diagnostics: &[String]) -> ClientLoopConfig {
-    let startup_config_diagnostic = crate::config::config_diagnostic_summary(diagnostics);
+fn client_loop_config(
+    config: crate::utils::config::Config,
+    diagnostics: &[String],
+) -> ClientLoopConfig {
+    let startup_config_diagnostic = crate::utils::config::config_diagnostic_summary(diagnostics);
     let shell_config = Some(
         shell::ClientShellConfig::from_config(&config)
             .with_startup_config_diagnostic(startup_config_diagnostic),

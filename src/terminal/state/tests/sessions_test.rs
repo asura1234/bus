@@ -1,7 +1,7 @@
 #[test]
 fn a_stale_session_sequence_is_ignored() {
     let mut terminal = test_terminal();
-    terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+    terminal.set_detected_state(Some(AgentKind::Pi), AgentState::Idle);
     assert!(terminal
         .set_agent_session_ref_for_session_start(
             "herdr:pi".into(),

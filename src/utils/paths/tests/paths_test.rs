@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Mutex;
 
 fn env_lock() -> &'static Mutex<()> {
-    crate::config::test_config_env_lock()
+    crate::utils::config::test_config_env_lock()
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn configure_from_args_leaves_session_attach_help_for_cli_dispatch() {
 #[test]
 fn configure_from_args_maps_default_session_name_to_default_path() {
     let _guard = env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _bus = crate::utils::config::test_without_bus_env(&_guard);
     let config_home =
         std::env::temp_dir().join(format!("herdr-session-default-{}", std::process::id()));
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
@@ -166,7 +166,7 @@ fn configure_from_args_maps_default_session_name_to_default_path() {
     assert_eq!(
         active_api_socket_path(),
         config_home
-            .join(crate::config::app_dir_name())
+            .join(crate::utils::config::app_dir_name())
             .join("herdr.sock")
     );
     std::env::remove_var("XDG_CONFIG_HOME");
@@ -197,7 +197,7 @@ fn env_session_does_not_mark_session_explicit() {
 #[test]
 fn env_default_session_name_uses_default_path() {
     let _guard = env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _bus = crate::utils::config::test_without_bus_env(&_guard);
     let config_home =
         std::env::temp_dir().join(format!("herdr-env-session-default-{}", std::process::id()));
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
@@ -218,7 +218,7 @@ fn env_default_session_name_uses_default_path() {
     assert_eq!(
         active_api_socket_path(),
         config_home
-            .join(crate::config::app_dir_name())
+            .join(crate::utils::config::app_dir_name())
             .join("herdr.sock")
     );
     std::env::remove_var("XDG_CONFIG_HOME");
@@ -230,7 +230,7 @@ fn env_default_session_name_uses_default_path() {
 #[test]
 fn explicit_session_socket_ignores_inherited_socket_override() {
     let _guard = env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _bus = crate::utils::config::test_without_bus_env(&_guard);
     let config_home =
         std::env::temp_dir().join(format!("herdr-session-precedence-{}", std::process::id()));
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
@@ -246,7 +246,7 @@ fn explicit_session_socket_ignores_inherited_socket_override() {
     assert_eq!(
         path,
         config_home
-            .join(crate::config::app_dir_name())
+            .join(crate::utils::config::app_dir_name())
             .join("sessions")
             .join("work")
             .join("herdr.sock")

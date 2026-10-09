@@ -145,7 +145,12 @@ impl Worker {
         let report = reports::pending_report(state, &callback);
         let disposition = state.accept_callback(callback);
         if let Some(report) = report {
-            reports::post_report(state, report, &disposition, crate::bus::io::now_ms());
+            reports::post_report(
+                state,
+                report,
+                &disposition,
+                crate::messaging::storage::io::now_ms(),
+            );
         }
         // A turn the agent began on its own keeps it busy even while the
         // native status still reads idle; settling it clears that.
@@ -434,7 +439,11 @@ impl Worker {
                 .invalidate_agent_session(id)
                 .map_err(|e| e.to_string())?;
             state
-                .observe_status(id, RuntimeStatus::Unavailable, crate::bus::io::now_ms())
+                .observe_status(
+                    id,
+                    RuntimeStatus::Unavailable,
+                    crate::messaging::storage::io::now_ms(),
+                )
                 .map_err(|e| e.to_string())?;
             state.set_agent_error(id, Some("The Bus server kept the previous provider session after agent clear, so Bus can no longer follow this agent. Delete it and add a new one; restart Bus first if its server predates this build.".into())).map_err(|e| e.to_string())?;
             self.save(state)?;
@@ -512,7 +521,11 @@ impl Worker {
                         .map_err(|e| e.to_string())?;
                 }
                 state
-                    .observe_status(id, RuntimeStatus::Unavailable, crate::bus::io::now_ms())
+                    .observe_status(
+                        id,
+                        RuntimeStatus::Unavailable,
+                        crate::messaging::storage::io::now_ms(),
+                    )
                     .map_err(|e| e.to_string())?;
                 state.set_agent_error(id, Some("Provider callback session differs from this Bus launch; request ownership is preserved. Inspect the terminal and create a new Bus agent for a new session.".into())).map_err(|e| e.to_string())?;
                 self.save(state)?;
@@ -652,9 +665,9 @@ impl Worker {
     fn refresh_codex_usage(&mut self, id: AgentId, path: &Path) {
         match crate::agents::providers::codex::usage::read_codex_rollout(path) {
             Ok(Some(windows)) => {
-                self.usage.codex = Some(crate::bus::usage::UsageSnapshot {
+                self.usage.codex = Some(crate::messaging::coordinator::usage::UsageSnapshot {
                     windows,
-                    read_at_ms: crate::bus::io::now_ms(),
+                    read_at_ms: crate::messaging::storage::io::now_ms(),
                     observed_by_agent: id,
                 });
             }

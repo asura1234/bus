@@ -5,7 +5,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::platform::ipc::remove_socket_file_if_owned;
-use crate::protocol::ServerMessage;
+use crate::protocol::wire::ServerMessage;
 use crate::server::main_loop::HeadlessServer;
 
 impl HeadlessServer {

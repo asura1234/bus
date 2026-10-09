@@ -1,5 +1,5 @@
 use super::*;
-use crate::workspace::Workspace;
+use crate::server::workspaces::Workspace;
 
 #[test]
 fn hidden_render_attempt_keeps_presentation_cadence_available() {
@@ -22,25 +22,28 @@ fn interrupted_detached_process_wait_keeps_child_for_retry() {
     assert!(retain_detached_process_after_wait(42, Err(interrupted)));
 }
 
-fn test_app_with_pane() -> (App, crate::layout::PaneId) {
+fn test_app_with_pane() -> (App, crate::utils::ids::PaneId) {
     let mut app = App::new(
-        &crate::config::Config::default(),
-        crate::app::AppPolicy::TEST,
+        &crate::utils::config::Config::default(),
+        crate::server::app::AppPolicy::TEST,
         None,
         tokio::sync::mpsc::unbounded_channel().1,
-        crate::api::EventHub::default(),
+        crate::server::api::EventHub::default(),
     );
     let ws = Workspace::test_new("test");
     let pane_id = ws.tabs[0].root_pane;
     app.state.workspaces.push(ws);
     app.state.active = Some(0);
-    app.state.view.pane_infos.push(crate::layout::PaneInfo {
-        id: pane_id,
-        rect: ratatui::layout::Rect::new(0, 0, 80, 24),
-        inner_rect: ratatui::layout::Rect::new(0, 0, 80, 24),
-        scrollbar_rect: None,
-        borders: ratatui::widgets::Borders::NONE,
-        is_focused: true,
-    });
+    app.state
+        .view
+        .pane_infos
+        .push(crate::server::workspaces::layout::PaneInfo {
+            id: pane_id,
+            rect: ratatui::layout::Rect::new(0, 0, 80, 24),
+            inner_rect: ratatui::layout::Rect::new(0, 0, 80, 24),
+            scrollbar_rect: None,
+            borders: ratatui::widgets::Borders::NONE,
+            is_focused: true,
+        });
     (app, pane_id)
 }

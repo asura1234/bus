@@ -3,15 +3,16 @@ use std::time::Instant;
 
 use ratatui::layout::Rect;
 
-use crate::api;
+use crate::protocol::api;
 use crate::server::clients::connection::ClientShellTopology;
 use crate::server::main_loop::HeadlessServer;
+use crate::server::rendering::surface::TabSurfaceTarget;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::server) struct ShellFocusTarget {
     pub(in crate::server) tab_id: String,
     pub(in crate::server) workspace_index: usize,
-    pub(in crate::server) pane_id: crate::layout::PaneId,
+    pub(in crate::server) pane_id: crate::utils::ids::PaneId,
 }
 
 fn classify_shell_focus_transition<'a>(
@@ -41,10 +42,10 @@ fn classify_shell_focus_transition<'a>(
 }
 
 impl HeadlessServer {
-    pub(in crate::server) fn default_shell_target(&self) -> Option<crate::ui::TabSurfaceTarget> {
+    pub(in crate::server) fn default_shell_target(&self) -> Option<TabSurfaceTarget> {
         let workspace_index = self.app.state.active?;
         let workspace = self.app.state.workspaces.get(workspace_index)?;
-        Some(crate::ui::TabSurfaceTarget {
+        Some(TabSurfaceTarget {
             workspace_index,
             tab_index: workspace.active_tab_index(),
         })
@@ -53,7 +54,7 @@ impl HeadlessServer {
     pub(in crate::server) fn shell_target_for_client(
         &self,
         client_id: u64,
-    ) -> Option<crate::ui::TabSurfaceTarget> {
+    ) -> Option<TabSurfaceTarget> {
         let tab_id = self
             .clients
             .get(&client_id)?
@@ -62,14 +63,14 @@ impl HeadlessServer {
             .and_then(crate::server::clients::connection::ClientShellLocation::focused_tab_id);
         tab_id
             .and_then(|tab_id| self.app.parse_tab_id(tab_id))
-            .map(|(workspace_index, tab_index)| crate::ui::TabSurfaceTarget {
+            .map(|(workspace_index, tab_index)| TabSurfaceTarget {
                 workspace_index,
                 tab_index,
             })
             .or_else(|| self.default_shell_target())
     }
 
-    fn tab_id_for_target(&self, target: crate::ui::TabSurfaceTarget) -> Option<String> {
+    fn tab_id_for_target(&self, target: TabSurfaceTarget) -> Option<String> {
         self.app
             .public_tab_id(target.workspace_index, target.tab_index)
     }
@@ -203,7 +204,7 @@ impl HeadlessServer {
     }
 
     fn shell_locations_may_need_reconcile(method: &api::schema::Method) -> bool {
-        use api::schema::Method;
+        use crate::protocol::api::schema::Method;
 
         matches!(
             method,
@@ -218,7 +219,7 @@ impl HeadlessServer {
     }
 
     fn shell_endpoint_claims_geometry(method: &api::schema::Method) -> bool {
-        use api::schema::Method;
+        use crate::protocol::api::schema::Method;
 
         matches!(
             method,
@@ -250,7 +251,7 @@ impl HeadlessServer {
     }
 
     fn public_request_may_change_geometry(method: &api::schema::Method) -> bool {
-        use api::schema::Method;
+        use crate::protocol::api::schema::Method;
 
         matches!(
             method,
@@ -309,10 +310,7 @@ impl HeadlessServer {
         }
     }
 
-    fn focus_target_for_surface(
-        &self,
-        target: crate::ui::TabSurfaceTarget,
-    ) -> Option<ShellFocusTarget> {
+    fn focus_target_for_surface(&self, target: TabSurfaceTarget) -> Option<ShellFocusTarget> {
         let pane_id = self
             .app
             .state
@@ -354,7 +352,7 @@ impl HeadlessServer {
     pub(in crate::server) fn send_shell_focus_target(
         &self,
         target: &ShellFocusTarget,
-        event: crate::ghostty::FocusEvent,
+        event: crate::terminal::vt::FocusEvent,
     ) {
         self.app
             .send_pane_focus_event(target.workspace_index, target.pane_id, event);
@@ -398,10 +396,10 @@ impl HeadlessServer {
         gained: &HashMap<String, ShellFocusTarget>,
     ) {
         for target in lost.values() {
-            self.send_shell_focus_target(target, crate::ghostty::FocusEvent::Lost);
+            self.send_shell_focus_target(target, crate::terminal::vt::FocusEvent::Lost);
         }
         for target in gained.values() {
-            self.send_shell_focus_target(target, crate::ghostty::FocusEvent::Gained);
+            self.send_shell_focus_target(target, crate::terminal::vt::FocusEvent::Gained);
         }
     }
 
@@ -426,10 +424,10 @@ impl HeadlessServer {
         let (lost, gained) =
             classify_shell_focus_transition(before, after, focused_tabs_before, focused_tabs_after);
         if let Some(target) = lost {
-            self.send_shell_focus_target(target, crate::ghostty::FocusEvent::Lost);
+            self.send_shell_focus_target(target, crate::terminal::vt::FocusEvent::Lost);
         }
         if let Some(target) = gained {
-            self.send_shell_focus_target(target, crate::ghostty::FocusEvent::Gained);
+            self.send_shell_focus_target(target, crate::terminal::vt::FocusEvent::Gained);
         }
     }
 
@@ -437,7 +435,7 @@ impl HeadlessServer {
         &self,
         client_id: u64,
         workspace_index: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> bool {
         let Some(target) = self.shell_target_for_client(client_id) else {
             return false;
@@ -495,7 +493,7 @@ impl HeadlessServer {
     fn apply_shell_tab_geometry_to_target(
         &mut self,
         client_id: u64,
-        target: crate::ui::TabSurfaceTarget,
+        target: TabSurfaceTarget,
         start_pending_agent_resumes: bool,
     ) -> bool {
         if !self.resize_shell_tab_geometry_to_target(client_id, target) {
@@ -508,7 +506,7 @@ impl HeadlessServer {
     fn resize_shell_tab_geometry_to_target(
         &mut self,
         client_id: u64,
-        target: crate::ui::TabSurfaceTarget,
+        target: TabSurfaceTarget,
     ) -> bool {
         let Some(client) = self.clients.get(&client_id) else {
             return false;
@@ -517,13 +515,13 @@ impl HeadlessServer {
         let cell_size = if client.cell_size.is_known() {
             client.cell_size
         } else {
-            crate::kitty_graphics::HostCellSize::default()
+            crate::protocol::kitty::HostCellSize::default()
         };
         let area = Rect::new(0, 0, cols, rows);
         if self.app_client_count() == 1 {
             for (workspace_index, workspace) in self.app.state.workspaces.iter().enumerate() {
                 for tab_index in 0..workspace.tabs.len() {
-                    crate::ui::resize_tab_surface(
+                    crate::server::rendering::surface::resize_tab_surface(
                         &self.app.state,
                         &self.app.terminal_runtimes,
                         workspace_index,
@@ -534,7 +532,7 @@ impl HeadlessServer {
                 }
             }
         } else {
-            crate::ui::compute_tab_surface_for(
+            crate::server::rendering::surface::compute_tab_surface_for(
                 &self.app.state,
                 &self.app.terminal_runtimes,
                 Some(target),
@@ -609,7 +607,7 @@ impl HeadlessServer {
                         (
                             tab_id.clone(),
                             client_id,
-                            crate::ui::TabSurfaceTarget {
+                            TabSurfaceTarget {
                                 workspace_index,
                                 tab_index,
                             },
@@ -695,7 +693,7 @@ impl HeadlessServer {
     /// Applies a public socket request, including its session-wide focus projection.
     pub(in crate::server) fn handle_api_request_with_shutdown_check(
         &mut self,
-        msg: api::ApiRequestMessage,
+        msg: crate::server::api::ApiRequestMessage,
     ) -> bool {
         let target_before = self.default_shell_target();
         let method_claims_geometry = Self::public_request_may_change_geometry(&msg.request.method);
@@ -705,7 +703,7 @@ impl HeadlessServer {
                 .parse_workspace_id(&params.workspace_id)
                 .and_then(|workspace_index| {
                     let workspace = self.app.state.workspaces.get(workspace_index)?;
-                    Some(crate::ui::TabSurfaceTarget {
+                    Some(TabSurfaceTarget {
                         workspace_index,
                         tab_index: workspace.active_tab_index(),
                     })
@@ -713,7 +711,7 @@ impl HeadlessServer {
             api::schema::Method::TabFocus(params) => {
                 self.app
                     .parse_tab_id(&params.tab_id)
-                    .map(|(workspace_index, tab_index)| crate::ui::TabSurfaceTarget {
+                    .map(|(workspace_index, tab_index)| TabSurfaceTarget {
                         workspace_index,
                         tab_index,
                     })
@@ -723,7 +721,7 @@ impl HeadlessServer {
                 .parse_pane_id(&params.pane_id)
                 .and_then(|(workspace_index, pane_id)| {
                     let workspace = self.app.state.workspaces.get(workspace_index)?;
-                    Some(crate::ui::TabSurfaceTarget {
+                    Some(TabSurfaceTarget {
                         workspace_index,
                         tab_index: workspace.find_tab_index_for_pane(pane_id)?,
                     })
@@ -755,7 +753,7 @@ impl HeadlessServer {
     pub(in crate::server) fn handle_client_shell_api_request(
         &mut self,
         client_id: u64,
-        msg: api::ApiRequestMessage,
+        msg: crate::server::api::ApiRequestMessage,
     ) -> bool {
         let focus_before = self.shell_focus_target(client_id);
         let focused_tabs_before = self.focused_shell_tabs();

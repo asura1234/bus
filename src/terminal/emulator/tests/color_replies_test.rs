@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn process_pty_bytes_does_not_advertise_unsupported_glyph_protocol() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -16,7 +16,7 @@ fn process_pty_bytes_does_not_advertise_unsupported_glyph_protocol() {
 #[test]
 fn process_pty_bytes_returns_libghostty_query_responses_without_queuing_input() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -30,12 +30,12 @@ fn process_pty_bytes_returns_libghostty_query_responses_without_queuing_input() 
 #[test]
 fn color_scheme_queries_and_live_updates_follow_terminal_mode() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
     assert!(pane
-        .apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark))
+        .apply_host_terminal_appearance(Some(crate::utils::theme::color::HostAppearance::Dark))
         .is_none());
     let query = pane.process_pty_bytes(pane_id, 0, b"\x1b[?996n", &tx, |_| None);
     assert_eq!(
@@ -45,10 +45,12 @@ fn color_scheme_queries_and_live_updates_follow_terminal_mode() {
 
     pane.process_pty_bytes(pane_id, 0, b"\x1b[?2031h", &tx, |_| None);
     assert!(pane
-        .apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark))
+        .apply_host_terminal_appearance(Some(crate::utils::theme::color::HostAppearance::Dark))
         .is_none());
     assert_eq!(
-        pane.apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Light)),
+        pane.apply_host_terminal_appearance(Some(
+            crate::utils::theme::color::HostAppearance::Light
+        )),
         Some(Bytes::from_static(b"\x1b[?997;2n"))
     );
 
@@ -56,12 +58,12 @@ fn color_scheme_queries_and_live_updates_follow_terminal_mode() {
     let unknown_query = pane.process_pty_bytes(pane_id, 0, b"\x1b[?996n", &tx, |_| None);
     assert!(unknown_query.terminal_responses.is_empty());
     assert!(pane
-        .apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Dark))
+        .apply_host_terminal_appearance(Some(crate::utils::theme::color::HostAppearance::Dark))
         .is_none());
 
     pane.process_pty_bytes(pane_id, 0, b"\x1bc", &tx, |_| None);
     assert!(pane
-        .apply_host_terminal_appearance(Some(crate::terminal_theme::HostAppearance::Light))
+        .apply_host_terminal_appearance(Some(crate::utils::theme::color::HostAppearance::Light))
         .is_none());
     assert!(rx.try_recv().is_err());
 }
@@ -69,7 +71,7 @@ fn color_scheme_queries_and_live_updates_follow_terminal_mode() {
 #[test]
 fn process_pty_bytes_returns_xtgettcap_truecolor_query_responses_without_queuing_input() {
     let (tx, mut rx) = mpsc::channel(8);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -96,7 +98,7 @@ fn process_pty_bytes_returns_xtgettcap_truecolor_query_responses_without_queuing
 #[test]
 fn process_pty_bytes_returns_split_xtgettcap_query_response() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -121,7 +123,7 @@ fn process_pty_bytes_returns_split_xtgettcap_query_response() {
 #[test]
 fn process_pty_bytes_orders_device_attribute_reply_before_following_xtgettcap_reply() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -139,7 +141,7 @@ fn process_pty_bytes_orders_device_attribute_reply_before_following_xtgettcap_re
 #[test]
 fn process_pty_bytes_orders_xtgettcap_reply_before_following_device_attribute_reply() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -157,12 +159,12 @@ fn process_pty_bytes_orders_xtgettcap_reply_before_following_device_attribute_re
 #[test]
 fn process_pty_bytes_orders_xtgettcap_reply_before_following_default_color_reply() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
         foreground: None,
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0x00,
             g: 0x2b,
             b: 0x36,
@@ -186,16 +188,16 @@ fn process_pty_bytes_orders_xtgettcap_reply_before_following_default_color_reply
 #[test]
 fn host_theme_update_preserves_child_default_color_override() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
     let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]11;#112233\x07", &tx, |_| None);
     assert!(result.terminal_responses.is_empty());
 
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
         foreground: None,
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0xaa,
             g: 0xbb,
             b: 0xcc,
@@ -214,14 +216,14 @@ fn host_theme_update_preserves_child_default_color_override() {
 #[test]
 fn child_default_color_reset_restores_cached_host_color() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
     pane.process_pty_bytes(pane_id, 0, b"\x1b]11;#112233\x07", &tx, |_| None);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
         foreground: None,
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0xaa,
             g: 0xbb,
             b: 0xcc,
@@ -242,7 +244,7 @@ fn child_default_color_reset_restores_cached_host_color() {
 #[test]
 fn process_pty_bytes_recovers_xtgettcap_after_osc_bel_terminator() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -264,7 +266,7 @@ fn process_pty_bytes_recovers_xtgettcap_after_osc_bel_terminator() {
 #[test]
 fn process_pty_bytes_ignores_unknown_and_unsupported_xtgettcap_queries() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -277,7 +279,7 @@ fn process_pty_bytes_ignores_unknown_and_unsupported_xtgettcap_queries() {
 #[test]
 fn process_pty_bytes_returns_underline_color_xtgettcap_query_responses() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -306,12 +308,12 @@ fn process_pty_bytes_returns_underline_color_xtgettcap_query_responses() {
 #[test]
 fn process_pty_bytes_orders_default_color_reply_before_following_device_attribute_reply() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
         foreground: None,
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0x00,
             g: 0x2b,
             b: 0x36,
@@ -333,13 +335,13 @@ fn process_pty_bytes_orders_default_color_reply_before_following_device_attribut
 #[test]
 fn process_pty_bytes_returns_host_palette_color_without_queuing_input() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     pane.apply_host_terminal_theme(
-        crate::terminal_theme::TerminalTheme::default().with_palette_color(
+        crate::utils::theme::color::TerminalTheme::default().with_palette_color(
             0,
-            crate::terminal_theme::RgbColor {
+            crate::utils::theme::color::RgbColor {
                 r: 0x11,
                 g: 0x22,
                 b: 0x33,
@@ -361,15 +363,15 @@ fn opentui_256_palette_query_burst_uses_host_snapshot() {
     use std::fmt::Write as _;
 
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    let mut theme = crate::terminal_theme::TerminalTheme::default();
+    let mut theme = crate::utils::theme::color::TerminalTheme::default();
     let mut queries = String::new();
     for index in 0..=u8::MAX {
         theme = theme.with_palette_color(
             index,
-            crate::terminal_theme::RgbColor {
+            crate::utils::theme::color::RgbColor {
                 r: index,
                 g: 0x22,
                 b: 0x33,
@@ -395,13 +397,13 @@ fn opentui_256_palette_query_burst_uses_host_snapshot() {
 #[test]
 fn child_palette_override_survives_host_refresh_until_reset() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     pane.apply_host_terminal_theme(
-        crate::terminal_theme::TerminalTheme::default().with_palette_color(
+        crate::utils::theme::color::TerminalTheme::default().with_palette_color(
             7,
-            crate::terminal_theme::RgbColor {
+            crate::utils::theme::color::RgbColor {
                 r: 0x11,
                 g: 0x22,
                 b: 0x33,
@@ -411,9 +413,9 @@ fn child_palette_override_survives_host_refresh_until_reset() {
     pane.process_pty_bytes(pane_id, 0, b"\x1b]4;7;rgb:aa/bb/cc\x1b\\", &tx, |_| None);
 
     pane.apply_host_terminal_theme(
-        crate::terminal_theme::TerminalTheme::default().with_palette_color(
+        crate::utils::theme::color::TerminalTheme::default().with_palette_color(
             7,
-            crate::terminal_theme::RgbColor {
+            crate::utils::theme::color::RgbColor {
                 r: 0x44,
                 g: 0x55,
                 b: 0x66,
@@ -437,7 +439,7 @@ fn child_palette_override_survives_host_refresh_until_reset() {
 #[test]
 fn process_pty_bytes_returns_split_palette_color_query_response() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     let color = current_palette_color(&pane, 255);
@@ -460,7 +462,7 @@ fn process_pty_bytes_returns_split_palette_color_query_response() {
 #[test]
 fn process_pty_bytes_ignores_malformed_and_preserves_multi_palette_queries() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -485,13 +487,13 @@ fn process_pty_bytes_ignores_malformed_and_preserves_multi_palette_queries() {
 #[test]
 fn process_pty_bytes_orders_palette_reply_before_following_terminal_replies() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     let color = current_palette_color(&pane, 0);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
         foreground: None,
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0x00,
             g: 0x2b,
             b: 0x36,
@@ -523,12 +525,12 @@ fn process_pty_bytes_orders_palette_reply_before_following_terminal_replies() {
 #[test]
 fn process_pty_bytes_returns_default_color_query_responses_without_queuing_input() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
         foreground: None,
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0x00,
             g: 0x2b,
             b: 0x36,
@@ -548,7 +550,7 @@ fn process_pty_bytes_returns_default_color_query_responses_without_queuing_input
 #[test]
 fn process_pty_bytes_answers_default_color_queries_without_a_host_theme() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     let colors = current_default_colors(&pane);
@@ -573,7 +575,7 @@ fn process_pty_bytes_answers_default_color_queries_without_a_host_theme() {
 #[test]
 fn process_pty_bytes_mirrors_query_terminator_in_default_color_reply() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     let colors = current_default_colors(&pane);
@@ -595,7 +597,7 @@ fn process_pty_bytes_mirrors_query_terminator_in_default_color_reply() {
 #[test]
 fn process_pty_bytes_answers_every_tui_startup_capability_query() {
     let (tx, mut rx) = mpsc::channel(8);
-    let terminal = crate::ghostty::Terminal::new(120, 30, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(120, 30, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     let colors = current_default_colors(&pane);
@@ -632,16 +634,16 @@ fn process_pty_bytes_answers_every_tui_startup_capability_query() {
 #[test]
 fn process_pty_bytes_preserves_untracked_multi_color_query_responses() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0x65,
             g: 0x7b,
             b: 0x83,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0xfd,
             g: 0xf6,
             b: 0xe3,
@@ -684,7 +686,7 @@ fn process_pty_bytes_preserves_untracked_multi_color_query_responses() {
 #[test]
 fn process_pty_bytes_preserves_earlier_aggregate_palette_reply() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -711,7 +713,7 @@ fn process_pty_bytes_preserves_earlier_aggregate_palette_reply() {
 #[test]
 fn process_pty_bytes_preserves_libghostty_reply_for_child_color_override() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -726,7 +728,7 @@ fn process_pty_bytes_preserves_libghostty_reply_for_child_color_override() {
 #[test]
 fn process_pty_bytes_tracks_later_multi_value_color_set() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -740,11 +742,11 @@ fn process_pty_bytes_tracks_later_multi_value_color_set() {
 #[test]
 fn process_pty_bytes_returns_cursor_color_query_response_from_foreground_fallback() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0x65,
             g: 0x7b,
             b: 0x83,
@@ -765,11 +767,11 @@ fn process_pty_bytes_returns_cursor_color_query_response_from_foreground_fallbac
 #[test]
 fn process_pty_bytes_returns_cursor_color_query_response_from_child_foreground() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0x65,
             g: 0x7b,
             b: 0x83,
@@ -791,11 +793,11 @@ fn process_pty_bytes_returns_cursor_color_query_response_from_child_foreground()
 #[test]
 fn process_pty_bytes_returns_explicit_cursor_color_query_response() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0x65,
             g: 0x7b,
             b: 0x83,
@@ -817,16 +819,16 @@ fn process_pty_bytes_returns_explicit_cursor_color_query_response() {
 #[test]
 fn process_pty_bytes_returns_default_color_query_responses_in_order() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0x65,
             g: 0x7b,
             b: 0x83,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0xfd,
             g: 0xf6,
             b: 0xe3,
@@ -856,12 +858,12 @@ fn process_pty_bytes_returns_default_color_query_responses_in_order() {
 #[test]
 fn process_pty_bytes_returns_split_default_color_query_response() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
         foreground: None,
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0xfd,
             g: 0xf6,
             b: 0xe3,
@@ -887,11 +889,11 @@ fn process_pty_bytes_returns_split_default_color_query_response() {
 #[test]
 fn process_pty_bytes_returns_split_cursor_color_query_response() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0xfd,
             g: 0xf6,
             b: 0xe3,
@@ -918,12 +920,12 @@ fn process_pty_bytes_returns_split_cursor_color_query_response() {
 #[test]
 fn process_pty_bytes_tracks_default_color_set_and_reset_before_replying() {
     let (tx, mut rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
         foreground: None,
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0xfd,
             g: 0xf6,
             b: 0xe3,

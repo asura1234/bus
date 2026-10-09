@@ -1,14 +1,14 @@
-use crate::app::state::AppState;
 use crate::protocol::kitty::placement::{
     terminal_image_needs_data, HostCellSize, HostPlacement, HostSourceKey, ImageSignature,
 };
+use crate::server::app_state::AppState;
 use crate::terminal::TerminalRuntimeRegistry;
 use std::collections::{HashMap, HashSet};
 
 pub(crate) fn collect_visible_placements(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
-    surface: crate::ui::TabSurfaceView<'_>,
+    surface: crate::server::rendering::surface::TabSurfaceView<'_>,
     cell_size: HostCellSize,
     uploaded_images: &HashMap<u32, ImageSignature>,
     oversized_images: &HashMap<HostSourceKey, ImageSignature>,

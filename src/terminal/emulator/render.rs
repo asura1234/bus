@@ -8,7 +8,7 @@ use super::{
     effective_cursor_state, GhosttyPaneCore, GhosttyPaneTerminal, PaneTerminal,
     TerminalCursorState, TerminalDirtyPatchOutcome,
 };
-use crate::protocol::CellData;
+use crate::protocol::wire::CellData;
 
 impl PaneTerminal {
     pub fn render(&self, frame: &mut Frame, area: Rect, show_cursor: bool) {
@@ -34,9 +34,9 @@ impl PaneTerminal {
     pub fn kitty_image_placements_with_data_filter<F>(
         &self,
         needs_data: F,
-    ) -> Vec<crate::ghostty::KittyImagePlacement>
+    ) -> Vec<crate::terminal::vt::KittyImagePlacement>
     where
-        F: FnMut(crate::ghostty::KittyImageDescriptor) -> bool,
+        F: FnMut(crate::terminal::vt::KittyImageDescriptor) -> bool,
     {
         self.ghostty
             .kitty_image_placements_with_data_filter(needs_data)
@@ -63,9 +63,9 @@ impl GhosttyPaneTerminal {
     pub fn kitty_image_placements_with_data_filter<F>(
         &self,
         needs_data: F,
-    ) -> Vec<crate::ghostty::KittyImagePlacement>
+    ) -> Vec<crate::terminal::vt::KittyImagePlacement>
     where
-        F: FnMut(crate::ghostty::KittyImageDescriptor) -> bool,
+        F: FnMut(crate::terminal::vt::KittyImageDescriptor) -> bool,
     {
         self.core
             .lock()
@@ -104,13 +104,13 @@ impl GhosttyPaneTerminal {
         let palette_overrides = colors
             .zip(terminal.default_palette().ok())
             .and_then(|(colors, default)| PaletteOverrides::new(&colors.palette, &default));
-        let hide_kitty_placeholders = crate::kitty_graphics::is_enabled();
+        let hide_kitty_placeholders = crate::protocol::kitty::is_enabled();
 
-        let mut row_iterator = match crate::ghostty::RowIterator::new() {
+        let mut row_iterator = match crate::terminal::vt::RowIterator::new() {
             Ok(iterator) => iterator,
             Err(_) => return,
         };
-        let mut row_cells = match crate::ghostty::RowCells::new() {
+        let mut row_cells = match crate::terminal::vt::RowCells::new() {
             Ok(cells) => cells,
             Err(_) => return,
         };
@@ -159,18 +159,18 @@ impl GhosttyPaneTerminal {
 }
 
 pub(super) fn decscusr_cursor_shape(
-    style: crate::ghostty::CursorVisualStyle,
+    style: crate::terminal::vt::CursorVisualStyle,
     blinking: bool,
 ) -> u8 {
     match (style, blinking) {
-        (crate::ghostty::CursorVisualStyle::Block, true)
-        | (crate::ghostty::CursorVisualStyle::BlockHollow, true) => 1,
-        (crate::ghostty::CursorVisualStyle::Block, false)
-        | (crate::ghostty::CursorVisualStyle::BlockHollow, false) => 2,
-        (crate::ghostty::CursorVisualStyle::Underline, true) => 3,
-        (crate::ghostty::CursorVisualStyle::Underline, false) => 4,
-        (crate::ghostty::CursorVisualStyle::Bar, true) => 5,
-        (crate::ghostty::CursorVisualStyle::Bar, false) => 6,
+        (crate::terminal::vt::CursorVisualStyle::Block, true)
+        | (crate::terminal::vt::CursorVisualStyle::BlockHollow, true) => 1,
+        (crate::terminal::vt::CursorVisualStyle::Block, false)
+        | (crate::terminal::vt::CursorVisualStyle::BlockHollow, false) => 2,
+        (crate::terminal::vt::CursorVisualStyle::Underline, true) => 3,
+        (crate::terminal::vt::CursorVisualStyle::Underline, false) => 4,
+        (crate::terminal::vt::CursorVisualStyle::Bar, true) => 5,
+        (crate::terminal::vt::CursorVisualStyle::Bar, false) => 6,
     }
 }
 
@@ -186,7 +186,7 @@ pub(super) fn current_cursor_state(core: &mut GhosttyPaneCore) -> Option<Termina
 }
 
 fn cursor_state_from_render_state(
-    render_state: &mut crate::ghostty::RenderState,
+    render_state: &mut crate::terminal::vt::RenderState,
     decscusr_tracker: &DecscusrTracker,
 ) -> Option<TerminalCursorState> {
     let cursor = render_state.cursor_viewport().ok()??;
@@ -211,10 +211,10 @@ fn cursor_state_from_render_state(
 type VisibleHyperlinks = Vec<((u16, u16), String, String)>;
 
 pub(super) fn ghostty_clear_render_dirty(
-    render_state: &mut crate::ghostty::RenderState,
+    render_state: &mut crate::terminal::vt::RenderState,
     area_height: u16,
 ) {
-    let Ok(mut row_iterator) = crate::ghostty::RowIterator::new() else {
+    let Ok(mut row_iterator) = crate::terminal::vt::RowIterator::new() else {
         return;
     };
     let Ok(mut rows) = render_state.populate_row_iterator(&mut row_iterator) else {
@@ -225,21 +225,21 @@ pub(super) fn ghostty_clear_render_dirty(
         let _ = rows.clear_dirty();
         y += 1;
     }
-    let _ = render_state.set_dirty(crate::ghostty::Dirty::Clean);
+    let _ = render_state.set_dirty(crate::terminal::vt::Dirty::Clean);
 }
 
 fn ghostty_visible_hyperlinks(
     core: &mut GhosttyPaneCore,
     area: Rect,
-) -> Result<VisibleHyperlinks, crate::ghostty::Error> {
+) -> Result<VisibleHyperlinks, crate::terminal::vt::Error> {
     let GhosttyPaneCore {
         terminal,
         render_state,
         ..
     } = core;
     render_state.update(terminal)?;
-    let mut row_iterator = crate::ghostty::RowIterator::new()?;
-    let mut row_cells = crate::ghostty::RowCells::new()?;
+    let mut row_iterator = crate::terminal::vt::RowIterator::new()?;
+    let mut row_cells = crate::terminal::vt::RowCells::new()?;
     let mut rows = render_state.populate_row_iterator(&mut row_iterator)?;
     let mut links = Vec::new();
     let mut y = 0u16;
@@ -260,8 +260,8 @@ fn ghostty_visible_hyperlinks(
 }
 
 pub(super) fn ghostty_line_from_cells(
-    cells: &mut crate::ghostty::RowCellIter<'_>,
-) -> Result<String, crate::ghostty::Error> {
+    cells: &mut crate::terminal::vt::RowCellIter<'_>,
+) -> Result<String, crate::terminal::vt::Error> {
     let mut line = String::new();
     while cells.next() {
         line.push_str(&ghostty_cell_symbol(cells)?);
@@ -270,13 +270,13 @@ pub(super) fn ghostty_line_from_cells(
 }
 
 fn ghostty_cell_symbol(
-    cells: &crate::ghostty::RowCellIter<'_>,
-) -> Result<String, crate::ghostty::Error> {
-    if cells.wide()? == crate::ghostty::CellWide::SpacerTail {
+    cells: &crate::terminal::vt::RowCellIter<'_>,
+) -> Result<String, crate::terminal::vt::Error> {
+    if cells.wide()? == crate::terminal::vt::CellWide::SpacerTail {
         return Ok(String::new());
     }
     let text = cells.grapheme_text()?;
-    if text.chars().next().map(u32::from) == Some(crate::ghostty::KITTY_UNICODE_PLACEHOLDER) {
+    if text.chars().next().map(u32::from) == Some(crate::terminal::vt::KITTY_UNICODE_PLACEHOLDER) {
         return Ok(" ".to_string());
     }
     if text.is_empty() {
@@ -286,25 +286,26 @@ fn ghostty_cell_symbol(
 }
 
 pub(in super::super) fn ghostty_blank_symbol_for_width(
-    wide: crate::ghostty::CellWide,
+    wide: crate::terminal::vt::CellWide,
 ) -> &'static str {
     match wide {
-        crate::ghostty::CellWide::Wide => "  ",
-        crate::ghostty::CellWide::SpacerTail => "",
-        crate::ghostty::CellWide::Narrow | crate::ghostty::CellWide::SpacerHead => " ",
+        crate::terminal::vt::CellWide::Wide => "  ",
+        crate::terminal::vt::CellWide::SpacerTail => "",
+        crate::terminal::vt::CellWide::Narrow | crate::terminal::vt::CellWide::SpacerHead => " ",
     }
 }
 
-pub(super) fn ghostty_symbol_fits_cell(symbol: &str, wide: crate::ghostty::CellWide) -> bool {
+pub(super) fn ghostty_symbol_fits_cell(symbol: &str, wide: crate::terminal::vt::CellWide) -> bool {
     let expected_width = match wide {
-        crate::ghostty::CellWide::Wide => 2,
-        crate::ghostty::CellWide::Narrow | crate::ghostty::CellWide::SpacerHead => 1,
-        crate::ghostty::CellWide::SpacerTail => 0,
+        crate::terminal::vt::CellWide::Wide => 2,
+        crate::terminal::vt::CellWide::Narrow | crate::terminal::vt::CellWide::SpacerHead => 1,
+        crate::terminal::vt::CellWide::SpacerTail => 0,
     };
     let actual_width = symbol.width();
     actual_width == expected_width
-        || (wide == crate::ghostty::CellWide::Narrow && actual_width == 2)
-        || (wide == crate::ghostty::CellWide::Wide && is_halfwidth_katakana_voiced_grapheme(symbol))
+        || (wide == crate::terminal::vt::CellWide::Narrow && actual_width == 2)
+        || (wide == crate::terminal::vt::CellWide::Wide
+            && is_halfwidth_katakana_voiced_grapheme(symbol))
 }
 
 fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {
@@ -321,21 +322,21 @@ fn is_halfwidth_katakana_voiced_grapheme(symbol: &str) -> bool {
 }
 
 pub(super) fn ghostty_buffer_symbol_into<'a>(
-    cells: &crate::ghostty::RowCellIter<'_>,
-    wide: crate::ghostty::CellWide,
+    cells: &crate::terminal::vt::RowCellIter<'_>,
+    wide: crate::terminal::vt::CellWide,
     hide_kitty_placeholders: bool,
     grapheme_bytes: &mut Vec<u8>,
     symbol_scratch: &'a mut String,
-) -> Result<&'a str, crate::ghostty::Error> {
+) -> Result<&'a str, crate::terminal::vt::Error> {
     symbol_scratch.clear();
     match wide {
-        crate::ghostty::CellWide::SpacerTail => {}
-        crate::ghostty::CellWide::SpacerHead => symbol_scratch.push(' '),
-        crate::ghostty::CellWide::Narrow | crate::ghostty::CellWide::Wide => {
+        crate::terminal::vt::CellWide::SpacerTail => {}
+        crate::terminal::vt::CellWide::SpacerHead => symbol_scratch.push(' '),
+        crate::terminal::vt::CellWide::Narrow | crate::terminal::vt::CellWide::Wide => {
             cells.grapheme_text_into(grapheme_bytes, symbol_scratch)?;
             let hidden_kitty_placeholder = hide_kitty_placeholders
                 && symbol_scratch.chars().next().map(u32::from)
-                    == Some(crate::ghostty::KITTY_UNICODE_PLACEHOLDER);
+                    == Some(crate::terminal::vt::KITTY_UNICODE_PLACEHOLDER);
             if hidden_kitty_placeholder || symbol_scratch.is_empty() {
                 symbol_scratch.clear();
                 symbol_scratch.push(' ');
@@ -376,9 +377,9 @@ pub(super) fn blank_cell_data(default_fg: Option<Color>, default_bg: Option<Colo
 pub(super) fn cell_data_from_style(symbol: String, style: Style) -> CellData {
     CellData {
         symbol,
-        fg: crate::protocol::color_to_u32(style.fg.unwrap_or(Color::Reset)),
-        bg: crate::protocol::color_to_u32(style.bg.unwrap_or(Color::Reset)),
-        modifier: crate::protocol::modifier_to_u16(style.add_modifier),
+        fg: crate::protocol::wire::color_to_u32(style.fg.unwrap_or(Color::Reset)),
+        bg: crate::protocol::wire::color_to_u32(style.bg.unwrap_or(Color::Reset)),
+        modifier: crate::protocol::wire::modifier_to_u16(style.add_modifier),
         skip: false,
         hyperlink: None,
     }
@@ -396,8 +397,8 @@ fn ghostty_default_style(default_fg: Option<Color>, default_bg: Option<Color>) -
 }
 
 pub(super) fn ghostty_cell_style(
-    cells: &crate::ghostty::RowCellIter<'_>,
-    basic: &crate::ghostty::CellBasicData,
+    cells: &crate::terminal::vt::RowCellIter<'_>,
+    basic: &crate::terminal::vt::CellBasicData,
     default_fg: Option<Color>,
     default_bg: Option<Color>,
     resolved_fg: Option<Color>,
@@ -463,14 +464,15 @@ pub(super) fn ghostty_cell_style(
     if basic.style.strikethrough {
         modifiers |= Modifier::CROSSED_OUT;
     }
-    modifiers = crate::protocol::modifier_with_underline_style(modifiers, basic.style.underline);
+    modifiers =
+        crate::protocol::wire::modifier_with_underline_style(modifiers, basic.style.underline);
     style.add_modifier(modifiers)
 }
 
 pub(super) fn ghostty_default_fg(
-    color: crate::ghostty::RgbColor,
-    host_theme: crate::terminal_theme::TerminalTheme,
-    initial_default_foreground: Option<crate::ghostty::RgbColor>,
+    color: crate::terminal::vt::RgbColor,
+    host_theme: crate::utils::theme::color::TerminalTheme,
+    initial_default_foreground: Option<crate::terminal::vt::RgbColor>,
 ) -> Option<Color> {
     if let Some(host_foreground) = host_theme.foreground {
         if host_foreground == terminal_theme_color(color) {
@@ -486,9 +488,9 @@ pub(super) fn ghostty_default_fg(
 }
 
 pub(super) fn ghostty_default_bg(
-    color: crate::ghostty::RgbColor,
-    host_theme: crate::terminal_theme::TerminalTheme,
-    initial_default_background: Option<crate::ghostty::RgbColor>,
+    color: crate::terminal::vt::RgbColor,
+    host_theme: crate::utils::theme::color::TerminalTheme,
+    initial_default_background: Option<crate::terminal::vt::RgbColor>,
 ) -> Option<Color> {
     if let Some(host_background) = host_theme.background {
         if host_background == terminal_theme_color(color) {
@@ -503,8 +505,10 @@ pub(super) fn ghostty_default_bg(
     }
 }
 
-fn terminal_theme_color(color: crate::ghostty::RgbColor) -> crate::terminal_theme::RgbColor {
-    crate::terminal_theme::RgbColor {
+fn terminal_theme_color(
+    color: crate::terminal::vt::RgbColor,
+) -> crate::utils::theme::color::RgbColor {
+    crate::utils::theme::color::RgbColor {
         r: color.r,
         g: color.g,
         b: color.b,
@@ -515,12 +519,12 @@ fn terminal_theme_color(color: crate::ghostty::RgbColor) -> crate::terminal_them
 // host makes it resolve against the host's own palette, discarding the redefinition.
 // Only overridden entries become RGB; the rest stay indexed and keep following the
 // host theme. None when nothing was redefined, which is the common case.
-pub(super) struct PaletteOverrides([Option<crate::ghostty::RgbColor>; 256]);
+pub(super) struct PaletteOverrides([Option<crate::terminal::vt::RgbColor>; 256]);
 
 impl PaletteOverrides {
     pub(super) fn new(
-        active: &[crate::ghostty::RgbColor; 256],
-        default: &[crate::ghostty::RgbColor; 256],
+        active: &[crate::terminal::vt::RgbColor; 256],
+        default: &[crate::terminal::vt::RgbColor; 256],
     ) -> Option<Self> {
         let mut overrides = [None; 256];
         let mut any = false;
@@ -533,36 +537,36 @@ impl PaletteOverrides {
         any.then_some(Self(overrides))
     }
 
-    fn get(&self, index: u8) -> Option<crate::ghostty::RgbColor> {
+    fn get(&self, index: u8) -> Option<crate::terminal::vt::RgbColor> {
         self.0[usize::from(index)]
     }
 }
 
 pub(super) fn ghostty_cell_color(
-    color: crate::ghostty::CellColor,
+    color: crate::terminal::vt::CellColor,
     palette_overrides: Option<&PaletteOverrides>,
 ) -> Color {
     match color {
-        crate::ghostty::CellColor::Palette(index) => {
+        crate::terminal::vt::CellColor::Palette(index) => {
             match palette_overrides.and_then(|overrides| overrides.get(index)) {
                 Some(color) => ghostty_color(color),
                 None => Color::Indexed(index),
             }
         }
-        crate::ghostty::CellColor::Rgb(color) => ghostty_color(color),
+        crate::terminal::vt::CellColor::Rgb(color) => ghostty_color(color),
     }
 }
 
-pub(super) fn ghostty_color(color: crate::ghostty::RgbColor) -> Color {
+pub(super) fn ghostty_color(color: crate::terminal::vt::RgbColor) -> Color {
     Color::Rgb(color.r, color.g, color.b)
 }
 
 fn render_rows(
     frame: &mut Frame,
     area: Rect,
-    render_state: &mut crate::ghostty::RenderState,
-    row_iterator: &mut crate::ghostty::RowIterator,
-    row_cells: &mut crate::ghostty::RowCells,
+    render_state: &mut crate::terminal::vt::RenderState,
+    row_iterator: &mut crate::terminal::vt::RowIterator,
+    row_cells: &mut crate::terminal::vt::RowCells,
     default_fg: Option<Color>,
     default_bg: Option<Color>,
     resolved_fg: Option<Color>,

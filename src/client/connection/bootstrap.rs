@@ -1,7 +1,7 @@
 use std::io;
 use std::time::{Duration, Instant};
 
-use crate::protocol::ClientMessage;
+use crate::protocol::wire::ClientMessage;
 
 #[path = "writer.rs"]
 mod writer;
@@ -88,7 +88,7 @@ impl Drop for ServerConnection {
 }
 
 pub(crate) enum EndpointControlMessage {
-    Snapshot(Box<crate::protocol::ClientShellSnapshot>),
+    Snapshot(Box<crate::protocol::wire::ClientShellSnapshot>),
     Ignored,
 }
 
@@ -96,7 +96,7 @@ pub(crate) fn decode_endpoint_control(
     kind: &str,
     data: &str,
 ) -> Result<EndpointControlMessage, String> {
-    if kind == crate::protocol::endpoint::ENDPOINT_SNAPSHOT_KIND {
+    if kind == crate::protocol::wire::handshake::ENDPOINT_SNAPSHOT_KIND {
         let snapshot = serde_json::from_str(data)
             .map_err(|error| format!("invalid endpoint snapshot: {error}"))?;
         return Ok(EndpointControlMessage::Snapshot(Box::new(snapshot)));

@@ -68,7 +68,7 @@ impl App {
                 if let Some(label) = params.label {
                     if let Some(workspace) = self.state.workspaces.get_mut(index) {
                         workspace.set_custom_name(label);
-                        crate::logging::workspace_renamed(&workspace.id);
+                        crate::utils::logging::workspace_renamed(&workspace.id);
                     }
                 }
                 self.emit_workspace_open_events(index);
@@ -111,7 +111,7 @@ impl App {
             return workspace_not_found(id, &params.workspace_id);
         };
         ws.set_custom_name(params.label.clone());
-        crate::logging::workspace_renamed(&ws.id);
+        crate::utils::logging::workspace_renamed(&ws.id);
         self.schedule_session_save();
         self.emit_event(EventEnvelope {
             event: EventKind::WorkspaceRenamed,
@@ -216,9 +216,9 @@ pub(super) fn workspace_not_found(id: String, workspace_id: &str) -> String {
 mod tests {
     use super::*;
     use crate::{
-        api::schema::{ErrorResponse, SuccessResponse},
-        config::Config,
-        workspace::Workspace,
+        protocol::api::schema::{ErrorResponse, SuccessResponse},
+        server::workspaces::Workspace,
+        utils::config::Config,
     };
 
     // `new_cwd = follow` must anchor on the focused pane for every creation
@@ -227,7 +227,7 @@ mod tests {
     #[tokio::test]
     async fn workspace_create_follows_focused_pane_cwd_not_first_tab_root() {
         use super::super::test_support::{exiting_test_command, shutdown_test_runtimes};
-        use crate::config::ShellModeConfig;
+        use crate::utils::config::ShellModeConfig;
 
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
@@ -293,12 +293,12 @@ mod tests {
         ));
         let created_cwd = &app.state.workspaces[1].identity_cwd;
         assert_eq!(
-            crate::home_path::canonical_or_original(created_cwd),
-            crate::home_path::canonical_or_original(&focused_cwd)
+            crate::utils::home_path::canonical_or_original(created_cwd),
+            crate::utils::home_path::canonical_or_original(&focused_cwd)
         );
         assert_ne!(
-            crate::home_path::canonical_or_original(created_cwd),
-            crate::home_path::canonical_or_original(&root_cwd)
+            crate::utils::home_path::canonical_or_original(created_cwd),
+            crate::utils::home_path::canonical_or_original(&root_cwd)
         );
         shutdown_test_runtimes(&mut app);
         let _ = std::fs::remove_dir_all(&focused_cwd);
@@ -307,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn workspace_create_uses_explicit_source_workspace() {
         use super::super::test_support::{exiting_test_command, shutdown_test_runtimes};
-        use crate::config::ShellModeConfig;
+        use crate::utils::config::ShellModeConfig;
 
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
@@ -352,8 +352,8 @@ mod tests {
             ResponseResult::WorkspaceCreated { .. }
         ));
         assert_eq!(
-            crate::home_path::canonical_or_original(&app.state.workspaces[2].identity_cwd),
-            crate::home_path::canonical_or_original(&source_cwd)
+            crate::utils::home_path::canonical_or_original(&app.state.workspaces[2].identity_cwd),
+            crate::utils::home_path::canonical_or_original(&source_cwd)
         );
 
         let invalid = app.handle_workspace_create(
@@ -385,8 +385,8 @@ mod tests {
             ResponseResult::WorkspaceCreated { .. }
         ));
         assert_eq!(
-            crate::home_path::canonical_or_original(&app.state.workspaces[3].identity_cwd),
-            crate::home_path::canonical_or_original(&source_cwd)
+            crate::utils::home_path::canonical_or_original(&app.state.workspaces[3].identity_cwd),
+            crate::utils::home_path::canonical_or_original(&source_cwd)
         );
         shutdown_test_runtimes(&mut app);
         let _ = std::fs::remove_dir_all(&source_cwd);

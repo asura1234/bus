@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use super::{TerminalId, TerminalRuntime};
+use super::TerminalRuntime;
+use crate::utils::ids::TerminalId;
 
 /// Server-owned live terminal runtimes, keyed by durable terminal id.
 ///

@@ -13,7 +13,7 @@ fn client_input_roundtrip() {
 
 #[test]
 fn client_shell_pane_input_roundtrips_semantic_and_windows_keys() {
-    let windows_record = crate::input::WindowsKeyRecord {
+    let windows_record = crate::protocol::keys::WindowsKeyRecord {
         key_down: true,
         repeat_count: 1,
         virtual_key_code: 0x37,
@@ -57,12 +57,14 @@ fn client_shell_pane_input_roundtrips_semantic_and_windows_keys() {
     let ClientMessage::ClientShellPaneInput { events, .. } = decoded else {
         panic!("expected targeted semantic input");
     };
-    let crate::raw_input::RawInputEvent::Key(semantic) = events[0].to_raw_input_event() else {
+    let crate::protocol::keys::host::RawInputEvent::Key(semantic) = events[0].to_raw_input_event()
+    else {
         panic!("expected semantic key");
     };
     assert_eq!(semantic.shifted_codepoint, Some('L' as u32));
     assert_eq!(semantic.kind, crossterm::event::KeyEventKind::Release);
-    let crate::raw_input::RawInputEvent::Key(key) = events[1].to_raw_input_event() else {
+    let crate::protocol::keys::host::RawInputEvent::Key(key) = events[1].to_raw_input_event()
+    else {
         panic!("expected Windows key");
     };
     assert_eq!(key.code, crossterm::event::KeyCode::Char('7'));
@@ -81,7 +83,7 @@ fn client_shell_pane_input_reconstructs_windows_dead_key_without_native_source()
         generated_text: None,
         tracks_release: true,
         physical_key_id: Some(0x07),
-        windows_record: Some(crate::input::WindowsKeyRecord {
+        windows_record: Some(crate::protocol::keys::WindowsKeyRecord {
             key_down: true,
             repeat_count: 1,
             virtual_key_code: 0x36,
@@ -90,28 +92,28 @@ fn client_shell_pane_input_reconstructs_windows_dead_key_without_native_source()
             control_key_state: 0x0030,
         }),
     };
-    let crate::raw_input::RawInputEvent::Key(key) =
+    let crate::protocol::keys::host::RawInputEvent::Key(key) =
         event.to_raw_input_event_with_windows_source(false)
     else {
         panic!("pane dead key should remain a key");
     };
     assert!(key.is_windows_shift_dead_key());
     assert_eq!(key.windows_record(), None);
-    assert!(crate::input::encode_terminal_key(
+    assert!(crate::protocol::keys::encode_terminal_key(
         key,
-        crate::input::KeyboardProtocol::Kitty { flags: 1 },
+        crate::protocol::keys::KeyboardProtocol::Kitty { flags: 1 },
     )
     .is_empty());
 }
 
 #[test]
 fn client_shell_key_roundtrip_preserves_physical_generated_text_encoding() {
-    let key = crate::input::TerminalKey::new(
+    let key = crate::protocol::keys::TerminalKey::new(
         crossterm::event::KeyCode::Char('/'),
         crossterm::event::KeyModifiers::SHIFT,
     )
     .with_generated_text(Some("/".into()))
-    .with_windows_record(crate::input::WindowsKeyRecord {
+    .with_windows_record(crate::protocol::keys::WindowsKeyRecord {
         key_down: true,
         repeat_count: 1,
         virtual_key_code: 0x37,
@@ -127,14 +129,15 @@ fn client_shell_key_roundtrip_preserves_physical_generated_text_encoding() {
             ..
         }
     ));
-    let crate::raw_input::RawInputEvent::Key(roundtripped) = event.to_raw_input_event() else {
+    let crate::protocol::keys::host::RawInputEvent::Key(roundtripped) = event.to_raw_input_event()
+    else {
         panic!("pane key should remain a key");
     };
 
     assert!(roundtripped.has_physical_identity());
-    let encoded = crate::input::encode_terminal_key(
+    let encoded = crate::protocol::keys::encode_terminal_key(
         roundtripped,
-        crate::input::KeyboardProtocol::Kitty { flags: 8 },
+        crate::protocol::keys::KeyboardProtocol::Kitty { flags: 8 },
     );
     assert_ne!(encoded, b"/");
     assert!(encoded.starts_with(b"\x1b["));

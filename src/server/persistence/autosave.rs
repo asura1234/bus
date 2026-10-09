@@ -5,8 +5,8 @@ use crate::server::app::{App, SESSION_SAVE_DEBOUNCE};
 enum SessionSaveJob {
     Clear,
     Save {
-        snapshot: crate::persist::SessionSnapshot,
-        history: Option<crate::persist::SessionHistorySnapshot>,
+        snapshot: crate::server::persistence::SessionSnapshot,
+        history: Option<crate::server::persistence::SessionHistorySnapshot>,
     },
 }
 
@@ -41,7 +41,7 @@ impl App {
         if self.state.workspaces.is_empty() {
             SessionSaveJob::Clear
         } else {
-            let snapshot = crate::persist::capture(
+            let snapshot = crate::server::persistence::capture(
                 &self.state.workspaces,
                 &self.state.terminals,
                 &self.terminal_runtimes,
@@ -49,7 +49,10 @@ impl App {
                 self.state.selected,
             );
             let history = self.persist_pane_history.then(|| {
-                crate::persist::capture_history(&self.state.workspaces, &self.terminal_runtimes)
+                crate::server::persistence::capture_history(
+                    &self.state.workspaces,
+                    &self.terminal_runtimes,
+                )
             });
             SessionSaveJob::Save { snapshot, history }
         }
@@ -126,9 +129,9 @@ impl App {
 
 fn run_session_save_job(job: SessionSaveJob) {
     match job {
-        SessionSaveJob::Clear => crate::persist::clear(),
+        SessionSaveJob::Clear => crate::server::persistence::clear(),
         SessionSaveJob::Save { snapshot, history } => {
-            crate::persist::save(&snapshot, history.as_ref());
+            crate::server::persistence::save(&snapshot, history.as_ref());
         }
     }
 }

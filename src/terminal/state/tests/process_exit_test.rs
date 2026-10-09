@@ -1,14 +1,14 @@
 #[test]
 fn process_exit_clears_the_matching_persisted_session() {
     let mut terminal = test_terminal();
-    terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
-    terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
+    terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
         source: "herdr:codex".into(),
         agent: "codex".into(),
         session_ref: session_id("codex-1"),
     });
     terminal.set_detected_state_with_screen_signals_at(
-        Some(Agent::Codex),
+        Some(AgentKind::Codex),
         AgentState::Unknown,
         false,
         true,
@@ -20,14 +20,14 @@ fn process_exit_clears_the_matching_persisted_session() {
 #[test]
 fn process_exit_keeps_a_foreign_persisted_session() {
     let mut terminal = test_terminal();
-    terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
-    terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
+    terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
         source: "herdr:claude".into(),
         agent: "claude".into(),
         session_ref: session_id("claude-1"),
     });
     terminal.set_detected_state_with_screen_signals_at(
-        Some(Agent::Codex),
+        Some(AgentKind::Codex),
         AgentState::Unknown,
         false,
         true,

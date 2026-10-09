@@ -1,13 +1,13 @@
 use super::*;
 
-pub(super) fn rgb(r: u8, g: u8, b: u8) -> crate::ghostty::RgbColor {
-    crate::ghostty::RgbColor { r, g, b }
+pub(super) fn rgb(r: u8, g: u8, b: u8) -> crate::terminal::vt::RgbColor {
+    crate::terminal::vt::RgbColor { r, g, b }
 }
 
 pub(super) fn current_palette_color(
     pane: &GhosttyPaneTerminal,
     index: u8,
-) -> crate::ghostty::RgbColor {
+) -> crate::terminal::vt::RgbColor {
     let mut core = pane.core.lock().unwrap();
     let GhosttyPaneCore {
         terminal,
@@ -18,7 +18,9 @@ pub(super) fn current_palette_color(
     render_state.colors().unwrap().palette[usize::from(index)]
 }
 
-pub(super) fn current_default_colors(pane: &GhosttyPaneTerminal) -> crate::ghostty::RenderColors {
+pub(super) fn current_default_colors(
+    pane: &GhosttyPaneTerminal,
+) -> crate::terminal::vt::RenderColors {
     let mut core = pane.core.lock().unwrap();
     let GhosttyPaneCore {
         terminal,
@@ -31,7 +33,7 @@ pub(super) fn current_default_colors(pane: &GhosttyPaneTerminal) -> crate::ghost
 
 pub(super) fn expected_osc_rgb_response(
     command: &str,
-    color: crate::ghostty::RgbColor,
+    color: crate::terminal::vt::RgbColor,
     terminator: &str,
 ) -> Bytes {
     let r = u16::from(color.r) * 257;
@@ -50,7 +52,7 @@ pub(super) fn process_windows_powershell_prompt_bytes(
     enabled: bool,
 ) -> ProcessBytesResult {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(cols, rows, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(cols, rows, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     pane.set_windows_powershell_prompt_cwd_reporting(enabled);
     pane.process_pty_bytes(PaneId::from_raw(1), 0, bytes, &tx, |_| None)

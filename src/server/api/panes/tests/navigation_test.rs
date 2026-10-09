@@ -108,7 +108,7 @@ fn api_pane_swap_explicit_source_and_target_preserves_focus_and_returns_layout()
     let source = app.state.workspaces[0].tabs[0].root_pane;
     let target = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
     app.state.workspaces[0].tabs[0].layout.focus_pane(source);
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut app.state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         ratatui::layout::Rect::new(0, 0, 100, 20),
@@ -228,7 +228,7 @@ fn api_pane_resize_changes_target_ratio_without_changing_focus() {
     let root = app.state.workspaces[0].tabs[0].root_pane;
     let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
     app.state.workspaces[0].tabs[0].layout.focus_pane(right);
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut app.state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         ratatui::layout::Rect::new(0, 0, 100, 20),
@@ -270,7 +270,7 @@ fn api_pane_focus_direction_focuses_neighbor() {
     let root = app.state.workspaces[0].tabs[0].root_pane;
     let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
     app.state.workspaces[0].tabs[0].layout.focus_pane(root);
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut app.state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         ratatui::layout::Rect::new(0, 0, 100, 20),
@@ -348,7 +348,7 @@ fn api_pane_focus_direction_no_neighbor_is_noop() {
     let mut app = app_with_one_workspace();
     let root = app.state.workspaces[0].tabs[0].root_pane;
     app.state.workspaces[0].tabs[0].layout.focus_pane(root);
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut app.state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         ratatui::layout::Rect::new(0, 0, 100, 20),

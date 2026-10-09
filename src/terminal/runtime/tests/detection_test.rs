@@ -3,11 +3,11 @@ use super::*;
 #[test]
 fn foreground_shell_reports_process_exit_before_clearing_agent() {
     assert_eq!(
-        foreground_shell_agent_action(Some(Agent::Codex), None, true, false),
+        foreground_shell_agent_action(Some(AgentKind::Codex), None, true, false),
         ForegroundShellAgentAction::ReportProcessExit
     );
     assert_eq!(
-        foreground_shell_agent_action(Some(Agent::Codex), None, true, true),
+        foreground_shell_agent_action(Some(AgentKind::Codex), None, true, true),
         ForegroundShellAgentAction::ClearAgent
     );
 }
@@ -15,7 +15,7 @@ fn foreground_shell_reports_process_exit_before_clearing_agent() {
 #[test]
 fn same_agent_after_reported_exit_is_a_replacement_process() {
     assert_eq!(
-        foreground_shell_agent_action(Some(Agent::Pi), Some(Agent::Pi), false, true),
+        foreground_shell_agent_action(Some(AgentKind::Pi), Some(AgentKind::Pi), false, true),
         ForegroundShellAgentAction::ReportReplacementProcess
     );
 }
@@ -23,21 +23,21 @@ fn same_agent_after_reported_exit_is_a_replacement_process() {
 #[test]
 fn unknown_non_shell_foreground_job_is_not_immediate_clear_signal() {
     assert_eq!(
-        foreground_shell_agent_action(Some(Agent::Claude), None, false, false),
+        foreground_shell_agent_action(Some(AgentKind::Claude), None, false, false),
         ForegroundShellAgentAction::ObserveProbe
     );
 }
 
 #[tokio::test]
 async fn first_agent_acquisition_keeps_osc_evidence_replacement_clears_it() {
-    let runtime = PaneRuntime::test_with_screen_bytes(80, 24, b"");
+    let runtime = TerminalRuntime::test_with_screen_bytes(80, 24, b"");
     runtime.test_process_pty_bytes(b"\x1b]2;startup title\x1b\\\x1b]9;4;1;\x1b\\");
 
     clear_osc_evidence_for_agent_transition(&runtime.terminal, None);
     assert_eq!(runtime.terminal.agent_osc_title(), "startup title");
     assert_eq!(runtime.terminal.agent_osc_progress(), "4;1;");
 
-    clear_osc_evidence_for_agent_transition(&runtime.terminal, Some(Agent::Claude));
+    clear_osc_evidence_for_agent_transition(&runtime.terminal, Some(AgentKind::Claude));
     assert_eq!(runtime.terminal.agent_osc_title(), "");
     assert_eq!(runtime.terminal.agent_osc_progress(), "");
 }
@@ -45,7 +45,7 @@ async fn first_agent_acquisition_keeps_osc_evidence_replacement_clears_it() {
 #[test]
 fn reported_process_exit_clears_before_unknown_foreground_probe() {
     assert_eq!(
-        foreground_shell_agent_action(Some(Agent::Claude), None, false, true),
+        foreground_shell_agent_action(Some(AgentKind::Claude), None, false, true),
         ForegroundShellAgentAction::ClearAgent
     );
 }
@@ -53,7 +53,12 @@ fn reported_process_exit_clears_before_unknown_foreground_probe() {
 #[test]
 fn foreground_agent_job_is_not_clear_signal() {
     assert_eq!(
-        foreground_shell_agent_action(Some(Agent::Claude), Some(Agent::OpenCode), true, false,),
+        foreground_shell_agent_action(
+            Some(AgentKind::Claude),
+            Some(AgentKind::OpenCode),
+            true,
+            false,
+        ),
         ForegroundShellAgentAction::ObserveProbe
     );
 }
@@ -66,8 +71,10 @@ fn foreground_agent_hint_accepts_pane_shell_environment() {
     };
 
     assert_eq!(
-        agent_hint_for_foreground_job_members(&job, |pid| { (pid == 42).then_some(Agent::Claude) }),
-        Some(Agent::Claude)
+        agent_hint_for_foreground_job_members(&job, |pid| {
+            (pid == 42).then_some(AgentKind::Claude)
+        }),
+        Some(AgentKind::Claude)
     );
 }
 
@@ -82,8 +89,10 @@ fn foreground_agent_hint_accepts_non_leader_foreground_process_environment() {
     };
 
     assert_eq!(
-        agent_hint_for_foreground_job_members(&job, |pid| { (pid == 100).then_some(Agent::Codex) }),
-        Some(Agent::Codex)
+        agent_hint_for_foreground_job_members(&job, |pid| {
+            (pid == 100).then_some(AgentKind::Codex)
+        }),
+        Some(AgentKind::Codex)
     );
 }
 
@@ -99,10 +108,10 @@ fn foreground_agent_hint_wins_over_process_name_detection() {
         Some(99),
         Some(job),
         || None,
-        |pid| (pid == 99).then_some(Agent::Claude),
+        |pid| (pid == 99).then_some(AgentKind::Claude),
     );
 
-    assert_eq!(result.agent, Some(Agent::Claude));
+    assert_eq!(result.agent, Some(AgentKind::Claude));
     assert_eq!(result.process_name.as_deref(), Some("claude"));
 }
 
@@ -118,10 +127,10 @@ fn foreground_agent_hint_on_inherited_child_environment_is_authoritative() {
         Some(99),
         None,
         || Some(job),
-        |pid| (pid == 99).then_some(Agent::Claude),
+        |pid| (pid == 99).then_some(AgentKind::Claude),
     );
 
-    assert_eq!(result.agent, Some(Agent::Claude));
+    assert_eq!(result.agent, Some(AgentKind::Claude));
     assert_eq!(result.process_name.as_deref(), Some("claude"));
 }
 
@@ -140,10 +149,10 @@ fn non_leader_agent_hint_does_not_override_identifiable_leader() {
         Some(99),
         None,
         || Some(job),
-        |pid| (pid == 100).then_some(Agent::Claude),
+        |pid| (pid == 100).then_some(AgentKind::Claude),
     );
 
-    assert_eq!(result.agent, Some(Agent::Codex));
+    assert_eq!(result.agent, Some(AgentKind::Codex));
     assert_eq!(result.process_name.as_deref(), Some("codex"));
 }
 
@@ -162,10 +171,10 @@ fn non_leader_agent_hint_wins_when_leader_is_unidentified() {
         Some(99),
         None,
         || Some(job),
-        |pid| (pid == 100).then_some(Agent::Claude),
+        |pid| (pid == 100).then_some(AgentKind::Claude),
     );
 
-    assert_eq!(result.agent, Some(Agent::Claude));
+    assert_eq!(result.agent, Some(AgentKind::Claude));
     assert_eq!(result.process_name.as_deref(), Some("claude"));
 }
 
@@ -173,7 +182,7 @@ fn non_leader_agent_hint_wins_when_leader_is_unidentified() {
 fn windows_foreground_observation_schedule_preserves_safety_checks() {
     let before_safety_bound = PROCESS_RECHECK_IDENTIFIED - std::time::Duration::from_millis(1);
     let quiet = ProcessProbeInput {
-        current_agent: Some(Agent::Codex),
+        current_agent: Some(AgentKind::Codex),
         elapsed_since_process_check: before_safety_bound,
         ..process_probe_input()
     };
@@ -280,7 +289,7 @@ fn inferred_group_does_not_trigger_a_probe_on_every_tick() {
     let tracked = process_group_for_change_tracking(None, Some(300));
     assert_eq!(tracked, None);
     assert!(!should_probe_foreground_job(ProcessProbeInput {
-        current_agent: Some(Agent::Claude),
+        current_agent: Some(AgentKind::Claude),
         foreground_pgid: None,
         last_foreground_pgid: tracked,
         elapsed_since_process_check: std::time::Duration::from_millis(300),
@@ -291,12 +300,12 @@ fn inferred_group_does_not_trigger_a_probe_on_every_tick() {
 #[test]
 fn pending_shell_clear_and_restore_force_process_probes() {
     assert!(should_probe_foreground_job(ProcessProbeInput {
-        current_agent: Some(Agent::Codex),
+        current_agent: Some(AgentKind::Codex),
         pending_foreground_shell_clear: true,
         ..process_probe_input()
     }));
     assert!(should_probe_foreground_job(ProcessProbeInput {
-        current_agent: Some(Agent::Codex),
+        current_agent: Some(AgentKind::Codex),
         pending_restore_probe: true,
         ..process_probe_input()
     }));
@@ -396,7 +405,7 @@ fn content_change_does_not_start_acquisition_when_process_probe_has_other_signal
     let mut last_content_change_at = None;
 
     sync_content_change_acquisition(
-        Some(Agent::Codex),
+        Some(AgentKind::Codex),
         false,
         true,
         now,
@@ -441,13 +450,13 @@ fn content_change_restarts_stale_process_group_acquisition_window() {
 #[test]
 fn identified_agent_uses_shorter_safety_process_probe() {
     assert!(!should_probe_foreground_job(ProcessProbeInput {
-        current_agent: Some(Agent::Codex),
+        current_agent: Some(AgentKind::Codex),
         elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED
             - std::time::Duration::from_millis(1),
         ..process_probe_input()
     }));
     assert!(should_probe_foreground_job(ProcessProbeInput {
-        current_agent: Some(Agent::Codex),
+        current_agent: Some(AgentKind::Codex),
         elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
         ..process_probe_input()
     }));
@@ -456,7 +465,7 @@ fn identified_agent_uses_shorter_safety_process_probe() {
 #[test]
 fn identified_agent_probes_when_foreground_group_disappears() {
     assert!(should_probe_foreground_job(ProcessProbeInput {
-        current_agent: Some(Agent::Codex),
+        current_agent: Some(AgentKind::Codex),
         foreground_pgid: None,
         last_foreground_pgid: Some(42),
         elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED
@@ -468,7 +477,7 @@ fn identified_agent_probes_when_foreground_group_disappears() {
 #[test]
 fn stable_missing_foreground_group_uses_safety_process_probe() {
     assert!(!should_probe_foreground_job(ProcessProbeInput {
-        current_agent: Some(Agent::Codex),
+        current_agent: Some(AgentKind::Codex),
         foreground_pgid: None,
         last_foreground_pgid: None,
         elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED
@@ -476,7 +485,7 @@ fn stable_missing_foreground_group_uses_safety_process_probe() {
         ..process_probe_input()
     }));
     assert!(should_probe_foreground_job(ProcessProbeInput {
-        current_agent: Some(Agent::Codex),
+        current_agent: Some(AgentKind::Codex),
         foreground_pgid: None,
         last_foreground_pgid: None,
         elapsed_since_process_check: PROCESS_RECHECK_IDENTIFIED,
@@ -486,17 +495,17 @@ fn stable_missing_foreground_group_uses_safety_process_probe() {
 
 #[test]
 fn transient_process_miss_keeps_current_agent_detected() {
-    let mut presence = AgentDetectionPresence::from_agent(Some(Agent::Pi));
+    let mut presence = AgentDetectionPresence::from_agent(Some(AgentKind::Pi));
 
     let changed = presence.observe_process_probe(None);
 
     assert!(!changed, "one miss should not clear the detected agent");
-    assert_eq!(presence.current_agent(), Some(Agent::Pi));
+    assert_eq!(presence.current_agent(), Some(AgentKind::Pi));
 }
 
 #[test]
 fn agent_only_clears_after_confirmation_misses() {
-    let mut presence = AgentDetectionPresence::from_agent(Some(Agent::Pi));
+    let mut presence = AgentDetectionPresence::from_agent(Some(AgentKind::Pi));
 
     for attempt in 1..AGENT_MISS_CONFIRMATION_ATTEMPTS {
         let changed = presence.observe_process_probe(None);
@@ -504,7 +513,7 @@ fn agent_only_clears_after_confirmation_misses() {
             !changed,
             "miss {attempt} should stay in the confirmation window"
         );
-        assert_eq!(presence.current_agent(), Some(Agent::Pi));
+        assert_eq!(presence.current_agent(), Some(AgentKind::Pi));
     }
 
     let changed = presence.observe_process_probe(None);

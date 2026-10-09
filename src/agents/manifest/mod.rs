@@ -13,7 +13,7 @@ use self::loader::{bundled_loaded_manifest, bundled_manifest, loaded_manifest, o
 use self::loader::{load_manifest, LoadedManifest};
 use self::regions::region;
 use self::schema::ManifestRule;
-use super::{agent_label, parse_agent_label, Agent, AgentDetection, AgentState};
+use super::{agent_label, parse_agent_label, AgentDetection, AgentKind, AgentState};
 
 /// Input to the detection engine, carrying the screen snapshot plus any
 /// OSC-derived strings captured from the terminal title / progress sequences.
@@ -26,7 +26,7 @@ pub struct DetectionInput<'a> {
     pub osc_progress: &'a str,
 }
 
-pub fn detect_with_osc(agent: Agent, input: DetectionInput<'_>) -> AgentDetection {
+pub fn detect_with_osc(agent: AgentKind, input: DetectionInput<'_>) -> AgentDetection {
     let Some(loaded) = load_manifest(agent) else {
         return idle_fallback();
     };
@@ -50,7 +50,7 @@ fn evaluate_loaded_manifest(input: DetectionInput<'_>, loaded: &LoadedManifest) 
     }
 }
 
-pub fn should_skip_state_update(agent: Agent, screen_content: &str) -> bool {
+pub fn should_skip_state_update(agent: AgentKind, screen_content: &str) -> bool {
     detect_with_osc(
         agent,
         DetectionInput {

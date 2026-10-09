@@ -5,7 +5,7 @@ fn pane_exit_emits_layout_updated_when_tab_survives() {
     let event_hub = crate::server::api::EventHub::default();
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -17,7 +17,7 @@ fn pane_exit_emits_layout_updated_when_tab_survives() {
     app.state.ensure_test_terminals();
     let tab_id = app.public_tab_id(0, 0).unwrap();
 
-    app.handle_internal_event(AppEvent::PaneDied {
+    app.handle_internal_event(TerminalEvent::PaneDied {
         pane_id: dead_pane,
         exit_reason: crate::platform::ChildExitReason::Exited,
     });
@@ -47,7 +47,7 @@ fn idle_agent_exit_emits_release_event_without_a_state_change() {
         let event_hub = crate::server::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
-            &crate::config::Config::default(),
+            &crate::utils::config::Config::default(),
             crate::server::app::AppPolicy::TEST,
             None,
             api_rx,
@@ -59,14 +59,14 @@ fn idle_agent_exit_emits_release_event_without_a_state_change() {
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
-        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.set_detected_state(Some(AgentKind::Pi), AgentState::Idle);
         if let Some(agent_name) = agent_name {
             terminal.set_agent_name(agent_name.into());
         }
 
-        app.handle_internal_event(AppEvent::StateChanged {
+        app.handle_internal_event(TerminalEvent::StateChanged {
             pane_id,
-            agent: Some(Agent::Pi),
+            agent: Some(AgentKind::Pi),
             state: AgentState::Idle,
             visible_blocker: false,
             process_exited: true,
@@ -90,7 +90,7 @@ fn overlay_exit_layout_updated_uses_restored_zoom_state() {
     let event_hub = crate::server::api::EventHub::default();
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -117,7 +117,7 @@ fn overlay_exit_layout_updated_uses_restored_zoom_state() {
         },
     );
 
-    app.handle_internal_event(AppEvent::PaneDied {
+    app.handle_internal_event(TerminalEvent::PaneDied {
         pane_id: overlay_pane,
         exit_reason: crate::platform::ChildExitReason::Exited,
     });
@@ -140,7 +140,7 @@ fn overlay_exit_layout_updated_uses_restored_zoom_state() {
 fn terminal_delivery_does_not_refresh_existing_targeted_toast() {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -158,11 +158,11 @@ fn terminal_delivery_does_not_refresh_existing_targeted_toast() {
     app.state.active = None;
     app.state.selected = 0;
     app.state.mode = Mode::Terminal;
-    app.state.toast_config.delivery = crate::config::ToastDelivery::Terminal;
+    app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Terminal;
 
-    app.handle_internal_event(AppEvent::StateChanged {
+    app.handle_internal_event(TerminalEvent::StateChanged {
         pane_id: root,
-        agent: Some(Agent::Codex),
+        agent: Some(AgentKind::Codex),
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
@@ -179,9 +179,9 @@ fn terminal_delivery_does_not_refresh_existing_targeted_toast() {
         }),
     });
 
-    app.handle_internal_event(AppEvent::StateChanged {
+    app.handle_internal_event(TerminalEvent::StateChanged {
         pane_id: root,
-        agent: Some(Agent::Codex),
+        agent: Some(AgentKind::Codex),
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,

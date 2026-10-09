@@ -5,7 +5,7 @@ use super::{EffectivePresentation, TerminalState, TerminalStateMutation};
 impl TerminalState {
     pub fn set_persisted_agent_session(
         &mut self,
-        session: crate::agent_resume::PersistedAgentSession,
+        session: crate::agents::resume::catalog::PersistedAgentSession,
     ) {
         self.persisted_agent_session = Some(session);
     }
@@ -14,12 +14,12 @@ impl TerminalState {
         &mut self,
         source: String,
         agent_label: String,
-        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        session_ref: Option<crate::agents::resume::catalog::AgentSessionRef>,
         seq: Option<u64>,
         session_start_source: Option<String>,
     ) -> Option<TerminalStateMutation> {
         let session_ref = session_ref?;
-        let known_agent = crate::detect::parse_agent_label(&agent_label);
+        let known_agent = crate::agents::parse_agent_label(&agent_label);
         let process_present = known_agent.is_some()
             && self.detected_agent == known_agent
             && self.recent_agent_process_exit.is_none();
@@ -35,14 +35,16 @@ impl TerminalState {
             session_start_source.as_deref(),
         );
         let replacing_identity_only_session =
-            crate::detect::session_identity_only_integration(&source, &agent_label)
+            crate::agents::session_identity_only_integration(&source, &agent_label)
                 && session_replacement_allowed
                 && self.current_session_identity_for_persistence().is_some_and(
                     |(current_source, current_agent, current_kind, current_value)| {
                         current_source == source
                             && current_agent == agent_label
-                            && current_kind == crate::agent_resume::AgentSessionRefKind::Id
-                            && session_ref.kind == crate::agent_resume::AgentSessionRefKind::Id
+                            && current_kind
+                                == crate::agents::resume::catalog::AgentSessionRefKind::Id
+                            && session_ref.kind
+                                == crate::agents::resume::catalog::AgentSessionRefKind::Id
                             && current_value != session_ref.value
                     },
                 );
@@ -79,7 +81,7 @@ impl TerminalState {
         let previous_presentation = EffectivePresentation::default();
         let previous_session = self.current_session_identity_for_persistence();
         self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
-        let persisted_session = crate::agent_resume::PersistedAgentSession {
+        let persisted_session = crate::agents::resume::catalog::PersistedAgentSession {
             source,
             agent: agent_label,
             session_ref,
@@ -106,7 +108,7 @@ impl TerminalState {
         let Some(detected_agent) = self.detected_agent else {
             return false;
         };
-        crate::detect::parse_agent_label(agent_label)
+        crate::agents::parse_agent_label(agent_label)
             .is_some_and(|reported| reported != detected_agent)
     }
 
@@ -114,7 +116,7 @@ impl TerminalState {
         &self,
         source: &str,
         agent_label: &str,
-        session_ref: &crate::agent_resume::AgentSessionRef,
+        session_ref: &crate::agents::resume::catalog::AgentSessionRef,
         session_start_source: Option<&str>,
     ) -> bool {
         Self::session_start_source_is_recognized(session_start_source)
@@ -125,13 +127,13 @@ impl TerminalState {
         &self,
         source: &str,
         agent_label: &str,
-        session_ref: &crate::agent_resume::AgentSessionRef,
+        session_ref: &crate::agents::resume::catalog::AgentSessionRef,
     ) -> bool {
         let Some(detected_agent) = self.detected_agent else {
             return false;
         };
-        crate::detect::parse_agent_label(agent_label) == Some(detected_agent)
-            && crate::agent_resume::plan(source, agent_label, session_ref).is_some()
+        crate::agents::parse_agent_label(agent_label) == Some(detected_agent)
+            && crate::agents::resume::catalog::plan(source, agent_label, session_ref).is_some()
     }
 
     fn accept_session_report(&mut self, source: &str, seq: Option<u64>) -> bool {
@@ -155,7 +157,7 @@ impl TerminalState {
     ) -> Option<(
         String,
         String,
-        crate::agent_resume::AgentSessionRefKind,
+        crate::agents::resume::catalog::AgentSessionRefKind,
         String,
     )> {
         self.persisted_agent_session.as_ref().map(|session| {
@@ -180,22 +182,22 @@ impl TerminalState {
         &self,
         source: &str,
         agent_label: &str,
-        session_ref: &crate::agent_resume::AgentSessionRef,
+        session_ref: &crate::agents::resume::catalog::AgentSessionRef,
         session_start_source: Option<&str>,
-    ) -> Option<crate::agent_resume::AgentSessionRef> {
+    ) -> Option<crate::agents::resume::catalog::AgentSessionRef> {
         self.current_session_identity_for_persistence().and_then(
             |(current_source, current_agent, current_kind, current_value)| {
                 (current_source == source
                     && current_agent == agent_label
-                    && current_kind == crate::agent_resume::AgentSessionRefKind::Id
-                    && session_ref.kind == crate::agent_resume::AgentSessionRefKind::Id
+                    && current_kind == crate::agents::resume::catalog::AgentSessionRefKind::Id
+                    && session_ref.kind == crate::agents::resume::catalog::AgentSessionRefKind::Id
                     && current_value != session_ref.value
                     && !Self::session_report_allows_session_replacement(
                         source,
                         agent_label,
                         session_start_source,
                     ))
-                .then_some(crate::agent_resume::AgentSessionRef {
+                .then_some(crate::agents::resume::catalog::AgentSessionRef {
                     kind: current_kind,
                     value: current_value,
                 })

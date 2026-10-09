@@ -3,17 +3,10 @@
 //! - `app_state.rs` — AppState, Mode, and pure data structs
 //! - `terminals/events.rs` — state mutations (testable without PTYs/async)
 
-// Keep the old app item paths while each implementation has one server-owned home.
-pub(crate) use super::api::input_encoding as api_helpers;
 #[cfg(test)]
 pub(crate) use super::api::test_support::exiting_test_command;
-pub(crate) use super::app_state as state;
-pub(crate) use super::terminals::events as actions;
 #[cfg(test)]
 use super::workspaces::cwd as creation;
-#[cfg(test)]
-use super::workspaces::ids as terminal_targets;
-pub(crate) use api_helpers::limit_snapshot_lines;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,20 +20,20 @@ use ratatui::layout::Rect;
 use tokio::sync::{mpsc, Notify};
 use tracing::info;
 
-use crate::config::Config;
-use crate::events::AppEvent;
+use crate::terminal::events::TerminalEvent;
+use crate::utils::config::Config;
 
 use super::app_settings::{agent_panel_sort_from_config, parse_cjk_ime_agents};
+pub use crate::server::app_state::{AppState, Mode, ToastKind};
+use crate::utils::theme::resolve_effective_theme;
 use crate::utils::theme::theme_runtime_config;
-pub(crate) use crate::utils::theme::{client_palette_for_appearance, resolve_effective_theme};
-pub use state::{AppState, Mode, ToastKind, ViewState};
 
 /// Full application: AppState + runtime concerns (event channels, async I/O).
 #[derive(Debug, Clone)]
 pub(crate) struct OverlayPaneState {
     pub(super) ws_idx: usize,
     pub(super) tab_idx: usize,
-    pub(super) previous_focus: crate::layout::PaneId,
+    pub(super) previous_focus: crate::utils::ids::PaneId,
     pub(super) previous_zoomed: bool,
     pub(super) temp_files: Vec<std::path::PathBuf>,
 }
@@ -68,32 +61,32 @@ pub struct App {
     pub state: AppState,
     pub(crate) pixel_mouse_available: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
-    pub event_tx: mpsc::Sender<AppEvent>,
-    pub(crate) event_rx: mpsc::Receiver<AppEvent>,
-    pub(crate) api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
-    pub(crate) event_hub: crate::api::EventHub,
-    pub(crate) last_focus: Option<(usize, crate::layout::PaneId)>,
+    pub event_tx: mpsc::Sender<TerminalEvent>,
+    pub(crate) event_rx: mpsc::Receiver<TerminalEvent>,
+    pub(crate) api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::server::api::ApiRequestMessage>,
+    pub(crate) event_hub: crate::server::api::EventHub,
+    pub(crate) last_focus: Option<(usize, crate::utils::ids::PaneId)>,
     pub(crate) policy: AppPolicy,
     pub(crate) config_diagnostic_deadline: Option<Instant>,
     pub(crate) toast_deadline: Option<Instant>,
     pub(crate) last_api_notification_at: Option<Instant>,
-    pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
+    pub(crate) loaded_host_cursor: crate::utils::config::HostCursorModeConfig,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
     pub(super) pane_exit_checkpoint_pending: bool,
     pub(crate) detached_process_children: Vec<std::process::Child>,
     /// Parsed `ui.window_title` plus the hostname resolved when it was applied.
-    pub(super) window_title_template: Option<(crate::config::WindowTitleTemplate, String)>,
+    pub(super) window_title_template: Option<(crate::utils::config::WindowTitleTemplate, String)>,
     pub(crate) persist_pane_history: bool,
     /// Last render-loop attempt, including a throttled hidden-only PTY skip.
     pub(crate) last_render_at: Option<Instant>,
     /// Last attempt that could update a connected presentation surface.
     pub(crate) last_presentation_at: Option<Instant>,
     pub render_notify: Arc<Notify>,
-    pub(crate) render_dirty: Arc<crate::render_signal::RenderSignal>,
+    pub(crate) render_dirty: Arc<crate::utils::render::signal::RenderSignal>,
     pub(crate) full_redraw_pending: bool,
-    pub(crate) overlay_panes: HashMap<crate::layout::PaneId, OverlayPaneState>,
+    pub(crate) overlay_panes: HashMap<crate::utils::ids::PaneId, OverlayPaneState>,
     pub(crate) config_reloaded_from_disk: bool,
 }
 
@@ -105,26 +98,26 @@ impl App {
         config: &Config,
         policy: AppPolicy,
         config_diagnostic: Option<String>,
-        api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
-        event_hub: crate::api::EventHub,
+        api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::server::api::ApiRequestMessage>,
+        event_hub: crate::server::api::EventHub,
     ) -> Self {
-        crate::kitty_graphics::set_enabled(config.kitty_graphics_enabled());
-        let (event_tx, event_rx) = mpsc::channel::<AppEvent>(APP_EVENT_CHANNEL_CAPACITY);
+        crate::protocol::kitty::set_enabled(config.kitty_graphics_enabled());
+        let (event_tx, event_rx) = mpsc::channel::<TerminalEvent>(APP_EVENT_CHANNEL_CAPACITY);
         let render_notify = Arc::new(Notify::new());
-        let render_dirty = Arc::new(crate::render_signal::RenderSignal::new());
+        let render_dirty = Arc::new(crate::utils::render::signal::RenderSignal::new());
 
         // Try to restore previous session
         let mut restored_terminals = std::collections::HashMap::new();
         let mut restored_terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
         let (workspaces, active, selected) = if !policy.restore_session {
             (Vec::new(), None, 0)
-        } else if let Some(snap) = crate::persist::load() {
+        } else if let Some(snap) = crate::server::persistence::load() {
             let history = config
                 .experimental
                 .pane_history
-                .then(crate::persist::load_history)
+                .then(crate::server::persistence::load_history)
                 .flatten();
-            let restored = crate::persist::restore(
+            let restored = crate::server::persistence::restore(
                 &snap,
                 history.as_ref(),
                 config.session.resume_agents_on_restore,
@@ -138,7 +131,7 @@ impl App {
                     rows: 24,
                     cols: 80,
                     scrollback_limit_bytes: config.advanced.scrollback_limit_bytes,
-                    shell_config: crate::terminal::runtime::PaneShellConfig::new(
+                    shell_config: crate::terminal::runtime::spawn::PaneShellConfig::new(
                         &config.terminal.default_shell,
                         config.terminal.shell_mode,
                     ),
@@ -150,10 +143,10 @@ impl App {
             restored_terminals = terminals;
             restored_terminal_runtimes = terminal_runtimes.into();
             if ws.is_empty() {
-                crate::logging::session_restored(0, "empty");
+                crate::utils::logging::session_restored(0, "empty");
                 (Vec::new(), None, 0)
             } else {
-                crate::logging::session_restored(ws.len(), "ok");
+                crate::utils::logging::session_restored(ws.len(), "ok");
                 let active = snap.active.filter(|&i| i < ws.len());
                 let selected = snap.selected.min(ws.len().saturating_sub(1));
                 (ws, active, selected)
@@ -224,9 +217,9 @@ impl App {
         );
 
         let mode = if active.is_some() {
-            state::Mode::Terminal
+            crate::server::app_state::Mode::Terminal
         } else {
-            state::Mode::Navigate
+            crate::server::app_state::Mode::Navigate
         };
 
         let theme_runtime = theme_runtime_config(config, true);
@@ -243,7 +236,7 @@ impl App {
             mode,
             should_quit: false,
             request_client_config_reload: false,
-            view: state::ViewState {
+            view: crate::server::app_state::ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),
             },
@@ -276,8 +269,8 @@ impl App {
             theme_runtime,
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
-            host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
-            host_cell_size: crate::kitty_graphics::HostCellSize::default(),
+            host_terminal_theme: crate::utils::theme::color::TerminalTheme::default(),
+            host_cell_size: crate::protocol::kitty::HostCellSize::default(),
             session_dirty: false,
             terminal_runtime_shutdowns: Vec::new(),
         }

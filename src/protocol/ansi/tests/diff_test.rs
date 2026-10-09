@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::protocol::{CellData, CursorState};
+use crate::protocol::wire::{CellData, CursorState};
 
 const WIDE_GRAPHEME: &str = "💡";
 
@@ -106,8 +106,11 @@ fn build_sgr_resets_previous_modifiers_when_cell_is_plain() {
 
 #[test]
 fn build_sgr_preserves_curly_underline_style() {
-    let modifier = crate::protocol::modifier_to_u16(
-        crate::protocol::modifier_with_underline_style(ratatui::style::Modifier::UNDERLINED, 3),
+    let modifier = crate::protocol::wire::modifier_to_u16(
+        crate::protocol::wire::modifier_with_underline_style(
+            ratatui::style::Modifier::UNDERLINED,
+            3,
+        ),
     );
 
     assert_eq!(

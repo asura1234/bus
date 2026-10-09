@@ -7,16 +7,16 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
 
     let light = crate::utils::theme::client_palette_for_appearance(
         &state.config.theme_runtime,
-        crate::terminal_theme::HostAppearance::Light,
+        crate::utils::theme::color::HostAppearance::Light,
     );
     let dark = crate::utils::theme::client_palette_for_appearance(
         &state.config.theme_runtime,
-        crate::terminal_theme::HostAppearance::Dark,
+        crate::utils::theme::color::HostAppearance::Dark,
     );
 
     let inferred = state.handle_raw_events(vec![RawInputEvent::HostDefaultColor {
-        kind: crate::terminal_theme::DefaultColorKind::Background,
-        color: crate::terminal_theme::RgbColor {
+        kind: crate::utils::theme::color::DefaultColorKind::Background,
+        color: crate::utils::theme::color::RgbColor {
             r: 255,
             g: 255,
             b: 255,
@@ -26,42 +26,42 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
     assert!(matches!(
         inferred.requests.as_slice(),
         [ClientMessage::ClientShellHostTheme {
-            update: crate::protocol::ClientHostThemeUpdate::DefaultColor {
-                kind: crate::protocol::ClientHostDefaultColorKind::Background,
+            update: crate::protocol::wire::ClientHostThemeUpdate::DefaultColor {
+                kind: crate::protocol::wire::ClientHostDefaultColorKind::Background,
                 ..
             }
         }]
     ));
     assert_eq!(
         state.host_appearance,
-        Some(crate::terminal_theme::HostAppearance::Light)
+        Some(crate::utils::theme::color::HostAppearance::Light)
     );
     assert!(!state.host_appearance_explicit);
     assert_eq!(state.config.palette, light);
 
     let explicit = state.handle_raw_events(vec![RawInputEvent::HostColorSchemeChanged(
-        crate::terminal_theme::HostAppearance::Dark,
+        crate::utils::theme::color::HostAppearance::Dark,
     )]);
     assert!(explicit.repaint);
     assert!(explicit.query_host_theme);
     assert!(matches!(
         explicit.requests.as_slice(),
         [ClientMessage::ClientShellHostTheme {
-            update: crate::protocol::ClientHostThemeUpdate::Appearance(
-                crate::protocol::ClientHostAppearance::Dark
+            update: crate::protocol::wire::ClientHostThemeUpdate::Appearance(
+                crate::protocol::wire::ClientHostAppearance::Dark
             )
         }]
     ));
     assert_eq!(
         state.host_appearance,
-        Some(crate::terminal_theme::HostAppearance::Dark)
+        Some(crate::utils::theme::color::HostAppearance::Dark)
     );
     assert!(state.host_appearance_explicit);
     assert_eq!(state.config.palette, dark);
 
     let ignored = state.handle_raw_events(vec![RawInputEvent::HostDefaultColor {
-        kind: crate::terminal_theme::DefaultColorKind::Background,
-        color: crate::terminal_theme::RgbColor {
+        kind: crate::utils::theme::color::DefaultColorKind::Background,
+        color: crate::utils::theme::color::RgbColor {
             r: 255,
             g: 255,
             b: 255,
@@ -71,7 +71,7 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
     assert_eq!(ignored.requests.len(), 1);
     assert_eq!(
         state.host_appearance,
-        Some(crate::terminal_theme::HostAppearance::Dark)
+        Some(crate::utils::theme::color::HostAppearance::Dark)
     );
     assert_eq!(state.config.palette, dark);
 }
@@ -89,7 +89,7 @@ fn full_host_palette_response_is_sent_as_one_theme_update() {
     let outcome = state.handle_input_bytes(responses.as_bytes());
 
     let [ClientMessage::ClientShellHostTheme {
-        update: crate::protocol::ClientHostThemeUpdate::PaletteColors(colors),
+        update: crate::protocol::wire::ClientHostThemeUpdate::PaletteColors(colors),
     }] = outcome.requests.as_slice()
     else {
         panic!(
@@ -127,10 +127,12 @@ fn delayed_link_fallback_does_not_replay_against_changed_geometry() {
     let (_, actions) = state.handle_endpoint_result(
         "boot-1",
         &request_id,
-        Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
-            url: None,
-            handled: false,
-        }),
+        Ok(
+            crate::protocol::api::schema::ResponseResult::PaneLinkActivated {
+                url: None,
+                handled: false,
+            },
+        ),
     );
 
     assert!(actions.is_empty());
@@ -142,8 +144,8 @@ fn physical_release_uses_the_leased_press_code_with_current_modifiers() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
-    let press = crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
-        .with_windows_record(crate::input::WindowsKeyRecord {
+    let press = crate::protocol::keys::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
+        .with_windows_record(crate::protocol::keys::WindowsKeyRecord {
             key_down: true,
             repeat_count: 1,
             virtual_key_code: 0x58,
@@ -152,9 +154,9 @@ fn physical_release_uses_the_leased_press_code_with_current_modifiers() {
             control_key_state: 0,
         });
     state.handle_raw_events(vec![RawInputEvent::Key(press)]);
-    let release = crate::input::TerminalKey::new(KeyCode::Char('z'), KeyModifiers::SHIFT)
+    let release = crate::protocol::keys::TerminalKey::new(KeyCode::Char('z'), KeyModifiers::SHIFT)
         .with_kind(crossterm::event::KeyEventKind::Release)
-        .with_windows_record(crate::input::WindowsKeyRecord {
+        .with_windows_record(crate::protocol::keys::WindowsKeyRecord {
             key_down: false,
             repeat_count: 1,
             virtual_key_code: 0x5a,
@@ -171,9 +173,9 @@ fn physical_release_uses_the_leased_press_code_with_current_modifiers() {
             if matches!(
                 &events[..],
                 [ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('x'),
+                    code: crate::protocol::wire::ClientKeyCode::Char('x'),
                     modifiers,
-                    kind: crate::protocol::ClientKeyKind::Release,
+                    kind: crate::protocol::wire::ClientKeyKind::Release,
                     physical_key_id: Some(0x2d),
                     ..
                 }] if *modifiers == KeyModifiers::SHIFT.bits()
@@ -191,7 +193,7 @@ fn pixel_host_reports_use_cells_without_target_pixel_mode_and_release_outside() 
     state.compose(106, 20).expect("composed frame");
     let pane = state.hits.panes[0].clone();
     let geometry =
-        crate::input::mouse::HostGeometry::new(106, 20, 1060, 400).expect("host geometry");
+        crate::protocol::keys::mouse::HostGeometry::new(106, 20, 1060, 400).expect("host geometry");
     let x = u32::from(pane.inner_rect.x) * 10 + 21;
     let y = u32::from(pane.inner_rect.y) * 20 + 21;
 
@@ -217,8 +219,8 @@ fn pixel_host_reports_use_cells_without_target_pixel_mode_and_release_outside() 
                 && matches!(
                     &events[..],
                     [ClientPaneInputEvent::Mouse {
-                        kind: crate::protocol::ClientMouseKind::Up(
-                            crate::protocol::ClientMouseButton::Left
+                        kind: crate::protocol::wire::ClientMouseKind::Up(
+                            crate::protocol::wire::ClientMouseButton::Left
                         ),
                         position: ClientMousePosition::Cell { .. },
                         ..
@@ -244,7 +246,7 @@ fn shell_forwards_all_keys_to_the_focused_pane() {
     assert!(matches!(
         &events[0],
         ClientPaneInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('h'),
+            code: crate::protocol::wire::ClientKeyCode::Char('h'),
             generated_text: Some(text),
             ..
         } if text == "h"
@@ -258,9 +260,9 @@ fn shell_forwards_all_keys_to_the_focused_pane() {
     assert!(matches!(
         &events[..],
         [ClientPaneInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('c'),
+            code: crate::protocol::wire::ClientKeyCode::Char('c'),
             modifiers,
-            kind: crate::protocol::ClientKeyKind::Press,
+            kind: crate::protocol::wire::ClientKeyKind::Press,
             ..
         }] if *modifiers == KeyModifiers::CONTROL.bits()
     ));
@@ -272,7 +274,7 @@ fn shell_forwards_all_keys_to_the_focused_pane() {
     assert!(matches!(
         &events[..],
         [ClientPaneInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('x'),
+            code: crate::protocol::wire::ClientKeyCode::Char('x'),
             modifiers,
             ..
         }] if *modifiers == KeyModifiers::ALT.bits()
@@ -311,7 +313,7 @@ fn pane_key_release_keeps_the_press_target() {
     assert!(matches!(
         &events[..],
         [ClientPaneInputEvent::Key {
-            kind: crate::protocol::ClientKeyKind::Release,
+            kind: crate::protocol::wire::ClientKeyKind::Release,
             ..
         }]
     ));
@@ -329,8 +331,11 @@ fn styled_client_composition_preserves_pane_hyperlinks() {
         &[((0, 0), "L".into(), "https://example.test".into())],
     );
     state.set_pane_surface(pane_surface);
-    let mut selection =
-        crate::selection::Selection::absolute_range("pane_1".to_owned(), (0, 0), (0, 1));
+    let mut selection = crate::utils::text::selection::Selection::absolute_range(
+        "pane_1".to_owned(),
+        (0, 0),
+        (0, 1),
+    );
     assert!(selection.finish());
     state.selection = Some(selection);
     let frame = state.compose(106, 20).expect("composed frame");

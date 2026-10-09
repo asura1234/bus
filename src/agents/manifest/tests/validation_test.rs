@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn all_bundled_manifests_parse_and_validate() {
-    for agent in Agent::SCREEN_MANIFEST_AGENTS {
+    for agent in AgentKind::SCREEN_MANIFEST_AGENTS {
         assert!(
             bundled_manifest(agent).is_some(),
             "missing bundled manifest for {}",

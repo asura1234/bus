@@ -32,9 +32,9 @@ fn double_click_word_bounds_cover_terminal_text() {
             "/tmp/foo-bar/baz_qux/",
         ),
         (
-            "open ./src/app/actions.rs:795",
-            "actions",
-            "./src/app/actions.rs:795",
+            "open ./src/server/terminals/events.rs:795",
+            "events",
+            "./src/server/terminals/events.rs:795",
         ),
         (
             "open ../herdr-worktrees/issue-1",
@@ -42,9 +42,9 @@ fn double_click_word_bounds_cover_terminal_text() {
             "../herdr-worktrees/issue-1",
         ),
         (
-            "edit src/app/actions.rs,then",
-            "actions",
-            "src/app/actions.rs",
+            "edit src/server/terminals/events.rs,then",
+            "events",
+            "src/server/terminals/events.rs",
         ),
         (
             "cat \"/tmp/build output/log.txt\"",
@@ -72,9 +72,9 @@ fn double_click_word_bounds_cover_terminal_text() {
         ("refs #123 and @owner/name", "owner", "@owner/name"),
         ("cargo test --package=herdr", "--package", "--package=herdr"),
         (
-            "cargo test app::actions::tests",
-            "app::",
-            "app::actions::tests",
+            "cargo test server::terminals::events::tests",
+            "server::",
+            "server::terminals::events::tests",
         ),
         (
             "image ghcr.io/org/app:latest",

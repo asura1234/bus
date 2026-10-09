@@ -5,7 +5,7 @@ use ratatui::{
     widgets::Borders,
 };
 
-pub use crate::utils::ids::PaneId;
+use crate::utils::ids::PaneId;
 
 mod geometry;
 mod nav;

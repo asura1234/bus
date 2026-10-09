@@ -85,7 +85,7 @@ pub(crate) enum HostSourceKey {
     },
     ClientSurface {
         scope: String,
-        source: crate::protocol::SurfaceGraphicsSource,
+        source: crate::protocol::wire::SurfaceGraphicsSource,
     },
 }
 

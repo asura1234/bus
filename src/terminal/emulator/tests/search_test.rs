@@ -39,8 +39,8 @@ fn retained_text_search_skips_wide_spacer_heads_at_soft_wraps() {
         .chars()
         .map(|ch| text_cell(&ch.to_string()))
         .collect::<Vec<_>>();
-    first.push(crate::ghostty::ScreenTextCell {
-        wide: crate::ghostty::CellWide::SpacerHead,
+    first.push(crate::terminal::vt::ScreenTextCell {
+        wide: crate::terminal::vt::CellWide::SpacerHead,
         graphemes: Vec::new(),
     });
     let mut second = wide_text_cells("界").to_vec();

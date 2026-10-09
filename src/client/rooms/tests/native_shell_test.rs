@@ -4,7 +4,9 @@ use super::*;
 fn native_shell_composes_bus_before_any_server_frame_and_uses_same_resize_geometry() {
     let (ui, _, _) = fixture();
     let mut shell = crate::client::compositor::ClientShellState::new(
-        crate::client::compositor::ClientShellConfig::from_config(&crate::config::Config::default()),
+        crate::client::compositor::ClientShellConfig::from_config(
+            &crate::utils::config::Config::default(),
+        ),
     );
     shell.bus = Some(ui);
     let frame = shell.compose(100, 30).unwrap();
@@ -20,7 +22,9 @@ fn native_terminal_bytes_are_held_during_focus_then_forwarded_to_matching_pane()
     let (mut ui, _, agent) = fixture();
     ui.open_terminal(agent);
     let mut shell = crate::client::compositor::ClientShellState::new(
-        crate::client::compositor::ClientShellConfig::from_config(&crate::config::Config::default()),
+        crate::client::compositor::ClientShellConfig::from_config(
+            &crate::utils::config::Config::default(),
+        ),
     );
     shell.bus = Some(ui);
     shell.snapshot = Some(Box::new(crate::client::compositor::tests::snapshot()));
@@ -36,7 +40,7 @@ fn native_terminal_bytes_are_held_during_focus_then_forwarded_to_matching_pane()
         });
     shell.compose(100, 30);
     let outcome = shell.handle_input_bytes(b"1\r");
-    assert!(outcome.requests.iter().any(|r|matches!(r,crate::protocol::ClientMessage::ClientShellPaneInput {pane_id,..} if pane_id=="pane_1")));
+    assert!(outcome.requests.iter().any(|r|matches!(r,crate::protocol::wire::ClientMessage::ClientShellPaneInput {pane_id,..} if pane_id=="pane_1")));
     let frame = shell.compose(100, 30).unwrap();
     assert_eq!(frame.cursor.as_ref().unwrap().x, 29);
     let text: String = frame.cells.iter().map(|c| c.symbol.as_str()).collect();
@@ -53,7 +57,9 @@ fn working_agent_projection_updates_hold_native_terminal_instead_of_flashing_pla
         pane_id: "pane_1".into(),
     });
     let mut shell = crate::client::compositor::ClientShellState::new(
-        crate::client::compositor::ClientShellConfig::from_config(&crate::config::Config::default()),
+        crate::client::compositor::ClientShellConfig::from_config(
+            &crate::utils::config::Config::default(),
+        ),
     );
     shell.bus = Some(ui);
     shell.apply_active_snapshot(Box::new(snapshot()));
@@ -87,7 +93,7 @@ fn working_agent_projection_updates_hold_native_terminal_instead_of_flashing_pla
     assert!(
         outcome.requests.iter().any(|r| matches!(
             r,
-            crate::protocol::ClientMessage::ClientShellPaneInput { pane_id, .. }
+            crate::protocol::wire::ClientMessage::ClientShellPaneInput { pane_id, .. }
                 if pane_id == "pane_1"
         )),
         "typing must not be swallowed while the pair catches up"
@@ -143,7 +149,7 @@ fn ctrl_c_in_room_clears_the_draft_and_never_quits_bus() {
         assert!(!outcome.detach);
         assert!(!outcome.requests.iter().any(|r| matches!(
             r,
-            crate::protocol::ClientMessage::ClientShellPaneInput { .. }
+            crate::protocol::wire::ClientMessage::ClientShellPaneInput { .. }
         )));
         let ui = shell.bus.as_ref().unwrap();
         assert!(ui.quitting.is_none(), "Ctrl+C must not quit Bus");
@@ -210,7 +216,7 @@ fn ctrl_q_still_quits_from_room_and_agent_terminal_after_saving() {
         );
         assert!(!outcome.requests.iter().any(|r| matches!(
             r,
-            crate::protocol::ClientMessage::ClientShellPaneInput { .. }
+            crate::protocol::wire::ClientMessage::ClientShellPaneInput { .. }
         )));
         assert_eq!(ui.locals[&room].text.text, "keep this draft");
         assert!(ui.pending.iter().any(|p| matches!(&p.command, BusCommand::SetDraftText(id, text) if *id == room && text == "keep this draft")));
@@ -326,7 +332,7 @@ fn paste_and_composition_never_send_while_enter_and_newline_have_distinct_meanin
         &mut Default::default(),
     );
     ui.input(
-        &RawInputEvent::Text(crate::input::TextCommit::new("文")),
+        &RawInputEvent::Text(crate::protocol::keys::TextCommit::new("文")),
         false,
         &mut Default::default(),
     );
@@ -372,7 +378,7 @@ fn stale_suggestions_cannot_replace_current_query_and_forms_leave_room() {
     ui.suggestions.query_id = 9;
     ui.receive_event(BusEvent::Suggestions {
         query_id: 8,
-        result: Ok(vec![crate::bus::launch::PathSuggestion {
+        result: Ok(vec![crate::agents::providers::suggest::PathSuggestion {
             path: "/stale".into(),
             is_directory: true,
         }]),
@@ -407,7 +413,9 @@ fn option_delete_and_option_arrows_edit_by_word_from_terminal_bytes() {
         .text
         .insert("keep these words");
     let mut shell = crate::client::compositor::ClientShellState::new(
-        crate::client::compositor::ClientShellConfig::from_config(&crate::config::Config::default()),
+        crate::client::compositor::ClientShellConfig::from_config(
+            &crate::utils::config::Config::default(),
+        ),
     );
     shell.bus = Some(ui);
     shell.snapshot = Some(Box::new(crate::client::compositor::tests::snapshot()));
@@ -501,12 +509,12 @@ fn hook_consent_clears_old_pwd_suggestions_before_enter_can_confirm() {
     ui.suggestions.query_id = 9;
     ui.suggestions
         .entries
-        .push(crate::bus::launch::PathSuggestion {
+        .push(crate::agents::providers::suggest::PathSuggestion {
             path: "/old".into(),
             is_directory: true,
         });
     ui.receive_event(BusEvent::SetupRequired {
-        input: crate::bus::launch::AddAgent {
+        input: crate::messaging::coordinator::agents::AddAgent {
             room,
             name: "fixture".into(),
             provider: Provider::Codex,
@@ -515,7 +523,7 @@ fn hook_consent_clears_old_pwd_suggestions_before_enter_can_confirm() {
             consent_project_hooks: false,
         },
         orchestrator: None,
-        notice: crate::bus::launch::SetupNotice {
+        notice: crate::agents::providers::launch::SetupNotice {
             path: "/project/.codex/hooks.json".into(),
             message: "review hooks".into(),
         },

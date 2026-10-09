@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::api::client::ApiClientError;
-use crate::api::schema::{Request, ResponseResult};
-use crate::protocol::ClientMessage;
+use crate::protocol::api::client::ApiClientError;
+use crate::protocol::api::schema::{Request, ResponseResult};
+use crate::protocol::wire::ClientMessage;
 
 use super::bootstrap::ServerConnection;
 use crate::client::compositor::{
@@ -132,7 +132,7 @@ pub(in crate::client) fn parse_response(
         code: None,
         message: format!("invalid endpoint response: {error}"),
     })?;
-    match crate::api::client::parse_response_value(value) {
+    match crate::protocol::api::client::parse_response_value(value) {
         Ok(response) if response.id == expected_id => Ok(response.result),
         Ok(response) => Err(ClientShellEndpointError {
             code: None,
@@ -181,14 +181,14 @@ impl ClientShellState {
             .filter(|_| !live);
         let (anchor, cursor) = selection.ordered_cells();
         self.push_endpoint_method_with_kind(
-            crate::api::schema::Method::PaneSelectionRead(
-                crate::api::schema::PaneSelectionReadParams {
+            crate::protocol::api::schema::Method::PaneSelectionRead(
+                crate::protocol::api::schema::PaneSelectionReadParams {
                     pane_id,
-                    anchor: crate::api::schema::PaneTextPoint {
+                    anchor: crate::protocol::api::schema::PaneTextPoint {
                         row: anchor.0,
                         col: anchor.1,
                     },
-                    cursor: crate::api::schema::PaneTextPoint {
+                    cursor: crate::protocol::api::schema::PaneTextPoint {
                         row: cursor.0,
                         col: cursor.1,
                     },
@@ -207,7 +207,8 @@ impl ClientShellState {
         col: u16,
         outcome: &mut ClientShellInput,
     ) {
-        let absolute_row = crate::selection::absolute_row_for_viewport(viewport_row, hit.scroll);
+        let absolute_row =
+            crate::utils::text::selection::absolute_row_for_viewport(viewport_row, hit.scroll);
         let content_revision = self
             .pane_surface
             .as_ref()
@@ -222,14 +223,14 @@ impl ClientShellState {
         let generation = self.word_selection_generation;
         self.pending_word_selection = Some(generation);
         if !self.push_endpoint_method_with_kind(
-            crate::api::schema::Method::PaneSelectionRead(
-                crate::api::schema::PaneSelectionReadParams {
+            crate::protocol::api::schema::Method::PaneSelectionRead(
+                crate::protocol::api::schema::PaneSelectionReadParams {
                     pane_id: hit.pane_id.clone(),
-                    anchor: crate::api::schema::PaneTextPoint {
+                    anchor: crate::protocol::api::schema::PaneTextPoint {
                         row: absolute_row,
                         col: 0,
                     },
-                    cursor: crate::api::schema::PaneTextPoint {
+                    cursor: crate::protocol::api::schema::PaneTextPoint {
                         row: absolute_row,
                         col: hit.inner_rect.width.saturating_sub(1),
                     },
@@ -250,7 +251,7 @@ impl ClientShellState {
 
     pub(in crate::client) fn push_endpoint_method(
         &mut self,
-        method: crate::api::schema::Method,
+        method: crate::protocol::api::schema::Method,
         outcome: &mut ClientShellInput,
     ) {
         self.push_endpoint_method_with_kind(method, PendingEndpointKind::Generic, outcome);
@@ -258,7 +259,7 @@ impl ClientShellState {
 
     pub(in crate::client) fn push_endpoint_method_with_kind(
         &mut self,
-        method: crate::api::schema::Method,
+        method: crate::protocol::api::schema::Method,
         kind: PendingEndpointKind,
         outcome: &mut ClientShellInput,
     ) -> bool {
@@ -279,7 +280,7 @@ impl ClientShellState {
         );
         outcome.actions.push(ClientShellAction::Endpoint {
             boot_id: snapshot.boot_id.clone(),
-            request: Box::new(crate::api::schema::Request {
+            request: Box::new(crate::protocol::api::schema::Request {
                 id: request_id,
                 method,
             }),
@@ -312,7 +313,7 @@ impl ClientShellState {
         &mut self,
         boot_id: &str,
         request_id: &str,
-        result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
+        result: Result<crate::protocol::api::schema::ResponseResult, ClientShellEndpointError>,
     ) -> (bool, Vec<ClientShellAction>) {
         let Some(pending) = self.pending_requests.remove(request_id) else {
             return (false, Vec::new());
@@ -342,16 +343,17 @@ impl ClientShellState {
             }
             PendingEndpointKind::SelectionCopy => {
                 return match result {
-                    Ok(crate::api::schema::ResponseResult::PaneSelection { text, .. })
-                        if !text.is_empty() =>
-                    {
+                    Ok(crate::protocol::api::schema::ResponseResult::PaneSelection {
+                        text,
+                        ..
+                    }) if !text.is_empty() => {
                         let repaint = self.show_copy_feedback(std::time::Instant::now());
                         (
                             repaint,
                             vec![ClientShellAction::ClipboardWrite(text.into_bytes())],
                         )
                     }
-                    Ok(crate::api::schema::ResponseResult::PaneSelection { .. }) => {
+                    Ok(crate::protocol::api::schema::ResponseResult::PaneSelection { .. }) => {
                         (false, Vec::new())
                     }
                     Ok(_) => {
@@ -404,11 +406,11 @@ impl ClientShellState {
         }
         self.pending_word_selection = None;
         let row_text = match result {
-            Ok(crate::api::schema::ResponseResult::PaneSelection {
+            Ok(crate::protocol::api::schema::ResponseResult::PaneSelection {
                 pane_id: returned_pane_id,
                 text,
             }) if returned_pane_id == pane_id => text,
-            Ok(crate::api::schema::ResponseResult::PaneSelection { .. }) => {
+            Ok(crate::protocol::api::schema::ResponseResult::PaneSelection { .. }) => {
                 return (false, Vec::new())
             }
             Ok(_) => {
@@ -427,7 +429,7 @@ impl ClientShellState {
             self.selection = None;
             return (true, Vec::new());
         };
-        let mut selection = crate::selection::Selection::absolute_range(
+        let mut selection = crate::utils::text::selection::Selection::absolute_range(
             pane_id,
             (absolute_row, start_col),
             (absolute_row, end_col),
@@ -474,18 +476,21 @@ impl ClientShellState {
                 .collect()
         };
         match result {
-            Ok(crate::api::schema::ResponseResult::PaneLinkActivated { handled: true, .. }) => {
+            Ok(crate::protocol::api::schema::ResponseResult::PaneLinkActivated {
+                handled: true,
+                ..
+            }) => {
                 self.url_click_consumes_until_up = completed_before_release;
                 (false, Vec::new())
             }
-            Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
+            Ok(crate::protocol::api::schema::ResponseResult::PaneLinkActivated {
                 url: Some(url),
                 handled: false,
-            }) if crate::app::actions::safe_web_url(&url).is_some() => {
+            }) if crate::utils::url::safe_web_url(&url).is_some() => {
                 self.url_click_consumes_until_up = completed_before_release;
                 (false, vec![ClientShellAction::OpenSafeWebUrl(url)])
             }
-            Ok(crate::api::schema::ResponseResult::PaneLinkActivated { .. }) => {
+            Ok(crate::protocol::api::schema::ResponseResult::PaneLinkActivated { .. }) => {
                 (false, replay_action(replay))
             }
             Ok(_) => {
@@ -509,7 +514,7 @@ impl ClientShellState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::schema::{ResponseResult, SuccessResponse};
+    use crate::protocol::api::schema::{ResponseResult, SuccessResponse};
 
     fn commands_with_in_flight() -> EndpointCommands {
         EndpointCommands {

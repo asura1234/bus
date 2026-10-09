@@ -1,10 +1,11 @@
+use crate::protocol::api::schema;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use base64::Engine;
 use tracing::debug;
 
-use crate::protocol::{self, ServerMessage};
+use crate::protocol::{self, wire::ServerMessage};
 use crate::server::clients::connection::ClientConnection;
 use crate::server::main_loop::{
     non_empty_body, notification_show_result, sanitize_notification_text, HeadlessServer,
@@ -12,11 +13,14 @@ use crate::server::main_loop::{
 use crate::server::notifications::show::{
     should_forward_toast_to_clients, toast_message_from_state_change, toast_notify_kind,
 };
-use crate::terminal::events::AppEvent;
-use crate::{api, config};
+use crate::terminal::events::TerminalEvent;
+use crate::utils::config;
 
 impl HeadlessServer {
-    fn pane_effective_state(&self, pane_id: crate::layout::PaneId) -> crate::detect::AgentState {
+    fn pane_effective_state(
+        &self,
+        pane_id: crate::utils::ids::PaneId,
+    ) -> crate::agents::AgentState {
         self.app
             .state
             .workspaces
@@ -31,10 +35,10 @@ impl HeadlessServer {
                         .map(|terminal| terminal.state)
                 })
             })
-            .unwrap_or(crate::detect::AgentState::Unknown)
+            .unwrap_or(crate::agents::AgentState::Unknown)
     }
 
-    fn pane_effective_agent_label(&self, pane_id: crate::layout::PaneId) -> Option<String> {
+    fn pane_effective_agent_label(&self, pane_id: crate::utils::ids::PaneId) -> Option<String> {
         self.app.state.workspaces.iter().find_map(|ws| {
             ws.tabs.iter().find_map(|tab| {
                 let pane = tab.panes.get(&pane_id)?;
@@ -50,7 +54,7 @@ impl HeadlessServer {
 
     fn forward_semantic_agent_notification(
         &mut self,
-        update: &crate::app::actions::PaneStateUpdate,
+        update: &crate::server::terminals::events::PaneStateUpdate,
     ) -> bool {
         if update.suppress_completion {
             return false;
@@ -69,14 +73,14 @@ impl HeadlessServer {
     pub(in crate::server) fn forward_semantic_agent_transition(
         &mut self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
-        previous_state: crate::detect::AgentState,
-        state: crate::detect::AgentState,
+        pane_id: crate::utils::ids::PaneId,
+        previous_state: crate::agents::AgentState,
+        state: crate::agents::AgentState,
         previous_agent_label: Option<&str>,
         agent_label: Option<&str>,
-        known_agent: Option<crate::detect::Agent>,
+        known_agent: Option<crate::agents::AgentKind>,
     ) -> bool {
-        let Some(kind) = crate::app::actions::notification_toast_for_state_change_with_agent_labels(
+        let Some(kind) = crate::server::notifications::policy::notification_toast_for_state_change_with_agent_labels(
             false,
             previous_state,
             state,
@@ -101,29 +105,34 @@ impl HeadlessServer {
             return false;
         };
         let (semantic_kind, event_text) = match kind {
-            crate::app::state::ToastKind::NeedsAttention => (
-                protocol::SemanticNotificationKind::NeedsAttention,
+            crate::server::app_state::ToastKind::NeedsAttention => (
+                protocol::wire::SemanticNotificationKind::NeedsAttention,
                 "needs attention",
             ),
-            crate::app::state::ToastKind::Finished => {
-                (protocol::SemanticNotificationKind::Finished, "finished")
-            }
-            crate::app::state::ToastKind::UpdateInstalled => (
-                protocol::SemanticNotificationKind::UpdateInstalled,
+            crate::server::app_state::ToastKind::Finished => (
+                protocol::wire::SemanticNotificationKind::Finished,
+                "finished",
+            ),
+            crate::server::app_state::ToastKind::UpdateInstalled => (
+                protocol::wire::SemanticNotificationKind::UpdateInstalled,
                 "updated",
             ),
         };
         let workspace_id = workspace.id.clone();
-        let tab_id = crate::workspace::public_tab_id_for_number(&workspace_id, tab_number);
+        let tab_id = crate::server::workspaces::public_tab_id_for_number(&workspace_id, tab_number);
         let workspace_label =
             workspace.display_name_from(&self.app.state.terminals, &self.app.terminal_runtimes);
-        let context =
-            crate::app::actions::notification_context(workspace, &workspace_label, ws_idx, pane_id);
+        let context = crate::server::notifications::policy::notification_context(
+            workspace,
+            &workspace_label,
+            ws_idx,
+            pane_id,
+        );
         let agent = known_agent
-            .map(crate::detect::agent_label)
+            .map(crate::agents::agent_label)
             .map(str::to_owned);
         self.send_to_client_shells(ServerMessage::SemanticNotification(
-            protocol::SemanticNotification {
+            protocol::wire::SemanticNotification {
                 kind: semantic_kind,
                 title: format!("{agent_label} {event_text}"),
                 body: non_empty_body(&context),
@@ -139,7 +148,7 @@ impl HeadlessServer {
 
     fn forward_pane_state_update_notifications_to_clients(
         &mut self,
-        update: &crate::app::actions::PaneStateUpdate,
+        update: &crate::server::terminals::events::PaneStateUpdate,
     ) {
         if self.app.state.toast_config.delay_seconds != 0 {
             return;
@@ -155,10 +164,12 @@ impl HeadlessServer {
         if !should_forward_toast_to_clients(self.app.state.toast_config.delivery) {
             return;
         }
-        let Some(kind) = crate::app::actions::notification_toast_for_pane_state_update(
-            suppress_active_tab_notifications,
-            update,
-        ) else {
+        let Some(kind) =
+            crate::server::notifications::policy::notification_toast_for_pane_state_update(
+                suppress_active_tab_notifications,
+                update,
+            )
+        else {
             return;
         };
         let Some(ws) = self.app.state.workspaces.get(update.ws_idx) else {
@@ -168,13 +179,13 @@ impl HeadlessServer {
             return;
         };
         let event_text = match kind {
-            crate::app::state::ToastKind::NeedsAttention => "needs attention",
-            crate::app::state::ToastKind::Finished => "finished",
-            crate::app::state::ToastKind::UpdateInstalled => "updated",
+            crate::server::app_state::ToastKind::NeedsAttention => "needs attention",
+            crate::server::app_state::ToastKind::Finished => "finished",
+            crate::server::app_state::ToastKind::UpdateInstalled => "updated",
         };
         let workspace_label =
             ws.display_name_from(&self.app.state.terminals, &self.app.terminal_runtimes);
-        let context = crate::app::actions::notification_context(
+        let context = crate::server::notifications::policy::notification_context(
             ws,
             &workspace_label,
             update.ws_idx,
@@ -190,7 +201,7 @@ impl HeadlessServer {
 
     pub(in crate::server) fn forward_agent_notification_delivery(
         &mut self,
-        delivery: &crate::app::state::AgentNotificationDelivery,
+        delivery: &crate::server::app_state::AgentNotificationDelivery,
     ) {
         if should_forward_toast_to_clients(self.app.state.toast_config.delivery) {
             if let Some(toast) = &delivery.client_notification {
@@ -206,7 +217,7 @@ impl HeadlessServer {
 
     pub(in crate::server) fn send_notify_to_foreground_client(
         &mut self,
-        kind: protocol::NotifyKind,
+        kind: protocol::wire::NotifyKind,
         message: impl Into<String>,
         body: Option<String>,
     ) -> bool {
@@ -219,7 +230,7 @@ impl HeadlessServer {
 
     pub(in crate::server) fn send_flat_toast_to_foreground_client(
         &mut self,
-        kind: protocol::NotifyKind,
+        kind: protocol::wire::NotifyKind,
         message: impl AsRef<str>,
     ) -> bool {
         let (title, body) = crate::utils::text::notification::split_message(message.as_ref());
@@ -229,14 +240,14 @@ impl HeadlessServer {
     pub(in crate::server) fn handle_notification_show_api(
         &mut self,
         id: String,
-        params: api::schema::NotificationShowParams,
+        params: schema::NotificationShowParams,
     ) -> String {
-        use api::schema::NotificationShowReason;
+        use schema::NotificationShowReason;
 
         let Some(title) = sanitize_notification_text(&params.title, 80) else {
-            return serde_json::to_string(&api::schema::ErrorResponse {
+            return serde_json::to_string(&schema::ErrorResponse {
                 id,
-                error: api::schema::ErrorBody {
+                error: schema::ErrorBody {
                     code: "invalid_params".into(),
                     message: "notification title is empty".into(),
                 },
@@ -261,17 +272,17 @@ impl HeadlessServer {
             return notification_show_result(id, false, NotificationShowReason::RateLimited);
         }
         let sound = match params.sound {
-            api::schema::NotificationShowSound::None => None,
-            api::schema::NotificationShowSound::Done => {
-                Some(protocol::SemanticNotificationSound::Done)
+            schema::NotificationShowSound::None => None,
+            schema::NotificationShowSound::Done => {
+                Some(protocol::wire::SemanticNotificationSound::Done)
             }
-            api::schema::NotificationShowSound::Request => {
-                Some(protocol::SemanticNotificationSound::Request)
+            schema::NotificationShowSound::Request => {
+                Some(protocol::wire::SemanticNotificationSound::Request)
             }
         };
         let shown = self.send_to_client_shells(ServerMessage::SemanticNotification(
-            protocol::SemanticNotification {
-                kind: protocol::SemanticNotificationKind::Custom,
+            protocol::wire::SemanticNotification {
+                kind: protocol::wire::SemanticNotificationKind::Custom,
                 title,
                 body,
                 sound,
@@ -307,10 +318,10 @@ impl HeadlessServer {
     /// Returns true if the event changed visual state (requiring a re-render).
     pub(in crate::server) fn handle_internal_event_with_forwarding(
         &mut self,
-        ev: AppEvent,
+        ev: TerminalEvent,
     ) -> bool {
         match &ev {
-            AppEvent::TerminalBell { pane_id, count } => {
+            TerminalEvent::TerminalBell { pane_id, count } => {
                 if !self.send_to_foreground_client(ServerMessage::TerminalBell { count: *count }) {
                     debug!(
                         pane = pane_id.raw(),
@@ -319,18 +330,18 @@ impl HeadlessServer {
                 }
                 false
             }
-            AppEvent::ClipboardWrite { content } => {
+            TerminalEvent::ClipboardWrite { content } => {
                 // Clipboard writes are client-local side effects. Forward them only to
                 // the foreground client instead of broadcasting to every attached client.
                 let data = base64::engine::general_purpose::STANDARD.encode(content.as_slice());
                 self.send_to_foreground_client(ServerMessage::Clipboard { data });
                 false
             }
-            AppEvent::StateChanged { pane_id, .. } => {
+            TerminalEvent::StateChanged { pane_id, .. } => {
                 let pane_id_val = *pane_id;
                 self.handle_forwarded_state_change(ev, pane_id_val)
             }
-            AppEvent::PaneDied { pane_id, .. } => {
+            TerminalEvent::PaneDied { pane_id, .. } => {
                 let focus_before = self.shell_focus_targets();
                 let focused_tabs_before = self.focused_shell_tabs();
                 let pane_id_val = *pane_id;
@@ -361,8 +372,8 @@ impl HeadlessServer {
 
     fn handle_forwarded_state_change(
         &mut self,
-        ev: AppEvent,
-        pane_id_val: crate::layout::PaneId,
+        ev: TerminalEvent,
+        pane_id_val: crate::utils::ids::PaneId,
     ) -> bool {
         // Capture toast before handling.
         let toast_before = self.app.state.toast.clone();
@@ -445,15 +456,16 @@ impl HeadlessServer {
     /// - Detect when a toast is set on AppState and forward as
     ///   `ServerMessage::Notify` to the foreground client for terminal/system delivery.
     pub(in crate::server) fn drain_internal_events_with_forwarding(&mut self) -> bool {
-        self.drain_internal_events_with_forwarding_up_to(crate::app::APP_EVENT_DRAIN_LIMIT)
+        self.drain_internal_events_with_forwarding_up_to(crate::server::app::APP_EVENT_DRAIN_LIMIT)
             .1
     }
 
     pub(in crate::server) fn drain_all_internal_events_with_forwarding(&mut self) -> bool {
         let mut changed = false;
         loop {
-            let (had_event, batch_changed) =
-                self.drain_internal_events_with_forwarding_up_to(crate::app::APP_EVENT_DRAIN_LIMIT);
+            let (had_event, batch_changed) = self.drain_internal_events_with_forwarding_up_to(
+                crate::server::app::APP_EVENT_DRAIN_LIMIT,
+            );
             changed |= batch_changed;
             if !had_event || self.should_quit.load(Ordering::Acquire) {
                 break;
@@ -479,8 +491,8 @@ impl HeadlessServer {
     }
 }
 
-use crate::detect::AgentState;
-use crate::layout::PaneId;
+use crate::agents::AgentState;
+use crate::utils::ids::PaneId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
@@ -500,7 +512,7 @@ pub struct ToastNotification {
     pub kind: ToastKind,
     pub title: String,
     pub context: String,
-    pub position: Option<crate::config::ToastHerdrPosition>,
+    pub position: Option<crate::utils::config::ToastHerdrPosition>,
     pub target: Option<ToastTarget>,
 }
 
@@ -509,7 +521,7 @@ pub struct PendingAgentNotification {
     pub pane_id: PaneId,
     pub workspace_id: String,
     pub agent_label: String,
-    pub known_agent: Option<crate::detect::Agent>,
+    pub known_agent: Option<crate::agents::AgentKind>,
     pub kind: ToastKind,
     pub state: AgentState,
     pub deadline: std::time::Instant,
@@ -520,7 +532,7 @@ pub struct AgentNotificationDelivery {
     pub pane_id: PaneId,
     pub workspace_id: String,
     pub agent_label: String,
-    pub known_agent: Option<crate::detect::Agent>,
+    pub known_agent: Option<crate::agents::AgentKind>,
     pub kind: ToastKind,
     pub toast: Option<ToastNotification>,
     pub client_notification: Option<ToastNotification>,

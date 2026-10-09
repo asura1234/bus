@@ -1,8 +1,11 @@
 //! Content-free delivery diagnostics. Never format commands, prompts or callbacks with Debug.
-use super::model::{Agent, BusState, RequestId};
+use {
+    super::model::{BusState, RequestId},
+    crate::messaging::model::RoomAgent,
+};
 
 // Keep the existing test namespace while startup composition consumes the leaf.
-pub(crate) fn wait_reason(agent: &Agent) -> Option<&'static str> {
+pub(crate) fn wait_reason(agent: &RoomAgent) -> Option<&'static str> {
     agent.wait_reason()
 }
 
@@ -60,7 +63,7 @@ pub(crate) fn replies(previous: &BusState, next: &BusState, event: &'static str)
 mod tests {
     #[test]
     fn dev_logs_enable_debug_and_trace_but_not_input_or_toast_payloads() {
-        let capture = crate::logging::test_capture::Capture::default();
+        let capture = crate::utils::logging::test_capture::Capture::default();
         capture.run_filtered(super::DEV_FILTER, || {
             tracing::debug!(target: "bus::messaging", "DEBUG_ENABLED");
             tracing::trace!(target: "bus::server::main_loop", "TRACE_ENABLED");

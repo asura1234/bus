@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf};
 
 use super::*;
-use crate::bus::model::{
+use crate::messaging::model::{
     AgentRuntimeIdentity, CallbackDisposition, CallbackRejection, Provider, ProviderCallback,
     RequestPhase, SubmissionOutcome,
 };
@@ -209,7 +209,7 @@ fn reload_preserves_uncertain_ownership_queue_and_consumed_callbacks() {
 
 #[test]
 fn saved_sound_orchestrator_compactions_notes_and_draft_reload() {
-    use crate::bus::model::RoomKind;
+    use crate::messaging::model::RoomKind;
 
     let dir = temp_dir("compat-fields");
     let store = JsonStore::new(dir.join("state.json"));

@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use ratatui::layout::Rect;
 use tracing::warn;
 
-use crate::app;
-use crate::protocol::{self, FrameData, MAX_GRAPHICS_FRAME_SIZE};
+use crate::protocol::wire::{self as protocol, FrameData, MAX_GRAPHICS_FRAME_SIZE};
+use crate::server::app;
 use crate::server::clients::connection::{render_targets, ClientConnectionMode, DeferredRender};
 use crate::server::main_loop::HeadlessServer;
 
@@ -16,7 +16,7 @@ fn rect_fits_frame(rect: protocol::SurfaceRect, frame: &FrameData) -> bool {
 fn patch_intersects_hyperlinks(
     frame: &FrameData,
     area: protocol::SurfaceRect,
-    patch: &crate::pane::TerminalDirtyPatch,
+    patch: &crate::terminal::emulator::TerminalDirtyPatch,
 ) -> bool {
     if frame.hyperlinks.is_empty() || !rect_fits_frame(area, frame) {
         return false;
@@ -55,7 +55,7 @@ fn apply_patch_row(frame: &mut FrameData, row: &protocol::PaneSurfacePatchRow) -
 fn apply_rows(
     frame: &mut FrameData,
     area: protocol::SurfaceRect,
-    patch: &crate::pane::TerminalDirtyPatch,
+    patch: &crate::terminal::emulator::TerminalDirtyPatch,
 ) -> Option<Vec<protocol::PaneSurfacePatchRow>> {
     if !rect_fits_frame(area, frame) {
         return None;
@@ -108,7 +108,7 @@ fn retained_scrollbar_patch(
     frame: &mut FrameData,
     pane: &mut protocol::PaneSurfacePane,
     alternate_screen_active: bool,
-    metrics: Option<crate::pane::ScrollMetrics>,
+    metrics: Option<crate::utils::render::widgets::ScrollMetrics>,
 ) -> Option<Vec<protocol::PaneSurfacePatchRow>> {
     let next_rect = metrics
         .filter(|metrics| metrics.max_offset_from_bottom > 0)
@@ -134,7 +134,7 @@ fn retained_scrollbar_patch(
     let track = Rect::new(0, 0, 1, rect.height);
     let mut buffer = ratatui::buffer::Buffer::empty(track);
     if let (Some(metrics), Some(_)) = (metrics, next_rect) {
-        crate::ui::render_pane_scrollbar_buffer(
+        crate::server::rendering::surface::render_pane_scrollbar_buffer(
             &mut buffer,
             metrics,
             track,
@@ -186,7 +186,8 @@ fn retained_cursor(
         .map(|cursor| protocol::CursorState {
             x: cursor.x,
             y: cursor.y,
-            visible: cursor.visible && !crate::ui::pane_is_scrolled_back(runtime),
+            visible: cursor.visible
+                && !crate::server::rendering::surface::pane_is_scrolled_back(runtime),
             shape: cursor.shape,
         })
 }
@@ -198,9 +199,9 @@ struct RetainedRecipient {
 
 struct CollectedPanePatch {
     pane_id: String,
-    patch: crate::pane::TerminalDirtyPatch,
+    patch: crate::terminal::emulator::TerminalDirtyPatch,
     content_revision: u64,
-    scroll_metrics: Option<crate::pane::ScrollMetrics>,
+    scroll_metrics: Option<crate::utils::render::widgets::ScrollMetrics>,
     mouse_reporting: bool,
     sgr_pixel_mouse: bool,
     alternate_screen_active: bool,
@@ -215,8 +216,8 @@ struct RetainedRecipientUpdate {
 }
 
 fn retained_fallback(reason: &'static str, started: Option<std::time::Instant>) -> bool {
-    crate::render_prof::event(reason);
-    crate::render_prof::duration_since("retained_surface.total", started);
+    crate::utils::render::prof::event(reason);
+    crate::utils::render::prof::duration_since("retained_surface.total", started);
     false
 }
 
@@ -269,22 +270,22 @@ impl HeadlessServer {
     /// Any presentation or geometry uncertainty falls back to the complete renderer.
     pub(in crate::server) fn render_retained_pane_surface_and_stream(
         &mut self,
-        pty_sources: &HashSet<crate::layout::PaneId>,
+        pty_sources: &HashSet<crate::utils::ids::PaneId>,
     ) -> bool {
-        crate::render_prof::event("retained_surface.attempt");
-        let started = crate::render_prof::timer();
+        crate::utils::render::prof::event("retained_surface.attempt");
+        let started = crate::utils::render::prof::timer();
         macro_rules! fallback {
             ($reason:literal) => {{
-                crate::render_prof::event(concat!("retained_surface.fallback.", $reason));
-                crate::render_prof::duration_since("retained_surface.total", started);
+                crate::utils::render::prof::event(concat!("retained_surface.fallback.", $reason));
+                crate::utils::render::prof::duration_since("retained_surface.total", started);
                 return false;
             }};
         }
         macro_rules! success {
             ($reason:literal) => {{
-                crate::render_prof::event("retained_surface.success");
-                crate::render_prof::event(concat!("retained_surface.success.", $reason));
-                crate::render_prof::duration_since("retained_surface.total", started);
+                crate::utils::render::prof::event("retained_surface.success");
+                crate::utils::render::prof::event(concat!("retained_surface.success.", $reason));
+                crate::utils::render::prof::duration_since("retained_surface.total", started);
                 return true;
             }};
         }
@@ -354,7 +355,7 @@ impl HeadlessServer {
                 return Err("retained_surface.fallback.client_missing");
             };
             if client.deferred_render() != DeferredRender::None {
-                crate::render_prof::event("retained_surface.recipient_deferred");
+                crate::utils::render::prof::event("retained_surface.recipient_deferred");
                 continue;
             }
             let Some(surface) = client.render_state.last_pane_surface() else {
@@ -379,7 +380,7 @@ impl HeadlessServer {
 
     fn collect_retained_pane_patches(
         &self,
-        pty_sources: &HashSet<crate::layout::PaneId>,
+        pty_sources: &HashSet<crate::utils::ids::PaneId>,
         recipients: &[RetainedRecipient],
     ) -> Result<Vec<CollectedPanePatch>, &'static str> {
         let mut collected = Vec::with_capacity(pty_sources.len());
@@ -417,17 +418,17 @@ impl HeadlessServer {
                 return Err("retained_surface.fallback.unstable_content");
             }
             let patch = match runtime.collect_dirty_patch(width, height) {
-                crate::pane::TerminalDirtyPatchOutcome::Clean => {
-                    crate::render_prof::event("retained_surface.pane_clean");
-                    crate::pane::TerminalDirtyPatch { rows: Vec::new() }
+                crate::terminal::emulator::TerminalDirtyPatchOutcome::Clean => {
+                    crate::utils::render::prof::event("retained_surface.pane_clean");
+                    crate::terminal::emulator::TerminalDirtyPatch { rows: Vec::new() }
                 }
-                crate::pane::TerminalDirtyPatchOutcome::Patch(patch) => patch,
-                crate::pane::TerminalDirtyPatchOutcome::Fallback => {
+                crate::terminal::emulator::TerminalDirtyPatchOutcome::Patch(patch) => patch,
+                crate::terminal::emulator::TerminalDirtyPatchOutcome::Fallback => {
                     return Err("retained_surface.fallback.terminal_patch");
                 }
             };
-            let graphics_may_have_placements =
-                crate::kitty_graphics::is_enabled() && runtime.kitty_graphics_may_have_placements();
+            let graphics_may_have_placements = crate::protocol::kitty::is_enabled()
+                && runtime.kitty_graphics_may_have_placements();
             let revision = runtime.content_seq();
             if revision != revision_before || !revision.is_multiple_of(2) {
                 return Err("retained_surface.fallback.content_changed");
@@ -489,15 +490,13 @@ impl HeadlessServer {
                 return Err("retained_surface.fallback.graphics_target");
             };
             let client = &self.clients[&client_id];
-            let Some((graphics, delivery)) =
-                crate::server::rendering::snapshot_graphics::collect_retained(
-                    &self.app,
-                    &surface,
-                    target,
-                    client.cell_size,
-                    &client.shell_graphics_delivery,
-                )
-            else {
+            let Some((graphics, delivery)) = crate::server::rendering::images::collect_retained(
+                &self.app,
+                &surface,
+                target,
+                client.cell_size,
+                &client.shell_graphics_delivery,
+            ) else {
                 return Err("retained_surface.fallback.graphics_geometry");
             };
             graphics_changed = graphics != surface.graphics;
@@ -574,7 +573,7 @@ impl HeadlessServer {
                         continue;
                     }
                 };
-            crate::render_prof::counter("retained_surface.bytes", serialized.len() as u64);
+            crate::utils::render::prof::counter("retained_surface.bytes", serialized.len() as u64);
             match writer.render.try_send(serialized) {
                 Ok(()) => {
                     let graphics_pending = graphics_delivery
@@ -603,8 +602,8 @@ impl HeadlessServer {
         for client_id in disconnected {
             self.remove_client_and_resize_if_needed(client_id);
         }
-        crate::render_prof::counter("retained_surface.recipients.sent", sent);
-        crate::render_prof::counter("retained_surface.recipients.deferred", deferred);
+        crate::utils::render::prof::counter("retained_surface.recipients.sent", sent);
+        crate::utils::render::prof::counter("retained_surface.recipients.deferred", deferred);
 
         sent
     }
@@ -635,7 +634,7 @@ mod tests {
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
         };
-        let patch = crate::pane::TerminalDirtyPatch {
+        let patch = crate::terminal::emulator::TerminalDirtyPatch {
             rows: vec![(0, vec![cell(" "), cell("x"), cell("y"), cell(" ")])],
         };
 
@@ -673,7 +672,7 @@ mod tests {
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
         };
-        let patch = crate::pane::TerminalDirtyPatch {
+        let patch = crate::terminal::emulator::TerminalDirtyPatch {
             rows: vec![(0, vec![cell("x"), cell("z"), cell("q")])],
         };
 
@@ -709,7 +708,7 @@ mod tests {
             hyperlinks: Vec::new(),
             graphics: Vec::new(),
         };
-        let patch = crate::pane::TerminalDirtyPatch {
+        let patch = crate::terminal::emulator::TerminalDirtyPatch {
             rows: vec![(0, vec![cell(" "); 4]), (1, vec![cell(" "); 4])],
         };
 

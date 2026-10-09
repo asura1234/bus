@@ -5,12 +5,12 @@
 
 use std::time::Instant;
 
-use crate::detect::{Agent, AgentState};
-use crate::layout::PaneId;
+use crate::agents::{AgentKind, AgentState};
+use crate::utils::ids::PaneId;
 
 /// An event from a background task to the main loop.
 #[derive(Debug)]
-pub enum AppEvent {
+pub enum TerminalEvent {
     /// A pane's child process exited.
     PaneDied {
         pane_id: PaneId,
@@ -19,13 +19,13 @@ pub enum AppEvent {
     /// Process detection identified an agent before its screen state was confirmed.
     AgentProcessDetected {
         pane_id: PaneId,
-        agent: Agent,
+        agent: AgentKind,
         observed_at: Instant,
     },
     /// Fallback detector state changed in a pane.
     StateChanged {
         pane_id: PaneId,
-        agent: Option<Agent>,
+        agent: Option<AgentKind>,
         state: AgentState,
         visible_blocker: bool,
         process_exited: bool,
@@ -37,7 +37,7 @@ pub enum AppEvent {
         source: String,
         agent_label: String,
         seq: Option<u64>,
-        session_ref: Option<crate::agent_resume::AgentSessionRef>,
+        session_ref: Option<crate::agents::resume::catalog::AgentSessionRef>,
         session_start_source: Option<String>,
     },
     /// A pane child emitted one or more executable BEL characters.

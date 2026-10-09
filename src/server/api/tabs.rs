@@ -88,7 +88,10 @@ impl App {
                     scrollback_limit_bytes,
                     host_terminal_theme,
                     host_terminal_appearance,
-                    crate::pane::PaneShellConfig::new(&default_shell, self.state.shell_mode),
+                    crate::terminal::runtime::spawn::PaneShellConfig::new(
+                        &default_shell,
+                        self.state.shell_mode,
+                    ),
                     extra_env,
                 )
             });
@@ -114,7 +117,7 @@ impl App {
                         .and_then(|ws| ws.tabs.get_mut(tab_idx))
                     {
                         tab.set_custom_name(label);
-                        crate::logging::tab_renamed(&workspace_id, &tab_id);
+                        crate::utils::logging::tab_renamed(&workspace_id, &tab_id);
                     }
                 }
                 if focus {
@@ -162,7 +165,7 @@ impl App {
             return tab_not_found(id, &params.tab_id);
         };
         tab.set_custom_name(params.label.clone());
-        crate::logging::tab_renamed(&workspace_id, &tab_id);
+        crate::utils::logging::tab_renamed(&workspace_id, &tab_id);
         self.schedule_session_save();
         // Renaming the label leaves the public tab number and resolved ID unchanged.
         self.emit_event(EventEnvelope {
@@ -269,9 +272,9 @@ mod tests {
     use super::super::test_support::{exiting_test_command, shutdown_test_runtimes};
     use super::*;
     use crate::{
-        api::schema::SuccessResponse,
-        config::{Config, ShellModeConfig},
-        workspace::Workspace,
+        protocol::api::schema::SuccessResponse,
+        server::workspaces::Workspace,
+        utils::config::{Config, ShellModeConfig},
     };
 
     #[test]
@@ -446,8 +449,8 @@ mod tests {
         let created_terminal_id = created.terminal_id(created.root_pane).unwrap();
         let created_cwd = &app.state.terminals.get(created_terminal_id).unwrap().cwd;
         assert_eq!(
-            crate::home_path::canonical_or_original(created_cwd),
-            crate::home_path::canonical_or_original(&cached_cwd)
+            crate::utils::home_path::canonical_or_original(created_cwd),
+            crate::utils::home_path::canonical_or_original(&cached_cwd)
         );
         shutdown_test_runtimes(&mut app);
     }

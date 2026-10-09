@@ -1,8 +1,11 @@
 //! State operations for the messaging state.
-use super::{Agent, AgentId, ModelError, Request, RequestId, Room, RoomId};
 use crate::messaging::prefs::colors;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use {
+    super::{AgentId, ModelError, Request, RequestId, Room, RoomId},
+    crate::messaging::model::RoomAgent,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct BusState {
@@ -10,7 +13,7 @@ pub(crate) struct BusState {
     pub(super) next_status_revision: u64,
     pub(super) rooms: BTreeMap<RoomId, Room>,
     #[serde(deserialize_with = "deserialize_agents")]
-    pub(super) agents: BTreeMap<AgentId, Agent>,
+    pub(super) agents: BTreeMap<AgentId, RoomAgent>,
     pub(super) requests: BTreeMap<RequestId, Request>,
     pub(super) queues: BTreeMap<AgentId, Vec<RequestId>>,
     pub(super) consumed_callback_ids: BTreeSet<String>,
@@ -26,11 +29,11 @@ pub(crate) struct BusState {
     pub(super) consumed_dialog_fingerprints: BTreeSet<String>,
 }
 
-fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, Agent>, D::Error>
+fn deserialize_agents<'de, D>(deserializer: D) -> Result<BTreeMap<AgentId, RoomAgent>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let mut agents = BTreeMap::<AgentId, Agent>::deserialize(deserializer)?;
+    let mut agents = BTreeMap::<AgentId, RoomAgent>::deserialize(deserializer)?;
     backfill_colors(
         &mut agents,
         |agent| &mut agent.color,
@@ -47,8 +50,8 @@ where
 }
 
 fn backfill_colors(
-    agents: &mut BTreeMap<AgentId, Agent>,
-    color: fn(&mut Agent) -> &mut [u8; 3],
+    agents: &mut BTreeMap<AgentId, RoomAgent>,
+    color: fn(&mut RoomAgent) -> &mut [u8; 3],
     valid: fn([u8; 3]) -> bool,
     next: fn(&[[u8; 3]]) -> [u8; 3],
 ) {
@@ -115,11 +118,11 @@ impl BusState {
         self.rooms.values()
     }
 
-    pub(crate) fn agent(&self, id: AgentId) -> Option<&Agent> {
+    pub(crate) fn agent(&self, id: AgentId) -> Option<&RoomAgent> {
         self.agents.get(&id)
     }
 
-    pub(crate) fn agents(&self) -> impl Iterator<Item = &Agent> {
+    pub(crate) fn agents(&self) -> impl Iterator<Item = &RoomAgent> {
         self.agents.values()
     }
 

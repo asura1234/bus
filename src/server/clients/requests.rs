@@ -3,7 +3,7 @@ use std::sync::mpsc;
 
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::api::schema::{ErrorBody, ErrorResponse, Method};
+use crate::protocol::api::schema::{ErrorBody, ErrorResponse, Method};
 
 use super::transport::ServerEvent;
 
@@ -69,9 +69,9 @@ pub(crate) fn error_response(id: String, code: &str, message: impl Into<String>)
 pub(crate) fn success_message_with_result(
     boot_id: String,
     request_id: String,
-    result: crate::api::schema::ResponseResult,
-) -> crate::protocol::ServerMessage {
-    let response = serde_json::to_string(&crate::api::schema::SuccessResponse {
+    result: crate::protocol::api::schema::ResponseResult,
+) -> crate::protocol::wire::ServerMessage {
+    let response = serde_json::to_string(&crate::protocol::api::schema::SuccessResponse {
         id: request_id.clone(),
         result,
     })
@@ -82,7 +82,7 @@ pub(crate) fn success_message_with_result(
             "failed to serialize endpoint response",
         )
     });
-    crate::protocol::ServerMessage::ClientShellEndpointResponseChunk {
+    crate::protocol::wire::ServerMessage::ClientShellEndpointResponseChunk {
         boot_id,
         request_id,
         final_chunk: true,
@@ -95,9 +95,9 @@ pub(crate) fn error_message(
     request_id: String,
     code: &str,
     message: impl Into<String>,
-) -> crate::protocol::ServerMessage {
+) -> crate::protocol::wire::ServerMessage {
     let response = error_response(request_id.clone(), code, message);
-    crate::protocol::ServerMessage::ClientShellEndpointResponseChunk {
+    crate::protocol::wire::ServerMessage::ClientShellEndpointResponseChunk {
         boot_id,
         request_id,
         final_chunk: true,
@@ -168,7 +168,7 @@ pub(crate) fn spawn_response_waiter(
         .map(|_| ())
 }
 
-use crate::api;
+use crate::protocol::api;
 use crate::server::clients::connection::ClientConnectionMode;
 use crate::server::main_loop::HeadlessServer;
 
@@ -288,7 +288,7 @@ impl HeadlessServer {
         foreground_changed
             | self.handle_client_shell_api_request(
                 client_id,
-                api::ApiRequestMessage {
+                crate::server::api::ApiRequestMessage {
                     request,
                     respond_to,
                 },
@@ -347,8 +347,9 @@ mod tests {
     }
 
     fn endpoint_method_shape_digests() -> BTreeMap<String, String> {
-        let schema = serde_json::to_value(schemars::schema_for!(crate::api::schema::Request))
-            .expect("request schema");
+        let schema =
+            serde_json::to_value(schemars::schema_for!(crate::protocol::api::schema::Request))
+                .expect("request schema");
         let definitions = schema
             .get("$defs")
             .and_then(serde_json::Value::as_object)
@@ -439,8 +440,9 @@ mod tests {
             }
         }
 
-        let schema = serde_json::to_value(schemars::schema_for!(crate::api::schema::Request))
-            .expect("request schema");
+        let schema =
+            serde_json::to_value(schemars::schema_for!(crate::protocol::api::schema::Request))
+                .expect("request schema");
         let mut schema_methods = Vec::new();
         collect_method_constants(&schema, &mut schema_methods);
         for method in CLIENT_SHELL_METHODS {
@@ -454,15 +456,15 @@ mod tests {
     #[test]
     fn client_shell_lane_excludes_api_front_door_and_lifecycle_methods() {
         assert!(supports_client_shell_method(
-            &Method::ClientShellSurfaceSet(crate::api::schema::ClientShellSurfaceSetParams {
-                active: false,
-            })
+            &Method::ClientShellSurfaceSet(
+                crate::protocol::api::schema::ClientShellSurfaceSetParams { active: false }
+            )
         ));
         assert!(supports_client_shell_method(&Method::ServerReloadConfig(
-            crate::api::schema::EmptyParams::default(),
+            crate::protocol::api::schema::EmptyParams::default(),
         )));
         assert!(supports_client_shell_method(&Method::PaneLinkActivate(
-            crate::api::schema::PaneLinkActivateParams {
+            crate::protocol::api::schema::PaneLinkActivateParams {
                 pane_id: "w1:p1".into(),
                 viewport_row: 0,
                 col: 0,
@@ -471,10 +473,10 @@ mod tests {
             },
         )));
         assert!(!supports_client_shell_method(&Method::Ping(
-            crate::api::schema::PingParams::default(),
+            crate::protocol::api::schema::PingParams::default(),
         )));
         assert!(!supports_client_shell_method(&Method::ServerStop(
-            crate::api::schema::EmptyParams::default(),
+            crate::protocol::api::schema::EmptyParams::default(),
         )));
     }
 

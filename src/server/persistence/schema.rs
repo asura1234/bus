@@ -87,7 +87,7 @@ pub struct PaneSnapshot {
 pub struct PaneAgentSessionSnapshot {
     pub source: String,
     pub agent: String,
-    pub kind: crate::agent_resume::AgentSessionRefKind,
+    pub kind: crate::agents::resume::catalog::AgentSessionRefKind,
     pub value: String,
 }
 

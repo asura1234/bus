@@ -262,7 +262,8 @@ pub(crate) const HUMAN_RECIPIENT: &str = "human";
 pub(super) const MASTER_ROOM_ID: RoomId = RoomId(0);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct Agent {
+#[serde(rename = "Agent")]
+pub(crate) struct RoomAgent {
     pub(crate) id: AgentId,
     pub(crate) room_id: RoomId,
     pub(crate) name: String,

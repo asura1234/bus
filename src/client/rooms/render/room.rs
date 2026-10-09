@@ -10,7 +10,7 @@ use super::dialogs::{search_panel, SEARCH_BOX_HEIGHT};
 use super::sidebar::{message_name_color, status_name};
 use super::text::{display, provider, wrap};
 use super::{Action, Hit, View, ACCENT};
-use crate::bus::model::{Room, RoomId, RoomKind};
+use crate::messaging::model::{Room, RoomId, RoomKind};
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -545,7 +545,9 @@ impl BusUi {
             .map(|path| (path, false))
             .collect();
         for pending in &self.failed {
-            if let crate::bus::runtime::BusCommand::AttachFile(id, path) = &pending.command {
+            if let crate::messaging::coordinator::BusCommand::AttachFile(id, path) =
+                &pending.command
+            {
                 if *id != room.id {
                     continue;
                 }

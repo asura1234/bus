@@ -1,9 +1,9 @@
 use super::*;
 use crate::utils::text::hit_testing::test_support::text_in_cell_range;
 
-use crate::detect::{Agent, AgentState};
+use crate::agents::{AgentKind, AgentState};
 
-use crate::workspace::Workspace;
+use crate::server::workspaces::Workspace;
 
 use ratatui::layout::Direction;
 
@@ -38,7 +38,11 @@ fn col_of(row: &str, needle: &str) -> u16 {
     let prefix = &row[..byte_idx];
     prefix
         .chars()
-        .map(|ch| u16::from(crate::ghostty::unicode_codepoint_width(ch as u32)))
+        .map(|ch| {
+            u16::from(crate::utils::text::width::unicode_codepoint_width(
+                ch as u32,
+            ))
+        })
         .sum()
 }
 

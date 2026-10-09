@@ -3,9 +3,12 @@ use super::*;
 #[test]
 fn recent_reads_include_viewport_before_scrollback_exists() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal =
-        crate::ghostty::Terminal::new(20, 20, crate::config::DEFAULT_SCROLLBACK_LIMIT_BYTES)
-            .unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(
+        20,
+        20,
+        crate::utils::config::DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    )
+    .unwrap();
     terminal.write(b"hello123");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -16,7 +19,7 @@ fn recent_reads_include_viewport_before_scrollback_exists() {
 #[test]
 fn alternate_screen_recent_reads_keep_physical_row_ranges() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(20, 20, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(20, 20, 100).unwrap();
     terminal.write(b"\x1b[?1049hhello123");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -27,7 +30,7 @@ fn alternate_screen_recent_reads_keep_physical_row_ranges() {
 #[test]
 fn recent_unwrapped_text_ignores_soft_wraps() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(5, 3, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(5, 3, 100).unwrap();
     terminal.write(b"ABCDEFGHIJ");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -38,7 +41,7 @@ fn recent_unwrapped_text_ignores_soft_wraps() {
 #[test]
 fn room_orchestrator_core_recent_text_snapshot_honors_requests_above_one_thousand() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(80, 3, 10_000_000).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(80, 3, 10_000_000).unwrap();
     write_numbered_lines(&mut terminal, 1500);
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     let snapshot = pane.recent_text_snapshot(5000);
@@ -64,7 +67,7 @@ fn room_orchestrator_core_recent_text_snapshot_honors_requests_above_one_thousan
 #[test]
 fn room_orchestrator_core_recent_snapshots_report_omitted_rendered_rows() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(20, 3, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(20, 3, 100).unwrap();
     terminal.write(b"one\r\ntwo\r\nthree\r\nfour");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -78,7 +81,7 @@ fn room_orchestrator_core_recent_snapshots_report_omitted_rendered_rows() {
 #[test]
 fn recent_ansi_can_read_styled_scrollback() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(20, 3, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(20, 3, 100).unwrap();
     terminal.write(b"\x1b[34mblue\x1b[0m\r\nline2\r\nline3\r\nline4");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 

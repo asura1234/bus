@@ -2,9 +2,9 @@
 use super::super::{
     editor::Editor, forms::RenameTarget, render::Action, BusUi, ComposerSize, Effect,
 };
-use crate::bus::{
+use crate::messaging::{
+    coordinator::BusCommand,
     model::{AgentId, AgentRecipients, RoomId, RoomKind},
-    runtime::BusCommand,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -405,9 +405,9 @@ impl BusUi {
     }
 
     pub(super) fn paste_image(&mut self) {
-        let Some(image) =
-            crate::platform::read_clipboard_image(crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD)
-        else {
+        let Some(image) = crate::platform::read_clipboard_image(
+            crate::protocol::wire::MAX_CLIPBOARD_IMAGE_PAYLOAD,
+        ) else {
             return;
         };
         let Some(room) = self.room else {

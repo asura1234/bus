@@ -266,7 +266,7 @@ mod tests {
     fn physical_generated_slash(repeat_count: u16) -> TerminalKey {
         TerminalKey::new(KeyCode::Char('/'), KeyModifiers::SHIFT)
             .with_generated_text(Some("/".to_owned()))
-            .with_windows_record(crate::input::WindowsKeyRecord {
+            .with_windows_record(crate::protocol::keys::WindowsKeyRecord {
                 key_down: true,
                 repeat_count,
                 virtual_key_code: 0x37,
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn duplicate_physical_press_normalizes_for_forwarded_and_consumed_leases() {
-        let record = crate::input::WindowsKeyRecord {
+        let record = crate::protocol::keys::WindowsKeyRecord {
             key_down: true,
             repeat_count: 1,
             virtual_key_code: 65,
@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn physical_and_semantic_identities_do_not_collide() {
-        let record = crate::input::WindowsKeyRecord {
+        let record = crate::protocol::keys::WindowsKeyRecord {
             key_down: true,
             repeat_count: 1,
             virtual_key_code: 65,

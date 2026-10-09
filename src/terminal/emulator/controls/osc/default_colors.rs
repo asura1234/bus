@@ -1,6 +1,6 @@
 use super::collector::is_ignored_string_intro;
-use crate::layout::PaneId;
 use crate::terminal::emulator::GhosttyPaneCore;
+use crate::utils::ids::PaneId;
 use tracing::info;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -383,38 +383,38 @@ pub(in crate::terminal::emulator) fn should_restore_host_terminal_theme(
 }
 
 pub(in crate::terminal::emulator) fn write_host_terminal_theme(
-    terminal: &mut crate::ghostty::Terminal,
-    theme: crate::terminal_theme::TerminalTheme,
+    terminal: &mut crate::terminal::vt::Terminal,
+    theme: crate::utils::theme::color::TerminalTheme,
 ) {
     write_host_terminal_theme_selective(terminal, theme, true, true);
 }
 
 pub(in crate::terminal::emulator) fn write_host_terminal_theme_selective(
-    terminal: &mut crate::ghostty::Terminal,
-    theme: crate::terminal_theme::TerminalTheme,
+    terminal: &mut crate::terminal::vt::Terminal,
+    theme: crate::utils::theme::color::TerminalTheme,
     foreground: bool,
     background: bool,
 ) {
     if foreground {
         write_host_default_color(
             terminal,
-            crate::terminal_theme::DefaultColorKind::Foreground,
+            crate::utils::theme::color::DefaultColorKind::Foreground,
             theme.foreground,
         );
     }
     if background {
         write_host_default_color(
             terminal,
-            crate::terminal_theme::DefaultColorKind::Background,
+            crate::utils::theme::color::DefaultColorKind::Background,
             theme.background,
         );
     }
 }
 
 pub(super) fn write_host_default_color(
-    terminal: &mut crate::ghostty::Terminal,
-    kind: crate::terminal_theme::DefaultColorKind,
-    color: Option<crate::terminal_theme::RgbColor>,
+    terminal: &mut crate::terminal::vt::Terminal,
+    kind: crate::utils::theme::color::DefaultColorKind,
+    color: Option<crate::utils::theme::color::RgbColor>,
 ) {
     let sequence = if let Some(color) = color {
         crate::utils::theme::color::osc_set_default_color_sequence(kind, color)

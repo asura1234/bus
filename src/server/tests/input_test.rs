@@ -17,9 +17,9 @@ fn client_pane_pixel_mouse_uses_runtime_pixel_encoding() {
 
     apply_client_pane_input_events(
         &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Moved,
-            position: crate::protocol::ClientMousePosition::Pixels {
+        &[crate::protocol::wire::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::Moved,
+            position: crate::protocol::wire::ClientMousePosition::Pixels {
                 x: 21,
                 y: 22,
                 column: 2,
@@ -59,9 +59,11 @@ fn client_pane_pixel_mouse_stays_pixel_scaled_when_sgr_is_reasserted() {
 
     apply_client_pane_input_events(
         &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left),
-            position: crate::protocol::ClientMousePosition::Pixels {
+        &[crate::protocol::wire::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::Down(
+                crate::protocol::wire::ClientMouseButton::Left,
+            ),
+            position: crate::protocol::wire::ClientMousePosition::Pixels {
                 x: 403,
                 y: 240,
                 column: 40,
@@ -101,9 +103,9 @@ fn client_pane_pixel_mouse_falls_back_to_canonical_cell_position() {
 
     apply_client_pane_input_events(
         &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Moved,
-            position: crate::protocol::ClientMousePosition::Pixels {
+        &[crate::protocol::wire::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::Moved,
+            position: crate::protocol::wire::ClientMousePosition::Pixels {
                 x: 21,
                 y: 22,
                 column: 2,
@@ -139,9 +141,9 @@ fn client_pane_wheel_input_accumulates_scrollback_offset() {
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
             20, 5, 4096, &bytes, 4,
         );
-    let scroll = |kind| crate::protocol::ClientPaneInputEvent::Mouse {
+    let scroll = |kind| crate::protocol::wire::ClientPaneInputEvent::Mouse {
         kind,
-        position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+        position: crate::protocol::wire::ClientMousePosition::Cell { column: 2, row: 1 },
         geometry: None,
         modifiers: 0,
         lines: 3,
@@ -149,12 +151,12 @@ fn client_pane_wheel_input_accumulates_scrollback_offset() {
 
     apply_client_pane_input_events(
         &runtime,
-        &[scroll(crate::protocol::ClientMouseKind::ScrollUp)],
+        &[scroll(crate::protocol::wire::ClientMouseKind::ScrollUp)],
     )
     .expect("first scroll up");
     apply_client_pane_input_events(
         &runtime,
-        &[scroll(crate::protocol::ClientMouseKind::ScrollUp)],
+        &[scroll(crate::protocol::wire::ClientMouseKind::ScrollUp)],
     )
     .expect("second scroll up");
     assert_eq!(
@@ -167,7 +169,7 @@ fn client_pane_wheel_input_accumulates_scrollback_offset() {
 
     apply_client_pane_input_events(
         &runtime,
-        &[scroll(crate::protocol::ClientMouseKind::ScrollDown)],
+        &[scroll(crate::protocol::wire::ClientMouseKind::ScrollDown)],
     )
     .expect("scroll down");
     assert_eq!(
@@ -181,9 +183,9 @@ fn client_pane_wheel_input_accumulates_scrollback_offset() {
     runtime.test_process_pty_bytes(b"\x1b[?1003h\x1b[?1006h");
     apply_client_pane_input_events(
         &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Moved,
-            position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+        &[crate::protocol::wire::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::Moved,
+            position: crate::protocol::wire::ClientMousePosition::Cell { column: 2, row: 1 },
             geometry: None,
             modifiers: 0,
             lines: 3,
@@ -204,9 +206,11 @@ fn client_pane_wheel_input_accumulates_scrollback_offset() {
 
     apply_client_pane_input_events(
         &runtime,
-        &[crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left),
-            position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+        &[crate::protocol::wire::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::Down(
+                crate::protocol::wire::ClientMouseButton::Left,
+            ),
+            position: crate::protocol::wire::ClientMousePosition::Cell { column: 2, row: 1 },
             geometry: None,
             modifiers: 0,
             lines: 3,
@@ -235,9 +239,9 @@ fn client_plain_page_keys_scroll_shell_transcript_by_pane_height() {
         apply_client_pane_input_events(
             runtime,
             &[client_page_key(
-                crate::protocol::ClientKeyCode::PageUp,
+                crate::protocol::wire::ClientKeyCode::PageUp,
                 crossterm::event::KeyModifiers::empty(),
-                crate::protocol::ClientKeyKind::Press,
+                crate::protocol::wire::ClientKeyKind::Press,
             )],
         )
         .expect("pane PageUp");
@@ -252,9 +256,9 @@ fn client_plain_page_keys_scroll_shell_transcript_by_pane_height() {
         apply_client_pane_input_events(
             runtime,
             &[client_page_key(
-                crate::protocol::ClientKeyCode::PageUp,
+                crate::protocol::wire::ClientKeyCode::PageUp,
                 crossterm::event::KeyModifiers::empty(),
-                crate::protocol::ClientKeyKind::Release,
+                crate::protocol::wire::ClientKeyKind::Release,
             )],
         )
         .expect("pane PageUp release");
@@ -269,9 +273,9 @@ fn client_plain_page_keys_scroll_shell_transcript_by_pane_height() {
         apply_client_pane_input_events(
             runtime,
             &[client_page_key(
-                crate::protocol::ClientKeyCode::PageDown,
+                crate::protocol::wire::ClientKeyCode::PageDown,
                 crossterm::event::KeyModifiers::empty(),
-                crate::protocol::ClientKeyKind::Press,
+                crate::protocol::wire::ClientKeyKind::Press,
             )],
         )
         .expect("pane PageDown");
@@ -292,9 +296,9 @@ fn client_page_keys_forward_when_modified_or_owned_by_application() {
         apply_client_pane_input_events(
             runtime,
             &[client_page_key(
-                crate::protocol::ClientKeyCode::PageUp,
+                crate::protocol::wire::ClientKeyCode::PageUp,
                 crossterm::event::KeyModifiers::CONTROL,
-                crate::protocol::ClientKeyKind::Press,
+                crate::protocol::wire::ClientKeyKind::Press,
             )],
         )
         .expect("modified pane PageUp");
@@ -315,9 +319,9 @@ fn client_page_keys_forward_when_modified_or_owned_by_application() {
         apply_client_pane_input_events(
             runtime,
             &[client_page_key(
-                crate::protocol::ClientKeyCode::PageUp,
+                crate::protocol::wire::ClientKeyCode::PageUp,
                 crossterm::event::KeyModifiers::empty(),
-                crate::protocol::ClientKeyKind::Press,
+                crate::protocol::wire::ClientKeyKind::Press,
             )],
         )
         .expect("application PageUp");
@@ -343,7 +347,7 @@ fn client_shell_streams_focused_pane_report_all_demand() {
             1,
             ClientConnection::new(
                 (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
+                crate::protocol::kitty::HostCellSize::default(),
                 1,
                 client_tx,
             ),
@@ -379,19 +383,20 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
             client_id,
             ClientConnection::new(
                 (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
+                crate::protocol::kitty::HostCellSize::default(),
                 client_id,
                 unread_test_writer(),
             ),
         );
     }
-    let key = |kind| crate::protocol::ClientPaneInputEvent::Key {
-        code: crate::protocol::ClientKeyCode::Char('x'),
+    let key = |kind| crate::protocol::wire::ClientPaneInputEvent::Key {
+        code: crate::protocol::wire::ClientKeyCode::Char('x'),
         modifiers: 0,
         kind,
         repeat_count: 1,
         shifted_codepoint: None,
-        generated_text: (kind == crate::protocol::ClientKeyKind::Press).then(|| "x".to_owned()),
+        generated_text: (kind == crate::protocol::wire::ClientKeyKind::Press)
+            .then(|| "x".to_owned()),
         tracks_release: true,
         physical_key_id: Some(0x2d),
         windows_record: None,
@@ -401,7 +406,7 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
         server.handle_server_event(ServerEvent::ClientShellPaneInput {
             client_id: 1,
             pane_id: pane_id.clone(),
-            events: vec![key(crate::protocol::ClientKeyKind::Press)],
+            events: vec![key(crate::protocol::wire::ClientKeyKind::Press)],
         })
     );
     assert!(!input_rx.recv().await.expect("encoded press").is_empty());
@@ -411,7 +416,7 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
         !server.handle_server_event(ServerEvent::ClientShellPaneInput {
             client_id: 1,
             pane_id: pane_id.clone(),
-            events: vec![key(crate::protocol::ClientKeyKind::Release)],
+            events: vec![key(crate::protocol::wire::ClientKeyKind::Release)],
         })
     );
     assert!(!input_rx.recv().await.expect("encoded release").is_empty());
@@ -421,7 +426,7 @@ async fn client_shell_release_cleanup_does_not_promote_and_survives_disconnect()
         server.handle_server_event(ServerEvent::ClientShellPaneInput {
             client_id: 1,
             pane_id,
-            events: vec![key(crate::protocol::ClientKeyKind::Press)],
+            events: vec![key(crate::protocol::wire::ClientKeyKind::Press)],
         })
     );
     assert!(!input_rx
@@ -446,7 +451,7 @@ fn client_shell_mouse_capture_combines_local_preference_with_endpoint_demand() {
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             writer,
         ),
@@ -496,7 +501,7 @@ fn client_shell_focus_promotes_and_reaches_reporting_pane() {
             1,
             ClientConnection::new(
                 (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
+                crate::protocol::kitty::HostCellSize::default(),
                 1,
                 unread_test_writer(),
             ),
@@ -505,7 +510,7 @@ fn client_shell_focus_promotes_and_reaches_reporting_pane() {
             2,
             ClientConnection::new(
                 (100, 30),
-                crate::kitty_graphics::HostCellSize::default(),
+                crate::protocol::kitty::HostCellSize::default(),
                 2,
                 unread_test_writer(),
             ),
@@ -581,7 +586,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
         1,
         ClientConnection::new(
             (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             sender_writer,
         ),
@@ -590,7 +595,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
         2,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             2,
             foreground_writer,
         ),
@@ -622,7 +627,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
         3,
         ClientConnection::new(
             (100, 30),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             3,
             shell_writer,
         ),

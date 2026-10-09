@@ -81,13 +81,13 @@ enum WindowsInputItems {
 #[cfg(windows)]
 #[derive(Default)]
 pub(super) struct WindowsInputHandoff {
-    pub(super) pending: VecDeque<Vec<crate::protocol::ClientInputEvent>>,
+    pub(super) pending: VecDeque<Vec<crate::protocol::wire::ClientInputEvent>>,
     backpressured: bool,
 }
 
 #[cfg(windows)]
 impl WindowsInputHandoff {
-    pub(super) fn push(&mut self, events: Vec<crate::protocol::ClientInputEvent>) {
+    pub(super) fn push(&mut self, events: Vec<crate::protocol::wire::ClientInputEvent>) {
         if events.is_empty() {
             return;
         }
@@ -131,7 +131,7 @@ impl WindowsInputHandoff {
         }
     }
 
-    fn push_backpressured(&mut self, events: Vec<crate::protocol::ClientInputEvent>) {
+    fn push_backpressured(&mut self, events: Vec<crate::protocol::wire::ClientInputEvent>) {
         if let Some(previous) = self.pending.back_mut() {
             if let ([previous_event], [next_event]) = (previous.as_slice(), events.as_slice()) {
                 if windows_mouse_motion_can_replace(previous_event, next_event) {
@@ -146,10 +146,10 @@ impl WindowsInputHandoff {
 
 #[cfg(windows)]
 fn windows_mouse_motion_can_replace(
-    previous: &crate::protocol::ClientInputEvent,
-    next: &crate::protocol::ClientInputEvent,
+    previous: &crate::protocol::wire::ClientInputEvent,
+    next: &crate::protocol::wire::ClientInputEvent,
 ) -> bool {
-    use crate::protocol::{ClientInputEvent, ClientMouseKind};
+    use crate::protocol::wire::{ClientInputEvent, ClientMouseKind};
 
     let (
         ClientInputEvent::Mouse {

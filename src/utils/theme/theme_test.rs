@@ -1,3 +1,4 @@
+use crate::utils::theme::Palette;
 use ratatui::style::Color;
 
 fn rgb_luminance(color: Color) -> f64 {
@@ -26,7 +27,7 @@ fn contrast_ratio(a: Color, b: Color) -> f64 {
 
 #[test]
 fn built_in_theme_names_resolve() {
-    for name in crate::config::THEME_NAMES {
+    for name in crate::utils::config::THEME_NAMES {
         assert!(
             Palette::from_name(name).is_some(),
             "theme should resolve: {name}"
@@ -36,7 +37,7 @@ fn built_in_theme_names_resolve() {
 
 #[test]
 fn built_in_active_rows_remain_visible_with_matching_terminal_backgrounds() {
-    for name in crate::config::THEME_NAMES
+    for name in crate::utils::config::THEME_NAMES
         .iter()
         .copied()
         .filter(|name| *name != "terminal")
@@ -58,7 +59,7 @@ fn built_in_active_rows_remain_visible_with_matching_terminal_backgrounds() {
 
 #[test]
 fn built_in_selection_rows_stay_distinct_from_background_and_active_rows() {
-    for name in crate::config::THEME_NAMES
+    for name in crate::utils::config::THEME_NAMES
         .iter()
         .copied()
         .filter(|name| *name != "terminal")
@@ -84,7 +85,7 @@ fn built_in_selection_rows_stay_distinct_from_background_and_active_rows() {
 
 #[test]
 fn built_in_themes_leave_sidebar_background_unset() {
-    for name in crate::config::THEME_NAMES {
+    for name in crate::utils::config::THEME_NAMES {
         let palette = Palette::from_name(name).unwrap();
         assert_eq!(
             palette.sidebar_bg,
@@ -96,7 +97,7 @@ fn built_in_themes_leave_sidebar_background_unset() {
 
 #[test]
 fn custom_sidebar_colors_override_the_defaults() {
-    let custom = crate::config::CustomThemeColors {
+    let custom = crate::utils::config::CustomThemeColors {
         sidebar_bg: Some("#181825".to_string()),
         active_row_bg: Some("#313244".to_string()),
         selection_bg: Some("#45475a".to_string()),

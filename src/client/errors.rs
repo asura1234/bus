@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::protocol;
+use crate::protocol::wire as protocol;
 use crate::utils::socket_paths::client_socket_path;
 
 /// Reopens this Bus session: a local session by its ID, an explicit

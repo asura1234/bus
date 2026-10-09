@@ -6,7 +6,7 @@ use crate::protocol::kitty::placement::{
     KittyImagePlacement, KittyPlacementRenderInfo,
 };
 use crate::protocol::wire::SurfaceGraphicsVisibility as Visibility;
-use crate::protocol::{
+use crate::protocol::wire::{
     SurfaceGraphicsAssetKey, SurfaceGraphicsFormat, SurfaceGraphicsPlacement, SurfaceGraphicsScene,
     SurfaceGraphicsSource, SurfaceGraphicsTarget,
 };

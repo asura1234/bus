@@ -1,15 +1,18 @@
 //! Monotonic snapshot/surface pairing and foreground snapshot installation.
 use super::{ClientInputLeases, ClientShellState, ShellHitMap};
 use crate::client::{
-    client_shell_resize_message, endpoint, write_to_server, ClientError, ClientState,
+    connection::{bootstrap as endpoint, write_to_server},
+    effects::client_shell_resize_message,
+    errors::ClientError,
+    state::ClientState,
 };
-use crate::protocol::{ClientShellSnapshot, PaneSurfaceFrame};
+use crate::protocol::wire::{ClientShellSnapshot, PaneSurfaceFrame};
 
 fn pane_surface_row<'a>(
     surface: &'a PaneSurfaceFrame,
-    pane: &crate::protocol::PaneSurfacePane,
+    pane: &crate::protocol::wire::PaneSurfacePane,
     absolute_row: u32,
-) -> Option<&'a [crate::protocol::CellData]> {
+) -> Option<&'a [crate::protocol::wire::CellData]> {
     let viewport_top = pane
         .scroll
         .map(|scroll| {
@@ -32,11 +35,11 @@ fn pane_surface_row<'a>(
 }
 
 fn selection_cells_unchanged(
-    selection: &crate::selection::Selection<String>,
+    selection: &crate::utils::text::selection::Selection<String>,
     previous_surface: &PaneSurfaceFrame,
-    previous_pane: &crate::protocol::PaneSurfacePane,
+    previous_pane: &crate::protocol::wire::PaneSurfacePane,
     next_surface: &PaneSurfaceFrame,
-    next_pane: &crate::protocol::PaneSurfacePane,
+    next_pane: &crate::protocol::wire::PaneSurfacePane,
 ) -> bool {
     let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
     (start_row..=end_row).all(|row| {
@@ -276,7 +279,7 @@ impl ClientShellState {
 
 pub(in crate::client) fn install_client_shell_snapshot(
     state: &mut ClientState,
-    snapshot: Box<crate::protocol::ClientShellSnapshot>,
+    snapshot: Box<crate::protocol::wire::ClientShellSnapshot>,
     connection: &mut endpoint::ServerConnection,
 ) -> Result<(), ClientError> {
     let Some(shell) = state.shell.as_mut() else {

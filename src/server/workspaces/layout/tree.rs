@@ -1,4 +1,5 @@
-use super::{Node, PaneId};
+use super::Node;
+use crate::utils::ids::PaneId;
 use ratatui::layout::Direction;
 
 pub(super) fn count_panes(node: &Node) -> usize {

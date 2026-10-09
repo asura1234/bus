@@ -19,7 +19,7 @@ use crate::messaging::{
     },
 };
 
-pub(crate) use crate::utils::env::bus_data_dir as data_dir;
+use crate::utils::env::bus_data_dir;
 
 pub(crate) fn logging_options() -> crate::utils::logging::LoggingOptions {
     use crate::utils::logging::{
@@ -40,10 +40,10 @@ pub(crate) fn logging_options() -> crate::utils::logging::LoggingOptions {
     }
 }
 
-pub(crate) fn config_override() -> Option<fn(&mut crate::config::Config)> {
-    data_dir()
+pub(crate) fn config_override() -> Option<fn(&mut crate::utils::config::Config)> {
+    bus_data_dir()
         .is_some()
-        .then_some(apply_config as fn(&mut crate::config::Config))
+        .then_some(apply_config as fn(&mut crate::utils::config::Config))
 }
 
 pub(crate) fn run(args: &[String]) -> io::Result<()> {
@@ -61,7 +61,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         return Ok(());
     }
 
-    let explicit_root = data_dir();
+    let explicit_root = bus_data_dir();
     let base = sessions::default_base_dir().map_err(io::Error::other)?;
     let registry = LocalSessionRegistry::new(base.clone());
     if invocation.action == Action::Sessions {
@@ -129,7 +129,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         "--session".to_owned(),
         coordinator::DEFAULT_SESSION.to_owned(),
     ];
-    crate::session::configure_from_args(&session).map_err(io::Error::other)?;
+    crate::utils::paths::configure_from_args(&session).map_err(io::Error::other)?;
     match invocation.action {
         Action::Control(control_args) => control::run(&root, &control_args),
         Action::Stop => {
@@ -141,7 +141,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         Action::Paths => {
             help::write_stdout_line(format_args!(
                 "{}",
-                serde_json::json!({"data":root,"session_base":base,"dev":dev,"logs":crate::session::data_dir(),"callback_logs":root.join("callbacks/<launch-id>/hook.log"),"config":crate::config::config_dir(),"state":crate::config::state_dir(),"xdg_config":std::env::var("XDG_CONFIG_HOME").ok(),"xdg_state":std::env::var("XDG_STATE_HOME").ok()})
+                serde_json::json!({"data":root,"session_base":base,"dev":dev,"logs":crate::utils::paths::data_dir(),"callback_logs":root.join("callbacks/<launch-id>/hook.log"),"config":crate::utils::config::config_dir(),"state":crate::utils::config::state_dir(),"xdg_config":std::env::var("XDG_CONFIG_HOME").ok(),"xdg_state":std::env::var("XDG_STATE_HOME").ok()})
             ));
             Ok(())
         }
@@ -149,7 +149,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
     }
 }
 
-pub(crate) fn apply_config(config: &mut crate::config::Config) {
+pub(crate) fn apply_config(config: &mut crate::utils::config::Config) {
     config.onboarding = Some(false);
     config.ui.sound.enabled = false;
 }

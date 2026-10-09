@@ -1,4 +1,12 @@
-use crate::utils::render::widgets::selection::relative_luminance;
+use crate::utils::ids::PaneId;
+use crate::utils::render::widgets::selection::{
+    automatic_selection_bg, automatic_selection_style, relative_luminance,
+    render_selection_highlight,
+};
+use crate::utils::text::selection::Selection;
+use crate::utils::theme::Palette;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
 #[test]
 fn selection_highlight_uses_one_uniform_style() {
     let palette = Palette::catppuccin();

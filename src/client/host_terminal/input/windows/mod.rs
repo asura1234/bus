@@ -15,7 +15,7 @@ pub(super) use reader::{
 #[cfg(all(test, windows))]
 use super::ClientLoopEvent;
 #[cfg(test)]
-use crate::input::WindowsKeyRecord;
+use crate::protocol::keys::WindowsKeyRecord;
 #[cfg(test)]
 use mapper::WindowsInputMapper;
 #[cfg(test)]
@@ -38,7 +38,10 @@ struct WindowsInputTranslator {
 
 #[cfg(test)]
 impl WindowsInputTranslator {
-    fn translate(&mut self, record: WindowsInputRecord) -> Vec<crate::protocol::ClientInputEvent> {
+    fn translate(
+        &mut self,
+        record: WindowsInputRecord,
+    ) -> Vec<crate::protocol::wire::ClientInputEvent> {
         let mut events = Vec::new();
         for item in self.mapper.translate(record) {
             events.extend(self.pump.process(item));
@@ -46,7 +49,7 @@ impl WindowsInputTranslator {
         events
     }
 
-    fn idle(&mut self) -> Vec<crate::protocol::ClientInputEvent> {
+    fn idle(&mut self) -> Vec<crate::protocol::wire::ClientInputEvent> {
         let mut events = Vec::new();
         for item in self.mapper.idle() {
             events.extend(self.pump.process(item));

@@ -12,8 +12,8 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            headless_cols: crate::config::DEFAULT_HEADLESS_COLS,
-            headless_rows: crate::config::DEFAULT_HEADLESS_ROWS,
+            headless_cols: crate::utils::config::DEFAULT_HEADLESS_COLS,
+            headless_rows: crate::utils::config::DEFAULT_HEADLESS_ROWS,
         }
     }
 }

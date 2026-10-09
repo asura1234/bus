@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::server::app::{App, Mode};
-use crate::{config::NewTerminalCwdConfig, workspace::Workspace};
+use crate::server::{app::App, app_settings::Mode};
+use crate::{server::workspaces::Workspace, utils::config::NewTerminalCwdConfig};
 
 pub(crate) fn resolve_new_terminal_cwd(
     policy: &NewTerminalCwdConfig,
@@ -19,14 +19,14 @@ pub(crate) fn resolve_new_terminal_cwd(
         NewTerminalCwdConfig::Current => {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
         }
-        NewTerminalCwdConfig::Path(path) => crate::home_path::expand_tilde_path(path),
+        NewTerminalCwdConfig::Path(path) => crate::utils::home_path::expand_tilde_path(path),
     }
 }
 
 pub(in crate::server) fn launch_cwd_for_terminal(
-    terminal_id: &crate::terminal::TerminalId,
+    terminal_id: &crate::utils::ids::TerminalId,
     terminals: &std::collections::HashMap<
-        crate::terminal::TerminalId,
+        crate::utils::ids::TerminalId,
         crate::terminal::TerminalState,
     >,
     terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
@@ -52,7 +52,7 @@ impl App {
     pub(in crate::server) fn launch_cwd_for_pane_in_workspace(
         &self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> Option<PathBuf> {
         let workspace = self.state.workspaces.get(ws_idx)?;
         let tab = workspace
@@ -85,7 +85,7 @@ impl App {
             .state
             .workspaces
             .get(ws_idx)
-            .map(crate::workspace::Workspace::active_tab_index);
+            .map(crate::server::workspaces::Workspace::active_tab_index);
         self.resolved_new_workspace_cwd_from_tab(ws_idx, tab_idx)
     }
 
@@ -139,7 +139,10 @@ impl App {
             self.state.pane_scrollback_limit_bytes,
             self.state.host_terminal_theme,
             self.state.host_terminal_appearance,
-            crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
+            crate::terminal::runtime::spawn::PaneShellConfig::new(
+                &self.state.default_shell,
+                self.state.shell_mode,
+            ),
             self.event_tx.clone(),
             self.render_notify.clone(),
             self.render_dirty.clone(),
@@ -153,7 +156,7 @@ impl App {
             .remove_alias_shadowed_by_new_pane(self.state.workspaces[idx].tabs[0].root_pane);
         let workspace_id = self.state.workspaces[idx].id.clone();
         let root_pane = self.state.workspaces[idx].tabs[0].root_pane.raw();
-        crate::logging::workspace_created(&workspace_id, root_pane);
+        crate::utils::logging::workspace_created(&workspace_id, root_pane);
         if focus || self.state.active.is_none() {
             self.state.switch_workspace(idx);
             self.state.mode = Mode::Terminal;
@@ -165,7 +168,7 @@ impl App {
     pub(in crate::server) fn lookup_runtime(
         &self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> Option<(&crate::terminal::TerminalRuntime, String)> {
         let runtime =
             self.state
@@ -176,7 +179,7 @@ impl App {
     pub(in crate::server) fn lookup_runtime_sender(
         &self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> Option<&crate::terminal::TerminalRuntime> {
         self.state
             .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)

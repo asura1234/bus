@@ -68,19 +68,20 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(resolved.ws_idx, resolved.pane_id) else {
             return agent_not_found(id, &params.target);
         };
-        let (keys, reason) = match runtime
-            .try_choose_dialog_option(&params.expected_dialog_digest, params.option)
-        {
-            Ok(crate::pane::DialogChoice::Sent(keys)) => (keys, None),
-            Ok(crate::pane::DialogChoice::Stale) => (Vec::new(), Some("stale_or_changed_dialog")),
-            Ok(crate::pane::DialogChoice::Unreachable) => {
-                (Vec::new(), Some("option_missing_or_selection_not_visible"))
-            }
-            Ok(crate::pane::DialogChoice::NotQuestion) => {
-                (Vec::new(), Some("not_a_free_text_question"))
-            }
-            Err(error) => return encode_error(id, "dialog_write_failed", error),
-        };
+        let (keys, reason) =
+            match runtime.try_choose_dialog_option(&params.expected_dialog_digest, params.option) {
+                Ok(crate::terminal::runtime::DialogChoice::Sent(keys)) => (keys, None),
+                Ok(crate::terminal::runtime::DialogChoice::Stale) => {
+                    (Vec::new(), Some("stale_or_changed_dialog"))
+                }
+                Ok(crate::terminal::runtime::DialogChoice::Unreachable) => {
+                    (Vec::new(), Some("option_missing_or_selection_not_visible"))
+                }
+                Ok(crate::terminal::runtime::DialogChoice::NotQuestion) => {
+                    (Vec::new(), Some("not_a_free_text_question"))
+                }
+                Err(error) => return encode_error(id, "dialog_write_failed", error),
+            };
         let Some(observation) = dialog_observation(&agent, runtime) else {
             return encode_error(
                 id,
@@ -142,12 +143,14 @@ impl App {
             params.text,
             params.skip,
         ) {
-            Ok(crate::pane::DialogChoice::Sent(keys)) => (keys, None),
-            Ok(crate::pane::DialogChoice::Stale) => (Vec::new(), Some("stale_or_changed_dialog")),
-            Ok(crate::pane::DialogChoice::NotQuestion) => {
+            Ok(crate::terminal::runtime::DialogChoice::Sent(keys)) => (keys, None),
+            Ok(crate::terminal::runtime::DialogChoice::Stale) => {
+                (Vec::new(), Some("stale_or_changed_dialog"))
+            }
+            Ok(crate::terminal::runtime::DialogChoice::NotQuestion) => {
                 (Vec::new(), Some("not_a_free_text_question"))
             }
-            Ok(crate::pane::DialogChoice::Unreachable) => {
+            Ok(crate::terminal::runtime::DialogChoice::Unreachable) => {
                 (Vec::new(), Some("question_input_unavailable"))
             }
             Err(error) => return encode_error(id, "dialog_write_failed", error),
@@ -186,10 +189,10 @@ fn dialog_observation(
             .as_ref()
             .map(|session| session.value.clone()),
         content_revision,
-        dialog: crate::detect::dialog::parse(&screen).map(|dialog| AgentDialog {
+        dialog: crate::agents::dialog::parse(&screen).map(|dialog| AgentDialog {
             kind: match dialog.kind {
-                crate::detect::dialog::DialogKind::Choice => AgentDialogKind::Choice,
-                crate::detect::dialog::DialogKind::Question => AgentDialogKind::Question,
+                crate::agents::dialog::DialogKind::Choice => AgentDialogKind::Choice,
+                crate::agents::dialog::DialogKind::Question => AgentDialogKind::Question,
             },
             id: dialog.id(),
             digest: dialog.digest(),

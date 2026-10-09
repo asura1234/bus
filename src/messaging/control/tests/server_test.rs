@@ -1,5 +1,5 @@
 use super::*;
-use crate::ipc;
+use crate::platform::ipc;
 use interprocess::local_socket::traits::Stream as _;
 use serde_json::json;
 use std::{

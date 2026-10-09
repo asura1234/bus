@@ -1,6 +1,6 @@
 //! Prompt recall, quoting and history-search navigation.
 use super::super::{editor::Editor, BusUi, HistorySearch};
-use crate::bus::model::{RequestId, RoomId};
+use crate::messaging::model::{RequestId, RoomId};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 impl BusUi {

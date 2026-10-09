@@ -5,7 +5,7 @@ async fn client_shell_attach_seeds_workspace() {
     let mut server = test_headless_server();
     server.app.state.workspaces.clear();
     server.app.state.active = None;
-    server.app.state.mode = crate::app::Mode::Navigate;
+    server.app.state.mode = crate::server::app_settings::Mode::Navigate;
     let (writer, _control_rx, _render_rx) = test_client_writer();
 
     assert!(
@@ -24,7 +24,10 @@ async fn client_shell_attach_seeds_workspace() {
         })
     );
 
-    assert_eq!(server.app.state.mode, crate::app::Mode::Terminal);
+    assert_eq!(
+        server.app.state.mode,
+        crate::server::app_settings::Mode::Terminal
+    );
     assert_eq!(server.app.state.workspaces.len(), 1);
     assert_eq!(server.app.state.active, Some(0));
     shutdown_test_runtimes(&mut server);
@@ -33,7 +36,7 @@ async fn client_shell_attach_seeds_workspace() {
 #[tokio::test]
 async fn client_shell_endpoint_request_uses_the_selected_connection() {
     let mut server = test_headless_server();
-    server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("endpoint")];
+    server.app.state.workspaces = vec![crate::server::workspaces::Workspace::test_new("endpoint")];
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(0);
     let (writer, control_rx, _render_rx) = test_client_writer();
@@ -123,7 +126,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
 #[tokio::test]
 async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("shell-only-label");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("shell-only-label");
     let pane_id = workspace.focused_pane_id().expect("focused pane");
     workspace.insert_test_runtime(
         pane_id,
@@ -136,7 +139,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     server.server_config_diagnostic = Some("endpoint config warning".into());
 
     let (writer, control_rx, render_rx) = test_client_writer();
@@ -255,7 +258,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
 #[tokio::test]
 async fn client_shell_tabs_render_accept_input_and_resize_independently() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("independent-geometry");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("independent-geometry");
     let first_pane = workspace.tabs[0].root_pane;
     let second_tab = workspace.test_add_tab(Some("second"));
     let second_pane = workspace.tabs[second_tab].root_pane;
@@ -275,7 +278,7 @@ async fn client_shell_tabs_render_accept_input_and_resize_independently() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
     let second_pane_id = server.app.public_pane_id(0, second_pane).unwrap();
     let initial_second_size =
@@ -304,7 +307,7 @@ async fn client_shell_tabs_render_accept_input_and_resize_independently() {
     server.handle_server_event(ServerEvent::ClientShellPaneInput {
         client_id: 22,
         pane_id: second_pane_id,
-        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+        events: vec![crate::protocol::wire::ClientPaneInputEvent::TextCommit(
             "typed".into(),
         )],
     });
@@ -359,13 +362,13 @@ async fn client_shell_tabs_render_accept_input_and_resize_independently() {
 #[tokio::test]
 async fn public_background_tab_create_preserves_client_locations() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("background-create");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("background-create");
     let second_tab = workspace.test_add_tab(Some("second"));
     server.app.state.workspaces = vec![workspace];
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let workspace_id = server.app.public_workspace_id(0);
     let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
@@ -377,16 +380,18 @@ async fn public_background_tab_create_preserves_client_locations() {
     assert!(server.focus_shell_client_on_tab(71, &second_tab_id));
 
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
-    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
-        request: crate::api::schema::Request {
+    server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+        request: crate::protocol::api::schema::Request {
             id: "create-background-tab".into(),
-            method: crate::api::schema::Method::TabCreate(crate::api::schema::TabCreateParams {
-                workspace_id: Some(workspace_id),
-                cwd: None,
-                focus: false,
-                label: Some("background".into()),
-                env: std::collections::HashMap::new(),
-            }),
+            method: crate::protocol::api::schema::Method::TabCreate(
+                crate::protocol::api::schema::TabCreateParams {
+                    workspace_id: Some(workspace_id),
+                    cwd: None,
+                    focus: false,
+                    label: Some("background".into()),
+                    env: std::collections::HashMap::new(),
+                },
+            ),
         },
         respond_to,
     });
@@ -405,14 +410,14 @@ async fn public_background_tab_create_preserves_client_locations() {
 #[tokio::test]
 async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
     let mut server = test_headless_server();
-    let mut first = crate::workspace::Workspace::test_new("first");
+    let mut first = crate::server::workspaces::Workspace::test_new("first");
     let second_tab = first.test_add_tab(Some("second"));
-    let second = crate::workspace::Workspace::test_new("second");
+    let second = crate::server::workspaces::Workspace::test_new("second");
     server.app.state.workspaces = vec![first, second];
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let first_workspace_id = server.app.public_workspace_id(0);
     let second_workspace_id = server.app.public_workspace_id(1);
     let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
@@ -425,11 +430,11 @@ async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
     assert!(server.focus_shell_client_on_tab(41, &second_tab_id));
 
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
-    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
-        request: crate::api::schema::Request {
+    server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+        request: crate::protocol::api::schema::Request {
             id: "focus-second-workspace".into(),
-            method: crate::api::schema::Method::WorkspaceFocus(
-                crate::api::schema::WorkspaceTarget {
+            method: crate::protocol::api::schema::Method::WorkspaceFocus(
+                crate::protocol::api::schema::WorkspaceTarget {
                     workspace_id: second_workspace_id.clone(),
                 },
             ),
@@ -461,13 +466,13 @@ async fn public_workspace_focus_preserves_each_clients_remembered_tabs() {
 #[tokio::test]
 async fn public_api_focus_replaces_every_client_shell_projection() {
     let mut server = test_headless_server();
-    let first = crate::workspace::Workspace::test_new("first");
-    let second = crate::workspace::Workspace::test_new("second");
+    let first = crate::server::workspaces::Workspace::test_new("first");
+    let second = crate::server::workspaces::Workspace::test_new("second");
     server.app.state.workspaces = vec![first, second];
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let second_id = server.app.session_snapshot().workspaces[1]
         .workspace_id
         .clone();
@@ -494,11 +499,11 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
     .revision;
 
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
-    server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
-        request: crate::api::schema::Request {
+    server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+        request: crate::protocol::api::schema::Request {
             id: "test.client.shell.workspace.focus".into(),
-            method: crate::api::schema::Method::WorkspaceFocus(
-                crate::api::schema::WorkspaceTarget {
+            method: crate::protocol::api::schema::Method::WorkspaceFocus(
+                crate::protocol::api::schema::WorkspaceTarget {
                     workspace_id: second_id.clone(),
                 },
             ),
@@ -532,7 +537,7 @@ fn client_shell_host_theme_follows_foreground_client() {
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             unread_test_writer(),
         ),
@@ -541,7 +546,7 @@ fn client_shell_host_theme_follows_foreground_client() {
         2,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             2,
             unread_test_writer(),
         ),
@@ -587,7 +592,7 @@ fn client_shell_host_theme_follows_foreground_client() {
     );
     assert_eq!(
         server.app.state.host_terminal_appearance,
-        Some(crate::terminal_theme::HostAppearance::Dark)
+        Some(crate::utils::theme::color::HostAppearance::Dark)
     );
     assert!(server.app.state.host_terminal_appearance_explicit);
 
@@ -618,7 +623,7 @@ fn client_shell_host_theme_follows_foreground_client() {
     );
     assert_eq!(
         server.app.state.host_terminal_appearance,
-        Some(crate::terminal_theme::HostAppearance::Light)
+        Some(crate::utils::theme::color::HostAppearance::Light)
     );
     assert!(!server.app.state.host_terminal_appearance_explicit);
 }
@@ -645,7 +650,7 @@ fn client_shell_stores_known_cell_geometry_independently_of_pixel_mouse() {
         assert!(!server.clients[&7].pixel_mouse);
         assert_eq!(
             server.clients[&7].cell_size,
-            crate::kitty_graphics::HostCellSize::default()
+            crate::protocol::kitty::HostCellSize::default()
         );
 
         let (writer, _control_rx, _render_rx) = test_client_writer();
@@ -667,7 +672,7 @@ fn client_shell_stores_known_cell_geometry_independently_of_pixel_mouse() {
         assert!(!server.clients[&8].pixel_mouse);
         assert_eq!(
             server.clients[&8].cell_size,
-            crate::kitty_graphics::HostCellSize {
+            crate::protocol::kitty::HostCellSize {
                 width_px: 10,
                 height_px: 20,
             }
@@ -678,13 +683,13 @@ fn client_shell_stores_known_cell_geometry_independently_of_pixel_mouse() {
 #[tokio::test]
 async fn client_shell_tab_focus_changes_only_the_source_connection() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("independent-tabs");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("independent-tabs");
     let second_tab = workspace.test_add_tab(Some("second"));
     server.app.state.workspaces = vec![workspace];
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let tab_ids = server
         .app
         .session_snapshot()
@@ -751,7 +756,7 @@ async fn client_shell_tab_focus_changes_only_the_source_connection() {
 #[tokio::test]
 async fn client_local_navigation_does_not_emit_global_focus_transitions() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("independent-focus");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("independent-focus");
     let first_pane = workspace.tabs[0].root_pane;
     let second_tab = workspace.test_add_tab(Some("second"));
     let second_pane = workspace.tabs[second_tab].root_pane;
@@ -776,7 +781,7 @@ async fn client_local_navigation_does_not_emit_global_focus_transitions() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
 
     let (first_control, _) = connect_matching_test_shell(&mut server, 61);
@@ -790,12 +795,14 @@ async fn client_local_navigation_does_not_emit_global_focus_transitions() {
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
     server.handle_client_shell_api_request(
         62,
-        crate::api::ApiRequestMessage {
-            request: crate::api::schema::Request {
+        crate::server::api::ApiRequestMessage {
+            request: crate::protocol::api::schema::Request {
                 id: "focus-own-tab".into(),
-                method: crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
-                    tab_id: second_tab_id,
-                }),
+                method: crate::protocol::api::schema::Method::TabFocus(
+                    crate::protocol::api::schema::TabTarget {
+                        tab_id: second_tab_id,
+                    },
+                ),
             },
             respond_to,
         },
@@ -809,7 +816,7 @@ async fn client_local_navigation_does_not_emit_global_focus_transitions() {
 #[tokio::test]
 async fn public_close_reapplies_controller_geometry() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("public-close-geometry");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("public-close-geometry");
     let first_pane = workspace.tabs[0].root_pane;
     let second_pane = workspace.test_split(ratatui::layout::Direction::Vertical);
     workspace.insert_test_runtime(
@@ -823,7 +830,7 @@ async fn public_close_reapplies_controller_geometry() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let second_pane_id = server.app.public_pane_id(0, second_pane).unwrap();
 
     let (control, _) = connect_test_shell(&mut server, 66, 100, 30);
@@ -833,12 +840,14 @@ async fn public_close_reapplies_controller_geometry() {
 
     let (respond_to, _response_rx) = std::sync::mpsc::channel();
     assert!(
-        server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
-            request: crate::api::schema::Request {
+        server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            request: crate::protocol::api::schema::Request {
                 id: "public-close-geometry".into(),
-                method: crate::api::schema::Method::PaneClose(crate::api::schema::PaneTarget {
-                    pane_id: second_pane_id,
-                }),
+                method: crate::protocol::api::schema::Method::PaneClose(
+                    crate::protocol::api::schema::PaneTarget {
+                        pane_id: second_pane_id,
+                    }
+                ),
             },
             respond_to,
         })

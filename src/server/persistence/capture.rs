@@ -12,7 +12,7 @@ use std::collections::HashMap;
 pub fn capture(
     workspaces: &[Workspace],
     terminals: &std::collections::HashMap<
-        crate::terminal::TerminalId,
+        crate::utils::ids::TerminalId,
         crate::terminal::TerminalState,
     >,
     terminal_runtimes: &TerminalRuntimeRegistry,
@@ -33,7 +33,7 @@ pub fn capture(
 fn capture_workspace(
     ws: &Workspace,
     terminals: &std::collections::HashMap<
-        crate::terminal::TerminalId,
+        crate::utils::ids::TerminalId,
         crate::terminal::TerminalState,
     >,
     terminal_runtimes: &TerminalRuntimeRegistry,
@@ -64,7 +64,7 @@ fn capture_workspace(
 fn capture_tab(
     tab: &crate::server::workspaces::Tab,
     terminals: &std::collections::HashMap<
-        crate::terminal::TerminalId,
+        crate::utils::ids::TerminalId,
         crate::terminal::TerminalState,
     >,
     terminal_runtimes: &TerminalRuntimeRegistry,
@@ -83,7 +83,7 @@ fn capture_tab(
                     terminal.agent_name.clone(),
                     terminal
                         .managed_agent_kind()
-                        .map(|agent| crate::detect::agent_label(agent).to_string()),
+                        .map(|agent| crate::agents::agent_label(agent).to_string()),
                 )
             })
             .unwrap_or_default();
@@ -157,7 +157,7 @@ fn capture_tab_history(
 }
 
 fn capture_pane_history(
-    pane: &crate::pane::PaneState,
+    pane: &crate::server::workspaces::pane::PaneState,
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> Option<PaneHistorySnapshot> {
     let ansi = terminal_runtimes

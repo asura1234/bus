@@ -3,13 +3,13 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::{Direction, Rect};
 
-use crate::app::{App, AppPolicy};
-use crate::client::{ClientShellConfig, ClientShellState};
-use crate::config::Config;
-use crate::kitty_graphics::HostCellSize;
-use crate::protocol::PaneSurfaceFrame;
+use crate::client::compositor::{ClientShellConfig, ClientShellState};
+use crate::protocol::kitty::HostCellSize;
+use crate::protocol::wire::PaneSurfaceFrame;
+use crate::server::app::{App, AppPolicy};
+use crate::server::workspaces::Workspace;
 use crate::terminal::TerminalRuntime;
-use crate::workspace::Workspace;
+use crate::utils::config::Config;
 
 const COLS: u16 = 120;
 const ROWS: u16 = 40;
@@ -49,7 +49,7 @@ impl RenderPipeline {
             AppPolicy::TEST,
             None,
             api_rx,
-            crate::api::EventHub::default(),
+            crate::server::api::EventHub::default(),
         );
         app.state.workspaces = workspaces;
         app.state.active = Some(0);
@@ -75,14 +75,12 @@ impl RenderPipeline {
     fn render_once(&mut self) -> (Duration, Duration) {
         let surface_size = self.client.surface_size(COLS, ROWS);
         let started = Instant::now();
-        let target = self
-            .app
-            .state
-            .active
-            .map(|workspace_index| crate::ui::TabSurfaceTarget {
+        let target = self.app.state.active.map(|workspace_index| {
+            crate::server::rendering::surface::TabSurfaceTarget {
                 workspace_index,
                 tab_index: self.app.state.workspaces[workspace_index].active_tab_index(),
-            });
+            }
+        });
         let rendered = crate::server::rendering::snapshot::render_pane_surface(
             &mut self.app,
             target,
@@ -243,7 +241,7 @@ fn profile_snapshot_encoding(
         for client_index in 0..client_count {
             let mut snapshot = template.clone();
             snapshot.revision = client_index as u64 + 1;
-            let message = crate::protocol::endpoint::snapshot_message(&snapshot)
+            let message = crate::protocol::wire::handshake::snapshot_message(&snapshot)
                 .expect("benchmark snapshot should serialize");
             black_box(
                 bincode::serde::encode_to_vec(message, bincode::config::standard())
@@ -293,7 +291,7 @@ fn print_token_rule_profiles() {
                 let mut pipeline = RenderPipeline::with_config(build(count), &config);
                 pipeline.app.state.ensure_test_terminals();
                 for terminal in pipeline.app.state.terminals.values_mut() {
-                    terminal.detected_agent = Some(crate::detect::Agent::Pi);
+                    terminal.detected_agent = Some(crate::agents::AgentKind::Pi);
                 }
                 pipeline.client.set_snapshot(Box::new(
                     crate::server::rendering::snapshot::snapshot(

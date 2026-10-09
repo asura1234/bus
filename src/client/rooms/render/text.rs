@@ -1,5 +1,5 @@
 //! Display filtering and cell-aware wrapping/offsets.
-use crate::bus::model::{Provider, RuntimeStatus};
+use crate::messaging::model::{Provider, RuntimeStatus};
 use std::ops::Range;
 use unicode_width::UnicodeWidthChar;
 

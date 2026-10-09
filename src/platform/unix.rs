@@ -8,9 +8,11 @@ pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::C
     }
 }
 
-pub(crate) fn wait_client_stream_readable(stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
+pub(crate) fn wait_client_stream_readable(
+    stream: &crate::platform::ipc::LocalStream,
+) -> std::io::Result<()> {
     use std::os::fd::{AsFd as _, AsRawFd as _};
-    let crate::ipc::LocalStream::UdSocket(stream) = stream;
+    let crate::platform::ipc::LocalStream::UdSocket(stream) = stream;
     let mut descriptor = libc::pollfd {
         fd: stream.as_fd().as_raw_fd(),
         events: libc::POLLIN,

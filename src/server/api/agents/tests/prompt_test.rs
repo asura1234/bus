@@ -2,13 +2,13 @@ use super::*;
 
 #[test]
 fn prompt_delay_only_scales_for_windows_codex() {
-    let codex_delay = agent_prompt_submit_delay(Agent::Codex, 4_096);
+    let codex_delay = agent_prompt_submit_delay(AgentKind::Codex, 4_096);
     #[cfg(windows)]
     assert_eq!(codex_delay, Duration::from_millis(1_624));
     #[cfg(not(windows))]
     assert_eq!(codex_delay, AGENT_PROMPT_SUBMIT_DELAY);
     assert_eq!(
-        agent_prompt_submit_delay(Agent::OpenCode, 4_096),
+        agent_prompt_submit_delay(AgentKind::OpenCode, 4_096),
         AGENT_PROMPT_SUBMIT_DELAY
     );
 }
@@ -100,12 +100,12 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.begin_managed_agent(
         "bus-r1-a2".into(),
-        Agent::Codex,
+        AgentKind::Codex,
         now,
         Duration::ZERO,
         Duration::from_secs(10),
     );
-    terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
     let (runtime, mut rx) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 2);
@@ -141,7 +141,7 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
             .terminals
             .get_mut(&terminal_id)
             .unwrap()
-            .set_detected_state(Some(Agent::Codex), state);
+            .set_detected_state(Some(AgentKind::Codex), state);
         assert!(run(&mut app, params.clone()).contains("agent_not_idle"));
         assert!(rx.try_recv().is_err());
     }
@@ -149,7 +149,7 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
         .terminals
         .get_mut(&terminal_id)
         .unwrap()
-        .set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     let mut wrong = info.clone();
     wrong.agent = Some("claude".into());
     assert!(check_unbound_prompt_identity_and_idle(&wrong, &params).is_err());
@@ -179,7 +179,7 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
         .set_agent_session_ref_for_session_start(
             "herdr:codex".into(),
             "codex".into(),
-            crate::agent_resume::AgentSessionRef::id("already-bound"),
+            crate::agents::resume::catalog::AgentSessionRef::id("already-bound"),
             Some(1),
             None,
         );
@@ -199,17 +199,17 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
     let now = std::time::Instant::now();
     terminal.begin_managed_agent(
         "bus-r1-a2".into(),
-        Agent::Codex,
+        AgentKind::Codex,
         now,
         Duration::ZERO,
         Duration::from_secs(10),
     );
-    terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
     terminal.set_agent_session_ref_for_session_start(
         "bus".into(),
         "codex".into(),
-        crate::agent_resume::AgentSessionRef::id("session"),
+        crate::agents::resume::catalog::AgentSessionRef::id("session"),
         Some(1),
         None,
     );
@@ -250,7 +250,7 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
             .terminals
             .get_mut(&terminal_id)
             .unwrap()
-            .set_detected_state(Some(Agent::Codex), state);
+            .set_detected_state(Some(AgentKind::Codex), state);
         let rejected = run(&mut app, params.clone())
             .recv_timeout(Duration::from_secs(1))
             .unwrap();
@@ -261,7 +261,7 @@ async fn guarded_prompt_rechecks_identity_and_idle_then_reuses_delayed_enter() {
         .terminals
         .get_mut(&terminal_id)
         .unwrap()
-        .set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     let response = run(&mut app, params);
     assert!(response.try_recv().is_err());
     let result = response.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -286,17 +286,17 @@ async fn guarded_codex_prompt_rejects_nonempty_composer_without_writing() {
     let now = std::time::Instant::now();
     terminal.begin_managed_agent(
         "bus-r1-a2".into(),
-        Agent::Codex,
+        AgentKind::Codex,
         now,
         Duration::ZERO,
         Duration::from_secs(10),
     );
-    terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
     terminal.reconcile_managed_agent_at(now + Duration::from_secs(1), false);
     terminal.set_agent_session_ref_for_session_start(
         "bus".into(),
         "codex".into(),
-        crate::agent_resume::AgentSessionRef::id("session"),
+        crate::agents::resume::catalog::AgentSessionRef::id("session"),
         Some(1),
         None,
     );
@@ -341,7 +341,7 @@ async fn agent_prompt_sends_text_then_delays_enter() {
         .clone();
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.set_agent_name("reviewer".into());
-    terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Working);
+    terminal.set_detected_state(Some(AgentKind::OpenCode), AgentState::Working);
     let (runtime, mut rx) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 2);
     runtime.test_process_pty_bytes(b"\x1b[?2004h");
@@ -417,7 +417,7 @@ async fn agent_prompt_rejects_blocked_agent_without_writing() {
         .clone();
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.set_agent_name("reviewer".into());
-    terminal.set_detected_state(Some(Agent::GithubCopilot), AgentState::Blocked);
+    terminal.set_detected_state(Some(AgentKind::GithubCopilot), AgentState::Blocked);
     let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
     app.state.insert_test_runtime(pane_id, runtime);
 
@@ -454,7 +454,7 @@ async fn agent_prompt_focuses_copilot_before_submitting() {
         .clone();
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.set_agent_name("reviewer".into());
-    terminal.set_detected_state(Some(Agent::GithubCopilot), AgentState::Idle);
+    terminal.set_detected_state(Some(AgentKind::GithubCopilot), AgentState::Idle);
     let (runtime, mut rx) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 3);
     runtime.test_process_pty_bytes(b"\x1b[?2004h");
@@ -493,12 +493,12 @@ async fn agent_prompt_rejects_managed_agent_while_startup_is_pending() {
     let now = std::time::Instant::now();
     terminal.begin_managed_agent(
         "reviewer".into(),
-        Agent::OpenCode,
+        AgentKind::OpenCode,
         now,
         std::time::Duration::from_secs(3),
         std::time::Duration::from_secs(10),
     );
-    terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
+    terminal.set_detected_state(Some(AgentKind::OpenCode), AgentState::Idle);
     let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
     app.state.insert_test_runtime(pane_id, runtime);
 

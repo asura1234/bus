@@ -1,19 +1,20 @@
-use crate::app;
-use crate::app::state::AppState;
-use crate::config;
-use crate::detect::AgentState;
-use crate::layout::PaneId;
+use crate::agents::AgentState;
 use crate::protocol;
+use crate::server::app_state::AppState;
 use crate::terminal::TerminalRuntimeRegistry;
+use crate::utils::config;
+use crate::utils::ids::PaneId;
 
 pub(crate) fn should_forward_toast_to_clients(delivery: config::ToastDelivery) -> bool {
     toast_notify_kind(delivery).is_some()
 }
 
-pub(crate) fn toast_notify_kind(delivery: config::ToastDelivery) -> Option<protocol::NotifyKind> {
+pub(crate) fn toast_notify_kind(
+    delivery: config::ToastDelivery,
+) -> Option<protocol::wire::NotifyKind> {
     match delivery {
-        config::ToastDelivery::Terminal => Some(protocol::NotifyKind::Toast),
-        config::ToastDelivery::System => Some(protocol::NotifyKind::SystemToast),
+        config::ToastDelivery::Terminal => Some(protocol::wire::NotifyKind::Toast),
+        config::ToastDelivery::System => Some(protocol::wire::NotifyKind::SystemToast),
         config::ToastDelivery::Off | config::ToastDelivery::Herdr => None,
     }
 }
@@ -38,7 +39,7 @@ pub(crate) fn toast_message_from_state_change(
                     .terminals
                     .get(&pane.attached_terminal_id)
                     .and_then(|terminal| terminal.effective_agent_label())?;
-                let kind = app::actions::notification_toast_for_state_change_with_agent_labels(
+                let kind = crate::server::notifications::policy::notification_toast_for_state_change_with_agent_labels(
                     suppress_active_tab_notifications,
                     prev_state,
                     new_state,
@@ -50,17 +51,17 @@ pub(crate) fn toast_message_from_state_change(
                     "{} {}: {}",
                     agent_label,
                     toast_event_text(kind),
-                    app::actions::notification_context(ws, &workspace_label, ws_idx, pane_id)
+                    crate::server::notifications::policy::notification_context(ws, &workspace_label, ws_idx, pane_id)
                 ))
             })
         })
 }
 
-fn toast_event_text(kind: app::state::ToastKind) -> &'static str {
+fn toast_event_text(kind: crate::server::app_state::ToastKind) -> &'static str {
     match kind {
-        app::state::ToastKind::NeedsAttention => "needs attention",
-        app::state::ToastKind::Finished => "finished",
-        app::state::ToastKind::UpdateInstalled => "updated",
+        crate::server::app_state::ToastKind::NeedsAttention => "needs attention",
+        crate::server::app_state::ToastKind::Finished => "finished",
+        crate::server::app_state::ToastKind::UpdateInstalled => "updated",
     }
 }
 
@@ -77,7 +78,7 @@ impl App {
     ) {
         if !matches!(
             self.state.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
+            crate::utils::config::ToastDelivery::Herdr
         ) || self.state.toast == *previous_toast
         {
             return;
@@ -102,7 +103,7 @@ impl App {
         }
 
         let workspace_label = ws.display_name_from(&self.state.terminals, &self.terminal_runtimes);
-        let context = crate::server::terminals::events::notification_context(
+        let context = crate::server::notifications::policy::notification_context(
             ws,
             &workspace_label,
             update.ws_idx,
@@ -145,7 +146,7 @@ impl App {
             let ws = &self.state.workspaces[ws_idx];
             let workspace_label =
                 ws.display_name_from(&self.state.terminals, &self.terminal_runtimes);
-            let context = crate::server::terminals::events::notification_context(
+            let context = crate::server::notifications::policy::notification_context(
                 ws,
                 &workspace_label,
                 ws_idx,
@@ -184,8 +185,8 @@ impl App {
             .and_then(|body| sanitized_notification_text(body, 240));
 
         let reason = match self.state.toast_config.delivery {
-            crate::config::ToastDelivery::Off => NotificationShowReason::Disabled,
-            crate::config::ToastDelivery::Herdr => {
+            crate::utils::config::ToastDelivery::Off => NotificationShowReason::Disabled,
+            crate::utils::config::ToastDelivery::Herdr => {
                 if self.state.toast.is_some() {
                     NotificationShowReason::Busy
                 } else if self.api_notification_rate_limited(Instant::now()) {
@@ -204,7 +205,8 @@ impl App {
                     NotificationShowReason::Shown
                 }
             }
-            crate::config::ToastDelivery::Terminal | crate::config::ToastDelivery::System => {
+            crate::utils::config::ToastDelivery::Terminal
+            | crate::utils::config::ToastDelivery::System => {
                 NotificationShowReason::NoForegroundClient
             }
         };
@@ -265,7 +267,7 @@ mod tests {
     #[cfg(unix)]
     use super::*;
     #[cfg(unix)]
-    use crate::detect::Agent;
+    use crate::agents::AgentKind;
     #[cfg(unix)]
     use crate::terminal::TerminalState;
 
@@ -285,7 +287,7 @@ mod tests {
         let mut state = AppState::test_new();
         state
             .workspaces
-            .push(crate::workspace::Workspace::test_new("stale"));
+            .push(crate::server::workspaces::Workspace::test_new("stale"));
         state.ensure_test_terminals();
         let root = state.workspaces[0].tabs[0].root_pane;
         let terminal_id = state.workspaces[0].terminal_id(root).cloned().unwrap();
@@ -306,7 +308,7 @@ mod tests {
         state.workspaces[0].custom_name = None;
         state.workspaces[0].identity_cwd = stale_cwd.clone();
         let mut terminal = TerminalState::new(terminal_id.clone(), stale_cwd);
-        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Idle);
         state.terminals.insert(terminal_id.clone(), terminal);
         let (events, _) = tokio::sync::mpsc::channel(4);
         let runtime = crate::terminal::TerminalRuntime::spawn(
@@ -315,13 +317,16 @@ mod tests {
             80,
             live_cwd.clone(),
             0,
-            crate::terminal_theme::TerminalTheme::default(),
+            crate::utils::theme::color::TerminalTheme::default(),
             None,
-            crate::pane::PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::NonLogin),
-            &crate::pane::PaneLaunchEnv::default(),
+            crate::terminal::runtime::spawn::PaneShellConfig::new(
+                "/bin/sh",
+                crate::utils::config::ShellModeConfig::NonLogin,
+            ),
+            &crate::terminal::runtime::spawn::PaneLaunchEnv::default(),
             events,
             std::sync::Arc::new(tokio::sync::Notify::new()),
-            std::sync::Arc::new(crate::render_signal::RenderSignal::new()),
+            std::sync::Arc::new(crate::utils::render::signal::RenderSignal::new()),
         )
         .unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);

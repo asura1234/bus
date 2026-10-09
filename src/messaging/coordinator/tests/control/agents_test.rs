@@ -18,7 +18,7 @@ fn codex_is_refused_as_an_orchestrator_but_not_as_a_worker() {
         assert!(!rejected.ok, "{id}: {rejected:?}");
         assert_eq!(
             error_message(&rejected),
-            crate::bus::orchestrator::CODEX_ORCHESTRATOR_REFUSED,
+            crate::messaging::orchestration::CODEX_ORCHESTRATOR_REFUSED,
             "{id}"
         );
     }
@@ -240,7 +240,8 @@ fn dev_agent_add_adopts_an_existing_session_once_and_prompts_it_the_reviewed_way
     let spool = launch_spool(&worker, orch);
     assert!(spool.join("adopted-session").is_file());
     assert_eq!(
-        crate::bus::orchestrator::resume_prompt_args(Provider::ClaudeCode, &spool).unwrap()[..2],
+        crate::messaging::orchestration::resume_prompt_args(Provider::ClaudeCode, &spool).unwrap()
+            [..2],
         ["--system-prompt-snapshot".to_owned(), "off".into()]
     );
     assert!(messages_to(&worker, orch).is_empty());
@@ -315,9 +316,9 @@ fn an_adopted_cursor_session_is_bound_at_launch() {
     let dir = std::env::temp_dir().join(format!(
         "bus-cursor-adoption-{}-{}",
         std::process::id(),
-        crate::bus::io::now_ns()
+        crate::messaging::storage::io::now_ns()
     ));
-    crate::bus::io::private_dir(&dir).unwrap();
+    crate::messaging::storage::io::private_dir(&dir).unwrap();
     let reported = std::sync::Arc::default();
     let transport = Launches {
         tabs: 0,
@@ -402,9 +403,9 @@ fn adopting_a_session_reserves_its_owner_before_the_first_session_callback() {
     let dir = std::env::temp_dir().join(format!(
         "bus-adoption-reservation-{}-{}",
         std::process::id(),
-        crate::bus::io::now_ns()
+        crate::messaging::storage::io::now_ns()
     ));
-    crate::bus::io::private_dir(&dir).unwrap();
+    crate::messaging::storage::io::private_dir(&dir).unwrap();
     let mut worker = Worker::open(dir.clone(), Box::new(SuccessfulLaunches { tabs: 0 })).unwrap();
     worker.dev_enabled = true;
     let room = worker.state.create_room("adoption").unwrap();

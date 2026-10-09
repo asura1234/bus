@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use crate::detect::AgentState;
-use crate::server::workspaces::layout::PaneId;
-use crate::terminal::{TerminalId, TerminalState};
+use crate::agents::AgentState;
+use crate::utils::ids::PaneId;
+use crate::{terminal::TerminalState, utils::ids::TerminalId};
 
 use super::{Tab, Workspace};
 
@@ -76,7 +76,7 @@ mod tests {
     use ratatui::layout::Direction;
 
     use super::*;
-    use crate::detect::Agent;
+    use crate::agents::AgentKind;
 
     fn terminal_for_pane(ws: &Workspace, pane_id: PaneId) -> TerminalState {
         TerminalState::new(ws.terminal_id(pane_id).unwrap().clone(), "/tmp".into())
@@ -154,7 +154,7 @@ mod tests {
 
         let mut terminals = HashMap::new();
         let mut terminal = terminal_for_pane(&ws, survivor_pane);
-        terminal.detected_agent = Some(Agent::Codex);
+        terminal.detected_agent = Some(AgentKind::Codex);
         terminals.insert(terminal.id.clone(), terminal);
 
         let details = ws.pane_details(&terminals);

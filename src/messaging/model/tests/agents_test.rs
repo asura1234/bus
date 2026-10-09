@@ -123,7 +123,9 @@ fn accessible_agent_colors_persist_beside_standard_colors() {
     let (mut state, _, first, second) = state_with_room_and_agents();
     let standard = serialized_agent_color(&state, second);
     let accessible = serialized_accessible_color(&state, second);
-    assert!(crate::bus::colors::is_accessible_agent_color(accessible));
+    assert!(crate::messaging::prefs::colors::is_accessible_agent_color(
+        accessible
+    ));
     assert_ne!(serialized_accessible_color(&state, first), accessible);
     state.rename_agent(second, "new name").unwrap();
     state.delete_agent(first).unwrap();

@@ -1,5 +1,5 @@
 //! Streaming Win32-input-mode CSI key records and timeout flushes.
-use crate::input::WindowsKeyRecord;
+use crate::protocol::keys::WindowsKeyRecord;
 
 #[derive(Default)]
 pub(super) struct WindowsWin32InputModeFramer {

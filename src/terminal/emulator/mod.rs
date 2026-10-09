@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
-use crate::protocol::CellData;
+use crate::protocol::wire::CellData;
 
 mod color_replies;
 #[cfg(windows)]
@@ -46,7 +46,7 @@ use self::windows::windows_powershell_prompt_cwd;
 #[cfg(test)]
 use self::write::render_delay_after_pty_write;
 #[cfg(test)]
-use crate::layout::PaneId;
+use crate::utils::ids::PaneId;
 #[cfg(test)]
 use ratatui::style::Modifier;
 
@@ -57,7 +57,7 @@ const MODE_MOUSE_PRESS_RELEASE: u16 = 1000;
 const MODE_MOUSE_BUTTON_MOTION: u16 = 1002;
 const MODE_MOUSE_ANY_MOTION: u16 = 1003;
 
-pub use crate::utils::render::widgets::ScrollMetrics;
+use crate::utils::render::widgets::ScrollMetrics;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TerminalTextPoint {
@@ -71,7 +71,7 @@ pub(crate) struct TerminalTextMatch {
     pub end: TerminalTextPoint,
     pub source_fingerprint: u64,
     pub scan_cols: u16,
-    pub scan_screen: crate::ghostty::ActiveScreen,
+    pub scan_screen: crate::terminal::vt::ActiveScreen,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,24 +140,24 @@ pub(crate) struct TerminalReadSnapshot {
 pub(crate) enum TerminalCompressionStep {
     Busy,
     ActivityChanged(u64),
-    Compressed(crate::ghostty::TerminalCompressionResult),
+    Compressed(crate::terminal::vt::TerminalCompressionResult),
 }
 
 pub(crate) struct GhosttyPaneTerminal {
     pub core: Mutex<GhosttyPaneCore>,
-    key_encoder: Mutex<crate::ghostty::KeyEncoder>,
+    key_encoder: Mutex<crate::terminal::vt::KeyEncoder>,
     pending_pty_responses: Arc<Mutex<Vec<Bytes>>>,
 }
 
 pub(crate) struct GhosttyPaneCore {
-    pub terminal: crate::ghostty::Terminal,
+    pub terminal: crate::terminal::vt::Terminal,
     #[cfg(windows)]
     recent_fallback: conpty_recent_cache::Cache,
-    pub render_state: crate::ghostty::RenderState,
+    pub render_state: crate::terminal::vt::RenderState,
     pub kitty_keyboard: KittyKeyboardTracker,
-    pub initial_default_foreground: Option<crate::ghostty::RgbColor>,
-    pub initial_default_background: Option<crate::ghostty::RgbColor>,
-    pub host_terminal_theme: crate::terminal_theme::TerminalTheme,
+    pub initial_default_foreground: Option<crate::terminal::vt::RgbColor>,
+    pub initial_default_background: Option<crate::terminal::vt::RgbColor>,
+    pub host_terminal_theme: crate::utils::theme::color::TerminalTheme,
     pub transient_default_color_owner_pgid: Option<u32>,
     // Control tracker types stay internal to the emulator, as do these fields.
     default_color_tracker: DefaultColorOscTracker,
@@ -236,9 +236,9 @@ impl PaneTerminal {
     pub(crate) fn screen_text_snapshot(
         &self,
     ) -> Option<(
-        crate::ghostty::ActiveScreen,
+        crate::terminal::vt::ActiveScreen,
         u16,
-        Vec<crate::ghostty::ScreenTextRow>,
+        Vec<crate::terminal::vt::ScreenTextRow>,
     )> {
         self.ghostty.screen_text_snapshot()
     }
@@ -263,14 +263,16 @@ impl PaneTerminal {
         self.ghostty.detection_text()
     }
 
-    pub(crate) fn try_compression_activity(&self) -> Result<Option<u64>, crate::ghostty::Error> {
+    pub(crate) fn try_compression_activity(
+        &self,
+    ) -> Result<Option<u64>, crate::terminal::vt::Error> {
         self.ghostty.try_compression_activity()
     }
 
     pub(crate) fn try_compress_incremental_if_activity(
         &self,
         expected_activity: u64,
-    ) -> Result<TerminalCompressionStep, crate::ghostty::Error> {
+    ) -> Result<TerminalCompressionStep, crate::terminal::vt::Error> {
         self.ghostty
             .try_compress_incremental_if_activity(expected_activity)
     }
@@ -295,7 +297,10 @@ impl PaneTerminal {
         self.ghostty.recent_unwrapped_ansi_snapshot(lines)
     }
 
-    pub fn extract_selection(&self, selection: &crate::selection::Selection) -> Option<String> {
+    pub fn extract_selection(
+        &self,
+        selection: &crate::utils::text::selection::Selection,
+    ) -> Option<String> {
         self.ghostty.extract_selection(selection)
     }
 
@@ -318,15 +323,15 @@ impl PaneTerminal {
 
     pub fn keyboard_protocol(
         &self,
-        fallback: crate::input::KeyboardProtocol,
-    ) -> crate::input::KeyboardProtocol {
+        fallback: crate::protocol::keys::KeyboardProtocol,
+    ) -> crate::protocol::keys::KeyboardProtocol {
         self.ghostty.keyboard_protocol().unwrap_or(fallback)
     }
 }
 
 impl GhosttyPaneTerminal {
     pub fn new(
-        mut terminal: crate::ghostty::Terminal,
+        mut terminal: crate::terminal::vt::Terminal,
         _response_writer: mpsc::Sender<Bytes>,
     ) -> std::io::Result<Self> {
         let pending_pty_responses = Arc::new(Mutex::new(Vec::new()));
@@ -339,16 +344,16 @@ impl GhosttyPaneTerminal {
             })
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        let mut render_state =
-            crate::ghostty::RenderState::new().map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut render_state = crate::terminal::vt::RenderState::new()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         let initial_colors = render_state
             .update(&terminal)
             .ok()
             .and_then(|_| render_state.colors().ok());
         let initial_default_foreground = initial_colors.map(|colors| colors.foreground);
         let initial_default_background = initial_colors.map(|colors| colors.background);
-        let mut key_encoder =
-            crate::ghostty::KeyEncoder::new().map_err(|e| std::io::Error::other(e.to_string()))?;
+        let mut key_encoder = crate::terminal::vt::KeyEncoder::new()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         key_encoder.set_from_terminal(&terminal);
         Ok(Self {
             core: Mutex::new(GhosttyPaneCore {
@@ -359,7 +364,7 @@ impl GhosttyPaneTerminal {
                 kitty_keyboard: KittyKeyboardTracker::default(),
                 initial_default_foreground,
                 initial_default_background,
-                host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
+                host_terminal_theme: crate::utils::theme::color::TerminalTheme::default(),
                 transient_default_color_owner_pgid: None,
                 default_color_tracker: DefaultColorOscTracker::default(),
                 default_color_event_tracker: DefaultColorEventTracker::default(),
@@ -458,21 +463,21 @@ impl GhosttyPaneTerminal {
         })
     }
 
-    pub fn keyboard_protocol(&self) -> Option<crate::input::KeyboardProtocol> {
+    pub fn keyboard_protocol(&self) -> Option<crate::protocol::keys::KeyboardProtocol> {
         let Ok(core) = self.core.lock() else {
             return None;
         };
-        Some(crate::input::KeyboardProtocol::from_kitty_flags(
+        Some(crate::protocol::keys::KeyboardProtocol::from_kitty_flags(
             core.terminal.kitty_keyboard_flags().ok()? as u16,
         ))
     }
 
     pub fn bracketed_paste_enabled(&self) -> bool {
-        self.mode_enabled(crate::ghostty::MODE_BRACKETED_PASTE)
+        self.mode_enabled(crate::terminal::vt::MODE_BRACKETED_PASTE)
     }
 
     pub fn focus_reporting_enabled(&self) -> bool {
-        self.mode_enabled(crate::ghostty::MODE_FOCUS_EVENT)
+        self.mode_enabled(crate::terminal::vt::MODE_FOCUS_EVENT)
     }
 
     pub fn mouse_reporting_enabled(&self) -> bool {
@@ -488,7 +493,7 @@ impl GhosttyPaneTerminal {
     }
 
     pub fn sgr_pixel_mouse_enabled(&self) -> bool {
-        self.mode_enabled(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
+        self.mode_enabled(crate::terminal::vt::MODE_MOUSE_SGR_PIXELS)
     }
 
     fn mode_enabled(&self, mode: u16) -> bool {
@@ -500,22 +505,22 @@ impl GhosttyPaneTerminal {
     pub fn plain_page_keys_use_host_scrollback(&self) -> Option<bool> {
         let core = self.core.lock().ok()?;
         let alternate_screen =
-            core.terminal.active_screen().ok()? == crate::ghostty::ActiveScreen::Alternate;
+            core.terminal.active_screen().ok()? == crate::terminal::vt::ActiveScreen::Alternate;
         let mouse_reporting = core.terminal.mouse_tracking_enabled().ok()?;
         let application_cursor = core
             .terminal
-            .mode_get(crate::ghostty::MODE_APPLICATION_CURSOR_KEYS)
+            .mode_get(crate::terminal::vt::MODE_APPLICATION_CURSOR_KEYS)
             .ok()?;
         let bracketed_paste = core
             .terminal
-            .mode_get(crate::ghostty::MODE_BRACKETED_PASTE)
+            .mode_get(crate::terminal::vt::MODE_BRACKETED_PASTE)
             .ok()?;
         Some(!alternate_screen && !mouse_reporting && (!application_cursor || bracketed_paste))
     }
 
     pub fn alternate_screen_active(&self) -> bool {
         self.core.lock().is_ok_and(|core| {
-            core.terminal.active_screen().ok() == Some(crate::ghostty::ActiveScreen::Alternate)
+            core.terminal.active_screen().ok() == Some(crate::terminal::vt::ActiveScreen::Alternate)
         })
     }
 
@@ -524,10 +529,10 @@ impl GhosttyPaneTerminal {
             return None;
         };
         let alternate_screen =
-            core.terminal.active_screen().ok()? == crate::ghostty::ActiveScreen::Alternate;
+            core.terminal.active_screen().ok()? == crate::terminal::vt::ActiveScreen::Alternate;
         let mouse_alternate_scroll = core
             .terminal
-            .mode_get(crate::ghostty::MODE_MOUSE_ALTERNATE_SCROLL)
+            .mode_get(crate::terminal::vt::MODE_MOUSE_ALTERNATE_SCROLL)
             .ok()?;
         let mouse_reporting = core.terminal.mode_get(MODE_MOUSE_ANY_MOTION).ok()?
             || core.terminal.mode_get(MODE_MOUSE_BUTTON_MOTION).ok()?
@@ -554,7 +559,7 @@ impl GhosttyPaneTerminal {
             .ok()
             .and_then(|core| {
                 core.terminal
-                    .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+                    .mode_get(crate::terminal::vt::MODE_SYNCHRONIZED_OUTPUT)
                     .ok()
             })
             .unwrap_or(false)
@@ -568,7 +573,9 @@ impl GhosttyPaneTerminal {
         }
     }
 
-    pub(crate) fn try_compression_activity(&self) -> Result<Option<u64>, crate::ghostty::Error> {
+    pub(crate) fn try_compression_activity(
+        &self,
+    ) -> Result<Option<u64>, crate::terminal::vt::Error> {
         let Some(core) = self.try_lock_core() else {
             return Ok(None);
         };
@@ -578,7 +585,7 @@ impl GhosttyPaneTerminal {
     pub(crate) fn try_compress_incremental_if_activity(
         &self,
         expected_activity: u64,
-    ) -> Result<TerminalCompressionStep, crate::ghostty::Error> {
+    ) -> Result<TerminalCompressionStep, crate::terminal::vt::Error> {
         let Some(mut core) = self.try_lock_core() else {
             return Ok(TerminalCompressionStep::Busy);
         };
@@ -608,7 +615,7 @@ fn effective_cursor_state(
 }
 
 fn ghostty_set_scroll_offset_from_bottom(
-    terminal: &mut crate::ghostty::Terminal,
+    terminal: &mut crate::terminal::vt::Terminal,
     offset_from_bottom: usize,
 ) {
     let Ok(scrollbar) = terminal.scrollbar() else {

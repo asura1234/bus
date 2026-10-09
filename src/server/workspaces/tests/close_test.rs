@@ -56,20 +56,20 @@ fn close_non_focused_workspace_keeps_focus() {
 fn delayed_background_waiting_is_cleared_when_pane_dies() {
     let mut state = app_with_workspaces(&["active", "background"]);
     state.active = Some(0);
-    state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
     state.toast_config.delay_seconds = 1;
     let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
-    state.handle_app_event(AppEvent::StateChanged {
+    state.handle_app_event(TerminalEvent::StateChanged {
         pane_id: bg_pane_id,
-        agent: Some(Agent::Pi),
+        agent: Some(AgentKind::Pi),
         state: AgentState::Blocked,
         visible_blocker: false,
         process_exited: false,
         observed_at: std::time::Instant::now(),
     });
     let deadline = state.next_pending_agent_notification_deadline().unwrap();
-    state.handle_app_event(AppEvent::PaneDied {
+    state.handle_app_event(TerminalEvent::PaneDied {
         pane_id: bg_pane_id,
         exit_reason: crate::platform::ChildExitReason::Exited,
     });
@@ -93,7 +93,7 @@ fn close_pane_removes_from_workspace() {
 #[test]
 fn pane_process_exit_publish_marks_agent_idle_before_pane_removal() {
     let mut state = app_with_workspaces(&["active", "background"]);
-    state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
     state.active = Some(1);
     state.ensure_test_terminals();
     let pane_id = state.workspaces[0].tabs[0].root_pane;
@@ -102,7 +102,7 @@ fn pane_process_exit_publish_marks_agent_idle_before_pane_removal() {
         .terminals
         .get_mut(&terminal_id)
         .unwrap()
-        .set_detected_state(Some(Agent::Pi), AgentState::Working);
+        .set_detected_state(Some(AgentKind::Pi), AgentState::Working);
     assert_eq!(
         state.terminals.get(&terminal_id).unwrap().state,
         AgentState::Working
@@ -116,11 +116,11 @@ fn pane_process_exit_publish_marks_agent_idle_before_pane_removal() {
     assert_eq!(update.previous_state, AgentState::Working);
     assert_eq!(update.state, AgentState::Idle);
     assert_eq!(update.agent_label.as_deref(), Some("pi"));
-    assert_eq!(update.known_agent, Some(Agent::Pi));
+    assert_eq!(update.known_agent, Some(AgentKind::Pi));
     assert!(update.agent_released);
     assert_eq!(
         update.agent_release_status,
-        Some(crate::api::schema::AgentStatus::Done)
+        Some(crate::protocol::api::schema::AgentStatus::Done)
     );
     assert!(matches!(
         state.toast.as_ref().map(|toast| toast.kind),

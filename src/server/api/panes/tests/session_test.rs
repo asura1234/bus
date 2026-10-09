@@ -1,9 +1,9 @@
 use super::*;
 use crate::{
-    api::schema::{ErrorResponse, SuccessResponse},
-    config::Config,
-    detect::{Agent, AgentState},
-    workspace::Workspace,
+    agents::{AgentKind, AgentState},
+    protocol::api::schema::{ErrorResponse, SuccessResponse},
+    server::workspaces::Workspace,
+    utils::config::Config,
 };
 
 fn app_with_test_workspace() -> (App, String) {
@@ -36,12 +36,12 @@ fn guarded_close_fixture() -> (
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.begin_managed_agent(
         "bus-r1-a2".into(),
-        Agent::Codex,
+        AgentKind::Codex,
         std::time::Instant::now(),
         std::time::Duration::ZERO,
         std::time::Duration::from_secs(10),
     );
-    terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Working);
     let params = crate::protocol::api::schema::PaneCloseIfIdentityParams {
         pane_id: public_pane_id,
         expected_terminal_id: terminal_id.to_string(),
@@ -113,7 +113,7 @@ fn api_pane_report_agent_session_preserves_session_identity_and_detected_state()
         .terminals
         .get_mut(&terminal_id)
         .unwrap()
-        .set_detected_state(Some(Agent::Codex), AgentState::Working);
+        .set_detected_state(Some(AgentKind::Codex), AgentState::Working);
 
     let response = app.handle_api_request(crate::protocol::api::schema::Request {
         id: "session-report".into(),
@@ -141,7 +141,7 @@ fn api_pane_report_agent_session_preserves_session_identity_and_detected_state()
     assert_eq!(session.session_ref.value, "codex-session");
     assert_eq!(
         session.session_ref.kind,
-        crate::agent_resume::AgentSessionRefKind::Id
+        crate::agents::resume::catalog::AgentSessionRefKind::Id
     );
 }
 

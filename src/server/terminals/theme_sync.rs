@@ -3,7 +3,7 @@ use crate::server::app::App;
 impl App {
     pub(crate) fn set_host_terminal_appearance_state(
         &mut self,
-        appearance: Option<crate::terminal_theme::HostAppearance>,
+        appearance: Option<crate::utils::theme::color::HostAppearance>,
         explicit: bool,
     ) -> bool {
         if self.state.host_terminal_appearance == appearance
@@ -19,7 +19,7 @@ impl App {
 
     pub(crate) fn set_host_terminal_theme(
         &mut self,
-        theme: crate::terminal_theme::TerminalTheme,
+        theme: crate::utils::theme::color::TerminalTheme,
     ) -> bool {
         if theme == self.state.host_terminal_theme {
             return false;
@@ -30,7 +30,7 @@ impl App {
     }
 
     pub(in crate::server) fn refresh_effective_app_theme(&mut self) -> bool {
-        let (palette, theme_name) = crate::server::app::resolve_effective_theme(
+        let (palette, theme_name) = crate::utils::theme::resolve_effective_theme(
             &self.state.theme_runtime,
             self.state.host_terminal_appearance,
         );

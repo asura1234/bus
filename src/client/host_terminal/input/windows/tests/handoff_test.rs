@@ -3,7 +3,7 @@ use super::*;
 #[cfg(windows)]
 #[test]
 fn windows_input_handoff_keeps_input_while_the_client_queue_is_full() {
-    use crate::protocol::{
+    use crate::protocol::wire::{
         ClientInputEvent, ClientKeyCode, ClientKeyKind, ClientKeySource, ClientMouseButton,
         ClientMouseKind,
     };

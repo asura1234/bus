@@ -1,6 +1,8 @@
-use crate::layout::PaneId;
 use crate::terminal::emulator::PaneTerminal;
-use crate::terminal::events::AppEvent;
+use crate::terminal::emulator::TerminalCursorState;
+use crate::terminal::emulator::TerminalDirtyPatchOutcome;
+use crate::terminal::emulator::TerminalReadSnapshot;
+use crate::terminal::events::TerminalEvent;
 use crate::terminal::pty::actor::PtyReadResult;
 use crate::terminal::runtime::compression::TerminalCompressionWake;
 use crate::terminal::runtime::detection_policy::observe_detection_content_change;
@@ -11,12 +13,10 @@ use crate::terminal::runtime::detection_process::foreground_member_cwd_different
 #[cfg(unix)]
 use crate::terminal::runtime::detection_process::usable_process_cwd;
 use crate::terminal::runtime::AgentDetection;
-use crate::terminal::runtime::ScrollMetrics;
-use crate::terminal::runtime::TerminalCursorState;
-use crate::terminal::runtime::TerminalDirtyPatchOutcome;
-use crate::terminal::runtime::TerminalReadSnapshot;
 use crate::terminal::runtime::TerminalRuntime;
+use crate::utils::ids::PaneId;
 use crate::utils::render::signal::RenderSignal;
+use crate::utils::render::widgets::ScrollMetrics;
 use bytes::Bytes;
 use ratatui::layout::Rect;
 use ratatui::Frame;
@@ -33,11 +33,15 @@ pub(super) fn usable_reported_cwd(cwd: std::path::PathBuf) -> Option<std::path::
     (cwd.is_absolute() && cwd.is_dir()).then_some(cwd)
 }
 
-pub(super) fn publish_terminal_bells(pane_id: PaneId, count: u16, events: &mpsc::Sender<AppEvent>) {
+pub(super) fn publish_terminal_bells(
+    pane_id: PaneId,
+    count: u16,
+    events: &mpsc::Sender<TerminalEvent>,
+) {
     if count == 0 {
         return;
     }
-    if let Err(err) = events.try_send(AppEvent::TerminalBell { pane_id, count }) {
+    if let Err(err) = events.try_send(TerminalEvent::TerminalBell { pane_id, count }) {
         warn!(
             pane = pane_id.raw(),
             count,
@@ -51,7 +55,7 @@ pub(super) fn publish_reported_cwd(
     pane_id: PaneId,
     cwd: std::path::PathBuf,
     reported_cwd: &Arc<Mutex<Option<std::path::PathBuf>>>,
-    events: &mpsc::Sender<AppEvent>,
+    events: &mpsc::Sender<TerminalEvent>,
 ) {
     let Some(cwd) = usable_reported_cwd(cwd) else {
         return;
@@ -62,7 +66,7 @@ pub(super) fn publish_reported_cwd(
         }
         *current = Some(cwd.clone());
     }
-    if let Err(err) = events.try_send(AppEvent::TerminalCwdReported { pane_id, cwd }) {
+    if let Err(err) = events.try_send(TerminalEvent::TerminalCwdReported { pane_id, cwd }) {
         warn!(
             pane = pane_id.raw(),
             err = %err,
@@ -81,7 +85,7 @@ pub(super) struct PtyReadContext {
     pub(super) content_write_lock: Arc<Mutex<()>>,
     pub(super) detection_content_seq: Arc<AtomicU64>,
     pub(super) child_pid: Arc<AtomicU32>,
-    pub(super) events: mpsc::Sender<AppEvent>,
+    pub(super) events: mpsc::Sender<TerminalEvent>,
     pub(super) reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
     pub(super) compression_wake: TerminalCompressionWake,
     pub(super) rt: tokio::runtime::Handle,
@@ -148,7 +152,7 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
             publish_reported_cwd(pane_id, cwd, &reported_cwd, &events);
         }
         for content in result.clipboard_writes {
-            if let Err(err) = events.try_send(AppEvent::ClipboardWrite { content }) {
+            if let Err(err) = events.try_send(TerminalEvent::ClipboardWrite { content }) {
                 warn!(
                     pane = pane_id.raw(),
                     err = %err,
@@ -195,14 +199,14 @@ impl TerminalRuntime {
         &self,
         query: &str,
         case_sensitive: bool,
-        direction: crate::terminal::runtime::TerminalSearchDirection,
-        cursor: crate::terminal::runtime::TerminalTextPoint,
+        direction: crate::terminal::emulator::TerminalSearchDirection,
+        cursor: crate::terminal::emulator::TerminalTextPoint,
         previous: Option<(
-            crate::terminal::runtime::TerminalTextPoint,
-            crate::terminal::runtime::TerminalTextPoint,
+            crate::terminal::emulator::TerminalTextPoint,
+            crate::terminal::emulator::TerminalTextPoint,
         )>,
         limit: usize,
-    ) -> crate::terminal::runtime::TerminalSearchWindow {
+    ) -> crate::terminal::emulator::TerminalSearchWindow {
         let result = self.terminal.search_text_window(
             query,
             case_sensitive,
@@ -219,8 +223,8 @@ impl TerminalRuntime {
         &self,
         row: u32,
         col: u16,
-        motion: crate::terminal::runtime::TerminalWordMotion,
-    ) -> Option<crate::terminal::runtime::TerminalTextPoint> {
+        motion: crate::terminal::emulator::TerminalWordMotion,
+    ) -> Option<crate::terminal::emulator::TerminalTextPoint> {
         let result = self.terminal.word_motion_target(row, col, motion);
         self.compression.wake();
         result
@@ -234,7 +238,7 @@ impl TerminalRuntime {
         &self,
         row: u32,
         direction: i8,
-    ) -> Option<crate::terminal::runtime::TerminalTextPoint> {
+    ) -> Option<crate::terminal::emulator::TerminalTextPoint> {
         let result = self.terminal.paragraph_motion_target(row, direction);
         self.compression.wake();
         result

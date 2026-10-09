@@ -1,12 +1,15 @@
-use crate::layout::PaneId;
-#[cfg(test)]
-use crate::layout::{find_in_direction, NavDirection};
-use crate::server::app_state::{AppState, PaneFocusTarget};
 use crate::server::terminals::events::{PaneZoomCommand, PaneZoomNoopReason, PaneZoomOutcome};
+#[cfg(test)]
+use crate::server::workspaces::layout::{find_in_direction, NavDirection};
+use crate::server::{app_settings::PaneFocusTarget, app_state::AppState};
+use crate::utils::ids::PaneId;
 
-fn public_tab_id_for_index(ws: &crate::workspace::Workspace, tab_idx: usize) -> Option<String> {
+fn public_tab_id_for_index(
+    ws: &crate::server::workspaces::Workspace,
+    tab_idx: usize,
+) -> Option<String> {
     let tab_number = ws.public_tab_number(tab_idx)?;
-    Some(crate::workspace::public_tab_id_for_number(
+    Some(crate::server::workspaces::public_tab_id_for_number(
         &ws.id, tab_number,
     ))
 }
@@ -95,14 +98,14 @@ impl AppState {
             self.active = Some(idx);
             self.selected = idx;
             let workspace_id = self.workspaces[idx].id.clone();
-            crate::logging::workspace_focused(&workspace_id);
+            crate::utils::logging::workspace_focused(&workspace_id);
             self.mark_session_dirty();
             if let Some(ws) = self.workspaces.get_mut(idx) {
                 let active_tab = ws.active_tab;
                 ws.switch_tab(active_tab);
                 let tab_id =
                     public_tab_id_for_index(ws, active_tab).unwrap_or_else(|| workspace_id.clone());
-                crate::logging::tab_focused(&workspace_id, &tab_id);
+                crate::utils::logging::tab_focused(&workspace_id, &tab_id);
             }
             self.record_pane_focus_after_navigation(previous_focus);
         }
@@ -126,14 +129,14 @@ impl AppState {
         self.selected = ws_idx;
         let workspace_id = self.workspaces[ws_idx].id.clone();
         if workspace_changed {
-            crate::logging::workspace_focused(&workspace_id);
+            crate::utils::logging::workspace_focused(&workspace_id);
         }
         self.mark_session_dirty();
         if let Some(ws) = self.workspaces.get_mut(ws_idx) {
             ws.switch_tab(tab_idx);
             let tab_id =
                 public_tab_id_for_index(ws, tab_idx).unwrap_or_else(|| workspace_id.clone());
-            crate::logging::tab_focused(&workspace_id, &tab_id);
+            crate::utils::logging::tab_focused(&workspace_id, &tab_id);
         }
         self.record_pane_focus_after_navigation(previous_focus);
         true
@@ -146,7 +149,7 @@ impl AppState {
         let Some(tab) = self
             .workspaces
             .get_mut(ws_idx)
-            .and_then(crate::workspace::Workspace::active_tab_mut)
+            .and_then(crate::server::workspaces::Workspace::active_tab_mut)
         else {
             return false;
         };
@@ -295,7 +298,7 @@ impl AppState {
         let Some(pane_id) = self
             .workspaces
             .get(ws_idx)
-            .and_then(crate::workspace::Workspace::focused_pane_id)
+            .and_then(crate::server::workspaces::Workspace::focused_pane_id)
         else {
             return;
         };

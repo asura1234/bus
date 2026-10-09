@@ -58,7 +58,7 @@ fn is_server_listening_at(socket_path: &Path) -> bool {
             return false;
         }
 
-        match crate::ipc::connect_local_stream(socket_path) {
+        match crate::platform::ipc::connect_local_stream(socket_path) {
             Ok(_) => {
                 // Server is listening. Close the test connection immediately.
                 // The server's handshake handler will time out on this connection
@@ -87,8 +87,11 @@ fn is_server_listening_at(socket_path: &Path) -> bool {
     }
 }
 
-fn read_server_status() -> io::Result<Option<crate::api::RuntimeStatus>> {
-    crate::api::read_runtime_status_at(&crate::api::socket_path(), STATUS_REQUEST_TIMEOUT)
+fn read_server_status() -> io::Result<Option<crate::protocol::api::RuntimeStatus>> {
+    crate::protocol::api::read_runtime_status_at(
+        &crate::protocol::api::socket_path(),
+        STATUS_REQUEST_TIMEOUT,
+    )
 }
 
 #[cfg(windows)]
@@ -97,7 +100,7 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
         return Ok(false);
     }
 
-    let mut stream = match crate::ipc::connect_local_stream(socket_path) {
+    let mut stream = match crate::platform::ipc::connect_local_stream(socket_path) {
         Ok(stream) => stream,
         Err(err)
             if matches!(
@@ -113,8 +116,8 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
         Err(err) => return Err(err),
     };
 
-    let hello = crate::protocol::ClientMessage::TerminalHello {
-        version: crate::protocol::PROTOCOL_VERSION,
+    let hello = crate::protocol::wire::ClientMessage::TerminalHello {
+        version: crate::protocol::wire::PROTOCOL_VERSION,
         cols: 80,
         rows: 24,
         cell_width_px: 0,
@@ -122,9 +125,9 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
         pixel_mouse: false,
     };
 
-    match crate::protocol::write_message(&mut stream, &hello) {
+    match crate::protocol::wire::write_message(&mut stream, &hello) {
         Ok(()) => Ok(true),
-        Err(crate::protocol::FramingError::Io(err))
+        Err(crate::protocol::wire::FramingError::Io(err))
             if matches!(
                 err.kind(),
                 io::ErrorKind::ConnectionRefused
@@ -153,7 +156,7 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
     let endpoint_generation =
         capabilities.and_then(|capabilities| capabilities.endpoint_protocol_generation);
     let surface_interest = capabilities.is_some_and(|capabilities| capabilities.surface_interest);
-    if endpoint_generation == Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION)
+    if endpoint_generation == Some(crate::protocol::wire::handshake::ENDPOINT_PROTOCOL_GENERATION)
         && (!saved_federation || surface_interest)
     {
         return Ok(());
@@ -170,8 +173,8 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
         endpoint_generation
             .map(|value| value.to_string())
             .unwrap_or_else(|| "unavailable".to_string()),
-        crate::build_info::version(),
-        crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+        crate::utils::version::version(),
+        crate::protocol::wire::handshake::ENDPOINT_PROTOCOL_GENERATION,
         super::help::active_restart_after_update_guidance()
     )))
 }
@@ -230,9 +233,9 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
         }
     }
 
-    if crate::session::explicit_session_requested() {
+    if crate::utils::paths::explicit_session_requested() {
         command
-            .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
+            .env_remove(crate::protocol::api::SOCKET_PATH_ENV_VAR)
             .env_remove("HERDR_CLIENT_SOCKET_PATH");
     }
 
@@ -272,7 +275,7 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
             "server did not become ready within {}s (socket: {}). The background server may still be starting; try `herdr` again, or check {}",
             timeout.as_secs(),
             socket_path.display(),
-            crate::session::data_dir().join("herdr-server.log").display()
+            crate::utils::paths::data_dir().join("herdr-server.log").display()
         ),
     ))
 }
@@ -315,7 +318,7 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
     }
 
     // Now attach as a thin client.
-    crate::client::run_client(
+    crate::client::run::run_client(
         super::logging_options(),
         super::config_override(),
         super::stop::stop_active_server,
@@ -335,7 +338,7 @@ mod tests {
     use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
-        crate::config::test_config_env_lock()
+        crate::utils::config::test_config_env_lock()
     }
 
     fn unique_test_dir(name: &str) -> std::path::PathBuf {
@@ -356,30 +359,33 @@ mod tests {
     #[test]
     fn server_daemon_command_clears_socket_overrides_for_explicit_session() {
         let _guard = env_lock().lock().unwrap();
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/inherited.sock");
+        std::env::set_var(
+            crate::protocol::api::SOCKET_PATH_ENV_VAR,
+            "/tmp/inherited.sock",
+        );
         std::env::set_var("HERDR_CLIENT_SOCKET_PATH", "/tmp/inherited-client.sock");
-        std::env::remove_var(crate::session::SESSION_ENV_VAR);
-        crate::session::clear_explicit_session_for_test();
+        std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
+        crate::utils::paths::clear_explicit_session_for_test();
         let args = vec![
             "herdr".to_string(),
             "--session".to_string(),
             "work".to_string(),
         ];
-        crate::session::configure_from_args(&args).unwrap();
+        crate::utils::paths::configure_from_args(&args).unwrap();
 
         let command = build_server_daemon_command(PathBuf::from("/tmp/herdr-test"));
         let envs: Vec<_> = command.get_envs().collect();
 
         assert!(envs.iter().any(|(key, value)| {
-            *key == OsStr::new(crate::api::SOCKET_PATH_ENV_VAR) && value.is_none()
+            *key == OsStr::new(crate::protocol::api::SOCKET_PATH_ENV_VAR) && value.is_none()
         }));
         assert!(envs.iter().any(|(key, value)| {
             *key == OsStr::new("HERDR_CLIENT_SOCKET_PATH") && value.is_none()
         }));
-        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+        std::env::remove_var(crate::protocol::api::SOCKET_PATH_ENV_VAR);
         std::env::remove_var("HERDR_CLIENT_SOCKET_PATH");
-        std::env::remove_var(crate::session::SESSION_ENV_VAR);
-        crate::session::clear_explicit_session_for_test();
+        std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
+        crate::utils::paths::clear_explicit_session_for_test();
     }
 
     #[test]
@@ -523,9 +529,10 @@ test "$sid" = "$$"
             stream.flush().unwrap();
         });
 
-        let status = crate::api::read_runtime_status_at(&path, Duration::from_millis(200))
-            .unwrap()
-            .unwrap();
+        let status =
+            crate::protocol::api::read_runtime_status_at(&path, Duration::from_millis(200))
+                .unwrap()
+                .unwrap();
         let _ = handle.join();
         assert_eq!(status.version, "0.5.5");
         assert_eq!(status.protocol, 2);
@@ -538,7 +545,7 @@ test "$sid" = "$$"
         let dir = unique_test_dir("missing-api");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("api.sock");
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &path);
+        std::env::set_var(crate::protocol::api::SOCKET_PATH_ENV_VAR, &path);
 
         let err = validate_running_server_compatibility(false).unwrap_err();
 
@@ -546,20 +553,20 @@ test "$sid" = "$$"
             err.to_string().contains("status API is unavailable"),
             "unexpected error: {err}"
         );
-        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+        std::env::remove_var(crate::protocol::api::SOCKET_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn validate_running_server_compatibility_names_session_commands_for_protocol_mismatch() {
         let _guard = env_lock().lock().unwrap();
-        let _bus = crate::config::test_without_bus_env(&_guard);
+        let _bus = crate::utils::config::test_without_bus_env(&_guard);
         let dir = unique_test_dir("named-protocol");
         std::env::set_var("XDG_CONFIG_HOME", &dir);
-        std::env::set_var(crate::session::SESSION_ENV_VAR, "work");
-        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
-        crate::session::clear_explicit_session_for_test();
-        let path = crate::session::api_socket_path_for(Some("work"));
+        std::env::set_var(crate::utils::paths::SESSION_ENV_VAR, "work");
+        std::env::remove_var(crate::protocol::api::SOCKET_PATH_ENV_VAR);
+        crate::utils::paths::clear_explicit_session_for_test();
+        let path = crate::utils::paths::api_socket_path_for(Some("work"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let listener = UnixListener::bind(&path).unwrap();
         let handle = std::thread::spawn(move || {
@@ -571,7 +578,7 @@ test "$sid" = "$$"
             assert!(request.contains("ping"));
             let body = format!(
                 "{{\"id\":\"autodetect:server:status\",\"result\":{{\"type\":\"pong\",\"version\":\"0.5.5\",\"protocol\":{}}}}}\n",
-                crate::protocol::PROTOCOL_VERSION + 1
+                crate::protocol::wire::PROTOCOL_VERSION + 1
             );
             stream.write_all(body.as_bytes()).unwrap();
             stream.flush().unwrap();
@@ -594,9 +601,9 @@ test "$sid" = "$$"
             "unexpected error: {message}"
         );
         std::env::remove_var("XDG_CONFIG_HOME");
-        std::env::remove_var(crate::session::SESSION_ENV_VAR);
-        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
-        crate::session::clear_explicit_session_for_test();
+        std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
+        std::env::remove_var(crate::protocol::api::SOCKET_PATH_ENV_VAR);
+        crate::utils::paths::clear_explicit_session_for_test();
         let _ = std::fs::remove_dir_all(dir);
     }
 }

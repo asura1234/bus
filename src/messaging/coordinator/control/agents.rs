@@ -4,7 +4,7 @@ use super::{
     BusCommand, BusEvent, Method, Provider, ResponseResult, RoomId, RuntimeStatus, Worker,
     MASTER_AGENT_NEEDS_ROOM,
 };
-use crate::bus::orchestrator::OrchestratorSpec;
+use crate::messaging::orchestration::OrchestratorSpec;
 use serde_json::{json, Value};
 
 impl Worker {

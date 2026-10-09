@@ -9,7 +9,7 @@ fn shutdown_liveness_treats_reaped_direct_child_as_gone() {
 #[tokio::test]
 async fn checked_close_stops_owned_native_session_and_clears_pid_before_retry() {
     let (events, _event_rx) = mpsc::channel(8);
-    let runtime = PaneRuntime::spawn_shell_command(
+    let runtime = TerminalRuntime::spawn_shell_command(
         PaneId::from_raw(43),
         24,
         80,

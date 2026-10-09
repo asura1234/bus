@@ -2,9 +2,8 @@ pub(crate) mod agent_view;
 mod close;
 pub(crate) mod cwd;
 pub(crate) mod ids;
-pub(crate) mod navigation;
-pub(crate) use ids as targets;
 mod naming;
+pub(crate) mod navigation;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
@@ -13,16 +12,19 @@ use std::sync::Arc;
 use ratatui::layout::Direction;
 use tokio::sync::{mpsc, Notify};
 
-use crate::events::AppEvent;
-use crate::render_signal::RenderSignal;
-use crate::server::workspaces::layout::PaneId;
 #[cfg(test)]
 use crate::server::workspaces::layout::TileLayout;
 use crate::server::workspaces::pane::PaneState;
-use crate::terminal::runtime::PaneLaunchEnv;
+use crate::terminal::events::TerminalEvent;
+use crate::terminal::runtime::spawn::PaneLaunchEnv;
 #[cfg(test)]
 use crate::terminal::TerminalRuntimeRegistry;
-use crate::terminal::{TerminalId, TerminalRuntime, TerminalState};
+use crate::utils::ids::PaneId;
+use crate::utils::render::signal::RenderSignal;
+use crate::{
+    terminal::{TerminalRuntime, TerminalState},
+    utils::ids::TerminalId,
+};
 
 mod attention;
 mod git_label;
@@ -83,10 +85,10 @@ impl Workspace {
         rows: u16,
         cols: u16,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
-        events: mpsc::Sender<AppEvent>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
@@ -112,10 +114,10 @@ impl Workspace {
         rows: u16,
         cols: u16,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
-        events: mpsc::Sender<AppEvent>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
         extra_env: Vec<(String, String)>,
@@ -156,10 +158,10 @@ impl Workspace {
         rows: u16,
         cols: u16,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
-        events: mpsc::Sender<AppEvent>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
         argv: Option<&[String]>,
@@ -267,9 +269,9 @@ impl Workspace {
         cols: u16,
         cwd: PathBuf,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
         extra_env: Vec<(String, String)>,
     ) -> std::io::Result<(usize, TerminalState, TerminalRuntime)> {
         self.create_tab_with_runtime(
@@ -291,9 +293,9 @@ impl Workspace {
         cols: u16,
         cwd: PathBuf,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
         argv: Option<&[String]>,
         extra_env: Vec<(String, String)>,
     ) -> std::io::Result<(usize, TerminalState, TerminalRuntime)> {
@@ -381,9 +383,9 @@ impl Workspace {
         cols: u16,
         cwd: Option<PathBuf>,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
         extra_env: Vec<(String, String)>,
         focus_new_pane: bool,
     ) -> Option<std::io::Result<(usize, crate::server::workspaces::tab::NewPane)>> {
@@ -414,9 +416,9 @@ impl Workspace {
         cols: u16,
         cwd: Option<PathBuf>,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
         extra_env: Vec<(String, String)>,
         focus_new_pane: bool,
     ) -> Option<std::io::Result<(usize, crate::server::workspaces::tab::NewPane)>> {
@@ -447,9 +449,9 @@ impl Workspace {
         cols: u16,
         cwd: Option<PathBuf>,
         scrollback_limit_bytes: usize,
-        host_terminal_theme: crate::terminal_theme::TerminalTheme,
-        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
-        shell_config: crate::pane::PaneShellConfig<'_>,
+        host_terminal_theme: crate::utils::theme::color::TerminalTheme,
+        host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
+        shell_config: crate::terminal::runtime::spawn::PaneShellConfig<'_>,
         extra_env: Vec<(String, String)>,
         focus_new_pane: bool,
         argv: Option<&[String]>,

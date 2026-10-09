@@ -149,11 +149,10 @@ pub(crate) fn copy_feedback_offset_for_toast(
     area: Rect,
     feedback: &CopyFeedback,
     base_offset: u16,
-    position: crate::config::ToastClipboardPosition,
+    position: crate::utils::config::ToastClipboardPosition,
     toast_rect: Rect,
 ) -> u16 {
-    let feedback_rect =
-        super::status_popups::copy_feedback_rect(area, feedback, base_offset, position);
+    let feedback_rect = super::feedback::copy_feedback_rect(area, feedback, base_offset, position);
     if rectangles_overlap(feedback_rect, toast_rect) {
         base_offset.saturating_add(toast_rect.height)
     } else {

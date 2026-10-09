@@ -1,5 +1,5 @@
 use super::ServerEvent;
-use crate::protocol::{self, ServerMessage};
+use crate::protocol::wire::{self as protocol, ServerMessage};
 use crate::server::clients::connection::{
     ClientConnection, ClientConnectionMode, ClientShellInputTarget, DeferredRender,
 };
@@ -38,7 +38,7 @@ impl HeadlessServer {
         }
         if should_release_focus {
             if let Some(target) = disconnected_focus.as_ref() {
-                self.send_shell_focus_target(target, crate::ghostty::FocusEvent::Lost);
+                self.send_shell_focus_target(target, crate::terminal::vt::FocusEvent::Lost);
             }
         }
         if was_foreground {
@@ -135,7 +135,7 @@ impl HeadlessServer {
                 );
                 self.app.ensure_default_workspace();
                 let last_activity = self.allocate_activity_stamp();
-                let observed = crate::kitty_graphics::HostCellSize {
+                let observed = crate::protocol::kitty::HostCellSize {
                     width_px: cell_width_px,
                     height_px: cell_height_px,
                 };
@@ -164,7 +164,7 @@ impl HeadlessServer {
                     crate::server::clients::connection::ClientShellLocation::from_snapshot(
                         &seed_snapshot,
                     );
-                let snapshot_message = match crate::protocol::endpoint::snapshot_message(
+                let snapshot_message = match crate::protocol::wire::handshake::snapshot_message(
                     &seed_snapshot,
                 ) {
                     Ok(message) => message,

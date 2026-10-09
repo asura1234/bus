@@ -4,7 +4,7 @@ use super::*;
 fn non_overlay_ctrl_v_is_forwarded_to_the_focused_pane() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
-    let key = crate::input::TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
+    let key = crate::protocol::keys::TerminalKey::new(KeyCode::Char('v'), KeyModifiers::CONTROL);
 
     let outcome = state.handle_raw_events(vec![RawInputEvent::Key(key)]);
 
@@ -47,9 +47,9 @@ fn focus_loss_releases_held_pane_keys_before_reporting_focus() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
-    let key = crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
+    let key = crate::protocol::keys::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty())
         .with_generated_text(Some("x".to_owned()))
-        .with_windows_record(crate::input::WindowsKeyRecord {
+        .with_windows_record(crate::protocol::keys::WindowsKeyRecord {
             key_down: true,
             repeat_count: 1,
             virtual_key_code: 0x58,
@@ -72,7 +72,7 @@ fn focus_loss_releases_held_pane_keys_before_reporting_focus() {
         ] if matches!(
             &events[..],
             [ClientPaneInputEvent::Key {
-                kind: crate::protocol::ClientKeyKind::Release,
+                kind: crate::protocol::wire::ClientKeyKind::Release,
                 ..
             }]
         )
@@ -111,8 +111,8 @@ fn focus_loss_releases_active_pane_mouse_before_reporting_focus() {
         ] if pane_id == "pane_1" && matches!(
             &events[..],
             [ClientPaneInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::Up(
-                    crate::protocol::ClientMouseButton::Left
+                kind: crate::protocol::wire::ClientMouseKind::Up(
+                    crate::protocol::wire::ClientMouseButton::Left
                 ),
                 position: ClientMousePosition::Cell { column: 2, row: 1 },
                 ..
@@ -174,7 +174,8 @@ fn shell_ignores_older_same_boot_snapshot_and_surface() {
     state.set_pane_surface(current_surface);
     state.compose(106, 20).expect("current shell");
     assert!(!state.hits.panes.is_empty());
-    let held_key = crate::input::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty());
+    let held_key =
+        crate::protocol::keys::TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty());
     assert!(matches!(
         &state
             .handle_raw_events(vec![RawInputEvent::Key(held_key.clone())])
@@ -273,8 +274,8 @@ fn resize_invalidation_drops_stale_hits_but_preserves_gesture_release() {
                 && matches!(
                     &events[..],
                     [ClientPaneInputEvent::Mouse {
-                        kind: crate::protocol::ClientMouseKind::Up(
-                            crate::protocol::ClientMouseButton::Left
+                        kind: crate::protocol::wire::ClientMouseKind::Up(
+                            crate::protocol::wire::ClientMouseButton::Left
                         ),
                         ..
                     }]
@@ -294,7 +295,7 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
         width: 1,
         height: 2,
     });
-    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+    pane_surface.panes[0].scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
         offset_from_bottom: 0,
         max_offset_from_bottom: 20,
         viewport_rows: 2,
@@ -322,10 +323,10 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
             ClientShellAction::Endpoint { request: scroll, .. }
         ] if matches!(
             &focus.method,
-            crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1"
+            crate::protocol::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1"
         ) && matches!(
             &scroll.method,
-            crate::api::schema::Method::PaneScroll(params)
+            crate::protocol::api::schema::Method::PaneScroll(params)
                 if params.pane_id == "pane_1"
                     && params.offset_from_bottom == expected as u64
         )
@@ -354,7 +355,7 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
         [ClientShellAction::Endpoint { request, .. }]
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1"
+                crate::protocol::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1"
             )
     ));
     assert!(matches!(
@@ -375,7 +376,7 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
         [ClientShellAction::Endpoint { request, .. }]
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneScroll(params)
+                crate::protocol::api::schema::Method::PaneScroll(params)
                     if params.pane_id == "pane_1"
                         && params.offset_from_bottom == expected as u64
             )
@@ -396,7 +397,7 @@ fn pending_scroll_target_does_not_relabel_an_older_surface() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
-    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+    pane_surface.panes[0].scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
         offset_from_bottom: 0,
         max_offset_from_bottom: 20,
         viewport_rows: 2,
@@ -426,16 +427,16 @@ fn retained_surface_patch_updates_only_pane_cells_without_recomposing_chrome() {
     state.set_pane_surface(pane_surface);
     let composed = state.compose(100, 30).expect("initial composed frame");
     let layout = state.layout(100, 30);
-    let patch = crate::protocol::PaneSurfacePatch {
+    let patch = crate::protocol::wire::PaneSurfacePatch {
         boot_id: "boot-1".into(),
         projection_revision: 1,
         base_surface_revision: 1,
         surface_revision: 2,
-        rows: vec![crate::protocol::PaneSurfacePatchRow {
+        rows: vec![crate::protocol::wire::PaneSurfacePatchRow {
             x: 0,
             y: 0,
             cells: vec![
-                crate::protocol::CellData {
+                crate::protocol::wire::CellData {
                     symbol: "N".into(),
                     fg: 0,
                     bg: 0,
@@ -497,22 +498,22 @@ fn retained_surface_patch_updates_scrollbar_cells_and_pane_hit_metadata() {
         width: 1,
         height: 2,
     });
-    updated_pane.scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+    updated_pane.scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
         offset_from_bottom: 2,
         max_offset_from_bottom: 8,
         viewport_rows: 2,
     });
     updated_pane.mouse_reporting = true;
     updated_pane.sgr_pixel_mouse = true;
-    let patch = crate::protocol::PaneSurfacePatch {
+    let patch = crate::protocol::wire::PaneSurfacePatch {
         boot_id: "boot-1".into(),
         projection_revision: 1,
         base_surface_revision: 1,
         surface_revision: 2,
-        rows: vec![crate::protocol::PaneSurfacePatchRow {
+        rows: vec![crate::protocol::wire::PaneSurfacePatchRow {
             x: 4,
             y: 0,
-            cells: vec![crate::protocol::CellData {
+            cells: vec![crate::protocol::wire::CellData {
                 symbol: "▐".into(),
                 fg: 0,
                 bg: 0,
@@ -562,7 +563,7 @@ fn retained_surface_patch_rejects_stale_base_without_mutating_surface() {
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
     let before = state.pane_surface.clone();
-    let outcome = state.apply_pane_surface_patch(crate::protocol::PaneSurfacePatch {
+    let outcome = state.apply_pane_surface_patch(crate::protocol::wire::PaneSurfacePatch {
         boot_id: "boot-1".into(),
         projection_revision: 1,
         base_surface_revision: 0,

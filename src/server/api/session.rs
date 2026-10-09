@@ -43,8 +43,8 @@ impl App {
         }
 
         SessionSnapshot {
-            version: crate::build_info::version(),
-            protocol: crate::protocol::PROTOCOL_VERSION,
+            version: crate::utils::version::version(),
+            protocol: crate::protocol::wire::PROTOCOL_VERSION,
             focused_workspace_id,
             focused_tab_id,
             focused_pane_id,
@@ -60,7 +60,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use crate::protocol::api::schema::{EmptyParams, Method, ResponseResult, SuccessResponse};
-    use crate::{config::Config, workspace::Workspace};
+    use crate::{server::workspaces::Workspace, utils::config::Config};
 
     fn app_with_two_tabs() -> crate::server::app::App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();

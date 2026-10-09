@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use ratatui::layout::Rect;
 use tracing::{debug, warn};
 
-use crate::protocol::{self, MAX_GRAPHICS_FRAME_SIZE};
+use crate::protocol::wire::{self as protocol, MAX_GRAPHICS_FRAME_SIZE};
 use crate::server::clients::connection::{render_targets, ClientConnection};
 use crate::server::main_loop::HeadlessServer;
 use crate::server::rendering::snapshot::{
@@ -44,7 +44,7 @@ impl HeadlessServer {
 
     pub(in crate::server) fn pty_sources_visible_to_any_render_target(
         &self,
-        sources: &HashSet<crate::layout::PaneId>,
+        sources: &HashSet<crate::utils::ids::PaneId>,
     ) -> bool {
         self.clients
             .values()
@@ -57,14 +57,14 @@ impl HeadlessServer {
 
     fn terminal_id_for_pane(
         &self,
-        pane_id: crate::layout::PaneId,
-    ) -> Option<&crate::terminal::TerminalId> {
+        pane_id: crate::utils::ids::PaneId,
+    ) -> Option<&crate::utils::ids::TerminalId> {
         self.app
             .find_pane(pane_id)
             .map(|(_, pane)| &pane.attached_terminal_id)
     }
 
-    fn any_shell_surface_contains_pane(&self, pane_id: crate::layout::PaneId) -> bool {
+    fn any_shell_surface_contains_pane(&self, pane_id: crate::utils::ids::PaneId) -> bool {
         self.clients.iter().any(|(&client_id, client)| {
             if !client.is_active_shell_client() {
                 return false;
@@ -86,13 +86,13 @@ impl HeadlessServer {
     }
 
     pub(in crate::server) fn render_and_stream(&mut self) {
-        let full_started = crate::render_prof::timer();
+        let full_started = crate::utils::render::prof::timer();
         let render_targets = render_targets(&self.clients, self.foreground_client_id);
 
         if render_targets.is_empty() {
             let resize_panes = self.update_headless_render_geometry();
             self.app.full_redraw_pending = false;
-            crate::render_prof::duration_since("full_render.total", full_started);
+            crate::utils::render::prof::duration_since("full_render.total", full_started);
             let (cols, rows) = self.effective_size;
             debug!(
                 cols,
@@ -122,7 +122,7 @@ impl HeadlessServer {
         // keep responsive peers on the global full-render path while it waits
         // for its render slot to drain.
         self.app.full_redraw_pending = false;
-        crate::render_prof::duration_since("full_render.total", full_started);
+        crate::utils::render::prof::duration_since("full_render.total", full_started);
         debug!(cols, rows, foreground_client_id = ?self.foreground_client_id, "rendered virtual frame(s)");
     }
     fn update_headless_render_geometry(&mut self) -> bool {
@@ -130,13 +130,13 @@ impl HeadlessServer {
         let area = Rect::new(0, 0, cols, rows);
         let resize_panes = self.app.state.view.pane_infos.is_empty();
         if resize_panes {
-            crate::ui::compute_view_with_runtime_registry(
+            crate::server::rendering::surface::compute_view_with_runtime_registry(
                 &mut self.app.state,
                 &self.app.terminal_runtimes,
                 area,
             );
         } else {
-            crate::ui::compute_view_without_resizing_panes(
+            crate::server::rendering::surface::compute_view_without_resizing_panes(
                 &mut self.app.state,
                 &self.app.terminal_runtimes,
                 area,
@@ -166,7 +166,7 @@ impl HeadlessServer {
             client.shell_projection_revision = client.shell_projection_revision.saturating_add(1);
             candidate.revision = client.shell_projection_revision;
             let message =
-                crate::protocol::endpoint::snapshot_message(&candidate).map_err(|err| {
+                crate::protocol::wire::handshake::snapshot_message(&candidate).map_err(|err| {
                     warn!(client_id, err = %err, "failed to encode endpoint snapshot");
                 })?;
             let framed = Self::frame_server_message(&message).map_err(|err| {
@@ -186,7 +186,7 @@ impl HeadlessServer {
         &mut self,
         client_id: u64,
         area: Rect,
-        cell_size: crate::kitty_graphics::HostCellSize,
+        cell_size: crate::protocol::kitty::HostCellSize,
     ) -> Result<(), ()> {
         let shell_target = self.shell_target_for_client(client_id);
         if !self.sync_client_shell_snapshot(client_id)? {
@@ -197,7 +197,7 @@ impl HeadlessServer {
             .get(&client_id)
             .map(|client| client.shell_graphics_delivery.clone())
             .unwrap_or_default();
-        let render_started = crate::render_prof::timer();
+        let render_started = crate::utils::render::prof::timer();
         let crate::server::rendering::snapshot::RenderedPaneSurface {
             frame,
             panes,
@@ -208,7 +208,7 @@ impl HeadlessServer {
             let render_cell_size = if cell_size.is_known() {
                 cell_size
             } else {
-                crate::kitty_graphics::HostCellSize::default()
+                crate::protocol::kitty::HostCellSize::default()
             };
             let rendered = render_client_shell_pane_surface(
                 &mut self.app,
@@ -218,7 +218,7 @@ impl HeadlessServer {
                 render_cell_size,
                 &shell_graphics_delivery,
             );
-            crate::render_prof::duration_since(
+            crate::utils::render::prof::duration_since(
                 "full_render.render_tab_surface_virtual",
                 render_started,
             );
@@ -243,7 +243,7 @@ impl HeadlessServer {
             });
         let Some(mut prepared) = prepared else {
             client.clear_deferred_render();
-            crate::render_prof::event("full_render.skip_identical");
+            crate::utils::render::prof::event("full_render.skip_identical");
             return Ok(());
         };
         let mut shell_assets_deferred = false;
@@ -271,7 +271,7 @@ impl HeadlessServer {
                 } else {
                     client.clear_deferred_render();
                 }
-                crate::render_prof::event("full_render.sent");
+                crate::utils::render::prof::event("full_render.sent");
             }
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 client.defer_full_render();
@@ -293,7 +293,7 @@ impl HeadlessServer {
         let max = if has_graphics {
             MAX_GRAPHICS_FRAME_SIZE
         } else {
-            crate::protocol::MAX_FRAME_SIZE
+            crate::protocol::wire::MAX_FRAME_SIZE
         };
         let serialized = match Self::frame_server_message_with_max(prepared.message(), max) {
             Ok(frame) => frame,
@@ -303,7 +303,7 @@ impl HeadlessServer {
                     claimed, max, "dropping graphics assets from oversized pane surface"
                 );
                 if !prepared.strip_pane_surface_assets() {
-                    crate::render_prof::event("full_render.serialize_oversized");
+                    crate::utils::render::prof::event("full_render.serialize_oversized");
                     return Ok(None);
                 }
                 *next_shell_graphics_delivery = None;
@@ -312,7 +312,7 @@ impl HeadlessServer {
                     Ok(framed) => framed,
                     Err(err) => {
                         warn!(client_id, err = %err, "failed to serialize pane surface without assets");
-                        crate::render_prof::event("full_render.serialize_error");
+                        crate::utils::render::prof::event("full_render.serialize_error");
                         return Err(());
                     }
                 }
@@ -322,12 +322,12 @@ impl HeadlessServer {
                     client_id,
                     claimed, max, "skipping oversized frame for client"
                 );
-                crate::render_prof::event("full_render.serialize_oversized");
+                crate::utils::render::prof::event("full_render.serialize_oversized");
                 return Ok(None);
             }
             Err(err) => {
                 warn!(client_id, err = %err, "failed to serialize frame");
-                crate::render_prof::event("full_render.serialize_error");
+                crate::utils::render::prof::event("full_render.serialize_error");
                 return Err(());
             }
         };

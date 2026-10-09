@@ -1,50 +1,52 @@
-use super::*;
+use super::{
+    api_session_kind, native_resume_is_empty_for_test, shell_command_from_argv,
+    terminal_resume_identity_for_test, test_support,
+};
+#[cfg(unix)]
+use super::{App, Rect};
 
 #[test]
 fn terminal_resume_facts_are_an_owned_snapshot_of_only_saved_identity() {
     let mut terminal = crate::terminal::TerminalState::new(
-        crate::terminal::TerminalId::alloc(),
+        crate::utils::ids::TerminalId::alloc(),
         std::env::temp_dir(),
     );
-    let session = crate::agent_resume::PersistedAgentSession {
+    let session = crate::agents::resume::catalog::PersistedAgentSession {
         source: "herdr:codex".into(),
         agent: "codex".into(),
-        session_ref: crate::agent_resume::AgentSessionRef::id("saved-session").unwrap(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("saved-session").unwrap(),
     };
-    terminal.restore_managed_agent("bus-r1-a2".into(), crate::detect::Agent::Codex);
+    terminal.restore_managed_agent("bus-r1-a2".into(), crate::agents::AgentKind::Codex);
     terminal.set_persisted_agent_session(session.clone());
-    let facts = terminal_resume_facts(&terminal);
+    let (agent_name, managed_agent, saved_session) = terminal_resume_identity_for_test(&terminal);
     terminal.clear_agent_runtime_identity_after_respawn();
-    assert_eq!(facts.agent_name.as_deref(), Some("bus-r1-a2"));
-    assert_eq!(facts.managed_agent.as_deref(), Some("codex"));
-    assert_eq!(facts.session, Some(session));
+    assert_eq!(agent_name.as_deref(), Some("bus-r1-a2"));
+    assert_eq!(managed_agent.as_deref(), Some("codex"));
+    assert_eq!(saved_session, Some(session));
 }
 
 #[test]
 fn native_resume_entry_keeps_foreign_server_context_out_of_capture_validation() {
     let root = std::env::temp_dir().join("bus-resume-foreign-context");
     let mut terminal =
-        crate::terminal::TerminalState::new(crate::terminal::TerminalId::alloc(), root.clone());
-    terminal.restore_managed_agent("bus-r1-a2".into(), crate::detect::Agent::Codex);
-    let plan = crate::agent_resume::AgentResumePlan {
+        crate::terminal::TerminalState::new(crate::utils::ids::TerminalId::alloc(), root.clone());
+    terminal.restore_managed_agent("bus-r1-a2".into(), crate::agents::AgentKind::Codex);
+    let plan = crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: vec!["invalid-saved-plan".into()],
         dedupe_key: "invalid".into(),
     };
     for (data_root, session_name) in [(None, None), (Some(root.as_path()), Some("nested"))] {
         let _env = test_support::ProcessEnvironment::enter(data_root, session_name);
-        assert_eq!(
-            for_native_resume(&terminal, &plan, &root).unwrap(),
-            LaunchExtras::default()
-        );
+        assert!(native_resume_is_empty_for_test(&terminal, &plan, &root).unwrap());
     }
 }
 
 #[test]
 fn api_session_kind_keeps_domain_id_and_path_serialized_spellings() {
     for kind in [
-        crate::agent_resume::AgentSessionRefKind::Id,
-        crate::agent_resume::AgentSessionRefKind::Path,
+        crate::agents::resume::catalog::AgentSessionRefKind::Id,
+        crate::agents::resume::catalog::AgentSessionRefKind::Path,
     ] {
         assert_eq!(
             serde_json::to_value(api_session_kind(kind)).unwrap(),
@@ -57,11 +59,11 @@ fn api_session_kind_keeps_domain_id_and_path_serialized_spellings() {
 fn test_app() -> App {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     App::new(
-        &crate::config::Config::default(),
-        crate::app::AppPolicy::TEST,
+        &crate::utils::config::Config::default(),
+        crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
-        crate::api::EventHub::default(),
+        crate::server::api::EventHub::default(),
     )
 }
 
@@ -85,7 +87,7 @@ async fn invalid_bus_resume_context_does_not_launch_or_retry_and_keeps_session()
     let root = std::env::temp_dir().join("bus-resume-missing-context-test");
     let _env = test_support::ProcessEnvironment::enter(Some(&root), Some("bus"));
     let mut app = test_app();
-    let workspace = crate::workspace::Workspace::test_new("restored-bus");
+    let workspace = crate::server::workspaces::Workspace::test_new("restored-bus");
     let terminal_id = workspace
         .terminal_id(workspace.tabs[0].root_pane)
         .cloned()
@@ -95,15 +97,16 @@ async fn invalid_bus_resume_context_does_not_launch_or_retry_and_keeps_session()
     app.state.workspaces = vec![workspace];
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
-    let session = crate::agent_resume::PersistedAgentSession {
+    let session = crate::agents::resume::catalog::PersistedAgentSession {
         source: "herdr:codex".into(),
         agent: "codex".into(),
-        session_ref: crate::agent_resume::AgentSessionRef::id("missing-bus-session").unwrap(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("missing-bus-session")
+            .unwrap(),
     };
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
-    terminal.restore_managed_agent("bus-r999-a999".into(), crate::detect::Agent::Codex);
+    terminal.restore_managed_agent("bus-r999-a999".into(), crate::agents::AgentKind::Codex);
     terminal.set_persisted_agent_session(session.clone());
-    terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+    terminal.pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: marker_resume_test_argv(),
         dedupe_key: "test-untrusted-plan".into(),
@@ -119,7 +122,7 @@ async fn invalid_bus_resume_context_does_not_launch_or_retry_and_keeps_session()
         "failed context must not trigger file I/O on subsequent layout ticks"
     );
     let terminal = &app.state.terminals[&terminal_id];
-    assert_eq!(terminal.state, crate::detect::AgentState::Unknown);
+    assert_eq!(terminal.state, crate::agents::AgentState::Unknown);
     assert_eq!(terminal.persisted_agent_session, Some(session));
     assert_eq!(terminal.agent_name.as_deref(), Some("bus-r999-a999"));
     assert!(!app.start_pending_agent_resumes(true));
@@ -129,7 +132,7 @@ async fn invalid_bus_resume_context_does_not_launch_or_retry_and_keeps_session()
 #[tokio::test]
 async fn pending_agent_resume_waits_for_host_theme_before_launch() {
     let mut app = test_app();
-    let workspace = crate::workspace::Workspace::test_new("restored");
+    let workspace = crate::server::workspaces::Workspace::test_new("restored");
     let pane_id = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
     let pane_infos = workspace.tabs[0]
@@ -145,7 +148,7 @@ async fn pending_agent_resume_waits_for_host_theme_before_launch() {
         .terminals
         .get_mut(&terminal_id)
         .expect("test terminal should exist");
-    terminal.pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+    terminal.pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: marker_resume_test_argv(),
         dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
@@ -154,13 +157,13 @@ async fn pending_agent_resume_waits_for_host_theme_before_launch() {
     assert!(!app.start_pending_agent_resumes(false));
     assert!(app.terminal_runtimes.get(&terminal_id).is_none());
 
-    app.state.host_terminal_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    app.state.host_terminal_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 220,
             g: 220,
             b: 220,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 20,
             g: 20,
             b: 20,
@@ -209,7 +212,7 @@ async fn pending_agent_resume_waits_for_host_theme_before_launch() {
 #[tokio::test]
 async fn pending_agent_resume_can_launch_after_theme_wait_expires() {
     let mut app = test_app();
-    let workspace = crate::workspace::Workspace::test_new("restored");
+    let workspace = crate::server::workspaces::Workspace::test_new("restored");
     let pane_id = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
     app.state.view.pane_infos = workspace.tabs[0]
@@ -223,7 +226,7 @@ async fn pending_agent_resume_can_launch_after_theme_wait_expires() {
         .terminals
         .get_mut(&terminal_id)
         .expect("test terminal should exist")
-        .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+        .pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: long_running_test_argv(),
         dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
@@ -243,10 +246,10 @@ async fn pending_agent_resume_can_launch_after_theme_wait_expires() {
 #[tokio::test]
 async fn pending_agent_resume_launches_hidden_panes_with_current_terminal_area() {
     let mut app = test_app();
-    let active_workspace = crate::workspace::Workspace::test_new("active");
+    let active_workspace = crate::server::workspaces::Workspace::test_new("active");
     let active_pane = active_workspace.tabs[0].root_pane;
     let active_terminal = active_workspace.terminal_id(active_pane).cloned().unwrap();
-    let hidden_workspace = crate::workspace::Workspace::test_new("hidden");
+    let hidden_workspace = crate::server::workspaces::Workspace::test_new("hidden");
     let hidden_pane = hidden_workspace.tabs[0].root_pane;
     let hidden_terminal = hidden_workspace.terminal_id(hidden_pane).cloned().unwrap();
     app.state.view.pane_infos = active_workspace.tabs[0]
@@ -256,13 +259,13 @@ async fn pending_agent_resume_launches_hidden_panes_with_current_terminal_area()
     app.state.workspaces = vec![active_workspace, hidden_workspace];
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
-    app.state.host_terminal_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    app.state.host_terminal_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 220,
             g: 220,
             b: 220,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 20,
             g: 20,
             b: 20,
@@ -274,7 +277,7 @@ async fn pending_agent_resume_launches_hidden_panes_with_current_terminal_area()
             .terminals
             .get_mut(terminal_id)
             .expect("test terminal should exist")
-            .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            .pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
             agent: "codex".into(),
             argv: long_running_test_argv(),
             dedupe_key: format!("herdr:codex\0codex\0Id\0{terminal_id}"),
@@ -300,7 +303,7 @@ async fn pending_agent_resume_launches_hidden_panes_with_current_terminal_area()
 #[tokio::test]
 async fn pending_agent_resume_launches_inactive_tab_panes_with_current_terminal_area() {
     let mut app = test_app();
-    let mut workspace = crate::workspace::Workspace::test_new("tabs");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("tabs");
     let active_pane = workspace.tabs[0].root_pane;
     let inactive_tab = workspace.test_add_tab(Some("agents"));
     let inactive_pane = workspace.tabs[inactive_tab].root_pane;
@@ -321,13 +324,13 @@ async fn pending_agent_resume_launches_inactive_tab_panes_with_current_terminal_
         .first()
         .and_then(|ws| ws.tabs[0].terminal_id(active_pane))
         .is_some());
-    app.state.host_terminal_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    app.state.host_terminal_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 220,
             g: 220,
             b: 220,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 20,
             g: 20,
             b: 20,
@@ -338,7 +341,7 @@ async fn pending_agent_resume_launches_inactive_tab_panes_with_current_terminal_
         .terminals
         .get_mut(&inactive_terminal)
         .expect("inactive tab terminal should exist")
-        .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+        .pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: long_running_test_argv(),
         dedupe_key: "herdr:codex\0codex\0Id\0inactive-tab-session".into(),
@@ -365,12 +368,12 @@ async fn pending_agent_resume_launches_inactive_tab_panes_with_current_terminal_
 #[tokio::test]
 async fn pending_agent_resume_launches_zoom_hidden_active_tab_panes() {
     let mut app = test_app();
-    let mut workspace = crate::workspace::Workspace::test_new("zoomed");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("zoomed");
     let hidden_pane = workspace.tabs[0].root_pane;
     let visible_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
     workspace.tabs[0].zoomed = true;
     let hidden_terminal = workspace.terminal_id(hidden_pane).cloned().unwrap();
-    app.state.view.pane_infos = vec![crate::layout::PaneInfo {
+    app.state.view.pane_infos = vec![crate::server::workspaces::layout::PaneInfo {
         id: visible_pane,
         rect: ratatui::layout::Rect::new(0, 0, 100, 30),
         inner_rect: ratatui::layout::Rect::new(1, 1, 98, 28),
@@ -382,13 +385,13 @@ async fn pending_agent_resume_launches_zoom_hidden_active_tab_panes() {
     app.state.workspaces = vec![workspace];
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
-    app.state.host_terminal_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    app.state.host_terminal_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 220,
             g: 220,
             b: 220,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 20,
             g: 20,
             b: 20,
@@ -399,7 +402,7 @@ async fn pending_agent_resume_launches_zoom_hidden_active_tab_panes() {
         .terminals
         .get_mut(&hidden_terminal)
         .expect("hidden zoom pane terminal should exist")
-        .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+        .pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: long_running_test_argv(),
         dedupe_key: "herdr:codex\0codex\0Id\0zoom-hidden-session".into(),
@@ -426,13 +429,13 @@ async fn pending_agent_resume_launches_zoom_hidden_active_tab_panes() {
 #[tokio::test]
 async fn pending_agent_resume_uses_current_terminal_area_for_background_panes() {
     let mut app = test_app();
-    let previous_workspace = crate::workspace::Workspace::test_new("previous");
+    let previous_workspace = crate::server::workspaces::Workspace::test_new("previous");
     let previous_pane = previous_workspace.tabs[0].root_pane;
     let previous_terminal = previous_workspace
         .terminal_id(previous_pane)
         .cloned()
         .unwrap();
-    let current_workspace = crate::workspace::Workspace::test_new("current");
+    let current_workspace = crate::server::workspaces::Workspace::test_new("current");
     app.state.view.pane_infos = previous_workspace.tabs[0]
         .layout
         .panes(ratatui::layout::Rect::new(0, 0, 100, 30));
@@ -440,13 +443,13 @@ async fn pending_agent_resume_uses_current_terminal_area_for_background_panes() 
     app.state.workspaces = vec![previous_workspace, current_workspace];
     app.state.active = Some(1);
     app.state.ensure_test_terminals();
-    app.state.host_terminal_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    app.state.host_terminal_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 220,
             g: 220,
             b: 220,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 20,
             g: 20,
             b: 20,
@@ -457,7 +460,7 @@ async fn pending_agent_resume_uses_current_terminal_area_for_background_panes() 
         .terminals
         .get_mut(&previous_terminal)
         .expect("test terminal should exist")
-        .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+        .pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: long_running_test_argv(),
         dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
@@ -486,10 +489,10 @@ async fn pending_agent_resume_uses_current_terminal_area_for_background_panes() 
 #[tokio::test]
 async fn pending_agent_resume_launches_with_inner_rect_size() {
     let mut app = test_app();
-    let mut workspace = crate::workspace::Workspace::test_new("split");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("split");
     let pane_id = workspace.test_split(ratatui::layout::Direction::Horizontal);
     let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
-    app.state.view.pane_infos = vec![crate::layout::PaneInfo {
+    app.state.view.pane_infos = vec![crate::server::workspaces::layout::PaneInfo {
         id: pane_id,
         rect: ratatui::layout::Rect::new(0, 0, 100, 30),
         inner_rect: ratatui::layout::Rect::new(1, 1, 98, 28),
@@ -501,13 +504,13 @@ async fn pending_agent_resume_launches_with_inner_rect_size() {
     app.state.workspaces = vec![workspace];
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
-    app.state.host_terminal_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    app.state.host_terminal_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 220,
             g: 220,
             b: 220,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 20,
             g: 20,
             b: 20,
@@ -518,7 +521,7 @@ async fn pending_agent_resume_launches_with_inner_rect_size() {
         .terminals
         .get_mut(&terminal_id)
         .expect("test terminal should exist")
-        .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+        .pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: long_running_test_argv(),
         dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),

@@ -5,7 +5,7 @@ use super::keymap::{
 };
 use super::records::{PlatformInputItem, WindowsInputRecord, WindowsMouseRecord};
 use super::win32_input_mode::{WindowsWin32InputModeFramer, WindowsWin32InputModeItem};
-use crate::input::WindowsKeyRecord;
+use crate::protocol::keys::WindowsKeyRecord;
 
 #[derive(Default)]
 pub(super) struct WindowsInputMapper {
@@ -44,9 +44,9 @@ impl WindowsInputMapper {
             }
             WindowsInputRecord::Focus(focused) => {
                 self.with_pending_win32_flush(vec![PlatformInputItem::Semantic(if focused {
-                    crate::protocol::ClientInputEvent::FocusGained
+                    crate::protocol::wire::ClientInputEvent::FocusGained
                 } else {
-                    crate::protocol::ClientInputEvent::FocusLost
+                    crate::protocol::wire::ClientInputEvent::FocusLost
                 })])
             }
         }
@@ -202,9 +202,9 @@ impl WindowsInputMapper {
     fn synthetic_modified_key_event(
         &mut self,
         key: WindowsKeyRecord,
-        kind: crate::protocol::ClientKeyKind,
-    ) -> Option<(Vec<u8>, crate::protocol::ClientInputEvent)> {
-        use crate::protocol::ClientKeyCode;
+        kind: crate::protocol::wire::ClientKeyKind,
+    ) -> Option<(Vec<u8>, crate::protocol::wire::ClientInputEvent)> {
+        use crate::protocol::wire::ClientKeyCode;
 
         let modifiers = windows_key_modifiers(key.control_key_state);
         if !modifiers.contains(crossterm::event::KeyModifiers::SHIFT) {
@@ -220,14 +220,14 @@ impl WindowsInputMapper {
         self.pending_paste_high_surrogate = None;
         Some((
             vec![key.unicode as u8],
-            crate::protocol::ClientInputEvent::Key {
+            crate::protocol::wire::ClientInputEvent::Key {
                 code,
                 modifiers: modifiers.bits(),
                 kind,
                 repeat_count: 1,
 
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
         ))
     }
@@ -236,7 +236,7 @@ impl WindowsInputMapper {
         &mut self,
         key: WindowsKeyRecord,
         oem_char: Option<char>,
-    ) -> Vec<crate::protocol::ClientInputEvent> {
+    ) -> Vec<crate::protocol::wire::ClientInputEvent> {
         if !self.key_record_can_emit_event(key) {
             return Vec::new();
         }
@@ -246,7 +246,7 @@ impl WindowsInputMapper {
 
         if key.virtual_key_code == 0 {
             if let Some((_bytes, event)) =
-                self.synthetic_modified_key_event(key, crate::protocol::ClientKeyKind::Press)
+                self.synthetic_modified_key_event(key, crate::protocol::wire::ClientKeyKind::Press)
             {
                 return vec![event];
             }
@@ -264,7 +264,7 @@ impl WindowsInputMapper {
             return self
                 .translate_semantic_key_event(key, kind, oem_char)
                 .map(|event| match event {
-                    crate::protocol::ClientInputEvent::Key {
+                    crate::protocol::wire::ClientInputEvent::Key {
                         code,
                         modifiers,
                         kind,
@@ -276,13 +276,13 @@ impl WindowsInputMapper {
                         // physical event, so carry its produced text separately.
                         let shifted_text = key.key_down
                             && modifiers == crossterm::event::KeyModifiers::SHIFT.bits();
-                        crate::protocol::ClientInputEvent::Key {
+                        crate::protocol::wire::ClientInputEvent::Key {
                             code,
                             modifiers,
                             kind,
                             repeat_count: key.repeat_count.max(1),
                             generated_text: if shifted_text { generated_text } else { None },
-                            source: crate::protocol::ClientKeySource::WindowsConsole {
+                            source: crate::protocol::wire::ClientKeySource::WindowsConsole {
                                 record: key,
                             },
                         }
@@ -324,29 +324,29 @@ impl WindowsInputMapper {
         key: WindowsKeyRecord,
         is_alt_code: bool,
         repeat_idx: u16,
-    ) -> crate::protocol::ClientKeyKind {
+    ) -> crate::protocol::wire::ClientKeyKind {
         if is_alt_code {
-            crate::protocol::ClientKeyKind::Press
+            crate::protocol::wire::ClientKeyKind::Press
         } else if !key.key_down {
-            crate::protocol::ClientKeyKind::Release
+            crate::protocol::wire::ClientKeyKind::Release
         } else if repeat_idx > 0 {
-            crate::protocol::ClientKeyKind::Repeat
+            crate::protocol::wire::ClientKeyKind::Repeat
         } else {
-            crate::protocol::ClientKeyKind::Press
+            crate::protocol::wire::ClientKeyKind::Press
         }
     }
 
     fn translate_semantic_key_event(
         &mut self,
         key: WindowsKeyRecord,
-        kind: crate::protocol::ClientKeyKind,
+        kind: crate::protocol::wire::ClientKeyKind,
         oem_char: Option<char>,
-    ) -> Option<crate::protocol::ClientInputEvent> {
+    ) -> Option<crate::protocol::wire::ClientInputEvent> {
         let modifiers = windows_key_modifiers(key.control_key_state);
         if key.virtual_key_code == 0 {
             let codepoint = self.utf16_unit_to_char(key.unicode)?;
             if !codepoint.is_control() {
-                return Some(crate::protocol::ClientInputEvent::TextCommit(
+                return Some(crate::protocol::wire::ClientInputEvent::TextCommit(
                     codepoint.to_string(),
                 ));
             }
@@ -356,14 +356,14 @@ impl WindowsInputMapper {
             && (key.virtual_key_code == 0x4a || key.virtual_scan_code == 0x24)
         {
             self.pending_high_surrogate = None;
-            return Some(crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('j'),
+            return Some(crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('j'),
                 modifiers: modifiers.bits(),
                 kind,
                 repeat_count: 1,
 
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             });
         }
 
@@ -381,38 +381,38 @@ impl WindowsInputMapper {
             {
                 if let Some(code) = ctrl_key_code(key.virtual_key_code, key.unicode, oem_char) {
                     self.pending_high_surrogate = None;
-                    return Some(crate::protocol::ClientInputEvent::Key {
+                    return Some(crate::protocol::wire::ClientInputEvent::Key {
                         code,
                         modifiers: modifiers.bits(),
                         kind,
                         repeat_count: 1,
 
                         generated_text: None,
-                        source: crate::protocol::ClientKeySource::Synthesized,
+                        source: crate::protocol::wire::ClientKeySource::Synthesized,
                     });
                 }
             }
             self.utf16_unit_to_char(key.unicode)
                 .filter(|ch| !ch.is_control())
-                .map(crate::protocol::ClientKeyCode::Char)
+                .map(crate::protocol::wire::ClientKeyCode::Char)
                 .or_else(|| {
                     windows_virtual_key_to_char_code(key.virtual_key_code, key.unicode, modifiers)
                 })
         };
 
         code.map(|code| {
-            let generated_text = matches!(code, crate::protocol::ClientKeyCode::Char(_))
+            let generated_text = matches!(code, crate::protocol::wire::ClientKeyCode::Char(_))
                 .then(|| char::from_u32(key.unicode as u32))
                 .flatten()
                 .filter(|ch| !ch.is_control())
                 .map(|ch| ch.to_string());
-            crate::protocol::ClientInputEvent::Key {
+            crate::protocol::wire::ClientInputEvent::Key {
                 code,
                 modifiers: modifiers.bits(),
                 kind,
                 repeat_count: 1,
                 generated_text,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             }
         })
     }
@@ -475,7 +475,7 @@ impl WindowsInputMapper {
     fn translate_mouse(
         &mut self,
         mouse: WindowsMouseRecord,
-    ) -> Option<crate::protocol::ClientInputEvent> {
+    ) -> Option<crate::protocol::wire::ClientInputEvent> {
         use crossterm::event::{MouseButton, MouseEventKind};
 
         const FROM_LEFT_1ST_BUTTON_PRESSED: u32 = 0x0001;
@@ -531,8 +531,8 @@ impl WindowsInputMapper {
         };
         self.mouse_buttons = buttons;
 
-        Some(crate::protocol::ClientInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::from_crossterm(kind),
+        Some(crate::protocol::wire::ClientInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::from_crossterm(kind),
             column: mouse.x,
             row: mouse.y,
             modifiers: windows_key_modifiers(mouse.control_key_state).bits(),

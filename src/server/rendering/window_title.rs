@@ -9,8 +9,8 @@
 //! actually live on, not the machine a thin remote client runs on. The server
 //! pushes the result to the foreground client, which writes the `OSC 0`.
 
-use crate::config::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken};
 use crate::server::app::App;
+use crate::utils::config::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken};
 
 impl App {
     pub(crate) fn configure_window_title(&mut self, template: &str) {
@@ -98,8 +98,8 @@ impl App {
     }
 }
 
-use crate::api;
-use crate::protocol::ServerMessage;
+use crate::protocol::api;
+use crate::protocol::wire::ServerMessage;
 use crate::server::main_loop::HeadlessServer;
 use std::collections::HashSet;
 
@@ -109,7 +109,7 @@ impl HeadlessServer {
     /// tokens require a UI render.
     pub(in crate::server) fn sync_terminal_title_sources(
         &mut self,
-        sources: &HashSet<crate::layout::PaneId>,
+        sources: &HashSet<crate::utils::ids::PaneId>,
     ) -> (bool, bool) {
         let focused_source = self
             .app
@@ -132,7 +132,7 @@ impl HeadlessServer {
     fn configured_window_title(&self) -> Option<String> {
         self.app
             .window_title()
-            .and_then(|title| crate::config::sanitize_window_title_text(&title))
+            .and_then(|title| crate::utils::config::sanitize_window_title_text(&title))
     }
 
     /// Pushes the configured outer window title to the foreground client when it
@@ -177,10 +177,10 @@ impl HeadlessServer {
         id: String,
         title: Option<String>,
     ) -> String {
-        use api::schema::{ClientWindowTitleReason, ResponseResult};
+        use crate::protocol::api::schema::{ClientWindowTitleReason, ResponseResult};
 
         let title = match title {
-            Some(title) => match crate::config::sanitize_window_title_text(&title) {
+            Some(title) => match crate::utils::config::sanitize_window_title_text(&title) {
                 Some(title) => Some(title),
                 None => {
                     return serde_json::to_string(&api::schema::ErrorResponse {
@@ -216,16 +216,16 @@ impl HeadlessServer {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::App;
-    use crate::config::Config;
-    use crate::workspace::Workspace;
+    use crate::server::app::App;
+    use crate::server::workspaces::Workspace;
+    use crate::utils::config::Config;
 
     fn test_app() -> App {
-        let event_hub = crate::api::EventHub::default();
+        let event_hub = crate::server::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            crate::app::AppPolicy::TEST,
+            crate::server::app::AppPolicy::TEST,
             None,
             api_rx,
             event_hub,

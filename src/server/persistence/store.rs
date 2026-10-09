@@ -8,11 +8,11 @@ use super::schema::{
 };
 
 fn session_path() -> PathBuf {
-    crate::session::data_dir().join("session.json")
+    crate::utils::paths::data_dir().join("session.json")
 }
 
 fn session_history_path() -> PathBuf {
-    crate::session::data_dir().join("session-history.json")
+    crate::utils::paths::data_dir().join("session-history.json")
 }
 
 // Follow symlinks manually so a write through a (possibly dangling) symlink
@@ -77,26 +77,26 @@ pub fn save(snapshot: &SessionSnapshot, history: Option<&SessionHistorySnapshot>
     let path = session_path();
     let history_path = session_history_path();
     if let Err(err) = save_to_paths(&path, &history_path, snapshot, history) {
-        crate::logging::session_save_failed(&path, &err.to_string());
+        crate::utils::logging::session_save_failed(&path, &err.to_string());
         return;
     }
-    crate::logging::session_saved(&path, snapshot.workspaces.len());
+    crate::utils::logging::session_saved(&path, snapshot.workspaces.len());
 }
 
 pub fn clear() {
     let path = session_path();
     if let Err(err) = clear_path(&path) {
-        crate::logging::session_clear_failed(&path, &err.to_string());
+        crate::utils::logging::session_clear_failed(&path, &err.to_string());
         return;
     }
     clear_history();
-    crate::logging::session_cleared(&path);
+    crate::utils::logging::session_cleared(&path);
 }
 
 pub fn clear_history() {
     let path = session_history_path();
     if let Err(err) = clear_path(&path) {
-        crate::logging::session_clear_failed(&path, &err.to_string());
+        crate::utils::logging::session_clear_failed(&path, &err.to_string());
     }
 }
 

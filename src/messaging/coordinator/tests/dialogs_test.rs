@@ -1,5 +1,5 @@
 use super::*;
-use crate::bus::transport::TransportError;
+use crate::messaging::native::TransportError;
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -128,7 +128,7 @@ fn worker(
     let dir = std::env::temp_dir().join(format!(
         "bus-dialogs-{}-{}-{}",
         std::process::id(),
-        crate::bus::io::now_ns(),
+        crate::messaging::storage::io::now_ns(),
         NEXT_DIR.fetch_add(1, Ordering::Relaxed)
     ));
     let screen = Arc::new(Mutex::new(Screen::default()));

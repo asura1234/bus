@@ -2,12 +2,12 @@
 use crate::client::compositor::{
     push_target_event, ClientInputContext, ClientInputTarget, ClientShellInput, ClientShellState,
 };
-use crate::protocol::ClientPaneInputEvent;
+use crate::protocol::wire::ClientPaneInputEvent;
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 
 const LOCAL_INPUT_SOURCE: u8 = 0;
 
-fn is_retained_selection_copy_key(key: &crate::input::TerminalKey) -> bool {
+fn is_retained_selection_copy_key(key: &crate::protocol::keys::TerminalKey) -> bool {
     matches!(key.code, KeyCode::Char('c' | 'C'))
         && matches!(key.modifiers, KeyModifiers::CONTROL | KeyModifiers::SUPER)
 }
@@ -15,10 +15,11 @@ fn is_retained_selection_copy_key(key: &crate::input::TerminalKey) -> bool {
 impl ClientShellState {
     pub(in crate::client) fn handle_key(
         &mut self,
-        key: crate::input::TerminalKey,
+        key: crate::protocol::keys::TerminalKey,
         outcome: &mut ClientShellInput,
     ) {
-        let lease_key = crate::input::InputLeaseKey::new(LOCAL_INPUT_SOURCE, &key);
+        let lease_key =
+            crate::client::panes::input_lease::InputLeaseKey::new(LOCAL_INPUT_SOURCE, &key);
         let key = self.input_leases.normalize_press(&lease_key, key);
         match key.kind {
             KeyEventKind::Press => {
@@ -73,9 +74,9 @@ impl ClientShellState {
                 .difference(gesture.stripped_modifiers);
             let geometry = matches!(
                 gesture.last_position,
-                crate::protocol::ClientMousePosition::Pixels { .. }
+                crate::protocol::wire::ClientMousePosition::Pixels { .. }
             )
-            .then_some(crate::protocol::ClientMouseGeometry {
+            .then_some(crate::protocol::wire::ClientMouseGeometry {
                 cols: gesture.hit.inner_rect.width,
                 rows: gesture.hit.inner_rect.height,
                 width_px: gesture.hit.pixel_width,
@@ -85,8 +86,8 @@ impl ClientShellState {
             push_target_event(
                 target,
                 ClientPaneInputEvent::Mouse {
-                    kind: crate::protocol::ClientMouseKind::Up(
-                        crate::protocol::ClientMouseButton::from_crossterm(gesture.button),
+                    kind: crate::protocol::wire::ClientMouseKind::Up(
+                        crate::protocol::wire::ClientMouseButton::from_crossterm(gesture.button),
                     ),
                     position: gesture.last_position,
                     geometry,
@@ -100,16 +101,16 @@ impl ClientShellState {
 
     fn execute_repeat_plan(
         &mut self,
-        lease_key: crate::input::InputLeaseKey<u8>,
-        key: crate::input::TerminalKey,
-        plan: crate::input::RepeatPlan<ClientInputContext, ClientInputTarget>,
+        lease_key: crate::client::panes::input_lease::InputLeaseKey<u8>,
+        key: crate::protocol::keys::TerminalKey,
+        plan: crate::client::panes::input_lease::RepeatPlan<ClientInputContext, ClientInputTarget>,
         outcome: &mut ClientShellInput,
     ) {
         match plan {
-            crate::input::RepeatPlan::Forwarded(target) => {
+            crate::client::panes::input_lease::RepeatPlan::Forwarded(target) => {
                 self.push_pane_key(target, key, outcome);
             }
-            crate::input::RepeatPlan::Reprocess {
+            crate::client::panes::input_lease::RepeatPlan::Reprocess {
                 context,
                 repetitions,
                 tracked,
@@ -133,13 +134,13 @@ impl ClientShellState {
                     }
                 }
             }
-            crate::input::RepeatPlan::Ignore => {}
+            crate::client::panes::input_lease::RepeatPlan::Ignore => {}
         }
     }
 
     fn route_key_press(
         &mut self,
-        key: &crate::input::TerminalKey,
+        key: &crate::protocol::keys::TerminalKey,
         outcome: &mut ClientShellInput,
     ) -> Option<ClientInputTarget> {
         if matches!(key.code, KeyCode::Modifier(_)) {
@@ -151,7 +152,7 @@ impl ClientShellState {
             && self
                 .selection
                 .as_ref()
-                .is_some_and(crate::selection::Selection::is_visible)
+                .is_some_and(crate::utils::text::selection::Selection::is_visible)
         {
             self.request_selection_copy(outcome, true);
             self.selection = None;
@@ -173,14 +174,14 @@ impl ClientShellState {
             retained_selection: self
                 .selection
                 .as_ref()
-                .is_some_and(crate::selection::Selection::is_visible),
+                .is_some_and(crate::utils::text::selection::Selection::is_visible),
         }
     }
 
     fn push_pane_key(
         &self,
         target: ClientInputTarget,
-        key: crate::input::TerminalKey,
+        key: crate::protocol::keys::TerminalKey,
         outcome: &mut ClientShellInput,
     ) {
         if let Some(event) = ClientPaneInputEvent::from_terminal_key(key) {

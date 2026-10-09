@@ -3,28 +3,28 @@
 
 use std::time::Instant;
 
-use crate::detect::{Agent, AgentState};
-use crate::events::AppEvent;
+use crate::agents::{AgentKind, AgentState};
 #[cfg(test)]
-use crate::layout::NavDirection;
-use crate::layout::PaneId;
-use crate::selection::Selection;
+use crate::server::workspaces::layout::NavDirection;
+use crate::terminal::events::TerminalEvent;
 use crate::terminal::{EffectiveStateChange, TerminalStateMutation};
+use crate::utils::ids::PaneId;
+use crate::utils::text::selection::Selection;
 
 use crate::server::api::input_encoding::pane_agent_status;
+#[cfg(test)]
+use crate::server::app_settings::Mode;
 use crate::server::app_state::AppState;
 #[cfg(test)]
-use crate::server::app_state::{Mode, ToastKind};
-use crate::server::notifications::policy::is_completion_transition;
-pub use crate::server::notifications::policy::{
-    active_tab_suppresses_notifications, notification_context,
-    notification_toast_for_pane_state_update,
-    notification_toast_for_state_change_with_agent_labels,
+use crate::server::notifications::delivery::ToastKind;
+#[cfg(test)]
+use crate::server::notifications::policy::notification_context;
+use crate::server::notifications::policy::{
+    active_tab_suppresses_notifications, is_completion_transition,
 };
 #[cfg(test)]
 use crate::utils::text::hit_testing::word_bounds_at_column;
-pub(crate) use crate::utils::text::hit_testing::{logical_cell_for_visible_cell, url_at_column};
-pub(crate) use crate::utils::url::safe_web_url;
+use crate::utils::text::hit_testing::{logical_cell_for_visible_cell, url_at_column};
 
 fn terminal_char_width(ch: char) -> u16 {
     u16::from(crate::utils::text::width::unicode_codepoint_width(
@@ -37,18 +37,18 @@ pub struct PaneStateUpdate {
     pub pane_id: PaneId,
     pub ws_idx: usize,
     pub previous_agent_label: Option<String>,
-    pub previous_known_agent: Option<Agent>,
+    pub previous_known_agent: Option<AgentKind>,
     pub previous_state: AgentState,
     pub previous_seen: bool,
     pub previous_presentation: crate::terminal::EffectivePresentation,
     pub agent_label: Option<String>,
-    pub known_agent: Option<Agent>,
+    pub known_agent: Option<AgentKind>,
     pub state: AgentState,
     pub seen: bool,
     pub presentation: crate::terminal::EffectivePresentation,
     pub agent_name_changed: bool,
     pub agent_released: bool,
-    pub agent_release_status: Option<crate::api::schema::AgentStatus>,
+    pub agent_release_status: Option<crate::protocol::api::schema::AgentStatus>,
     pub suppress_completion: bool,
 }
 
@@ -91,7 +91,7 @@ impl AppState {
         &self,
         terminal_runtimes: &crate::terminal::TerminalRuntimeRegistry,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
         viewport_row: u16,
         col: u16,
     ) -> Option<String> {
@@ -110,11 +110,11 @@ impl AppState {
 
 fn url_at_runtime_cell(
     runtime: &crate::terminal::TerminalRuntime,
-    pane_id: crate::layout::PaneId,
+    pane_id: crate::utils::ids::PaneId,
     area: ratatui::layout::Rect,
     viewport_row: u16,
     col: u16,
-    metrics: Option<crate::pane::ScrollMetrics>,
+    metrics: Option<crate::utils::render::widgets::ScrollMetrics>,
 ) -> Option<String> {
     if viewport_row >= area.height || col >= area.width {
         return None;
@@ -131,8 +131,11 @@ fn url_at_runtime_cell(
 
     let visible_selection = Selection::line_range(
         pane_id,
-        crate::selection::absolute_row_for_viewport(0, metrics),
-        crate::selection::absolute_row_for_viewport(area.height.saturating_sub(1), metrics),
+        crate::utils::text::selection::absolute_row_for_viewport(0, metrics),
+        crate::utils::text::selection::absolute_row_for_viewport(
+            area.height.saturating_sub(1),
+            metrics,
+        ),
         area.width.saturating_sub(1),
     );
     let visible_text = runtime.extract_selection(&visible_selection)?;
@@ -173,7 +176,7 @@ impl AppState {
             if ws.cached_identity_cwd == cwd {
                 continue;
             }
-            let label = crate::workspace::workspace_auto_label(&cwd);
+            let label = crate::server::workspaces::workspace_auto_label(&cwd);
             ws.cached_identity_cwd = cwd;
             if ws.cached_auto_label != label {
                 ws.cached_auto_label = label;
@@ -183,13 +186,13 @@ impl AppState {
         changed
     }
 
-    pub fn handle_app_event(&mut self, event: AppEvent) -> Vec<PaneStateUpdate> {
+    pub fn handle_app_event(&mut self, event: TerminalEvent) -> Vec<PaneStateUpdate> {
         match event {
-            AppEvent::PaneDied { pane_id, .. } => {
+            TerminalEvent::PaneDied { pane_id, .. } => {
                 self.handle_pane_died(pane_id);
                 Vec::new()
             }
-            AppEvent::AgentProcessDetected {
+            TerminalEvent::AgentProcessDetected {
                 pane_id,
                 agent,
                 observed_at,
@@ -199,7 +202,7 @@ impl AppState {
                 })
                 .into_iter()
                 .collect(),
-            AppEvent::StateChanged {
+            TerminalEvent::StateChanged {
                 pane_id,
                 agent,
                 state,
@@ -218,7 +221,7 @@ impl AppState {
                 })
                 .into_iter()
                 .collect(),
-            AppEvent::AgentSessionReported {
+            TerminalEvent::AgentSessionReported {
                 pane_id,
                 source,
                 agent_label,
@@ -238,10 +241,10 @@ impl AppState {
                 .into_iter()
                 .collect(),
             // Host-local effects are intercepted by HeadlessServer and forwarded to the
-            // foreground client; they never touch AppState. Kept for AppEvent exhaustiveness.
-            AppEvent::TerminalBell { .. } => Vec::new(),
-            AppEvent::ClipboardWrite { .. } => Vec::new(),
-            AppEvent::TerminalCwdReported { pane_id, cwd } => {
+            // foreground client; they never touch AppState. Kept for TerminalEvent exhaustiveness.
+            TerminalEvent::TerminalBell { .. } => Vec::new(),
+            TerminalEvent::ClipboardWrite { .. } => Vec::new(),
+            TerminalEvent::TerminalCwdReported { pane_id, cwd } => {
                 if !cwd.is_absolute() || !cwd.is_dir() {
                     return Vec::new();
                 }

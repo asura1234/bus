@@ -6,10 +6,10 @@ use super::{
     render::View,
 };
 #[cfg(test)]
-use crate::bus::model::{BusState, Provider};
-use crate::bus::{
+use crate::messaging::model::{BusState, Provider};
+use crate::messaging::{
+    coordinator::{BusCommand, BusEvent, BusHandle, BusSnapshot},
     model::{AgentId, RoomId, RoomKind, RuntimeStatus},
-    runtime::{BusCommand, BusEvent, BusHandle, BusSnapshot},
 };
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -111,14 +111,14 @@ pub(in crate::client) struct BusUi {
     pub(super) chat_search: Option<super::chat_search::ChatSearch>,
     pub(super) pending_line_continue: bool,
     pub(super) last_esc: Option<std::time::Instant>,
-    pub(super) settings: crate::bus::settings::BusSettings,
+    pub(super) settings: crate::messaging::prefs::settings::BusSettings,
     /// None keeps toggles in memory only.
     pub(super) settings_path: Option<std::path::PathBuf>,
     /// Settings focus: 0 is color blind mode, then one row per sound room.
     pub(super) settings_field: usize,
     pub(super) settings_scroll: usize,
     /// Set only by the coordinator-owning client; `None` never plays a sound.
-    pub(super) sound_config: Option<crate::config::SoundConfig>,
+    pub(super) sound_config: Option<crate::utils::config::SoundConfig>,
     /// System sound names, read from the OS when Settings first opens.
     pub(super) system_sounds: Option<Vec<String>>,
     pub(super) ringer: super::ring::Ringer,
@@ -196,7 +196,7 @@ impl BusUi {
             chat_search: None,
             pending_line_continue: false,
             last_esc: None,
-            settings: crate::bus::settings::BusSettings::default(),
+            settings: crate::messaging::prefs::settings::BusSettings::default(),
             settings_path: None,
             settings_field: 0,
             settings_scroll: 0,
@@ -211,7 +211,9 @@ impl BusUi {
         self.settings.color_blind_mode = on;
         if let Some(path) = &self.settings_path {
             // Change only this field; the coordinator saves the sound fields.
-            match crate::bus::settings::update(path, |settings| settings.color_blind_mode = on) {
+            match crate::messaging::prefs::settings::update(path, |settings| {
+                settings.color_blind_mode = on
+            }) {
                 Ok(saved) => self.settings = saved,
                 Err(error) => self.error = Some(error),
             }
@@ -306,7 +308,7 @@ impl BusUi {
         }
     }
     pub fn receive_snapshot(&mut self, snapshot: Arc<BusSnapshot>) {
-        crate::bus::diagnostics::replies(
+        crate::messaging::diagnostics::replies(
             &self.snapshot.state,
             &snapshot.state,
             "bus.reply.received",
@@ -332,7 +334,7 @@ impl BusUi {
                     .state
                     .room(room)
                     .and_then(|room| room.sound_name.as_deref());
-                crate::sound::play_named(name, config);
+                crate::platform::sound::play_named(name, config);
             }
         }
         self.reconcile_deleted_targets(&previous.state);
@@ -590,7 +592,7 @@ mod tests {
                 "text": "PRIVATE_REPLY", "received_at_ms": 2});
         snapshot.state = serde_json::from_value(value).unwrap();
         snapshot.revision += 1;
-        let capture = crate::logging::test_capture::Capture::default();
+        let capture = crate::utils::logging::test_capture::Capture::default();
         capture.run(|| {
             ui.receive_snapshot(Arc::new(snapshot.clone()));
             ui.receive_snapshot(Arc::new(snapshot));

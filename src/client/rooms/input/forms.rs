@@ -5,11 +5,10 @@ use super::super::{
     render::Action,
     BusUi, Effect,
 };
-use crate::bus::{
-    launch::AddAgent,
+use crate::messaging::{
+    coordinator::{agents::AddAgent, BusCommand},
     model::{ModelError, RoomId, RoomKind},
-    orchestrator::OrchestratorSpec,
-    runtime::BusCommand,
+    orchestration::OrchestratorSpec,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -366,7 +365,7 @@ impl BusUi {
         // The MASTER form never offers Codex; this keeps the form and
         // the coordinator, which refuses it too, in step.
         if let (Some(_), Some(provider)) = (orchestrates, provider) {
-            if let Err(error) = crate::bus::orchestrator::check_new_orchestrator(provider) {
+            if let Err(error) = crate::messaging::orchestration::check_new_orchestrator(provider) {
                 self.error = Some(error);
                 return;
             }

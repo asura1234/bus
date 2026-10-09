@@ -1,9 +1,8 @@
-use crate::agents as detect;
-use crate::agents::Agent;
+use crate::agents;
+use crate::agents::AgentKind;
 use crate::agents::AgentState;
-use crate::layout::PaneId;
 use crate::terminal::emulator::PaneTerminal;
-use crate::terminal::events::AppEvent;
+use crate::terminal::events::TerminalEvent;
 use crate::terminal::runtime::detection_policy::decide_detection_screen_read;
 use crate::terminal::runtime::detection_policy::decide_screen_detection_publish;
 use crate::terminal::runtime::detection_policy::detection_update_for_publish_with_osc;
@@ -28,6 +27,7 @@ use crate::terminal::runtime::detection_process::AgentDetectionPresence;
 use crate::terminal::runtime::detection_process::ForegroundShellAgentAction;
 use crate::terminal::runtime::detection_process::ProcessProbeInput;
 use crate::terminal::runtime::AgentDetection;
+use crate::utils::ids::PaneId;
 use crate::utils::render::signal::RenderSignal;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
@@ -40,9 +40,9 @@ use tracing::info;
 use tracing::warn;
 
 pub(super) async fn publish_state_changed_event(
-    state_events: mpsc::Sender<AppEvent>,
+    state_events: mpsc::Sender<TerminalEvent>,
     pane_id: PaneId,
-    agent: Option<Agent>,
+    agent: Option<AgentKind>,
     state: AgentState,
     visible_blocker: bool,
     process_exited: bool,
@@ -52,7 +52,7 @@ pub(super) async fn publish_state_changed_event(
     // Waiting for queue space here preserves correctness-critical state transitions
     // without blocking pane I/O.
     if let Err(e) = state_events
-        .send(AppEvent::StateChanged {
+        .send(TerminalEvent::StateChanged {
             pane_id,
             agent,
             state,
@@ -71,13 +71,13 @@ pub(super) async fn publish_state_changed_event(
 }
 
 pub(super) async fn publish_agent_process_detected_event(
-    state_events: mpsc::Sender<AppEvent>,
+    state_events: mpsc::Sender<TerminalEvent>,
     pane_id: PaneId,
-    agent: Agent,
+    agent: AgentKind,
     observed_at: std::time::Instant,
 ) {
     if let Err(e) = state_events
-        .send(AppEvent::AgentProcessDetected {
+        .send(TerminalEvent::AgentProcessDetected {
             pane_id,
             agent,
             observed_at,
@@ -102,9 +102,9 @@ pub(super) struct AgentDetectionPublishUpdate {
 }
 
 pub(super) async fn apply_agent_detection_publish_update(
-    state_events: mpsc::Sender<AppEvent>,
+    state_events: mpsc::Sender<TerminalEvent>,
     pane_id: PaneId,
-    agent: Option<Agent>,
+    agent: Option<AgentKind>,
     update: AgentDetectionPublishUpdate,
     observed_at: std::time::Instant,
     state: &mut AgentState,
@@ -141,10 +141,10 @@ pub(super) async fn apply_agent_detection_publish_update(
 pub(super) fn spawn_detection_task(
     pane_id: PaneId,
     agent_detection: AgentDetection,
-    initial_agent: Option<Agent>,
+    initial_agent: Option<AgentKind>,
     child_pid: Arc<AtomicU32>,
     terminal: Arc<PaneTerminal>,
-    events: mpsc::Sender<AppEvent>,
+    events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
@@ -173,7 +173,7 @@ struct DetectionTask {
     pane_id: PaneId,
     child_pid: Arc<AtomicU32>,
     terminal: Arc<PaneTerminal>,
-    state_events: mpsc::Sender<AppEvent>,
+    state_events: mpsc::Sender<TerminalEvent>,
     detection_content_seq: Arc<AtomicU64>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
@@ -203,7 +203,7 @@ struct DetectionState {
 }
 
 impl DetectionState {
-    fn new(initial_agent: Option<Agent>) -> Self {
+    fn new(initial_agent: Option<AgentKind>) -> Self {
         Self {
             agent_presence: AgentDetectionPresence::from_agent(initial_agent),
             state: AgentState::Idle,
@@ -230,7 +230,7 @@ impl DetectionState {
 }
 
 impl DetectionTask {
-    async fn run(self, initial_agent: Option<Agent>) {
+    async fn run(self, initial_agent: Option<AgentKind>) {
         let mut status = DetectionState::new(initial_agent);
         tokio::time::sleep(Duration::from_millis(50)).await;
         loop {
@@ -333,7 +333,7 @@ impl DetectionTask {
         let foreground_observation_due = true;
         let foreground_pgid = match (pid, foreground_observation_due) {
             (0, _) => None,
-            (_, true) => detect::foreground_process_group_id(pid),
+            (_, true) => agents::foreground_process_group_id(pid),
             _ => status.last_foreground_pgid,
         };
         #[cfg(windows)]
@@ -417,7 +417,7 @@ impl DetectionTask {
     async fn accept_agent_transition(
         &self,
         status: &mut DetectionState,
-        previous_agent: Option<Agent>,
+        previous_agent: Option<AgentKind>,
         foreground_action: ForegroundShellAgentAction,
         process_name: Option<String>,
         process_group_id: Option<u32>,
@@ -500,7 +500,7 @@ impl DetectionTask {
     async fn scan_screen(
         &self,
         status: &mut DetectionState,
-        agent: Option<Agent>,
+        agent: Option<AgentKind>,
         agent_changed: bool,
         process_group_changed: bool,
         process_exited: bool,
@@ -528,7 +528,7 @@ impl DetectionTask {
         status.last_screen_scan_detection_content_seq = current_detection_content_seq;
         let content_changed = content != status.last_detection_text;
         status.last_detection_text.clone_from(&content);
-        if detect::should_skip_state_update(agent, &content) {
+        if agents::should_skip_state_update(agent, &content) {
             status.pending_idle.clear();
             return;
         }
@@ -574,7 +574,7 @@ impl DetectionTask {
     async fn publish_screen_detection(
         &self,
         status: &mut DetectionState,
-        agent: Option<Agent>,
+        agent: Option<AgentKind>,
         decision: DetectionPublishDecision,
         now: Instant,
     ) {

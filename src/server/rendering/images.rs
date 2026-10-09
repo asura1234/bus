@@ -6,7 +6,7 @@ use crate::protocol::kitty::placement::{
     KittyImageFormat, KittyImagePlacement,
 };
 use crate::protocol::kitty::HEADLESS_GRAPHICS_TRANSACTION_BUDGET;
-use crate::protocol::{
+use crate::protocol::wire::{
     SurfaceGraphicsAsset, SurfaceGraphicsAssetKey, SurfaceGraphicsFormat, SurfaceGraphicsPlacement,
     SurfaceGraphicsScene, SurfaceGraphicsSource, SurfaceGraphicsTarget,
 };
@@ -26,8 +26,8 @@ impl DeliveryCache {
 }
 
 pub(crate) fn collect_scene(
-    app: &crate::app::App,
-    surface: crate::ui::TabSurfaceView<'_>,
+    app: &crate::server::app::App,
+    surface: crate::server::rendering::surface::TabSurfaceView<'_>,
     cell_size: HostCellSize,
     delivered: &DeliveryCache,
 ) -> (SurfaceGraphicsScene, DeliveryCache) {
@@ -202,13 +202,13 @@ fn asset_key(
 }
 
 pub(crate) fn collect_retained(
-    app: &crate::app::App,
-    surface: &crate::protocol::PaneSurfaceFrame,
-    target: crate::ui::TabSurfaceTarget,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    app: &crate::server::app::App,
+    surface: &crate::protocol::wire::PaneSurfaceFrame,
+    target: crate::server::rendering::surface::TabSurfaceTarget,
+    cell_size: crate::protocol::kitty::HostCellSize,
     delivered: &DeliveryCache,
 ) -> Option<(SurfaceGraphicsScene, DeliveryCache)> {
-    let rect = |rect: crate::protocol::SurfaceRect| {
+    let rect = |rect: crate::protocol::wire::SurfaceRect| {
         ratatui::layout::Rect::new(rect.x, rect.y, rect.width, rect.height)
     };
     let pane_infos = surface
@@ -219,7 +219,7 @@ pub(crate) fn collect_retained(
             if workspace_index != target.workspace_index {
                 return None;
             }
-            Some(crate::layout::PaneInfo {
+            Some(crate::server::workspaces::layout::PaneInfo {
                 id,
                 rect: rect(pane.rect),
                 inner_rect: rect(pane.inner_rect),
@@ -241,16 +241,16 @@ pub(crate) fn collect_retained(
 }
 
 pub(crate) fn collect(
-    app: &crate::app::App,
-    pane_infos: &[crate::layout::PaneInfo],
-    split_borders: &[crate::layout::SplitBorder],
-    target: Option<crate::ui::TabSurfaceTarget>,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    app: &crate::server::app::App,
+    pane_infos: &[crate::server::workspaces::layout::PaneInfo],
+    split_borders: &[crate::server::workspaces::layout::SplitBorder],
+    target: Option<crate::server::rendering::surface::TabSurfaceTarget>,
+    cell_size: crate::protocol::kitty::HostCellSize,
     delivered: &DeliveryCache,
 ) -> (SurfaceGraphicsScene, DeliveryCache) {
     crate::server::rendering::images::collect_scene(
         app,
-        crate::ui::TabSurfaceView {
+        crate::server::rendering::surface::TabSurfaceView {
             target,
             pane_infos,
             split_borders,

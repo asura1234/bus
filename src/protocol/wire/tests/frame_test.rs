@@ -201,7 +201,7 @@ fn client_shell_snapshot_roundtrip() {
             custom_label: false,
             tokens: Vec::new(),
             focused: true,
-            agent_status: crate::api::schema::AgentStatus::Idle,
+            agent_status: crate::protocol::api::schema::AgentStatus::Idle,
         }],
         tabs: vec![ClientShellTab {
             tab_id: "w1:t1".into(),
@@ -211,7 +211,7 @@ fn client_shell_snapshot_roundtrip() {
             custom_label: true,
             zoomed: false,
             focused: true,
-            agent_status: crate::api::schema::AgentStatus::Idle,
+            agent_status: crate::protocol::api::schema::AgentStatus::Idle,
         }],
         panes: vec![ClientShellPane {
             pane_id: "w1:p1".into(),

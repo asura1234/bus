@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 use interprocess::local_socket::traits::Stream as _;
 
 use super::EndpointTransport;
-use crate::ipc::LocalStream;
-use crate::protocol::ClientMessage;
+use crate::platform::ipc::LocalStream;
+use crate::protocol::wire::ClientMessage;
 
 const MAX_QUEUED_MESSAGES: usize = 256;
-const MAX_QUEUED_BYTES: usize = 2 * crate::protocol::MAX_GRAPHICS_FRAME_SIZE;
+const MAX_QUEUED_BYTES: usize = 2 * crate::protocol::wire::MAX_GRAPHICS_FRAME_SIZE;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(2);
 
@@ -89,7 +89,7 @@ impl EndpointTransport for NativeEndpointTransport {
             ));
         }
         let mut frame = Vec::new();
-        crate::protocol::write_message(&mut frame, message)
+        crate::protocol::wire::write_message(&mut frame, message)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
         let len = frame.len();
         if self
@@ -199,9 +199,9 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let listener = crate::ipc::bind_private_local_listener(&path).unwrap();
+        let listener = crate::platform::ipc::bind_private_local_listener(&path).unwrap();
         let accepting = std::thread::spawn(move || listener.accept().unwrap());
-        let client = crate::ipc::connect_local_stream(&path).unwrap();
+        let client = crate::platform::ipc::connect_local_stream(&path).unwrap();
         (client, accepting.join().unwrap(), path)
     }
 
@@ -211,10 +211,16 @@ mod tests {
         let mut transport = NativeEndpointTransport::with_lifetime(stream, ()).unwrap();
         let (done, received) = mpsc::channel();
         let reader = std::thread::spawn(move || {
-            let first: ClientMessage =
-                crate::protocol::read_message(&mut peer, crate::protocol::MAX_FRAME_SIZE).unwrap();
-            let second: ClientMessage =
-                crate::protocol::read_message(&mut peer, crate::protocol::MAX_FRAME_SIZE).unwrap();
+            let first: ClientMessage = crate::protocol::wire::read_message(
+                &mut peer,
+                crate::protocol::wire::MAX_FRAME_SIZE,
+            )
+            .unwrap();
+            let second: ClientMessage = crate::protocol::wire::read_message(
+                &mut peer,
+                crate::protocol::wire::MAX_FRAME_SIZE,
+            )
+            .unwrap();
             done.send((first, second)).unwrap();
         });
         transport
@@ -243,11 +249,15 @@ mod tests {
         let (done, received) = mpsc::channel();
         let reader = std::thread::spawn(move || {
             let result = (|| {
-                let first: ClientMessage =
-                    crate::protocol::read_message(&mut peer, crate::protocol::MAX_FRAME_SIZE)?;
-                let second: ClientMessage =
-                    crate::protocol::read_message(&mut peer, crate::protocol::MAX_FRAME_SIZE)?;
-                Ok::<_, crate::protocol::FramingError>((first, second))
+                let first: ClientMessage = crate::protocol::wire::read_message(
+                    &mut peer,
+                    crate::protocol::wire::MAX_FRAME_SIZE,
+                )?;
+                let second: ClientMessage = crate::protocol::wire::read_message(
+                    &mut peer,
+                    crate::protocol::wire::MAX_FRAME_SIZE,
+                )?;
+                Ok::<_, crate::protocol::wire::FramingError>((first, second))
             })();
             done.send(result).unwrap();
         });
@@ -273,10 +283,16 @@ mod tests {
         let mut transport = NativeEndpointTransport::with_lifetime(stream, ()).unwrap();
         let (done, received) = mpsc::channel();
         let reader = std::thread::spawn(move || {
-            let first: ClientMessage =
-                crate::protocol::read_message(&mut peer, crate::protocol::MAX_FRAME_SIZE).unwrap();
-            let second: ClientMessage =
-                crate::protocol::read_message(&mut peer, crate::protocol::MAX_FRAME_SIZE).unwrap();
+            let first: ClientMessage = crate::protocol::wire::read_message(
+                &mut peer,
+                crate::protocol::wire::MAX_FRAME_SIZE,
+            )
+            .unwrap();
+            let second: ClientMessage = crate::protocol::wire::read_message(
+                &mut peer,
+                crate::protocol::wire::MAX_FRAME_SIZE,
+            )
+            .unwrap();
             done.send((first, second)).unwrap();
         });
         let input = ClientMessage::Input {

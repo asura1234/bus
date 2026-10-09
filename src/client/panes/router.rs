@@ -1,12 +1,14 @@
 use crate::client::compositor::{
     push_target_event, ClientInputTarget, ClientShellInput, ClientShellState,
 };
-use crate::protocol::ClientMessage;
-use crate::protocol::ClientPaneInputEvent;
-use crate::raw_input::RawInputEvent;
+use crate::protocol::keys::host::RawInputEvent;
+use crate::protocol::wire::ClientMessage;
+use crate::protocol::wire::ClientPaneInputEvent;
 
-fn host_theme_update(event: &RawInputEvent) -> Option<crate::protocol::ClientHostThemeUpdate> {
-    use crate::protocol::{
+fn host_theme_update(
+    event: &RawInputEvent,
+) -> Option<crate::protocol::wire::ClientHostThemeUpdate> {
+    use crate::protocol::wire::{
         ClientHostAppearance, ClientHostDefaultColorKind, ClientHostThemeUpdate,
     };
 
@@ -14,10 +16,10 @@ fn host_theme_update(event: &RawInputEvent) -> Option<crate::protocol::ClientHos
         RawInputEvent::HostDefaultColor { kind, color } => {
             Some(ClientHostThemeUpdate::DefaultColor {
                 kind: match kind {
-                    crate::terminal_theme::DefaultColorKind::Foreground => {
+                    crate::utils::theme::color::DefaultColorKind::Foreground => {
                         ClientHostDefaultColorKind::Foreground
                     }
-                    crate::terminal_theme::DefaultColorKind::Background => {
+                    crate::utils::theme::color::DefaultColorKind::Background => {
                         ClientHostDefaultColorKind::Background
                     }
                 },
@@ -32,8 +34,8 @@ fn host_theme_update(event: &RawInputEvent) -> Option<crate::protocol::ClientHos
         )),
         RawInputEvent::HostColorSchemeChanged(appearance) => {
             Some(ClientHostThemeUpdate::Appearance(match appearance {
-                crate::terminal_theme::HostAppearance::Dark => ClientHostAppearance::Dark,
-                crate::terminal_theme::HostAppearance::Light => ClientHostAppearance::Light,
+                crate::utils::theme::color::HostAppearance::Dark => ClientHostAppearance::Dark,
+                crate::utils::theme::color::HostAppearance::Light => ClientHostAppearance::Light,
             }))
         }
         _ => None,
@@ -42,11 +44,11 @@ fn host_theme_update(event: &RawInputEvent) -> Option<crate::protocol::ClientHos
 
 fn push_host_theme_update(
     requests: &mut Vec<ClientMessage>,
-    update: crate::protocol::ClientHostThemeUpdate,
+    update: crate::protocol::wire::ClientHostThemeUpdate,
 ) {
-    if let crate::protocol::ClientHostThemeUpdate::PaletteColors(colors) = &update {
+    if let crate::protocol::wire::ClientHostThemeUpdate::PaletteColors(colors) = &update {
         if let Some(ClientMessage::ClientShellHostTheme {
-            update: crate::protocol::ClientHostThemeUpdate::PaletteColors(pending),
+            update: crate::protocol::wire::ClientHostThemeUpdate::PaletteColors(pending),
         }) = requests.last_mut()
         {
             if pending.len() + colors.len() <= 256 {
@@ -61,29 +63,32 @@ fn push_host_theme_update(
 impl ClientShellState {
     #[cfg(any(unix, test))]
     pub(crate) fn handle_input_bytes(&mut self, data: &[u8]) -> ClientShellInput {
-        self.handle_raw_events(crate::raw_input::parse_raw_input_bytes_sync(data))
+        self.handle_raw_events(crate::protocol::keys::host::parse_raw_input_bytes_sync(
+            data,
+        ))
     }
 
     #[cfg(any(unix, test))]
     pub(crate) fn handle_pixel_mouse(
         &mut self,
         data: &[u8],
-        geometry: crate::input::mouse::HostGeometry,
+        geometry: crate::protocol::keys::mouse::HostGeometry,
     ) -> ClientShellInput {
-        let Some((x, y)) = crate::input::mouse::parse_report(data) else {
+        let Some((x, y)) = crate::protocol::keys::mouse::parse_report(data) else {
             return ClientShellInput::default();
         };
         let Some((column, row)) = geometry.cell(x, y) else {
             return ClientShellInput::default();
         };
-        let Some(cell_report) = crate::input::mouse::report_at_cell(data, column, row) else {
+        let Some(cell_report) = crate::protocol::keys::mouse::report_at_cell(data, column, row)
+        else {
             return ClientShellInput::default();
         };
-        let events = crate::raw_input::parse_raw_input_bytes_sync(&cell_report);
+        let events = crate::protocol::keys::host::parse_raw_input_bytes_sync(&cell_report);
         if events.len() != 1 || !matches!(events[0], RawInputEvent::Mouse(_)) {
             return ClientShellInput::default();
         }
-        self.host_mouse_pixels = Some(crate::input::mouse::HostPixels { x, y, geometry });
+        self.host_mouse_pixels = Some(crate::protocol::keys::mouse::HostPixels { x, y, geometry });
         let outcome = self.handle_raw_events(events);
         self.host_mouse_pixels = None;
         outcome
@@ -92,12 +97,12 @@ impl ClientShellState {
     #[cfg(windows)]
     pub(crate) fn handle_client_events(
         &mut self,
-        events: &[crate::protocol::ClientInputEvent],
+        events: &[crate::protocol::wire::ClientInputEvent],
     ) -> ClientShellInput {
         self.handle_raw_events(
             events
                 .iter()
-                .map(crate::protocol::ClientInputEvent::to_raw_input_event)
+                .map(crate::protocol::wire::ClientInputEvent::to_raw_input_event)
                 .collect(),
         )
     }
@@ -177,7 +182,7 @@ impl ClientShellState {
                     self.host_appearance_explicit = true;
                     outcome.query_host_theme = true;
                     if self.config.theme_runtime.auto_switch {
-                        self.config.palette = crate::app::client_palette_for_appearance(
+                        self.config.palette = crate::utils::theme::client_palette_for_appearance(
                             &self.config.theme_runtime,
                             appearance,
                         );
@@ -185,13 +190,13 @@ impl ClientShellState {
                     }
                 }
                 RawInputEvent::HostDefaultColor {
-                    kind: crate::terminal_theme::DefaultColorKind::Background,
+                    kind: crate::utils::theme::color::DefaultColorKind::Background,
                     color,
                 } if !self.host_appearance_explicit => {
                     let appearance = color.inferred_appearance();
                     self.host_appearance = Some(appearance);
                     if self.config.theme_runtime.auto_switch {
-                        self.config.palette = crate::app::client_palette_for_appearance(
+                        self.config.palette = crate::utils::theme::client_palette_for_appearance(
                             &self.config.theme_runtime,
                             appearance,
                         );

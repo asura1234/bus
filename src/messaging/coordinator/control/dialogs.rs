@@ -132,7 +132,7 @@ impl Worker {
                 dialog_digest: dialog.digest.clone(),
                 dialog_shape: dialog.id.clone(),
                 options: dialog.options.len() as u32,
-                observed_at_ns: crate::bus::io::now_ns(),
+                observed_at_ns: crate::messaging::storage::io::now_ns(),
             })?),
             None => None,
         };
@@ -141,7 +141,7 @@ impl Worker {
             "dialog": observation.dialog.as_ref().map(dialog_json),
             "fingerprint": fingerprint,
             "content_revision": observation.content_revision,
-            "observed_at_ms": crate::bus::io::now_ms(),
+            "observed_at_ms": crate::messaging::storage::io::now_ms(),
         }))
     }
 

@@ -3,15 +3,15 @@ use super::super::windows_client_input_event_from_raw;
 use super::records::PlatformInputItem;
 
 pub(super) struct WindowsInputPump {
-    framer: crate::raw_input::RawInputFramer,
+    framer: crate::protocol::keys::host::RawInputFramer,
     paste_from_win32_key_records: bool,
-    pending_physical_escape: Option<(crate::protocol::ClientInputEvent, bool)>,
+    pending_physical_escape: Option<(crate::protocol::wire::ClientInputEvent, bool)>,
 }
 
 impl Default for WindowsInputPump {
     fn default() -> Self {
         Self {
-            framer: crate::raw_input::RawInputFramer::for_host_input(),
+            framer: crate::protocol::keys::host::RawInputFramer::for_host_input(),
             paste_from_win32_key_records: false,
             pending_physical_escape: None,
         }
@@ -22,7 +22,7 @@ impl WindowsInputPump {
     pub(super) fn process(
         &mut self,
         item: PlatformInputItem,
-    ) -> Vec<crate::protocol::ClientInputEvent> {
+    ) -> Vec<crate::protocol::wire::ClientInputEvent> {
         let mut events = Vec::new();
         if let Some((escape, open_bracket)) = self.pending_physical_escape.take() {
             let raw_bytes = item.raw_bytes();
@@ -112,7 +112,7 @@ impl WindowsInputPump {
         events
     }
 
-    pub(super) fn idle(&mut self) -> Vec<crate::protocol::ClientInputEvent> {
+    pub(super) fn idle(&mut self) -> Vec<crate::protocol::wire::ClientInputEvent> {
         let mut events = Vec::new();
         if let Some((escape, open_bracket)) = self.pending_physical_escape.take() {
             events.push(escape);
@@ -128,10 +128,10 @@ impl WindowsInputPump {
 
     fn process_raw_events(
         &mut self,
-        mut events: Vec<crate::raw_input::RawInputEvent>,
-    ) -> Vec<crate::protocol::ClientInputEvent> {
+        mut events: Vec<crate::protocol::keys::host::RawInputEvent>,
+    ) -> Vec<crate::protocol::wire::ClientInputEvent> {
         for event in &mut events {
-            if let crate::raw_input::RawInputEvent::Paste(text) = event {
+            if let crate::protocol::keys::host::RawInputEvent::Paste(text) = event {
                 decode_windows_terminal_paste_enters(text);
                 self.paste_from_win32_key_records = false;
             }
@@ -140,8 +140,8 @@ impl WindowsInputPump {
     }
 
     fn raw_events_to_client_events(
-        events: Vec<crate::raw_input::RawInputEvent>,
-    ) -> Vec<crate::protocol::ClientInputEvent> {
+        events: Vec<crate::protocol::keys::host::RawInputEvent>,
+    ) -> Vec<crate::protocol::wire::ClientInputEvent> {
         events
             .into_iter()
             .filter_map(windows_client_input_event_from_raw)
@@ -160,7 +160,7 @@ impl PlatformInputItem {
         }
     }
 
-    fn physical_escape_press(&self) -> Option<crate::protocol::ClientInputEvent> {
+    fn physical_escape_press(&self) -> Option<crate::protocol::wire::ClientInputEvent> {
         let event = match self {
             Self::Semantic(event) => event,
             Self::PasteAwareKey { events, .. } if events.len() == 1 => &events[0],
@@ -168,12 +168,12 @@ impl PlatformInputItem {
         };
         matches!(
             event,
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Esc,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Esc,
                 modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
                 repeat_count: 1,
-                source: crate::protocol::ClientKeySource::WindowsConsole { record },
+                source: crate::protocol::wire::ClientKeySource::WindowsConsole { record },
                 ..
             } if record.virtual_scan_code != 0
         )

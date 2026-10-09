@@ -43,13 +43,12 @@ pub use types::{
 };
 pub(crate) use types::{ScreenTextCell, ScreenTextRow, TerminalCompressionResult};
 
-pub use crate::utils::text::width::unicode_codepoint_width;
-
 #[cfg(test)]
 mod tests {
     use super::callbacks::{clipboard_write_trampoline, TerminalCallbackState};
     use super::kitty::kitty_image_fingerprint;
     use super::*;
+    use crate::utils::text::width::unicode_codepoint_width;
 
     #[path = "input_test.rs"]
     mod input;

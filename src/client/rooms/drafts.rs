@@ -1,8 +1,8 @@
 //! Per-room drafts, generation tracking and send/edit intent.
 use super::{editor::Editor, forms::Form, BusUi, Effect};
-use crate::bus::{
+use crate::messaging::{
+    coordinator::BusCommand,
     model::{AgentRecipients, Room, RoomId},
-    runtime::BusCommand,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

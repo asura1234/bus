@@ -1,13 +1,16 @@
 //! Rooms operations for the messaging state.
 use super::state::normalized_name;
 use super::types::MASTER_ROOM_ID;
-use super::{
-    Agent, AgentId, AgentRecipients, Author, BusState, Draft, ModelError, Prompt, PromptId, Room,
-    RoomId, RoomKind, MASTER_ROOM_NAME,
-};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
+};
+use {
+    super::{
+        AgentId, AgentRecipients, Author, BusState, Draft, ModelError, Prompt, PromptId, Room,
+        RoomId, RoomKind, MASTER_ROOM_NAME,
+    },
+    crate::messaging::model::RoomAgent,
 };
 
 impl BusState {
@@ -110,7 +113,7 @@ impl BusState {
     }
 
     /// The MASTER agent orchestrating `room`, if any.
-    pub(crate) fn orchestrator_of(&self, room: RoomId) -> Option<&Agent> {
+    pub(crate) fn orchestrator_of(&self, room: RoomId) -> Option<&RoomAgent> {
         self.agents
             .values()
             .find(|agent| agent.orchestrates == Some(room))

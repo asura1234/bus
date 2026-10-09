@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn delivery_logs_correlate_submission_callback_and_persisted_reply() {
-    let capture = crate::logging::test_capture::Capture::default();
+    let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
         let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
         let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");
@@ -74,7 +74,7 @@ fn provider_start_hooks_bind_when_terminal_trims_trailing_prompt_whitespace() {
 
 #[test]
 fn delivery_logs_do_not_claim_reply_persisted_when_storage_fails() {
-    let capture = crate::logging::test_capture::Capture::default();
+    let capture = crate::utils::logging::test_capture::Capture::default();
     let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
     let request = queue(&mut worker, room, agent, "PRIVATE_PROMPT");
     worker.submit_ready().unwrap();
@@ -218,13 +218,15 @@ fn deferred_codex_start_and_final_survive_background_sessions_without_rebinding(
 
 #[test]
 fn session_start_reports_bind_through_native_provider_session_adapter() {
-    struct NativeSessionTransport(Arc<Mutex<Option<crate::agent_resume::AgentSessionRef>>>);
+    struct NativeSessionTransport(
+        Arc<Mutex<Option<crate::agents::resume::catalog::AgentSessionRef>>>,
+    );
     impl Transport for NativeSessionTransport {
         fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
             if let Method::PaneReportAgentSession(params) = method {
                 // The real API returns Ok even if this consumer rejects the source.
                 // A transport-only mock would miss a silently discarded identity.
-                *self.0.lock().unwrap() = crate::agent_resume::session_ref_from_report(
+                *self.0.lock().unwrap() = crate::agents::resume::catalog::session_ref_from_report(
                     &params.source,
                     &params.agent,
                     params.agent_session_id,

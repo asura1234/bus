@@ -1,12 +1,15 @@
 #[cfg(not(windows))]
-use super::query_host_terminal_appearance;
-use super::{
-    endpoint, endpoint_commands, query_host_terminal_theme, shell, write_to_server, ClientError,
-    ClientState,
+use crate::client::host_terminal::geometry::query_host_terminal_appearance;
+use crate::client::{
+    compositor as shell,
+    connection::{bootstrap as endpoint, requests as endpoint_commands, write_to_server},
+    errors::ClientError,
+    host_terminal::geometry::query_host_terminal_theme,
+    state::ClientState,
 };
 #[cfg(test)]
-use crate::protocol::render_ansi;
-use crate::protocol::{ClientMessage, FrameData};
+use crate::protocol::ansi as render_ansi;
+use crate::protocol::wire::{ClientMessage, FrameData};
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
@@ -54,7 +57,7 @@ pub(super) fn dispatch_client_shell_actions(
                 }
             }
             shell::ClientShellAction::OpenSafeWebUrl(url) => {
-                if crate::app::actions::safe_web_url(&url).is_some() {
+                if crate::utils::url::safe_web_url(&url).is_some() {
                     match crate::platform::open_url(&url) {
                         Ok(Some(child)) => detached_process_children.push(child),
                         Ok(None) => {}
@@ -100,13 +103,14 @@ pub(super) fn sync_client_shell_keyboard_report_all(
     if desired == state.keyboard_report_all_active {
         return Ok(());
     }
-    crate::terminal_modes::set_host_kitty_keyboard_report_all(&mut io::stdout(), desired)
-        .map_err(ClientError::ConnectionFailed)?;
+    crate::client::host_terminal::modes::set_host_kitty_keyboard_report_all(
+        &mut io::stdout(),
+        desired,
+    )
+    .map_err(ClientError::ConnectionFailed)?;
     state.keyboard_report_all_active = desired;
     Ok(())
 }
-
-pub(super) use crate::client::compositor::snapshot::install_client_shell_snapshot;
 
 pub(super) fn finish_client_shell_input(
     state: &mut ClientState,
@@ -207,7 +211,7 @@ mod tests {
             keyboard_report_all_active: false,
             reported_size: (80, 24),
             reported_cell_size: (0, 0),
-            sound_config: crate::config::SoundConfig::default(),
+            sound_config: crate::utils::config::SoundConfig::default(),
             kitty_graphics_enabled: false,
             pixel_geometry_enabled: false,
             pixel_geometry_exact: false,

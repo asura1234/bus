@@ -88,7 +88,7 @@ pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::C
 }
 
 pub(crate) fn wait_client_stream_readable(
-    _stream: &crate::ipc::LocalStream,
+    _stream: &crate::platform::ipc::LocalStream,
 ) -> std::io::Result<()> {
     // Sync named pipes have no read timeout. The caller peeks before each read and checks its
     // cancellation flag between polls, including when a frame arrives in several fragments.

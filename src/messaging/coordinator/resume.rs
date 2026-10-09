@@ -1,5 +1,5 @@
 //! Reconnect a Bus agent to the same provider conversation after PTY restore.
-use super::{schema, Agent, BusState};
+use super::{schema, BusState, RoomAgent};
 use crate::messaging::identity;
 
 mod capture;
@@ -9,7 +9,7 @@ pub(crate) use capture::{for_native_resume, LaunchExtras, NativeResumeContext, N
 
 pub(super) fn restored_agent<'a>(
     state: &BusState,
-    agent: &Agent,
+    agent: &RoomAgent,
     infos: &'a [schema::AgentInfo],
 ) -> Option<&'a schema::AgentInfo> {
     if agent.session_binding_invalidated {

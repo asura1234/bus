@@ -1,6 +1,6 @@
 use super::*;
-use crate::bus::control::{Request as ControlRequest, Response as ControlResponse};
-use crate::bus::transport::TransportError;
+use crate::messaging::control::{Request as ControlRequest, Response as ControlResponse};
+use crate::messaging::native::TransportError;
 use serde_json::{json, Value};
 
 struct NoTerminals;
@@ -16,7 +16,7 @@ fn root(label: &str) -> PathBuf {
         .join(format!(
             "bus-global-settings-{label}-{}-{}",
             std::process::id(),
-            crate::bus::io::now_ns()
+            crate::messaging::storage::io::now_ns()
         ))
 }
 
@@ -95,7 +95,7 @@ fn master_and_all_rooms_sounds_carry_into_every_later_session() {
             _ => None,
         })
         .collect();
-    let glass = crate::bus::settings::SoundPref {
+    let glass = crate::messaging::prefs::settings::SoundPref {
         enabled: true,
         name: Some("Glass".into()),
     };
@@ -122,7 +122,7 @@ fn master_and_all_rooms_sounds_carry_into_every_later_session() {
     drop(second);
     let reopened = session(&root, "second");
     assert_eq!(sound(&reopened, room), (true, Some("Glass".into())));
-    let saved = crate::bus::settings::load(&root.join("settings.json")).unwrap();
+    let saved = crate::messaging::prefs::settings::load(&root.join("settings.json")).unwrap();
     assert!(!saved.color_blind_mode);
     drop((first, reopened));
     std::fs::remove_dir_all(root).unwrap();
@@ -144,11 +144,11 @@ fn resumed_sessions_follow_the_global_master_sound() {
     std::fs::write(root.join("settings.json"), br#"{"color_blind_mode":true}"#).unwrap();
     let old = session(&root, "old");
     assert_eq!(sound(&old, master(&old)), (true, None));
-    let saved = crate::bus::settings::load(&root.join("settings.json")).unwrap();
+    let saved = crate::messaging::prefs::settings::load(&root.join("settings.json")).unwrap();
     assert!(saved.color_blind_mode, "launching keeps the other settings");
     assert_eq!(
         saved.master_sound,
-        crate::bus::settings::SoundPref {
+        crate::messaging::prefs::settings::SoundPref {
             enabled: true,
             name: None
         }
@@ -201,7 +201,7 @@ fn dev_settings_show_and_set_the_global_sounds() {
         "settings.room_sound",
         json!({"on": false}),
     );
-    let saved = crate::bus::settings::load(&root.join("settings.json")).unwrap();
+    let saved = crate::messaging::prefs::settings::load(&root.join("settings.json")).unwrap();
     assert_eq!(saved.room_sound.name.as_deref(), Some("Glass"));
     call(
         &mut worker,

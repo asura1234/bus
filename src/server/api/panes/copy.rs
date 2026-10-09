@@ -56,7 +56,7 @@ impl App {
         {
             return Err(("stale_content", "pane content changed".to_owned()));
         }
-        let selection = crate::selection::Selection::absolute_range(
+        let selection = crate::utils::text::selection::Selection::absolute_range(
             pane_id,
             (params.anchor.row, params.anchor.col),
             (params.cursor.row, params.cursor.col),
@@ -131,23 +131,29 @@ impl App {
             | PaneCopyMotion::PreviousBigWordStart
             | PaneCopyMotion::NextBigWordEnd => {
                 let motion = match params.motion {
-                    PaneCopyMotion::NextWordStart => crate::pane::TerminalWordMotion::NextStart,
-                    PaneCopyMotion::PreviousWordStart => {
-                        crate::pane::TerminalWordMotion::PreviousStart
+                    PaneCopyMotion::NextWordStart => {
+                        crate::terminal::emulator::TerminalWordMotion::NextStart
                     }
-                    PaneCopyMotion::NextWordEnd => crate::pane::TerminalWordMotion::NextEnd,
+                    PaneCopyMotion::PreviousWordStart => {
+                        crate::terminal::emulator::TerminalWordMotion::PreviousStart
+                    }
+                    PaneCopyMotion::NextWordEnd => {
+                        crate::terminal::emulator::TerminalWordMotion::NextEnd
+                    }
                     PaneCopyMotion::NextBigWordStart => {
-                        crate::pane::TerminalWordMotion::NextBigStart
+                        crate::terminal::emulator::TerminalWordMotion::NextBigStart
                     }
                     PaneCopyMotion::PreviousBigWordStart => {
-                        crate::pane::TerminalWordMotion::PreviousBigStart
+                        crate::terminal::emulator::TerminalWordMotion::PreviousBigStart
                     }
-                    PaneCopyMotion::NextBigWordEnd => crate::pane::TerminalWordMotion::NextBigEnd,
+                    PaneCopyMotion::NextBigWordEnd => {
+                        crate::terminal::emulator::TerminalWordMotion::NextBigEnd
+                    }
                     _ => unreachable!(),
                 };
                 runtime
                     .word_motion_target(params.cursor.row, params.cursor.col, motion)
-                    .unwrap_or(crate::pane::TerminalTextPoint {
+                    .unwrap_or(crate::terminal::emulator::TerminalTextPoint {
                         row: params.cursor.row,
                         col: params.cursor.col,
                     })
@@ -161,11 +167,11 @@ impl App {
                         1
                     },
                 )
-                .map(|target| crate::pane::TerminalTextPoint {
+                .map(|target| crate::terminal::emulator::TerminalTextPoint {
                     row: target.row,
                     col: params.cursor.col,
                 })
-                .unwrap_or(crate::pane::TerminalTextPoint {
+                .unwrap_or(crate::terminal::emulator::TerminalTextPoint {
                     row: params.cursor.row,
                     col: params.cursor.col,
                 }),
@@ -210,25 +216,29 @@ impl App {
         if before != params.content_revision || !before.is_multiple_of(2) {
             return encode_error(id, "stale_content", "pane content changed");
         }
-        let cursor = crate::pane::TerminalTextPoint {
+        let cursor = crate::terminal::emulator::TerminalTextPoint {
             row: params.cursor.row,
             col: params.cursor.col,
         };
         let previous = params.previous.map(|previous| {
             (
-                crate::pane::TerminalTextPoint {
+                crate::terminal::emulator::TerminalTextPoint {
                     row: previous.start.row,
                     col: previous.start.col,
                 },
-                crate::pane::TerminalTextPoint {
+                crate::terminal::emulator::TerminalTextPoint {
                     row: previous.end.row,
                     col: previous.end.col,
                 },
             )
         });
         let direction = match params.direction {
-            PaneCopySearchDirection::Forward => crate::pane::TerminalSearchDirection::Forward,
-            PaneCopySearchDirection::Backward => crate::pane::TerminalSearchDirection::Backward,
+            PaneCopySearchDirection::Forward => {
+                crate::terminal::emulator::TerminalSearchDirection::Forward
+            }
+            PaneCopySearchDirection::Backward => {
+                crate::terminal::emulator::TerminalSearchDirection::Backward
+            }
         };
         let result = runtime.search_text_window(
             &params.query,
@@ -274,31 +284,39 @@ impl App {
 
 fn line_copy_motion_target(
     runtime: &crate::terminal::TerminalRuntime,
-    pane_id: crate::layout::PaneId,
+    pane_id: crate::utils::ids::PaneId,
     cursor: PaneTextPoint,
     motion: PaneCopyMotion,
-) -> Option<crate::pane::TerminalTextPoint> {
+) -> Option<crate::terminal::emulator::TerminalTextPoint> {
     let width = runtime
         .terminal_dimensions()
         .map_or(1, |(cols, _)| cols.max(1));
-    let selection = crate::selection::Selection::absolute_range(
+    let selection = crate::utils::text::selection::Selection::absolute_range(
         pane_id,
         (cursor.row, 0),
         (cursor.row, width.saturating_sub(1)),
     );
     let text = runtime.extract_selection(&selection)?;
     let col = match motion {
-        PaneCopyMotion::LineEnd => crate::copy_mode::last_character_col(&text, |ch| {
-            u16::from(crate::ghostty::unicode_codepoint_width(ch as u32))
-        })
-        .unwrap_or(0),
-        PaneCopyMotion::FirstNonBlank => crate::copy_mode::first_non_blank_col(&text, |ch| {
-            u16::from(crate::ghostty::unicode_codepoint_width(ch as u32))
-        })
-        .unwrap_or(0),
+        PaneCopyMotion::LineEnd => {
+            crate::utils::text::copy_motion::last_character_col(&text, |ch| {
+                u16::from(crate::utils::text::width::unicode_codepoint_width(
+                    ch as u32,
+                ))
+            })
+            .unwrap_or(0)
+        }
+        PaneCopyMotion::FirstNonBlank => {
+            crate::utils::text::copy_motion::first_non_blank_col(&text, |ch| {
+                u16::from(crate::utils::text::width::unicode_codepoint_width(
+                    ch as u32,
+                ))
+            })
+            .unwrap_or(0)
+        }
         _ => unreachable!(),
     };
-    Some(crate::pane::TerminalTextPoint {
+    Some(crate::terminal::emulator::TerminalTextPoint {
         row: cursor.row,
         col: col.min(width.saturating_sub(1)),
     })

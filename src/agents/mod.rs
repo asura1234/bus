@@ -19,7 +19,7 @@ mod identify;
 pub use identify::identify_agent;
 
 pub(crate) use self::catalog::parse_canonical_agent_label;
-pub use self::catalog::{agent_label, interactive_agent_executable, parse_agent_label, Agent};
+pub use self::catalog::{agent_label, interactive_agent_executable, parse_agent_label, AgentKind};
 pub(crate) use self::detect::session_identity_only_integration;
 pub use self::detect::{
     detect_agent_with_osc, should_skip_state_update, AgentDetection, AgentState,

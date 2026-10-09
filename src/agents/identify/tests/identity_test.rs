@@ -38,7 +38,7 @@ fn identify_agent_in_job_prefers_wrapped_codex() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Codex, "codex".to_string()))
+        Some((AgentKind::Codex, "codex".to_string()))
     );
 }
 
@@ -58,7 +58,7 @@ fn identify_agent_in_job_detects_node_wrapped_qwen() {
 
         assert_eq!(
             identify_agent_in_job(&job),
-            Some((Agent::Qwen, "qwen".to_string()))
+            Some((AgentKind::Qwen, "qwen".to_string()))
         );
     }
 }
@@ -79,7 +79,7 @@ fn identify_agent_in_job_detects_windows_cursor_install() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Cursor, "cursor".to_string()))
+        Some((AgentKind::Cursor, "cursor".to_string()))
     );
 }
 
@@ -131,7 +131,7 @@ fn identify_agent_in_job_prefers_recognized_process_group_leader() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Claude, "claude".to_string()))
+        Some((AgentKind::Claude, "claude".to_string()))
     );
 }
 
@@ -147,7 +147,7 @@ fn identify_agent_in_job_falls_back_when_process_group_leader_is_unrecognized() 
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Codex, "codex".to_string()))
+        Some((AgentKind::Codex, "codex".to_string()))
     );
 }
 
@@ -169,7 +169,7 @@ fn identify_agent_in_job_detects_python_version_wrapped_hermes() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Hermes, "hermes".to_string()))
+        Some((AgentKind::Hermes, "hermes".to_string()))
     );
 }
 
@@ -186,7 +186,7 @@ fn identify_agent_in_job_detects_nix_wrapped_codex_from_cmdline_argv0() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Codex, "codex".to_string()))
+        Some((AgentKind::Codex, "codex".to_string()))
     );
 }
 
@@ -203,7 +203,7 @@ fn identify_agent_in_job_canonicalizes_nix_wrapped_aliases_from_cmdline_argv0() 
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Claude, "claude".to_string()))
+        Some((AgentKind::Claude, "claude".to_string()))
     );
 }
 
@@ -220,7 +220,7 @@ fn identify_agent_in_job_detects_shell_wrapped_pi() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Pi, "pi".to_string()))
+        Some((AgentKind::Pi, "pi".to_string()))
     );
 }
 
@@ -237,7 +237,7 @@ fn identify_agent_in_job_detects_bun_wrapped_omp() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Omp, "omp".to_string()))
+        Some((AgentKind::Omp, "omp".to_string()))
     );
 }
 
@@ -257,7 +257,7 @@ fn identify_agent_in_job_detects_node_wrapped_pi_package_cli() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Pi, "pi".to_string()))
+        Some((AgentKind::Pi, "pi".to_string()))
     );
 }
 
@@ -277,7 +277,7 @@ fn identify_agent_in_job_detects_node_wrapped_pi_bundled_cli() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Pi, "pi".to_string()))
+        Some((AgentKind::Pi, "pi".to_string()))
     );
 }
 
@@ -297,7 +297,7 @@ fn identify_agent_in_job_detects_node_wrapped_mastracode_package_cli() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Mastracode, "mastracode".to_string()))
+        Some((AgentKind::Mastracode, "mastracode".to_string()))
     );
 }
 
@@ -341,7 +341,7 @@ fn identify_agent_in_job_detects_windows_cmd_wrapped_codex() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Codex, "codex".to_string()))
+        Some((AgentKind::Codex, "codex".to_string()))
     );
 }
 
@@ -363,7 +363,7 @@ fn identify_agent_in_job_detects_powershell_file_wrapped_claude() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Claude, "claude".to_string()))
+        Some((AgentKind::Claude, "claude".to_string()))
     );
 }
 
@@ -402,7 +402,7 @@ fn identify_agent_in_job_detects_opencode2_as_opencode() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::OpenCode, "opencode2".to_string()))
+        Some((AgentKind::OpenCode, "opencode2".to_string()))
     );
 }
 
@@ -419,7 +419,7 @@ fn identify_agent_in_job_detects_opencode_exe_from_pnpm_package() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::OpenCode, "opencode.exe".to_string()))
+        Some((AgentKind::OpenCode, "opencode.exe".to_string()))
     );
 }
 
@@ -436,7 +436,7 @@ fn identify_agent_in_job_detects_opencode_exe_from_argv0_path() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::OpenCode, "opencode".to_string()))
+        Some((AgentKind::OpenCode, "opencode".to_string()))
     );
 }
 
@@ -503,7 +503,7 @@ fn identify_agent_in_job_detects_python_script_named_codex() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Codex, "codex".to_string()))
+        Some((AgentKind::Codex, "codex".to_string()))
     );
 }
 
@@ -542,7 +542,7 @@ fn identify_agent_in_job_resolves_cursor_agent_symlink_argv0() {
 
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Cursor, "cursor".to_string()))
+        Some((AgentKind::Cursor, "cursor".to_string()))
     );
 
     std::fs::remove_dir_all(&dir).ok();
@@ -668,7 +668,7 @@ fn foreground_job_detects_agent_behind_shell_wrapper() {
     );
     assert_eq!(
         identify_agent_in_job(&job),
-        Some((Agent::Codex, "codex".to_string()))
+        Some((AgentKind::Codex, "codex".to_string()))
     );
 }
 
@@ -710,11 +710,11 @@ fn proc_stat_parsing_handles_spaces_in_comm() {
 fn parse_agent_env_hint_accepts_known_agents() {
     assert_eq!(
         super::identify::parse_agent_env_hint(b"PATH=/bin\0HERDR_AGENT=claude\0TERM=xterm\0"),
-        Some(Agent::Claude)
+        Some(AgentKind::Claude)
     );
     assert_eq!(
         super::identify::parse_agent_env_hint(b"HERDR_AGENT=codex"),
-        Some(Agent::Codex)
+        Some(AgentKind::Codex)
     );
 }
 

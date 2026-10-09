@@ -17,7 +17,7 @@ async fn pane_scrollbar_gutter_is_reserved_before_scrollback_exists() {
         &terminal_runtimes,
         area,
         false,
-        crate::kitty_graphics::HostCellSize::default(),
+        crate::protocol::kitty::HostCellSize::default(),
     );
     let info = &infos[0];
 
@@ -51,7 +51,7 @@ async fn alternate_screen_reclaims_scrollbar_gutter_and_restores_it_on_exit() {
             &terminal_runtimes,
             area,
             true,
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
         );
         assert_eq!(
             infos[0].inner_rect,
@@ -91,7 +91,7 @@ async fn zoomed_pane_scrollbar_gutter_is_reserved_before_scrollback_exists() {
         &terminal_runtimes,
         area,
         false,
-        crate::kitty_graphics::HostCellSize::default(),
+        crate::protocol::kitty::HostCellSize::default(),
     );
     let info = &infos[0];
 
@@ -120,7 +120,7 @@ async fn zoomed_multi_pane_keeps_border_space() {
         &terminal_runtimes,
         area,
         false,
-        crate::kitty_graphics::HostCellSize::default(),
+        crate::protocol::kitty::HostCellSize::default(),
     );
     let info = &infos[0];
 
@@ -149,7 +149,7 @@ async fn tiny_pane_does_not_reserve_scrollbar_gutter() {
         &terminal_runtimes,
         area,
         false,
-        crate::kitty_graphics::HostCellSize::default(),
+        crate::protocol::kitty::HostCellSize::default(),
     );
     let info = &infos[0];
 
@@ -182,7 +182,7 @@ async fn pane_scrollbar_setting_controls_reserved_column() {
         &terminal_runtimes,
         area,
         false,
-        crate::kitty_graphics::HostCellSize::default(),
+        crate::protocol::kitty::HostCellSize::default(),
     );
     let info = &infos[0];
 
@@ -196,7 +196,7 @@ async fn pane_scrollbar_setting_controls_reserved_column() {
         &terminal_runtimes,
         area,
         false,
-        crate::kitty_graphics::HostCellSize::default(),
+        crate::protocol::kitty::HostCellSize::default(),
     );
     let info = &infos[0];
 

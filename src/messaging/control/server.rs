@@ -6,8 +6,8 @@ use super::protocol::{
     MAX_RESPONSE_BYTES, POLL_INTERVAL, WORKER_TIMEOUT,
 };
 pub(crate) use super::protocol::{DevCall, Request, Response};
-use crate::ipc;
 use crate::messaging::{coordinator::BusCommand, storage::io as storage_io};
+use crate::platform::ipc;
 use interprocess::local_socket::{traits::Listener as _, ListenerNonblockingMode};
 #[cfg(test)]
 use serde_json::Value;

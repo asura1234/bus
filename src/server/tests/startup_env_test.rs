@@ -17,7 +17,7 @@ impl Drop for RestoreCwd {
 
 #[test]
 fn startup_cwd_is_taken_once_and_empty_values_are_removed() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let _restore = RestoreCwd(std::env::var_os(STARTUP_CWD_ENV_VAR));
 
     std::env::remove_var(STARTUP_CWD_ENV_VAR);
@@ -38,7 +38,7 @@ fn startup_cwd_is_taken_once_and_empty_values_are_removed() {
 #[test]
 fn startup_cwd_preserves_non_utf8_path_bytes_before_removing_the_key() {
     use std::os::unix::ffi::OsStringExt;
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let _restore = RestoreCwd(std::env::var_os(STARTUP_CWD_ENV_VAR));
     let path = OsString::from_vec(b"/tmp/bus-\xff".to_vec());
 

@@ -1,12 +1,12 @@
-use crate::layout::PaneId;
-use crate::server::app_state::{AppState, Mode};
+use crate::server::{app_settings::Mode, app_state::AppState};
+use crate::utils::ids::PaneId;
 use tracing::warn;
 
 impl AppState {
     pub(crate) fn terminal_ids_for_workspace(
         &self,
         ws_idx: usize,
-    ) -> Vec<crate::terminal::TerminalId> {
+    ) -> Vec<crate::utils::ids::TerminalId> {
         self.workspaces
             .get(ws_idx)
             .into_iter()
@@ -29,7 +29,7 @@ impl AppState {
         &self,
         ws_idx: usize,
         tab_idx: usize,
-    ) -> Vec<crate::terminal::TerminalId> {
+    ) -> Vec<crate::utils::ids::TerminalId> {
         self.workspaces
             .get(ws_idx)
             .and_then(|ws| ws.tabs.get(tab_idx))
@@ -43,7 +43,7 @@ impl AppState {
         &self,
         ws_idx: usize,
         pane_id: PaneId,
-    ) -> Option<crate::terminal::TerminalId> {
+    ) -> Option<crate::utils::ids::TerminalId> {
         self.workspaces
             .get(ws_idx)?
             .pane_state(pane_id)
@@ -52,7 +52,7 @@ impl AppState {
 
     pub(crate) fn remove_unattached_terminal_ids(
         &mut self,
-        terminal_ids: impl IntoIterator<Item = crate::terminal::TerminalId>,
+        terminal_ids: impl IntoIterator<Item = crate::utils::ids::TerminalId>,
     ) {
         for terminal_id in terminal_ids {
             let still_attached = self.workspaces.iter().any(|ws| {
@@ -95,7 +95,7 @@ impl AppState {
             terminal_ids.extend(self.terminal_ids_for_workspace(*idx));
             pane_ids.extend(self.pane_ids_for_workspace(*idx));
             if let Some(workspace_id) = self.workspaces.get(*idx).map(|ws| ws.id.clone()) {
-                crate::logging::workspace_closed(&workspace_id);
+                crate::utils::logging::workspace_closed(&workspace_id);
             }
         }
         let active_workspace_id = self

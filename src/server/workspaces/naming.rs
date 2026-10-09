@@ -1,5 +1,8 @@
 use super::{fallback_label_from_cwd, Workspace};
-use crate::terminal::{TerminalId, TerminalRuntimeRegistry, TerminalState};
+use crate::{
+    terminal::{TerminalRuntimeRegistry, TerminalState},
+    utils::ids::TerminalId,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 

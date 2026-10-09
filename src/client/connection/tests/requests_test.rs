@@ -10,9 +10,11 @@ fn request_id(actions: &[ClientShellAction]) -> &str {
 fn focus_workspace(state: &mut ClientShellState) -> Vec<ClientShellAction> {
     let mut outcome = ClientShellInput::default();
     state.push_endpoint_method(
-        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
-            workspace_id: "ws_1".into(),
-        }),
+        crate::protocol::api::schema::Method::WorkspaceFocus(
+            crate::protocol::api::schema::WorkspaceTarget {
+                workspace_id: "ws_1".into(),
+            },
+        ),
         &mut outcome,
     );
     outcome.actions
@@ -49,9 +51,11 @@ fn requests_before_the_first_snapshot_do_not_queue_actions() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     let mut outcome = ClientShellInput::default();
     state.push_endpoint_method(
-        crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
-            workspace_id: "ws_1".into(),
-        }),
+        crate::protocol::api::schema::Method::WorkspaceFocus(
+            crate::protocol::api::schema::WorkspaceTarget {
+                workspace_id: "ws_1".into(),
+            },
+        ),
         &mut outcome,
     );
     assert!(outcome.actions.is_empty());
@@ -76,9 +80,9 @@ fn queued_requests_run_one_at_a_time_in_order() {
 
     assert!(commands.send_next(&mut connection).is_empty());
     assert!(commands.send_next(&mut connection).is_empty());
-    let response = serde_json::to_vec(&crate::api::schema::SuccessResponse {
+    let response = serde_json::to_vec(&crate::protocol::api::schema::SuccessResponse {
         id: first_id.clone(),
-        result: crate::api::schema::ResponseResult::Ok {},
+        result: crate::protocol::api::schema::ResponseResult::Ok {},
     })
     .unwrap();
     let completed = commands
@@ -117,16 +121,18 @@ fn failed_selection_copy_does_not_send_terminal_input() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
-    state.selection = Some(crate::selection::Selection::absolute_range(
+    state.selection = Some(crate::utils::text::selection::Selection::absolute_range(
         "pane_1".into(),
         (0, 0),
         (0, 2),
     ));
     for result in [
-        Ok(crate::api::schema::ResponseResult::PaneSelection {
-            pane_id: "pane_1".into(),
-            text: String::new(),
-        }),
+        Ok(
+            crate::protocol::api::schema::ResponseResult::PaneSelection {
+                pane_id: "pane_1".into(),
+                text: String::new(),
+            },
+        ),
         Err(ClientShellEndpointError {
             code: Some("endpoint_cancelled".into()),
             message: "cancelled".into(),
@@ -155,13 +161,15 @@ fn cancelled_link_activation_does_not_replay_mouse_input() {
     let inner_rect = state.hits.panes[0].inner_rect;
     let mut outcome = ClientShellInput::default();
     state.push_endpoint_method_with_kind(
-        crate::api::schema::Method::PaneLinkActivate(crate::api::schema::PaneLinkActivateParams {
-            pane_id: pane_id.clone(),
-            viewport_row: 0,
-            col: 0,
-            content_revision: None,
-            offset_from_bottom: None,
-        }),
+        crate::protocol::api::schema::Method::PaneLinkActivate(
+            crate::protocol::api::schema::PaneLinkActivateParams {
+                pane_id: pane_id.clone(),
+                viewport_row: 0,
+                col: 0,
+                content_revision: None,
+                offset_from_bottom: None,
+            },
+        ),
         PendingEndpointKind::PaneLinkActivate {
             pane_id,
             inner_rect,

@@ -1,6 +1,6 @@
 //! Reliable control queue and bounded render slot for each client connection.
 use super::events::ServerEvent;
-use crate::ipc::LocalStream;
+use crate::platform::ipc::LocalStream;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::mpsc::{SendError, TrySendError};
@@ -264,7 +264,7 @@ fn write_framed_bytes(stream: &mut LocalStream, data: &[u8]) -> bool {
     true
 }
 
-use crate::protocol::{self, ServerMessage, MAX_FRAME_SIZE};
+use crate::protocol::wire::{self as protocol, ServerMessage, MAX_FRAME_SIZE};
 use crate::server::clients::connection::ClientConnectionMode;
 use crate::server::main_loop::HeadlessServer;
 

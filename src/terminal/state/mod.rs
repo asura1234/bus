@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::detect::{Agent, AgentState};
-use crate::terminal::TerminalId;
+use crate::agents::{AgentKind, AgentState};
+use crate::utils::ids::TerminalId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct EffectivePresentation {
@@ -31,18 +31,18 @@ enum ManagedAgentPhase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ManagedAgent {
-    kind: Agent,
+    kind: AgentKind,
     phase: ManagedAgentPhase,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveStateChange {
     pub previous_agent_label: Option<String>,
-    pub previous_known_agent: Option<Agent>,
+    pub previous_known_agent: Option<AgentKind>,
     pub previous_state: AgentState,
     pub previous_presentation: EffectivePresentation,
     pub agent_label: Option<String>,
-    pub known_agent: Option<Agent>,
+    pub known_agent: Option<AgentKind>,
     pub state: AgentState,
     pub presentation: EffectivePresentation,
 }
@@ -63,12 +63,12 @@ pub struct TerminalStateMutation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AgentNameOwner {
     agent_label: String,
-    session_ref: Option<crate::agent_resume::AgentSessionRef>,
+    session_ref: Option<crate::agents::resume::catalog::AgentSessionRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RecentAgentProcessExit {
-    agent: Agent,
+    agent: AgentKind,
     observed_at: Instant,
 }
 
@@ -79,15 +79,15 @@ struct RecentAgentProcessExit {
 pub struct TerminalState {
     pub id: TerminalId,
     pub cwd: PathBuf,
-    pub detected_agent: Option<Agent>,
+    pub detected_agent: Option<AgentKind>,
     pub fallback_state: AgentState,
-    pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    pub persisted_agent_session: Option<crate::agents::resume::catalog::PersistedAgentSession>,
     pub terminal_title: Option<String>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
     agent_name_owner: Option<AgentNameOwner>,
     managed_agent: Option<ManagedAgent>,
-    managed_agent_launch_session: Option<crate::agent_resume::PersistedAgentSession>,
+    managed_agent_launch_session: Option<crate::agents::resume::catalog::PersistedAgentSession>,
     session_report_sequences: HashMap<String, u64>,
     pub state: AgentState,
     pub last_agent_state_change_seq: Option<u64>,
@@ -96,7 +96,7 @@ pub struct TerminalState {
     pub respawn_shell_on_exit: bool,
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
     agent_process_acquisition_pending: bool,
-    pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
+    pub pending_agent_resume_plan: Option<crate::agents::resume::catalog::AgentResumePlan>,
 }
 
 impl TerminalState {
@@ -128,7 +128,7 @@ impl TerminalState {
     pub(crate) fn terminal_title_stripped(&self) -> Option<String> {
         self.terminal_title
             .as_deref()
-            .and_then(super::stripped_terminal_title)
+            .and_then(crate::agents::title::stripped_terminal_title)
     }
 
     pub(crate) fn set_terminal_title(&mut self, title: Option<String>) -> TerminalTitleChange {
@@ -154,7 +154,7 @@ impl TerminalState {
 
     pub fn with_pending_agent_resume_plan(
         mut self,
-        plan: crate::agent_resume::AgentResumePlan,
+        plan: crate::agents::resume::catalog::AgentResumePlan,
     ) -> Self {
         self.pending_agent_resume_plan = Some(plan);
         self
@@ -163,13 +163,13 @@ impl TerminalState {
     pub fn effective_agent_label(&self) -> Option<&str> {
         self.recent_agent_process_exit
             .is_none()
-            .then(|| self.detected_agent.map(crate::detect::agent_label))
+            .then(|| self.detected_agent.map(crate::agents::agent_label))
             .flatten()
     }
 
-    pub fn effective_known_agent(&self) -> Option<Agent> {
+    pub fn effective_known_agent(&self) -> Option<AgentKind> {
         self.effective_agent_label()
-            .and_then(crate::detect::parse_agent_label)
+            .and_then(crate::agents::parse_agent_label)
     }
 
     pub(crate) fn unchanged_effective_state_change_at(&self, now: Instant) -> EffectiveStateChange {
@@ -214,7 +214,7 @@ impl TerminalState {
     fn recompute_effective_state(
         &mut self,
         previous_agent_label: Option<String>,
-        previous_known_agent: Option<Agent>,
+        previous_known_agent: Option<AgentKind>,
         previous_state: AgentState,
         previous_presentation: EffectivePresentation,
         now: Instant,
@@ -252,8 +252,8 @@ mod tests {
         TerminalState::new(TerminalId::alloc(), "/tmp".into())
     }
 
-    fn session_id(value: &str) -> crate::agent_resume::AgentSessionRef {
-        crate::agent_resume::AgentSessionRef::id(value).unwrap()
+    fn session_id(value: &str) -> crate::agents::resume::catalog::AgentSessionRef {
+        crate::agents::resume::catalog::AgentSessionRef::id(value).unwrap()
     }
 
     include!("tests/detection_test.rs");

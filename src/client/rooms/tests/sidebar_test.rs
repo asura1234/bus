@@ -152,7 +152,11 @@ fn color_blind_mode_defaults_off_and_switches_agent_identity_colors() {
     assert!(matches!(ui.form, Some(forms::Form::Settings)));
     key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
     assert!(ui.settings.color_blind_mode);
-    assert!(crate::bus::settings::load(&path).unwrap().color_blind_mode);
+    assert!(
+        crate::messaging::prefs::settings::load(&path)
+            .unwrap()
+            .color_blind_mode
+    );
     assert_eq!(name_color(&mut ui), accessible);
 
     key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
@@ -162,7 +166,11 @@ fn color_blind_mode_defaults_off_and_switches_agent_identity_colors() {
 
     ui.action(render::Action::Settings);
     ui.action(render::Action::ToggleColorBlindMode);
-    assert!(!crate::bus::settings::load(&path).unwrap().color_blind_mode);
+    assert!(
+        !crate::messaging::prefs::settings::load(&path)
+            .unwrap()
+            .color_blind_mode
+    );
     assert_eq!(name_color(&mut ui), standard);
     let _ = std::fs::remove_file(path);
 }

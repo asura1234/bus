@@ -6,12 +6,12 @@ use std::time::Instant;
 use super::EffectiveStateChange;
 
 use super::{EffectivePresentation, RecentAgentProcessExit, TerminalState, TerminalStateMutation};
-use crate::detect::{Agent, AgentState};
+use crate::agents::{AgentKind, AgentState};
 
 impl TerminalState {
     pub fn set_detected_agent_process_at(
         &mut self,
-        agent: Agent,
+        agent: AgentKind,
         now: Instant,
     ) -> TerminalStateMutation {
         let starts_acquisition = self.recent_agent_process_exit.is_none();
@@ -46,7 +46,7 @@ impl TerminalState {
     #[cfg(test)]
     pub fn set_detected_state(
         &mut self,
-        agent: Option<Agent>,
+        agent: Option<AgentKind>,
         fallback_state: AgentState,
     ) -> Option<EffectiveStateChange> {
         self.set_detected_state_with_visible_blocker(agent, fallback_state, false, false)
@@ -55,7 +55,7 @@ impl TerminalState {
     #[cfg(test)]
     pub fn set_detected_state_with_visible_blocker(
         &mut self,
-        agent: Option<Agent>,
+        agent: Option<AgentKind>,
         fallback_state: AgentState,
         visible_blocker: bool,
         process_exited: bool,
@@ -72,7 +72,7 @@ impl TerminalState {
 
     pub fn set_detected_state_with_screen_signals_at(
         &mut self,
-        agent: Option<Agent>,
+        agent: Option<AgentKind>,
         fallback_state: AgentState,
         _visible_blocker: bool,
         process_exited: bool,
@@ -87,7 +87,7 @@ impl TerminalState {
             process_exited && (previous_agent_label.is_some() || self.agent_name.is_some());
         self.detected_agent = agent;
         if let Some(agent) = agent {
-            let agent_label = crate::detect::agent_label(agent);
+            let agent_label = crate::agents::agent_label(agent);
             self.reconcile_agent_name_owner(agent_label, None);
         }
         self.fallback_state = fallback_state;
@@ -101,7 +101,7 @@ impl TerminalState {
             if self
                 .persisted_agent_session
                 .as_ref()
-                .is_some_and(|session| crate::detect::parse_agent_label(&session.agent) == agent)
+                .is_some_and(|session| crate::agents::parse_agent_label(&session.agent) == agent)
             {
                 self.persisted_agent_session = None;
             }
@@ -140,6 +140,6 @@ impl TerminalState {
     }
 }
 
-pub(crate) fn stabilize_agent_detection(detection: crate::detect::AgentDetection) -> AgentState {
+pub(crate) fn stabilize_agent_detection(detection: crate::agents::AgentDetection) -> AgentState {
     detection.state
 }

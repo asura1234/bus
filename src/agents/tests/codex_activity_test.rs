@@ -1,9 +1,9 @@
 use super::manifest::{detect_with_osc, DetectionInput};
-use super::{Agent, AgentDetection, AgentState};
+use super::{AgentDetection, AgentKind, AgentState};
 
 fn codex_detection(screen: &str, osc_title: &str) -> AgentDetection {
     detect_with_osc(
-        Agent::Codex,
+        AgentKind::Codex,
         DetectionInput {
             screen,
             osc_title,
@@ -68,7 +68,7 @@ fn codex_background_activity_with_a_collapsed_question_remains_working() {
         assert_eq!(result.state, AgentState::Working, "{screen}");
         assert!(result.visible_working, "{screen}");
         assert!(!result.visible_blocker, "{screen}");
-        assert!(crate::detect::dialog::parse(&screen).is_none(), "{screen}");
+        assert!(crate::agents::dialog::parse(&screen).is_none(), "{screen}");
     }
 }
 

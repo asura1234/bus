@@ -3,10 +3,10 @@
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 
-use crate::app::state::AppState;
 #[cfg(test)]
-use crate::protocol::FrameData;
-use crate::protocol::{CursorState, PaneSurfaceFrame, PaneSurfacePatch, ServerMessage};
+use crate::protocol::wire::FrameData;
+use crate::protocol::wire::{CursorState, PaneSurfaceFrame, PaneSurfacePatch, ServerMessage};
+use crate::server::app_state::AppState;
 use crate::terminal::TerminalRuntimeRegistry;
 
 /// Per-client delivery baseline for semantic pane surfaces.
@@ -108,19 +108,19 @@ pub(crate) type RenderedTabSurface = (
     ratatui::buffer::Buffer,
     Option<CursorState>,
     Vec<((u16, u16), String, String)>,
-    crate::ui::TabSurfaceLayout,
+    crate::server::rendering::surface::TabSurfaceLayout,
 );
 
 /// Renders only the active tab's pane surface at an origin-relative client viewport.
 pub(crate) fn render_tab_surface_virtual(
     app_state: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
-    target: Option<crate::ui::TabSurfaceTarget>,
+    target: Option<crate::server::rendering::surface::TabSurfaceTarget>,
     area: Rect,
     resize_panes: bool,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    cell_size: crate::protocol::kitty::HostCellSize,
 ) -> RenderedTabSurface {
-    let layout = crate::ui::compute_tab_surface_for(
+    let layout = crate::server::rendering::surface::compute_tab_surface_for(
         app_state,
         terminal_runtimes,
         target,
@@ -128,19 +128,32 @@ pub(crate) fn render_tab_surface_virtual(
         resize_panes,
         cell_size,
     );
-    let surface = crate::ui::TabSurfaceView {
+    let surface = crate::server::rendering::surface::TabSurfaceView {
         target: layout.target,
         pane_infos: &layout.pane_infos,
         split_borders: &layout.split_borders,
     };
-    let cursor = crate::ui::tab_surface_cursor(app_state, terminal_runtimes, surface);
-    let hyperlinks = crate::ui::tab_surface_hyperlinks(app_state, terminal_runtimes, surface);
+    let cursor = crate::server::rendering::surface::tab_surface_cursor(
+        app_state,
+        terminal_runtimes,
+        surface,
+    );
+    let hyperlinks = crate::server::rendering::surface::tab_surface_hyperlinks(
+        app_state,
+        terminal_runtimes,
+        surface,
+    );
 
     let backend = TestBackend::new(area.width, area.height);
     let mut terminal = ratatui::Terminal::new(backend).expect("TestBackend::new should never fail");
     terminal
         .draw(|frame| {
-            crate::ui::render_tab_surface(app_state, terminal_runtimes, surface, frame);
+            crate::server::rendering::surface::render_tab_surface(
+                app_state,
+                terminal_runtimes,
+                surface,
+                frame,
+            );
         })
         .expect("render to TestBackend should never fail");
 
@@ -165,7 +178,7 @@ mod tests {
             frame: FrameData::from_ratatui_buffer_with_hyperlinks(&pane, None, &[]),
             panes: Vec::new(),
             splits: Vec::new(),
-            graphics: crate::protocol::SurfaceGraphicsScene::default(),
+            graphics: crate::protocol::wire::SurfaceGraphicsScene::default(),
         }
     }
 

@@ -1,6 +1,6 @@
 use super::cursor::write_cursor_position;
 use super::REVERSED_MODIFIER;
-use crate::protocol::{underline_style_from_modifier, CellData, FrameData};
+use crate::protocol::wire::{underline_style_from_modifier, CellData, FrameData};
 use std::io::Write;
 
 pub(super) fn color_to_sgr_fg(val: u32) -> String {

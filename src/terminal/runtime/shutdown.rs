@@ -1,5 +1,5 @@
-use crate::layout::PaneId;
 use crate::terminal::runtime::TerminalRuntime;
+use crate::utils::ids::PaneId;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tracing::info;

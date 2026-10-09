@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn public_focus_moves_shell_focus_between_tabs() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("public-focus-events");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("public-focus-events");
     let first_pane = workspace.tabs[0].root_pane;
     let second_tab = workspace.test_add_tab(Some("second"));
     let second_pane = workspace.tabs[second_tab].root_pane;
@@ -26,7 +26,7 @@ async fn public_focus_moves_shell_focus_between_tabs() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let second_tab_id = server
         .app
         .public_tab_id(0, second_tab)
@@ -61,7 +61,7 @@ async fn public_focus_moves_shell_focus_between_tabs() {
 #[tokio::test]
 async fn repeated_layout_action_reapplies_controller_geometry() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("layout-geometry");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("layout-geometry");
     let first_pane = workspace.tabs[0].root_pane;
     let second_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
     workspace.insert_test_runtime(
@@ -75,7 +75,7 @@ async fn repeated_layout_action_reapplies_controller_geometry() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let tab_id = server.app.public_tab_id(0, 0).expect("tab id");
 
     let (control, _) = connect_test_shell(&mut server, 65, 100, 30);
@@ -85,11 +85,11 @@ async fn repeated_layout_action_reapplies_controller_geometry() {
 
     assert!(server.handle_client_shell_api_request(
         65,
-        crate::api::ApiRequestMessage {
-            request: crate::api::schema::Request {
+        crate::server::api::ApiRequestMessage {
+            request: crate::protocol::api::schema::Request {
                 id: "resize-layout".into(),
-                method: crate::api::schema::Method::LayoutSetSplitRatio(
-                    crate::api::schema::LayoutSetSplitRatioParams {
+                method: crate::protocol::api::schema::Method::LayoutSetSplitRatio(
+                    crate::protocol::api::schema::LayoutSetSplitRatioParams {
                         tab_id: Some(tab_id),
                         pane_id: None,
                         path: Vec::new(),
@@ -109,7 +109,8 @@ async fn repeated_layout_action_reapplies_controller_geometry() {
 #[tokio::test]
 async fn geometry_reapply_replaces_a_controller_that_left_the_tab() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("geometry-controller-viewer");
+    let mut workspace =
+        crate::server::workspaces::Workspace::test_new("geometry-controller-viewer");
     let first_pane = workspace.tabs[0].root_pane;
     let second_tab = workspace.test_add_tab(Some("second"));
     let second_pane = workspace.tabs[second_tab].root_pane;
@@ -124,7 +125,7 @@ async fn geometry_reapply_replaces_a_controller_that_left_the_tab() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
     let third_tab_id = server.app.public_tab_id(0, third_tab).unwrap();
 
@@ -167,8 +168,8 @@ fn room_orchestrator_core_headless_explicit_agent_history_read_requires_idle_on_
                 .terminals
                 .get_mut(&terminal_id)
                 .expect("terminal");
-            terminal.detected_agent = Some(crate::detect::Agent::Claude);
-            terminal.state = crate::detect::AgentState::Working;
+            terminal.detected_agent = Some(crate::agents::AgentKind::Claude);
+            terminal.state = crate::agents::AgentState::Working;
             server.app.terminal_runtimes.insert(
                 terminal_id,
                 crate::terminal::TerminalRuntime::test_with_screen_bytes(
@@ -218,7 +219,7 @@ fn room_orchestrator_core_headless_explicit_agent_history_read_requires_idle_on_
 #[tokio::test]
 async fn pane_death_reconciles_each_client_view_and_focus() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("pane-death-views");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("pane-death-views");
     let dead_pane = workspace.tabs[0].root_pane;
     let second_tab = workspace.test_add_tab(Some("second"));
     let second_pane = workspace.tabs[second_tab].root_pane;
@@ -235,7 +236,7 @@ async fn pane_death_reconciles_each_client_view_and_focus() {
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let second_tab_id = server
         .app
         .public_tab_id(0, second_tab)
@@ -250,7 +251,7 @@ async fn pane_death_reconciles_each_client_view_and_focus() {
     server.clients.get_mut(&72).unwrap().outer_terminal_focus = Some(false);
 
     assert!(
-        server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
+        server.handle_internal_event_with_forwarding(TerminalEvent::PaneDied {
             pane_id: dead_pane,
             exit_reason: crate::platform::ChildExitReason::Exited
         })
@@ -297,7 +298,7 @@ async fn pane_death_reconciles_each_client_view_and_focus() {
 #[tokio::test]
 async fn pane_death_reapplies_controller_geometry() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("pane-death-geometry");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("pane-death-geometry");
     let first_pane = workspace.tabs[0].root_pane;
     let dead_pane = workspace.test_split(ratatui::layout::Direction::Vertical);
     workspace.insert_test_runtime(
@@ -311,7 +312,7 @@ async fn pane_death_reapplies_controller_geometry() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
 
     let (control, _) = connect_test_shell(&mut server, 73, 185, 46);
     let _ = control.recv().expect("snapshot");
@@ -319,7 +320,7 @@ async fn pane_death_reapplies_controller_geometry() {
     assert!(shrunk.0 < 46);
 
     assert!(
-        server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
+        server.handle_internal_event_with_forwarding(TerminalEvent::PaneDied {
             pane_id: dead_pane,
             exit_reason: crate::platform::ChildExitReason::Exited
         })
@@ -345,7 +346,7 @@ fn client_config_reload_request_refreshes_attached_clients() {
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             client_tx,
         ),

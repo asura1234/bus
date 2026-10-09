@@ -1,8 +1,8 @@
 //! Coordinator poll ownership.
 use super::dialogs;
 use super::{
-    io, launch, resume, schema, Agent, AgentId, BTreeMap, BusState, Duration, Method, Path,
-    PathBuf, ResponseResult, RuntimeStatus, Worker,
+    io, launch, resume, schema, AgentId, BTreeMap, BusState, Duration, Method, Path, PathBuf,
+    ResponseResult, RoomAgent, RuntimeStatus, Worker,
 };
 
 impl Worker {
@@ -108,7 +108,7 @@ fn branch_for(cwd: &Path) -> Option<String> {
     (!branch.is_empty()).then_some(branch)
 }
 
-fn polled_status(agent: &Agent, info: Option<&schema::AgentInfo>) -> RuntimeStatus {
+fn polled_status(agent: &RoomAgent, info: Option<&schema::AgentInfo>) -> RuntimeStatus {
     info.map_or(RuntimeStatus::Unavailable, |info| {
         if agent.session_binding_invalidated || agent.deletion_pending {
             return RuntimeStatus::Unavailable;
@@ -130,7 +130,7 @@ fn polled_status(agent: &Agent, info: Option<&schema::AgentInfo>) -> RuntimeStat
 
 fn confirm_interactive_agent(
     state: &mut BusState,
-    agent: &Agent,
+    agent: &RoomAgent,
     info: Option<&schema::AgentInfo>,
 ) -> Result<(), String> {
     // Hook installation is explicitly consented before the agent is
@@ -162,7 +162,7 @@ fn confirm_interactive_agent(
 
 fn update_polled_metadata(
     state: &mut BusState,
-    agent: &Agent,
+    agent: &RoomAgent,
     info: &schema::AgentInfo,
     branch_checks: &mut BTreeMap<AgentId, std::time::Instant>,
 ) -> Result<(), String> {

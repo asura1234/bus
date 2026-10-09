@@ -1,5 +1,5 @@
 //! Control envelopes, bounded JSON-line framing and shared IO budgets.
-use crate::ipc;
+use crate::platform::ipc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{

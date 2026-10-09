@@ -5,7 +5,7 @@ use crate::protocol::api::schema::{
     SplitDirection,
 };
 use crate::server::app::App;
-use crate::server::workspaces::layout::{Node, PaneId};
+use crate::{server::workspaces::layout::Node, utils::ids::PaneId};
 
 use super::errors::{encode_error, encode_success};
 
@@ -133,9 +133,9 @@ mod tests {
     use super::super::test_support::exiting_test_command;
     use super::*;
     use crate::{
-        api::schema::{ErrorResponse, EventData, ResponseResult, SuccessResponse},
-        config::{Config, ShellModeConfig},
-        workspace::Workspace,
+        protocol::api::schema::{ErrorResponse, EventData, ResponseResult, SuccessResponse},
+        server::workspaces::Workspace,
+        utils::config::{Config, ShellModeConfig},
     };
 
     fn app_with_workspace() -> App {

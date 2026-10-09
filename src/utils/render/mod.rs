@@ -1,6 +1,13 @@
-mod diagnostic;
+pub(crate) mod diagnostic;
+pub(crate) mod feedback;
 pub(crate) mod prof;
 pub(crate) mod signal;
-#[path = "feedback.rs"]
-pub(crate) mod status_popups;
 pub(crate) mod widgets;
+
+// Keep the original test identity after exposing the physical feedback owner.
+#[cfg(test)]
+mod status_popups {
+    mod tests {
+        include!("feedback/tests/feedback_test.rs");
+    }
+}

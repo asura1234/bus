@@ -1,6 +1,6 @@
 //! Transport event values and their server-side dispatch.
 use super::writer::ClientWriter;
-use crate::protocol::ClientPaneInputEvent;
+use crate::protocol::wire::ClientPaneInputEvent;
 
 /// Internal event sent from client transport threads to the main event loop.
 #[derive(Debug)]
@@ -28,7 +28,7 @@ pub(crate) enum ServerEvent {
     /// A client sent local clipboard image bytes to paste into a remote pane.
     ClientClipboardImage {
         client_id: u64,
-        target: crate::protocol::ClientClipboardImageTarget,
+        target: crate::protocol::wire::ClientClipboardImageTarget,
         extension: String,
         data: Vec<u8>,
     },
@@ -50,7 +50,7 @@ pub(crate) enum ServerEvent {
     /// A client-owned shell published one host terminal theme observation.
     ClientShellHostTheme {
         client_id: u64,
-        update: crate::protocol::ClientHostThemeUpdate,
+        update: crate::protocol::wire::ClientHostThemeUpdate,
     },
     /// A client-owned shell reported whether its outer terminal has focus.
     ClientShellFocus { client_id: u64, focused: bool },
@@ -62,7 +62,7 @@ pub(crate) enum ServerEvent {
     ClientShellEndpointRequest {
         client_id: u64,
         boot_id: String,
-        request: Box<crate::api::schema::Request>,
+        request: Box<crate::protocol::api::schema::Request>,
     },
     /// A well-framed endpoint request could not be dispatched by this server.
     ClientShellEndpointRequestError {

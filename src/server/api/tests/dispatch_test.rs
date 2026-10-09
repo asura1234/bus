@@ -1,5 +1,5 @@
 use super::*;
-use crate::detect::{Agent, AgentState};
+use crate::agents::{AgentKind, AgentState};
 
 #[cfg(unix)]
 fn init_repo(path: &std::path::Path) {
@@ -13,13 +13,13 @@ fn init_repo(path: &std::path::Path) {
 
 fn app_with_overlay(
     workspace: crate::server::workspaces::Workspace,
-    overlay_pane: crate::server::workspaces::layout::PaneId,
-    previous_focus: crate::server::workspaces::layout::PaneId,
+    overlay_pane: crate::utils::ids::PaneId,
+    previous_focus: crate::utils::ids::PaneId,
     previous_zoomed: bool,
 ) -> App {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -49,7 +49,7 @@ mod events;
 fn client_window_title_api_reports_no_foreground_client_in_app_mode() {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -85,7 +85,7 @@ fn client_window_title_api_reports_no_foreground_client_in_app_mode() {
 async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -118,7 +118,7 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
     app.state.active = None;
     app.state.selected = 0;
     app.state.mode = Mode::Terminal;
-    app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
     app.state.toast_config.delay_seconds = 0;
 
     let (events, _) = tokio::sync::mpsc::channel(4);
@@ -128,13 +128,16 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
         80,
         live_cwd.clone(),
         0,
-        crate::terminal_theme::TerminalTheme::default(),
+        crate::utils::theme::color::TerminalTheme::default(),
         None,
-        crate::pane::PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::NonLogin),
-        &crate::pane::PaneLaunchEnv::default(),
+        crate::terminal::runtime::spawn::PaneShellConfig::new(
+            "/bin/sh",
+            crate::utils::config::ShellModeConfig::NonLogin,
+        ),
+        &crate::terminal::runtime::spawn::PaneLaunchEnv::default(),
         events,
         std::sync::Arc::new(tokio::sync::Notify::new()),
-        std::sync::Arc::new(crate::render_signal::RenderSignal::new()),
+        std::sync::Arc::new(crate::utils::render::signal::RenderSignal::new()),
     )
     .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -143,17 +146,17 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
     }
     app.terminal_runtimes.insert(terminal_id, runtime);
 
-    app.handle_internal_event(AppEvent::StateChanged {
+    app.handle_internal_event(TerminalEvent::StateChanged {
         pane_id: root,
-        agent: Some(Agent::Codex),
+        agent: Some(AgentKind::Codex),
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
         observed_at: std::time::Instant::now(),
     });
-    app.handle_internal_event(AppEvent::StateChanged {
+    app.handle_internal_event(TerminalEvent::StateChanged {
         pane_id: root,
-        agent: Some(Agent::Codex),
+        agent: Some(AgentKind::Codex),
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
@@ -176,7 +179,7 @@ async fn herdr_toast_context_uses_live_root_runtime_cwd_label() {
 async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -209,7 +212,7 @@ async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
     app.state.active = None;
     app.state.selected = 0;
     app.state.mode = Mode::Terminal;
-    app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
     app.state.toast_config.delay_seconds = 1;
 
     let (events, _) = tokio::sync::mpsc::channel(4);
@@ -219,13 +222,16 @@ async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
         80,
         live_cwd.clone(),
         0,
-        crate::terminal_theme::TerminalTheme::default(),
+        crate::utils::theme::color::TerminalTheme::default(),
         None,
-        crate::pane::PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::NonLogin),
-        &crate::pane::PaneLaunchEnv::default(),
+        crate::terminal::runtime::spawn::PaneShellConfig::new(
+            "/bin/sh",
+            crate::utils::config::ShellModeConfig::NonLogin,
+        ),
+        &crate::terminal::runtime::spawn::PaneLaunchEnv::default(),
         events,
         std::sync::Arc::new(tokio::sync::Notify::new()),
-        std::sync::Arc::new(crate::render_signal::RenderSignal::new()),
+        std::sync::Arc::new(crate::utils::render::signal::RenderSignal::new()),
     )
     .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -234,17 +240,17 @@ async fn delayed_herdr_toast_context_uses_live_root_runtime_cwd_label() {
     }
     app.terminal_runtimes.insert(terminal_id, runtime);
 
-    app.handle_internal_event(AppEvent::StateChanged {
+    app.handle_internal_event(TerminalEvent::StateChanged {
         pane_id: root,
-        agent: Some(Agent::Codex),
+        agent: Some(AgentKind::Codex),
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
         observed_at: std::time::Instant::now(),
     });
-    app.handle_internal_event(AppEvent::StateChanged {
+    app.handle_internal_event(TerminalEvent::StateChanged {
         pane_id: root,
-        agent: Some(Agent::Codex),
+        agent: Some(AgentKind::Codex),
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,
@@ -283,7 +289,7 @@ fn overlay_exit_preserves_focus_changed_before_exit() {
     workspace.switch_tab(new_tab);
     let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, true);
 
-    app.handle_internal_event(AppEvent::PaneDied {
+    app.handle_internal_event(TerminalEvent::PaneDied {
         pane_id: overlay_pane,
         exit_reason: crate::platform::ChildExitReason::Exited,
     });
@@ -304,7 +310,7 @@ fn overlay_exit_preserves_same_tab_focus_changed_before_exit() {
     workspace.tabs[0].zoomed = true;
     let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, false);
 
-    app.handle_internal_event(AppEvent::PaneDied {
+    app.handle_internal_event(TerminalEvent::PaneDied {
         pane_id: overlay_pane,
         exit_reason: crate::platform::ChildExitReason::Exited,
     });
@@ -324,7 +330,7 @@ fn overlay_exit_restores_previous_focus_when_overlay_still_focused() {
     workspace.tabs[0].zoomed = true;
     let mut app = app_with_overlay(workspace, overlay_pane, previous_focus, false);
 
-    app.handle_internal_event(AppEvent::PaneDied {
+    app.handle_internal_event(TerminalEvent::PaneDied {
         pane_id: overlay_pane,
         exit_reason: crate::platform::ChildExitReason::Exited,
     });
@@ -340,7 +346,7 @@ fn overlay_exit_restores_previous_focus_when_overlay_still_focused() {
 async fn pane_died_respawns_shell_and_clears_restored_agent_session() {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -359,14 +365,14 @@ async fn pane_died_respawns_shell_and_clears_restored_agent_session() {
         .expect("test terminal should exist");
     terminal.respawn_shell_on_exit = true;
     terminal.set_agent_name("codex".into());
-    terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+    terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
         source: "herdr:codex".into(),
         agent: "codex".into(),
-        session_ref: crate::agent_resume::AgentSessionRef::id("codex-session")
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("codex-session")
             .expect("test session id should be valid"),
     });
 
-    app.handle_internal_event(AppEvent::PaneDied {
+    app.handle_internal_event(TerminalEvent::PaneDied {
         pane_id,
         exit_reason: crate::platform::ChildExitReason::Exited,
     });
@@ -394,7 +400,7 @@ async fn pane_died_respawns_shell_and_clears_restored_agent_session() {
 fn windows_powershell_exit_after_agent_process_exit_respawns_shell() {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -405,11 +411,11 @@ fn windows_powershell_exit_after_agent_process_exit_respawns_shell() {
     app.state.workspaces = vec![workspace];
     app.state.ensure_test_terminals();
     app.state.default_shell = "powershell.exe".into();
-    app.state.shell_mode = crate::config::ShellModeConfig::NonLogin;
+    app.state.shell_mode = crate::utils::config::ShellModeConfig::NonLogin;
 
-    app.handle_internal_event(AppEvent::StateChanged {
+    app.handle_internal_event(TerminalEvent::StateChanged {
         pane_id,
-        agent: Some(crate::detect::Agent::OpenCode),
+        agent: Some(crate::agents::AgentKind::OpenCode),
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: true,
@@ -427,7 +433,7 @@ fn windows_powershell_exit_after_agent_process_exit_respawns_shell() {
 fn windows_powershell_exit_without_recent_agent_process_exit_closes_pane() {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
-        &crate::config::Config::default(),
+        &crate::utils::config::Config::default(),
         crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
@@ -438,7 +444,7 @@ fn windows_powershell_exit_without_recent_agent_process_exit_closes_pane() {
     app.state.workspaces = vec![workspace];
     app.state.ensure_test_terminals();
     app.state.default_shell = "powershell.exe".into();
-    app.state.shell_mode = crate::config::ShellModeConfig::NonLogin;
+    app.state.shell_mode = crate::utils::config::ShellModeConfig::NonLogin;
 
     assert_eq!(
         app.runtime_exit_action(pane_id),

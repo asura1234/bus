@@ -31,7 +31,7 @@ pub fn data_dir() -> PathBuf {
 }
 
 pub fn data_dir_for(name: Option<&str>) -> PathBuf {
-    let config_dir = crate::config::config_dir();
+    let config_dir = crate::utils::config::config_dir();
     match name {
         Some(name) => config_dir.join("sessions").join(name),
         None => config_dir,

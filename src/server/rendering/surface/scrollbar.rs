@@ -1,24 +1,21 @@
-use crate::app::AppState;
-use crate::layout::PaneInfo;
+use crate::server::app_state::AppState;
+use crate::server::workspaces::layout::PaneInfo;
 use crate::utils::render::widgets::render_scrollbar_buffer;
-pub(crate) use crate::utils::render::widgets::{
-    scrollbar_offset_from_drag_row, scrollbar_offset_from_row, scrollbar_thumb_grab_offset,
-};
 use ratatui::{buffer::Buffer, layout::Rect, Frame};
 
 pub(crate) fn pane_scrollbar_rect(info: &PaneInfo) -> Option<Rect> {
     info.scrollbar_rect
 }
 
-pub(crate) fn should_show_scrollbar(metrics: crate::pane::ScrollMetrics) -> bool {
+pub(crate) fn should_show_scrollbar(metrics: crate::utils::render::widgets::ScrollMetrics) -> bool {
     metrics.max_offset_from_bottom > 0
 }
 
 pub(crate) fn render_pane_scrollbar_buffer(
     buffer: &mut Buffer,
-    metrics: crate::pane::ScrollMetrics,
+    metrics: crate::utils::render::widgets::ScrollMetrics,
     track: Rect,
-    palette: &crate::app::state::Palette,
+    palette: &crate::utils::theme::Palette,
     focused: bool,
 ) {
     let (track_color, thumb_color, thumb_symbol) = if focused {

@@ -1,5 +1,8 @@
 use super::*;
-use crate::bus::{callbacks, store::JsonStore, transport::TransportError};
+use crate::{
+    agents::providers::spool as callbacks,
+    messaging::{native::TransportError, storage::state_store::JsonStore},
+};
 use serde_json::{json, Value};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -33,7 +36,7 @@ impl Fixture {
         let dir = std::env::temp_dir().join(format!(
             "bus-steering-{}-{}-{}",
             std::process::id(),
-            crate::bus::io::now_ns(),
+            crate::messaging::storage::io::now_ns(),
             NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
         ));
         let native = Arc::new(Mutex::new(Vec::new()));
@@ -73,7 +76,7 @@ impl Fixture {
             dir,
             provider,
             native,
-            now: crate::bus::io::now_ms(),
+            now: crate::messaging::storage::io::now_ms(),
         }
     }
 
@@ -304,7 +307,8 @@ fn typed_input_without_a_submit_hook_settles_after_a_short_wait() {
     fixture.consume();
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(fixture.request(lead).phase, RequestPhase::Active);
-    fixture.now = crate::bus::io::now_ms() + crate::bus::model::STEERING_SETTLE_MS;
+    fixture.now =
+        crate::messaging::storage::io::now_ms() + crate::messaging::model::STEERING_SETTLE_MS;
     fixture.status(RuntimeStatus::Idle);
     assert_eq!(
         fixture.reply(correction).as_deref(),
@@ -406,7 +410,10 @@ fn a_steered_group_survives_a_restart() {
     let worker = std::mem::replace(
         &mut fixture.worker,
         Worker::open(
-            std::env::temp_dir().join(format!("bus-steering-swap-{}", crate::bus::io::now_ns())),
+            std::env::temp_dir().join(format!(
+                "bus-steering-swap-{}",
+                crate::messaging::storage::io::now_ns()
+            )),
             Box::new(Native(native.clone())),
         )
         .unwrap(),

@@ -5,7 +5,7 @@ fn api_pane_swap_direction_no_neighbor_returns_unchanged_layout() {
     let mut app = app_with_one_workspace();
     let source = app.state.workspaces[0].tabs[0].root_pane;
     app.state.workspaces[0].tabs[0].layout.focus_pane(source);
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut app.state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         ratatui::layout::Rect::new(0, 0, 100, 20),
@@ -248,7 +248,7 @@ fn api_pane_layout_returns_public_ids_rects_and_splits() {
     let root = app.state.workspaces[0].tabs[0].root_pane;
     let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
     app.state.workspaces[0].tabs[0].layout.focus_pane(root);
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut app.state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         ratatui::layout::Rect::new(0, 0, 100, 20),

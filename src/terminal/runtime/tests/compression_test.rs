@@ -27,7 +27,8 @@ async fn compression_task_rechecks_history_after_a_read() {
     let history = (1..=2_000)
         .map(|line| format!("{line:05} {suffix}\r\n"))
         .collect::<String>();
-    let runtime = PaneRuntime::test_with_scrollback_bytes(80, 24, 20_000_000, history.as_bytes());
+    let runtime =
+        TerminalRuntime::test_with_scrollback_bytes(80, 24, 20_000_000, history.as_bytes());
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while runtime.compression.completed_passes() == 0 {
@@ -58,7 +59,8 @@ async fn compressed_scrollback_survives_shrink_and_grow_resize() {
     let history = (1..=2_000)
         .map(|line| format!("{line:05} {suffix}\r\n"))
         .collect::<String>();
-    let runtime = PaneRuntime::test_with_scrollback_bytes(80, 45, 20_000_000, history.as_bytes());
+    let runtime =
+        TerminalRuntime::test_with_scrollback_bytes(80, 45, 20_000_000, history.as_bytes());
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while runtime.compression.completed_passes() == 0 {

@@ -1,21 +1,21 @@
-use crate::config::{NewTerminalCwdConfig, SoundConfig, ToastConfig};
+use crate::utils::config::{NewTerminalCwdConfig, SoundConfig, ToastConfig};
 
-use crate::layout::PaneId;
+use crate::utils::ids::PaneId;
 
-use crate::terminal_theme::{HostAppearance, TerminalTheme};
-use crate::workspace::Workspace;
+use crate::server::workspaces::Workspace;
+use crate::utils::theme::color::{HostAppearance, TerminalTheme};
 
 pub(crate) use super::app_settings::PaneFocusTarget;
 pub use super::app_settings::{AgentPanelSort, Mode, ViewState};
 pub use super::notifications::delivery::{
     AgentNotificationDelivery, PendingAgentNotification, ToastKind, ToastNotification, ToastTarget,
 };
-pub use crate::utils::theme::{Palette, ThemeRuntimeConfig};
+use crate::utils::theme::{Palette, ThemeRuntimeConfig};
 
 /// Testable without PTYs or a tokio runtime.
 pub struct AppState {
     pub terminals:
-        std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
+        std::collections::HashMap<crate::utils::ids::TerminalId, crate::terminal::TerminalState>,
     pub(crate) pane_id_aliases: std::collections::HashMap<u32, PaneId>,
     pub(crate) public_pane_id_aliases: std::collections::HashMap<String, PaneId>,
     pub workspaces: Vec<Workspace>,
@@ -42,7 +42,7 @@ pub struct AppState {
     pub agent_panel_sort: AgentPanelSort,
     pub next_agent_state_change_seq: u64,
     pub confirm_close: bool,
-    pub pane_borders: crate::config::PaneBordersConfig,
+    pub pane_borders: crate::utils::config::PaneBordersConfig,
     pub pane_outer_borders: bool,
     pub pane_scrollbars: bool,
     pub pane_gaps: bool,
@@ -53,12 +53,12 @@ pub struct AppState {
     /// Restrict cursor reveal to focused panes whose detected agent matches
     /// one of these. When false, apply to any focused pane.
     pub cjk_ime_agent_filter_configured: bool,
-    pub cjk_ime_agents: Vec<crate::detect::Agent>,
+    pub cjk_ime_agents: Vec<crate::agents::AgentKind>,
     /// DECSCUSR shape parameter (1–6) for the IME anchor cursor.
     pub cjk_ime_cursor_shape: u8,
     pub kitty_graphics_enabled: bool,
     pub default_shell: String,
-    pub shell_mode: crate::config::ShellModeConfig,
+    pub shell_mode: crate::utils::config::ShellModeConfig,
     pub new_terminal_cwd: NewTerminalCwdConfig,
     pub pane_scrollback_limit_bytes: usize,
     pub sound: SoundConfig,
@@ -76,12 +76,12 @@ pub struct AppState {
     /// Resolved host terminal default colors for theming embedded panes.
     pub host_terminal_theme: TerminalTheme,
     /// Last known foreground host terminal cell size in pixels.
-    pub(crate) host_cell_size: crate::kitty_graphics::HostCellSize,
+    pub(crate) host_cell_size: crate::protocol::kitty::HostCellSize,
     /// Set when a persisted session snapshot would change.
     pub session_dirty: bool,
     /// Terminal runtimes that should be shut down by the app/runtime layer
     /// after state has detached their terminal metadata.
-    pub(crate) terminal_runtime_shutdowns: Vec<crate::terminal::TerminalId>,
+    pub(crate) terminal_runtime_shutdowns: Vec<crate::utils::ids::TerminalId>,
 }
 
 impl AppState {

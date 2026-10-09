@@ -2,7 +2,7 @@ use super::{
     blit_pane_surface, pane_surface_topology_signature, render, Buffer, ClientShellState, PaneHit,
     PaneSplitHit, ShellHitMap, Style,
 };
-use crate::protocol::FrameData;
+use crate::protocol::wire::FrameData;
 use ratatui::layout::Rect;
 
 impl ClientShellState {
@@ -109,7 +109,7 @@ impl ClientShellState {
                     hit.inner_rect,
                     hit.scroll,
                     &self.config.palette,
-                    crate::terminal_theme::TerminalTheme::default(),
+                    crate::utils::theme::color::TerminalTheme::default(),
                 );
             }
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
@@ -120,7 +120,7 @@ impl ClientShellState {
             let mut composed = frame.to_ratatui_buffer()?;
             if let Some(diagnostic) = self.config_diagnostic.as_deref() {
                 let diagnostic_area = Rect::new(0, 0, cols, rows);
-                crate::ui::render_config_diagnostic_buffer(
+                crate::utils::render::diagnostic::render_config_diagnostic_buffer(
                     &mut composed,
                     diagnostic_area,
                     diagnostic,
@@ -141,7 +141,7 @@ impl ClientShellState {
                 self.config.clipboard_toast_position,
                 self.hits.notification_toast,
             );
-            crate::ui::render_copy_feedback_buffer(
+            crate::utils::render::feedback::render_copy_feedback_buffer(
                 &mut composed,
                 feedback_area,
                 feedback,
@@ -155,7 +155,7 @@ impl ClientShellState {
     }
 }
 
-fn project_pane_hit(pane: &crate::protocol::PaneSurfacePane, area: Rect) -> PaneHit {
+fn project_pane_hit(pane: &crate::protocol::wire::PaneSurfacePane, area: Rect) -> PaneHit {
     PaneHit {
         rect: Rect::new(
             area.x.saturating_add(pane.rect.x),
@@ -195,17 +195,17 @@ fn project_pane_hit(pane: &crate::protocol::PaneSurfacePane, area: Rect) -> Pane
 }
 
 fn project_split_hit(
-    split: &crate::protocol::PaneSurfaceSplit,
+    split: &crate::protocol::wire::PaneSurfaceSplit,
     area: Rect,
     topology_signature: u64,
 ) -> PaneSplitHit {
     PaneSplitHit {
         direction: split.direction,
         pos: match split.direction {
-            crate::protocol::PaneSurfaceSplitDirection::Horizontal => {
+            crate::protocol::wire::PaneSurfaceSplitDirection::Horizontal => {
                 area.x.saturating_add(split.pos)
             }
-            crate::protocol::PaneSurfaceSplitDirection::Vertical => {
+            crate::protocol::wire::PaneSurfaceSplitDirection::Vertical => {
                 area.y.saturating_add(split.pos)
             }
         },

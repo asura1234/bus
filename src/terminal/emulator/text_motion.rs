@@ -155,7 +155,9 @@ impl PaneTerminal {
         None
     }
 
-    fn retained_text_buffer(&self) -> Option<(RetainedTextBuffer, crate::ghostty::ActiveScreen)> {
+    fn retained_text_buffer(
+        &self,
+    ) -> Option<(RetainedTextBuffer, crate::terminal::vt::ActiveScreen)> {
         let (cols, rows, active_screen) = {
             let core = self.ghostty.core.lock().ok()?;
             let cols = core.terminal.cols().ok()?;
@@ -204,21 +206,29 @@ pub(super) struct RetainedTextBuffer {
 
 impl RetainedTextBuffer {
     #[cfg(test)]
-    pub(super) fn new(cols: u16, rows: Vec<crate::ghostty::ScreenTextRow>) -> Self {
+    pub(super) fn new(cols: u16, rows: Vec<crate::terminal::vt::ScreenTextRow>) -> Self {
         Self::build(cols, rows, 0, true, true)
     }
 
-    fn new_search(cols: u16, rows: Vec<crate::ghostty::ScreenTextRow>, row_offset: u32) -> Self {
+    fn new_search(
+        cols: u16,
+        rows: Vec<crate::terminal::vt::ScreenTextRow>,
+        row_offset: u32,
+    ) -> Self {
         Self::build(cols, rows, row_offset, true, false)
     }
 
-    fn new_words(cols: u16, rows: Vec<crate::ghostty::ScreenTextRow>, row_offset: u32) -> Self {
+    fn new_words(
+        cols: u16,
+        rows: Vec<crate::terminal::vt::ScreenTextRow>,
+        row_offset: u32,
+    ) -> Self {
         Self::build(cols, rows, row_offset, false, true)
     }
 
     fn build(
         cols: u16,
-        rows: Vec<crate::ghostty::ScreenTextRow>,
+        rows: Vec<crate::terminal::vt::ScreenTextRow>,
         row_offset: u32,
         build_lines: bool,
         build_atoms: bool,
@@ -236,10 +246,10 @@ impl RetainedTextBuffer {
                 let Ok(col) = u16::try_from(col) else {
                     break;
                 };
-                if cell.wide == crate::ghostty::CellWide::SpacerTail {
+                if cell.wide == crate::terminal::vt::CellWide::SpacerTail {
                     continue;
                 }
-                if cell.wide == crate::ghostty::CellWide::SpacerHead {
+                if cell.wide == crate::terminal::vt::CellWide::SpacerHead {
                     if build_atoms {
                         atoms.push(TextAtom {
                             point: Some(TerminalTextPoint { row: row_idx, col }),
@@ -251,7 +261,7 @@ impl RetainedTextBuffer {
                     }
                     continue;
                 }
-                let width = if cell.wide == crate::ghostty::CellWide::Wide {
+                let width = if cell.wide == crate::terminal::vt::CellWide::Wide {
                     2
                 } else {
                     1
@@ -318,7 +328,7 @@ impl RetainedTextBuffer {
         &self,
         line: &LogicalTextLine,
         found: regex::Match<'_>,
-        active_screen: crate::ghostty::ActiveScreen,
+        active_screen: crate::terminal::vt::ActiveScreen,
     ) -> Option<TerminalTextMatch> {
         let start_index = line
             .spans
@@ -343,7 +353,7 @@ impl RetainedTextBuffer {
         &self,
         query: &str,
         case_sensitive: bool,
-        active_screen: crate::ghostty::ActiveScreen,
+        active_screen: crate::terminal::vt::ActiveScreen,
         direction: TerminalSearchDirection,
         cursor: TerminalTextPoint,
         previous: Option<(TerminalTextPoint, TerminalTextPoint)>,
@@ -622,7 +632,7 @@ impl RetainedTextBuffer {
 
 fn terminal_cell_text(graphemes: &[u32]) -> String {
     if graphemes.is_empty()
-        || graphemes.first().copied() == Some(crate::ghostty::KITTY_UNICODE_PLACEHOLDER)
+        || graphemes.first().copied() == Some(crate::terminal::vt::KITTY_UNICODE_PLACEHOLDER)
     {
         return " ".to_string();
     }

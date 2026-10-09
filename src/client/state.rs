@@ -1,9 +1,17 @@
-use super::*;
+use crate::client::host_terminal::frame_output::write_encoded_frame_with_graphics;
+use crate::protocol::wire::FrameData;
+use std::{
+    io::{self, Write as _},
+    sync::{
+        atomic::{AtomicBool, AtomicU16},
+        Arc,
+    },
+};
 
 /// State tracking for the thin client.
 pub(super) struct ClientState {
     /// Stateful semantic-frame encoder used when the server sends FrameData.
-    pub(super) blit_encoder: render_ansi::BlitEncoder,
+    pub(super) blit_encoder: crate::protocol::ansi::BlitEncoder,
     pub(super) mouse_capture_active: bool,
     pub(super) endpoint_mouse_capture_requested: bool,
     pub(super) endpoint_sgr_pixels_requested: bool,
@@ -16,7 +24,7 @@ pub(super) struct ClientState {
     pub(super) keyboard_report_all_active: bool,
     pub(super) reported_size: (u16, u16),
     pub(super) reported_cell_size: (u32, u32),
-    pub(super) sound_config: crate::config::SoundConfig,
+    pub(super) sound_config: crate::utils::config::SoundConfig,
     pub(super) kitty_graphics_enabled: bool,
     pub(super) pixel_geometry_enabled: bool,
     pub(super) pixel_geometry_exact: bool,
@@ -24,7 +32,7 @@ pub(super) struct ClientState {
     pub(super) repaint_pending: bool,
     pub(super) draw_host_cursor: bool,
     pub(super) detached_process_children: Vec<std::process::Child>,
-    pub(super) shell: Option<shell::ClientShellState>,
+    pub(super) shell: Option<crate::client::compositor::ClientShellState>,
 }
 
 impl ClientState {
@@ -43,10 +51,10 @@ impl ClientState {
 
     pub(super) fn present_surface_patch(
         &mut self,
-        patch: shell::ClientComposedSurfacePatch,
+        patch: crate::client::compositor::ClientComposedSurfacePatch,
     ) -> io::Result<bool> {
         if self.repaint_pending {
-            crate::render_prof::event("client_surface_patch.fallback.repaint");
+            crate::utils::render::prof::event("client_surface_patch.fallback.repaint");
             return Ok(false);
         }
         let rows = if self.draw_host_cursor {
@@ -54,29 +62,29 @@ impl ClientState {
                 .blit_encoder
                 .patch_rows_with_drawn_cursor(&patch.rows, patch.cursor.as_ref())
             else {
-                crate::render_prof::event("client_surface_patch.fallback.drawn_cursor");
+                crate::utils::render::prof::event("client_surface_patch.fallback.drawn_cursor");
                 return Ok(false);
             };
             rows
         } else {
             patch.rows
         };
-        let encode_started = crate::render_prof::timer();
+        let encode_started = crate::utils::render::prof::timer();
         let Some(encoded) =
             self.blit_encoder
                 .encode_patch(&rows, patch.cursor.clone(), self.draw_host_cursor)
         else {
-            crate::render_prof::event("client_surface_patch.fallback.encode");
+            crate::utils::render::prof::event("client_surface_patch.fallback.encode");
             return Ok(false);
         };
-        crate::render_prof::duration_since("client_surface_patch.encode", encode_started);
-        let write_started = crate::render_prof::timer();
+        crate::utils::render::prof::duration_since("client_surface_patch.encode", encode_started);
+        let write_started = crate::utils::render::prof::timer();
         let mut stdout = io::stdout();
         stdout.write_all(&encoded.bytes)?;
         stdout.flush()?;
-        crate::render_prof::duration_since("client_surface_patch.write", write_started);
+        crate::utils::render::prof::duration_since("client_surface_patch.write", write_started);
         let committed = self.blit_encoder.commit_patch(&rows, patch.cursor, encoded);
-        crate::render_prof::event(if committed {
+        crate::utils::render::prof::event(if committed {
             "client_surface_patch.success"
         } else {
             "client_surface_patch.fallback.commit"
@@ -93,7 +101,7 @@ impl ClientState {
             self.request_repaint();
         }
         let frame_data = if self.draw_host_cursor {
-            render_ansi::frame_with_drawn_cursor(frame_data)
+            crate::protocol::ansi::frame_with_drawn_cursor(frame_data)
         } else {
             frame_data
         };

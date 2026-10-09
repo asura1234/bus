@@ -204,7 +204,7 @@ fn semantic_notification_roundtrip() {
         workspace_id: Some("w1".into()),
         tab_id: Some("w1:t1".into()),
         pane_id: Some("w1:p1".into()),
-        position: Some(crate::config::ToastHerdrPosition::TopRight),
+        position: Some(crate::utils::config::ToastHerdrPosition::TopRight),
     });
     let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
     let (decoded, _): (ServerMessage, _) =

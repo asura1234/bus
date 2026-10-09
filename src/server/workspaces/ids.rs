@@ -3,8 +3,8 @@ use crate::server::app::App;
 impl App {
     pub(crate) fn find_pane(
         &self,
-        pane_id: crate::layout::PaneId,
-    ) -> Option<(usize, &crate::pane::PaneState)> {
+        pane_id: crate::utils::ids::PaneId,
+    ) -> Option<(usize, &crate::server::workspaces::pane::PaneState)> {
         self.state
             .workspaces
             .iter()
@@ -19,7 +19,7 @@ impl App {
     pub(crate) fn public_tab_id(&self, ws_idx: usize, tab_idx: usize) -> Option<String> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let tab_number = ws.public_tab_number(tab_idx)?;
-        Some(crate::workspace::public_tab_id_for_number(
+        Some(crate::server::workspaces::public_tab_id_for_number(
             &ws.id, tab_number,
         ))
     }
@@ -27,11 +27,11 @@ impl App {
     pub(crate) fn public_pane_id(
         &self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> Option<String> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane_number = ws.public_pane_number(pane_id)?;
-        Some(crate::workspace::public_pane_id_for_number(
+        Some(crate::server::workspaces::public_pane_id_for_number(
             &ws.id,
             pane_number,
         ))
@@ -40,16 +40,16 @@ impl App {
     pub(in crate::server) fn pane_launch_env(
         &self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
         extra_env: Vec<(String, String)>,
-    ) -> Option<crate::pane::PaneLaunchEnv> {
+    ) -> Option<crate::terminal::runtime::spawn::PaneLaunchEnv> {
         let workspace_id = self.public_workspace_id(ws_idx);
         let ws = self.state.workspaces.get(ws_idx)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
         let tab_id = self.public_tab_id(ws_idx, tab_idx)?;
         let pane_id = self.public_pane_id(ws_idx, pane_id)?;
         Some(
-            crate::pane::PaneLaunchEnv::from_extra(extra_env).with_identity(
+            crate::terminal::runtime::spawn::PaneLaunchEnv::from_extra(extra_env).with_identity(
                 workspace_id,
                 tab_id,
                 pane_id,
@@ -78,7 +78,7 @@ impl App {
         let (ws_raw, tab_raw) = id.rsplit_once(':')?;
         let ws_idx = self.parse_workspace_id(ws_raw)?;
         let tab_idx = if let Some(encoded) = tab_raw.strip_prefix('t') {
-            let tab_number = crate::workspace::decode_public_number(encoded)?;
+            let tab_number = crate::server::workspaces::decode_public_number(encoded)?;
             self.state
                 .workspaces
                 .get(ws_idx)?
@@ -92,18 +92,18 @@ impl App {
         Some((ws_idx, tab_idx))
     }
 
-    fn resolve_raw_pane_id(&self, raw: u32) -> Option<crate::layout::PaneId> {
+    fn resolve_raw_pane_id(&self, raw: u32) -> Option<crate::utils::ids::PaneId> {
         if let Some(alias) = self.state.pane_id_aliases.get(&raw).copied() {
             return self.find_pane(alias).map(|_| alias);
         }
-        let pane_id = crate::layout::PaneId::from_raw(raw);
+        let pane_id = crate::utils::ids::PaneId::from_raw(raw);
         if self.find_pane(pane_id).is_some() {
             return Some(pane_id);
         }
         None
     }
 
-    pub(crate) fn parse_pane_id(&self, id: &str) -> Option<(usize, crate::layout::PaneId)> {
+    pub(crate) fn parse_pane_id(&self, id: &str) -> Option<(usize, crate::utils::ids::PaneId)> {
         if let Some(alias) = self.state.public_pane_id_aliases.get(id).copied() {
             return self.find_pane(alias).map(|(ws_idx, _)| (ws_idx, alias));
         }
@@ -122,7 +122,7 @@ impl App {
 
         if let Some((ws_raw, pane_number_raw)) = id.rsplit_once(":p") {
             let ws_idx = self.parse_workspace_id(ws_raw)?;
-            let pane_number = crate::workspace::decode_public_number(pane_number_raw)?;
+            let pane_number = crate::server::workspaces::decode_public_number(pane_number_raw)?;
             let ws = self.state.workspaces.get(ws_idx)?;
             let pane_id = ws
                 .public_pane_numbers
@@ -145,7 +145,7 @@ impl App {
     pub(crate) fn parse_current_public_pane_id(
         &self,
         id: &str,
-    ) -> Option<(usize, crate::layout::PaneId)> {
+    ) -> Option<(usize, crate::utils::ids::PaneId)> {
         let (ws_idx, pane_id) = self.parse_pane_id(id)?;
         (self.public_pane_id(ws_idx, pane_id).as_deref() == Some(id)).then_some((ws_idx, pane_id))
     }
@@ -157,7 +157,7 @@ use crate::server::api::input_encoding::pane_agent_status;
 pub(crate) struct TerminalTarget {
     pub ws_idx: usize,
     pub tab_idx: usize,
-    pub pane_id: crate::layout::PaneId,
+    pub pane_id: crate::utils::ids::PaneId,
     pub terminal_id: String,
 }
 
@@ -168,7 +168,7 @@ pub(crate) struct TerminalTargetCandidate {
     pub workspace_id: String,
     pub tab_id: String,
     pub cwd: Option<String>,
-    pub agent_status: crate::api::schema::AgentStatus,
+    pub agent_status: crate::protocol::api::schema::AgentStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,7 +312,7 @@ impl App {
     fn terminal_target_for_pane(
         &self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> Option<TerminalTarget> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
@@ -328,7 +328,7 @@ impl App {
     fn terminal_target_candidate(
         &self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> Option<TerminalTargetCandidate> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;

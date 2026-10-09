@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn delivery_logs_explain_queued_hook_gate_once_without_prompt_contents() {
-    let capture = crate::logging::test_capture::Capture::default();
+    let capture = crate::utils::logging::test_capture::Capture::default();
     capture.run(|| {
         let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
         let mut value = serde_json::to_value(&worker.state).unwrap();

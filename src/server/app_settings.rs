@@ -1,4 +1,4 @@
-use crate::layout::{PaneId, PaneInfo};
+use crate::{server::workspaces::layout::PaneInfo, utils::ids::PaneId};
 use ratatui::layout::Rect;
 
 /// Geometry for the server-rendered active-tab pane surface.
@@ -27,21 +27,21 @@ pub(crate) struct PaneFocusTarget {
 }
 
 pub(super) fn agent_panel_sort_from_config(
-    sort: crate::config::AgentPanelSortConfig,
+    sort: crate::utils::config::AgentPanelSortConfig,
 ) -> AgentPanelSort {
     match sort {
-        crate::config::AgentPanelSortConfig::Spaces => AgentPanelSort::Spaces,
-        crate::config::AgentPanelSortConfig::Priority => AgentPanelSort::Priority,
+        crate::utils::config::AgentPanelSortConfig::Spaces => AgentPanelSort::Spaces,
+        crate::utils::config::AgentPanelSortConfig::Priority => AgentPanelSort::Priority,
     }
 }
 
 /// Parse the configured agent name list into a deduplicated set of `Agent`
 /// values. Unknown agent names are silently dropped so a typo cannot disable
 /// other valid entries.
-pub(super) fn parse_cjk_ime_agents(names: &[String]) -> Vec<crate::detect::Agent> {
+pub(super) fn parse_cjk_ime_agents(names: &[String]) -> Vec<crate::agents::AgentKind> {
     let mut out = Vec::with_capacity(names.len());
     for name in names {
-        if let Some(agent) = crate::detect::parse_agent_label(name) {
+        if let Some(agent) = crate::agents::parse_agent_label(name) {
             if !out.contains(&agent) {
                 out.push(agent);
             }

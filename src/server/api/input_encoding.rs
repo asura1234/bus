@@ -1,19 +1,19 @@
 pub(in crate::server) fn tab_attention_priority(
-    state: crate::detect::AgentState,
+    state: crate::agents::AgentState,
     seen: bool,
 ) -> u8 {
     match (state, seen) {
-        (crate::detect::AgentState::Blocked, _) => 4,
-        (crate::detect::AgentState::Idle, false) => 3,
-        (crate::detect::AgentState::Working, _) => 2,
-        (crate::detect::AgentState::Idle, true) => 1,
-        (crate::detect::AgentState::Unknown, _) => 0,
+        (crate::agents::AgentState::Blocked, _) => 4,
+        (crate::agents::AgentState::Idle, false) => 3,
+        (crate::agents::AgentState::Working, _) => 2,
+        (crate::agents::AgentState::Idle, true) => 1,
+        (crate::agents::AgentState::Unknown, _) => 0,
     }
 }
 
 fn parse_api_key(key: &str) -> Option<crossterm::event::KeyEvent> {
     let normalized = normalize_api_key_alias(key.trim());
-    let (code, modifiers) = crate::config::parse_key_combo(normalized)?;
+    let (code, modifiers) = crate::utils::config::parse_key_combo(normalized)?;
     Some(crossterm::event::KeyEvent::new(code, modifiers))
 }
 
@@ -89,19 +89,19 @@ pub(in crate::server) fn encode_api_input(
 }
 
 pub(in crate::server) fn pane_agent_status(
-    state: crate::detect::AgentState,
+    state: crate::agents::AgentState,
     seen: bool,
 ) -> crate::protocol::api::schema::AgentStatus {
     match (state, seen) {
-        (crate::detect::AgentState::Idle, false) => crate::protocol::api::schema::AgentStatus::Done,
-        (crate::detect::AgentState::Idle, true) => crate::protocol::api::schema::AgentStatus::Idle,
-        (crate::detect::AgentState::Working, _) => {
+        (crate::agents::AgentState::Idle, false) => crate::protocol::api::schema::AgentStatus::Done,
+        (crate::agents::AgentState::Idle, true) => crate::protocol::api::schema::AgentStatus::Idle,
+        (crate::agents::AgentState::Working, _) => {
             crate::protocol::api::schema::AgentStatus::Working
         }
-        (crate::detect::AgentState::Blocked, _) => {
+        (crate::agents::AgentState::Blocked, _) => {
             crate::protocol::api::schema::AgentStatus::Blocked
         }
-        (crate::detect::AgentState::Unknown, _) => {
+        (crate::agents::AgentState::Unknown, _) => {
             crate::protocol::api::schema::AgentStatus::Unknown
         }
     }
@@ -115,8 +115,8 @@ pub(in crate::server) fn normalize_reported_agent_label(agent: &str) -> Option<S
     if trimmed.is_empty() {
         return None;
     }
-    if let Some(agent) = crate::detect::parse_agent_label(trimmed) {
-        return Some(crate::detect::agent_label(agent).to_string());
+    if let Some(agent) = crate::agents::parse_agent_label(trimmed) {
+        return Some(crate::agents::agent_label(agent).to_string());
     }
     Some(trimmed.to_string())
 }

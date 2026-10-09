@@ -6,31 +6,31 @@ use tokio::sync::mpsc;
 
 use support::*;
 
-fn text_cell(text: &str) -> crate::ghostty::ScreenTextCell {
-    crate::ghostty::ScreenTextCell {
-        wide: crate::ghostty::CellWide::Narrow,
+fn text_cell(text: &str) -> crate::terminal::vt::ScreenTextCell {
+    crate::terminal::vt::ScreenTextCell {
+        wide: crate::terminal::vt::CellWide::Narrow,
         graphemes: text.chars().map(u32::from).collect(),
     }
 }
 
-fn wide_text_cells(text: &str) -> [crate::ghostty::ScreenTextCell; 2] {
+fn wide_text_cells(text: &str) -> [crate::terminal::vt::ScreenTextCell; 2] {
     [
-        crate::ghostty::ScreenTextCell {
-            wide: crate::ghostty::CellWide::Wide,
+        crate::terminal::vt::ScreenTextCell {
+            wide: crate::terminal::vt::CellWide::Wide,
             graphemes: text.chars().map(u32::from).collect(),
         },
-        crate::ghostty::ScreenTextCell {
-            wide: crate::ghostty::CellWide::SpacerTail,
+        crate::terminal::vt::ScreenTextCell {
+            wide: crate::terminal::vt::CellWide::SpacerTail,
             graphemes: Vec::new(),
         },
     ]
 }
 
 fn text_row(
-    cells: impl IntoIterator<Item = crate::ghostty::ScreenTextCell>,
+    cells: impl IntoIterator<Item = crate::terminal::vt::ScreenTextCell>,
     soft_wrapped: bool,
-) -> crate::ghostty::ScreenTextRow {
-    crate::ghostty::ScreenTextRow {
+) -> crate::terminal::vt::ScreenTextRow {
+    crate::terminal::vt::ScreenTextRow {
         cells: cells.into_iter().collect(),
         soft_wrapped,
         wrap_continuation: false,
@@ -46,7 +46,7 @@ fn search_primary(
         .search_window(
             query,
             case_sensitive,
-            crate::ghostty::ActiveScreen::Primary,
+            crate::terminal::vt::ActiveScreen::Primary,
             TerminalSearchDirection::Forward,
             TerminalTextPoint { row: 0, col: 0 },
             None,
@@ -55,20 +55,20 @@ fn search_primary(
         .matches
 }
 
-fn write_numbered_lines(terminal: &mut crate::ghostty::Terminal, count: usize) {
+fn write_numbered_lines(terminal: &mut crate::terminal::vt::Terminal, count: usize) {
     for i in 0..count {
         terminal.write(format!("{i:06}\r\n").as_bytes());
     }
 }
 
-fn write_wrapped_contract_lines(terminal: &mut crate::ghostty::Terminal, count: usize) {
+fn write_wrapped_contract_lines(terminal: &mut crate::terminal::vt::Terminal, count: usize) {
     for i in 0..count {
         terminal.write(format!("WRAP-{i:03}-abcdefghijklmnopqrstuvwxyz\r\n").as_bytes());
     }
     terminal.write(b"END");
 }
 
-fn ghostty_normalize_buffer_symbol(symbol: &str, wide: crate::ghostty::CellWide) -> String {
+fn ghostty_normalize_buffer_symbol(symbol: &str, wide: crate::terminal::vt::CellWide) -> String {
     if ghostty_symbol_fits_cell(symbol, wide) {
         symbol.to_string()
     } else {
@@ -77,16 +77,16 @@ fn ghostty_normalize_buffer_symbol(symbol: &str, wide: crate::ghostty::CellWide)
 }
 
 fn render_cells_to_symbols(
-    terminal: &mut crate::ghostty::Terminal,
-) -> Vec<(crate::ghostty::CellWide, String)> {
-    let mut render_state = crate::ghostty::RenderState::new().unwrap();
+    terminal: &mut crate::terminal::vt::Terminal,
+) -> Vec<(crate::terminal::vt::CellWide, String)> {
+    let mut render_state = crate::terminal::vt::RenderState::new().unwrap();
     render_state.update(terminal).unwrap();
 
-    let mut row_iterator = crate::ghostty::RowIterator::new().unwrap();
+    let mut row_iterator = crate::terminal::vt::RowIterator::new().unwrap();
     let mut rows = render_state
         .populate_row_iterator(&mut row_iterator)
         .unwrap();
-    let mut row_cells = crate::ghostty::RowCells::new().unwrap();
+    let mut row_cells = crate::terminal::vt::RowCells::new().unwrap();
     let mut grapheme_bytes = Vec::new();
     let mut symbol_scratch = String::new();
     let mut out = Vec::new();
@@ -94,7 +94,9 @@ fn render_cells_to_symbols(
     if rows.next() {
         let mut cells = rows.populate_cells(&mut row_cells).unwrap();
         while cells.next() {
-            let wide = cells.wide().unwrap_or(crate::ghostty::CellWide::Narrow);
+            let wide = cells
+                .wide()
+                .unwrap_or(crate::terminal::vt::CellWide::Narrow);
             let symbol = ghostty_buffer_symbol_into(
                 &cells,
                 wide,
@@ -114,7 +116,7 @@ fn render_cells_to_symbols(
 #[test]
 fn dirty_full_collects_bounded_viewport_patch() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(4, 3, 200).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(4, 3, 200).unwrap();
     terminal.write(b"one\r\ntwo\r\nthree");
     let pane = PaneTerminal::new(GhosttyPaneTerminal::new(terminal, tx).unwrap());
 
@@ -149,17 +151,23 @@ fn redefined_palette_entries_render_as_rgb_and_others_stay_indexed() {
     let overrides = PaletteOverrides::new(&active, &default).expect("index 18 differs");
 
     assert_eq!(
-        ghostty_cell_color(crate::ghostty::CellColor::Palette(18), Some(&overrides)),
+        ghostty_cell_color(
+            crate::terminal::vt::CellColor::Palette(18),
+            Some(&overrides)
+        ),
         Color::Rgb(169, 177, 214)
     );
     // Untouched entries keep being forwarded, so they still follow the host theme.
     assert_eq!(
-        ghostty_cell_color(crate::ghostty::CellColor::Palette(19), Some(&overrides)),
+        ghostty_cell_color(
+            crate::terminal::vt::CellColor::Palette(19),
+            Some(&overrides)
+        ),
         Color::Indexed(19)
     );
     // ...and so does everything when the program never wrote a palette at all.
     assert_eq!(
-        ghostty_cell_color(crate::ghostty::CellColor::Palette(18), None),
+        ghostty_cell_color(crate::terminal::vt::CellColor::Palette(18), None),
         Color::Indexed(18)
     );
 }
@@ -172,7 +180,7 @@ fn direct_rgb_cells_are_unaffected_by_palette_overrides() {
     let overrides = PaletteOverrides::new(&active, &default).expect("index 18 differs");
     assert_eq!(
         ghostty_cell_color(
-            crate::ghostty::CellColor::Rgb(rgb(122, 162, 247)),
+            crate::terminal::vt::CellColor::Rgb(rgb(122, 162, 247)),
             Some(&overrides)
         ),
         Color::Rgb(122, 162, 247)
@@ -182,31 +190,31 @@ fn direct_rgb_cells_are_unaffected_by_palette_overrides() {
 #[test]
 fn decscusr_cursor_shape_preserves_blinking_variants() {
     assert_eq!(
-        decscusr_cursor_shape(crate::ghostty::CursorVisualStyle::Block, true),
+        decscusr_cursor_shape(crate::terminal::vt::CursorVisualStyle::Block, true),
         1
     );
     assert_eq!(
-        decscusr_cursor_shape(crate::ghostty::CursorVisualStyle::Block, false),
+        decscusr_cursor_shape(crate::terminal::vt::CursorVisualStyle::Block, false),
         2
     );
     assert_eq!(
-        decscusr_cursor_shape(crate::ghostty::CursorVisualStyle::Underline, true),
+        decscusr_cursor_shape(crate::terminal::vt::CursorVisualStyle::Underline, true),
         3
     );
     assert_eq!(
-        decscusr_cursor_shape(crate::ghostty::CursorVisualStyle::Underline, false),
+        decscusr_cursor_shape(crate::terminal::vt::CursorVisualStyle::Underline, false),
         4
     );
     assert_eq!(
-        decscusr_cursor_shape(crate::ghostty::CursorVisualStyle::Bar, true),
+        decscusr_cursor_shape(crate::terminal::vt::CursorVisualStyle::Bar, true),
         5
     );
     assert_eq!(
-        decscusr_cursor_shape(crate::ghostty::CursorVisualStyle::Bar, false),
+        decscusr_cursor_shape(crate::terminal::vt::CursorVisualStyle::Bar, false),
         6
     );
     assert_eq!(
-        decscusr_cursor_shape(crate::ghostty::CursorVisualStyle::BlockHollow, false),
+        decscusr_cursor_shape(crate::terminal::vt::CursorVisualStyle::BlockHollow, false),
         2
     );
 }
@@ -214,7 +222,7 @@ fn decscusr_cursor_shape_preserves_blinking_variants() {
 #[test]
 fn cursor_state_uses_terminal_default_until_child_sets_shape() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -228,7 +236,7 @@ fn cursor_state_uses_terminal_default_until_child_sets_shape() {
 #[test]
 fn cursor_state_returns_terminal_default_after_decscusr_reset() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -243,7 +251,7 @@ fn cursor_state_returns_terminal_default_after_decscusr_reset() {
 #[test]
 fn cursor_shape_tracker_handles_split_decscusr_sequences() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -258,7 +266,7 @@ fn cursor_shape_tracker_handles_split_decscusr_sequences() {
 #[cfg(windows)]
 fn cursor_state_holds_pty_position_change_until_settle_window() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -283,7 +291,7 @@ fn cursor_state_holds_pty_position_change_until_settle_window() {
 #[cfg(not(windows))]
 fn cursor_state_uses_live_position_when_settle_policy_disabled() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -318,7 +326,7 @@ fn cursor_settle_policy_controls_render_delay() {
 #[test]
 fn host_terminal_theme_restore_probe_skips_when_no_transient_override() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     let core = pane.core.lock().unwrap();
 
@@ -328,7 +336,7 @@ fn host_terminal_theme_restore_probe_skips_when_no_transient_override() {
 #[test]
 fn host_terminal_theme_restore_probe_skips_when_host_theme_unknown() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -342,19 +350,19 @@ fn host_terminal_theme_restore_probe_skips_when_host_theme_unknown() {
 #[test]
 fn host_terminal_theme_restore_probe_skips_on_alternate_screen() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     terminal.write(b"\x1b[?1049h");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
         core.transient_default_color_owner_pgid = Some(42);
-        core.host_terminal_theme = crate::terminal_theme::TerminalTheme {
-            foreground: Some(crate::terminal_theme::RgbColor {
+        core.host_terminal_theme = crate::utils::theme::color::TerminalTheme {
+            foreground: Some(crate::utils::theme::color::RgbColor {
                 r: 0xaa,
                 g: 0xbb,
                 b: 0xcc,
             }),
-            background: Some(crate::terminal_theme::RgbColor {
+            background: Some(crate::utils::theme::color::RgbColor {
                 r: 0x11,
                 g: 0x22,
                 b: 0x33,
@@ -370,18 +378,18 @@ fn host_terminal_theme_restore_probe_skips_on_alternate_screen() {
 #[test]
 fn host_terminal_theme_restore_probe_runs_when_restore_is_pending() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
         core.transient_default_color_owner_pgid = Some(42);
-        core.host_terminal_theme = crate::terminal_theme::TerminalTheme {
-            foreground: Some(crate::terminal_theme::RgbColor {
+        core.host_terminal_theme = crate::utils::theme::color::TerminalTheme {
+            foreground: Some(crate::utils::theme::color::RgbColor {
                 r: 0xaa,
                 g: 0xbb,
                 b: 0xcc,
             }),
-            background: Some(crate::terminal_theme::RgbColor {
+            background: Some(crate::utils::theme::color::RgbColor {
                 r: 0x11,
                 g: 0x22,
                 b: 0x33,
@@ -397,11 +405,11 @@ fn host_terminal_theme_restore_probe_runs_when_restore_is_pending() {
 #[test]
 fn ghostty_render_can_suppress_cursor_position() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut first_terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let mut first_terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     first_terminal.write(b"left");
     let first = GhosttyPaneTerminal::new(first_terminal, tx.clone()).unwrap();
 
-    let mut second_terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let mut second_terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     second_terminal.write(b"r\r\nb");
     let second = GhosttyPaneTerminal::new(second_terminal, tx).unwrap();
 
@@ -426,54 +434,54 @@ fn ghostty_normalize_buffer_symbol_prefers_grapheme_width_when_metadata_disagree
     const EMOJI_GRAPHEME: &str = "💳";
 
     assert_eq!(
-        ghostty_normalize_buffer_symbol(WIDE_GRAPHEME, crate::ghostty::CellWide::Wide),
+        ghostty_normalize_buffer_symbol(WIDE_GRAPHEME, crate::terminal::vt::CellWide::Wide),
         WIDE_GRAPHEME
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol("a", crate::ghostty::CellWide::Wide),
+        ghostty_normalize_buffer_symbol("a", crate::terminal::vt::CellWide::Wide),
         "  "
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol(FLAG_GRAPHEME, crate::ghostty::CellWide::Wide),
+        ghostty_normalize_buffer_symbol(FLAG_GRAPHEME, crate::terminal::vt::CellWide::Wide),
         FLAG_GRAPHEME
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol(FAMILY_GRAPHEME, crate::ghostty::CellWide::Wide),
+        ghostty_normalize_buffer_symbol(FAMILY_GRAPHEME, crate::terminal::vt::CellWide::Wide),
         FAMILY_GRAPHEME
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol("⌨️", crate::ghostty::CellWide::Narrow),
+        ghostty_normalize_buffer_symbol("⌨️", crate::terminal::vt::CellWide::Narrow),
         "⌨️"
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol(VS16_GRAPHEME, crate::ghostty::CellWide::Narrow),
+        ghostty_normalize_buffer_symbol(VS16_GRAPHEME, crate::terminal::vt::CellWide::Narrow),
         VS16_GRAPHEME
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol(EMOJI_GRAPHEME, crate::ghostty::CellWide::Narrow),
+        ghostty_normalize_buffer_symbol(EMOJI_GRAPHEME, crate::terminal::vt::CellWide::Narrow),
         EMOJI_GRAPHEME
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol(" ", crate::ghostty::CellWide::SpacerTail),
+        ghostty_normalize_buffer_symbol(" ", crate::terminal::vt::CellWide::SpacerTail),
         ""
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol("xx", crate::ghostty::CellWide::SpacerHead),
+        ghostty_normalize_buffer_symbol("xx", crate::terminal::vt::CellWide::SpacerHead),
         " "
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol("ｶ\u{ff9e}", crate::ghostty::CellWide::Wide),
+        ghostty_normalize_buffer_symbol("ｶ\u{ff9e}", crate::terminal::vt::CellWide::Wide),
         "ｶ\u{ff9e}"
     );
     assert_eq!(
-        ghostty_normalize_buffer_symbol("ﾊ\u{ff9f}", crate::ghostty::CellWide::Wide),
+        ghostty_normalize_buffer_symbol("ﾊ\u{ff9f}", crate::terminal::vt::CellWide::Wide),
         "ﾊ\u{ff9f}"
     );
 }
 
 #[test]
 fn grapheme_cluster_mode_renders_flag_emoji_in_single_wide_cell() {
-    let mut terminal = crate::ghostty::Terminal::new(40, 1, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(40, 1, 0).unwrap();
     terminal.write("🇧🇷".as_bytes());
 
     let cells = render_cells_to_symbols(&mut terminal);
@@ -481,30 +489,30 @@ fn grapheme_cluster_mode_renders_flag_emoji_in_single_wide_cell() {
     assert!(
         cells
             .iter()
-            .any(|(wide, symbol)| *wide == crate::ghostty::CellWide::Wide && symbol == "🇧🇷"),
+            .any(|(wide, symbol)| *wide == crate::terminal::vt::CellWide::Wide && symbol == "🇧🇷"),
         "expected a wide cell containing the full flag grapheme, got {cells:?}"
     );
 }
 
 #[test]
 fn grapheme_cluster_mode_renders_zwj_family_in_single_wide_cell() {
-    let mut terminal = crate::ghostty::Terminal::new(40, 1, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(40, 1, 0).unwrap();
     terminal.write("👨\u{200d}👩\u{200d}👧".as_bytes());
 
     let cells = render_cells_to_symbols(&mut terminal);
 
     assert!(
-        cells
-            .iter()
-            .any(|(wide, symbol)| *wide == crate::ghostty::CellWide::Wide
-                && symbol == "👨\u{200d}👩\u{200d}👧"),
+        cells.iter().any(
+            |(wide, symbol)| *wide == crate::terminal::vt::CellWide::Wide
+                && symbol == "👨\u{200d}👩\u{200d}👧"
+        ),
         "expected a wide cell containing the full ZWJ grapheme, got {cells:?}"
     );
 }
 
 #[test]
 fn halfwidth_katakana_voiced_marks_render() {
-    let mut terminal = crate::ghostty::Terminal::new(40, 1, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(40, 1, 0).unwrap();
     terminal.write("ｱｲｳｴｵ ｶﾞｷﾞｸﾞｹﾞｺﾞ ﾊﾟﾋﾟﾌﾟﾍﾟﾎﾟ".as_bytes());
 
     let cells = render_cells_to_symbols(&mut terminal);
@@ -519,7 +527,7 @@ fn halfwidth_katakana_voiced_marks_render() {
 #[test]
 fn render_keeps_halfwidth_katakana_voiced_tail_empty() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(20, 1, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(20, 1, 0).unwrap();
     terminal.write("ｶﾞZ".as_bytes());
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -549,7 +557,7 @@ fn render_keeps_halfwidth_katakana_voiced_tail_empty() {
 #[test]
 fn seeded_history_is_rendered_on_next_draw() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     pane.seed_history_ansi("restored history");
 
@@ -567,7 +575,7 @@ fn seeded_history_is_rendered_on_next_draw() {
 #[test]
 fn render_leaves_unknown_host_default_background_transparent() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -591,9 +599,9 @@ fn render_leaves_unknown_host_default_background_transparent() {
 
 #[test]
 fn render_blanks_kitty_unicode_placeholders_when_graphics_enabled() {
-    crate::kitty_graphics::set_enabled(true);
+    crate::protocol::kitty::set_enabled(true);
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -606,7 +614,7 @@ fn render_blanks_kitty_unicode_placeholders_when_graphics_enabled() {
     terminal
         .draw(|frame| pane.render(frame, Rect::new(0, 0, 20, 5), false))
         .unwrap();
-    crate::kitty_graphics::set_enabled(false);
+    crate::protocol::kitty::set_enabled(false);
 
     let buffer = terminal.backend().buffer();
     assert_eq!(buffer[(0, 0)].symbol(), "b");
@@ -619,7 +627,7 @@ fn render_blanks_kitty_unicode_placeholders_when_graphics_enabled() {
 #[test]
 fn render_keeps_explicit_cell_foreground_when_host_is_unknown() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -643,7 +651,7 @@ fn render_keeps_explicit_cell_foreground_when_host_is_unknown() {
 #[test]
 fn render_keeps_explicit_cell_background_when_host_is_unknown() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -667,7 +675,7 @@ fn render_keeps_explicit_cell_background_when_host_is_unknown() {
 #[test]
 fn render_preserves_palette_colors_instead_of_flattening_to_rgb() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -696,7 +704,7 @@ fn render_preserves_palette_colors_instead_of_flattening_to_rgb() {
 #[test]
 fn render_preserves_palette_background_fill_cells() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -719,7 +727,7 @@ fn render_preserves_palette_background_fill_cells() {
 #[test]
 fn render_preserves_rgb_background_fill_cells() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -742,7 +750,7 @@ fn render_preserves_rgb_background_fill_cells() {
 #[test]
 fn render_preserves_underline_color() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -763,7 +771,7 @@ fn render_preserves_underline_color() {
 #[test]
 fn full_frame_preserves_curly_underline_style() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     {
         let mut core = pane.core.lock().unwrap();
@@ -776,10 +784,11 @@ fn full_frame_preserves_curly_underline_style() {
         .draw(|frame| pane.render(frame, Rect::new(0, 0, 20, 5), false))
         .unwrap();
 
-    let frame = crate::protocol::FrameData::from_ratatui_buffer(terminal.backend().buffer(), None);
+    let frame =
+        crate::protocol::wire::FrameData::from_ratatui_buffer(terminal.backend().buffer(), None);
     assert_eq!(frame.cells[0].symbol, "U");
     assert_eq!(
-        crate::protocol::underline_style_from_modifier(frame.cells[0].modifier),
+        crate::protocol::wire::underline_style_from_modifier(frame.cells[0].modifier),
         3
     );
 }
@@ -787,15 +796,15 @@ fn full_frame_preserves_curly_underline_style() {
 #[test]
 fn render_leaves_host_default_background_transparent() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-    let host_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    let host_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0xaa,
             g: 0xbb,
             b: 0xcc,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0x11,
             g: 0x22,
             b: 0x33,
@@ -826,15 +835,15 @@ fn render_leaves_host_default_background_transparent() {
 #[test]
 fn render_keeps_explicit_default_foreground_when_it_differs_from_host() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-    let host_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    let host_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0xaa,
             g: 0xbb,
             b: 0xcc,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0x11,
             g: 0x22,
             b: 0x33,
@@ -864,15 +873,15 @@ fn render_keeps_explicit_default_foreground_when_it_differs_from_host() {
 #[test]
 fn render_keeps_explicit_default_background_when_it_differs_from_host() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-    let host_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    let host_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0xaa,
             g: 0xbb,
             b: 0xcc,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0x11,
             g: 0x22,
             b: 0x33,
@@ -902,15 +911,15 @@ fn render_keeps_explicit_default_background_when_it_differs_from_host() {
 #[test]
 fn render_inverse_text_swaps_fg_and_resolved_bg_when_bg_is_transparent() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-    let host_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    let host_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0xaa,
             g: 0xbb,
             b: 0xcc,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0x11,
             g: 0x22,
             b: 0x33,

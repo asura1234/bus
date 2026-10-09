@@ -1,9 +1,9 @@
 use ratatui::{layout::Rect, Frame};
 
 use super::draw::{compute_pane_infos_for_tab, render_panes, resize_tab_panes};
-use crate::app::AppState;
-use crate::layout::{PaneInfo, SplitBorder};
-use crate::protocol::CursorState;
+use crate::protocol::wire::CursorState;
+use crate::server::app_state::AppState;
+use crate::server::workspaces::layout::{PaneInfo, SplitBorder};
 use crate::terminal::TerminalRuntimeRegistry;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,7 +30,7 @@ pub(crate) fn compute_tab_surface(
     terminal_runtimes: &TerminalRuntimeRegistry,
     area: Rect,
     resize_panes: bool,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    cell_size: crate::protocol::kitty::HostCellSize,
 ) -> TabSurfaceLayout {
     let target = app.active.and_then(|workspace_index| {
         let workspace = app.workspaces.get(workspace_index)?;
@@ -55,7 +55,7 @@ pub(crate) fn compute_tab_surface_for(
     target: Option<TabSurfaceTarget>,
     area: Rect,
     resize_panes: bool,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    cell_size: crate::protocol::kitty::HostCellSize,
 ) -> TabSurfaceLayout {
     let tab = target.and_then(|target| {
         app.workspaces
@@ -97,7 +97,7 @@ pub(crate) fn resize_tab_surface(
     workspace_index: usize,
     tab_index: usize,
     area: Rect,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    cell_size: crate::protocol::kitty::HostCellSize,
 ) {
     let Some(tab) = app
         .workspaces
@@ -208,7 +208,7 @@ pub(crate) fn tab_surface_cursor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workspace::Workspace;
+    use crate::server::workspaces::Workspace;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Direction;
     use ratatui::Terminal;
@@ -244,7 +244,7 @@ mod tests {
             &TerminalRuntimeRegistry::new(),
             area,
             false,
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
         );
         assert_eq!(surface.pane_infos.len(), 2);
         assert!(!surface.split_borders.is_empty());

@@ -26,7 +26,7 @@ use super::{
     current_cursor_state, cursor_position_settle_pending, GhosttyPaneCore, GhosttyPaneTerminal,
     PaneTerminal, ProcessBytesResult, CURSOR_POSITION_SETTLE_ENABLED, KITTY_GRAPHICS_REDRAW_SETTLE,
 };
-use crate::layout::PaneId;
+use crate::utils::ids::PaneId;
 use std::time::Duration;
 
 impl PaneTerminal {
@@ -63,7 +63,7 @@ impl GhosttyPaneTerminal {
         _response_writer: &mpsc::Sender<Bytes>,
         foreground_job: impl Fn(u32) -> Option<crate::platform::ForegroundJob>,
     ) -> ProcessBytesResult {
-        crate::render_prof::counter("pty.bytes", bytes.len() as u64);
+        crate::utils::render::prof::counter("pty.bytes", bytes.len() as u64);
         let Ok(mut core) = self.core.lock() else {
             error!(pane = pane_id.raw(), "ghostty core lock poisoned in reader");
             return ProcessBytesResult {
@@ -90,7 +90,7 @@ impl GhosttyPaneTerminal {
         let in_progress_default_color_event = core.default_color_event_tracker.in_progress_event();
         let default_color_events = core.default_color_event_tracker.drain_pending();
         let xtgettcap_responses = core.xtgettcap_query_tracker.drain_pending();
-        let write_started = crate::render_prof::timer();
+        let write_started = crate::utils::render::prof::timer();
         self.write_pty_bytes_with_ordered_responses(
             &mut core,
             filtered_bytes.as_ref(),
@@ -109,9 +109,9 @@ impl GhosttyPaneTerminal {
             .next_back();
         #[cfg(windows)]
         conpty_recent_cache::update_after_write(&mut core);
-        crate::render_prof::duration_since("pty.ghostty_write", write_started);
+        crate::utils::render::prof::duration_since("pty.ghostty_write", write_started);
 
-        let has_kitty_graphics_sequence = crate::kitty_graphics::is_enabled()
+        let has_kitty_graphics_sequence = crate::protocol::kitty::is_enabled()
             && contains_kitty_graphics_sequence(filtered_bytes.as_ref());
         if has_kitty_graphics_sequence {
             debug!(pane = pane_id.raw(), "processed kitty graphics sequence");
@@ -121,12 +121,12 @@ impl GhosttyPaneTerminal {
         }
         let synchronized_output = core
             .terminal
-            .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+            .mode_get(crate::terminal::vt::MODE_SYNCHRONIZED_OUTPUT)
             .unwrap_or(false);
         if CURSOR_POSITION_SETTLE_ENABLED {
-            let cursor_started = crate::render_prof::timer();
+            let cursor_started = crate::utils::render::prof::timer();
             let cursor_after_write = current_cursor_state(&mut core);
-            crate::render_prof::duration_since("pty.cursor_state_update", cursor_started);
+            crate::utils::render::prof::duration_since("pty.cursor_state_update", cursor_started);
             core.cursor_settle_state
                 .observe(cursor_after_write, Instant::now());
         }
@@ -145,13 +145,13 @@ impl GhosttyPaneTerminal {
             CURSOR_POSITION_SETTLE_ENABLED,
         );
         if request_render {
-            crate::render_prof::event("pty.request_render");
+            crate::utils::render::prof::event("pty.request_render");
         }
         if render_delay.is_some() {
-            crate::render_prof::event("pty.request_render_delayed");
+            crate::utils::render::prof::event("pty.request_render_delayed");
         }
         if synchronized_output {
-            crate::render_prof::event("pty.synchronized_output_suppressed");
+            crate::utils::render::prof::event("pty.synchronized_output_suppressed");
         }
         ProcessBytesResult {
             request_render,
@@ -279,7 +279,7 @@ impl GhosttyPaneTerminal {
                 .saturating_mul(8)
                 .max(DEFAULT_DETECTION_ROWS);
             let replay_ansi = if core.terminal.active_screen().ok()
-                == Some(crate::ghostty::ActiveScreen::Primary)
+                == Some(crate::terminal::vt::ActiveScreen::Primary)
                 && bottom_before_resize
             {
                 ghostty_recent_ansi(&mut core, resize_recovery_probe_lines, true)
@@ -403,7 +403,7 @@ fn observe_pty_bytes<'a>(
     let alternate_screen = core
         .terminal
         .active_screen()
-        .map(|screen| screen == crate::ghostty::ActiveScreen::Alternate)
+        .map(|screen| screen == crate::terminal::vt::ActiveScreen::Alternate)
         .unwrap_or(false);
     let filtered_bytes = if shell_pid > 0 {
         let foreground_job = (!alternate_screen && contains_scrollback_clear_sequence(bytes))

@@ -182,11 +182,11 @@ pub(super) fn check_prompt_identity_and_idle(
 }
 
 pub(super) fn agent_prompt_submit_delay(
-    agent: crate::detect::Agent,
+    agent: crate::agents::AgentKind,
     prompt_bytes: usize,
 ) -> Duration {
     #[cfg(windows)]
-    if agent == crate::detect::Agent::Codex {
+    if agent == crate::agents::AgentKind::Codex {
         // Codex consumes Windows paste bursts at about 4 bytes/ms, then suppresses Enter briefly.
         // ponytail: best-effort ConPTY timing; remove when Codex exposes a paste-complete boundary.
         return Duration::from_millis(600 + prompt_bytes as u64 / 4);
@@ -379,7 +379,7 @@ impl App {
         let Some(terminal) = self.state.terminals.get(&terminal_id) else {
             return Err(agent_not_found(id, &params.target));
         };
-        if terminal.state == crate::detect::AgentState::Blocked {
+        if terminal.state == crate::agents::AgentState::Blocked {
             return Err(encode_error(
                 id,
                 "agent_blocked",
@@ -416,14 +416,15 @@ impl App {
             .and_then(|wait| wait.submission_deadline);
         #[cfg(not(windows))]
         let submit_deadline = None;
-        if expected_agent == crate::detect::Agent::GithubCopilot {
+        if expected_agent == crate::agents::AgentKind::GithubCopilot {
             // Copilot ignores synthetic Enter after focus loss until it receives focus gained.
-            let focus = match crate::ghostty::encode_focus(crate::ghostty::FocusEvent::Gained) {
-                Ok(focus) => focus,
-                Err(err) => {
-                    return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
-                }
-            };
+            let focus =
+                match crate::terminal::vt::encode_focus(crate::terminal::vt::FocusEvent::Gained) {
+                    Ok(focus) => focus,
+                    Err(err) => {
+                        return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
+                    }
+                };
             if let Err(err) = runtime.try_send_bytes(Bytes::from(focus)) {
                 return Err(encode_error(id, "agent_prompt_failed", err.to_string()));
             }

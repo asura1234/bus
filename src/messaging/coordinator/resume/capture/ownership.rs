@@ -6,11 +6,11 @@ use crate::agents::providers::{
     hook_json::{read_resume_json, HookContext},
     spool::Manifest,
 };
-use crate::messaging::{identity, model::Agent};
+use crate::messaging::{identity, model::RoomAgent};
 
 pub(super) fn verified_capture(
     root: &Path,
-    agent: &Agent,
+    agent: &RoomAgent,
     binary: &Path,
 ) -> Result<HookContext, String> {
     let launch = agent
@@ -54,15 +54,15 @@ pub(super) fn verified_capture(
 pub(super) fn resume_owner<'a>(
     state: &'a crate::messaging::model::BusState,
     facts: &NativeResumeFacts,
-    session: &crate::agent_resume::PersistedAgentSession,
+    session: &crate::agents::resume::catalog::PersistedAgentSession,
 ) -> Result<
     (
-        &'a Agent,
-        Option<crate::agent_resume::PersistedAgentSession>,
+        &'a RoomAgent,
+        Option<crate::agents::resume::catalog::PersistedAgentSession>,
     ),
     String,
 > {
-    let owns = |agent: &&Agent, value: &str| {
+    let owns = |agent: &&RoomAgent, value: &str| {
         identity::provider_kind(agent.provider).label() == session.agent
             && agent.runtime_identity.session_id.as_deref() == Some(value)
     };
@@ -103,9 +103,9 @@ pub(super) fn resume_owner<'a>(
             {
                 return Err("Bus resume ownership is ambiguous or mismatched".into());
             }
-            let session_ref = crate::agent_resume::AgentSessionRef::id(bound)
+            let session_ref = crate::agents::resume::catalog::AgentSessionRef::id(bound)
                 .ok_or("Bus resume session is not a provider session ID")?;
-            corrected = Some(crate::agent_resume::PersistedAgentSession {
+            corrected = Some(crate::agents::resume::catalog::PersistedAgentSession {
                 source: session.source.clone(),
                 agent: session.agent.clone(),
                 session_ref,

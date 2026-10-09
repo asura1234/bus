@@ -62,7 +62,7 @@ fn symbols_stay_literal_in_paste_notes_and_forms() {
     let (mut ui, room, _) = fixture();
     for event in [
         RawInputEvent::Paste("@author + file.md".into()),
-        RawInputEvent::Text(crate::input::TextCommit::new("@+")),
+        RawInputEvent::Text(crate::protocol::keys::TextCommit::new("@+")),
     ] {
         ui.input(&event, false, &mut Default::default());
     }

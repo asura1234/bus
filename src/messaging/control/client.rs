@@ -3,7 +3,7 @@ use super::protocol::{
     encode, poll_write, ControlledStream, Frame, FrameError, Request, Response, IO_TIMEOUT,
     MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, POLL_INTERVAL, WORKER_TIMEOUT,
 };
-use crate::ipc;
+use crate::platform::ipc;
 use std::{
     path::Path,
     thread,

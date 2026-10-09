@@ -30,7 +30,7 @@ pub struct ClientShellWorkspace {
     pub custom_label: bool,
     pub tokens: Vec<(String, String)>,
     pub focused: bool,
-    pub agent_status: crate::api::schema::AgentStatus,
+    pub agent_status: crate::protocol::api::schema::AgentStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,7 +42,7 @@ pub struct ClientShellTab {
     pub custom_label: bool,
     pub zoomed: bool,
     pub focused: bool,
-    pub agent_status: crate::api::schema::AgentStatus,
+    pub agent_status: crate::protocol::api::schema::AgentStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,7 +68,7 @@ pub struct ClientShellAgent {
     pub title: Option<String>,
     pub terminal_title: Option<String>,
     pub terminal_title_stripped: Option<String>,
-    pub agent_status: crate::api::schema::AgentStatus,
+    pub agent_status: crate::protocol::api::schema::AgentStatus,
     pub state_change_seq: u64,
     pub state_labels: Vec<(String, String)>,
     pub tokens: Vec<(String, String)>,

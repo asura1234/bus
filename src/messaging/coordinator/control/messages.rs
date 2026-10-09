@@ -32,7 +32,7 @@ impl Worker {
                     .agent_id;
                 let mut state = self.state.clone();
                 state
-                    .recover_idle_request(request, crate::bus::io::now_ms())
+                    .recover_idle_request(request, crate::messaging::storage::io::now_ms())
                     .map_err(|error| match error {
                         ModelError::AgentNotIdle => {
                             "Request recovery is allowed only while its agent is idle".into()
@@ -40,7 +40,7 @@ impl Worker {
                         _ => error.to_string(),
                     })?;
                 self.save(state)?;
-                crate::bus::diagnostics::request(
+                crate::messaging::diagnostics::request(
                     &self.state,
                     request,
                     "bus.message.recovered",
@@ -98,7 +98,7 @@ impl Worker {
         let files = attachment_files(p)?;
         let to_human = selectors
             .iter()
-            .any(|s| s.eq_ignore_ascii_case(crate::bus::model::HUMAN_RECIPIENT));
+            .any(|s| s.eq_ignore_ascii_case(crate::messaging::model::HUMAN_RECIPIENT));
         if to_human {
             return self.dev_send_to_human(p, room, author, selectors.len(), files);
         }
@@ -138,7 +138,7 @@ impl Worker {
                     recipient_ids: recipients,
                 },
                 author.map_or(Author::Human, Author::Agent),
-                crate::bus::io::now_ms(),
+                crate::messaging::storage::io::now_ms(),
                 p.get("queue").and_then(Value::as_bool).unwrap_or(false),
             )
             .map_err(|e| e.to_string())?;
@@ -149,7 +149,12 @@ impl Worker {
             .id;
         self.save(state)?;
         for id in &ids {
-            crate::bus::diagnostics::request(&self.state, *id, "bus.message.queued", "persisted");
+            crate::messaging::diagnostics::request(
+                &self.state,
+                *id,
+                "bus.message.queued",
+                "persisted",
+            );
         }
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
     }
@@ -183,7 +188,7 @@ impl Worker {
                 author,
                 optional_text(p, "text")?.unwrap_or_default().into(),
                 files,
-                crate::bus::io::now_ms(),
+                crate::messaging::storage::io::now_ms(),
             )
             .map_err(|e| e.to_string())?;
         self.save(state)?;
@@ -194,7 +199,7 @@ impl Worker {
         &self,
         message: PromptId,
     ) -> Result<Value, String> {
-        self.dev_message_at(message, crate::bus::io::now_ms())
+        self.dev_message_at(message, crate::messaging::storage::io::now_ms())
     }
 
     /// `message status` as of `now_ms`, which stall detection measures against.
@@ -229,7 +234,7 @@ impl Worker {
             // The native server's last refusal explains a queued wait best.
             let reason = stall
                 .or_else(|| self.state.blocked_unanswered(r, now_ms).then(|| "blocked_unanswered".into()))
-                .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::bus::diagnostics::wait_reason(a).map(Into::into)))).flatten());
+                .or_else(|| (r.phase == RequestPhase::Queued).then(|| agent.and_then(|a| a.delivery_rejection.clone().or_else(|| crate::messaging::diagnostics::wait_reason(a).map(Into::into)))).flatten());
             json!({"request_id":r.id,"agent_id":r.agent_id,"agent_name":agent.map(|a|&a.name),"stage":stage,"stalled_from":(stage=="stalled").then_some(phase_stage),"reason":reason,"status":agent.map(|a|a.status),"uncertain_outcome":r.uncertain_outcome,"session_id":r.provider_session_id,"turn_id":r.provider_turn_id,"start_bound":r.trusted_start_bound,"dialog":self.waiting_on_dialog(r),"turn_ended":self.state.turn_ended(r),"group":r.group,"queue":r.queue_only,"reply":if r.phase==RequestPhase::Completed {r.pending_final.as_ref()}else{None}})
         }).collect::<Vec<_>>()}),
         )
@@ -253,7 +258,7 @@ fn attachment_files(p: &Value) -> Result<Vec<PathBuf>, String> {
     if let Some(value) = p.get("files") {
         let home = std::env::home_dir().ok_or("Home directory unavailable")?;
         for item in value.as_array().ok_or("Files must be an array")? {
-            let path = crate::bus::files::validate_attachment(
+            let path = crate::messaging::attachments::validate_attachment(
                 item.as_str().ok_or("File must be a path")?,
                 &home,
             )

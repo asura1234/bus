@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use crate::layout::PaneId;
 use crate::server::app::App;
+use crate::utils::ids::PaneId;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct TerminalTitleChanges {
@@ -62,17 +62,17 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::detect::{Agent, AgentState};
-    use crate::workspace::Workspace;
+    use crate::agents::{AgentKind, AgentState};
+    use crate::server::workspaces::Workspace;
+    use crate::utils::config::Config;
 
     #[tokio::test]
     async fn sync_keeps_latest_raw_title_and_emits_only_for_stripped_changes() {
-        let event_hub = crate::api::EventHub::default();
+        let event_hub = crate::server::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            crate::app::AppPolicy::TEST,
+            crate::server::app::AppPolicy::TEST,
             None,
             api_rx,
             event_hub.clone(),
@@ -85,7 +85,7 @@ mod tests {
             .attached_terminal_id
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
-        terminal.detected_agent = Some(Agent::Claude);
+        terminal.detected_agent = Some(AgentKind::Claude);
         terminal.state = AgentState::Working;
         let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"");
         runtime.test_process_pty_bytes("\x1b]0;⠋ 修复🙂标题\x07".as_bytes());
@@ -103,7 +103,10 @@ mod tests {
         assert_eq!(pane.terminal_title.as_deref(), Some("⠋ 修复🙂标题"));
         assert_eq!(pane.terminal_title_stripped.as_deref(), Some("修复🙂标题"));
         assert_eq!(pane.title, None);
-        assert_eq!(pane.agent_status, crate::api::schema::AgentStatus::Working);
+        assert_eq!(
+            pane.agent_status,
+            crate::protocol::api::schema::AgentStatus::Working
+        );
         assert_eq!(pane.revision, 1);
         let agent = app.collect_agent_infos().pop().unwrap();
         assert_eq!(agent.terminal_title.as_deref(), Some("⠋ 修复🙂标题"));
@@ -147,11 +150,11 @@ mod tests {
 
     #[tokio::test]
     async fn syncing_pending_titles_records_the_title_without_a_repaint() {
-        let event_hub = crate::api::EventHub::default();
+        let event_hub = crate::server::api::EventHub::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
-            crate::app::AppPolicy::TEST,
+            crate::server::app::AppPolicy::TEST,
             None,
             api_rx,
             event_hub,
@@ -177,11 +180,13 @@ mod tests {
         assert!(!render_request.generic);
     }
 
-    fn pane_updated_events(event_hub: &crate::api::EventHub) -> usize {
+    fn pane_updated_events(event_hub: &crate::server::api::EventHub) -> usize {
         event_hub
             .events_after(0)
             .iter()
-            .filter(|(_, event)| event.event == crate::api::schema::EventKind::PaneUpdated)
+            .filter(|(_, event)| {
+                event.event == crate::protocol::api::schema::EventKind::PaneUpdated
+            })
             .count()
     }
 }

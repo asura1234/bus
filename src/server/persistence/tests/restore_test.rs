@@ -73,7 +73,7 @@ fn restore_plan_respects_opt_in_and_allowlist() {
     let session = super::super::schema::PaneAgentSessionSnapshot {
         source: "herdr:pi".into(),
         agent: "pi".into(),
-        kind: crate::agent_resume::AgentSessionRefKind::Path,
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Path,
         value: pi_session_path.clone(),
     };
 
@@ -86,7 +86,7 @@ fn restore_plan_respects_opt_in_and_allowlist() {
     let unsupported_path = super::super::schema::PaneAgentSessionSnapshot {
         source: "herdr:claude".into(),
         agent: "claude".into(),
-        kind: crate::agent_resume::AgentSessionRefKind::Path,
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Path,
         value: test_session_path("claude-session"),
     };
     assert!(restore_plan_for_snapshot(&unsupported_path, true).is_none());
@@ -98,7 +98,7 @@ fn restore_plan_selection_suppresses_duplicates() {
     let session = super::super::schema::PaneAgentSessionSnapshot {
         source: "herdr:pi".into(),
         agent: "pi".into(),
-        kind: crate::agent_resume::AgentSessionRefKind::Path,
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Path,
         value: pi_session_path.clone(),
     };
     let mut resumed = HashSet::new();
@@ -134,7 +134,7 @@ fn pane_restore_startup_suppresses_history_for_native_agent_resume() {
     let session = super::super::schema::PaneAgentSessionSnapshot {
         source: "herdr:pi".into(),
         agent: "pi".into(),
-        kind: crate::agent_resume::AgentSessionRefKind::Path,
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Path,
         value: test_session_path("pi-session.jsonl"),
     };
     let history = super::super::schema::PaneHistorySnapshot {
@@ -159,7 +159,7 @@ fn pane_restore_startup_suppresses_history_for_duplicate_native_agent_session() 
     let session = super::super::schema::PaneAgentSessionSnapshot {
         source: "herdr:pi".into(),
         agent: "pi".into(),
-        kind: crate::agent_resume::AgentSessionRefKind::Path,
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Path,
         value: test_session_path("pi-session.jsonl"),
     };
     let history = super::super::schema::PaneHistorySnapshot {
@@ -187,7 +187,7 @@ fn pane_restore_startup_keeps_history_without_native_agent_resume() {
     let session = super::super::schema::PaneAgentSessionSnapshot {
         source: "herdr:pi".into(),
         agent: "pi".into(),
-        kind: crate::agent_resume::AgentSessionRefKind::Path,
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Path,
         value: test_session_path("pi-session.jsonl"),
     };
     let history = super::super::schema::PaneHistorySnapshot {
@@ -213,7 +213,7 @@ fn restore_rehydrates_agent_session_metadata() {
     let session = super::super::schema::PaneAgentSessionSnapshot {
         source: "herdr:hermes".into(),
         agent: "hermes".into(),
-        kind: crate::agent_resume::AgentSessionRefKind::Id,
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Id,
         value: "hermes-session".into(),
     };
 
@@ -229,7 +229,7 @@ fn restore_does_not_rehydrate_duplicate_agent_session_metadata() {
     let session = super::super::schema::PaneAgentSessionSnapshot {
         source: "herdr:pi".into(),
         agent: "pi".into(),
-        kind: crate::agent_resume::AgentSessionRefKind::Path,
+        kind: crate::agents::resume::catalog::AgentSessionRefKind::Path,
         value: test_session_path("pi-session.jsonl"),
     };
     let mut resumed = HashSet::new();
@@ -274,7 +274,7 @@ async fn restore_carries_persisted_agent_session_metadata() {
                         agent_session: Some(super::super::schema::PaneAgentSessionSnapshot {
                             source: "herdr:opencode".into(),
                             agent: "opencode".into(),
-                            kind: crate::agent_resume::AgentSessionRefKind::Id,
+                            kind: crate::agents::resume::catalog::AgentSessionRefKind::Id,
                             value: "opencode-session".into(),
                         }),
                         launch_argv: None,
@@ -429,7 +429,7 @@ async fn cold_restore_with_gapped_public_tab_numbers_drops_unmanaged_agent_name(
         agent_session: Some(super::super::schema::PaneAgentSessionSnapshot {
             source: "herdr:codex".into(),
             agent: "codex".into(),
-            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            kind: crate::agents::resume::catalog::AgentSessionRefKind::Id,
             value: "codex-session".into(),
         }),
         launch_argv: None,
@@ -575,7 +575,7 @@ async fn native_agent_restore_defers_runtime_launch() {
                         agent_session: Some(super::super::schema::PaneAgentSessionSnapshot {
                             source: "herdr:codex".into(),
                             agent: "codex".into(),
-                            kind: crate::agent_resume::AgentSessionRefKind::Id,
+                            kind: crate::agents::resume::catalog::AgentSessionRefKind::Id,
                             value: "codex-session".into(),
                         }),
                         launch_argv: None,

@@ -1,8 +1,11 @@
 use super::editor::Editor;
-use crate::bus::{
-    launch::{AddAgent, PathSuggestion, SetupNotice},
-    model::{AgentId, Provider, RoomId},
-    orchestrator::{self, OrchestratorSpec, PromptValues},
+use crate::{
+    agents::providers::{launch::SetupNotice, suggest::PathSuggestion},
+    messaging::{
+        coordinator::agents::AddAgent,
+        model::{AgentId, Provider, RoomId},
+        orchestration::{self as orchestrator, OrchestratorSpec, PromptValues},
+    },
 };
 
 #[derive(Clone, Debug)]

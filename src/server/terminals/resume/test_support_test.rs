@@ -7,7 +7,7 @@ pub(crate) struct ProcessEnvironment {
 
 impl ProcessEnvironment {
     pub(crate) fn enter(root: Option<&Path>, session: Option<&str>) -> Self {
-        let guard = crate::config::test_config_env_lock().lock().unwrap();
+        let guard = crate::utils::config::test_config_env_lock().lock().unwrap();
         let previous = ["BUS_DATA_DIR", "HERDR_SESSION"]
             .into_iter()
             .map(|key| (key, std::env::var_os(key)))

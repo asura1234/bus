@@ -1,7 +1,7 @@
 use super::*;
-use crate::api::schema::AgentStatus;
-use crate::protocol::ClientShellWorkspace;
-use crate::protocol::{
+use crate::protocol::api::schema::AgentStatus;
+use crate::protocol::wire::ClientShellWorkspace;
+use crate::protocol::wire::{
     ClientShellPane, ClientShellTab, PaneSurfacePane, PaneSurfaceSplit, PaneSurfaceSplitDirection,
     SurfaceRect,
 };
@@ -61,7 +61,7 @@ pub(in crate::client) fn surface() -> PaneSurfaceFrame {
         surface_revision: 1,
         frame: FrameData::from_ratatui_buffer_with_hyperlinks(
             &surface_buffer,
-            Some(crate::protocol::CursorState {
+            Some(crate::protocol::wire::CursorState {
                 x: 1,
                 y: 1,
                 visible: true,
@@ -94,7 +94,7 @@ pub(in crate::client) fn surface() -> PaneSurfaceFrame {
             pixel_height: 0,
         }],
         splits: Vec::new(),
-        graphics: crate::protocol::SurfaceGraphicsScene::default(),
+        graphics: crate::protocol::wire::SurfaceGraphicsScene::default(),
     }
 }
 
@@ -102,9 +102,9 @@ pub(in crate::client) fn pane_scroll_result(
     offset_from_bottom: u64,
     max_offset_from_bottom: u64,
     viewport_rows: u64,
-) -> crate::api::schema::ResponseResult {
-    crate::api::schema::ResponseResult::PaneInfo {
-        pane: crate::api::schema::PaneInfo {
+) -> crate::protocol::api::schema::ResponseResult {
+    crate::protocol::api::schema::ResponseResult::PaneInfo {
+        pane: crate::protocol::api::schema::PaneInfo {
             pane_id: "pane_1".into(),
             terminal_id: "terminal_1".into(),
             workspace_id: "ws_1".into(),
@@ -118,11 +118,11 @@ pub(in crate::client) fn pane_scroll_result(
             terminal_title: None,
             terminal_title_stripped: None,
             display_agent: None,
-            agent_status: crate::api::schema::AgentStatus::Unknown,
+            agent_status: crate::protocol::api::schema::AgentStatus::Unknown,
             state_labels: HashMap::new(),
             tokens: HashMap::new(),
             agent_session: None,
-            scroll: Some(crate::api::schema::PaneScrollInfo {
+            scroll: Some(crate::protocol::api::schema::PaneScrollInfo {
                 offset_from_bottom,
                 max_offset_from_bottom,
                 viewport_rows,

@@ -1,27 +1,14 @@
 use std::io;
 
-pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
-pub(crate) const HERDR_ENV_VALUE: &str = "1";
-
 mod agents;
 mod cli;
 mod client;
-mod compat_paths;
 mod messaging;
 mod platform;
 mod protocol;
 mod server;
 mod terminal;
 mod utils;
-
-#[cfg(any(windows, test))]
-pub(crate) use compat_paths::noninteractive_process;
-pub(crate) use compat_paths::{
-    agent_resume, api, app, build_info, bus, config, copy_mode, detect, events, ghostty, home_path,
-    input, ipc, kitty_graphics, layout, logging, pane, pane_state, persist, raw_input, render_prof,
-    render_signal, selection, session, sound, terminal_effects, terminal_modes, terminal_theme, ui,
-    workspace,
-};
 
 fn args_as_utf8<I>(args: I) -> Result<Vec<String>, String>
 where
@@ -59,7 +46,7 @@ fn main() -> io::Result<()> {
         // Hidden entry the client spawns for the persistent daemon.
         Some("server") if raw_args.len() == 2 => {
             configure_session(&raw_args);
-            server::headless::run_server(cli::logging_options(), cli::config_override())
+            server::main_loop::run_server(cli::logging_options(), cli::config_override())
         }
         // Hidden entry that attaches a thin client to the running daemon.
         Some("client") if raw_args.len() == 2 => {
@@ -72,16 +59,16 @@ fn main() -> io::Result<()> {
         }
         Some("--version" | "-V") if raw_args.len() == 2 => {
             platform::begin_cli_output();
-            cli::help::write_stdout_line(format_args!("bus {}", crate::build_info::version()));
+            cli::help::write_stdout_line(format_args!("bus {}", utils::version::version()));
             Ok(())
         }
-        _ => bus::entry::run(&raw_args[1..]),
+        _ => cli::run(&raw_args[1..]),
     }
 }
 
 /// Applies the daemon session selected through the environment before a hidden entry runs.
 fn configure_session(args: &[String]) {
-    if let Err(err) = session::configure_from_args(args) {
+    if let Err(err) = utils::paths::configure_from_args(args) {
         eprintln!("error: {err}");
         std::process::exit(2);
     }
@@ -89,7 +76,7 @@ fn configure_session(args: &[String]) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::args_as_utf8;
 
     #[cfg(unix)]
     fn invalid_utf8_arg() -> std::ffi::OsString {

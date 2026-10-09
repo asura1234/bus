@@ -6,8 +6,8 @@ fn retained_text_word_motion_does_not_split_at_a_wide_spacer_head() {
         .chars()
         .map(|ch| text_cell(&ch.to_string()))
         .collect::<Vec<_>>();
-    first.push(crate::ghostty::ScreenTextCell {
-        wide: crate::ghostty::CellWide::SpacerHead,
+    first.push(crate::terminal::vt::ScreenTextCell {
+        wide: crate::terminal::vt::CellWide::SpacerHead,
         graphemes: Vec::new(),
     });
     let mut second = wide_text_cells("界").to_vec();
@@ -148,7 +148,7 @@ fn retained_text_big_word_motions_cross_rows_and_blank_lines() {
 #[test]
 fn live_terminal_word_motion_expands_across_long_blank_history() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(10, 3, 200).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(10, 3, 200).unwrap();
     terminal.write(b"origin\r\n");
     for _ in 0..80 {
         terminal.write(b"\r\n");
@@ -165,7 +165,7 @@ fn live_terminal_word_motion_expands_across_long_blank_history() {
 #[test]
 fn live_terminal_word_end_expands_through_a_long_soft_wrap() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(2, 3, 200).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(2, 3, 200).unwrap();
     let word = "a".repeat(132);
     terminal.write(word.as_bytes());
     let pane = PaneTerminal::new(GhosttyPaneTerminal::new(terminal, tx).unwrap());
@@ -193,7 +193,7 @@ fn live_terminal_word_end_expands_through_a_long_soft_wrap() {
 #[test]
 fn live_terminal_word_end_expands_through_a_long_wide_soft_wrap() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(2, 3, 200).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(2, 3, 200).unwrap();
     let word = "界".repeat(66);
     terminal.write(word.as_bytes());
     let pane = PaneTerminal::new(GhosttyPaneTerminal::new(terminal, tx).unwrap());

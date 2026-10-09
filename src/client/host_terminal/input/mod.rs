@@ -86,7 +86,7 @@ fn unix_stdin_reader_loop(
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let mut scratch = [0u8; 4096];
-    let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
+    let mut framer = crate::protocol::keys::host::RawInputByteFramer::for_host_input();
     if host_color_query_sent {
         framer.host_color_query_sent();
         framer.enable_host_color_scheme_change_tracking();
@@ -108,7 +108,7 @@ fn unix_stdin_reader_loop(
                 if sgr_pixels {
                     last_geometry = retain_geometry(
                         last_geometry,
-                        crate::input::mouse::HostGeometry::current(),
+                        crate::protocol::keys::mouse::HostGeometry::current(),
                     );
                 }
                 let chunks = framer.push(&scratch[..n]);
@@ -154,7 +154,7 @@ fn unix_stdin_reader_loop(
 
 #[cfg(unix)]
 fn flush_unix_idle_input(
-    framer: &mut crate::raw_input::RawInputByteFramer,
+    framer: &mut crate::protocol::keys::host::RawInputByteFramer,
     reader: &impl AsRawFd,
     event_tx: &mpsc::Sender<ClientLoopEvent>,
     pending_palette: &mut Vec<Vec<u8>>,
@@ -163,7 +163,7 @@ fn flush_unix_idle_input(
     host_mouse_capture_active: &AtomicBool,
     host_sgr_pixels_active: &AtomicBool,
     pending_mode: &mut Option<bool>,
-    last_geometry: Option<crate::input::mouse::HostGeometry>,
+    last_geometry: Option<crate::protocol::keys::mouse::HostGeometry>,
 ) -> bool {
     let timeout_ms =
         idle_flush_timeout_ms(framer, host_mouse_capture_active.load(Ordering::Acquire));
@@ -191,8 +191,10 @@ fn flush_unix_idle_input(
             return false;
         }
         if held_escape
-            && stdin_read_ready(reader, crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS)
-                == Some(false)
+            && stdin_read_ready(
+                reader,
+                crate::protocol::keys::host::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS,
+            ) == Some(false)
         {
             let chunks = framer.flush_timeout();
             if !framer.has_pending_input() {
@@ -222,7 +224,7 @@ fn send_unix_input_chunks(
     host_palette_query_pending: &AtomicBool,
     host_palette_query_progress: &AtomicU16,
     sgr_pixels: bool,
-    geometry: Option<crate::input::mouse::HostGeometry>,
+    geometry: Option<crate::protocol::keys::mouse::HostGeometry>,
 ) -> bool {
     for data in chunks {
         let palette_response = std::str::from_utf8(&data)
@@ -265,9 +267,9 @@ fn send_unix_input_chunks(
 
 #[cfg(unix)]
 fn retain_geometry(
-    last: Option<crate::input::mouse::HostGeometry>,
-    observed: Option<crate::input::mouse::HostGeometry>,
-) -> Option<crate::input::mouse::HostGeometry> {
+    last: Option<crate::protocol::keys::mouse::HostGeometry>,
+    observed: Option<crate::protocol::keys::mouse::HostGeometry>,
+) -> Option<crate::protocol::keys::mouse::HostGeometry> {
     observed.or(last)
 }
 
@@ -275,9 +277,9 @@ fn retain_geometry(
 fn classify_unix_input(
     data: Vec<u8>,
     sgr_pixels: bool,
-    geometry: Option<crate::input::mouse::HostGeometry>,
+    geometry: Option<crate::protocol::keys::mouse::HostGeometry>,
 ) -> Option<ClientLoopEvent> {
-    if sgr_pixels && crate::input::mouse::parse_report(&data).is_some() {
+    if sgr_pixels && crate::protocol::keys::mouse::parse_report(&data).is_some() {
         return geometry.map(|geometry| ClientLoopEvent::PixelMouse(data, geometry));
     }
     Some(ClientLoopEvent::StdinInput(data))
@@ -301,15 +303,15 @@ fn flush_unix_palette_input(
 
 #[cfg(unix)]
 fn idle_flush_timeout_ms(
-    framer: &crate::raw_input::RawInputByteFramer,
+    framer: &crate::protocol::keys::host::RawInputByteFramer,
     host_mouse_capture_active: bool,
 ) -> i32 {
     if host_mouse_capture_active
         && (framer.has_pending_lone_escape() || framer.has_pending_incomplete_mouse_sequence())
     {
-        crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
+        crate::protocol::keys::host::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
     } else {
-        crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
+        crate::protocol::keys::host::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
     }
 }
 
@@ -335,7 +337,7 @@ fn windows_crossterm_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
 ) {
-    let mut framer = crate::raw_input::RawInputFramer::for_host_input();
+    let mut framer = crate::protocol::keys::host::RawInputFramer::for_host_input();
 
     while !should_quit.load(Ordering::Acquire) {
         match crossterm::event::poll(Duration::from_millis(10)) {
@@ -400,19 +402,19 @@ fn windows_crossterm_reader_loop(
 #[cfg(any(windows, test))]
 fn windows_crossterm_input_event(
     event: crossterm::event::Event,
-) -> Option<crate::protocol::ClientInputEvent> {
-    let event = crate::protocol::ClientInputEvent::from_crossterm(event)?;
+) -> Option<crate::protocol::wire::ClientInputEvent> {
+    let event = crate::protocol::wire::ClientInputEvent::from_crossterm(event)?;
     match event {
-        crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char(codepoint),
+        crate::protocol::wire::ClientInputEvent::Key {
+            code: crate::protocol::wire::ClientKeyCode::Char(codepoint),
             modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
+            kind: crate::protocol::wire::ClientKeyKind::Press,
             source,
             ..
-        } => Some(crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char(codepoint),
+        } => Some(crate::protocol::wire::ClientInputEvent::Key {
+            code: crate::protocol::wire::ClientKeyCode::Char(codepoint),
             modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
+            kind: crate::protocol::wire::ClientKeyKind::Press,
             repeat_count: 1,
             generated_text: Some(codepoint.to_string()),
             source,
@@ -476,7 +478,7 @@ fn windows_key_raw_bytes(
 
 #[cfg(windows)]
 fn send_windows_raw_events(
-    events: Vec<crate::raw_input::RawInputEvent>,
+    events: Vec<crate::protocol::keys::host::RawInputEvent>,
     event_tx: &mpsc::Sender<ClientLoopEvent>,
 ) -> bool {
     let raw_event_count = events.len();
@@ -500,26 +502,26 @@ fn send_windows_raw_events(
 
 #[cfg(any(windows, test))]
 fn windows_client_input_event_from_raw(
-    event: crate::raw_input::RawInputEvent,
-) -> Option<crate::protocol::ClientInputEvent> {
+    event: crate::protocol::keys::host::RawInputEvent,
+) -> Option<crate::protocol::wire::ClientInputEvent> {
     match event {
-        crate::raw_input::RawInputEvent::Text(text) => Some(
-            crate::protocol::ClientInputEvent::TextCommit(text.into_string()),
+        crate::protocol::keys::host::RawInputEvent::Text(text) => Some(
+            crate::protocol::wire::ClientInputEvent::TextCommit(text.into_string()),
         ),
-        crate::raw_input::RawInputEvent::Key(key) => {
-            let code = crate::protocol::ClientKeyCode::from_crossterm(key.code)?;
+        crate::protocol::keys::host::RawInputEvent::Key(key) => {
+            let code = crate::protocol::wire::ClientKeyCode::from_crossterm(key.code)?;
             let modifiers = key.modifiers.bits();
-            let kind = crate::protocol::ClientKeyKind::from_crossterm(key.kind);
+            let kind = crate::protocol::wire::ClientKeyKind::from_crossterm(key.kind);
             let source = if let Some(bytes) = key.vt_bytes() {
-                crate::protocol::ClientKeySource::Vt {
+                crate::protocol::wire::ClientKeySource::Vt {
                     bytes: bytes.to_vec(),
                 }
             } else if let Some(record) = key.windows_record() {
-                crate::protocol::ClientKeySource::WindowsConsole { record }
+                crate::protocol::wire::ClientKeySource::WindowsConsole { record }
             } else {
-                crate::protocol::ClientKeySource::Synthesized
+                crate::protocol::wire::ClientKeySource::Synthesized
             };
-            Some(crate::protocol::ClientInputEvent::Key {
+            Some(crate::protocol::wire::ClientInputEvent::Key {
                 code,
                 modifiers,
                 kind,
@@ -528,28 +530,28 @@ fn windows_client_input_event_from_raw(
                 source,
             })
         }
-        crate::raw_input::RawInputEvent::Mouse(mouse) => {
-            Some(crate::protocol::ClientInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::from_crossterm(mouse.kind),
+        crate::protocol::keys::host::RawInputEvent::Mouse(mouse) => {
+            Some(crate::protocol::wire::ClientInputEvent::Mouse {
+                kind: crate::protocol::wire::ClientMouseKind::from_crossterm(mouse.kind),
                 column: mouse.column,
                 row: mouse.row,
                 modifiers: mouse.modifiers.bits(),
             })
         }
-        crate::raw_input::RawInputEvent::Paste(text) => {
-            Some(crate::protocol::ClientInputEvent::Paste { text })
+        crate::protocol::keys::host::RawInputEvent::Paste(text) => {
+            Some(crate::protocol::wire::ClientInputEvent::Paste { text })
         }
-        crate::raw_input::RawInputEvent::OuterFocusGained => {
-            Some(crate::protocol::ClientInputEvent::FocusGained)
+        crate::protocol::keys::host::RawInputEvent::OuterFocusGained => {
+            Some(crate::protocol::wire::ClientInputEvent::FocusGained)
         }
-        crate::raw_input::RawInputEvent::OuterFocusLost => {
-            Some(crate::protocol::ClientInputEvent::FocusLost)
+        crate::protocol::keys::host::RawInputEvent::OuterFocusLost => {
+            Some(crate::protocol::wire::ClientInputEvent::FocusLost)
         }
-        crate::raw_input::RawInputEvent::HostDefaultColor { .. }
-        | crate::raw_input::RawInputEvent::HostPaletteColors { .. }
-        | crate::raw_input::RawInputEvent::HostColorSchemeChanged(_)
-        | crate::raw_input::RawInputEvent::HostCellSizeReport { .. }
-        | crate::raw_input::RawInputEvent::Unsupported => None,
+        crate::protocol::keys::host::RawInputEvent::HostDefaultColor { .. }
+        | crate::protocol::keys::host::RawInputEvent::HostPaletteColors { .. }
+        | crate::protocol::keys::host::RawInputEvent::HostColorSchemeChanged(_)
+        | crate::protocol::keys::host::RawInputEvent::HostCellSizeReport { .. }
+        | crate::protocol::keys::host::RawInputEvent::Unsupported => None,
     }
 }
 
@@ -612,7 +614,7 @@ mod tests {
 
     #[test]
     fn pixel_mouse_classification_is_narrow_and_uses_read_geometry() {
-        let geometry = crate::input::mouse::HostGeometry::new(80, 24, 800, 480).unwrap();
+        let geometry = crate::protocol::keys::mouse::HostGeometry::new(80, 24, 800, 480).unwrap();
         let report = b"\x1b[<35;321;241M".to_vec();
         let Some(ClientLoopEvent::PixelMouse(data, captured)) =
             classify_unix_input(report.clone(), true, Some(geometry))
@@ -640,7 +642,7 @@ mod tests {
 
     #[test]
     fn transient_geometry_failure_keeps_last_real_value() {
-        let geometry = crate::input::mouse::HostGeometry::new(80, 24, 800, 480).unwrap();
+        let geometry = crate::protocol::keys::mouse::HostGeometry::new(80, 24, 800, 480).unwrap();
         assert_eq!(retain_geometry(Some(geometry), None), Some(geometry));
     }
 
@@ -745,14 +747,15 @@ mod tests {
 
     #[test]
     fn raw_input_idle_flush_timeout_keeps_escape_responsive() {
-        let timeout_ms = std::hint::black_box(crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS);
+        let timeout_ms =
+            std::hint::black_box(crate::protocol::keys::host::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS);
         assert!(timeout_ms <= 20);
     }
 
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn windows_repeated_escape_keeps_second_escape_pending() {
-        let mut framer = crate::raw_input::RawInputFramer::for_host_input();
+        let mut framer = crate::protocol::keys::host::RawInputFramer::for_host_input();
 
         let events = framer.push(b"\x1b\x1b");
 
@@ -763,34 +766,35 @@ mod tests {
 
     #[test]
     fn mouse_active_escape_sequences_get_longer_reassembly_window() {
-        let mut escape = crate::raw_input::RawInputByteFramer::default();
+        let mut escape = crate::protocol::keys::host::RawInputByteFramer::default();
         assert!(escape.push(b"\x1b").is_empty());
-        let mut sgr_mouse = crate::raw_input::RawInputByteFramer::default();
+        let mut sgr_mouse = crate::protocol::keys::host::RawInputByteFramer::default();
         assert!(sgr_mouse.push(b"\x1b[<3").is_empty());
-        let mut default_mouse = crate::raw_input::RawInputByteFramer::default();
+        let mut default_mouse = crate::protocol::keys::host::RawInputByteFramer::default();
         assert!(default_mouse.push(b"\x1b[MC").is_empty());
-        let mut unrelated = crate::raw_input::RawInputByteFramer::default();
+        let mut unrelated = crate::protocol::keys::host::RawInputByteFramer::default();
         assert!(unrelated.push(b"\x1b[49:33;2:").is_empty());
 
         for framer in [&escape, &sgr_mouse, &default_mouse, &unrelated] {
             assert_eq!(
                 idle_flush_timeout_ms(framer, false),
-                crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
+                crate::protocol::keys::host::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
             );
         }
         for framer in [&escape, &sgr_mouse, &default_mouse] {
             assert_eq!(
                 idle_flush_timeout_ms(framer, true),
-                crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
+                crate::protocol::keys::host::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
             );
         }
         assert_eq!(
             idle_flush_timeout_ms(&unrelated, true),
-            crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
+            crate::protocol::keys::host::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
         );
 
-        let mouse_timeout_ms =
-            std::hint::black_box(crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS);
+        let mouse_timeout_ms = std::hint::black_box(
+            crate::protocol::keys::host::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS,
+        );
         assert!(mouse_timeout_ms > 100);
     }
 }
@@ -831,13 +835,13 @@ mod windows_tests {
 
         assert_eq!(
             windows_crossterm_input_event(event),
-            Some(crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('你'),
+            Some(crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('你'),
                 modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
                 repeat_count: 1,
                 generated_text: Some("你".to_string()),
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             })
         );
     }
@@ -850,7 +854,7 @@ mod windows_tests {
             Some(b"\x1b".as_slice())
         );
 
-        let mut framer = crate::raw_input::RawInputFramer::default();
+        let mut framer = crate::protocol::keys::host::RawInputFramer::default();
         assert!(framer.push(b"\x1b").is_empty());
         let events = framer.push(b"[<35;48;26M");
         assert_eq!(events.len(), 1);
@@ -859,8 +863,8 @@ mod windows_tests {
             .expect("raw mouse converts");
         assert!(matches!(
             event,
-            crate::protocol::ClientInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::Moved,
+            crate::protocol::wire::ClientInputEvent::Mouse {
+                kind: crate::protocol::wire::ClientMouseKind::Moved,
                 column: 47,
                 row: 25,
                 modifiers: _,
@@ -883,16 +887,19 @@ mod windows_tests {
         let event = Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
         assert_eq!(windows_key_raw_bytes(&event, false), None);
 
-        let event =
-            crate::protocol::ClientInputEvent::from_crossterm(event).expect("ctrl-d converts");
+        let event = crate::protocol::wire::ClientInputEvent::from_crossterm(event)
+            .expect("ctrl-d converts");
         let raw = event.to_raw_input_event();
-        let crate::raw_input::RawInputEvent::Key(key) = raw else {
+        let crate::protocol::keys::host::RawInputEvent::Key(key) = raw else {
             panic!("expected key");
         };
         assert_eq!(key.code, KeyCode::Char('d'));
         assert_eq!(key.modifiers, KeyModifiers::CONTROL);
         assert_eq!(
-            crate::input::encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
+            crate::protocol::keys::encode_terminal_key(
+                key,
+                crate::protocol::keys::KeyboardProtocol::Legacy
+            ),
             b"\x04"
         );
     }
@@ -921,7 +928,7 @@ mod windows_tests {
         let bytes = windows_key_raw_bytes(&event, false).expect("eot routes through raw framer");
         assert_eq!(bytes, b"\x04");
 
-        let mut framer = crate::raw_input::RawInputFramer::default();
+        let mut framer = crate::protocol::keys::host::RawInputFramer::default();
         let events = framer.push(&bytes);
         assert_eq!(events.len(), 1);
 
@@ -929,20 +936,20 @@ mod windows_tests {
             .expect("raw eot converts");
         assert_eq!(
             event,
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('d'),
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('d'),
                 modifiers: KeyModifiers::CONTROL.bits(),
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Vt { bytes: vec![4] },
+                source: crate::protocol::wire::ClientKeySource::Vt { bytes: vec![4] },
             }
         );
     }
 
     #[test]
     fn windows_pending_escape_sequence_converts_to_semantic_arrow() {
-        let mut framer = crate::raw_input::RawInputFramer::default();
+        let mut framer = crate::protocol::keys::host::RawInputFramer::default();
         assert!(framer.push(b"\x1b").is_empty());
         assert!(framer.push(b"[").is_empty());
         let events = framer.push(b"A");
@@ -952,13 +959,13 @@ mod windows_tests {
             .expect("raw arrow converts");
         assert_eq!(
             event,
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Up,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Up,
                 modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Vt {
+                source: crate::protocol::wire::ClientKeySource::Vt {
                     bytes: b"\x1b[A".to_vec()
                 },
             }
@@ -967,7 +974,7 @@ mod windows_tests {
 
     #[test]
     fn windows_bare_escape_flushes_to_semantic_escape() {
-        let mut framer = crate::raw_input::RawInputFramer::default();
+        let mut framer = crate::protocol::keys::host::RawInputFramer::default();
         assert!(framer.push(b"\x1b").is_empty());
         let events = framer.flush_timeout();
         assert_eq!(events.len(), 1);
@@ -976,13 +983,13 @@ mod windows_tests {
             .expect("raw escape converts");
         assert_eq!(
             event,
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Esc,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Esc,
                 modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Vt { bytes: vec![0x1b] },
+                source: crate::protocol::wire::ClientKeySource::Vt { bytes: vec![0x1b] },
             }
         );
     }

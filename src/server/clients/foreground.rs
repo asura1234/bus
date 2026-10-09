@@ -1,7 +1,7 @@
 use super::connection::latest_shell_client;
-use crate::config;
-use crate::protocol::ServerMessage;
+use crate::protocol::wire::ServerMessage;
 use crate::server::main_loop::HeadlessServer;
+use crate::utils::config;
 use ratatui::layout::Rect;
 
 impl HeadlessServer {
@@ -26,7 +26,7 @@ impl HeadlessServer {
     }
 
     pub(in crate::server) fn sync_runtime_view_geometry(&mut self) {
-        crate::ui::compute_view_without_resizing_panes(
+        crate::server::rendering::surface::compute_view_without_resizing_panes(
             &mut self.app.state,
             &self.app.terminal_runtimes,
             Rect::new(0, 0, self.effective_size.0, self.effective_size.1),
@@ -42,7 +42,7 @@ impl HeadlessServer {
         let Some(client_id) = self.foreground_client_id else {
             self.effective_size = self.headless_size;
             self.app.state.outer_terminal_focus = None;
-            self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
+            self.app.state.host_cell_size = crate::protocol::kitty::HostCellSize::default();
             self.sync_runtime_view_geometry();
             return;
         };
@@ -50,7 +50,7 @@ impl HeadlessServer {
             self.foreground_client_id = None;
             self.effective_size = self.headless_size;
             self.app.state.outer_terminal_focus = None;
-            self.app.state.host_cell_size = crate::kitty_graphics::HostCellSize::default();
+            self.app.state.host_cell_size = crate::protocol::kitty::HostCellSize::default();
             self.sync_runtime_view_geometry();
             return;
         };
@@ -60,7 +60,7 @@ impl HeadlessServer {
         {
             client.cell_size
         } else {
-            crate::kitty_graphics::HostCellSize::default()
+            crate::protocol::kitty::HostCellSize::default()
         };
         let host_terminal_theme = client.host_terminal_theme;
         let host_terminal_appearance = client.host_terminal_appearance;
@@ -84,7 +84,7 @@ impl HeadlessServer {
     pub(in crate::server) fn reload_server_config(
         &mut self,
         notify_success: bool,
-    ) -> crate::config::ConfigReloadReport {
+    ) -> crate::utils::config::ConfigReloadReport {
         let report = self.app.apply_config_from_disk(notify_success);
         self.app.take_config_reloaded_from_disk();
         self.headless_size = self.app.state.headless_size;
@@ -102,7 +102,7 @@ impl HeadlessServer {
         &self,
         is_active_tab: bool,
     ) -> bool {
-        crate::app::actions::active_tab_suppresses_notifications(
+        crate::server::notifications::policy::active_tab_suppresses_notifications(
             is_active_tab,
             self.foreground_client_outer_focus(),
         )

@@ -1,9 +1,11 @@
 use super::*;
-use crate::api::schema::{Method, ResponseResult};
-use crate::bus::{
-    callbacks, io,
-    store::JsonStore,
-    transport::{Transport, TransportError},
+use crate::protocol::api::schema::{Method, ResponseResult};
+use crate::{
+    agents::providers::spool as callbacks,
+    messaging::{
+        native::{Transport, TransportError},
+        storage::{io, state_store::JsonStore},
+    },
 };
 use serde_json::json;
 use std::{
@@ -68,7 +70,7 @@ fn claude_statusline_refresh_is_identity_bound_and_does_not_change_delivery_stat
         worker.consume_callbacks(agent, &spool).unwrap();
         worker.dev_enabled = true;
         let response = worker.dev_response_with_events(
-            &crate::bus::control::Request {
+            &crate::messaging::control::Request {
                 id: "usage-state".into(),
                 method: "state".into(),
                 params: json!({}),
@@ -143,7 +145,7 @@ fn codex_final_refreshes_usage_from_its_rollout_and_state_reports_it() {
     let state = |worker: &mut Worker| {
         worker
             .dev_response_with_events(
-                &crate::bus::control::Request {
+                &crate::messaging::control::Request {
                     id: format!("state-{}", io::now_ns()),
                     method: "state".into(),
                     params: json!({}),
@@ -216,7 +218,7 @@ mod status_tests {
     /// as `agent` (None once the pane runs something else) with its screen
     /// status, or no entry at all once the pane is no longer an agent.
     fn pane_listing(agent: Option<&str>, status: &str) -> Result<ResponseResult, TransportError> {
-        let info: crate::api::schema::AgentInfo = serde_json::from_value(json!({
+        let info: crate::protocol::api::schema::AgentInfo = serde_json::from_value(json!({
             "terminal_id": "terminal", "pane_id": "pane", "agent": agent,
             "agent_status": status, "agent_session": agent.map(|agent| json!({
                 "source": format!("herdr:{agent}"), "agent": agent, "kind": "id", "value": "session"
@@ -258,7 +260,7 @@ mod status_tests {
                 "{case}"
             );
             assert_eq!(
-                crate::bus::diagnostics::wait_reason(worker.state.agent(agent).unwrap()),
+                crate::messaging::diagnostics::wait_reason(worker.state.agent(agent).unwrap()),
                 Some("agent_unavailable"),
                 "{case}"
             );

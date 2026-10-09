@@ -234,7 +234,7 @@ pub(super) fn handle_request(
             id: request.id,
             result: ResponseResult::Pong {
                 version: crate::utils::version::version(),
-                protocol: crate::protocol::PROTOCOL_VERSION,
+                protocol: crate::protocol::wire::PROTOCOL_VERSION,
                 capabilities: Some(capabilities),
             },
         })

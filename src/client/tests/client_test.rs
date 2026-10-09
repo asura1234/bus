@@ -1,6 +1,35 @@
-use super::*;
 use std::ffi::OsString;
 use std::sync::{Mutex, OnceLock};
+use {
+    crate::client::{
+        clipboard::{decode_clipboard_payload, forward_clipboard},
+        config_reload::reload_local_client_config,
+        connection::handshake::direct_graphics_profile_values,
+        host_terminal::{
+            frame_output::{
+                clear_received_kitty_graphics, contains_kitty_graphics_bytes,
+                kitty_graphics_image_ids, record_received_kitty_graphics,
+                write_encoded_frame_with_graphics,
+            },
+            geometry::{
+                cell_size_fallback, current_terminal_geometry_with, ioctl_cell_size,
+                pack_cell_size, resize_report_required, should_query_host_cell_size,
+                should_query_host_terminal_theme, write_host_cell_size_query,
+                write_host_terminal_appearance_query, write_host_terminal_theme_query,
+            },
+            setup::{
+                effective_sgr_pixel_mouse, should_draw_host_cursor,
+                should_enable_host_color_scheme_reports, windows_virtual_terminal_input_mode,
+                write_host_color_scheme_report_mode, write_terminal_restore_postlude,
+            },
+        },
+        notifications::{forward_terminal_bells, handle_notify_with_notifiers},
+    },
+    std::{
+        io,
+        sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
+    },
+};
 
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -130,7 +159,7 @@ impl Drop for EnvVarsRemovedGuard {
 #[test]
 fn host_cursor_policy_auto_uses_platform_default() {
     assert_eq!(
-        should_draw_host_cursor(crate::config::HostCursorModeConfig::Auto),
+        should_draw_host_cursor(crate::utils::config::HostCursorModeConfig::Auto),
         crate::platform::should_draw_host_cursor_by_default()
     );
 }
@@ -141,10 +170,10 @@ fn host_cursor_policy_native_and_drawn_override_auto_detection() {
     let _env = EnvVarGuard::set("TERM_PROGRAM", "WezTerm");
 
     assert!(!should_draw_host_cursor(
-        crate::config::HostCursorModeConfig::Native
+        crate::utils::config::HostCursorModeConfig::Native
     ));
     assert!(should_draw_host_cursor(
-        crate::config::HostCursorModeConfig::Drawn
+        crate::utils::config::HostCursorModeConfig::Drawn
     ));
 }
 
@@ -276,13 +305,14 @@ fn cell_size_fallback_prefers_reported_then_previous_size() {
 
 #[test]
 fn reported_cell_size_is_taken_from_host_cell_size_events() {
-    let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[?997;1n");
+    let events = crate::protocol::keys::host::parse_raw_input_bytes_sync(b"\x1b[?997;1n");
     assert_eq!(
         super::host_terminal::geometry::reported_cell_size_from_events(&events),
         None
     );
 
-    let events = crate::raw_input::parse_raw_input_bytes_sync(b"\x1b[6;21;10t\x1b[6;18;9t");
+    let events =
+        crate::protocol::keys::host::parse_raw_input_bytes_sync(b"\x1b[6;21;10t\x1b[6;18;9t");
     assert_eq!(
         super::host_terminal::geometry::reported_cell_size_from_events(&events),
         Some((9, 18))
@@ -322,7 +352,7 @@ fn terminal_restore_postlude_disables_color_scheme_reports_when_enabled() {
 
 #[test]
 fn client_error_display_connection_failed() {
-    let err = ClientError::ConnectionFailed(io::Error::new(
+    let err = crate::client::errors::ClientError::ConnectionFailed(io::Error::new(
         io::ErrorKind::ConnectionRefused,
         "connection refused",
     ));
@@ -339,7 +369,7 @@ fn client_error_display_connection_failed() {
 
 #[test]
 fn client_error_display_handshake_rejected() {
-    let err = ClientError::HandshakeRejected {
+    let err = crate::client::errors::ClientError::HandshakeRejected {
         version: 1,
         error: "incompatible".into(),
     };
@@ -353,7 +383,7 @@ fn client_error_display_handshake_rejected() {
 
 #[test]
 fn client_error_display_server_shutdown() {
-    let err = ClientError::ServerShutdown {
+    let err = crate::client::errors::ClientError::ServerShutdown {
         reason: Some("maintenance".into()),
     };
     let msg = err.to_string();
@@ -366,7 +396,7 @@ fn client_error_display_server_shutdown() {
 
 #[test]
 fn client_error_display_server_shutdown_no_reason() {
-    let err = ClientError::ServerShutdown { reason: None };
+    let err = crate::client::errors::ClientError::ServerShutdown { reason: None };
     let msg = err.to_string();
     assert!(
         msg.contains("server shut down"),
@@ -377,7 +407,7 @@ fn client_error_display_server_shutdown_no_reason() {
 #[test]
 fn client_error_display_detached_suggests_the_bus_reattach_command() {
     let _guard = env_lock().lock().unwrap();
-    let err = ClientError::ServerShutdown {
+    let err = crate::client::errors::ClientError::ServerShutdown {
         reason: Some("detached".into()),
     };
     // The `bus resume ID` form is covered in session tests without touching
@@ -390,7 +420,10 @@ fn client_error_display_detached_suggests_the_bus_reattach_command() {
 #[test]
 fn client_error_display_connection_lost() {
     let _guard = env_lock().lock().unwrap();
-    let err = ClientError::ConnectionLost(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
+    let err = crate::client::errors::ClientError::ConnectionLost(io::Error::new(
+        io::ErrorKind::BrokenPipe,
+        "broken pipe",
+    ));
     let msg = err.to_string();
     assert!(
         msg.contains("lost connection to server"),
@@ -400,7 +433,7 @@ fn client_error_display_connection_lost() {
 
 #[test]
 fn reload_local_client_config_refreshes_local_client_presentation_state() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     // BUS_DATA_DIR outranks HERDR_CONFIG_PATH, and agents run inside Bus inherit it.
     let _bus = EnvVarsRemovedGuard::new(&["BUS_DATA_DIR"]);
     let path = std::env::temp_dir().join(format!(
@@ -417,8 +450,8 @@ fn reload_local_client_config_refreshes_local_client_presentation_state() {
     )
     .unwrap();
     let path_string = path.to_string_lossy().to_string();
-    let _env = EnvVarGuard::set(crate::config::CONFIG_PATH_ENV_VAR, &path_string);
-    let mut sound_config = crate::config::SoundConfig::default();
+    let _env = EnvVarGuard::set(crate::utils::config::CONFIG_PATH_ENV_VAR, &path_string);
+    let mut sound_config = crate::utils::config::SoundConfig::default();
     let mut redraw_on_focus_gained = true;
     let mut draw_host_cursor = false;
     let mut mouse_capture = true;
@@ -438,7 +471,7 @@ fn reload_local_client_config_refreshes_local_client_presentation_state() {
 
 #[test]
 fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     // BUS_DATA_DIR outranks HERDR_CONFIG_PATH, and agents run inside Bus inherit it.
     let _bus = EnvVarsRemovedGuard::new(&["BUS_DATA_DIR"]);
     let path = std::env::temp_dir().join(format!(
@@ -451,8 +484,8 @@ fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
     ));
     std::fs::write(&path, "[ui]\nmouse_capture = \"invalid\"\n").unwrap();
     let path_string = path.to_string_lossy().to_string();
-    let _env = EnvVarGuard::set(crate::config::CONFIG_PATH_ENV_VAR, &path_string);
-    let mut sound_config = crate::config::SoundConfig::default();
+    let _env = EnvVarGuard::set(crate::utils::config::CONFIG_PATH_ENV_VAR, &path_string);
+    let mut sound_config = crate::utils::config::SoundConfig::default();
     let mut redraw_on_focus_gained = false;
     let mut draw_host_cursor = true;
     let mut mouse_capture = false;
@@ -487,7 +520,7 @@ fn toast_notify_from_server_is_emitted_even_when_attach_config_was_off() {
     let mut emitted = None;
 
     handle_notify_with_notifiers(
-        NotifyKind::Toast,
+        crate::protocol::wire::NotifyKind::Toast,
         "pi finished",
         Some("workspace 1"),
         |title, body| {
@@ -508,7 +541,7 @@ fn system_toast_notify_from_server_uses_system_notifier() {
     let mut emitted = None;
 
     handle_notify_with_notifiers(
-        NotifyKind::SystemToast,
+        crate::protocol::wire::NotifyKind::SystemToast,
         "pi finished",
         Some("workspace 1"),
         |_, _| Ok(false),
@@ -529,7 +562,7 @@ fn system_toast_notify_preserves_colon_in_title() {
     let mut emitted = None;
 
     handle_notify_with_notifiers(
-        NotifyKind::SystemToast,
+        crate::protocol::wire::NotifyKind::SystemToast,
         "build: failed",
         Some("api workspace"),
         |_, _| Ok(false),

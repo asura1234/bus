@@ -373,11 +373,11 @@ fn prompt_text(ui: &BusUi) -> String {
 fn expected_prompt(agent: &str, room: Option<(&str, RoomId)>) -> String {
     let docs = crate::utils::env::bus_data_dir().map_or_else(
         || std::path::PathBuf::from("<BUS_DATA_DIR>/docs"),
-        |data| crate::bus::orchestrator::docs_dir(&data),
+        |data| crate::messaging::orchestration::docs_dir(&data),
     );
-    crate::bus::orchestrator::fill(
-        crate::bus::orchestrator::DEFAULT_PROMPT,
-        &crate::bus::orchestrator::PromptValues {
+    crate::messaging::orchestration::fill(
+        crate::messaging::orchestration::DEFAULT_PROMPT,
+        &crate::messaging::orchestration::PromptValues {
             room: room.map(|(name, id)| (name.into(), id)),
             agent: agent.into(),
             docs,
@@ -452,12 +452,12 @@ fn enter_adds_a_prompt_line_and_ctrl_enter_adds_the_orchestrator_with_it() {
 #[test]
 fn hook_consent_keeps_the_orchestrator_prompt() {
     let (mut ui, master, _, other, _) = master_fixture();
-    let spec = crate::bus::orchestrator::OrchestratorSpec {
+    let spec = crate::messaging::orchestration::OrchestratorSpec {
         room: other,
         system_prompt: Some("Run pr-456.".into()),
     };
     ui.receive_event(BusEvent::SetupRequired {
-        input: crate::bus::launch::AddAgent {
+        input: crate::messaging::coordinator::agents::AddAgent {
             room: master,
             name: "codex-orch".into(),
             provider: Provider::Codex,
@@ -466,7 +466,7 @@ fn hook_consent_keeps_the_orchestrator_prompt() {
             consent_project_hooks: false,
         },
         orchestrator: Some(spec.clone()),
-        notice: crate::bus::launch::SetupNotice {
+        notice: crate::agents::providers::launch::SetupNotice {
             path: "/repo/.codex/hooks.json".into(),
             message: "review hooks".into(),
         },
@@ -745,7 +745,7 @@ fn the_master_form_offers_no_codex_and_a_work_room_form_does() {
     )));
     assert_eq!(
         ui.error.as_deref(),
-        Some(crate::bus::orchestrator::CODEX_ORCHESTRATOR_REFUSED)
+        Some(crate::messaging::orchestration::CODEX_ORCHESTRATOR_REFUSED)
     );
     assert!(
         matches!(ui.form, Some(forms::Form::Agent { .. })),

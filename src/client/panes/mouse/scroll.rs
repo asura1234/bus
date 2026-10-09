@@ -11,10 +11,13 @@ impl ClientShellState {
         let track = hit.scrollbar_rect?;
         let metrics = hit.scroll?;
         (metrics.max_offset_from_bottom > 0).then(|| match grab_row_offset {
-            Some(grab_row_offset) => {
-                crate::ui::scrollbar_offset_from_drag_row(metrics, track, row, grab_row_offset)
-            }
-            None => crate::ui::scrollbar_offset_from_row(metrics, track, row),
+            Some(grab_row_offset) => crate::utils::render::widgets::scrollbar_offset_from_drag_row(
+                metrics,
+                track,
+                row,
+                grab_row_offset,
+            ),
+            None => crate::utils::render::widgets::scrollbar_offset_from_row(metrics, track, row),
         })
     }
 
@@ -48,10 +51,12 @@ impl ClientShellState {
             .insert(pane_id.clone(), offset_from_bottom);
         self.pane_scroll_in_flight.insert(pane_id.clone(), serial);
         if !self.push_endpoint_method_with_kind(
-            crate::api::schema::Method::PaneScroll(crate::api::schema::PaneScrollParams {
-                pane_id: pane_id.clone(),
-                offset_from_bottom: offset_from_bottom as u64,
-            }),
+            crate::protocol::api::schema::Method::PaneScroll(
+                crate::protocol::api::schema::PaneScrollParams {
+                    pane_id: pane_id.clone(),
+                    offset_from_bottom: offset_from_bottom as u64,
+                },
+            ),
             PendingEndpointKind::PaneScroll {
                 pane_id: pane_id.clone(),
                 serial,
@@ -67,7 +72,7 @@ impl ClientShellState {
         &mut self,
         pane_id: String,
         serial: u64,
-        result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
+        result: Result<crate::protocol::api::schema::ResponseResult, ClientShellEndpointError>,
         outcome: &mut ClientShellInput,
     ) -> bool {
         if self.pane_scroll_in_flight.get(&pane_id).copied() != Some(serial) {
@@ -75,7 +80,7 @@ impl ClientShellState {
         }
         self.pane_scroll_in_flight.remove(&pane_id);
         let repaint = match result {
-            Ok(crate::api::schema::ResponseResult::PaneInfo { pane })
+            Ok(crate::protocol::api::schema::ResponseResult::PaneInfo { pane })
                 if pane.pane_id == pane_id =>
             {
                 if let Some(scroll) = pane.scroll {

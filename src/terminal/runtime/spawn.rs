@@ -1,8 +1,7 @@
-use crate::agents::Agent;
-use crate::layout::PaneId;
+use crate::agents::AgentKind;
 use crate::terminal::emulator::GhosttyPaneTerminal;
 use crate::terminal::emulator::PaneTerminal;
-use crate::terminal::events::AppEvent;
+use crate::terminal::events::TerminalEvent;
 use crate::terminal::pty::actor::PtyIoActor;
 use crate::terminal::pty::actor::PtyIoActorConfig;
 #[cfg(unix)]
@@ -13,6 +12,7 @@ use crate::terminal::runtime::io::PaneRuntimeIo;
 use crate::terminal::runtime::read::{pty_read_callback, PtyReadContext};
 use crate::terminal::runtime::AgentDetection;
 use crate::terminal::runtime::TerminalRuntime;
+use crate::utils::ids::PaneId;
 use crate::utils::render::signal::RenderSignal;
 use bytes::Bytes;
 use portable_pty::native_pty_system;
@@ -101,7 +101,10 @@ pub(super) fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneL
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }
-    cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
+    cmd.env(
+        crate::utils::env::HERDR_ENV_VAR,
+        crate::utils::env::HERDR_ENV_VALUE,
+    );
     apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
     match &launch_env.identity {
@@ -147,7 +150,7 @@ pub(super) fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneL
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct SpawnInitialState<'a> {
-    pub(super) detected_agent: Option<Agent>,
+    pub(super) detected_agent: Option<AgentKind>,
     pub(super) history_ansi: Option<&'a str>,
     pub(super) windows_powershell_prompt_cwd_reporting: bool,
 }
@@ -477,7 +480,7 @@ fn spawn_child_watcher(
     mut child: Box<dyn Child + Send + Sync>,
     child_pid: Arc<AtomicU32>,
     child_wait_completed: Arc<AtomicBool>,
-    events: mpsc::Sender<AppEvent>,
+    events: mpsc::Sender<TerminalEvent>,
 ) {
     let rt = tokio::runtime::Handle::current();
     if let Some(pid) = child.process_id() {
@@ -499,7 +502,7 @@ fn spawn_child_watcher(
         };
         child_wait_completed.store(true, Ordering::Release);
         // Use blocking send — PaneDied is critical, must not be dropped
-        if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
+        if let Err(e) = rt.block_on(events.send(TerminalEvent::PaneDied {
             pane_id,
             exit_reason,
         })) {
@@ -521,7 +524,7 @@ impl TerminalRuntime {
         host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
         shell_config: PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
-        events: mpsc::Sender<AppEvent>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -555,7 +558,7 @@ impl TerminalRuntime {
         shell_config: PaneShellConfig<'_>,
         launch_env: &PaneLaunchEnv,
         initial_history_ansi: Option<&str>,
-        events: mpsc::Sender<AppEvent>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -600,7 +603,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::utils::theme::color::TerminalTheme,
         host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -642,7 +645,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::utils::theme::color::TerminalTheme,
         host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
@@ -685,7 +688,7 @@ impl TerminalRuntime {
         scrollback_limit_bytes: usize,
         host_terminal_theme: crate::utils::theme::color::TerminalTheme,
         host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
-        events: mpsc::Sender<AppEvent>,
+        events: mpsc::Sender<TerminalEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
         cmd: CommandBuilder,

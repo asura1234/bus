@@ -1,5 +1,5 @@
 use super::*;
-use crate::bus::transport::TransportError;
+use crate::messaging::native::TransportError;
 
 struct NoNativeInput;
 impl Transport for NoNativeInput {
@@ -14,7 +14,7 @@ fn fixture() -> (Worker, RoomId, AgentId, PathBuf) {
         .join(format!(
             "bus-focus-{}-{}",
             std::process::id(),
-            crate::bus::io::now_ns()
+            crate::messaging::storage::io::now_ns()
         ));
     let mut worker = Worker::open(dir.clone(), Box::new(NoNativeInput)).unwrap();
     worker.dev_enabled = true;
@@ -163,7 +163,11 @@ fn dev_quit_and_settings_reach_the_ui_and_state_reports_them() {
         receiver.try_recv().unwrap(),
         BusEvent::SettingsChanged(settings) if settings.color_blind_mode
     ));
-    assert!(crate::bus::settings::load(&path).unwrap().color_blind_mode);
+    assert!(
+        crate::messaging::prefs::settings::load(&path)
+            .unwrap()
+            .color_blind_mode
+    );
     assert_eq!(
         state(&mut worker, "s2")["settings"]["color_blind_mode"],
         true

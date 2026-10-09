@@ -5,7 +5,7 @@ use std::{
 
 use super::compile::{compile_manifest, parse_manifest, CompiledRule};
 use super::schema::AgentManifest;
-use super::{agent_label, parse_agent_label, Agent};
+use super::{agent_label, parse_agent_label, AgentKind};
 
 #[derive(Debug, Clone)]
 pub(super) struct LoadedManifest {
@@ -15,7 +15,7 @@ pub(super) struct LoadedManifest {
 
 #[derive(Debug, Clone)]
 struct ManifestCache {
-    pub(super) manifests: Vec<(Agent, Option<LoadedManifest>)>,
+    pub(super) manifests: Vec<(AgentKind, Option<LoadedManifest>)>,
 }
 
 pub(super) const BUNDLED_MANIFESTS: &[(&str, &str)] = &[
@@ -61,14 +61,14 @@ fn manifest_cache() -> &'static RwLock<ManifestCache> {
 
 fn build_manifest_cache() -> ManifestCache {
     ManifestCache {
-        manifests: Agent::SCREEN_MANIFEST_AGENTS
+        manifests: AgentKind::SCREEN_MANIFEST_AGENTS
             .into_iter()
             .map(|agent| (agent, load_manifest_uncached(agent)))
             .collect(),
     }
 }
 
-pub(super) fn load_manifest(agent: Agent) -> Option<LoadedManifest> {
+pub(super) fn load_manifest(agent: AgentKind) -> Option<LoadedManifest> {
     let lock = manifest_cache();
     let guard = match lock.read() {
         Ok(guard) => guard,
@@ -81,7 +81,7 @@ pub(super) fn load_manifest(agent: Agent) -> Option<LoadedManifest> {
         .and_then(|(_, loaded)| loaded.clone())
 }
 
-fn load_manifest_uncached(agent: Agent) -> Option<LoadedManifest> {
+fn load_manifest_uncached(agent: AgentKind) -> Option<LoadedManifest> {
     let bundled = bundled_manifest(agent)?;
     let Some(path) = override_path(agent).filter(|path| path.exists()) else {
         return Some(bundled_loaded_manifest(agent, bundled));
@@ -120,7 +120,7 @@ pub(super) fn loaded_manifest(manifest: AgentManifest) -> Result<LoadedManifest,
     })
 }
 
-pub(super) fn bundled_loaded_manifest(agent: Agent, manifest: AgentManifest) -> LoadedManifest {
+pub(super) fn bundled_loaded_manifest(agent: AgentKind, manifest: AgentManifest) -> LoadedManifest {
     loaded_manifest(manifest).unwrap_or_else(|err| {
         panic!(
             "bundled {} manifest could not be compiled: {err}",
@@ -129,7 +129,7 @@ pub(super) fn bundled_loaded_manifest(agent: Agent, manifest: AgentManifest) -> 
     })
 }
 
-pub(super) fn bundled_manifest(agent: Agent) -> Option<AgentManifest> {
+pub(super) fn bundled_manifest(agent: AgentKind) -> Option<AgentManifest> {
     let id = agent_label(agent);
     BUNDLED_MANIFESTS
         .iter()
@@ -145,15 +145,15 @@ fn read_override_manifest(path: &Path) -> Result<AgentManifest, String> {
     parse_manifest(&content)
 }
 
-pub(super) fn override_path(agent: Agent) -> Option<PathBuf> {
+pub(super) fn override_path(agent: AgentKind) -> Option<PathBuf> {
     Some(
-        crate::config::config_dir()
+        crate::utils::config::config_dir()
             .join("agent-detection")
             .join(format!("{}.toml", agent_label(agent))),
     )
 }
 
-fn manifest_matches_agent(manifest: &AgentManifest, agent: Agent) -> bool {
+fn manifest_matches_agent(manifest: &AgentManifest, agent: AgentKind) -> bool {
     let id = agent_label(agent);
     manifest.id == id
         || manifest.aliases.iter().any(|alias| alias == id)

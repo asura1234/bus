@@ -159,7 +159,7 @@ fn stall_at(state: &BusState, request: RequestId, now_ms: u64) -> Option<String>
 
 #[test]
 fn native_refusals_map_to_stall_reasons() {
-    // The exact texts `src/app/api/agents.rs` sends.
+    // The exact texts `src/server/api/agents/prompt.rs` sends.
     for (message, reason) in [
         (
             "Claude input box is not empty; prompt was not sent",

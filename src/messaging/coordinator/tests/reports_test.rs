@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::bus::transport::TransportError;
+use crate::messaging::native::TransportError;
 use serde_json::json;
 
 /// Accepts every native call, as a server that types prompts does.
@@ -31,7 +31,7 @@ fn fixture(provider: Provider) -> Fixture {
     let dir = std::env::temp_dir().join(format!(
         "bus-reports-{}-{}",
         std::process::id(),
-        crate::bus::io::now_ns()
+        crate::messaging::storage::io::now_ns()
     ));
     let mut worker = Worker::open(dir.clone(), Box::new(Accepting)).unwrap();
     let mut state = worker.state.clone();

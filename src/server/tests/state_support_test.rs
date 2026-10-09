@@ -23,13 +23,13 @@ impl AppState {
             pending_agent_notifications: std::collections::HashMap::new(),
             outer_terminal_focus: None,
             headless_size: (
-                crate::config::DEFAULT_HEADLESS_COLS,
-                crate::config::DEFAULT_HEADLESS_ROWS,
+                crate::utils::config::DEFAULT_HEADLESS_COLS,
+                crate::utils::config::DEFAULT_HEADLESS_ROWS,
             ),
             agent_panel_sort: AgentPanelSort::Spaces,
             next_agent_state_change_seq: 0,
             confirm_close: true,
-            pane_borders: crate::config::PaneBordersConfig::Auto,
+            pane_borders: crate::utils::config::PaneBordersConfig::Auto,
             pane_outer_borders: true,
             pane_scrollbars: true,
             pane_gaps: false,
@@ -40,9 +40,9 @@ impl AppState {
             cjk_ime_cursor_shape: 2, // steady_block
             kitty_graphics_enabled: false,
             default_shell: String::new(),
-            shell_mode: crate::config::ShellModeConfig::Auto,
+            shell_mode: crate::utils::config::ShellModeConfig::Auto,
             new_terminal_cwd: NewTerminalCwdConfig::Follow,
-            pane_scrollback_limit_bytes: crate::config::DEFAULT_SCROLLBACK_LIMIT_BYTES,
+            pane_scrollback_limit_bytes: crate::utils::config::DEFAULT_SCROLLBACK_LIMIT_BYTES,
             sound: SoundConfig {
                 enabled: false,
                 ..SoundConfig::default()
@@ -61,7 +61,7 @@ impl AppState {
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
             host_terminal_theme: TerminalTheme::default(),
-            host_cell_size: crate::kitty_graphics::HostCellSize::default(),
+            host_cell_size: crate::protocol::kitty::HostCellSize::default(),
             session_dirty: false,
             terminal_runtime_shutdowns: Vec::new(),
         }
@@ -88,7 +88,8 @@ impl AppState {
 
     pub fn test_with_adversarial_identity_state() -> Self {
         let mut state = Self::test_new();
-        state.workspaces = vec![crate::workspace::Workspace::test_adversarial_identity_state()];
+        state.workspaces =
+            vec![crate::server::workspaces::Workspace::test_adversarial_identity_state()];
         state.active = Some(0);
         state.selected = 0;
         state.ensure_test_terminals();
@@ -231,7 +232,7 @@ impl AppState {
 
     pub fn insert_test_runtime(
         &mut self,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
         runtime: crate::terminal::TerminalRuntime,
     ) {
         if let Some(ws) = self

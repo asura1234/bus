@@ -11,7 +11,7 @@ pub(super) fn run() -> io::Result<()> {
     Ok(())
 }
 
-use crate::ipc::LocalStream;
+use crate::platform::ipc::LocalStream;
 use crate::utils::paths::active_api_socket_path;
 use interprocess::local_socket::traits::Stream as _;
 use std::io::{BufRead, BufReader, Write};
@@ -44,7 +44,7 @@ pub(crate) fn stop_socket_with_timeout(
         "method": "server.stop",
         "params": {}
     });
-    let stream = crate::ipc::connect_local_stream(&socket_path).map_err(|err| {
+    let stream = crate::platform::ipc::connect_local_stream(&socket_path).map_err(|err| {
         format!(
             "{label} is not running or cannot be reached at {}: {err}",
             socket_path.display()
@@ -141,7 +141,7 @@ pub(crate) fn stop_request_error_allows_wait(err: &std::io::Error) -> bool {
 }
 
 fn is_running_at(socket_path: &Path) -> bool {
-    socket_path.exists() && crate::ipc::connect_local_stream(socket_path).is_ok()
+    socket_path.exists() && crate::platform::ipc::connect_local_stream(socket_path).is_ok()
 }
 
 fn wait_until_stopped_until(socket_paths: &[PathBuf], deadline: Instant) -> bool {

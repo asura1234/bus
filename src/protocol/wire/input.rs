@@ -110,7 +110,7 @@ pub enum ClientPaneInputEvent {
         generated_text: Option<String>,
         tracks_release: bool,
         physical_key_id: Option<u32>,
-        windows_record: Option<crate::input::WindowsKeyRecord>,
+        windows_record: Option<crate::protocol::keys::WindowsKeyRecord>,
     },
     TextCommit(String),
     Mouse {
@@ -131,6 +131,6 @@ pub enum ClientKeySource {
         bytes: Vec<u8>,
     },
     WindowsConsole {
-        record: crate::input::WindowsKeyRecord,
+        record: crate::protocol::keys::WindowsKeyRecord,
     },
 }

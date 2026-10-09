@@ -5,7 +5,10 @@ use crate::protocol::api::schema::{
 };
 use crate::server::api::errors::{encode_error, encode_success};
 use crate::server::app::App;
-use crate::server::workspaces::layout::{find_in_direction, NavDirection, PaneId};
+use crate::{
+    server::workspaces::layout::{find_in_direction, NavDirection},
+    utils::ids::PaneId,
+};
 
 impl App {
     pub(in crate::server::api) fn handle_pane_focus_direction(

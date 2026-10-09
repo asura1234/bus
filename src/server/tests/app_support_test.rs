@@ -1,10 +1,12 @@
 use super::*;
+use crate::protocol::api::schema;
+use crate::utils::config;
 
-use crate::config::Config;
+use crate::utils::config::Config;
 
-use crate::detect::{Agent, AgentState};
+use crate::agents::{AgentKind, AgentState};
 
-use crate::workspace::Workspace;
+use crate::server::workspaces::Workspace;
 
 use std::sync::Mutex;
 
@@ -12,10 +14,10 @@ fn test_app() -> App {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
         &Config::default(),
-        crate::app::AppPolicy::TEST,
+        crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
-        crate::api::EventHub::default(),
+        crate::server::api::EventHub::default(),
     );
     app.state.default_shell = exiting_test_command().into();
     app
@@ -30,7 +32,7 @@ fn unique_temp_path(name: &str) -> std::path::PathBuf {
 }
 
 fn config_env_lock() -> &'static Mutex<()> {
-    crate::config::test_config_env_lock()
+    config::test_config_env_lock()
 }
 
 fn temp_config_path(name: &str) -> std::path::PathBuf {
@@ -48,63 +50,54 @@ fn temp_config_path(name: &str) -> std::path::PathBuf {
 #[test]
 fn notification_show_api_creates_herdr_toast_with_position() {
     let mut app = test_app();
-    app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    app.state.toast_config.delivery = config::ToastDelivery::Herdr;
 
-    let response =
-        app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
-            id: "notify".into(),
-            method: crate::api::schema::Method::NotificationShow(
-                crate::api::schema::NotificationShowParams {
-                    title: "build failed".into(),
-                    body: Some("api workspace".into()),
-                    position: Some(crate::config::ToastHerdrPosition::TopLeft),
-                    sound: crate::api::schema::NotificationShowSound::None,
-                },
-            ),
-        });
+    let response = app.handle_api_request_after_internal_events_drained(schema::Request {
+        id: "notify".into(),
+        method: schema::Method::NotificationShow(schema::NotificationShowParams {
+            title: "build failed".into(),
+            body: Some("api workspace".into()),
+            position: Some(config::ToastHerdrPosition::TopLeft),
+            sound: schema::NotificationShowSound::None,
+        }),
+    });
 
-    let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+    let parsed: schema::SuccessResponse = serde_json::from_str(&response).unwrap();
     assert_eq!(
         parsed.result,
-        crate::api::schema::ResponseResult::NotificationShow {
+        schema::ResponseResult::NotificationShow {
             shown: true,
-            reason: crate::api::schema::NotificationShowReason::Shown,
+            reason: schema::NotificationShowReason::Shown,
         }
     );
     let toast = app.state.toast.as_ref().expect("api toast");
     assert_eq!(toast.title, "build failed");
     assert_eq!(toast.context, "api workspace");
-    assert_eq!(
-        toast.position,
-        Some(crate::config::ToastHerdrPosition::TopLeft)
-    );
+    assert_eq!(toast.position, Some(config::ToastHerdrPosition::TopLeft));
     assert!(app.toast_deadline.is_some());
 }
 
 #[test]
 fn notification_show_api_respects_off_delivery() {
     let mut app = test_app();
-    app.state.toast_config.delivery = crate::config::ToastDelivery::Off;
+    app.state.toast_config.delivery = config::ToastDelivery::Off;
 
-    let response =
-        app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
-            id: "notify".into(),
-            method: crate::api::schema::Method::NotificationShow(
-                crate::api::schema::NotificationShowParams {
-                    title: "build failed".into(),
-                    body: None,
-                    position: None,
-                    sound: crate::api::schema::NotificationShowSound::None,
-                },
-            ),
-        });
+    let response = app.handle_api_request_after_internal_events_drained(schema::Request {
+        id: "notify".into(),
+        method: schema::Method::NotificationShow(schema::NotificationShowParams {
+            title: "build failed".into(),
+            body: None,
+            position: None,
+            sound: schema::NotificationShowSound::None,
+        }),
+    });
 
-    let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+    let parsed: schema::SuccessResponse = serde_json::from_str(&response).unwrap();
     assert_eq!(
         parsed.result,
-        crate::api::schema::ResponseResult::NotificationShow {
+        schema::ResponseResult::NotificationShow {
             shown: false,
-            reason: crate::api::schema::NotificationShowReason::Disabled,
+            reason: schema::NotificationShowReason::Disabled,
         }
     );
     assert!(app.state.toast.is_none());
@@ -113,34 +106,31 @@ fn notification_show_api_respects_off_delivery() {
 #[test]
 fn notification_show_api_does_not_replace_existing_toast() {
     let mut app = test_app();
-    app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
-    app.state.toast = Some(crate::app::state::ToastNotification {
-        kind: crate::app::state::ToastKind::NeedsAttention,
+    app.state.toast_config.delivery = config::ToastDelivery::Herdr;
+    app.state.toast = Some(crate::server::app_state::ToastNotification {
+        kind: crate::server::app_state::ToastKind::NeedsAttention,
         title: "pi needs attention".to_string(),
         context: "background · 2".to_string(),
         position: None,
         target: None,
     });
 
-    let response =
-        app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
-            id: "notify".into(),
-            method: crate::api::schema::Method::NotificationShow(
-                crate::api::schema::NotificationShowParams {
-                    title: "build failed".into(),
-                    body: None,
-                    position: None,
-                    sound: crate::api::schema::NotificationShowSound::None,
-                },
-            ),
-        });
+    let response = app.handle_api_request_after_internal_events_drained(schema::Request {
+        id: "notify".into(),
+        method: schema::Method::NotificationShow(schema::NotificationShowParams {
+            title: "build failed".into(),
+            body: None,
+            position: None,
+            sound: schema::NotificationShowSound::None,
+        }),
+    });
 
-    let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+    let parsed: schema::SuccessResponse = serde_json::from_str(&response).unwrap();
     assert_eq!(
         parsed.result,
-        crate::api::schema::ResponseResult::NotificationShow {
+        schema::ResponseResult::NotificationShow {
             shown: false,
-            reason: crate::api::schema::NotificationShowReason::Busy,
+            reason: schema::NotificationShowReason::Busy,
         }
     );
     assert_eq!(
@@ -152,28 +142,25 @@ fn notification_show_api_does_not_replace_existing_toast() {
 #[test]
 fn notification_show_api_is_rate_limited() {
     let mut app = test_app();
-    app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    app.state.toast_config.delivery = config::ToastDelivery::Herdr;
     app.mark_api_notification_shown(Instant::now());
 
-    let response =
-        app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
-            id: "notify".into(),
-            method: crate::api::schema::Method::NotificationShow(
-                crate::api::schema::NotificationShowParams {
-                    title: "build failed".into(),
-                    body: None,
-                    position: None,
-                    sound: crate::api::schema::NotificationShowSound::None,
-                },
-            ),
-        });
+    let response = app.handle_api_request_after_internal_events_drained(schema::Request {
+        id: "notify".into(),
+        method: schema::Method::NotificationShow(schema::NotificationShowParams {
+            title: "build failed".into(),
+            body: None,
+            position: None,
+            sound: schema::NotificationShowSound::None,
+        }),
+    });
 
-    let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+    let parsed: schema::SuccessResponse = serde_json::from_str(&response).unwrap();
     assert_eq!(
         parsed.result,
-        crate::api::schema::ResponseResult::NotificationShow {
+        schema::ResponseResult::NotificationShow {
             shown: false,
-            reason: crate::api::schema::NotificationShowReason::RateLimited,
+            reason: schema::NotificationShowReason::RateLimited,
         }
     );
     assert!(app.state.toast.is_none());
@@ -184,7 +171,7 @@ fn internal_event_drain_limits_work_per_tick() {
     let mut app = test_app();
     for _ in 0..=APP_EVENT_DRAIN_LIMIT {
         app.event_tx
-            .try_send(AppEvent::ClipboardWrite {
+            .try_send(TerminalEvent::ClipboardWrite {
                 content: Vec::new(),
             })
             .unwrap();
@@ -200,15 +187,15 @@ fn api_request_drains_all_pending_internal_events_before_reading_state() {
     let mut app = test_app();
     for _ in 0..=APP_EVENT_DRAIN_LIMIT {
         app.event_tx
-            .try_send(AppEvent::ClipboardWrite {
+            .try_send(TerminalEvent::ClipboardWrite {
                 content: Vec::new(),
             })
             .unwrap();
     }
 
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_server_stop_after_events".into(),
-        method: crate::api::schema::Method::ServerStop(crate::api::schema::EmptyParams::default()),
+        method: schema::Method::ServerStop(schema::EmptyParams::default()),
     });
     let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
@@ -218,57 +205,55 @@ fn api_request_drains_all_pending_internal_events_before_reading_state() {
 
 #[test]
 fn read_only_api_requests_do_not_force_rerender() {
-    let read_only = crate::api::schema::Request {
+    let read_only = schema::Request {
         id: "req_1".into(),
-        method: crate::api::schema::Method::WorkspaceList(
-            crate::api::schema::EmptyParams::default(),
-        ),
+        method: schema::Method::WorkspaceList(schema::EmptyParams::default()),
     };
-    let mutating = crate::api::schema::Request {
+    let mutating = schema::Request {
         id: "req_2".into(),
-        method: crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
+        method: schema::Method::WorkspaceFocus(schema::WorkspaceTarget {
             workspace_id: "w1".into(),
         }),
     };
-    let pane_rename = crate::api::schema::Request {
+    let pane_rename = schema::Request {
         id: "req_3".into(),
-        method: crate::api::schema::Method::PaneRename(crate::api::schema::PaneRenameParams {
+        method: schema::Method::PaneRename(schema::PaneRenameParams {
             pane_id: "w1:p1".into(),
             label: Some("logs".into()),
         }),
     };
-    let pane_swap = crate::api::schema::Request {
+    let pane_swap = schema::Request {
         id: "req_6".into(),
-        method: crate::api::schema::Method::PaneSwap(crate::api::schema::PaneSwapParams {
+        method: schema::Method::PaneSwap(schema::PaneSwapParams {
             pane_id: Some("w1:p1".into()),
-            direction: Some(crate::api::schema::PaneDirection::Right),
-            ..crate::api::schema::PaneSwapParams::default()
+            direction: Some(schema::PaneDirection::Right),
+            ..schema::PaneSwapParams::default()
         }),
     };
-    let pane_focus_direction = crate::api::schema::Request {
+    let pane_focus_direction = schema::Request {
         id: "req_7".into(),
-        method: crate::api::schema::Method::PaneFocusDirection(
-            crate::api::schema::PaneFocusDirectionParams {
-                pane_id: Some("w1:p1".into()),
-                direction: crate::api::schema::PaneDirection::Right,
-            },
-        ),
-    };
-    let pane_resize = crate::api::schema::Request {
-        id: "req_8".into(),
-        method: crate::api::schema::Method::PaneResize(crate::api::schema::PaneResizeParams {
+        method: schema::Method::PaneFocusDirection(schema::PaneFocusDirectionParams {
             pane_id: Some("w1:p1".into()),
-            direction: crate::api::schema::PaneDirection::Right,
+            direction: schema::PaneDirection::Right,
+        }),
+    };
+    let pane_resize = schema::Request {
+        id: "req_8".into(),
+        method: schema::Method::PaneResize(schema::PaneResizeParams {
+            pane_id: Some("w1:p1".into()),
+            direction: schema::PaneDirection::Right,
             amount: Some(0.05),
         }),
     };
 
-    assert!(!crate::api::request_changes_ui(&read_only));
-    assert!(crate::api::request_changes_ui(&mutating));
-    assert!(crate::api::request_changes_ui(&pane_rename));
-    assert!(crate::api::request_changes_ui(&pane_swap));
-    assert!(crate::api::request_changes_ui(&pane_focus_direction));
-    assert!(crate::api::request_changes_ui(&pane_resize));
+    assert!(!crate::server::api::request_changes_ui(&read_only));
+    assert!(crate::server::api::request_changes_ui(&mutating));
+    assert!(crate::server::api::request_changes_ui(&pane_rename));
+    assert!(crate::server::api::request_changes_ui(&pane_swap));
+    assert!(crate::server::api::request_changes_ui(
+        &pane_focus_direction
+    ));
+    assert!(crate::server::api::request_changes_ui(&pane_resize));
 }
 
 #[test]
@@ -279,7 +264,7 @@ fn workspace_create_response_includes_initial_tab_and_root_pane() {
     app.state.active = Some(0);
     app.state.selected = 0;
 
-    let crate::api::schema::ResponseResult::WorkspaceCreated {
+    let schema::ResponseResult::WorkspaceCreated {
         workspace,
         tab,
         root_pane,
@@ -306,7 +291,7 @@ fn tab_create_response_includes_root_pane() {
     app.state.active = Some(0);
     app.state.selected = 0;
 
-    let crate::api::schema::ResponseResult::TabCreated { tab, root_pane } =
+    let schema::ResponseResult::TabCreated { tab, root_pane } =
         app.tab_created_result(0, 1).unwrap()
     else {
         panic!("expected tab_created response");
@@ -395,7 +380,7 @@ fn workspace_creation_in_navigate_mode_uses_selected_workspace_seed_cwd() {
 #[test]
 fn new_terminal_cwd_follow_uses_source_cwd() {
     let cwd = creation::resolve_new_terminal_cwd(
-        &crate::config::NewTerminalCwdConfig::Follow,
+        &config::NewTerminalCwdConfig::Follow,
         Some(std::path::PathBuf::from("/tmp/herdr-source")),
     );
 
@@ -408,8 +393,7 @@ fn new_terminal_cwd_follow_without_source_uses_home() {
         return;
     };
 
-    let cwd =
-        creation::resolve_new_terminal_cwd(&crate::config::NewTerminalCwdConfig::Follow, None);
+    let cwd = creation::resolve_new_terminal_cwd(&config::NewTerminalCwdConfig::Follow, None);
 
     assert_eq!(cwd, home);
 }
@@ -417,7 +401,7 @@ fn new_terminal_cwd_follow_without_source_uses_home() {
 #[test]
 fn new_terminal_cwd_path_uses_configured_path() {
     let cwd = creation::resolve_new_terminal_cwd(
-        &crate::config::NewTerminalCwdConfig::Path("/tmp/herdr-fixed".into()),
+        &config::NewTerminalCwdConfig::Path("/tmp/herdr-fixed".into()),
         Some(std::path::PathBuf::from("/tmp/herdr-source")),
     );
 
@@ -428,9 +412,9 @@ fn new_terminal_cwd_path_uses_configured_path() {
 fn server_stop_request_sets_should_quit_flag() {
     let mut app = test_app();
 
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_server_stop".into(),
-        method: crate::api::schema::Method::ServerStop(crate::api::schema::EmptyParams::default()),
+        method: schema::Method::ServerStop(schema::EmptyParams::default()),
     });
     let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
@@ -449,9 +433,9 @@ fn pane_rename_request_sets_and_clears_manual_label() {
     app.state.selected = 0;
 
     let pane_id = app.pane_info(0, pane).unwrap().pane_id;
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_pane_rename".into(),
-        method: crate::api::schema::Method::PaneRename(crate::api::schema::PaneRenameParams {
+        method: schema::Method::PaneRename(schema::PaneRenameParams {
             pane_id: pane_id.clone(),
             label: Some("reviewer".into()),
         }),
@@ -475,9 +459,9 @@ fn pane_rename_request_sets_and_clears_manual_label() {
         Some("reviewer")
     );
 
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_pane_rename_clear".into(),
-        method: crate::api::schema::Method::PaneRename(crate::api::schema::PaneRenameParams {
+        method: schema::Method::PaneRename(schema::PaneRenameParams {
             pane_id,
             label: None,
         }),
@@ -511,7 +495,7 @@ fn terminal_and_agent_targets_treat_terminal_ids_differently() {
 
     assert!(matches!(
         app.resolve_agent_target(&resolved.terminal_id),
-        Err(crate::app::terminal_targets::TerminalTargetError::NotFound { .. })
+        Err(crate::server::workspaces::ids::TerminalTargetError::NotFound { .. })
     ));
 }
 
@@ -533,7 +517,7 @@ fn agent_target_rejects_a_pane_that_only_has_a_launch_command() {
     assert!(app.resolve_terminal_target(&pane_id).is_ok());
     assert!(matches!(
         app.resolve_agent_target(&pane_id),
-        Err(crate::app::terminal_targets::TerminalTargetError::NotFound { .. })
+        Err(crate::server::workspaces::ids::TerminalTargetError::NotFound { .. })
     ));
 }
 
@@ -551,8 +535,8 @@ fn terminal_target_resolves_pane_id_for_an_agent() {
         .get_mut(&attached_terminal_id)
         .unwrap()
         .set_detected_state(
-            Some(crate::detect::Agent::Pi),
-            crate::detect::AgentState::Idle,
+            Some(crate::agents::AgentKind::Pi),
+            crate::agents::AgentState::Idle,
         );
     app.state.active = Some(0);
     app.state.selected = 0;
@@ -601,8 +585,8 @@ fn agent_target_treats_legacy_pane_syntax_as_a_name() {
     app.state.ensure_test_terminals();
     let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
     terminal.set_detected_state(
-        Some(crate::detect::Agent::Pi),
-        crate::detect::AgentState::Idle,
+        Some(crate::agents::AgentKind::Pi),
+        crate::agents::AgentState::Idle,
     );
     terminal.set_agent_name("p_1".into());
 
@@ -623,7 +607,7 @@ fn terminal_target_reports_missing_target() {
 
     assert_eq!(
         err,
-        crate::app::terminal_targets::TerminalTargetError::NotFound {
+        crate::server::workspaces::ids::TerminalTargetError::NotFound {
             target: "missing-agent".into()
         }
     );
@@ -662,7 +646,7 @@ fn terminal_target_reports_ambiguous_duplicate_agent_name() {
 
     let err = app.resolve_terminal_target("worker").unwrap_err();
 
-    let crate::app::terminal_targets::TerminalTargetError::Ambiguous { target, candidates } = err
+    let crate::server::workspaces::ids::TerminalTargetError::Ambiguous { target, candidates } = err
     else {
         panic!("expected ambiguous terminal target");
     };
@@ -695,12 +679,12 @@ async fn pane_split_request_focuses_new_pane_when_requested() {
     let target_pane_id = app.pane_info(0, target_pane).unwrap().pane_id;
     let target_tab_id = app.public_tab_id(0, background_tab).unwrap();
 
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_pane_split_focus_background_tab".into(),
-        method: crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
+        method: schema::Method::PaneSplit(schema::PaneSplitParams {
             workspace_id: None,
             target_pane_id: Some(target_pane_id),
-            direction: crate::api::schema::SplitDirection::Right,
+            direction: schema::SplitDirection::Right,
             ratio: None,
             cwd: None,
             focus: true,
@@ -742,16 +726,16 @@ async fn pane_split_request_applies_ratio() {
 
     let target_pane_id = app.pane_info(0, target_pane).unwrap().pane_id;
 
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_pane_split_ratio".into(),
-        method: crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
+        method: schema::Method::PaneSplit(schema::PaneSplitParams {
             workspace_id: None,
             target_pane_id: Some(target_pane_id),
-            direction: crate::api::schema::SplitDirection::Right,
+            direction: schema::SplitDirection::Right,
             ratio: Some(0.333),
             cwd: None,
             focus: false,
-            right_click: crate::api::schema::PaneRightClickTarget::Pane,
+            right_click: schema::PaneRightClickTarget::Pane,
             env: Default::default(),
         }),
     });
@@ -797,12 +781,12 @@ async fn pane_split_request_uses_active_focused_pane_when_target_is_omitted() {
     app.state.selected = 0;
     app.state.focus_pane_in_workspace(0, target_pane);
 
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_pane_split_current".into(),
-        method: crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
+        method: schema::Method::PaneSplit(schema::PaneSplitParams {
             workspace_id: None,
             target_pane_id: None,
-            direction: crate::api::schema::SplitDirection::Right,
+            direction: schema::SplitDirection::Right,
             ratio: None,
             cwd: None,
             focus: false,
@@ -840,9 +824,9 @@ async fn unavailable_agent_start_does_not_mutate_topology() {
     app.state.selected = 0;
     let pane_id = app.pane_info(0, root).unwrap().pane_id;
 
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_agent_start_target".into(),
-        method: crate::api::schema::Method::AgentStart(crate::api::schema::AgentStartParams {
+        method: schema::Method::AgentStart(schema::AgentStartParams {
             name: "worker".into(),
             kind: "pi".into(),
             pane_id,
@@ -882,9 +866,9 @@ async fn failed_agent_start_input_rolls_back_and_can_retry() {
         .unwrap();
     app.terminal_runtimes.insert(terminal_id.clone(), runtime);
 
-    let request = || crate::api::schema::Request {
+    let request = || schema::Request {
         id: "req_agent_start_input".into(),
-        method: crate::api::schema::Method::AgentStart(crate::api::schema::AgentStartParams {
+        method: schema::Method::AgentStart(schema::AgentStartParams {
             name: "worker".into(),
             kind: "codex".into(),
             pane_id: pane_id.clone(),
@@ -924,9 +908,9 @@ async fn failed_agent_start_input_rolls_back_and_can_retry() {
         app.state.terminals[&terminal_id].agent_name.as_deref(),
         Some("worker")
     );
-    let rename = app.handle_api_request(crate::api::schema::Request {
+    let rename = app.handle_api_request(schema::Request {
         id: "req_agent_rename_pending".into(),
-        method: crate::api::schema::Method::AgentRename(crate::api::schema::AgentRenameParams {
+        method: schema::Method::AgentRename(schema::AgentRenameParams {
             target: pane_id,
             name: Some("replacement".into()),
         }),
@@ -953,9 +937,9 @@ fn pane_close_request_closes_only_the_target_tab_when_other_tabs_exist() {
     let target_pane = app.state.workspaces[0].tabs[second_tab].root_pane;
     let target_pane_id = app.pane_info(0, target_pane).unwrap().pane_id;
 
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_pane_close".into(),
-        method: crate::api::schema::Method::PaneClose(crate::api::schema::PaneTarget {
+        method: schema::Method::PaneClose(schema::PaneTarget {
             pane_id: target_pane_id,
         }),
     });
@@ -979,9 +963,9 @@ fn pane_close_request_closes_workspace_when_it_removes_the_last_pane() {
     let target_pane = app.state.workspaces[0].tabs[0].root_pane;
     let target_pane_id = app.pane_info(0, target_pane).unwrap().pane_id;
 
-    let response = app.handle_api_request(crate::api::schema::Request {
+    let response = app.handle_api_request(schema::Request {
         id: "req_pane_close_last".into(),
-        method: crate::api::schema::Method::PaneClose(crate::api::schema::PaneTarget {
+        method: schema::Method::PaneClose(schema::PaneTarget {
             pane_id: target_pane_id,
         }),
     });
@@ -1029,11 +1013,11 @@ fn headless_next_loop_deadline_returns_none_when_resize_poll_is_only_deadline() 
 
 #[test]
 fn due_session_save_starts_background_writer() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _guard = config::test_config_env_lock().lock().unwrap();
+    let _bus = config::test_without_bus_env(&_guard);
     let config_home = unique_temp_path("background-session-save");
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
-    std::env::remove_var(crate::session::SESSION_ENV_VAR);
+    std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
 
     let mut app = test_app();
     app.policy.persist_session = true;
@@ -1046,7 +1030,9 @@ fn due_session_save_starts_background_writer() {
     assert!(app.session_save_thread.is_some());
     assert!(app.session_save_deadline.is_none());
     app.save_session_now();
-    assert!(crate::session::data_dir().join("session.json").exists());
+    assert!(crate::utils::paths::data_dir()
+        .join("session.json")
+        .exists());
 
     std::env::remove_var("XDG_CONFIG_HOME");
     let _ = std::fs::remove_dir_all(config_home);
@@ -1095,11 +1081,11 @@ fn final_session_save_joins_background_writer_before_returning() {
 
 #[tokio::test]
 async fn pane_exit_checkpoint_survives_automatic_workspace_creation_on_shutdown() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _guard = config::test_config_env_lock().lock().unwrap();
+    let _bus = config::test_without_bus_env(&_guard);
     let config_home = unique_temp_path("signaled-pane-session-checkpoint");
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
-    std::env::remove_var(crate::session::SESSION_ENV_VAR);
+    std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
 
     let mut app = test_app();
     app.policy.persist_session = true;
@@ -1110,11 +1096,11 @@ async fn pane_exit_checkpoint_survives_automatic_workspace_creation_on_shutdown(
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
 
-    app.handle_internal_event(AppEvent::PaneDied {
+    app.handle_internal_event(TerminalEvent::PaneDied {
         pane_id: first_pane,
         exit_reason: crate::platform::ChildExitReason::Interrupted,
     });
-    app.handle_internal_event(AppEvent::PaneDied {
+    app.handle_internal_event(TerminalEvent::PaneDied {
         pane_id: second_pane,
         exit_reason: crate::platform::ChildExitReason::Interrupted,
     });
@@ -1123,7 +1109,7 @@ async fn pane_exit_checkpoint_survives_automatic_workspace_creation_on_shutdown(
 
     app.save_session_on_shutdown();
 
-    let snapshot = crate::persist::load().expect("checkpointed session should survive");
+    let snapshot = crate::server::persistence::load().expect("checkpointed session should survive");
     assert_eq!(snapshot.workspaces.len(), 1);
     assert_eq!(snapshot.workspaces[0].tabs[0].panes.len(), 2);
 
@@ -1133,11 +1119,11 @@ async fn pane_exit_checkpoint_survives_automatic_workspace_creation_on_shutdown(
 
 #[test]
 fn normal_autosave_replaces_a_signaled_exit_checkpoint() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _guard = config::test_config_env_lock().lock().unwrap();
+    let _bus = config::test_without_bus_env(&_guard);
     let config_home = unique_temp_path("signaled-pane-autosave");
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
-    std::env::remove_var(crate::session::SESSION_ENV_VAR);
+    std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
 
     let mut app = test_app();
     app.policy.persist_session = true;
@@ -1147,11 +1133,11 @@ fn normal_autosave_replaces_a_signaled_exit_checkpoint() {
     app.state.active = Some(0);
     app.state.ensure_test_terminals();
 
-    app.handle_internal_event(AppEvent::PaneDied {
+    app.handle_internal_event(TerminalEvent::PaneDied {
         pane_id,
         exit_reason: crate::platform::ChildExitReason::Interrupted,
     });
-    assert!(crate::persist::load().is_some());
+    assert!(crate::server::persistence::load().is_some());
 
     app.start_background_session_save();
     if let Some(thread) = app.session_save_thread.take() {
@@ -1159,7 +1145,7 @@ fn normal_autosave_replaces_a_signaled_exit_checkpoint() {
     }
     app.save_session_on_shutdown();
 
-    assert!(crate::persist::load().is_none());
+    assert!(crate::server::persistence::load().is_none());
 
     std::env::remove_var("XDG_CONFIG_HOME");
     let _ = std::fs::remove_dir_all(config_home);
@@ -1167,11 +1153,11 @@ fn normal_autosave_replaces_a_signaled_exit_checkpoint() {
 
 #[test]
 fn durable_mutation_after_pane_exit_checkpoint_wins_on_shutdown() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _guard = config::test_config_env_lock().lock().unwrap();
+    let _bus = config::test_without_bus_env(&_guard);
     let config_home = unique_temp_path("pane-exit-newer-session-state");
     std::env::set_var("XDG_CONFIG_HOME", &config_home);
-    std::env::remove_var(crate::session::SESSION_ENV_VAR);
+    std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
 
     for another_interrupted_exit in [false, true] {
         let mut app = test_app();
@@ -1182,7 +1168,7 @@ fn durable_mutation_after_pane_exit_checkpoint_wins_on_shutdown() {
         app.state.active = Some(0);
         app.state.ensure_test_terminals();
 
-        app.handle_internal_event(AppEvent::PaneDied {
+        app.handle_internal_event(TerminalEvent::PaneDied {
             pane_id,
             exit_reason: crate::platform::ChildExitReason::Interrupted,
         });
@@ -1191,14 +1177,14 @@ fn durable_mutation_after_pane_exit_checkpoint_wins_on_shutdown() {
         app.state.ensure_test_terminals();
         app.state.mark_session_dirty();
         if another_interrupted_exit {
-            app.handle_internal_event(AppEvent::PaneDied {
+            app.handle_internal_event(TerminalEvent::PaneDied {
                 pane_id: app.state.workspaces[0].tabs[0].root_pane,
                 exit_reason: crate::platform::ChildExitReason::Interrupted,
             });
         }
         app.save_session_on_shutdown();
 
-        let snapshot = crate::persist::load().expect("newer session should be saved");
+        let snapshot = crate::server::persistence::load().expect("newer session should be saved");
         assert_eq!(snapshot.workspaces.len(), 1);
         assert_eq!(snapshot.workspaces[0].custom_name.as_deref(), Some("newer"));
     }
@@ -1224,9 +1210,9 @@ async fn full_internal_event_queue_eventually_applies_working_to_idle_transition
         .unwrap()
         .attached_terminal_id
         .clone();
-    app.handle_internal_event(AppEvent::StateChanged {
+    app.handle_internal_event(TerminalEvent::StateChanged {
         pane_id,
-        agent: Some(Agent::Pi),
+        agent: Some(AgentKind::Pi),
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
@@ -1239,16 +1225,16 @@ async fn full_internal_event_queue_eventually_applies_working_to_idle_transition
 
     for _ in 0..APP_EVENT_CHANNEL_CAPACITY {
         app.event_tx
-            .try_send(AppEvent::ClipboardWrite {
+            .try_send(TerminalEvent::ClipboardWrite {
                 content: Vec::new(),
             })
             .unwrap();
     }
 
     let tx = app.event_tx.clone();
-    let send = tx.send(AppEvent::StateChanged {
+    let send = tx.send(TerminalEvent::StateChanged {
         pane_id,
-        agent: Some(Agent::Pi),
+        agent: Some(AgentKind::Pi),
         state: AgentState::Idle,
         visible_blocker: false,
         process_exited: false,

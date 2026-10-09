@@ -1,6 +1,6 @@
 /// Which agent we detected running in a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Agent {
+pub enum AgentKind {
     Pi,
     Claude,
     Codex,
@@ -26,7 +26,7 @@ pub enum Agent {
     Muse,
 }
 
-impl Agent {
+impl AgentKind {
     #[cfg(test)]
     pub const ALL: [Self; 23] = [
         Self::Pi,
@@ -79,105 +79,105 @@ impl Agent {
     ];
 }
 
-pub fn agent_label(agent: Agent) -> &'static str {
+pub fn agent_label(agent: AgentKind) -> &'static str {
     match agent {
-        Agent::Pi => "pi",
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-        Agent::Gemini => "gemini",
-        Agent::Cursor => "cursor",
-        Agent::Devin => "devin",
-        Agent::Antigravity => "agy",
-        Agent::Cline => "cline",
-        Agent::Omp => "omp",
-        Agent::Mastracode => "mastracode",
-        Agent::OpenCode => "opencode",
-        Agent::GithubCopilot => "copilot",
-        Agent::Kimi => "kimi",
-        Agent::Kiro => "kiro",
-        Agent::Droid => "droid",
-        Agent::Amp => "amp",
-        Agent::Grok => "grok",
-        Agent::Hermes => "hermes",
-        Agent::Kilo => "kilo",
-        Agent::Qodercli => "qodercli",
-        Agent::Qwen => "qwen",
-        Agent::Maki => "maki",
-        Agent::Muse => "muse",
+        AgentKind::Pi => "pi",
+        AgentKind::Claude => "claude",
+        AgentKind::Codex => "codex",
+        AgentKind::Gemini => "gemini",
+        AgentKind::Cursor => "cursor",
+        AgentKind::Devin => "devin",
+        AgentKind::Antigravity => "agy",
+        AgentKind::Cline => "cline",
+        AgentKind::Omp => "omp",
+        AgentKind::Mastracode => "mastracode",
+        AgentKind::OpenCode => "opencode",
+        AgentKind::GithubCopilot => "copilot",
+        AgentKind::Kimi => "kimi",
+        AgentKind::Kiro => "kiro",
+        AgentKind::Droid => "droid",
+        AgentKind::Amp => "amp",
+        AgentKind::Grok => "grok",
+        AgentKind::Hermes => "hermes",
+        AgentKind::Kilo => "kilo",
+        AgentKind::Qodercli => "qodercli",
+        AgentKind::Qwen => "qwen",
+        AgentKind::Maki => "maki",
+        AgentKind::Muse => "muse",
     }
 }
 
-pub fn interactive_agent_executable(agent: Agent) -> &'static str {
+pub fn interactive_agent_executable(agent: AgentKind) -> &'static str {
     match agent {
-        Agent::Pi => "pi",
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-        Agent::Gemini => "gemini",
-        Agent::Cursor => {
+        AgentKind::Pi => "pi",
+        AgentKind::Claude => "claude",
+        AgentKind::Codex => "codex",
+        AgentKind::Gemini => "gemini",
+        AgentKind::Cursor => {
             if cfg!(windows) {
                 "cursor-agent.cmd"
             } else {
                 "cursor-agent"
             }
         }
-        Agent::Devin => "devin",
-        Agent::Antigravity => "agy",
-        Agent::Cline => "cline",
-        Agent::Omp => "omp",
-        Agent::Mastracode => "mastracode",
-        Agent::OpenCode => "opencode",
-        Agent::GithubCopilot => "copilot",
-        Agent::Kimi => "kimi",
-        Agent::Kiro => "kiro-cli",
-        Agent::Droid => "droid",
-        Agent::Amp => "amp",
-        Agent::Grok => "grok",
-        Agent::Hermes => "hermes",
-        Agent::Kilo => "kilo",
-        Agent::Qodercli => "qodercli",
-        Agent::Qwen => "qwen",
-        Agent::Maki => "maki",
-        Agent::Muse => "muse",
+        AgentKind::Devin => "devin",
+        AgentKind::Antigravity => "agy",
+        AgentKind::Cline => "cline",
+        AgentKind::Omp => "omp",
+        AgentKind::Mastracode => "mastracode",
+        AgentKind::OpenCode => "opencode",
+        AgentKind::GithubCopilot => "copilot",
+        AgentKind::Kimi => "kimi",
+        AgentKind::Kiro => "kiro-cli",
+        AgentKind::Droid => "droid",
+        AgentKind::Amp => "amp",
+        AgentKind::Grok => "grok",
+        AgentKind::Hermes => "hermes",
+        AgentKind::Kilo => "kilo",
+        AgentKind::Qodercli => "qodercli",
+        AgentKind::Qwen => "qwen",
+        AgentKind::Maki => "maki",
+        AgentKind::Muse => "muse",
     }
 }
 
-pub fn parse_agent_label(agent: &str) -> Option<Agent> {
+pub fn parse_agent_label(agent: &str) -> Option<AgentKind> {
     let name = normalized_agent_lookup_name(agent);
     parse_canonical_agent_label(&name).or_else(|| lookup_agent(&name))
 }
 
-pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
+pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<AgentKind> {
     let agent = lookup_agent(label)?;
     (agent_label(agent) == label).then_some(agent)
 }
 
-fn lookup_agent(name: &str) -> Option<Agent> {
+fn lookup_agent(name: &str) -> Option<AgentKind> {
     let name = path_basename(name);
     match name {
-        "pi" => Some(Agent::Pi),
-        "claude" | "claude-code" => Some(Agent::Claude),
-        "codex" => Some(Agent::Codex),
-        "gemini" => Some(Agent::Gemini),
-        "cursor" | "cursor-agent" => Some(Agent::Cursor),
-        "devin" | "devin-cli" | "devin cli" => Some(Agent::Devin),
-        "agy" | "antigravity" | "antigravity-cli" => Some(Agent::Antigravity),
-        "cline" => Some(Agent::Cline),
-        "omp" => Some(Agent::Omp),
-        "mastracode" | "mastra-code" | "mastra code" => Some(Agent::Mastracode),
-        "opencode" | "opencode2" | "open-code" => Some(Agent::OpenCode),
-        "copilot" | "github-copilot" | "ghcs" => Some(Agent::GithubCopilot),
-        "kimi" | "kimi-code" | "kimi code" => Some(Agent::Kimi),
-        "kiro" | "kiro-cli" => Some(Agent::Kiro),
-        "droid" => Some(Agent::Droid),
-        "amp" | "amp-local" => Some(Agent::Amp),
-        "grok" | "grok-build" => Some(Agent::Grok),
-        "hermes" | "hermes-agent" => Some(Agent::Hermes),
-        "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
-        "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
-        "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
-        "maki" => Some(Agent::Maki),
-        "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
-        _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
+        "pi" => Some(AgentKind::Pi),
+        "claude" | "claude-code" => Some(AgentKind::Claude),
+        "codex" => Some(AgentKind::Codex),
+        "gemini" => Some(AgentKind::Gemini),
+        "cursor" | "cursor-agent" => Some(AgentKind::Cursor),
+        "devin" | "devin-cli" | "devin cli" => Some(AgentKind::Devin),
+        "agy" | "antigravity" | "antigravity-cli" => Some(AgentKind::Antigravity),
+        "cline" => Some(AgentKind::Cline),
+        "omp" => Some(AgentKind::Omp),
+        "mastracode" | "mastra-code" | "mastra code" => Some(AgentKind::Mastracode),
+        "opencode" | "opencode2" | "open-code" => Some(AgentKind::OpenCode),
+        "copilot" | "github-copilot" | "ghcs" => Some(AgentKind::GithubCopilot),
+        "kimi" | "kimi-code" | "kimi code" => Some(AgentKind::Kimi),
+        "kiro" | "kiro-cli" => Some(AgentKind::Kiro),
+        "droid" => Some(AgentKind::Droid),
+        "amp" | "amp-local" => Some(AgentKind::Amp),
+        "grok" | "grok-build" => Some(AgentKind::Grok),
+        "hermes" | "hermes-agent" => Some(AgentKind::Hermes),
+        "kilo" | "kilo-code" | "kilo code" => Some(AgentKind::Kilo),
+        "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(AgentKind::Qodercli),
+        "qwen" | "qwen-code" | "qwen code" => Some(AgentKind::Qwen),
+        "maki" => Some(AgentKind::Maki),
+        "muse" | "muse-code" | "muse-cli" => Some(AgentKind::Muse),
+        _ if is_muse_versioned_binary(name) => Some(AgentKind::Muse),
         _ => None,
     }
 }

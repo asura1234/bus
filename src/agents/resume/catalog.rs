@@ -34,13 +34,16 @@ pub fn session_ref_from_report(
 }
 
 pub fn persisted_session_from_launch_args(
-    agent: crate::detect::Agent,
+    agent: crate::agents::AgentKind,
     args: &[String],
 ) -> Option<PersistedAgentSession> {
     let [command, session_id] = args else {
         return None;
     };
-    if agent != crate::detect::Agent::Codex || command != "resume" || session_id.starts_with('-') {
+    if agent != crate::agents::AgentKind::Codex
+        || command != "resume"
+        || session_id.starts_with('-')
+    {
         return None;
     }
 
@@ -230,7 +233,7 @@ mod tests {
     fn codex_noncanonical_resume_launch_has_no_explicit_session() {
         assert_eq!(
             persisted_session_from_launch_args(
-                crate::detect::Agent::Codex,
+                crate::agents::AgentKind::Codex,
                 &["resume".into(), "codex-session".into()]
             )
             .unwrap()
@@ -239,17 +242,17 @@ mod tests {
             "codex-session"
         );
         assert!(persisted_session_from_launch_args(
-            crate::detect::Agent::Codex,
+            crate::agents::AgentKind::Codex,
             &["resume".into(), "--last".into()]
         )
         .is_none());
         assert!(persisted_session_from_launch_args(
-            crate::detect::Agent::Codex,
+            crate::agents::AgentKind::Codex,
             &["resume".into(), "not-a-session".into(), "--last".into()]
         )
         .is_none());
         assert!(persisted_session_from_launch_args(
-            crate::detect::Agent::Codex,
+            crate::agents::AgentKind::Codex,
             &[
                 "--remote".into(),
                 "ws://example.test".into(),

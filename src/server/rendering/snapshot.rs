@@ -1,7 +1,7 @@
 use ratatui::layout::Rect;
 
-use crate::app;
-use crate::protocol::{self, FrameData};
+use crate::protocol::wire::{self as protocol, FrameData};
+use crate::server::app;
 
 pub(in crate::server) fn snapshot(
     app: &app::App,
@@ -90,7 +90,7 @@ pub(in crate::server) fn snapshot(
         .collect();
     let agents = snapshot_agents(snapshot.agents, focused_pane_id.as_deref());
 
-    let agent_order = crate::ui::agent_panel_entries_from(&app.state)
+    let agent_order = crate::server::rendering::surface::agent_panel_entries_from(&app.state)
         .into_iter()
         .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
         .collect();
@@ -121,10 +121,10 @@ pub(in crate::server) struct RenderedPaneSurface {
 
 pub(in crate::server) fn render_pane_surface(
     app: &mut app::App,
-    target: Option<crate::ui::TabSurfaceTarget>,
+    target: Option<crate::server::rendering::surface::TabSurfaceTarget>,
     area: Rect,
     resize_panes: bool,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    cell_size: crate::protocol::kitty::HostCellSize,
     graphics_delivery: &crate::server::rendering::images::DeliveryCache,
 ) -> RenderedPaneSurface {
     let content_revisions_before = target
@@ -196,7 +196,7 @@ pub(in crate::server) fn render_pane_surface(
             })
         })
         .collect();
-    let (graphics, next_graphics_delivery) = crate::server::rendering::snapshot_graphics::collect(
+    let (graphics, next_graphics_delivery) = crate::server::rendering::images::collect(
         app,
         &layout.pane_infos,
         &layout.split_borders,
@@ -215,7 +215,7 @@ pub(in crate::server) fn render_pane_surface(
 
 fn snapshot_workspaces(
     app: &app::App,
-    workspaces: Vec<crate::api::schema::WorkspaceInfo>,
+    workspaces: Vec<crate::protocol::api::schema::WorkspaceInfo>,
     location: Option<&crate::server::clients::connection::ClientShellLocation>,
     focused_workspace_id: Option<&str>,
 ) -> Vec<protocol::ClientShellWorkspace> {
@@ -255,7 +255,7 @@ fn snapshot_workspaces(
 }
 
 fn snapshot_agents(
-    agents: Vec<crate::api::schema::AgentInfo>,
+    agents: Vec<crate::protocol::api::schema::AgentInfo>,
     focused_pane_id: Option<&str>,
 ) -> Vec<protocol::ClientShellAgent> {
     agents
@@ -289,10 +289,10 @@ fn snapshot_agents(
 
 fn snapshot_surface_panes(
     app: &app::App,
-    target: Option<crate::ui::TabSurfaceTarget>,
-    pane_infos: &[crate::layout::PaneInfo],
-    cell_size: crate::kitty_graphics::HostCellSize,
-    content_revisions_before: &std::collections::HashMap<crate::layout::PaneId, u64>,
+    target: Option<crate::server::rendering::surface::TabSurfaceTarget>,
+    pane_infos: &[crate::server::workspaces::layout::PaneInfo],
+    cell_size: crate::protocol::kitty::HostCellSize,
+    content_revisions_before: &std::collections::HashMap<crate::utils::ids::PaneId, u64>,
 ) -> Vec<protocol::PaneSurfacePane> {
     target
         .map(|target| {
@@ -357,7 +357,7 @@ fn snapshot_surface_panes(
 }
 
 fn split_hit_rect(
-    split: &crate::layout::SplitBorder,
+    split: &crate::server::workspaces::layout::SplitBorder,
     pane_borders: bool,
     pane_gaps: bool,
     pane_frames: &[Rect],
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn split_hits_follow_released_border_and_gap_geometry() {
-        let horizontal = crate::layout::SplitBorder {
+        let horizontal = crate::server::workspaces::layout::SplitBorder {
             pos: 20,
             direction: ratatui::layout::Direction::Horizontal,
             ratio: 0.5,
@@ -438,7 +438,7 @@ mod tests {
         );
         assert_eq!(split_hit_rect(&horizontal, false, false, &[]), None);
 
-        let vertical = crate::layout::SplitBorder {
+        let vertical = crate::server::workspaces::layout::SplitBorder {
             pos: 9,
             direction: ratatui::layout::Direction::Vertical,
             ratio: 0.5,
@@ -450,7 +450,7 @@ mod tests {
             Some(Rect::new(2, 8, 40, 2))
         );
 
-        let edge = crate::layout::SplitBorder {
+        let edge = crate::server::workspaces::layout::SplitBorder {
             pos: 0,
             direction: ratatui::layout::Direction::Horizontal,
             ratio: 0.5,

@@ -86,7 +86,7 @@ impl EndpointServerWelcome {
     pub fn compatible(methods: Vec<String>) -> Self {
         Self {
             generation: ENDPOINT_PROTOCOL_GENERATION,
-            server_version: crate::build_info::version(),
+            server_version: crate::utils::version::version(),
             snapshot_codec: SNAPSHOT_CODEC_V1.into(),
             surface_codec: SURFACE_CODEC_V1.into(),
             input_codec: INPUT_CODEC_V1.into(),
@@ -103,7 +103,7 @@ impl EndpointServerWelcome {
     pub fn incompatible(code: &str, message: impl Into<String>) -> Self {
         Self {
             generation: ENDPOINT_PROTOCOL_GENERATION,
-            server_version: crate::build_info::version(),
+            server_version: crate::utils::version::version(),
             snapshot_codec: SNAPSHOT_CODEC_V1.into(),
             surface_codec: SURFACE_CODEC_V1.into(),
             input_codec: INPUT_CODEC_V1.into(),
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(snapshot.boot_id, "boot-v1");
         assert_eq!(
             snapshot.workspaces[0].agent_status,
-            crate::api::schema::AgentStatus::Working
+            crate::protocol::api::schema::AgentStatus::Working
         );
     }
 

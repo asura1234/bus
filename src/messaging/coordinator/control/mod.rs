@@ -15,7 +15,7 @@ use super::{
     AgentRuntimeIdentity, BTreeSet, BusState, CallbackDisposition, CallbackEventKind, JsonStore,
     ProviderCallback, SubmissionOutcome, Transport,
 };
-use crate::bus::control::{Request as ControlRequest, Response};
+use crate::messaging::control::{Request as ControlRequest, Response};
 #[cfg(test)]
 use crate::messaging::model::MASTER_ROOM_NAME;
 use serde_json::{json, Value};

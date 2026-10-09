@@ -1,5 +1,5 @@
 use super::{Palette, ThemeRuntimeConfig};
-use crate::config::Config;
+use crate::utils::config::Config;
 
 fn normalize_theme_name(name: &str) -> String {
     name.to_lowercase().replace([' ', '_'], "-")
@@ -33,7 +33,7 @@ fn sibling_theme_names(name: &str) -> (String, String) {
 }
 
 pub(crate) fn theme_runtime_config(
-    config: &crate::config::Config,
+    config: &crate::utils::config::Config,
     use_legacy_ui_accent: bool,
 ) -> ThemeRuntimeConfig {
     let manual_name = config
@@ -64,7 +64,7 @@ fn resolve_palette_for_theme_name(
     name: &str,
     fallback_name: &str,
     runtime: &ThemeRuntimeConfig,
-    mode_custom: Option<&crate::config::ModeThemeColors>,
+    mode_custom: Option<&crate::utils::config::ModeThemeColors>,
 ) -> Palette {
     let mut palette = Palette::from_name(name).unwrap_or_else(|| {
         tracing::warn!(target: "bus::server::app", theme = name,
@@ -78,7 +78,7 @@ fn resolve_palette_for_theme_name(
         palette = palette.with_overrides(custom);
     }
     if let Some(accent) = &runtime.legacy_accent {
-        palette.accent = crate::config::parse_color(accent);
+        palette.accent = crate::utils::config::parse_color(accent);
     }
     if let Some(custom) = mode_custom {
         palette = palette.with_mode_overrides(custom);
@@ -89,11 +89,11 @@ fn resolve_palette_for_theme_name(
 
 pub(crate) fn resolve_effective_theme(
     runtime: &ThemeRuntimeConfig,
-    appearance: Option<crate::terminal_theme::HostAppearance>,
+    appearance: Option<crate::utils::theme::color::HostAppearance>,
 ) -> (Palette, String) {
     let (name, fallback, mode_custom) = if runtime.auto_switch {
-        match appearance.unwrap_or(crate::terminal_theme::HostAppearance::Dark) {
-            crate::terminal_theme::HostAppearance::Dark => (
+        match appearance.unwrap_or(crate::utils::theme::color::HostAppearance::Dark) {
+            crate::utils::theme::color::HostAppearance::Dark => (
                 &runtime.dark_name,
                 "catppuccin",
                 runtime
@@ -101,7 +101,7 @@ pub(crate) fn resolve_effective_theme(
                     .as_ref()
                     .and_then(|custom| custom.dark.as_ref()),
             ),
-            crate::terminal_theme::HostAppearance::Light => (
+            crate::utils::theme::color::HostAppearance::Light => (
                 &runtime.light_name,
                 "catppuccin-latte",
                 runtime
@@ -130,7 +130,7 @@ pub(crate) fn client_palette_from_config(config: &Config) -> Palette {
 
 pub(crate) fn client_palette_for_appearance(
     runtime: &ThemeRuntimeConfig,
-    appearance: crate::terminal_theme::HostAppearance,
+    appearance: crate::utils::theme::color::HostAppearance,
 ) -> Palette {
     resolve_effective_theme(runtime, Some(appearance)).0
 }

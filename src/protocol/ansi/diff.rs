@@ -2,7 +2,7 @@ use super::cursor::{
     resolve_host_cursor_state, write_host_cursor_state, write_ime_anchor_cursor_state,
 };
 use super::style::{cells_visually_equal, close_hyperlink, sanitized_frame_hyperlinks, write_cell};
-use crate::protocol::{CellData, CursorState, FrameData, PaneSurfacePatchRow};
+use crate::protocol::wire::{CellData, CursorState, FrameData, PaneSurfacePatchRow};
 use std::cmp;
 use std::io::Write;
 use unicode_width::UnicodeWidthStr;

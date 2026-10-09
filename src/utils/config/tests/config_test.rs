@@ -2,8 +2,8 @@ use super::*;
 
 #[test]
 fn leaf_config_load_keeps_caller_overrides_outside_the_loader() {
-    let guard = crate::config::test_config_env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&guard);
+    let guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _bus = crate::utils::config::test_without_bus_env(&guard);
     let root = std::env::temp_dir().join(format!("herdr-config-leaf-{}", std::process::id()));
     std::fs::create_dir_all(root.join("herdr-config")).unwrap();
     std::fs::write(
@@ -24,7 +24,7 @@ fn leaf_config_load_keeps_caller_overrides_outside_the_loader() {
 
 #[test]
 fn config_diagnostic_summary_uses_compact_actionable_banner() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let diagnostics = vec![
         "one".to_string(),
         "two".to_string(),
@@ -41,7 +41,7 @@ fn config_diagnostic_summary_uses_compact_actionable_banner() {
 
 #[test]
 fn config_diagnostic_summary_reports_unknown_keys_as_invalid() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let startup = vec![
         "unknown config key ui.mouse_captur; using defaults".to_string(),
         "unknown config key keys.new_tabb; using defaults".to_string(),
@@ -60,7 +60,7 @@ fn config_diagnostic_summary_reports_unknown_keys_as_invalid() {
 
 #[test]
 fn config_diagnostic_summary_keeps_mixed_diagnostics_generic() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let diagnostics = vec![
         "invalid ui config: invalid type: string; keeping current ui settings".to_string(),
         "theme.name = \"catppucin\" is not a known theme".to_string(),
@@ -74,7 +74,7 @@ fn config_diagnostic_summary_keeps_mixed_diagnostics_generic() {
 
 #[test]
 fn config_diagnostic_summary_reports_default_fallback() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let diagnostics = vec![
             "config parse error: TOML parse error at line 33, column 8\n   |\n33 | type = \"popup\"\n   |        ^^^^^^^\nunknown variant `popup`; using defaults"
                 .to_string(),
@@ -88,7 +88,7 @@ fn config_diagnostic_summary_reports_default_fallback() {
 
 #[test]
 fn config_diagnostic_summary_reports_unreadable_config_impact() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let startup = vec!["config read error: permission denied; using defaults".to_string()];
     assert_eq!(
         config_diagnostic_summary(&startup).as_deref(),
@@ -104,7 +104,7 @@ fn config_diagnostic_summary_reports_unreadable_config_impact() {
 
 #[test]
 fn config_diagnostic_summary_reports_retained_live_config() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let diagnostics = vec![
         "config parse error: TOML parse error at line 7, column 4; keeping current config"
             .to_string(),
@@ -118,8 +118,8 @@ fn config_diagnostic_summary_reports_retained_live_config() {
 
 #[test]
 fn config_loaders_report_unreadable_path() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _bus = crate::utils::config::test_without_bus_env(&_guard);
     let path = std::env::temp_dir().join(format!("herdr-config-unreadable-{}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
@@ -280,8 +280,8 @@ mouse_captur = true
 
 #[test]
 fn startup_config_falls_back_to_defaults_on_a_retired_key() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _bus = crate::utils::config::test_without_bus_env(&_guard);
     let path = std::env::temp_dir().join(format!(
         "herdr-config-retired-agent-panel-scope-{}.toml",
         std::process::id()
@@ -310,8 +310,8 @@ fn startup_config_falls_back_to_defaults_on_a_retired_key() {
 
 #[test]
 fn startup_config_falls_back_to_defaults_on_an_unknown_section() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
-    let _bus = crate::config::test_without_bus_env(&_guard);
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let _bus = crate::utils::config::test_without_bus_env(&_guard);
     let path = std::env::temp_dir().join(format!(
         "herdr-config-unknown-section-{}.toml",
         std::process::id()

@@ -1,11 +1,14 @@
 //! Agents operations for the messaging state.
 use super::state::normalized_name;
-use super::{
-    Agent, AgentId, AgentRuntimeIdentity, BusState, Compactions, ModelError, Provider, RoomId,
-    RuntimeStatus, HUMAN_RECIPIENT, UNBOUND_SETTLE_MS,
-};
 use crate::messaging::prefs::colors;
 use std::path::PathBuf;
+use {
+    super::{
+        AgentId, AgentRuntimeIdentity, BusState, Compactions, ModelError, Provider, RoomId,
+        RuntimeStatus, HUMAN_RECIPIENT, UNBOUND_SETTLE_MS,
+    },
+    crate::messaging::model::RoomAgent,
+};
 
 impl BusState {
     pub(crate) fn create_agent(
@@ -33,7 +36,7 @@ impl BusState {
         let id = AgentId(self.allocate_id());
         self.agents.insert(
             id,
-            Agent {
+            RoomAgent {
                 id,
                 room_id,
                 name,

@@ -1,4 +1,4 @@
-use crate::protocol::ServerMessage;
+use crate::protocol::wire::ServerMessage;
 use crate::server::main_loop::HeadlessServer;
 use tracing::{debug, warn};
 
@@ -6,7 +6,7 @@ impl HeadlessServer {
     fn shell_focused_runtime(
         &self,
         client_id: u64,
-    ) -> Option<(&crate::terminal::TerminalRuntime, crate::layout::PaneId)> {
+    ) -> Option<(&crate::terminal::TerminalRuntime, crate::utils::ids::PaneId)> {
         let target = self.shell_target_for_client(client_id)?;
         let tab = self
             .app

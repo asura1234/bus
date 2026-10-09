@@ -119,7 +119,7 @@ pub(super) fn recent_text(
 fn primary_screen_active(core: &GhosttyPaneCore) -> bool {
     matches!(
         core.terminal.active_screen(),
-        Ok(crate::ghostty::ActiveScreen::Primary)
+        Ok(crate::terminal::vt::ActiveScreen::Primary)
     )
 }
 
@@ -153,21 +153,21 @@ fn unwrapped_text(core: &GhosttyPaneCore, lines: usize) -> TerminalReadSnapshot 
     }
 }
 
-fn at_bottom(scrollbar: crate::ghostty::TerminalScrollbar) -> bool {
+fn at_bottom(scrollbar: crate::terminal::vt::TerminalScrollbar) -> bool {
     scrollbar.offset.saturating_add(scrollbar.len) >= scrollbar.total
 }
 
 fn visible_render_lines(
     core: &mut GhosttyPaneCore,
-) -> Result<Vec<RenderedLine>, crate::ghostty::Error> {
+) -> Result<Vec<RenderedLine>, crate::terminal::vt::Error> {
     let GhosttyPaneCore {
         terminal,
         render_state,
         ..
     } = core;
     render_state.update(terminal)?;
-    let mut row_iterator = crate::ghostty::RowIterator::new()?;
-    let mut row_cells = crate::ghostty::RowCells::new()?;
+    let mut row_iterator = crate::terminal::vt::RowIterator::new()?;
+    let mut row_cells = crate::terminal::vt::RowCells::new()?;
     let mut rows = render_state.populate_row_iterator(&mut row_iterator)?;
     let mut lines = Vec::new();
     while rows.next() {
@@ -233,8 +233,8 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::layout::PaneId;
     use crate::terminal::emulator::GhosttyPaneTerminal;
+    use crate::utils::ids::PaneId;
 
     fn rendered_line(
         text: impl Into<String>,
@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn clears_on_blank_snapshot() {
         let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
+        let terminal = crate::terminal::vt::Terminal::new(40, 3, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
 
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn deferred_refresh_replaces_visible_tail_after_repaint() {
         let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
+        let terminal = crate::terminal::vt::Terminal::new(40, 3, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
         pane.process_pty_bytes(pane_id, 0, b"older", &tx, |_| None);
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn deferred_repaint_survives_real_scrollback_pruning() {
         let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(40, 1, 1).unwrap();
+        let terminal = crate::terminal::vt::Terminal::new(40, 1, 1).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
         let state = || {
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn ignores_alternate_screen_snapshots() {
         let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
+        let terminal = crate::terminal::vt::Terminal::new(40, 3, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
         for line in 0..20 {
@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn invalidates_fallback_when_output_arrives_while_scrolled_up() {
         let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
+        let terminal = crate::terminal::vt::Terminal::new(40, 3, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
 
@@ -478,7 +478,7 @@ mod tests {
     #[test]
     fn zero_scrollback_keeps_eager_snapshots_across_writes() {
         let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(40, 2, 0).unwrap();
+        let terminal = crate::terminal::vt::Terminal::new(40, 2, 0).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
         pane.process_pty_bytes(pane_id, 0, b"one\r\n", &tx, |_| None);
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn seed_history_updates_fallback() {
         let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(5, 2, 1024).unwrap();
+        let terminal = crate::terminal::vt::Terminal::new(5, 2, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
         pane.seed_history_ansi("abcdefghij\r\nend");
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn recent_ansi_unwrapped_limits_rendered_rows_before_unwrapping() {
         let (tx, _rx) = mpsc::channel(4);
-        let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
+        let terminal = crate::terminal::vt::Terminal::new(40, 3, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
         {

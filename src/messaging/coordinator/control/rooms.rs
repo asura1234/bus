@@ -84,7 +84,7 @@ impl Worker {
         &self,
         selector: &str,
     ) -> Result<RoomId, String> {
-        if selector.eq_ignore_ascii_case(crate::bus::model::MASTER_ROOM_NAME) {
+        if selector.eq_ignore_ascii_case(crate::messaging::model::MASTER_ROOM_NAME) {
             if let Some(master) = self.state.master_room() {
                 return Ok(master.id);
             }

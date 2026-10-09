@@ -12,7 +12,7 @@ async fn cwd_returns_accepted_report_without_rechecking_filesystem() {
     ));
     std::fs::create_dir(&cwd).expect("create reported cwd");
 
-    let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
+    let (runtime, _rx) = TerminalRuntime::test_with_channel(80, 24);
     let (events, _event_rx) = mpsc::channel(1);
     publish_reported_cwd(runtime.pane_id, cwd.clone(), &runtime.reported_cwd, &events);
     assert_eq!(
@@ -74,7 +74,7 @@ fn process_cwd_does_not_require_traversing_the_directory_path() {
 #[cfg(unix)]
 #[tokio::test]
 async fn follow_cwd_falls_back_to_reported_pane_cwd_without_foreground_group() {
-    let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
+    let (runtime, _rx) = TerminalRuntime::test_with_channel(80, 24);
     let cwd = std::env::temp_dir();
     *runtime.reported_cwd.lock().unwrap() = Some(cwd.clone());
 
@@ -94,7 +94,7 @@ async fn focus_events_are_forwarded_when_enabled() {
         GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
     ));
     let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
-    let runtime = PaneRuntime {
+    let runtime = TerminalRuntime {
         pane_id,
         terminal,
         io: PaneRuntimeIo::TestChannel {
@@ -128,7 +128,7 @@ async fn focus_events_are_suppressed_when_disabled() {
         GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap(),
     ));
     let compression = TerminalCompressionTask::spawn(pane_id, terminal.clone());
-    let runtime = PaneRuntime {
+    let runtime = TerminalRuntime {
         pane_id,
         terminal,
         io: PaneRuntimeIo::TestChannel {
@@ -158,7 +158,7 @@ async fn focus_events_are_suppressed_when_disabled() {
 
 #[tokio::test]
 async fn subscribed_idle_child_receives_color_scheme_transition() {
-    let (runtime, mut rx) = PaneRuntime::test_with_channel(80, 24);
+    let (runtime, mut rx) = TerminalRuntime::test_with_channel(80, 24);
     runtime.apply_host_terminal_appearance(Some(crate::utils::theme::color::HostAppearance::Dark));
     runtime.test_process_pty_bytes(b"\x1b[?2031h");
 
@@ -172,7 +172,7 @@ async fn subscribed_idle_child_receives_color_scheme_transition() {
 async fn spawned_pty_reader_aggregates_terminal_bells() {
     let (events, mut event_rx) = mpsc::channel(8);
     let pane_id = PaneId::from_raw(42);
-    let runtime = PaneRuntime::spawn_shell_command(
+    let runtime = TerminalRuntime::spawn_shell_command(
         pane_id,
         24,
         80,
@@ -191,7 +191,7 @@ async fn spawned_pty_reader_aggregates_terminal_bells() {
 
     let bell = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
-            if let Some(AppEvent::TerminalBell {
+            if let Some(TerminalEvent::TerminalBell {
                 pane_id: delivered_pane,
                 count,
             }) = event_rx.recv().await
@@ -212,7 +212,7 @@ async fn state_changed_event_waits_for_queue_space_instead_of_dropping() {
     let (tx, mut rx) = mpsc::channel(1);
     let pane_id = PaneId::from_raw(42);
 
-    tx.try_send(AppEvent::ClipboardWrite {
+    tx.try_send(TerminalEvent::ClipboardWrite {
         content: Vec::new(),
     })
     .unwrap();
@@ -220,7 +220,7 @@ async fn state_changed_event_waits_for_queue_space_instead_of_dropping() {
     let publish = publish_state_changed_event(
         tx.clone(),
         pane_id,
-        Some(Agent::Pi),
+        Some(AgentKind::Pi),
         AgentState::Idle,
         false,
         false,
@@ -241,7 +241,7 @@ async fn state_changed_event_waits_for_queue_space_instead_of_dropping() {
         .await
         .expect("queue should yield first event")
         .expect("sender still alive");
-    assert!(matches!(first, AppEvent::ClipboardWrite { .. }));
+    assert!(matches!(first, TerminalEvent::ClipboardWrite { .. }));
 
     tokio::time::timeout(std::time::Duration::from_millis(50), async {
         (&mut publish).await;
@@ -255,9 +255,9 @@ async fn state_changed_event_waits_for_queue_space_instead_of_dropping() {
         .expect("sender still alive");
     assert!(matches!(
         second,
-        AppEvent::StateChanged {
+        TerminalEvent::StateChanged {
             pane_id: delivered_pane,
-            agent: Some(Agent::Pi),
+            agent: Some(AgentKind::Pi),
             state: AgentState::Idle,
             visible_blocker: false,
             process_exited: false,

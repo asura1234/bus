@@ -19,7 +19,7 @@ fn client_mouse_selection_highlights_and_copies_through_endpoint_extraction() {
         [ClientShellAction::Endpoint { request, .. }]
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1"
+                crate::protocol::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1"
             )
     ));
     assert!(state
@@ -37,13 +37,13 @@ fn client_mouse_selection_highlights_and_copies_through_endpoint_extraction() {
     assert!(state
         .selection
         .as_ref()
-        .is_some_and(crate::selection::Selection::is_visible));
+        .is_some_and(crate::utils::text::selection::Selection::is_visible));
     let selected = state.compose(106, 20).expect("selected frame");
     let selected_cell =
         &selected.cells[usize::from(pane.inner_rect.y) * 106 + usize::from(pane.inner_rect.x)];
     assert_ne!(
         selected_cell.bg,
-        crate::protocol::color_to_u32(ratatui::style::Color::Reset)
+        crate::protocol::wire::color_to_u32(ratatui::style::Color::Reset)
     );
 
     let release =
@@ -60,19 +60,21 @@ fn client_mouse_selection_highlights_and_copies_through_endpoint_extraction() {
     let request_id = request.id.clone();
     assert!(matches!(
         &request.method,
-        crate::api::schema::Method::PaneSelectionRead(params)
+        crate::protocol::api::schema::Method::PaneSelectionRead(params)
             if params.pane_id == "pane_1"
-                && params.anchor == crate::api::schema::PaneTextPoint { row: 0, col: 0 }
-                && params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 2 }
+                && params.anchor == crate::protocol::api::schema::PaneTextPoint { row: 0, col: 0 }
+                && params.cursor == crate::protocol::api::schema::PaneTextPoint { row: 0, col: 2 }
     ));
 
     let (repaint, actions) = state.handle_endpoint_result(
         "boot-1",
         &request_id,
-        Ok(crate::api::schema::ResponseResult::PaneSelection {
-            pane_id: "pane_1".into(),
-            text: "LIV".into(),
-        }),
+        Ok(
+            crate::protocol::api::schema::ResponseResult::PaneSelection {
+                pane_id: "pane_1".into(),
+                text: "LIV".into(),
+            },
+        ),
     );
     assert!(repaint);
     assert!(matches!(
@@ -151,7 +153,7 @@ fn retained_mouse_selection_survives_output_and_copies_without_terminal_input() 
     assert!(state
         .selection
         .as_ref()
-        .is_some_and(crate::selection::Selection::is_finalized));
+        .is_some_and(crate::utils::text::selection::Selection::is_finalized));
 
     // A patch that redraws selected text must retain the same live terminal range.
     let mut updated = state.pane_surface.clone().expect("pane surface");
@@ -159,13 +161,13 @@ fn retained_mouse_selection_survives_output_and_copies_without_terminal_input() 
     let mut cell = updated.frame.cells[0].clone();
     cell.symbol = "y".into();
     assert!(matches!(
-        state.apply_pane_surface_patch(crate::protocol::PaneSurfacePatch {
+        state.apply_pane_surface_patch(crate::protocol::wire::PaneSurfacePatch {
             boot_id: updated.boot_id,
             projection_revision: updated.projection_revision,
             base_surface_revision: updated.surface_revision,
             surface_revision: updated.surface_revision + 1,
             panes: updated.panes,
-            rows: vec![crate::protocol::PaneSurfacePatchRow {
+            rows: vec![crate::protocol::wire::PaneSurfacePatchRow {
                 x: 0,
                 y: 0,
                 cells: vec![cell]
@@ -177,7 +179,7 @@ fn retained_mouse_selection_survives_output_and_copies_without_terminal_input() 
     assert!(state
         .selection
         .as_ref()
-        .is_some_and(crate::selection::Selection::is_finalized));
+        .is_some_and(crate::utils::text::selection::Selection::is_finalized));
 
     let highlighted = state.compose(106, 20).expect("highlighted frame");
     let cell_index = usize::from(pane.inner_rect.y) * 106 + usize::from(pane.inner_rect.x);
@@ -187,16 +189,15 @@ fn retained_mouse_selection_survives_output_and_copies_without_terminal_input() 
     assert_ne!(selected_cell.bg, unselected.cells[cell_index].bg);
     state.selection = selection;
 
-    let copy = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
-        KeyCode::Char('c'),
-        KeyModifiers::CONTROL,
-    ))]);
+    let copy = state.handle_raw_events(vec![RawInputEvent::Key(
+        crate::protocol::keys::TerminalKey::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    )]);
     assert!(state.selection.is_none());
     assert!(matches!(
         &copy.actions[..],
         [ClientShellAction::Endpoint { request, .. }]
-            if matches!(request.method, crate::api::schema::Method::PaneSelectionRead(
-                crate::api::schema::PaneSelectionReadParams { content_revision: None, .. }
+            if matches!(request.method, crate::protocol::api::schema::Method::PaneSelectionRead(
+                crate::protocol::api::schema::PaneSelectionReadParams { content_revision: None, .. }
             ))
     ));
     assert!(copy.requests.is_empty());
@@ -207,10 +208,12 @@ fn retained_mouse_selection_survives_output_and_copies_without_terminal_input() 
     let (_, actions) = state.handle_endpoint_result(
         "boot-1",
         &request_id,
-        Ok(crate::api::schema::ResponseResult::PaneSelection {
-            pane_id: "pane_1".into(),
-            text: "yIV".into(),
-        }),
+        Ok(
+            crate::protocol::api::schema::ResponseResult::PaneSelection {
+                pane_id: "pane_1".into(),
+                text: "yIV".into(),
+            },
+        ),
     );
     assert!(matches!(&actions[..], [ClientShellAction::ClipboardWrite(bytes)] if bytes == b"yIV"));
 }
@@ -220,7 +223,7 @@ fn selection_edge_drag_requests_scroll_and_timer_continues_it() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     let mut pane_surface = surface();
-    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+    pane_surface.panes[0].scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
         offset_from_bottom: 0,
         max_offset_from_bottom: 20,
         viewport_rows: 2,
@@ -248,7 +251,7 @@ fn selection_edge_drag_requests_scroll_and_timer_continues_it() {
         [ClientShellAction::Endpoint { request, .. }]
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneScroll(params)
+                crate::protocol::api::schema::Method::PaneScroll(params)
                     if params.offset_from_bottom == 3
             )
     ));
@@ -267,7 +270,7 @@ fn selection_edge_drag_requests_scroll_and_timer_continues_it() {
         [ClientShellAction::Endpoint { request, .. }]
             if matches!(
                 &request.method,
-                crate::api::schema::Method::PaneScroll(params)
+                crate::protocol::api::schema::Method::PaneScroll(params)
                     if params.offset_from_bottom == 4
             )
     ));
@@ -280,17 +283,20 @@ fn retained_selection_copy_suppresses_key_repeats() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
-    let mut selection =
-        crate::selection::Selection::absolute_range("pane_1".to_owned(), (0, 0), (0, 1));
+    let mut selection = crate::utils::text::selection::Selection::absolute_range(
+        "pane_1".to_owned(),
+        (0, 0),
+        (0, 1),
+    );
     assert!(selection.finish());
     state.selection = Some(selection);
 
-    let key = crate::input::TerminalKey::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    let key = crate::protocol::keys::TerminalKey::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
     let press = state.handle_raw_events(vec![RawInputEvent::Key(key.clone())]);
     assert!(press.actions.iter().any(|action| matches!(
         action,
         ClientShellAction::Endpoint { request, .. }
-            if matches!(request.method, crate::api::schema::Method::PaneSelectionRead(_))
+            if matches!(request.method, crate::protocol::api::schema::Method::PaneSelectionRead(_))
     )));
     let repeat = state.handle_raw_events(vec![RawInputEvent::Key(
         key.clone()
@@ -325,14 +331,16 @@ fn word_selection_result_survives_focus_snapshot_lag() {
     let (repaint, _) = state.handle_endpoint_result(
         "boot-1",
         &request_id,
-        Ok(crate::api::schema::ResponseResult::PaneSelection {
-            pane_id: "pane_1".into(),
-            text: "hello world".into(),
-        }),
+        Ok(
+            crate::protocol::api::schema::ResponseResult::PaneSelection {
+                pane_id: "pane_1".into(),
+                text: "hello world".into(),
+            },
+        ),
     );
     assert!(repaint);
     assert!(state
         .selection
         .as_ref()
-        .is_some_and(crate::selection::Selection::is_visible));
+        .is_some_and(crate::utils::text::selection::Selection::is_visible));
 }

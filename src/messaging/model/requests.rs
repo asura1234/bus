@@ -678,7 +678,7 @@ impl BusState {
 }
 
 /// The stall reason for a native refusal to type a request. The native
-/// server (`src/app/api/agents.rs`) shares one `agent_not_ready` code for
+/// server (`src/server/api/agents/prompt.rs`) shares one `agent_not_ready` code for
 /// several causes, so the message tells them apart.
 pub(crate) fn rejection_reason(message: &str) -> &'static str {
     if message.contains("input box is not empty") || message.contains("composer is not empty") {

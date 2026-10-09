@@ -8,7 +8,7 @@ fn vti_win32_input_mode_bracketed_paste_key_records_emit_single_paste() {
 
     assert_eq!(
         translate(records),
-        vec![crate::protocol::ClientInputEvent::Paste {
+        vec![crate::protocol::wire::ClientInputEvent::Paste {
             text: "About\ragent multiplexer that lives in your terminal.".into(),
         }]
     );
@@ -37,7 +37,7 @@ fn vti_win32_input_mode_decoded_paste_handles_shift_repeats_and_releases() {
 
     assert_eq!(
         translate(records),
-        vec![crate::protocol::ClientInputEvent::Paste { text: "AA".into() }]
+        vec![crate::protocol::wire::ClientInputEvent::Paste { text: "AA".into() }]
     );
 }
 
@@ -55,14 +55,14 @@ fn vti_win32_input_mode_marks_ime_commit_as_text() {
 
         let events = translate(records);
         match events.as_slice() {
-            [crate::protocol::ClientInputEvent::TextCommit(text)] => {
+            [crate::protocol::wire::ClientInputEvent::TextCommit(text)] => {
                 assert_eq!(text, "你");
             }
-            [crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('你'),
+            [crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('你'),
                 repeat_count: 1,
                 generated_text: Some(text),
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
                 ..
             }] => assert_eq!(text, "你"),
             other => panic!("unexpected VK=0 result: {other:?}"),
@@ -83,8 +83,8 @@ fn vti_win32_input_mode_decoded_paste_flag_clears_after_raw_completion() {
     assert_eq!(
         translate(records),
         vec![
-            crate::protocol::ClientInputEvent::Paste { text: "one".into() },
-            crate::protocol::ClientInputEvent::Paste {
+            crate::protocol::wire::ClientInputEvent::Paste { text: "one".into() },
+            crate::protocol::wire::ClientInputEvent::Paste {
                 text: "x\x1b[65;30;97;1;0;1_y".into(),
             },
         ]
@@ -114,23 +114,23 @@ fn vti_win32_input_mode_shift_enter_preserves_shift_modifier() {
     assert_eq!(
         translate(records),
         vec![
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Enter,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Enter,
                 modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Enter,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Enter,
                 modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
-                kind: crate::protocol::ClientKeyKind::Release,
+                kind: crate::protocol::wire::ClientKeyKind::Release,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
         ]
     );
@@ -145,23 +145,23 @@ fn vti_win32_input_mode_plain_enter_stays_plain_enter() {
     assert_eq!(
         translate(records),
         vec![
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Enter,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Enter,
                 modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Enter,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Enter,
                 modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Release,
+                kind: crate::protocol::wire::ClientKeyKind::Release,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
         ]
     );
@@ -174,23 +174,23 @@ fn vti_win32_input_mode_backspace_stays_backspace() {
     assert_eq!(
         translate(records),
         vec![
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Backspace,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Backspace,
                 modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Backspace,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Backspace,
                 modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Release,
+                kind: crate::protocol::wire::ClientKeyKind::Release,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
         ]
     );
@@ -205,23 +205,23 @@ fn vti_win32_input_mode_ctrl_j_preserves_lf_control_key() {
     assert_eq!(
         translate(records),
         vec![
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('j'),
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('j'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('j'),
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('j'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                kind: crate::protocol::ClientKeyKind::Release,
+                kind: crate::protocol::wire::ClientKeyKind::Release,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
         ]
     );
@@ -235,23 +235,23 @@ fn vti_alacritty_ctrl_j_return_lf_record_preserves_lf_control_key() {
             key_vk_up_with_scan_unicode(0x0d, 0x24, '\n', 0x0008),
         ]),
         vec![
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('j'),
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('j'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('j'),
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('j'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                kind: crate::protocol::ClientKeyKind::Release,
+                kind: crate::protocol::wire::ClientKeyKind::Release,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
         ]
     );
@@ -265,23 +265,23 @@ fn vti_ctrl_enter_return_lf_record_preserves_ctrl_enter() {
             key_vk_up_with_scan_unicode(0x0d, 0x1c, '\n', 0x0008),
         ]),
         vec![
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Enter,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Enter,
                 modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Enter,
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Enter,
                 modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                kind: crate::protocol::ClientKeyKind::Release,
+                kind: crate::protocol::wire::ClientKeyKind::Release,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             },
         ]
     );
@@ -298,17 +298,17 @@ fn vti_win32_input_mode_printable_keys_preserve_physical_records() {
             unicode: b'a'.into(),
             control_key_state: 0,
         })),
-        vec![crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('a'),
+        vec![crate::protocol::wire::ClientInputEvent::Key {
+            code: crate::protocol::wire::ClientKeyCode::Char('a'),
             modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
+            kind: crate::protocol::wire::ClientKeyKind::Press,
             repeat_count: 1,
             generated_text: Some("a".into()),
-            source: crate::protocol::ClientKeySource::Synthesized,
+            source: crate::protocol::wire::ClientKeySource::Synthesized,
         }]
     );
 
-    use crate::protocol::ClientKeyKind::{Press, Release};
+    use crate::protocol::wire::ClientKeyKind::{Press, Release};
     for repeat_count in [1, 3] {
         let mut records = win32_input_mode_encoded_record(WindowsKeyRecord {
             key_down: true,
@@ -331,14 +331,14 @@ fn vti_win32_input_mode_printable_keys_preserve_physical_records() {
             translate_with_provenance(records)
                 .iter()
                 .map(|event| match event {
-                    crate::protocol::ClientInputEvent::Key {
-                        code: crate::protocol::ClientKeyCode::Char('a'),
+                    crate::protocol::wire::ClientInputEvent::Key {
+                        code: crate::protocol::wire::ClientKeyCode::Char('a'),
                         modifiers: 0,
                         kind,
                         repeat_count: event_repeat_count,
                         generated_text: None,
                         source:
-                            crate::protocol::ClientKeySource::WindowsConsole {
+                            crate::protocol::wire::ClientKeySource::WindowsConsole {
                                 record:
                                     WindowsKeyRecord {
                                         repeat_count: record_repeat_count,
@@ -372,7 +372,7 @@ fn vti_win32_input_mode_sequence_inside_bracketed_paste_stays_payload() {
 
     assert_eq!(
         translate(records),
-        vec![crate::protocol::ClientInputEvent::Paste {
+        vec![crate::protocol::wire::ClientInputEvent::Paste {
             text: "alpha\x1b[13;28;13;1;16;1_bravo".into(),
         }]
     );
@@ -386,7 +386,7 @@ fn vti_win32_input_mode_raw_sequence_inside_bracketed_paste_stays_payload() {
 
     assert_eq!(
         translate(records),
-        vec![crate::protocol::ClientInputEvent::Paste {
+        vec![crate::protocol::wire::ClientInputEvent::Paste {
             text: "alpha\x1b[0;0;97;1;0;1_bravo".into(),
         }]
     );
@@ -398,8 +398,10 @@ fn vti_win32_input_mode_leaves_mouse_sequence_for_raw_parser() {
 
     assert_eq!(
         translate(records),
-        vec![crate::protocol::ClientInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Down(crate::protocol::ClientMouseButton::Left,),
+        vec![crate::protocol::wire::ClientInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::Down(
+                crate::protocol::wire::ClientMouseButton::Left,
+            ),
             column: 2,
             row: 3,
             modifiers: 0,
@@ -427,13 +429,13 @@ fn vti_win32_input_mode_physical_escape_keeps_native_ownership_after_idle() {
         .is_empty());
     assert_eq!(
         translator.idle(),
-        vec![crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Esc,
+        vec![crate::protocol::wire::ClientInputEvent::Key {
+            code: crate::protocol::wire::ClientKeyCode::Esc,
             modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
+            kind: crate::protocol::wire::ClientKeyKind::Press,
             repeat_count: 1,
             generated_text: None,
-            source: crate::protocol::ClientKeySource::WindowsConsole { record },
+            source: crate::protocol::wire::ClientKeySource::WindowsConsole { record },
         }]
     );
 }
@@ -442,8 +444,8 @@ fn vti_win32_input_mode_physical_escape_keeps_native_ownership_after_idle() {
 fn vti_win32_input_mode_encoded_mouse_sequence() {
     assert_eq!(
         translate(win32_input_mode_encoded_raw_bytes(b"\x1b[<35;48;26M")),
-        vec![crate::protocol::ClientInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Moved,
+        vec![crate::protocol::wire::ClientInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::Moved,
             column: 47,
             row: 25,
             modifiers: 0,

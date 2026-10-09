@@ -7,7 +7,7 @@ use super::render::{
 use super::{
     ghostty_blank_symbol_for_width, GhosttyPaneCore, TerminalDirtyPatch, TerminalDirtyPatchOutcome,
 };
-use crate::protocol::CellData;
+use crate::protocol::wire::CellData;
 
 type PatchRows = Vec<(u16, Vec<CellData>)>;
 type PatchCollection<T> = Result<T, &'static str>;
@@ -26,11 +26,11 @@ pub(super) fn ghostty_collect_dirty_patch(
     area_width: u16,
     area_height: u16,
 ) -> TerminalDirtyPatchOutcome {
-    let prof_started = crate::render_prof::timer();
+    let prof_started = crate::utils::render::prof::timer();
     let outcome = match collect_dirty_patch(core, area_width, area_height) {
         Ok(outcome) => outcome,
         Err(reason) => {
-            crate::render_prof::event(reason);
+            crate::utils::render::prof::event(reason);
             TerminalDirtyPatchOutcome::Fallback
         }
     };
@@ -42,19 +42,19 @@ fn finish_dirty_collection(
     outcome: TerminalDirtyPatchOutcome,
 ) -> TerminalDirtyPatchOutcome {
     if let Some(started) = prof_started {
-        crate::render_prof::duration("dirty_collect.total", started.elapsed());
+        crate::utils::render::prof::duration("dirty_collect.total", started.elapsed());
         match &outcome {
             TerminalDirtyPatchOutcome::Clean => {
-                crate::render_prof::event("dirty_collect.clean");
+                crate::utils::render::prof::event("dirty_collect.clean");
             }
             TerminalDirtyPatchOutcome::Fallback => {
-                crate::render_prof::event("dirty_collect.fallback");
+                crate::utils::render::prof::event("dirty_collect.fallback");
             }
             TerminalDirtyPatchOutcome::Patch(patch) => {
-                crate::render_prof::event("dirty_collect.patch");
-                crate::render_prof::counter("dirty_collect.rows", patch.rows.len() as u64);
+                crate::utils::render::prof::event("dirty_collect.patch");
+                crate::utils::render::prof::counter("dirty_collect.rows", patch.rows.len() as u64);
                 let cells = patch.rows.iter().map(|(_, cells)| cells.len() as u64).sum();
-                crate::render_prof::counter("dirty_collect.cells", cells);
+                crate::utils::render::prof::counter("dirty_collect.cells", cells);
             }
         }
     }
@@ -78,13 +78,13 @@ fn collect_dirty_patch(
         return Err("dirty_fallback.render_state_update_error");
     }
     let collect_all_rows = match render_state.dirty() {
-        Ok(crate::ghostty::Dirty::Clean) => return Ok(TerminalDirtyPatchOutcome::Clean),
-        Ok(crate::ghostty::Dirty::Partial) => false,
+        Ok(crate::terminal::vt::Dirty::Clean) => return Ok(TerminalDirtyPatchOutcome::Clean),
+        Ok(crate::terminal::vt::Dirty::Partial) => false,
         // A full dirty state means that every visible row may have changed. It
         // is still safe to send this as a bounded patch: the client replaces
         // only this pane's viewport, rather than falling back to the whole
         // shell surface.
-        Ok(crate::ghostty::Dirty::Full) => true,
+        Ok(crate::terminal::vt::Dirty::Full) => true,
         Err(_) => return Err("dirty_fallback.dirty_read_error"),
     };
 
@@ -98,7 +98,7 @@ fn collect_dirty_patch(
     let palette_overrides = colors
         .zip(terminal.default_palette().ok())
         .and_then(|(colors, default)| PaletteOverrides::new(&colors.palette, &default));
-    let hide_kitty_placeholders = crate::kitty_graphics::is_enabled();
+    let hide_kitty_placeholders = crate::protocol::kitty::is_enabled();
 
     let appearance = PatchCellAppearance {
         default_fg,
@@ -108,10 +108,10 @@ fn collect_dirty_patch(
         palette_overrides,
         hide_kitty_placeholders,
     };
-    let Ok(mut row_iterator) = crate::ghostty::RowIterator::new() else {
+    let Ok(mut row_iterator) = crate::terminal::vt::RowIterator::new() else {
         return Err("dirty_fallback.row_iterator_new_error");
     };
-    let Ok(mut row_cells) = crate::ghostty::RowCells::new() else {
+    let Ok(mut row_cells) = crate::terminal::vt::RowCells::new() else {
         return Err("dirty_fallback.row_cells_new_error");
     };
     let patch_rows = collect_patch_rows(
@@ -130,9 +130,9 @@ fn collect_dirty_patch(
 }
 
 fn collect_patch_rows(
-    render_state: &mut crate::ghostty::RenderState,
-    row_iterator: &mut crate::ghostty::RowIterator,
-    row_cells: &mut crate::ghostty::RowCells,
+    render_state: &mut crate::terminal::vt::RenderState,
+    row_iterator: &mut crate::terminal::vt::RowIterator,
+    row_cells: &mut crate::terminal::vt::RowCells,
     area_width: u16,
     area_height: u16,
     collect_all_rows: bool,
@@ -174,7 +174,7 @@ fn collect_patch_rows(
 }
 
 fn collect_patch_row(
-    cells: &mut crate::ghostty::RowCellIter<'_>,
+    cells: &mut crate::terminal::vt::RowCellIter<'_>,
     area_width: u16,
     appearance: &PatchCellAppearance,
     grapheme_bytes: &mut Vec<u8>,
@@ -222,7 +222,7 @@ fn collect_patch_row(
 }
 
 fn clear_collected_dirty(
-    render_state: &mut crate::ghostty::RenderState,
+    render_state: &mut crate::terminal::vt::RenderState,
     area_height: u16,
     patch_rows: &PatchRows,
 ) -> PatchCollection<()> {
@@ -231,7 +231,7 @@ fn clear_collected_dirty(
     // collection with the same information.
     let dirty_ys: std::collections::HashSet<u16> = patch_rows.iter().map(|(row, _)| *row).collect();
     if !dirty_ys.is_empty() {
-        let Ok(mut clear_row_iterator) = crate::ghostty::RowIterator::new() else {
+        let Ok(mut clear_row_iterator) = crate::terminal::vt::RowIterator::new() else {
             return Err("dirty_fallback.clear_row_iterator_new_error");
         };
         let Ok(mut clear_rows) = render_state.populate_row_iterator(&mut clear_row_iterator) else {
@@ -246,7 +246,7 @@ fn clear_collected_dirty(
         }
     }
     if render_state
-        .set_dirty(crate::ghostty::Dirty::Clean)
+        .set_dirty(crate::terminal::vt::Dirty::Clean)
         .is_err()
     {
         return Err("dirty_fallback.set_clean_error");

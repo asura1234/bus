@@ -1,7 +1,7 @@
 //! Single-writer command dispatch.
 use super::{
-    launch, mpsc, schema, AgentId, BusCommand, BusEvent, BusState, Method, Provider,
-    ResponseResult, RoomId, Worker,
+    mpsc, schema, AgentId, BusCommand, BusEvent, BusState, Method, Provider, ResponseResult,
+    RoomId, Worker,
 };
 
 impl Worker {
@@ -55,7 +55,7 @@ impl Worker {
             BusCommand::SetRecipients(id, recipients) => state.set_draft_recipients(id, recipients),
             BusCommand::AttachFile(room, path) => {
                 let home = std::env::home_dir().ok_or("Home directory unavailable")?;
-                let path = crate::bus::files::validate_attachment(&path, &home)
+                let path = crate::messaging::attachments::validate_attachment(&path, &home)
                     .map_err(|e| e.to_string())?;
                 state.attach_file(room, path)
             }
@@ -75,7 +75,10 @@ impl Worker {
             } => {
                 let _ = events.send(BusEvent::Suggestions {
                     query_id,
-                    result: launch::suggestions(&input, directories_only),
+                    result: crate::agents::providers::suggest::suggestions(
+                        &input,
+                        directories_only,
+                    ),
                 });
                 return Ok(());
             }
@@ -99,7 +102,7 @@ impl Worker {
         room: RoomId,
         queued: bool,
     ) -> Result<(), String> {
-        let now = crate::bus::io::now_ms();
+        let now = crate::messaging::storage::io::now_ms();
         let requests = if queued {
             state.submit_draft_queued(room, now)
         } else {

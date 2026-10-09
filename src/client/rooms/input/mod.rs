@@ -13,12 +13,13 @@ use super::{
     render::Action,
 };
 use super::{BusUi, Effect};
-use crate::bus::{
+use crate::messaging::{
+    coordinator::BusCommand,
     model::{AgentId, RoomId, RoomKind},
-    runtime::BusCommand,
 };
 use crate::{
-    client::compositor::ClientShellInput, protocol::keys::TerminalKey, raw_input::RawInputEvent,
+    client::compositor::ClientShellInput,
+    protocol::keys::{host::RawInputEvent, TerminalKey},
 };
 use crossterm::event::{
     KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -301,7 +302,7 @@ impl BusUi {
 
     fn paste_room_text(&mut self, text: &str) {
         if self.form.is_none() && self.rename.is_none() && !self.notes_focus {
-            let paths = crate::bus::files::parse_path_tokens(text)
+            let paths = crate::messaging::attachments::parse_path_tokens(text)
                 .ok()
                 .filter(|paths| {
                     text.trim() != "/help"
@@ -451,7 +452,7 @@ impl BusUi {
         self.settings_scroll = 0;
         if self.system_sounds.is_none() {
             self.system_sounds = Some(
-                crate::sound::system_sounds()
+                crate::platform::sound::system_sounds()
                     .into_iter()
                     .map(|sound| sound.name)
                     .collect(),

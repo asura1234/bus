@@ -13,20 +13,19 @@ use interprocess::local_socket::traits::Stream as _;
 use interprocess::TryClone as _;
 use tracing::warn;
 
-use self::bootstrap as endpoint;
 use crate::client::events::ClientLoopEvent;
 use crate::client::ClientError;
 use crate::platform::ipc::LocalStream;
-use crate::protocol::{self, ClientMessage};
+use crate::protocol::wire::{self, ClientMessage};
 
 pub(in crate::client) fn start_endpoint_transport(
     stream: LocalStream,
     lifetime: impl Send + 'static,
     event_tx: &tokio::sync::mpsc::Sender<ClientLoopEvent>,
     max_frame_size: usize,
-) -> Result<endpoint::NativeEndpointTransport, ClientError> {
+) -> Result<bootstrap::NativeEndpointTransport, ClientError> {
     let reader = stream.try_clone().map_err(ClientError::ConnectionFailed)?;
-    let transport = endpoint::NativeEndpointTransport::with_lifetime(stream, lifetime)
+    let transport = bootstrap::NativeEndpointTransport::with_lifetime(stream, lifetime)
         .map_err(ClientError::ConnectionFailed)?;
     let stopped = transport.stop_handle();
     let event_tx = event_tx.clone();
@@ -60,7 +59,7 @@ pub(in crate::client) fn server_reader_thread(
             break;
         }
 
-        match protocol::read_message(&mut stream, max_frame_size) {
+        match wire::read_message(&mut stream, max_frame_size) {
             Ok(msg) => {
                 if event_tx
                     .blocking_send(ClientLoopEvent::ServerMessage {
@@ -71,11 +70,11 @@ pub(in crate::client) fn server_reader_thread(
                     break;
                 }
             }
-            Err(protocol::FramingError::UnexpectedEof) => {
+            Err(wire::FramingError::UnexpectedEof) => {
                 let _ = event_tx.blocking_send(ClientLoopEvent::ServerDisconnected);
                 break;
             }
-            Err(protocol::FramingError::Io(err)) if err.kind() == io::ErrorKind::WouldBlock => {
+            Err(wire::FramingError::Io(err)) if err.kind() == io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(1));
             }
             Err(err) => {
@@ -98,10 +97,10 @@ impl io::Read for EndpointReader<'_> {
             if self.stopped.load(Ordering::Acquire) {
                 return Ok(0);
             }
-            match crate::ipc::poll_local_stream_read_count(self.stream, buffer)? {
-                crate::ipc::LocalStreamReadCount::Data(count) => return Ok(count),
-                crate::ipc::LocalStreamReadCount::Closed => return Ok(0),
-                crate::ipc::LocalStreamReadCount::Pending => {
+            match crate::platform::ipc::poll_local_stream_read_count(self.stream, buffer)? {
+                crate::platform::ipc::LocalStreamReadCount::Data(count) => return Ok(count),
+                crate::platform::ipc::LocalStreamReadCount::Closed => return Ok(0),
+                crate::platform::ipc::LocalStreamReadCount::Pending => {
                     crate::platform::wait_client_stream_readable(self.stream)?;
                 }
             }
@@ -113,7 +112,7 @@ pub(in crate::client) fn write_to_local_server(
     stream: &mut LocalStream,
     msg: &ClientMessage,
 ) -> io::Result<()> {
-    protocol::write_message(stream, msg).map_err(|error| io::Error::other(error.to_string()))
+    wire::write_message(stream, msg).map_err(|error| io::Error::other(error.to_string()))
 }
 
 pub(in crate::client) trait ClientMessageSink {
@@ -126,7 +125,7 @@ impl ClientMessageSink for LocalStream {
     }
 }
 
-impl ClientMessageSink for endpoint::ServerConnection {
+impl ClientMessageSink for bootstrap::ServerConnection {
     fn send_client_message(&mut self, message: &ClientMessage) -> io::Result<()> {
         self.send(message)
     }

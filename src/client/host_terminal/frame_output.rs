@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::io;
 use std::sync::{Mutex, OnceLock};
 
-use crate::protocol::render_ansi;
+use crate::protocol::ansi;
 
 static RECEIVED_KITTY_GRAPHICS_IDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
 
@@ -15,7 +15,7 @@ pub(in crate::client) fn write_encoded_frame_with_graphics(
         return writer.write_all(encoded);
     }
 
-    let insertion = render_ansi::final_sync_output_end(encoded).unwrap_or(encoded.len());
+    let insertion = ansi::final_sync_output_end(encoded).unwrap_or(encoded.len());
 
     writer.write_all(&encoded[..insertion])?;
     record_received_kitty_graphics(graphics);

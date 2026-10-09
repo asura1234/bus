@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn pane_scrollback_controls_round_trip_and_clamp_without_ui_interference() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(80, 3, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(80, 3, 100).unwrap();
     write_numbered_lines(&mut terminal, 1000);
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -32,7 +32,7 @@ fn pane_scrollback_controls_round_trip_and_clamp_without_ui_interference() {
 fn empty_or_short_resize_keeps_following_bottom_when_output_creates_scrollback() {
     for initial in [b"".as_slice(), b"seed\r\n".as_slice()] {
         let (tx, _rx) = mpsc::channel(4);
-        let mut terminal = crate::ghostty::Terminal::new(10, 3, 100).unwrap();
+        let mut terminal = crate::terminal::vt::Terminal::new(10, 3, 100).unwrap();
         terminal.write(initial);
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
@@ -55,7 +55,7 @@ fn empty_or_short_resize_keeps_following_bottom_when_output_creates_scrollback()
 #[test]
 fn resize_that_removes_scrollback_restores_live_follow() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(10, 3, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(10, 3, 100).unwrap();
     terminal.write(b"000000\r\n000001\r\n000002\r\n000003\r\n000004");
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
@@ -75,7 +75,7 @@ fn resize_that_removes_scrollback_restores_live_follow() {
 #[test]
 fn detection_text_stays_at_bottom_when_viewport_is_scrolled() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(80, 3, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(80, 3, 100).unwrap();
     write_numbered_lines(&mut terminal, 10);
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -93,7 +93,7 @@ fn detection_text_stays_at_bottom_when_viewport_is_scrolled() {
 #[test]
 fn extract_selection_reads_screen_rows_not_current_viewport() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(8, 3, 1024).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(8, 3, 1024).unwrap();
     write_numbered_lines(&mut terminal, 8);
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -102,7 +102,7 @@ fn extract_selection_reads_screen_rows_not_current_viewport() {
         .scroll_metrics()
         .expect("scroll metrics after initial scroll");
     let mut selection =
-        crate::selection::Selection::anchor(PaneId::from_raw(1), 0, 0, Some(metrics));
+        crate::utils::text::selection::Selection::anchor(PaneId::from_raw(1), 0, 0, Some(metrics));
     selection.drag(5, 2, Rect::new(0, 0, 8, 3), Some(metrics));
 
     pane.scroll_reset();
@@ -116,7 +116,7 @@ fn extract_selection_reads_screen_rows_not_current_viewport() {
 #[test]
 fn plain_text_reads_skip_wide_character_spacer_cells() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(40, 3, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(40, 3, 100).unwrap();
     terminal.write("日本語テスト ABC 123".as_bytes());
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -129,7 +129,7 @@ fn plain_text_reads_skip_wide_character_spacer_cells() {
 #[test]
 fn visible_ansi_preserves_cell_style_sequences() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(20, 3, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(20, 3, 100).unwrap();
     terminal.write(b"\x1b[31;1mred\x1b[0m plain");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -142,7 +142,7 @@ fn visible_ansi_preserves_cell_style_sequences() {
 #[test]
 fn resize_shrinks_both_axes_with_cursor_at_old_bottom() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(8, 4, 10_000).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(8, 4, 10_000).unwrap();
     terminal.write(b"alpha\r\nbeta\r\ngamma\r\ndelta");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -163,7 +163,7 @@ fn resize_shrinks_both_axes_with_cursor_at_old_bottom() {
 #[test]
 fn resize_reflow_keeps_scrolled_viewport_and_bottom_detection_sane() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(12, 4, 10_000).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(12, 4, 10_000).unwrap();
     write_wrapped_contract_lines(&mut terminal, 40);
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -209,7 +209,7 @@ fn resize_reflow_keeps_scrolled_viewport_and_bottom_detection_sane() {
 #[test]
 fn resize_recovery_does_not_replay_history_when_visible_screen_was_blank() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(20, 3, 10_000).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(20, 3, 10_000).unwrap();
     terminal.write(b"old history\r\n\x1b[2J\x1b[H");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
@@ -226,7 +226,7 @@ fn resize_recovery_does_not_replay_history_when_visible_screen_was_blank() {
 #[test]
 fn resize_recovery_does_not_replay_scrolled_history_over_blank_bottom() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(20, 3, 10_000).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(20, 3, 10_000).unwrap();
     write_numbered_lines(&mut terminal, 20);
     terminal.write(b"\x1b[2J\x1b[H");
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
@@ -245,7 +245,7 @@ fn resize_recovery_does_not_replay_scrolled_history_over_blank_bottom() {
 #[test]
 fn process_pty_bytes_answers_xtwinops_size_queries() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     pane.resize(24, 80, 9, 18);
@@ -265,7 +265,7 @@ fn process_pty_bytes_answers_xtwinops_size_queries() {
 #[test]
 fn xtwinops_size_queries_follow_successful_resize() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     pane.resize(24, 80, 9, 18);
@@ -286,7 +286,7 @@ fn xtwinops_size_queries_follow_successful_resize() {
 #[test]
 fn xtwinops_size_queries_stay_silent_without_pixel_geometry() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     for (cell_width_px, cell_height_px) in [(0, 0), (0, 18), (9, 0)] {
@@ -299,7 +299,7 @@ fn xtwinops_size_queries_stay_silent_without_pixel_geometry() {
 #[test]
 fn resize_returns_in_band_size_report_response() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     terminal.mode_set(2048, true).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 

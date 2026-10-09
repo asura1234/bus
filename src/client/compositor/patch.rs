@@ -1,10 +1,10 @@
 use super::ClientShellState;
-use crate::protocol::FrameData;
+use crate::protocol::wire::FrameData;
 use ratatui::layout::Rect;
 
 pub(crate) struct ClientComposedSurfacePatch {
-    pub(crate) rows: Vec<crate::protocol::PaneSurfacePatchRow>,
-    pub(crate) cursor: Option<crate::protocol::CursorState>,
+    pub(crate) rows: Vec<crate::protocol::wire::PaneSurfacePatchRow>,
+    pub(crate) cursor: Option<crate::protocol::wire::CursorState>,
 }
 
 pub(crate) enum ClientPaneSurfacePatchOutcome {
@@ -12,14 +12,14 @@ pub(crate) enum ClientPaneSurfacePatchOutcome {
     Applied(Option<ClientComposedSurfacePatch>),
 }
 
-fn row_fits_frame(row: &crate::protocol::PaneSurfacePatchRow, frame: &FrameData) -> bool {
+fn row_fits_frame(row: &crate::protocol::wire::PaneSurfacePatchRow, frame: &FrameData) -> bool {
     row.x
         .saturating_add(row.cells.len().min(u16::MAX as usize) as u16)
         <= frame.width
         && row.y < frame.height
 }
 
-fn apply_row(row: &crate::protocol::PaneSurfacePatchRow, frame: &mut FrameData) -> bool {
+fn apply_row(row: &crate::protocol::wire::PaneSurfacePatchRow, frame: &mut FrameData) -> bool {
     if !row_fits_frame(row, frame) {
         return false;
     }
@@ -33,8 +33,8 @@ fn apply_row(row: &crate::protocol::PaneSurfacePatchRow, frame: &mut FrameData) 
 }
 
 fn apply_patch_to_surface(
-    surface: &mut crate::protocol::PaneSurfaceFrame,
-    patch: &crate::protocol::PaneSurfacePatch,
+    surface: &mut crate::protocol::wire::PaneSurfaceFrame,
+    patch: &crate::protocol::wire::PaneSurfacePatch,
 ) -> bool {
     for row in &patch.rows {
         if !apply_row(row, &mut surface.frame) {
@@ -58,7 +58,7 @@ fn apply_patch_to_surface(
 
 fn fast_path_blocker(
     state: &ClientShellState,
-    patch: &crate::protocol::PaneSurfacePatch,
+    patch: &crate::protocol::wire::PaneSurfacePatch,
 ) -> Option<&'static str> {
     if state.config_diagnostic.is_some() {
         Some("client_surface_patch.fallback.config_diagnostic")
@@ -82,8 +82,8 @@ fn fast_path_blocker(
 }
 
 fn pane_geometry_matches(
-    left: &crate::protocol::PaneSurfacePane,
-    right: &crate::protocol::PaneSurfacePane,
+    left: &crate::protocol::wire::PaneSurfacePane,
+    right: &crate::protocol::wire::PaneSurfacePane,
 ) -> bool {
     left.pane_id == right.pane_id
         && left.rect == right.rect
@@ -94,8 +94,8 @@ fn pane_geometry_matches(
 }
 
 fn patch_matches_surface(
-    current: &crate::protocol::PaneSurfaceFrame,
-    patch: &crate::protocol::PaneSurfacePatch,
+    current: &crate::protocol::wire::PaneSurfaceFrame,
+    patch: &crate::protocol::wire::PaneSurfacePatch,
 ) -> bool {
     if patch.boot_id != current.boot_id
         || patch.projection_revision != current.projection_revision
@@ -154,7 +154,7 @@ fn patch_matches_surface(
 impl ClientShellState {
     pub(crate) fn apply_pane_surface_patch(
         &mut self,
-        patch: crate::protocol::PaneSurfacePatch,
+        patch: crate::protocol::wire::PaneSurfacePatch,
     ) -> ClientPaneSurfacePatchOutcome {
         let Some(current) = self.pane_surface.as_ref() else {
             return ClientPaneSurfacePatchOutcome::Rejected;
@@ -165,7 +165,7 @@ impl ClientShellState {
 
         let fast_path_blocker = fast_path_blocker(self, &patch);
         if let Some(reason) = fast_path_blocker {
-            crate::render_prof::event(reason);
+            crate::utils::render::prof::event(reason);
         }
         let fast_path_area = fast_path_blocker.is_none().then(|| {
             let (cols, rows) = self.last_composed_size.unwrap_or_default();
@@ -175,7 +175,7 @@ impl ClientShellState {
             rows: patch
                 .rows
                 .iter()
-                .map(|row| crate::protocol::PaneSurfacePatchRow {
+                .map(|row| crate::protocol::wire::PaneSurfacePatchRow {
                     x: area.x.saturating_add(row.x),
                     y: area.y.saturating_add(row.y),
                     cells: row.cells.clone(),
@@ -184,7 +184,7 @@ impl ClientShellState {
             cursor: patch
                 .cursor
                 .clone()
-                .map(|cursor| crate::protocol::CursorState {
+                .map(|cursor| crate::protocol::wire::CursorState {
                     x: area.x.saturating_add(cursor.x),
                     y: area.y.saturating_add(cursor.y),
                     visible: cursor.visible,

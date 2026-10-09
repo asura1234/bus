@@ -73,14 +73,17 @@ impl crate::client::compositor::ClientShellState {
 
     /// `sound` is the user's `[ui.sound]`, used only for custom sound paths; Bus
     /// rooms decide on their own whether to ring.
-    pub(crate) fn start_bus(&mut self, sound: &crate::config::SoundConfig) -> Result<(), String> {
+    pub(crate) fn start_bus(
+        &mut self,
+        sound: &crate::utils::config::SoundConfig,
+    ) -> Result<(), String> {
         let Some(root) = crate::utils::env::bus_data_dir() else {
             return Ok(());
         };
-        let handle = crate::bus::runtime::BusHandle::start(
+        let handle = crate::messaging::coordinator::BusHandle::start(
             root,
-            crate::api::client::ConnectionTarget::LocalSession(Some(
-                crate::bus::runtime::DEFAULT_SESSION.into(),
+            crate::protocol::api::client::ConnectionTarget::LocalSession(Some(
+                crate::messaging::coordinator::DEFAULT_SESSION.into(),
             )),
         )?;
         let snapshot = handle.snapshot().ok_or("Bus initial state unavailable")?;
@@ -88,9 +91,9 @@ impl crate::client::compositor::ClientShellState {
         bus.handle = Some(handle);
         // Only the client that owns the coordinator plays room sounds, so each rings once.
         bus.sound_config = Some(sound.clone());
-        bus.settings_path = crate::bus::settings::path();
+        bus.settings_path = crate::messaging::prefs::settings::path();
         if let Some(path) = &bus.settings_path {
-            match crate::bus::settings::load(path) {
+            match crate::messaging::prefs::settings::load(path) {
                 Ok(settings) => bus.settings = settings,
                 Err(error) => bus.error = Some(error),
             }
@@ -100,17 +103,17 @@ impl crate::client::compositor::ClientShellState {
         }
         if bus.seed_first_room {
             bus.queue(
-                crate::bus::runtime::BusCommand::CreateRoom("bus".into()),
+                crate::messaging::coordinator::BusCommand::CreateRoom("bus".into()),
                 Effect::None,
             );
         }
         bus.tick();
         if std::env::var_os("BUS_DEV_EXISTING_SERVER").is_some() {
-            bus.error = Some(crate::bus::diagnostics::EXISTING_SERVER_NOTICE.into());
+            bus.error = Some(crate::messaging::diagnostics::EXISTING_SERVER_NOTICE.into());
             tracing::warn!(
                 event = "bus.dev.existing_server",
                 "{}",
-                crate::bus::diagnostics::EXISTING_SERVER_NOTICE
+                crate::messaging::diagnostics::EXISTING_SERVER_NOTICE
             );
         }
         self.bus = Some(bus);
@@ -159,9 +162,8 @@ impl crate::client::compositor::ClientShellState {
 mod tests {
     use super::*;
     use crate::{
-        bus::{model::*, runtime::*},
-        input::TerminalKey,
-        raw_input::RawInputEvent,
+        messaging::{coordinator::*, model::*},
+        protocol::keys::{host::RawInputEvent, TerminalKey},
     };
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::sync::Arc;

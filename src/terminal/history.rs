@@ -1,5 +1,5 @@
-use crate::ghostty::{CellWide, ScreenTextRow};
-use crate::pane::TerminalReadSnapshot;
+use crate::terminal::emulator::TerminalReadSnapshot;
+use crate::terminal::vt::{CellWide, ScreenTextRow};
 
 const MIN_ALIGNMENT_RATIO_PERCENT: usize = 30;
 const SIMILAR_VIEWPORT_RATIO_PERCENT: usize = 70;
@@ -178,7 +178,8 @@ fn row_text(row: &ScreenTextRow) -> String {
             continue;
         }
         if cell.graphemes.is_empty()
-            || cell.graphemes.first().copied() == Some(crate::ghostty::KITTY_UNICODE_PLACEHOLDER)
+            || cell.graphemes.first().copied()
+                == Some(crate::terminal::vt::KITTY_UNICODE_PLACEHOLDER)
         {
             text.push(' ');
         } else {
@@ -193,7 +194,7 @@ fn row_text(row: &ScreenTextRow) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ghostty::{ScreenTextCell, ScreenTextRow};
+    use crate::terminal::vt::{ScreenTextCell, ScreenTextRow};
 
     fn row(text: &str) -> ScreenTextRow {
         ScreenTextRow {

@@ -2,7 +2,7 @@
 use super::super::render::{display, provider, wrap, wrap_ranges, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
 use super::{History, Line, MarkdownSource, RowAnchor, RowKind, ThumbnailRow, Tone};
-use crate::bus::model::{
+use crate::messaging::model::{
     AgentId, Author, BusState, Prompt, Request, RequestId, RequestPhase, Room, RoomId,
 };
 use std::collections::{BTreeMap, BTreeSet};

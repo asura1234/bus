@@ -1,6 +1,6 @@
-use super::text::truncate_end;
-use crate::app::AppState;
-use crate::layout::PaneInfo;
+use crate::server::app_state::AppState;
+use crate::server::workspaces::layout::PaneInfo;
+use crate::utils::text::width::truncate_end;
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -61,7 +61,7 @@ fn shrink_for_one_cell_gap(size: u16) -> u16 {
 
 pub(crate) fn apply_pane_chrome(
     panes: Vec<PaneInfo>,
-    pane_borders: crate::config::PaneBordersConfig,
+    pane_borders: crate::utils::config::PaneBordersConfig,
     pane_gaps: bool,
     pane_outer_borders: bool,
 ) -> Vec<PaneInfo> {
@@ -138,9 +138,9 @@ struct LineCell {
 
 pub(super) fn render_pane_borders(
     app: &AppState,
-    ws: &crate::workspace::Workspace,
+    ws: &crate::server::workspaces::Workspace,
     pane_infos: &[PaneInfo],
-    split_borders: &[crate::layout::SplitBorder],
+    split_borders: &[crate::server::workspaces::layout::SplitBorder],
     frame: &mut Frame,
 ) {
     if !app.pane_borders.draws_borders() || pane_infos.iter().all(|info| info.borders.is_empty()) {
@@ -185,7 +185,7 @@ pub(super) fn render_pane_borders(
 
 fn add_split_border_cells(
     pane_gaps: bool,
-    split_borders: &[crate::layout::SplitBorder],
+    split_borders: &[crate::server::workspaces::layout::SplitBorder],
     cells: &mut std::collections::HashMap<(u16, u16), LineCell>,
 ) {
     if pane_gaps {
@@ -307,7 +307,7 @@ fn line_touches_pane(x: u16, y: u16, info: &PaneInfo, pane_gaps: bool) -> bool {
 
 fn render_pane_border_titles(
     app: &AppState,
-    ws: &crate::workspace::Workspace,
+    ws: &crate::server::workspaces::Workspace,
     pane_infos: &[PaneInfo],
     frame: &mut Frame,
 ) {

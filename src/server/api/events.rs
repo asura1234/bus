@@ -1,13 +1,13 @@
 //! Apply terminal lifecycle events and publish API event envelopes.
-use crate::api::schema::{EventData, EventEnvelope, EventKind};
-use crate::events::AppEvent;
+use crate::protocol::api::schema::{EventData, EventEnvelope, EventKind};
 use crate::server::api::input_encoding::{pane_agent_status, tab_attention_priority};
 use crate::server::app::{App, Mode, OverlayPaneState};
 use crate::server::terminals::respawn::RuntimeExitAction;
+use crate::terminal::events::TerminalEvent;
 impl App {
-    pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
+    pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: TerminalEvent) -> bool {
         match ev {
-            ev @ AppEvent::TerminalBell { .. } => {
+            ev @ TerminalEvent::TerminalBell { .. } => {
                 self.handle_internal_event(ev);
                 false
             }
@@ -18,22 +18,22 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_internal_event(&mut self, ev: AppEvent) {
+    pub(crate) fn handle_internal_event(&mut self, ev: TerminalEvent) {
         let _ = self.handle_internal_event_with_pane_updates(ev);
     }
 
     pub(crate) fn handle_internal_event_with_pane_updates(
         &mut self,
-        ev: AppEvent,
+        ev: TerminalEvent,
     ) -> Vec<crate::server::terminals::events::PaneStateUpdate> {
         if matches!(
             &ev,
-            AppEvent::TerminalBell { .. } | AppEvent::ClipboardWrite { .. }
+            TerminalEvent::TerminalBell { .. } | TerminalEvent::ClipboardWrite { .. }
         ) {
             return Vec::new();
         }
 
-        if let AppEvent::PaneDied { pane_id, .. } = &ev {
+        if let TerminalEvent::PaneDied { pane_id, .. } = &ev {
             let previous_toast = self.state.toast.clone();
             if let Some(update) = self
                 .state
@@ -54,7 +54,7 @@ impl App {
 
         let checkpointed_pane_exit = matches!(
             &ev,
-            AppEvent::PaneDied {
+            TerminalEvent::PaneDied {
                 pane_id,
                 exit_reason,
             } if exit_reason.requires_session_checkpoint() && self.find_pane(*pane_id).is_some() && !self.overlay_panes.contains_key(pane_id)
@@ -65,7 +65,7 @@ impl App {
 
         let overlay_state = self.take_exited_overlay_state(&ev);
 
-        if let AppEvent::PaneDied { pane_id, .. } = &ev {
+        if let TerminalEvent::PaneDied { pane_id, .. } = &ev {
             if let Some((ws_idx, _)) = self.find_pane(*pane_id) {
                 if let Some(public_pane_id) = self.public_pane_id(ws_idx, *pane_id) {
                     self.emit_event(crate::protocol::api::schema::EventEnvelope {
@@ -78,7 +78,7 @@ impl App {
                 }
             }
         }
-        let pane_exit_layout_target = if let AppEvent::PaneDied { pane_id, .. } = &ev {
+        let pane_exit_layout_target = if let TerminalEvent::PaneDied { pane_id, .. } = &ev {
             self.find_pane(*pane_id).and_then(|(ws_idx, _)| {
                 self.layout_update_target_after_pane_removal(ws_idx, *pane_id)
             })
@@ -86,7 +86,7 @@ impl App {
             None
         };
 
-        let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
+        let terminal_cwd_reported = matches!(ev, TerminalEvent::TerminalCwdReported { .. });
         let previous_toast = self.state.toast.clone();
         let pane_updates = self.state.handle_app_event(ev);
         if checkpointed_pane_exit {
@@ -127,9 +127,9 @@ impl App {
 
     fn take_exited_overlay_state(
         &mut self,
-        ev: &AppEvent,
+        ev: &TerminalEvent,
     ) -> Option<(OverlayPaneState, bool, bool, Option<bool>)> {
-        if let AppEvent::PaneDied { pane_id, .. } = ev {
+        if let TerminalEvent::PaneDied { pane_id, .. } = ev {
             self.overlay_panes.remove(pane_id).map(|overlay| {
                 let was_overlay_active =
                     self.state
@@ -251,11 +251,7 @@ impl App {
         self.event_hub.push(event);
     }
 
-    pub(crate) fn emit_pane_updated(
-        &mut self,
-        ws_idx: usize,
-        pane_id: crate::server::workspaces::layout::PaneId,
-    ) {
+    pub(crate) fn emit_pane_updated(&mut self, ws_idx: usize, pane_id: crate::utils::ids::PaneId) {
         if let Some(pane) = self.pane_info(ws_idx, pane_id) {
             self.emit_event(crate::protocol::api::schema::EventEnvelope {
                 event: crate::protocol::api::schema::EventKind::PaneUpdated,
@@ -293,11 +289,7 @@ impl App {
         }
     }
 
-    fn emit_focus_api_events(
-        &mut self,
-        ws_idx: usize,
-        pane_id: crate::server::workspaces::layout::PaneId,
-    ) {
+    fn emit_focus_api_events(&mut self, ws_idx: usize, pane_id: crate::utils::ids::PaneId) {
         self.emit_event(crate::protocol::api::schema::EventEnvelope {
             event: crate::protocol::api::schema::EventKind::WorkspaceFocused,
             data: crate::protocol::api::schema::EventData::WorkspaceFocused {
@@ -326,7 +318,7 @@ impl App {
 
     fn sync_focus_events_with_outer_event(
         &mut self,
-        outer_event: Option<crate::ghostty::FocusEvent>,
+        outer_event: Option<crate::terminal::vt::FocusEvent>,
     ) {
         let current_focus = self.state.active.and_then(|idx| {
             self.state
@@ -342,14 +334,14 @@ impl App {
         }
 
         if let Some((ws_idx, pane_id)) = self.last_focus {
-            self.send_pane_focus_event(ws_idx, pane_id, crate::ghostty::FocusEvent::Lost);
+            self.send_pane_focus_event(ws_idx, pane_id, crate::terminal::vt::FocusEvent::Lost);
         }
         if let Some((ws_idx, pane_id)) = current_focus {
             let event = outer_event.unwrap_or_else(|| {
                 if self.state.outer_terminal_focus == Some(false) {
-                    crate::ghostty::FocusEvent::Lost
+                    crate::terminal::vt::FocusEvent::Lost
                 } else {
-                    crate::ghostty::FocusEvent::Gained
+                    crate::terminal::vt::FocusEvent::Gained
                 }
             });
             self.send_pane_focus_event(ws_idx, pane_id, event);
@@ -362,8 +354,8 @@ impl App {
     pub(crate) fn send_pane_focus_event(
         &self,
         ws_idx: usize,
-        pane_id: crate::server::workspaces::layout::PaneId,
-        event: crate::ghostty::FocusEvent,
+        pane_id: crate::utils::ids::PaneId,
+        event: crate::terminal::vt::FocusEvent,
     ) {
         let Some(runtime) = self.state.workspaces.get(ws_idx).and_then(|_| {
             self.state
@@ -379,7 +371,7 @@ impl App {
     pub(in crate::server) fn collect_panes_for_workspace(
         &self,
         workspace_id: Option<&str>,
-    ) -> Result<Vec<crate::api::schema::PaneInfo>, (String, String)> {
+    ) -> Result<Vec<crate::protocol::api::schema::PaneInfo>, (String, String)> {
         if let Some(workspace_id) = workspace_id {
             let Some(ws_idx) = self.parse_workspace_id(workspace_id) else {
                 return Err((
@@ -419,7 +411,7 @@ impl App {
         &self,
         ws_idx: usize,
         tab_idx: usize,
-    ) -> Option<crate::api::schema::TabInfo> {
+    ) -> Option<crate::protocol::api::schema::TabInfo> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let tab = ws.tabs.get(tab_idx)?;
         let (agg_state, seen) = tab
@@ -432,8 +424,8 @@ impl App {
                     .map(|terminal| (terminal.state, pane.seen))
             })
             .max_by_key(|(state, seen)| tab_attention_priority(*state, *seen))
-            .unwrap_or((crate::detect::AgentState::Unknown, true));
-        Some(crate::api::schema::TabInfo {
+            .unwrap_or((crate::agents::AgentState::Unknown, true));
+        Some(crate::protocol::api::schema::TabInfo {
             tab_id: self.public_tab_id(ws_idx, tab_idx)?,
             workspace_id: self.public_workspace_id(ws_idx),
             number: tab.number,
@@ -475,8 +467,8 @@ impl App {
 
     fn emit_tab_and_pane_created_events(
         &mut self,
-        tab: crate::api::schema::TabInfo,
-        root_pane: crate::api::schema::PaneInfo,
+        tab: crate::protocol::api::schema::TabInfo,
+        root_pane: crate::protocol::api::schema::PaneInfo,
     ) {
         self.emit_event(EventEnvelope {
             event: EventKind::TabCreated,
@@ -491,20 +483,22 @@ impl App {
     pub(in crate::server) fn workspace_created_result(
         &self,
         ws_idx: usize,
-    ) -> Option<crate::api::schema::ResponseResult> {
-        Some(crate::api::schema::ResponseResult::WorkspaceCreated {
-            workspace: self.workspace_info(ws_idx),
-            tab: self.tab_info(ws_idx, 0)?,
-            root_pane: self.root_pane_info(ws_idx, 0)?,
-        })
+    ) -> Option<crate::protocol::api::schema::ResponseResult> {
+        Some(
+            crate::protocol::api::schema::ResponseResult::WorkspaceCreated {
+                workspace: self.workspace_info(ws_idx),
+                tab: self.tab_info(ws_idx, 0)?,
+                root_pane: self.root_pane_info(ws_idx, 0)?,
+            },
+        )
     }
 
     pub(in crate::server) fn tab_created_result(
         &self,
         ws_idx: usize,
         tab_idx: usize,
-    ) -> Option<crate::api::schema::ResponseResult> {
-        Some(crate::api::schema::ResponseResult::TabCreated {
+    ) -> Option<crate::protocol::api::schema::ResponseResult> {
+        Some(crate::protocol::api::schema::ResponseResult::TabCreated {
             tab: self.tab_info(ws_idx, tab_idx)?,
             root_pane: self.root_pane_info(ws_idx, tab_idx)?,
         })
@@ -514,7 +508,7 @@ impl App {
         &self,
         ws_idx: usize,
         tab_idx: usize,
-    ) -> Option<crate::api::schema::PaneInfo> {
+    ) -> Option<crate::protocol::api::schema::PaneInfo> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let tab = ws.tabs.get(tab_idx)?;
         self.pane_info(ws_idx, tab.root_pane)
@@ -523,8 +517,8 @@ impl App {
     pub(in crate::server) fn pane_info(
         &self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
-    ) -> Option<crate::api::schema::PaneInfo> {
+        pane_id: crate::utils::ids::PaneId,
+    ) -> Option<crate::protocol::api::schema::PaneInfo> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane = ws.pane_state(pane_id)?;
         let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
@@ -533,7 +527,7 @@ impl App {
             .state
             .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
             .and_then(|runtime| runtime.scroll_metrics())
-            .map(|metrics| crate::api::schema::PaneScrollInfo {
+            .map(|metrics| crate::protocol::api::schema::PaneScrollInfo {
                 offset_from_bottom: metrics.offset_from_bottom as u64,
                 max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
                 viewport_rows: metrics.viewport_rows as u64,
@@ -543,7 +537,7 @@ impl App {
             && ws
                 .focused_pane_id()
                 .is_some_and(|focused| focused == pane_id);
-        Some(crate::api::schema::PaneInfo {
+        Some(crate::protocol::api::schema::PaneInfo {
             pane_id: self.public_pane_id(ws_idx, pane_id)?,
             terminal_id: terminal.id.to_string(),
             workspace_id: self.public_workspace_id(ws_idx),
@@ -573,10 +567,10 @@ impl App {
     pub(in crate::server) fn workspace_info(
         &self,
         index: usize,
-    ) -> crate::api::schema::WorkspaceInfo {
+    ) -> crate::protocol::api::schema::WorkspaceInfo {
         let ws = &self.state.workspaces[index];
         let (agg_state, seen) = ws.aggregate_state(&self.state.terminals);
-        crate::api::schema::WorkspaceInfo {
+        crate::protocol::api::schema::WorkspaceInfo {
             workspace_id: self.public_workspace_id(index),
             number: index + 1,
             label: ws.display_name_from(&self.state.terminals, &self.terminal_runtimes),
@@ -584,7 +578,7 @@ impl App {
             pane_count: ws.public_pane_numbers.len(),
             tab_count: ws.tabs.len(),
             active_tab_id: self.public_tab_id(index, ws.active_tab).unwrap_or_else(|| {
-                crate::workspace::public_tab_id_for_number(&ws.id, ws.active_tab + 1)
+                crate::server::workspaces::public_tab_id_for_number(&ws.id, ws.active_tab + 1)
             }),
             agent_status: pane_agent_status(agg_state, seen),
             tokens: Default::default(),
@@ -594,14 +588,13 @@ impl App {
 
 fn terminal_agent_session_info(
     terminal: &crate::terminal::TerminalState,
-) -> Option<crate::api::schema::AgentSessionInfo> {
-    terminal
-        .persisted_agent_session
-        .as_ref()
-        .map(|session| crate::api::schema::AgentSessionInfo {
+) -> Option<crate::protocol::api::schema::AgentSessionInfo> {
+    terminal.persisted_agent_session.as_ref().map(|session| {
+        crate::protocol::api::schema::AgentSessionInfo {
             source: session.source.clone(),
             agent: session.agent.clone(),
             kind: crate::server::terminals::api_session_kind(session.session_ref.kind),
             value: session.session_ref.value.clone(),
-        })
+        }
+    })
 }

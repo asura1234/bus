@@ -13,6 +13,7 @@
 //! - Continues running after client disconnect
 //! - Handles stale socket cleanup, explicit server stop, minimum terminal size,
 //!   and pane spawn failure during restore
+use crate::protocol::api::schema;
 use crate::server::clients::connection::latest_shell_client;
 
 use std::collections::HashMap;
@@ -32,13 +33,14 @@ use tracing::info;
 #[cfg(windows)]
 use tracing::{debug, error, warn};
 
-use crate::api;
-use crate::app;
-use crate::config;
-use crate::events::AppEvent;
-use crate::ipc::{bind_local_listener, socket_file_identity, LocalListener, SocketFileIdentity};
+use crate::platform::ipc::{
+    bind_local_listener, socket_file_identity, LocalListener, SocketFileIdentity,
+};
+use crate::server::app;
+use crate::terminal::events::TerminalEvent;
+use crate::utils::config;
 
-use crate::protocol::ServerMessage;
+use crate::protocol::wire::ServerMessage;
 #[cfg(unix)]
 use crate::server::clients::accept::accept_pending_client_connections;
 use crate::server::clients::connection::ClientConnection;
@@ -51,11 +53,11 @@ pub use crate::server::startup::run_server;
 pub(super) fn notification_show_result(
     id: String,
     shown: bool,
-    reason: api::schema::NotificationShowReason,
+    reason: schema::NotificationShowReason,
 ) -> String {
-    serde_json::to_string(&api::schema::SuccessResponse {
+    serde_json::to_string(&schema::SuccessResponse {
         id,
-        result: api::schema::ResponseResult::NotificationShow { shown, reason },
+        result: schema::ResponseResult::NotificationShow { shown, reason },
     })
     .unwrap_or_else(|_| "{}".to_string())
 }
@@ -71,8 +73,8 @@ pub(super) fn non_empty_body(value: &str) -> Option<String> {
 /// Events that the headless server event loop can process.
 enum LoopEvent {
     Timer,
-    Internal(AppEvent),
-    Api(Box<api::ApiRequestMessage>),
+    Internal(TerminalEvent),
+    Api(Box<crate::server::api::ApiRequestMessage>),
     ServerEvent(ServerEvent),
     RenderRequested,
 }
@@ -99,8 +101,8 @@ const CLIENT_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 pub struct HeadlessServer {
     pub(super) app: app::App,
     // Held so dropping HeadlessServer owns API request channel and server shutdown.
-    pub(super) _api_tx: Option<api::ApiRequestSender>,
-    pub(super) _api_server: Option<api::ServerHandle>,
+    pub(super) _api_tx: Option<crate::server::api::ApiRequestSender>,
+    pub(super) _api_server: Option<crate::server::api::ServerHandle>,
     #[cfg(unix)]
     pub(super) client_listener: LocalListener,
     pub(super) client_socket_path: PathBuf,
@@ -128,7 +130,7 @@ pub struct HeadlessServer {
     pub(super) pending_alt_screen_reads:
         Vec<crate::server::terminals::scrollback_read::PendingAltScreenRead>,
     /// Reads waiting for an alternate-screen traversal of the same terminal to finish.
-    pub(super) deferred_alt_screen_reads: Vec<api::ApiRequestMessage>,
+    pub(super) deferred_alt_screen_reads: Vec<crate::server::api::ApiRequestMessage>,
     /// Monotonic activity counter used to pick the most recently active client.
     pub(super) next_activity_stamp: u64,
     /// Configured virtual terminal size used when no clients are connected.
@@ -201,8 +203,8 @@ impl HeadlessServer {
     pub fn new(
         app: app::App,
         config_diagnostics: &[String],
-        api_tx: Option<api::ApiRequestSender>,
-        api_server: Option<api::ServerHandle>,
+        api_tx: Option<crate::server::api::ApiRequestSender>,
+        api_server: Option<crate::server::api::ServerHandle>,
         should_quit: Arc<AtomicBool>,
     ) -> io::Result<Self> {
         let client_path = client_socket_path();
@@ -279,8 +281,8 @@ impl HeadlessServer {
         let mut needs_full_render = true;
 
         loop {
-            crate::render_prof::event("loop.tick");
-            crate::render_prof::flush_if_due();
+            crate::utils::render::prof::event("loop.tick");
+            crate::utils::render::prof::flush_if_due();
             self.app.reap_finished_detached_processes();
 
             // If shutdown has been initiated, complete it and exit.
@@ -292,7 +294,7 @@ impl HeadlessServer {
             // Check if we should start shutting down.
             if self.app.state.should_quit || self.should_quit.load(Ordering::Acquire) {
                 self.drain_internal_events_with_forwarding_up_to(
-                    crate::app::APP_EVENT_CHANNEL_CAPACITY,
+                    crate::server::app::APP_EVENT_CHANNEL_CAPACITY,
                 );
                 self.initiate_shutdown();
                 continue;
@@ -327,14 +329,14 @@ impl HeadlessServer {
         // 1. Check the coalesced render signal from PTY readers and generic runtime work.
         if self.app.render_dirty.is_pending() {
             *needs_render = true;
-            crate::render_prof::event("render.request.signal");
+            crate::utils::render::prof::event("render.request.signal");
         }
         // 2. Drain a bounded internal-event batch. API handlers perform an
         // exhaustive forwarding-aware drain before reading pane/runtime state.
         if self.drain_internal_events_with_forwarding() {
             *needs_render = true;
             *needs_full_render = true;
-            crate::render_prof::event("full_render_cause.internal_events");
+            crate::utils::render::prof::event("full_render_cause.internal_events");
         }
         if self.should_quit.load(Ordering::Acquire) {
             return Ok(false);
@@ -343,7 +345,7 @@ impl HeadlessServer {
         if self.drain_api_requests_with_shutdown_check() {
             *needs_render = true;
             *needs_full_render = true;
-            crate::render_prof::event("full_render_cause.api_requests");
+            crate::utils::render::prof::event("full_render_cause.api_requests");
         }
         if self.should_quit.load(Ordering::Acquire) {
             return Ok(false);
@@ -359,7 +361,7 @@ impl HeadlessServer {
         if self.drain_server_events() {
             *needs_render = true;
             *needs_full_render = true;
-            crate::render_prof::event("full_render_cause.server_events");
+            crate::utils::render::prof::event("full_render_cause.server_events");
         }
         if self.should_quit.load(Ordering::Acquire) {
             return Ok(false);
@@ -378,7 +380,7 @@ impl HeadlessServer {
         if self.handle_scheduled_tasks_headless(now, *needs_render) {
             *needs_render = true;
             *needs_full_render = true;
-            crate::render_prof::event("full_render_cause.scheduled_tasks");
+            crate::utils::render::prof::event("full_render_cause.scheduled_tasks");
         }
 
         self.poll_pending_alt_screen_reads(now);
@@ -390,7 +392,7 @@ impl HeadlessServer {
         if latest_shell_client(&self.clients).is_some() && self.app.ensure_default_workspace() {
             *needs_render = true;
             *needs_full_render = true;
-            crate::render_prof::event("full_render_cause.default_workspace");
+            crate::utils::render::prof::event("full_render_cause.default_workspace");
         }
 
         self.drain_client_config_reload_request();
@@ -414,25 +416,25 @@ impl HeadlessServer {
                 || (self.app.can_present_now(now)
                     && self.has_pending_presentation_work(*needs_full_render)))
         {
-            crate::render_prof::event("render.attempt");
+            crate::utils::render::prof::event("render.attempt");
             let render_request = self.app.render_dirty.take();
             let pty_dirty = !render_request.pty_sources.is_empty();
             if pty_dirty {
-                crate::render_prof::event("render.attempt.pty_dirty");
-                crate::render_prof::counter(
+                crate::utils::render::prof::event("render.attempt.pty_dirty");
+                crate::utils::render::prof::counter(
                     "render.attempt.pty_sources",
                     render_request.pty_sources.len() as u64,
                 );
             }
             if render_request.generic {
                 *needs_full_render = true;
-                crate::render_prof::event("full_render_cause.generic_dirty");
+                crate::utils::render::prof::event("full_render_cause.generic_dirty");
             }
             let (sidebar_title_changed, outer_title_synced) =
                 self.sync_terminal_title_sources(&render_request.terminal_title_sources);
             if sidebar_title_changed {
                 *needs_full_render = true;
-                crate::render_prof::event("full_render_cause.terminal_title_sidebar");
+                crate::utils::render::prof::event("full_render_cause.terminal_title_sidebar");
             }
             if *needs_full_render && !outer_title_synced {
                 self.sync_window_title();
@@ -448,13 +450,13 @@ impl HeadlessServer {
                 && !*needs_full_render
                 && !self.pty_sources_visible_to_any_render_target(&render_request.pty_sources);
             if hidden_only {
-                crate::render_prof::event("render.skipped.hidden_sources");
+                crate::utils::render::prof::event("render.skipped.hidden_sources");
             } else if !*needs_full_render
                 && self.render_retained_pane_surface_and_stream(&render_request.pty_sources)
             {
-                crate::render_prof::event("retained_surface.invoke");
+                crate::utils::render::prof::event("retained_surface.invoke");
             } else {
-                crate::render_prof::event("full_render.invoke");
+                crate::utils::render::prof::event("full_render.invoke");
                 self.render_and_stream();
             }
             self.app.record_render_attempt(now, !hidden_only);

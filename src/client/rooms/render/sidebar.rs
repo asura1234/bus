@@ -7,7 +7,7 @@ use super::super::{
 use super::geometry::layout;
 use super::text::cells;
 use super::{cell_width, provider, status, wrap, Action, View, ACCENT};
-use crate::bus::model::{Agent, BusState, Room, RoomId, RoomKind, RuntimeStatus};
+use crate::messaging::model::{BusState, Room, RoomAgent, RoomId, RoomKind, RuntimeStatus};
 use ratatui::{layout::Rect, style::Color};
 
 const WORKING_MID: Color = Color::Rgb(68, 190, 84);
@@ -16,7 +16,7 @@ const BLOCKED_BRIGHT: Color = Color::Rgb(255, 92, 102);
 const BLOCKED_MID: Color = Color::Rgb(205, 64, 72);
 const BLOCKED_DIM: Color = Color::Rgb(128, 44, 52);
 
-fn agent_status(agent: &Agent) -> &'static str {
+fn agent_status(agent: &RoomAgent) -> &'static str {
     if !agent.hook_setup_confirmed && !agent.session_binding_invalidated && !agent.deletion_pending
     {
         "Not ready"
@@ -26,7 +26,10 @@ fn agent_status(agent: &Agent) -> &'static str {
 }
 
 /// The agent's identity color for the current color vision setting.
-pub(super) fn identity_color(agent: &Agent, settings: &crate::bus::settings::BusSettings) -> Color {
+pub(super) fn identity_color(
+    agent: &RoomAgent,
+    settings: &crate::messaging::prefs::settings::BusSettings,
+) -> Color {
     let [r, g, b] = if settings.color_blind_mode {
         agent.accessible_color
     } else {
@@ -42,8 +45,8 @@ pub(super) fn identity_color(agent: &Agent, settings: &crate::bus::settings::Bus
 pub(super) fn message_name_color(
     state: &BusState,
     open_room: Option<RoomId>,
-    agent: &Agent,
-    settings: &crate::bus::settings::BusSettings,
+    agent: &RoomAgent,
+    settings: &crate::messaging::prefs::settings::BusSettings,
 ) -> Color {
     let in_master = |room| state.master_room().is_some_and(|master| master.id == room);
     if in_master(agent.room_id) && !open_room.is_some_and(in_master) {
@@ -182,7 +185,10 @@ pub(in crate::client::rooms) fn room_label(room: &Room, width: usize) -> String 
 /// The MASTER line under an agent's provider: the room it orchestrates, or
 /// `# unassigned` for a saved orchestrator whose room failed the load checks.
 /// Written like the ROOMS list, `# name`.
-pub(in crate::client::rooms) fn orchestrated_room_label(state: &BusState, agent: &Agent) -> String {
+pub(in crate::client::rooms) fn orchestrated_room_label(
+    state: &BusState,
+    agent: &RoomAgent,
+) -> String {
     match agent.orchestrates.and_then(|room| state.room(room)) {
         Some(room) => format!("# {}", room.name),
         None => "# unassigned".into(),
@@ -191,7 +197,7 @@ pub(in crate::client::rooms) fn orchestrated_room_label(state: &BusState, agent:
 
 /// Measured agent rows, shared by height calculation and visible-row drawing.
 struct SidebarAgent<'a> {
-    agent: &'a Agent,
+    agent: &'a RoomAgent,
     in_master: bool,
     paths: Vec<String>,
     height: usize,
@@ -214,7 +220,7 @@ impl SidebarViewport {
 }
 
 impl BusUi {
-    pub fn cursor(&self) -> Option<crate::protocol::CursorState> {
+    pub fn cursor(&self) -> Option<crate::protocol::wire::CursorState> {
         self.view.cursor.clone()
     }
 
@@ -533,7 +539,7 @@ impl BusUi {
         &self,
         view: &mut View,
         viewport: SidebarViewport,
-        agent: &Agent,
+        agent: &RoomAgent,
         y: usize,
     ) {
         let sw = viewport.sidebar.width.saturating_sub(3);

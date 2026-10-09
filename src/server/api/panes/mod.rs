@@ -20,7 +20,7 @@ use crate::server::api::errors::{encode_error, encode_success};
 use crate::server::app::App;
 #[cfg(test)]
 use crate::server::app::Mode;
-use crate::server::workspaces::layout::PaneId;
+use crate::utils::ids::PaneId;
 
 impl App {
     pub(super) fn handle_pane_list(&mut self, id: String, params: PaneListParams) -> String {

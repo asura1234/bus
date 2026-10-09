@@ -14,14 +14,14 @@ fn vti_control_records_keep_physical_digit_identity() {
     for (vk, unicode, expected) in cases {
         assert_eq!(
             translate([key_vk_with_utf16_mods(vk, unicode, 0x0008)]),
-            vec![crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char(expected),
+            vec![crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char(expected),
                 modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
 
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::Synthesized,
+                source: crate::protocol::wire::ClientKeySource::Synthesized,
             }],
             "vk={vk:#x} unicode={unicode:#x}"
         );
@@ -43,18 +43,18 @@ fn vti_ctrl_oem_record_uses_resolved_layout_character() {
         ..pressed
     };
     let mut mapper = WindowsInputMapper::default();
-    let expected = |record, kind, ch| crate::protocol::ClientInputEvent::Key {
-        code: crate::protocol::ClientKeyCode::Char(ch),
+    let expected = |record, kind, ch| crate::protocol::wire::ClientInputEvent::Key {
+        code: crate::protocol::wire::ClientKeyCode::Char(ch),
         modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
         kind,
         repeat_count: 1,
         generated_text: None,
-        source: crate::protocol::ClientKeySource::WindowsConsole { record },
+        source: crate::protocol::wire::ClientKeySource::WindowsConsole { record },
     };
     for (record, kind, ch) in [
-        (pressed, crate::protocol::ClientKeyKind::Press, '/'),
-        (released, crate::protocol::ClientKeyKind::Release, '/'),
-        (pressed, crate::protocol::ClientKeyKind::Press, 'ß'),
+        (pressed, crate::protocol::wire::ClientKeyKind::Press, '/'),
+        (released, crate::protocol::wire::ClientKeyKind::Release, '/'),
+        (pressed, crate::protocol::wire::ClientKeyKind::Press, 'ß'),
     ] {
         assert_eq!(
             mapper.translate_semantic_key_events(record, Some(ch)),
@@ -68,15 +68,22 @@ fn vti_ctrl_oem_record_uses_resolved_layout_character() {
 
 #[test]
 fn vti_us_international_dead_key_only_emits_composed_text() {
-    fn encode_for_kitty(events: Vec<crate::protocol::ClientInputEvent>, flags: u16) -> Vec<u8> {
+    fn encode_for_kitty(
+        events: Vec<crate::protocol::wire::ClientInputEvent>,
+        flags: u16,
+    ) -> Vec<u8> {
         events
             .into_iter()
             .flat_map(|event| match event.to_raw_input_event() {
-                crate::raw_input::RawInputEvent::Key(key) => crate::input::encode_terminal_key(
-                    key,
-                    crate::input::KeyboardProtocol::Kitty { flags },
-                ),
-                crate::raw_input::RawInputEvent::Text(text) => text.as_str().as_bytes().to_vec(),
+                crate::protocol::keys::host::RawInputEvent::Key(key) => {
+                    crate::protocol::keys::encode_terminal_key(
+                        key,
+                        crate::protocol::keys::KeyboardProtocol::Kitty { flags },
+                    )
+                }
+                crate::protocol::keys::host::RawInputEvent::Text(text) => {
+                    text.as_str().as_bytes().to_vec()
+                }
                 _ => panic!("unexpected event while encoding dead-key input"),
             })
             .collect()
@@ -110,18 +117,18 @@ fn vti_us_international_dead_key_only_emits_composed_text() {
 
     let mut translator = WindowsInputTranslator::default();
     for (record, kind) in [
-        (dead_press, crate::protocol::ClientKeyKind::Press),
-        (dead_release, crate::protocol::ClientKeyKind::Release),
+        (dead_press, crate::protocol::wire::ClientKeyKind::Press),
+        (dead_release, crate::protocol::wire::ClientKeyKind::Release),
     ] {
         let events = translator.translate(WindowsInputRecord::Key(record));
         assert!(matches!(
             events.as_slice(),
-            [crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('6'),
+            [crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('6'),
                 modifiers,
                 kind: actual_kind,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::WindowsConsole {
+                source: crate::protocol::wire::ClientKeySource::WindowsConsole {
                     record: actual_record,
                 },
                 ..
@@ -137,10 +144,10 @@ fn vti_us_international_dead_key_only_emits_composed_text() {
     let events = translator.translate(WindowsInputRecord::Key(composed_press));
     assert!(matches!(
         events.as_slice(),
-        [crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('ê'),
-            kind: crate::protocol::ClientKeyKind::Press,
-            source: crate::protocol::ClientKeySource::WindowsConsole {
+        [crate::protocol::wire::ClientInputEvent::Key {
+            code: crate::protocol::wire::ClientKeyCode::Char('ê'),
+            kind: crate::protocol::wire::ClientKeyKind::Press,
+            source: crate::protocol::wire::ClientKeySource::WindowsConsole {
                 record: actual_record,
             },
             ..
@@ -182,41 +189,48 @@ fn vti_win32_input_mode_non_us_shifted_text_preserves_generated_text() {
     assert_eq!(
         events,
         vec![
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('/'),
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('/'),
                 modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
-                kind: crate::protocol::ClientKeyKind::Press,
+                kind: crate::protocol::wire::ClientKeyKind::Press,
                 repeat_count: 1,
                 generated_text: Some("/".into()),
-                source: crate::protocol::ClientKeySource::WindowsConsole { record: pressed },
+                source: crate::protocol::wire::ClientKeySource::WindowsConsole { record: pressed },
             },
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('/'),
+            crate::protocol::wire::ClientInputEvent::Key {
+                code: crate::protocol::wire::ClientKeyCode::Char('/'),
                 modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
-                kind: crate::protocol::ClientKeyKind::Release,
+                kind: crate::protocol::wire::ClientKeyKind::Release,
                 repeat_count: 1,
                 generated_text: None,
-                source: crate::protocol::ClientKeySource::WindowsConsole { record: released },
+                source: crate::protocol::wire::ClientKeySource::WindowsConsole { record: released },
             },
         ]
     );
 
-    let crate::raw_input::RawInputEvent::Key(key) = events[0].to_raw_input_event() else {
+    let crate::protocol::keys::host::RawInputEvent::Key(key) = events[0].to_raw_input_event()
+    else {
         panic!("expected translated key");
     };
     assert_eq!(
-        crate::input::encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy),
-        b"/"
-    );
-    assert_eq!(
-        crate::input::encode_terminal_key(
+        crate::protocol::keys::encode_terminal_key(
             key.clone(),
-            crate::input::KeyboardProtocol::Kitty { flags: 7 },
+            crate::protocol::keys::KeyboardProtocol::Legacy
         ),
         b"/"
     );
     assert_eq!(
-        crate::input::encode_terminal_key(key, crate::input::KeyboardProtocol::Kitty { flags: 15 },),
+        crate::protocol::keys::encode_terminal_key(
+            key.clone(),
+            crate::protocol::keys::KeyboardProtocol::Kitty { flags: 7 },
+        ),
+        b"/"
+    );
+    assert_eq!(
+        crate::protocol::keys::encode_terminal_key(
+            key,
+            crate::protocol::keys::KeyboardProtocol::Kitty { flags: 15 },
+        ),
         b"\x1b[47;2:1u"
     );
 }
@@ -310,14 +324,18 @@ fn vti_native_layout_text_and_command_modifiers_encode_by_role() {
         let [event] = events.as_slice() else {
             panic!("{name}: expected one translated event, got {events:?}");
         };
-        let crate::raw_input::RawInputEvent::Key(key) = event.to_raw_input_event() else {
+        let crate::protocol::keys::host::RawInputEvent::Key(key) = event.to_raw_input_event()
+        else {
             panic!("{name}: expected translated key");
         };
 
         assert_eq!(key.modifiers.bits(), modifiers, "{name}: modifiers");
         assert_eq!(key.generated_text.as_deref(), text, "{name}: text");
         assert_eq!(
-            crate::input::encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
+            crate::protocol::keys::encode_terminal_key(
+                key,
+                crate::protocol::keys::KeyboardProtocol::Legacy
+            ),
             expected,
             "{name}: encoding"
         );
@@ -328,14 +346,14 @@ fn vti_native_layout_text_and_command_modifiers_encode_by_role() {
 fn vti_right_alt_special_key_preserves_alt_modifier() {
     assert_eq!(
         translate([key_vk(0x26, 0x0001)]),
-        vec![crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Up,
+        vec![crate::protocol::wire::ClientInputEvent::Key {
+            code: crate::protocol::wire::ClientKeyCode::Up,
             modifiers: crossterm::event::KeyModifiers::ALT.bits(),
-            kind: crate::protocol::ClientKeyKind::Press,
+            kind: crate::protocol::wire::ClientKeyKind::Press,
 
             repeat_count: 1,
             generated_text: None,
-            source: crate::protocol::ClientKeySource::Synthesized,
+            source: crate::protocol::wire::ClientKeySource::Synthesized,
         }]
     );
 }
@@ -344,14 +362,14 @@ fn vti_right_alt_special_key_preserves_alt_modifier() {
 fn vti_altgr_printable_key_is_not_terminal_alt_prefix() {
     assert_eq!(
         translate([key_vk_with_unicode(0x32, '@', 0x0001 | 0x0008)]),
-        vec![crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('@'),
+        vec![crate::protocol::wire::ClientInputEvent::Key {
+            code: crate::protocol::wire::ClientKeyCode::Char('@'),
             modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
+            kind: crate::protocol::wire::ClientKeyKind::Press,
 
             repeat_count: 1,
             generated_text: None,
-            source: crate::protocol::ClientKeySource::Synthesized,
+            source: crate::protocol::wire::ClientKeySource::Synthesized,
         }]
     );
 }
@@ -360,13 +378,13 @@ fn vti_altgr_printable_key_is_not_terminal_alt_prefix() {
 fn vti_alt_code_unicode_on_alt_release_is_preserved() {
     assert_eq!(
         translate([key_vk_up_with_unicode(0x12, 'é', 0)]),
-        vec![crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('é'),
+        vec![crate::protocol::wire::ClientInputEvent::Key {
+            code: crate::protocol::wire::ClientKeyCode::Char('é'),
             modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
+            kind: crate::protocol::wire::ClientKeyKind::Press,
             repeat_count: 1,
             generated_text: Some("é".into()),
-            source: crate::protocol::ClientKeySource::Synthesized,
+            source: crate::protocol::wire::ClientKeySource::Synthesized,
         }]
     );
 }
@@ -380,14 +398,14 @@ fn vti_semantic_surrogate_pair_preserves_emoji() {
     assert!(translator.translate(high).is_empty());
     assert_eq!(
         translator.translate(low),
-        vec![crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char('🙂'),
+        vec![crate::protocol::wire::ClientInputEvent::Key {
+            code: crate::protocol::wire::ClientKeyCode::Char('🙂'),
             modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
+            kind: crate::protocol::wire::ClientKeyKind::Press,
 
             repeat_count: 1,
             generated_text: None,
-            source: crate::protocol::ClientKeySource::Synthesized,
+            source: crate::protocol::wire::ClientKeySource::Synthesized,
         }]
     );
 }
@@ -418,7 +436,7 @@ fn vti_surrogate_pair_paste_preserves_emoji() {
         .collect::<Vec<_>>();
     assert_eq!(
         events,
-        vec![crate::protocol::ClientInputEvent::Paste {
+        vec![crate::protocol::wire::ClientInputEvent::Paste {
             text: "🙂".into()
         }]
     );
@@ -441,7 +459,7 @@ fn vti_nonzero_vk_surrogate_pair_inside_paste_preserves_emoji() {
         .collect::<Vec<_>>();
     assert_eq!(
         events,
-        vec![crate::protocol::ClientInputEvent::Paste {
+        vec![crate::protocol::wire::ClientInputEvent::Paste {
             text: "🙂".into()
         }]
     );

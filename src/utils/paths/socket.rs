@@ -17,8 +17,10 @@ pub const CLIENT_SOCKET_PATH_ENV_VAR: &str = "HERDR_CLIENT_SOCKET_PATH";
 /// 3. Otherwise, honor `HERDR_CLIENT_SOCKET_PATH` (legacy/testing fallback).
 /// 4. Otherwise, use the active session data directory.
 pub fn client_socket_path() -> PathBuf {
-    if crate::session::explicit_session_requested() {
-        return crate::session::client_socket_path_for(crate::session::active_name().as_deref());
+    if crate::utils::paths::explicit_session_requested() {
+        return crate::utils::paths::client_socket_path_for(
+            crate::utils::paths::active_name().as_deref(),
+        );
     }
     client_socket_path_from_overrides(
         std::env::var(crate::utils::env::SOCKET_PATH_ENV_VAR)
@@ -40,7 +42,7 @@ pub(crate) fn client_socket_path_from_overrides(
         return PathBuf::from(client_socket_override);
     }
 
-    crate::session::client_socket_path_for(crate::session::active_name().as_deref())
+    crate::utils::paths::client_socket_path_for(crate::utils::paths::active_name().as_deref())
 }
 
 pub(crate) fn derive_client_socket_from_api_socket(api_socket_path: &Path) -> PathBuf {
@@ -80,11 +82,14 @@ mod tests {
 
     #[test]
     fn client_socket_path_defaults_to_config_dir() {
-        let _guard = crate::config::test_config_env_lock().lock().unwrap();
-        std::env::remove_var(crate::session::SESSION_ENV_VAR);
-        crate::session::clear_explicit_session_for_test();
+        let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+        std::env::remove_var(crate::utils::paths::SESSION_ENV_VAR);
+        crate::utils::paths::clear_explicit_session_for_test();
         let path = client_socket_path_from_overrides(None, None);
-        assert_eq!(path, crate::config::config_dir().join("herdr-client.sock"));
+        assert_eq!(
+            path,
+            crate::utils::config::config_dir().join("herdr-client.sock")
+        );
     }
 
     #[test]

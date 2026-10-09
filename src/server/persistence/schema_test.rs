@@ -86,7 +86,7 @@ fn managed_agent_snapshot_omits_pending_and_persists_active_ownership() {
         .unwrap()
         .begin_managed_agent(
             "reviewer".into(),
-            crate::detect::Agent::Pi,
+            crate::agents::AgentKind::Pi,
             now,
             std::time::Duration::ZERO,
             std::time::Duration::from_secs(1),
@@ -99,8 +99,8 @@ fn managed_agent_snapshot_omits_pending_and_persists_active_ownership() {
 
     let terminal = state.terminals.get_mut(&terminal_id).unwrap();
     terminal.set_detected_state(
-        Some(crate::detect::Agent::Pi),
-        crate::detect::AgentState::Idle,
+        Some(crate::agents::AgentKind::Pi),
+        crate::agents::AgentState::Idle,
     );
     assert!(terminal.reconcile_managed_agent_at(now, false));
     let active = capture_from_state(&state);
@@ -355,7 +355,7 @@ fn capture_contract_tracks_focus_navigation() {
     let mut state = state_with_workspaces(&["one"]);
     let root = state.workspaces[0].tabs[0].root_pane;
     let second = state.workspaces[0].test_split(Direction::Horizontal);
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         Rect::new(0, 0, 106, 20),
@@ -374,7 +374,7 @@ fn capture_contract_tracks_resize_ratio_changes() {
     let root = state.workspaces[0].tabs[0].root_pane;
     state.workspaces[0].test_split(Direction::Horizontal);
     state.workspaces[0].layout.focus_pane(root);
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         Rect::new(0, 0, 106, 20),
@@ -538,13 +538,14 @@ fn capture_contract_tracks_hook_authority_agent_session() {
         .clone();
     let terminal = state.terminals.get_mut(&terminal_id).unwrap();
     terminal.set_detected_state(
-        Some(crate::detect::Agent::Pi),
-        crate::detect::AgentState::Idle,
+        Some(crate::agents::AgentKind::Pi),
+        crate::agents::AgentState::Idle,
     );
-    terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+    terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
         source: "herdr:pi".into(),
         agent: "pi".into(),
-        session_ref: crate::agent_resume::AgentSessionRef::path(session_path.clone()).unwrap(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::path(session_path.clone())
+            .unwrap(),
     });
 
     let snapshot = capture_from_state(&state);
@@ -557,7 +558,7 @@ fn capture_contract_tracks_hook_authority_agent_session() {
     assert_eq!(agent_session.agent, "pi");
     assert_eq!(
         agent_session.kind,
-        crate::agent_resume::AgentSessionRefKind::Path
+        crate::agents::resume::catalog::AgentSessionRefKind::Path
     );
     assert_eq!(agent_session.value, session_path);
 }
@@ -574,10 +575,11 @@ fn capture_contract_preserves_restored_agent_session() {
         .terminals
         .get_mut(&terminal_id)
         .unwrap()
-        .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+        .set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
             source: "herdr:opencode".into(),
             agent: "opencode".into(),
-            session_ref: crate::agent_resume::AgentSessionRef::id("opencode-session").unwrap(),
+            session_ref: crate::agents::resume::catalog::AgentSessionRef::id("opencode-session")
+                .unwrap(),
         });
 
     let snapshot = capture_from_state(&state);
@@ -590,7 +592,7 @@ fn capture_contract_preserves_restored_agent_session() {
     assert_eq!(agent_session.agent, "opencode");
     assert_eq!(
         agent_session.kind,
-        crate::agent_resume::AgentSessionRefKind::Id
+        crate::agents::resume::catalog::AgentSessionRefKind::Id
     );
     assert_eq!(agent_session.value, "opencode-session");
 }

@@ -3,7 +3,7 @@ use super::super::{chat_search::ChatSearch, deletion::DeleteTarget, forms::Form,
 use super::geometry::agent_form_gap;
 use super::text::{display, provider, wrap};
 use super::{Action, SoundSettingsLine, SoundTarget, View};
-use crate::bus::model::RoomKind;
+use crate::messaging::model::RoomKind;
 use ratatui::layout::Rect;
 
 /// The chat-search panel: a border, the query row, the key hint, a border.
@@ -678,7 +678,7 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
             true,
         );
         let typed = unicode_width::UnicodeWidthStr::width(search.query.as_str()) as u16;
-        view.cursor = Some(crate::protocol::CursorState {
+        view.cursor = Some(crate::protocol::wire::CursorState {
             x: x + label_width + 1 + typed.min(inner.saturating_sub(1)),
             y: field_y + 1,
             visible: true,

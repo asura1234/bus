@@ -2,13 +2,13 @@ use super::*;
 
 #[tokio::test]
 async fn headless_api_reads_latest_title_without_spinner_event_flooding() {
-    let event_hub = api::EventHub::default();
+    let event_hub = crate::server::api::EventHub::default();
     let mut server = test_headless_server_with_event_hub(event_hub.clone());
-    server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("one")];
+    server.app.state.workspaces = vec![crate::server::workspaces::Workspace::test_new("one")];
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let pane_id = server.app.state.workspaces[0].tabs[0].root_pane;
     let terminal_id = server.app.state.workspaces[0].tabs[0].panes[&pane_id]
         .attached_terminal_id
@@ -19,7 +19,7 @@ async fn headless_api_reads_latest_title_without_spinner_event_flooding() {
         .terminals
         .get_mut(&terminal_id)
         .unwrap()
-        .detected_agent = Some(crate::detect::Agent::Claude);
+        .detected_agent = Some(crate::agents::AgentKind::Claude);
     let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"");
     runtime.test_process_pty_bytes(b"\x1b]0;\xe2\xa0\x8b task\x07");
     server
@@ -48,7 +48,7 @@ async fn headless_api_reads_latest_title_without_spinner_event_flooding() {
 #[test]
 fn window_title_waits_for_a_foreground_client_to_exist() {
     let mut server = test_headless_server();
-    server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("herd")];
+    server.app.state.workspaces = vec![crate::server::workspaces::Workspace::test_new("herd")];
     server.app.state.active = Some(0);
     server.app.configure_window_title("{workspace}");
 
@@ -62,7 +62,7 @@ fn window_title_waits_for_a_foreground_client_to_exist() {
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             client_tx,
         ),
@@ -95,7 +95,7 @@ fn an_attaching_client_gets_the_title_even_when_it_has_not_changed() {
         2,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             2,
             client_tx,
         ),
@@ -245,7 +245,7 @@ fn a_newly_promoted_client_gets_the_window_title_again() {
         2,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             2,
             client_tx,
         ),

@@ -4,12 +4,12 @@ use super::*;
 fn theme_auto_switch_is_opt_in_and_preserves_manual_default() {
     let mut config = Config::default();
     config.theme.name = Some("tokyo-night".to_string());
-    config.theme.custom = Some(crate::config::CustomThemeColors {
-        light: Some(crate::config::ModeThemeColors {
+    config.theme.custom = Some(crate::utils::config::CustomThemeColors {
+        light: Some(crate::utils::config::ModeThemeColors {
             accent: Some("#010203".to_string()),
             ..Default::default()
         }),
-        dark: Some(crate::config::ModeThemeColors {
+        dark: Some(crate::utils::config::ModeThemeColors {
             accent: Some("#040506".to_string()),
             ..Default::default()
         }),
@@ -19,15 +19,18 @@ fn theme_auto_switch_is_opt_in_and_preserves_manual_default() {
 
     let app = App::new(
         &config,
-        crate::app::AppPolicy::TEST,
+        crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
-        crate::api::EventHub::default(),
+        crate::server::api::EventHub::default(),
     );
 
     assert!(!app.state.theme_runtime.auto_switch);
     assert_eq!(app.state.theme_name, "tokyo-night");
-    assert_eq!(app.state.palette, state::Palette::tokyo_night());
+    assert_eq!(
+        app.state.palette,
+        crate::utils::theme::Palette::tokyo_night()
+    );
 }
 
 #[test]
@@ -38,20 +41,23 @@ fn theme_auto_switch_uses_sibling_map_and_explicit_appearance() {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
         &config,
-        crate::app::AppPolicy::TEST,
+        crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
-        crate::api::EventHub::default(),
+        crate::server::api::EventHub::default(),
     );
 
     assert_eq!(app.state.theme_name, "tokyo-night");
     assert!(app.set_host_terminal_appearance_state(
-        Some(crate::terminal_theme::HostAppearance::Light),
+        Some(crate::utils::theme::color::HostAppearance::Light),
         true,
     ));
 
     assert_eq!(app.state.theme_name, "tokyo-night-day");
-    assert_eq!(app.state.palette, state::Palette::tokyo_night_day());
+    assert_eq!(
+        app.state.palette,
+        crate::utils::theme::Palette::tokyo_night_day()
+    );
 }
 
 #[test]
@@ -59,21 +65,21 @@ fn theme_auto_switch_applies_custom_overrides_after_active_base() {
     let mut config = Config::default();
     config.theme.name = Some("gruvbox".to_string());
     config.theme.auto_switch = true;
-    config.theme.custom = Some(crate::config::CustomThemeColors {
+    config.theme.custom = Some(crate::utils::config::CustomThemeColors {
         accent: Some("#010203".to_string()),
         ..Default::default()
     });
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
         &config,
-        crate::app::AppPolicy::TEST,
+        crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
-        crate::api::EventHub::default(),
+        crate::server::api::EventHub::default(),
     );
 
     app.set_host_terminal_appearance_state(
-        Some(crate::terminal_theme::HostAppearance::Light),
+        Some(crate::utils::theme::color::HostAppearance::Light),
         true,
     );
 
@@ -89,14 +95,14 @@ fn theme_auto_switch_layers_active_mode_overrides_last() {
     let mut config = Config::default();
     config.theme.name = Some("gruvbox".to_string());
     config.theme.auto_switch = true;
-    config.theme.custom = Some(crate::config::CustomThemeColors {
+    config.theme.custom = Some(crate::utils::config::CustomThemeColors {
         accent: Some("#010203".to_string()),
         text: Some("#040506".to_string()),
-        light: Some(crate::config::ModeThemeColors {
+        light: Some(crate::utils::config::ModeThemeColors {
             accent: Some("#070809".to_string()),
             ..Default::default()
         }),
-        dark: Some(crate::config::ModeThemeColors {
+        dark: Some(crate::utils::config::ModeThemeColors {
             text: Some("#0a0b0c".to_string()),
             sidebar_bg: Some("#0d0e0f".to_string()),
             active_row_bg: Some("#101112".to_string()),
@@ -107,10 +113,10 @@ fn theme_auto_switch_layers_active_mode_overrides_last() {
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App::new(
         &config,
-        crate::app::AppPolicy::TEST,
+        crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
-        crate::api::EventHub::default(),
+        crate::server::api::EventHub::default(),
     );
 
     assert_eq!(
@@ -131,7 +137,7 @@ fn theme_auto_switch_layers_active_mode_overrides_last() {
     );
 
     app.set_host_terminal_appearance_state(
-        Some(crate::terminal_theme::HostAppearance::Light),
+        Some(crate::utils::theme::color::HostAppearance::Light),
         true,
     );
 

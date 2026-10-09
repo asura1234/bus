@@ -1,7 +1,7 @@
 fn render_view_pane_borders(
     app: &AppState,
     ws: &Workspace,
-    split_borders: &[crate::layout::SplitBorder],
+    split_borders: &[crate::server::workspaces::layout::SplitBorder],
     frame: &mut Frame,
 ) {
     render_pane_borders(app, ws, &app.view.pane_infos, split_borders, frame);
@@ -249,14 +249,14 @@ fn global_pane_border_renderer_composes_junctions_and_focus_style() {
         },
     ];
     let split_borders = vec![
-        crate::layout::SplitBorder {
+        crate::server::workspaces::layout::SplitBorder {
             pos: 2,
             direction: ratatui::layout::Direction::Horizontal,
             ratio: 0.5,
             area: Rect::new(0, 0, 4, 4),
             path: vec![],
         },
-        crate::layout::SplitBorder {
+        crate::server::workspaces::layout::SplitBorder {
             pos: 2,
             direction: ratatui::layout::Direction::Vertical,
             ratio: 0.5,

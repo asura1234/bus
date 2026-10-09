@@ -30,7 +30,10 @@ fn portable_pty_setup_leaves_one_parent_pty_fd() {
     let _guard = pty_fd_test_lock().lock().expect("pty fd test lock");
     let before = parent_pty_fd_count();
     let mut cmd = CommandBuilder::new("/bin/cat");
-    cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
+    cmd.env(
+        crate::utils::env::HERDR_ENV_VAR,
+        crate::utils::env::HERDR_ENV_VALUE,
+    );
 
     let mut spawned = spawn_with_portable_pty(24, 80, cmd).expect("portable pty setup succeeds");
     let after_spawn = parent_pty_fd_count();

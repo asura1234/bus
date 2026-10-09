@@ -56,13 +56,18 @@ impl Fixture {
             .unwrap();
         state.confirm_hook_setup(agent).unwrap();
         let label = identity::provider_kind(provider).label();
-        let session = crate::agent_resume::PersistedAgentSession {
+        let session = crate::agents::resume::catalog::PersistedAgentSession {
             source: format!("herdr:{label}"),
             agent: label.into(),
-            session_ref: crate::agent_resume::AgentSessionRef::id("original-session").unwrap(),
+            session_ref: crate::agents::resume::catalog::AgentSessionRef::id("original-session")
+                .unwrap(),
         };
-        let plan = crate::agent_resume::plan(&session.source, &session.agent, &session.session_ref)
-            .unwrap();
+        let plan = crate::agents::resume::catalog::plan(
+            &session.source,
+            &session.agent,
+            &session.session_ref,
+        )
+        .unwrap();
         let facts = NativeResumeFacts {
             agent_name: Some("bus-r1-a2".into()),
             managed_agent: Some(label.into()),
@@ -215,9 +220,9 @@ fn bus_resume_delivers_an_orchestrator_prompt_again() {
     for provider in [Provider::ClaudeCode, Provider::Codex, Provider::Cursor] {
         let fixture = Fixture::new(provider);
         let spool = fixture.root.join("callbacks/owned-launch");
-        let path = crate::bus::orchestrator::write_prompt(&spool, "Run pr-1.").unwrap();
+        let path = crate::messaging::orchestration::write_prompt(&spool, "Run pr-1.").unwrap();
         let extras = fixture.load().unwrap();
-        let expected = crate::bus::orchestrator::prompt_args(provider, &path, false)
+        let expected = crate::messaging::orchestration::prompt_args(provider, &path, false)
             .unwrap()
             .unwrap_or_default();
         assert!(extras.args.ends_with(&expected), "{:?}", extras.args);
@@ -441,7 +446,7 @@ fn bus_resume_rejects_fact_and_capture_mismatches_before_rewriting_hooks_or_stat
             "missing-session" => fixture.facts.session = None,
             "session-kind" => {
                 fixture.facts.session.as_mut().unwrap().session_ref.kind =
-                    crate::agent_resume::AgentSessionRefKind::Path
+                    crate::agents::resume::catalog::AgentSessionRefKind::Path
             }
             "missing-state" => std::fs::remove_file(&state_path).unwrap(),
             "unreadable-state" => {

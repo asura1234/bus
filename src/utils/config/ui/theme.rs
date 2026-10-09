@@ -221,7 +221,7 @@ pub fn parse_color(s: &str) -> ratatui::style::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::utils::config::Config;
 
     #[test]
     fn theme_name_parses() {

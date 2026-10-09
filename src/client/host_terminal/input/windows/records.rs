@@ -1,5 +1,5 @@
 //! Windows console records and the semantic/byte handoff to the pump.
-use crate::input::WindowsKeyRecord;
+use crate::protocol::keys::WindowsKeyRecord;
 
 #[cfg(windows)]
 pub(super) fn windows_console_input_record_from_os(
@@ -57,7 +57,7 @@ pub(super) struct WindowsMouseRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum PlatformInputItem {
     Bytes(Vec<u8>),
-    Semantic(crate::protocol::ClientInputEvent),
+    Semantic(crate::protocol::wire::ClientInputEvent),
     PasteAwareBytes {
         paste_bytes: Vec<u8>,
         raw_bytes: Vec<u8>,
@@ -66,6 +66,6 @@ pub(super) enum PlatformInputItem {
     PasteAwareKey {
         bytes: Vec<u8>,
         win32_paste_bytes: Vec<u8>,
-        events: Vec<crate::protocol::ClientInputEvent>,
+        events: Vec<crate::protocol::wire::ClientInputEvent>,
     },
 }

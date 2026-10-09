@@ -11,7 +11,7 @@ fn claude_idle_prompt_with_background_shell_is_idle() {
         "────────────────────────────────────────────────────────────────\n",
         "  ⏵⏵ auto mode on · 1 shell · ← for agents                     /rc\n",
     );
-    let result = detect_screen_with_osc(Agent::Claude, screen, "", "");
+    let result = detect_screen_with_osc(AgentKind::Claude, screen, "", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
@@ -25,7 +25,7 @@ fn claude_idle_prompt_with_background_shell_is_idle() {
 #[test]
 fn claude_background_shell_without_foreground_evidence_is_idle_fallback() {
     let result = detect_screen_with_osc(
-        Agent::Claude,
+        AgentKind::Claude,
         "  ⏵⏵ auto mode on · 1 shell · ← for agents\n",
         "",
         "",
@@ -44,7 +44,7 @@ fn claude_live_turn_with_background_shell_remains_working() {
         "────────────────────────────────────────────────────────────────\n",
         "  ⏵⏵ auto mode on · 1 shell · esc to interrupt\n",
     );
-    let result = detect_screen_with_osc(Agent::Claude, screen, "", "");
+    let result = detect_screen_with_osc(AgentKind::Claude, screen, "", "");
 
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
@@ -64,7 +64,7 @@ fn claude_blocker_with_background_shell_remains_blocked() {
         "Esc to cancel · Tab to amend · ctrl+e to explain\n",
         "  ⏵⏵ auto mode on · 1 shell · ← for agents\n",
     );
-    let result = detect_screen_with_osc(Agent::Claude, screen, "", "");
+    let result = detect_screen_with_osc(AgentKind::Claude, screen, "", "");
 
     assert_eq!(result.state, AgentState::Blocked);
     assert_eq!(
@@ -107,7 +107,7 @@ fn claude_bash_prompt_with_dont_ask_again_option_matches_bash_rule() {
         " Esc to cancel · Tab to amend · ctrl+e to explain
 ",
     );
-    let result = detect_screen_with_osc(Agent::Claude, screen, "", "");
+    let result = detect_screen_with_osc(AgentKind::Claude, screen, "", "");
 
     assert_eq!(result.state, AgentState::Blocked);
     assert_eq!(
@@ -164,7 +164,7 @@ fn claude_permission_prompt_matches_at_every_cursor_position() {
                 ),
                 options.join("\n"),
             );
-            let result = detect_screen_with_osc(Agent::Claude, &screen, "", "");
+            let result = detect_screen_with_osc(AgentKind::Claude, &screen, "", "");
 
             assert_eq!(
                 result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -180,7 +180,7 @@ fn claude_permission_prompt_matches_at_every_cursor_position() {
 #[test]
 fn claude_osc_title_braille_prefix_is_working() {
     // "⠂" is U+2802, in the braille block U+2800-U+28FF
-    let result = detect_screen_with_osc(Agent::Claude, "", "⠂ project", "");
+    let result = detect_screen_with_osc(AgentKind::Claude, "", "⠂ project", "");
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -193,7 +193,7 @@ fn claude_osc_title_braille_prefix_is_working() {
 fn claude_osc_title_half_circle_frames_are_working() {
     for frame in ['◐', '◓', '◑', '◒'] {
         let title = format!("{frame} Initial conversation with Claude");
-        let result = detect_screen_with_osc(Agent::Claude, "", &title, "");
+        let result = detect_screen_with_osc(AgentKind::Claude, "", &title, "");
         assert_eq!(result.state, AgentState::Working, "frame {frame}");
         assert_eq!(
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -207,7 +207,7 @@ fn claude_osc_title_half_circle_frames_are_working() {
 #[test]
 fn claude_osc_title_static_prefix_is_idle() {
     // "✳" is U+2733, static prefix when Claude is not working
-    let result = detect_screen_with_osc(Agent::Claude, "", "✳ Claude Code", "");
+    let result = detect_screen_with_osc(AgentKind::Claude, "", "✳ Claude Code", "");
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -221,7 +221,7 @@ fn claude_osc_progress_4_3_alone_does_not_force_working() {
     // Claude leaves progress stuck at 4;3 while waiting for permission, so
     // 4;3 must not be a working signal on its own. With no other evidence it
     // falls back to idle; blocked screen rules can win when present.
-    let result = detect_screen_with_osc(Agent::Claude, "", "", "4;3;");
+    let result = detect_screen_with_osc(AgentKind::Claude, "", "", "4;3;");
     assert_eq!(result.state, AgentState::Idle);
     assert!(!result.visible_working);
 }
@@ -232,14 +232,14 @@ fn claude_blocker_screen_outranks_stale_osc_progress() {
     // blocked form on screen must win because no rule treats 4;3 as working.
     let blocker_screen =
         "──────────\n  1. Yes\n  2. No\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n";
-    let result = detect_screen_with_osc(Agent::Claude, blocker_screen, "✳ Task title", "4;3;");
+    let result = detect_screen_with_osc(AgentKind::Claude, blocker_screen, "✳ Task title", "4;3;");
     assert_eq!(result.state, AgentState::Blocked);
     assert!(result.visible_blocker);
 }
 
 #[test]
 fn claude_osc_progress_4_0_is_idle() {
-    let result = detect_screen_with_osc(Agent::Claude, "", "", "4;0;");
+    let result = detect_screen_with_osc(AgentKind::Claude, "", "", "4;0;");
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -255,7 +255,7 @@ fn claude_blocker_screen_outranks_osc_idle_title() {
         bash command: rm -rf /tmp/test\n\
         ❯ 1. Yes\n   2. No\n\n\
         Esc to cancel · Tab to amend · ctrl+e to explain\n";
-    let result = detect_screen_with_osc(Agent::Claude, blocker_screen, "✳ Claude Code", "");
+    let result = detect_screen_with_osc(AgentKind::Claude, blocker_screen, "✳ Claude Code", "");
     assert_eq!(result.state, AgentState::Blocked);
     assert!(result.visible_blocker);
 }
@@ -272,7 +272,7 @@ fn claude_mcp_elicitation_is_blocked() {
         "MCP server \"my-server\" requests your input\n\nserver-supplied message\n\n\u{276f} Accept    Decline\n\nEsc to cancel \u{b7} \u{2191}/\u{2193} to navigate\n",
     ] {
         let result = with_manifest_dirs("claude-mcp-elicitation", || {
-            detect_screen_with_osc(Agent::Claude, screen, "\u{2733} Claude Code", "")
+            detect_screen_with_osc(AgentKind::Claude, screen, "\u{2733} Claude Code", "")
         });
         assert_eq!(result.state, AgentState::Blocked, "{result:#?}");
         assert!(result.visible_blocker, "{result:#?}");
@@ -287,7 +287,7 @@ fn claude_mcp_elicitation_is_blocked() {
 #[test]
 fn claude_empty_osc_empty_screen_is_idle_fallback() {
     // No OSC data, no matching screen rule → fallback idle (unchanged V3 behavior)
-    let result = detect_screen_with_osc(Agent::Claude, "", "", "");
+    let result = detect_screen_with_osc(AgentKind::Claude, "", "", "");
     assert_eq!(result.state, AgentState::Idle);
     assert!(!result.visible_idle);
 }

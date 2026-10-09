@@ -1,5 +1,5 @@
 use crate::client::compositor::ClientShellState;
-use crate::protocol::{ClientShellSnapshot, PaneSurfaceFrame};
+use crate::protocol::wire::{ClientShellSnapshot, PaneSurfaceFrame};
 
 impl ClientShellState {
     pub(crate) fn has_snapshot(&self) -> bool {

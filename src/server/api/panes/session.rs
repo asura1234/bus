@@ -16,21 +16,24 @@ impl App {
         let Some(agent_label) = normalize_reported_agent_label(&params.agent) else {
             return invalid_agent(id);
         };
-        self.handle_internal_event(crate::events::AppEvent::AgentSessionReported {
-            pane_id,
-            session_ref: crate::agent_resume::session_ref_from_report(
-                &params.source,
-                &agent_label,
-                params.agent_session_id,
-                params.agent_session_path,
-            ),
-            source: params.source,
-            agent_label,
-            seq: params.seq,
-            session_start_source: crate::agent_resume::normalize_session_start_source(
-                params.session_start_source,
-            ),
-        });
+        self.handle_internal_event(
+            crate::terminal::events::TerminalEvent::AgentSessionReported {
+                pane_id,
+                session_ref: crate::agents::resume::catalog::session_ref_from_report(
+                    &params.source,
+                    &agent_label,
+                    params.agent_session_id,
+                    params.agent_session_path,
+                ),
+                source: params.source,
+                agent_label,
+                seq: params.seq,
+                session_start_source:
+                    crate::agents::resume::catalog::normalize_session_start_source(
+                        params.session_start_source,
+                    ),
+            },
+        );
 
         encode_success(id, ResponseResult::Ok {})
     }

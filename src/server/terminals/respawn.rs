@@ -14,7 +14,7 @@ pub(in crate::server) enum RuntimeExitAction {
 impl App {
     pub(in crate::server) fn runtime_exit_action(
         &self,
-        pane_id: crate::server::workspaces::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> RuntimeExitAction {
         let Some((_, pane_state)) = self.find_pane(pane_id) else {
             return RuntimeExitAction::ClosePane;
@@ -49,16 +49,18 @@ impl App {
                 return false;
             }
 
-            crate::pane::uses_windows_powershell_pane_shell(crate::pane::PaneShellConfig::new(
-                &self.state.default_shell,
-                self.state.shell_mode,
-            ))
+            crate::terminal::runtime::uses_windows_powershell_pane_shell(
+                crate::terminal::runtime::PaneShellConfig::new(
+                    &self.state.default_shell,
+                    self.state.shell_mode,
+                ),
+            )
         }
     }
 
     pub(in crate::server) fn respawn_shell_for_launch_pane(
         &mut self,
-        pane_id: crate::server::workspaces::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
         focus_pane: bool,
     ) -> bool {
         let Some((ws_idx, pane_state)) = self.find_pane(pane_id) else {
@@ -86,7 +88,10 @@ impl App {
             self.state.pane_scrollback_limit_bytes,
             self.state.host_terminal_theme,
             self.state.host_terminal_appearance,
-            crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
+            crate::terminal::runtime::PaneShellConfig::new(
+                &self.state.default_shell,
+                self.state.shell_mode,
+            ),
             &launch_env,
             self.event_tx.clone(),
             self.render_notify.clone(),

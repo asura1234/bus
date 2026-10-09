@@ -13,7 +13,7 @@ use crate::agents::providers::{
     usage::{Observation, UsageWindow, UsageWindows},
     ProviderKind,
 };
-use crate::messaging::model::{Agent, AgentId, Provider};
+use crate::messaging::model::{AgentId, Provider, RoomAgent};
 use crate::utils::time as bus_io;
 
 const STALE_AFTER_MS: u64 = 15 * 60 * 1000;
@@ -80,7 +80,7 @@ impl Usage {
     }
 
     /// Advisory only: no State mutation, delivery errors, or event-spool growth.
-    pub(crate) fn refresh_claude(&mut self, agent: &Agent, spool: &Path) {
+    pub(crate) fn refresh_claude(&mut self, agent: &RoomAgent, spool: &Path) {
         if agent.provider != Provider::ClaudeCode || agent.session_binding_invalidated {
             return;
         }

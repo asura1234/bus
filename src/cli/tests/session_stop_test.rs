@@ -13,8 +13,8 @@ fn unique_test_path(name: &str) -> std::path::PathBuf {
 #[cfg(unix)]
 fn local_stream_pair(name: &str) -> (LocalStream, LocalStream, std::path::PathBuf) {
     let path = unique_test_path(name);
-    let listener = crate::ipc::bind_local_listener(&path).unwrap();
-    let client = crate::ipc::connect_local_stream(&path).unwrap();
+    let listener = crate::platform::ipc::bind_local_listener(&path).unwrap();
+    let client = crate::platform::ipc::connect_local_stream(&path).unwrap();
     let server = listener.accept().unwrap();
     (client, server, path)
 }

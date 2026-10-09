@@ -9,16 +9,15 @@ mod config_reload;
 pub mod main_loop;
 pub(crate) mod notifications;
 pub(crate) mod persistence;
+#[cfg(test)]
+#[path = "tests/render_scale_test.rs"]
+mod render_scale_benchmark;
 pub(crate) mod rendering;
 pub(crate) mod shutdown;
 pub(crate) mod socket_paths;
 pub(crate) mod startup;
 pub(crate) mod terminals;
 pub(crate) mod workspaces;
-pub use main_loop as headless;
-#[cfg(test)]
-#[path = "tests/render_scale_test.rs"]
-mod render_scale_benchmark;
 #[cfg(test)]
 mod tests {
     use super::clients::input::apply_client_pane_input_events;
@@ -41,14 +40,14 @@ mod tests {
     #[cfg(windows)]
     use super::main_loop::spawn_windows_client_accept_thread;
     use super::main_loop::HeadlessServer;
-    use crate::api;
     use crate::platform::ipc::{bind_local_listener, socket_file_identity};
-    use crate::protocol::{self, ServerMessage, MAX_FRAME_SIZE};
-    use crate::terminal::events::AppEvent;
+    use crate::protocol::api;
+    use crate::protocol::wire::{self as protocol, ServerMessage, MAX_FRAME_SIZE};
+    use crate::terminal::events::TerminalEvent;
     use crate::utils::config;
     use bytes::Bytes;
 
-    use crate::protocol::FrameData;
+    use crate::protocol::wire::FrameData;
 
     #[path = "support_test.rs"]
     mod support;

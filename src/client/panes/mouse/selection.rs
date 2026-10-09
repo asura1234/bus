@@ -15,16 +15,21 @@ impl ClientShellState {
         usize::from(distance).saturating_mul(3).clamp(3, 15)
     }
 
-    fn selection_scroll_metrics(&self, hit: &PaneHit) -> Option<crate::pane::ScrollMetrics> {
+    fn selection_scroll_metrics(
+        &self,
+        hit: &PaneHit,
+    ) -> Option<crate::utils::render::widgets::ScrollMetrics> {
         let metrics = hit.scroll?;
         Some(
             self.selection_autoscroll
                 .as_ref()
                 .filter(|autoscroll| autoscroll.pane_id == hit.pane_id)
-                .map_or(metrics, |autoscroll| crate::pane::ScrollMetrics {
-                    offset_from_bottom: autoscroll.offset_from_bottom,
-                    max_offset_from_bottom: autoscroll.max_offset_from_bottom,
-                    viewport_rows: metrics.viewport_rows,
+                .map_or(metrics, |autoscroll| {
+                    crate::utils::render::widgets::ScrollMetrics {
+                        offset_from_bottom: autoscroll.offset_from_bottom,
+                        max_offset_from_bottom: autoscroll.max_offset_from_bottom,
+                        viewport_rows: metrics.viewport_rows,
+                    }
                 }),
         )
     }
@@ -34,7 +39,7 @@ impl ClientShellState {
         hit: &PaneHit,
         column: u16,
         row: u16,
-        metrics: Option<crate::pane::ScrollMetrics>,
+        metrics: Option<crate::utils::render::widgets::ScrollMetrics>,
     ) {
         if let Some(selection) = self.selection.as_mut() {
             selection.drag(column, row, hit.inner_rect, metrics);
@@ -52,7 +57,7 @@ impl ClientShellState {
         let was_dragging = self
             .selection
             .as_ref()
-            .is_some_and(crate::selection::Selection::is_dragging);
+            .is_some_and(crate::utils::text::selection::Selection::is_dragging);
         let moved_from_anchor = self.selection.as_ref().is_some_and(|selection| {
             let (anchor_row, anchor_col) = selection.anchor_screen_pos(hit.inner_rect, metrics);
             anchor_row != row || anchor_col != column
@@ -107,7 +112,7 @@ impl ClientShellState {
             }
         };
         if offset_from_bottom != metrics.offset_from_bottom {
-            let projected = crate::pane::ScrollMetrics {
+            let projected = crate::utils::render::widgets::ScrollMetrics {
                 offset_from_bottom,
                 ..metrics
             };
@@ -138,7 +143,7 @@ impl ClientShellState {
         ) || !self
             .selection
             .as_ref()
-            .is_some_and(crate::selection::Selection::is_in_progress)
+            .is_some_and(crate::utils::text::selection::Selection::is_in_progress)
         {
             return false;
         }
@@ -165,7 +170,7 @@ impl ClientShellState {
             _ => unreachable!(),
         };
         if offset_from_bottom != metrics.offset_from_bottom {
-            let projected = crate::pane::ScrollMetrics {
+            let projected = crate::utils::render::widgets::ScrollMetrics {
                 offset_from_bottom,
                 ..metrics
             };
@@ -230,7 +235,7 @@ impl ClientShellState {
             return outcome;
         }
         autoscroll.offset_from_bottom = next_offset;
-        let metrics = crate::pane::ScrollMetrics {
+        let metrics = crate::utils::render::widgets::ScrollMetrics {
             offset_from_bottom: next_offset,
             max_offset_from_bottom: autoscroll.max_offset_from_bottom,
             viewport_rows: hit.scroll.map_or(0, |metrics| metrics.viewport_rows),

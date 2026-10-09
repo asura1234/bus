@@ -1,4 +1,5 @@
-use super::{NavDirection, PaneId, PaneInfo, SplitBorder};
+use super::{NavDirection, PaneInfo, SplitBorder};
+use crate::utils::ids::PaneId;
 use ratatui::layout::{Direction, Rect};
 use std::cmp::Reverse;
 

@@ -1,9 +1,10 @@
 use super::app::App;
 use super::app_settings::{agent_panel_sort_from_config, parse_cjk_ime_agents};
+use crate::utils::config;
 use crate::utils::theme::theme_runtime_config;
 
 impl App {
-    pub(crate) fn reload_config(&mut self) -> crate::config::ConfigReloadReport {
+    pub(crate) fn reload_config(&mut self) -> config::ConfigReloadReport {
         self.apply_config_from_disk(true)
     }
 
@@ -16,10 +17,10 @@ impl App {
     pub(crate) fn apply_config_from_disk(
         &mut self,
         notify_success: bool,
-    ) -> crate::config::ConfigReloadReport {
+    ) -> config::ConfigReloadReport {
         self.config_reloaded_from_disk = true;
         let previous_toast = self.state.toast.clone();
-        let report = match crate::config::load_live_config() {
+        let report = match config::load_live_config() {
             Ok(loaded) => self.apply_live_config(
                 &loaded.config,
                 &loaded.diagnostics,
@@ -28,11 +29,10 @@ impl App {
             ),
             Err(diagnostics) => {
                 self.state.toast = None;
-                self.state.config_diagnostic =
-                    crate::config::config_diagnostic_summary(&diagnostics);
+                self.state.config_diagnostic = config::config_diagnostic_summary(&diagnostics);
                 self.config_diagnostic_deadline = None;
-                crate::config::ConfigReloadReport {
-                    status: crate::config::ConfigReloadStatus::Failed,
+                config::ConfigReloadReport {
+                    status: config::ConfigReloadStatus::Failed,
                     diagnostics,
                 }
             }
@@ -43,20 +43,18 @@ impl App {
 
     fn apply_live_config(
         &mut self,
-        config: &crate::config::Config,
+        config: &config::Config,
         load_diagnostics: &[String],
         invalid_sections: &[String],
         notify_success: bool,
-    ) -> crate::config::ConfigReloadReport {
+    ) -> config::ConfigReloadReport {
         let mut diagnostics = load_diagnostics.to_vec();
         let invalid_section =
             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
 
         if !invalid_section("ui") {
             diagnostics.extend(config.ui.sound.diagnostics());
-            diagnostics.extend(crate::config::window_title_diagnostics(
-                &config.ui.window_title,
-            ));
+            diagnostics.extend(config::window_title_diagnostics(&config.ui.window_title));
 
             self.loaded_host_cursor = config.ui.host_cursor;
             self.state.confirm_close = config.ui.confirm_close;
@@ -93,7 +91,7 @@ impl App {
                 config.experimental.cjk_ime_cursor_shape.to_decscusr();
             self.persist_pane_history = config.experimental.pane_history;
             if !self.persist_pane_history {
-                crate::persist::clear_history();
+                crate::server::persistence::clear_history();
             }
         }
 
@@ -121,17 +119,17 @@ impl App {
         }
 
         let status = if diagnostics.is_empty() {
-            crate::config::ConfigReloadStatus::Applied
+            config::ConfigReloadStatus::Applied
         } else {
-            crate::config::ConfigReloadStatus::Partial
+            config::ConfigReloadStatus::Partial
         };
 
         if diagnostics.is_empty() {
             self.state.config_diagnostic = None;
             self.config_diagnostic_deadline = None;
             if notify_success {
-                self.state.toast = Some(crate::app::state::ToastNotification {
-                    kind: crate::app::state::ToastKind::UpdateInstalled,
+                self.state.toast = Some(crate::server::app_state::ToastNotification {
+                    kind: crate::server::app_state::ToastKind::UpdateInstalled,
                     title: "reloaded config".to_string(),
                     context: "using config.toml".to_string(),
                     position: None,
@@ -139,11 +137,11 @@ impl App {
                 });
             }
         } else {
-            self.state.config_diagnostic = crate::config::config_diagnostic_summary(&diagnostics);
+            self.state.config_diagnostic = config::config_diagnostic_summary(&diagnostics);
             self.config_diagnostic_deadline = None;
             if notify_success {
-                self.state.toast = Some(crate::app::state::ToastNotification {
-                    kind: crate::app::state::ToastKind::UpdateInstalled,
+                self.state.toast = Some(crate::server::app_state::ToastNotification {
+                    kind: crate::server::app_state::ToastKind::UpdateInstalled,
                     title: "reloaded config".to_string(),
                     context: "with warnings".to_string(),
                     position: None,
@@ -153,7 +151,7 @@ impl App {
         }
 
         self.state.request_client_config_reload = true;
-        crate::config::ConfigReloadReport {
+        config::ConfigReloadReport {
             status,
             diagnostics,
         }

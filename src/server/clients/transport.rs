@@ -18,14 +18,16 @@ use super::writer::{
     client_writer_loop, ClientControlWriter, ClientRenderWriter, ClientWriterQueue,
 };
 #[cfg(test)]
-use crate::ipc::LocalStream;
+use crate::platform::ipc::LocalStream;
 #[cfg(test)]
-use crate::protocol::endpoint::{
+use crate::protocol::wire::handshake::{
     EndpointClientHello, EndpointServerWelcome, ENDPOINT_HELLO_KIND, ENDPOINT_PROTOCOL_GENERATION,
     ENDPOINT_WELCOME_KIND,
 };
 #[cfg(test)]
-use crate::protocol::{self, ClientMessage, ClientPaneInputEvent, ServerMessage, MAX_FRAME_SIZE};
+use crate::protocol::wire::{
+    self as protocol, ClientMessage, ClientPaneInputEvent, ServerMessage, MAX_FRAME_SIZE,
+};
 #[cfg(all(test, not(windows)))]
 use interprocess::local_socket::traits::Stream as _;
 #[cfg(test)]

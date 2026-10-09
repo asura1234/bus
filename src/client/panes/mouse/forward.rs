@@ -11,10 +11,10 @@ impl ClientShellState {
         modifiers: crossterm::event::KeyModifiers,
         outcome: &mut ClientShellInput,
     ) {
-        let kind = crate::protocol::ClientMouseKind::from_crossterm(mouse.kind);
+        let kind = crate::protocol::wire::ClientMouseKind::from_crossterm(mouse.kind);
         let position = self.pane_mouse_position(hit, mouse);
         let geometry = matches!(position, ClientMousePosition::Pixels { .. }).then_some(
-            crate::protocol::ClientMouseGeometry {
+            crate::protocol::wire::ClientMouseGeometry {
                 cols: hit.inner_rect.width,
                 rows: hit.inner_rect.height,
                 width_px: hit.pixel_width,

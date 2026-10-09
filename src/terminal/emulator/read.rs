@@ -12,9 +12,9 @@ impl GhosttyPaneTerminal {
     pub(crate) fn screen_text_snapshot(
         &self,
     ) -> Option<(
-        crate::ghostty::ActiveScreen,
+        crate::terminal::vt::ActiveScreen,
         u16,
-        Vec<crate::ghostty::ScreenTextRow>,
+        Vec<crate::terminal::vt::ScreenTextRow>,
     )> {
         let core = self.core.lock().ok()?;
         Some((
@@ -99,7 +99,10 @@ impl GhosttyPaneTerminal {
             .unwrap_or_default()
     }
 
-    pub fn extract_selection(&self, selection: &crate::selection::Selection) -> Option<String> {
+    pub fn extract_selection(
+        &self,
+        selection: &crate::utils::text::selection::Selection,
+    ) -> Option<String> {
         self.core
             .lock()
             .ok()
@@ -109,15 +112,15 @@ impl GhosttyPaneTerminal {
 
 pub(super) fn ghostty_visible_text(
     core: &mut GhosttyPaneCore,
-) -> Result<String, crate::ghostty::Error> {
+) -> Result<String, crate::terminal::vt::Error> {
     let GhosttyPaneCore {
         terminal,
         render_state,
         ..
     } = core;
     render_state.update(terminal)?;
-    let mut row_iterator = crate::ghostty::RowIterator::new()?;
-    let mut row_cells = crate::ghostty::RowCells::new()?;
+    let mut row_iterator = crate::terminal::vt::RowIterator::new()?;
+    let mut row_cells = crate::terminal::vt::RowCells::new()?;
     let mut rows = render_state.populate_row_iterator(&mut row_iterator)?;
     let mut lines = Vec::new();
     while rows.next() {
@@ -128,7 +131,7 @@ pub(super) fn ghostty_visible_text(
     Ok(lines_to_text(lines))
 }
 
-fn ghostty_visible_ansi(core: &GhosttyPaneCore) -> Result<String, crate::ghostty::Error> {
+fn ghostty_visible_ansi(core: &GhosttyPaneCore) -> Result<String, crate::terminal::vt::Error> {
     let rows = core.terminal.rows()?;
     let cols = core.terminal.cols()?;
     if rows == 0 || cols == 0 {
@@ -143,7 +146,7 @@ fn ghostty_visible_ansi(core: &GhosttyPaneCore) -> Result<String, crate::ghostty
 
 pub(super) fn ghostty_detection_text(
     core: &mut GhosttyPaneCore,
-) -> Result<String, crate::ghostty::Error> {
+) -> Result<String, crate::terminal::vt::Error> {
     let lines = core
         .terminal
         .rows()
@@ -156,14 +159,14 @@ pub(super) fn ghostty_detection_text(
 fn ghostty_recent_text(
     core: &mut GhosttyPaneCore,
     lines: usize,
-) -> Result<String, crate::ghostty::Error> {
+) -> Result<String, crate::terminal::vt::Error> {
     ghostty_recent_text_snapshot(core, lines).map(|snapshot| snapshot.text)
 }
 
 fn ghostty_recent_text_snapshot(
     core: &mut GhosttyPaneCore,
     lines: usize,
-) -> Result<TerminalReadSnapshot, crate::ghostty::Error> {
+) -> Result<TerminalReadSnapshot, crate::terminal::vt::Error> {
     let text = ghostty_recent_text_for_terminal(&core.terminal, lines)?;
     Ok(finish_recent_snapshot(core, text, lines, false))
 }
@@ -171,7 +174,7 @@ fn ghostty_recent_text_snapshot(
 fn ghostty_recent_text_unwrapped_snapshot(
     core: &mut GhosttyPaneCore,
     lines: usize,
-) -> Result<TerminalReadSnapshot, crate::ghostty::Error> {
+) -> Result<TerminalReadSnapshot, crate::terminal::vt::Error> {
     let text = ghostty_recent_text_unwrapped_for_terminal(&core.terminal, lines)?;
     Ok(finish_recent_snapshot(core, text, lines, true))
 }
@@ -180,7 +183,7 @@ pub(super) fn ghostty_recent_ansi(
     core: &mut GhosttyPaneCore,
     lines: usize,
     unwrap: bool,
-) -> Result<String, crate::ghostty::Error> {
+) -> Result<String, crate::terminal::vt::Error> {
     ghostty_recent_ansi_snapshot(core, lines, unwrap).map(|snapshot| snapshot.text)
 }
 
@@ -188,7 +191,7 @@ fn ghostty_recent_ansi_snapshot(
     core: &mut GhosttyPaneCore,
     lines: usize,
     unwrap: bool,
-) -> Result<TerminalReadSnapshot, crate::ghostty::Error> {
+) -> Result<TerminalReadSnapshot, crate::terminal::vt::Error> {
     let text = ghostty_recent_ansi_for_terminal(&core.terminal, lines, unwrap)?;
     Ok(finish_recent_snapshot(core, text, lines, unwrap))
 }
@@ -221,9 +224,9 @@ pub(super) fn finish_recent_snapshot(
 }
 
 fn ghostty_recent_text_for_terminal(
-    terminal: &crate::ghostty::Terminal,
+    terminal: &crate::terminal::vt::Terminal,
     lines: usize,
-) -> Result<String, crate::ghostty::Error> {
+) -> Result<String, crate::terminal::vt::Error> {
     let Some((start, end, cols)) = ghostty_recent_read_range(terminal, lines)? else {
         return Ok(String::new());
     };
@@ -236,9 +239,9 @@ fn ghostty_recent_text_for_terminal(
 }
 
 fn ghostty_recent_text_unwrapped_for_terminal(
-    terminal: &crate::ghostty::Terminal,
+    terminal: &crate::terminal::vt::Terminal,
     lines: usize,
-) -> Result<String, crate::ghostty::Error> {
+) -> Result<String, crate::terminal::vt::Error> {
     let Some((start, end, cols)) = ghostty_recent_read_range(terminal, lines)? else {
         return Ok(String::new());
     };
@@ -250,10 +253,10 @@ fn ghostty_recent_text_unwrapped_for_terminal(
 }
 
 fn ghostty_recent_ansi_for_terminal(
-    terminal: &crate::ghostty::Terminal,
+    terminal: &crate::terminal::vt::Terminal,
     lines: usize,
     unwrap: bool,
-) -> Result<String, crate::ghostty::Error> {
+) -> Result<String, crate::terminal::vt::Error> {
     let Some((start, end, cols)) = ghostty_recent_read_range(terminal, lines)? else {
         return Ok(String::new());
     };
@@ -266,9 +269,9 @@ fn ghostty_recent_ansi_for_terminal(
 }
 
 fn ghostty_recent_read_range(
-    terminal: &crate::ghostty::Terminal,
+    terminal: &crate::terminal::vt::Terminal,
     lines: usize,
-) -> Result<Option<(usize, usize, u16)>, crate::ghostty::Error> {
+) -> Result<Option<(usize, usize, u16)>, crate::terminal::vt::Error> {
     let total_rows = terminal.total_rows()?;
     let cols = terminal.cols()?;
     if total_rows == 0 || cols == 0 || lines == 0 {
@@ -276,7 +279,7 @@ fn ghostty_recent_read_range(
     }
 
     let physical_end = total_rows.saturating_sub(1);
-    if terminal.active_screen()? != crate::ghostty::ActiveScreen::Primary {
+    if terminal.active_screen()? != crate::terminal::vt::ActiveScreen::Primary {
         let start = physical_end.saturating_add(1).saturating_sub(lines);
         return Ok(Some((start, physical_end, cols)));
     }
@@ -308,26 +311,26 @@ fn ghostty_recent_read_range(
 
 fn ghostty_extract_selection(
     core: &mut GhosttyPaneCore,
-    selection: &crate::selection::Selection,
-) -> Result<String, crate::ghostty::Error> {
+    selection: &crate::utils::text::selection::Selection,
+) -> Result<String, crate::terminal::vt::Error> {
     let ((start_row, start_col), (end_row, end_col)) = selection.ordered_cells();
     core.terminal
         .read_text_screen((start_col, start_row), (end_col, end_row), false)
 }
 
 fn ghostty_screen_row(
-    terminal: &crate::ghostty::Terminal,
+    terminal: &crate::terminal::vt::Terminal,
     cols: u16,
     y: u32,
-) -> Result<String, crate::ghostty::Error> {
+) -> Result<String, crate::terminal::vt::Error> {
     let mut line = String::new();
     for x in 0..cols {
         let (wide, graphemes) = terminal.screen_cell(x, y)?;
-        if wide == crate::ghostty::CellWide::SpacerTail {
+        if wide == crate::terminal::vt::CellWide::SpacerTail {
             continue;
         }
         if graphemes.is_empty()
-            || graphemes.first().copied() == Some(crate::ghostty::KITTY_UNICODE_PLACEHOLDER)
+            || graphemes.first().copied() == Some(crate::terminal::vt::KITTY_UNICODE_PLACEHOLDER)
         {
             line.push(' ');
         } else {

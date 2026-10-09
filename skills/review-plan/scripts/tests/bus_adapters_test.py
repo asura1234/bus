@@ -18,13 +18,13 @@ from review_round_support import prereq_failures  # noqa: E402
 
 
 def test_rust_module_and_test_paths_are_in_consumer_fallout() -> None:
-    source = "src/bus/model.rs"
-    importer = "src/client/shell.rs"
+    source = "src/messaging/model/types.rs"
+    importer = "src/client/rooms/ui.rs"
     specifiers = _module_specifiers(
         importer,
-        """use crate::bus::{
-    model::{self, BusState},
-    runtime::Runtime,
+        """use crate::messaging::model::{
+    types::{self, RoomAgent},
+    state::BusState,
 };
 """,
     )
@@ -32,14 +32,14 @@ def test_rust_module_and_test_paths_are_in_consumer_fallout() -> None:
     candidates = candidate_reasons_by_source(
         (source,),
         {importer: specifiers},
-        {"model": ("src/bus/model_tests.rs",)},
+        {"types": ("src/messaging/model/tests/types_test.rs",)},
     )
 
     assert candidates[source][importer] == {DIRECT_REASON}
-    assert "crate::bus::model" in specifiers
-    assert is_test("src/bus/model_tests.rs")
-    assert subject_stem("src/bus/model_tests.rs") == "model"
-    assert "src/bus" in source_module_paths("src/bus/mod.rs")
+    assert "crate::messaging::model::types" in specifiers
+    assert is_test("src/messaging/model/tests/types_test.rs")
+    assert subject_stem("src/messaging/model/tests/types_test.rs") == "types"
+    assert "src/messaging/model" in source_module_paths("src/messaging/model/mod.rs")
 
 
 def test_legacy_plan_gets_one_actionable_migration_failure() -> None:

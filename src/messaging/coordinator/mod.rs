@@ -1,5 +1,5 @@
 //! The single Bus coordinator. UI commands/snapshots contain data only.
-mod agents;
+pub(crate) mod agents;
 mod delivery;
 mod poll;
 mod worker;
@@ -16,25 +16,25 @@ mod dialogs;
 pub(crate) mod resume;
 #[path = "settings.rs"]
 mod settings_runtime;
-use crate::api::{
-    client::ConnectionTarget,
-    schema::{self, Method, ResponseResult},
-};
 #[cfg(test)]
 use crate::messaging::model::UNBOUND_SETTLE_MS;
 use crate::messaging::{
     control::server as control,
     diagnostics,
     model::{
-        Agent, AgentId, AgentRecipients, AgentRuntimeIdentity, Author, BusState,
-        CallbackDisposition, CallbackEventKind, CallbackRejection, Draft, ModelError, PromptId,
-        Provider, ProviderCallback, Request, RequestId, RequestPhase, Room, RoomId, RoomKind,
+        AgentId, AgentRecipients, AgentRuntimeIdentity, Author, BusState, CallbackDisposition,
+        CallbackEventKind, CallbackRejection, Draft, ModelError, PromptId, Provider,
+        ProviderCallback, Request, RequestId, RequestPhase, Room, RoomAgent, RoomId, RoomKind,
         RuntimeStatus, SubmissionOutcome,
     },
     native::{HerdrTransport, Transport},
     orchestration as orchestrator,
     prefs::settings,
     storage::{io, state_store::JsonStore},
+};
+use crate::protocol::api::{
+    client::ConnectionTarget,
+    schema::{self, Method, ResponseResult},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -102,7 +102,7 @@ pub(crate) enum BusEvent {
     },
     Suggestions {
         query_id: u64,
-        result: Result<Vec<launch::PathSuggestion>, String>,
+        result: Result<Vec<crate::agents::providers::suggest::PathSuggestion>, String>,
     },
     AgentAdded(AgentId),
     RoomCreated(RoomId),
@@ -113,7 +113,7 @@ pub(crate) enum BusEvent {
     SetupRequired {
         input: AddAgent,
         orchestrator: Option<orchestrator::OrchestratorSpec>,
-        notice: launch::SetupNotice,
+        notice: crate::agents::providers::launch::SetupNotice,
     },
     /// A deletion finished, but these terminals were no longer Bus-owned and were left open.
     TerminalsLeftOpen(Vec<LeftOpenTerminal>),
@@ -219,7 +219,7 @@ mod steering_tests;
 #[path = "tests/poll_test.rs"]
 mod tests;
 
+use crate::agents::providers::launch;
 use crate::agents::providers::spool as callbacks;
-use crate::messaging::launch;
 pub(crate) use agents::AddAgent;
 pub(crate) mod usage;

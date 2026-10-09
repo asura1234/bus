@@ -43,7 +43,7 @@ async fn metadata_only_shell_is_isolated_until_surface_activation() {
         !server.handle_server_event(ServerEvent::ClientShellPaneInput {
             client_id,
             pane_id,
-            events: vec![crate::protocol::ClientPaneInputEvent::Paste(
+            events: vec![crate::protocol::wire::ClientPaneInputEvent::Paste(
                 "blocked".into()
             )],
         })
@@ -73,8 +73,8 @@ async fn metadata_only_shell_is_isolated_until_surface_activation() {
 
     assert!(
         server.send_to_client_shells(ServerMessage::SemanticNotification(
-            crate::protocol::SemanticNotification {
-                kind: crate::protocol::SemanticNotificationKind::Custom,
+            crate::protocol::wire::SemanticNotification {
+                kind: crate::protocol::wire::SemanticNotificationKind::Custom,
                 title: "metadata event".into(),
                 body: None,
                 sound: None,

@@ -1,11 +1,11 @@
-use crate::detect::{Agent, AgentState};
-use crate::layout::PaneId;
+use crate::agents::{AgentKind, AgentState};
 use crate::server::app_state::{
     AgentNotificationDelivery, AppState, PendingAgentNotification, ToastKind, ToastNotification,
     ToastTarget,
 };
 use crate::server::terminals::events::PaneStateUpdate;
 use crate::terminal::EffectiveStateChange;
+use crate::utils::ids::PaneId;
 
 fn is_background_completion_transition(prev_state: AgentState, new_state: AgentState) -> bool {
     matches!(new_state, AgentState::Idle)
@@ -116,7 +116,7 @@ fn toast_event_text(kind: ToastKind) -> &'static str {
 }
 
 pub fn notification_context(
-    ws: &crate::workspace::Workspace,
+    ws: &crate::server::workspaces::Workspace,
     workspace_label: &str,
     ws_idx: usize,
     pane_id: PaneId,
@@ -182,7 +182,7 @@ impl AppState {
                     let delay_seconds = self
                         .toast_config
                         .delay_seconds
-                        .min(crate::config::MAX_TOAST_DELAY_SECONDS);
+                        .min(crate::utils::config::MAX_TOAST_DELAY_SECONDS);
                     now.checked_add(std::time::Duration::from_secs(delay_seconds))
                         .unwrap_or(now)
                 },
@@ -197,7 +197,7 @@ impl AppState {
         pane_id: PaneId,
         workspace_id: String,
         agent_label: String,
-        known_agent: Option<Agent>,
+        known_agent: Option<AgentKind>,
         kind: ToastKind,
         expected_state: AgentState,
     ) -> Option<AgentNotificationDelivery> {
@@ -263,7 +263,7 @@ impl AppState {
     ) {
         if matches!(
             self.toast_config.delivery,
-            crate::config::ToastDelivery::Herdr
+            crate::utils::config::ToastDelivery::Herdr
         ) {
             if let Some(toast) = delivery.toast.clone() {
                 self.toast = Some(toast);

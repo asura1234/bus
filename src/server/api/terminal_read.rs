@@ -1,4 +1,5 @@
 //! Terminal snapshot reads and their range observations.
+use crate::protocol::api::schema;
 pub(in crate::server) struct TerminalReadObservation {
     pub text: String,
     pub truncated: bool,
@@ -13,11 +14,11 @@ pub(in crate::server) struct TerminalReadObservation {
 
 pub(in crate::server) fn read_terminal_snapshot(
     terminal: &crate::terminal::TerminalRuntime,
-    source: crate::protocol::api::schema::ReadSource,
-    format: crate::protocol::api::schema::ReadFormat,
+    source: schema::ReadSource,
+    format: schema::ReadFormat,
     lines: Option<u32>,
 ) -> TerminalReadObservation {
-    use crate::protocol::api::schema::{ReadFormat, ReadSource};
+    use schema::{ReadFormat, ReadSource};
 
     let line_limit = lines.map(|lines| lines as usize);
     let recent_lines = line_limit.unwrap_or(80);
@@ -94,26 +95,25 @@ pub(in crate::server) fn read_terminal_snapshot(
 pub(crate) fn limit_snapshot_lines(
     text: String,
     limit: Option<usize>,
-) -> crate::pane::TerminalReadSnapshot {
+) -> crate::terminal::emulator::TerminalReadSnapshot {
     let Some(limit) = limit else {
-        return crate::pane::TerminalReadSnapshot {
+        return crate::terminal::emulator::TerminalReadSnapshot {
             text,
             truncated: false,
         };
     };
     let lines: Vec<_> = text.split_inclusive('\n').collect();
-    crate::pane::TerminalReadSnapshot {
+    crate::terminal::emulator::TerminalReadSnapshot {
         text: lines[lines.len().saturating_sub(limit)..].concat(),
         truncated: lines.len() > limit,
     }
 }
 
-use crate::api;
 use crate::server::main_loop::HeadlessServer;
 use std::time::Instant;
 
 pub(in crate::server) struct AltScreenReadSpec {
-    pub(in crate::server) terminal_id: crate::terminal::TerminalId,
+    pub(in crate::server) terminal_id: crate::utils::ids::TerminalId,
     pub(in crate::server) lines: usize,
     pub(in crate::server) unwrap: bool,
     pub(in crate::server) initial: crate::terminal::ScreenSnapshot,
@@ -122,16 +122,16 @@ pub(in crate::server) struct AltScreenReadSpec {
 
 pub(in crate::server) enum AltScreenReadConflict {
     None,
-    Frozen(crate::pane::TerminalReadSnapshot),
+    Frozen(crate::terminal::emulator::TerminalReadSnapshot),
     Defer,
 }
 
 impl HeadlessServer {
     pub(in crate::server) fn agent_read_not_idle_error(
         &self,
-        request: &api::schema::Request,
-    ) -> Option<api::schema::ErrorBody> {
-        use api::schema::{Method, ReadFormat, ReadSource};
+        request: &schema::Request,
+    ) -> Option<schema::ErrorBody> {
+        use schema::{Method, ReadFormat, ReadSource};
 
         let Method::AgentRead(params) = &request.method else {
             return None;
@@ -153,19 +153,19 @@ impl HeadlessServer {
             .values()
             .find(|terminal| terminal.id.as_str() == target.terminal_id)?;
         if terminal.effective_known_agent().is_none()
-            || terminal.state == crate::detect::AgentState::Idle
+            || terminal.state == crate::agents::AgentState::Idle
         {
             return None;
         }
         let runtime = self.app.terminal_runtimes.get(&terminal.id)?;
         let (screen, snapshot) = runtime.screen_text_snapshot()?;
-        if screen != crate::ghostty::ActiveScreen::Alternate
+        if screen != crate::terminal::vt::ActiveScreen::Alternate
             || snapshot.rows.len() >= requested as usize
         {
             return None;
         }
-        let status = crate::detect::manifest::agent_state_label(terminal.state);
-        Some(api::schema::ErrorBody {
+        let status = crate::agents::manifest::agent_state_label(terminal.state);
+        Some(schema::ErrorBody {
             code: "agent_not_idle".into(),
             message: format!(
                 "cannot read {requested} lines while {} is {status}: its alternate-screen history can only be captured by scrolling while idle. Wait and retry, or use --source visible",
@@ -176,9 +176,9 @@ impl HeadlessServer {
 
     pub(in crate::server) fn alt_screen_read_spec(
         &self,
-        request: &api::schema::Request,
+        request: &schema::Request,
     ) -> Option<AltScreenReadSpec> {
-        use api::schema::{Method, ReadFormat, ReadIntent, ReadSource};
+        use schema::{Method, ReadFormat, ReadIntent, ReadSource};
 
         let (target, source, lines, format) = match &request.method {
             Method::AgentRead(params) => (
@@ -216,16 +216,16 @@ impl HeadlessServer {
             .values()
             .find(|terminal| terminal.id.as_str() == target.terminal_id)?;
         if terminal.effective_known_agent().is_none()
-            || terminal.state != crate::detect::AgentState::Idle
+            || terminal.state != crate::agents::AgentState::Idle
         {
             return None;
         }
         let runtime = self.app.terminal_runtimes.get(&terminal.id)?;
-        if runtime.wheel_routing() != Some(crate::pane::WheelRouting::MouseReport) {
+        if runtime.wheel_routing() != Some(crate::terminal::runtime::WheelRouting::MouseReport) {
             return None;
         }
         let (screen, initial, content_seq) = runtime.screen_text_snapshot_with_seq()?;
-        if screen != crate::ghostty::ActiveScreen::Alternate || initial.rows.len() >= lines {
+        if screen != crate::terminal::vt::ActiveScreen::Alternate || initial.rows.len() >= lines {
             return None;
         }
         Some(AltScreenReadSpec {
@@ -246,7 +246,7 @@ impl HeadlessServer {
                 .state
                 .terminals
                 .get(&read.terminal_id)
-                .is_some_and(|terminal| terminal.state == crate::detect::AgentState::Idle);
+                .is_some_and(|terminal| terminal.state == crate::agents::AgentState::Idle);
             let outcome = if remains_idle {
                 read.poll(runtime, now)
             } else {
@@ -260,16 +260,16 @@ impl HeadlessServer {
 
     pub(in crate::server) fn alt_screen_read_conflict(
         &self,
-        request: &api::schema::Request,
+        request: &schema::Request,
     ) -> AltScreenReadConflict {
         let (target, source, lines, format) = match &request.method {
-            api::schema::Method::AgentRead(params) => (
+            schema::Method::AgentRead(params) => (
                 self.app.resolve_agent_target(&params.target).ok(),
                 params.source,
                 params.lines,
                 params.format,
             ),
-            api::schema::Method::PaneRead(params) => (
+            schema::Method::PaneRead(params) => (
                 self.app.resolve_terminal_target(&params.pane_id).ok(),
                 params.source,
                 params.lines,
@@ -287,7 +287,7 @@ impl HeadlessServer {
         else {
             return AltScreenReadConflict::None;
         };
-        if format == api::schema::ReadFormat::Text {
+        if format == schema::ReadFormat::Text {
             AltScreenReadConflict::Frozen(pending.frozen_snapshot(source, lines))
         } else {
             AltScreenReadConflict::Defer

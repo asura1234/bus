@@ -1,5 +1,5 @@
 //! Bounded direct JSON API transport, deliberately independent of the TUI endpoint.
-use crate::api::{
+use crate::protocol::api::{
     client::{ApiClient, ApiClientError, ConnectionTarget},
     schema::{Method, Request, ResponseResult},
 };
@@ -49,7 +49,7 @@ impl Transport for HerdrTransport {
             let response = self
                 .client
                 .request_value_with_timeout(&request, Duration::from_secs(3))
-                .and_then(crate::api::client::parse_response_value);
+                .and_then(crate::protocol::api::client::parse_response_value);
             // TabCreate can return while the login shell is running startup
             // children. This precise rejection occurs before any PTY input or
             // managed launch mutation. Never retry a timeout, input failure,
@@ -78,7 +78,7 @@ impl Transport for HerdrTransport {
 
 fn retry_shell_start(
     method: &Method,
-    response: &Result<crate::api::schema::SuccessResponse, ApiClientError>,
+    response: &Result<crate::protocol::api::schema::SuccessResponse, ApiClientError>,
     before_deadline: bool,
 ) -> bool {
     before_deadline
@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn shell_retry_never_repeats_uncertain_start_or_prompt_or_exceeds_deadline() {
-        let start = Method::AgentStart(crate::api::schema::AgentStartParams {
+        let start = Method::AgentStart(crate::protocol::api::schema::AgentStartParams {
             name: "live".into(),
             kind: "claude".into(),
             pane_id: "w1:p2".into(),
@@ -121,9 +121,9 @@ mod tests {
             "agent_not_ready",
         ] {
             let error = Err(ApiClientError::ErrorResponse(
-                crate::api::schema::ErrorResponse {
+                crate::protocol::api::schema::ErrorResponse {
                     id: "r".into(),
-                    error: crate::api::schema::ErrorBody {
+                    error: crate::protocol::api::schema::ErrorBody {
                         code: code.into(),
                         message: code.into(),
                     },
@@ -135,7 +135,7 @@ mod tests {
             );
             assert!(!retry_shell_start(&start, &error, false));
             assert!(!retry_shell_start(
-                &Method::AgentList(crate::api::schema::EmptyParams {}),
+                &Method::AgentList(crate::protocol::api::schema::EmptyParams {}),
                 &error,
                 true
             ));
@@ -157,7 +157,7 @@ mod tests {
         ));
         crate::messaging::storage::io::private_dir(&dir).unwrap();
         let path = dir.join("api.sock");
-        let listener = crate::ipc::bind_local_listener(&path).unwrap();
+        let listener = crate::platform::ipc::bind_local_listener(&path).unwrap();
         let server = std::thread::spawn(move || {
             for code in [Some("agent_pane_busy"), None] {
                 let mut stream = listener.accept().unwrap();
@@ -178,13 +178,15 @@ mod tests {
             }
         });
         let mut client = HerdrTransport::new(ConnectionTarget::SocketPath(path));
-        let outcome = client.request(Method::AgentStart(crate::api::schema::AgentStartParams {
-            name: "live".into(),
-            kind: "claude".into(),
-            pane_id: "w1:p2".into(),
-            args: vec![],
-            timeout_ms: None,
-        }));
+        let outcome = client.request(Method::AgentStart(
+            crate::protocol::api::schema::AgentStartParams {
+                name: "live".into(),
+                kind: "claude".into(),
+                pane_id: "w1:p2".into(),
+                args: vec![],
+                timeout_ms: None,
+            },
+        ));
         assert!(outcome.is_ok(), "{outcome:?}");
         server.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
@@ -204,9 +206,9 @@ mod tests {
             ("timeout", false),
             ("agent_prompt_failed", false),
         ] {
-            let error = crate::api::schema::ErrorResponse {
+            let error = crate::protocol::api::schema::ErrorResponse {
                 id: "r".into(),
-                error: crate::api::schema::ErrorBody {
+                error: crate::protocol::api::schema::ErrorBody {
                     code: code.into(),
                     message: code.into(),
                 },
@@ -227,7 +229,7 @@ mod tests {
         ));
         crate::messaging::storage::io::private_dir(&dir).unwrap();
         let path = dir.join("api.sock");
-        let listener = crate::ipc::bind_local_listener(&path).unwrap();
+        let listener = crate::platform::ipc::bind_local_listener(&path).unwrap();
         let server = std::thread::spawn(move || {
             let mut stream = listener.accept().unwrap();
             let mut line = String::new();
@@ -241,7 +243,7 @@ mod tests {
         });
         let mut client = HerdrTransport::new(ConnectionTarget::SocketPath(path));
         let outcome = client.request(Method::AgentPromptIfIdle(
-            crate::api::schema::AgentPromptIfIdleParams {
+            crate::protocol::api::schema::AgentPromptIfIdleParams {
                 target: "t".into(),
                 text: "literal $HOME @x".into(),
                 expected_terminal_id: "t".into(),

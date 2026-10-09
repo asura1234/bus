@@ -107,7 +107,7 @@ async fn different_size_shells_receive_geometry_specific_patches_from_one_dirty_
 #[tokio::test]
 async fn retained_patches_only_reach_shells_viewing_the_dirty_tab() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("divergent-retained");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("divergent-retained");
     let first_pane = workspace.tabs[0].root_pane;
     let second_tab = workspace.test_add_tab(Some("second"));
     let second_pane = workspace.tabs[second_tab].root_pane;
@@ -122,7 +122,7 @@ async fn retained_patches_only_reach_shells_viewing_the_dirty_tab() {
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
 
     let (first_control, first_render) = connect_matching_test_shell(&mut server, 7);

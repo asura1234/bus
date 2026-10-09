@@ -11,7 +11,7 @@ use crate::client::compositor::{
     ClientSelectionAutoscrollDirection, ClientShellEndpointError, ClientShellInput,
     ClientShellState, PaneHit, PaneSplitHit, PendingEndpointKind,
 };
-use crate::protocol::{ClientMousePosition, ClientPaneInputEvent};
+use crate::protocol::wire::{ClientMousePosition, ClientPaneInputEvent};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 impl ClientShellState {
@@ -146,8 +146,8 @@ impl ClientShellState {
                 self.last_pane_click = None;
                 let pane_id = hit.pane_id.clone();
                 self.push_endpoint_method_with_kind(
-                    crate::api::schema::Method::PaneLinkActivate(
-                        crate::api::schema::PaneLinkActivateParams {
+                    crate::protocol::api::schema::Method::PaneLinkActivate(
+                        crate::protocol::api::schema::PaneLinkActivateParams {
                             pane_id: pane_id.clone(),
                             viewport_row,
                             col,
@@ -266,8 +266,8 @@ impl ClientShellState {
         }
         if should_send {
             self.push_endpoint_method(
-                crate::api::schema::Method::LayoutSetSplitRatio(
-                    crate::api::schema::LayoutSetSplitRatioParams {
+                crate::protocol::api::schema::Method::LayoutSetSplitRatio(
+                    crate::protocol::api::schema::LayoutSetSplitRatioParams {
                         tab_id: Some(tab_id),
                         pane_id: None,
                         path: hit.path,
@@ -322,8 +322,8 @@ impl ClientShellState {
                                 .is_none_or(|sent| (sent - ratio).abs() > f32::EPSILON)
                         {
                             self.push_endpoint_method(
-                                crate::api::schema::Method::LayoutSetSplitRatio(
-                                    crate::api::schema::LayoutSetSplitRatioParams {
+                                crate::protocol::api::schema::Method::LayoutSetSplitRatio(
+                                    crate::protocol::api::schema::LayoutSetSplitRatioParams {
                                         tab_id: Some(tab_id),
                                         pane_id: None,
                                         path: hit.path,
@@ -365,7 +365,7 @@ impl ClientShellState {
             let copied = self
                 .selection
                 .as_mut()
-                .is_some_and(crate::selection::Selection::finish);
+                .is_some_and(crate::utils::text::selection::Selection::finish);
             if copied && self.config.copy_on_select {
                 self.request_selection_copy(outcome, false);
                 self.selection = None;
@@ -435,9 +435,11 @@ impl ClientShellState {
                 {
                     if self.focused_pane_id().as_deref() != Some(hit.pane_id.as_str()) {
                         self.push_endpoint_method(
-                            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
-                                pane_id: hit.pane_id.clone(),
-                            }),
+                            crate::protocol::api::schema::Method::PaneFocus(
+                                crate::protocol::api::schema::PaneTarget {
+                                    pane_id: hit.pane_id.clone(),
+                                },
+                            ),
                             outcome,
                         );
                     }
@@ -482,9 +484,11 @@ impl ClientShellState {
                     outcome,
                 );
                 self.push_endpoint_method(
-                    crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
-                        pane_id: hit.pane_id.clone(),
-                    }),
+                    crate::protocol::api::schema::Method::PaneFocus(
+                        crate::protocol::api::schema::PaneTarget {
+                            pane_id: hit.pane_id.clone(),
+                        },
+                    ),
                     outcome,
                 );
                 self.pane_mouse_gesture = Some(ClientPaneMouseGesture {
@@ -544,7 +548,7 @@ impl ClientShellState {
                     if mouse.modifiers.is_empty() {
                         self.last_pane_click = Some(click);
                     }
-                    self.selection = Some(crate::selection::Selection::anchor(
+                    self.selection = Some(crate::utils::text::selection::Selection::anchor(
                         hit.pane_id.clone(),
                         mouse.row.saturating_sub(hit.inner_rect.y),
                         mouse.column.saturating_sub(hit.inner_rect.x),
@@ -553,9 +557,11 @@ impl ClientShellState {
                 }
             }
             self.push_endpoint_method(
-                crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
-                    pane_id: hit.pane_id,
-                }),
+                crate::protocol::api::schema::Method::PaneFocus(
+                    crate::protocol::api::schema::PaneTarget {
+                        pane_id: hit.pane_id,
+                    },
+                ),
                 outcome,
             );
         }
@@ -580,16 +586,20 @@ impl ClientShellState {
             .cloned();
         if let Some(hit) = scrollbar_hit {
             self.push_endpoint_method(
-                crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
-                    pane_id: hit.pane_id.clone(),
-                }),
+                crate::protocol::api::schema::Method::PaneFocus(
+                    crate::protocol::api::schema::PaneTarget {
+                        pane_id: hit.pane_id.clone(),
+                    },
+                ),
                 outcome,
             );
             let (Some(track), Some(metrics)) = (hit.scrollbar_rect, hit.scroll) else {
                 return true;
             };
             if let Some(grab_row_offset) =
-                crate::ui::scrollbar_thumb_grab_offset(metrics, track, mouse.row)
+                crate::utils::render::widgets::scrollbar_thumb_grab_offset(
+                    metrics, track, mouse.row,
+                )
             {
                 self.chrome_drag = Some(ClientChromeDrag::PaneScrollbar {
                     hit,
@@ -622,8 +632,8 @@ impl ClientShellState {
                 return true;
             };
             let pointer = match hit.direction {
-                crate::protocol::PaneSurfaceSplitDirection::Horizontal => mouse.column,
-                crate::protocol::PaneSurfaceSplitDirection::Vertical => mouse.row,
+                crate::protocol::wire::PaneSurfaceSplitDirection::Horizontal => mouse.column,
+                crate::protocol::wire::PaneSurfaceSplitDirection::Vertical => mouse.row,
             };
             self.chrome_drag = Some(ClientChromeDrag::PaneSplit {
                 grab_offset: i32::from(hit.pos) - i32::from(pointer),

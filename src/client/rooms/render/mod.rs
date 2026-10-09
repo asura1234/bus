@@ -15,14 +15,14 @@ pub(super) use text::{
 };
 
 use super::deletion::DeleteTarget;
-use crate::bus::model::{Provider, RoomId};
+use crate::messaging::model::{Provider, RoomId};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 
 /// Background of mouse-selected text.
 const SELECTION: Color = Color::Rgb(44, 88, 56);
 const ACCENT: Color = {
-    let [r, g, b] = crate::bus::colors::YOU_COLOR;
+    let [r, g, b] = crate::messaging::prefs::colors::YOU_COLOR;
     Color::Rgb(r, g, b)
 };
 
@@ -31,20 +31,20 @@ pub(super) enum Action {
     Delete(DeleteTarget),
     CancelDelete,
     ConfirmDelete,
-    Room(crate::bus::model::RoomId),
-    Agent(crate::bus::model::AgentId),
+    Room(crate::messaging::model::RoomId),
+    Agent(crate::messaging::model::AgentId),
     NewRoom,
     NewAgent,
     ScrollFiles(bool),
     Notes,
     Composer,
     Recipients,
-    Recipient(Option<crate::bus::model::AgentId>),
+    Recipient(Option<crate::messaging::model::AgentId>),
     Files,
     RemoveFile(std::path::PathBuf),
     FileDetail(std::path::PathBuf),
-    Details(crate::bus::model::AgentId),
-    Quote(crate::bus::model::RequestId),
+    Details(crate::messaging::model::AgentId),
+    Quote(crate::messaging::model::RequestId),
     Field(usize),
     Provider(Provider),
     Orchestrates,
@@ -105,7 +105,7 @@ pub(super) struct View {
     pub settings_list: Rect,
     pub settings_max_scroll: usize,
     rows: Vec<Row>,
-    pub cursor: Option<crate::protocol::CursorState>,
+    pub cursor: Option<crate::protocol::wire::CursorState>,
     pub notes: Rect,
     pub notes_scroll: usize,
     /// Wrapped rows of the room notes, of which `notes` shows a window.

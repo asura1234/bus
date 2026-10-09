@@ -1,5 +1,5 @@
 //! Modifier, virtual-key, and control/OEM layout lookup.
-use crate::input::WindowsKeyRecord;
+use crate::protocol::keys::WindowsKeyRecord;
 
 pub(super) fn windows_key_modifiers(control_key_state: u32) -> crossterm::event::KeyModifiers {
     const RIGHT_ALT_PRESSED: u32 = 0x0001;
@@ -30,8 +30,8 @@ pub(super) fn windows_key_modifiers(control_key_state: u32) -> crossterm::event:
 pub(super) fn windows_virtual_key_to_key_code(
     vk: u16,
     modifiers: crossterm::event::KeyModifiers,
-) -> Option<crate::protocol::ClientKeyCode> {
-    use crate::protocol::ClientKeyCode;
+) -> Option<crate::protocol::wire::ClientKeyCode> {
+    use crate::protocol::wire::ClientKeyCode;
     Some(match vk {
         0x08 => ClientKeyCode::Backspace,
         0x09 if modifiers.contains(crossterm::event::KeyModifiers::SHIFT) => ClientKeyCode::BackTab,
@@ -57,8 +57,8 @@ pub(super) fn windows_virtual_key_to_char_code(
     vk: u16,
     unicode: u16,
     modifiers: crossterm::event::KeyModifiers,
-) -> Option<crate::protocol::ClientKeyCode> {
-    use crate::protocol::ClientKeyCode;
+) -> Option<crate::protocol::wire::ClientKeyCode> {
+    use crate::protocol::wire::ClientKeyCode;
 
     if let Some(ch) = char::from_u32(unicode as u32).filter(|ch| !ch.is_control()) {
         return Some(ClientKeyCode::Char(ch));
@@ -82,8 +82,8 @@ pub(super) fn ctrl_key_code(
     vk: u16,
     u: u16,
     oem: Option<char>,
-) -> Option<crate::protocol::ClientKeyCode> {
-    use crate::protocol::ClientKeyCode;
+) -> Option<crate::protocol::wire::ClientKeyCode> {
+    use crate::protocol::wire::ClientKeyCode;
     Some(match (vk, u) {
         (0xbf, 0x00) => ClientKeyCode::Char(oem?),
         (_, 0x00) => ClientKeyCode::Char(' '),

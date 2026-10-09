@@ -1,11 +1,11 @@
 //! Client-only confirmation; the coordinator owns persisted deletion and stopping sessions.
 use super::{render::Action, BusUi, Effect};
 use crate::{
-    bus::{
+    messaging::{
+        coordinator::BusCommand,
         model::{AgentId, BusState, ModelError, RoomId},
-        runtime::BusCommand,
     },
-    raw_input::RawInputEvent,
+    protocol::keys::host::RawInputEvent,
 };
 use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
@@ -214,7 +214,7 @@ pub(super) fn target_exists(command: &BusCommand, state: &BusState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::runtime::BusSnapshot;
+    use crate::messaging::coordinator::BusSnapshot;
     use std::sync::Arc;
 
     fn deletion_ui() -> (BusUi, RoomId) {

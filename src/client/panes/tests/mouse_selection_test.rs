@@ -20,7 +20,7 @@ fn ctrl_click_routes_link_activation_through_endpoint_then_client_host() {
     let request_id = request.id.clone();
     assert!(matches!(
         &request.method,
-        crate::api::schema::Method::PaneLinkActivate(params)
+        crate::protocol::api::schema::Method::PaneLinkActivate(params)
             if params.pane_id == "pane_1" && params.viewport_row == 1 && params.col == 2
     ));
 
@@ -33,10 +33,12 @@ fn ctrl_click_routes_link_activation_through_endpoint_then_client_host() {
     let (_, actions) = state.handle_endpoint_result(
         "boot-1",
         &request_id,
-        Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
-            url: Some("https://example.test".to_owned()),
-            handled: false,
-        }),
+        Ok(
+            crate::protocol::api::schema::ResponseResult::PaneLinkActivated {
+                url: Some("https://example.test".to_owned()),
+                handled: false,
+            },
+        ),
     );
     assert!(matches!(
         &actions[..],
@@ -66,10 +68,12 @@ fn ctrl_click_without_a_link_replays_the_original_gesture() {
     let (_, actions) = state.handle_endpoint_result(
         "boot-1",
         &request_id,
-        Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
-            url: None,
-            handled: false,
-        }),
+        Ok(
+            crate::protocol::api::schema::ResponseResult::PaneLinkActivated {
+                url: None,
+                handled: false,
+            },
+        ),
     );
     assert!(matches!(
         &actions[..],
@@ -82,7 +86,7 @@ fn ctrl_click_without_a_link_replays_the_original_gesture() {
     assert!(matches!(
         &replay.actions[..],
         [ClientShellAction::Endpoint { request, .. }]
-            if matches!(request.method, crate::api::schema::Method::PaneFocus(_))
+            if matches!(request.method, crate::protocol::api::schema::Method::PaneFocus(_))
     ));
     assert!(state.selection.is_some());
 }
@@ -158,7 +162,7 @@ fn pane_split_drag_uses_projected_handle_and_stable_tab_path() {
     };
     assert!(matches!(
         &request.method,
-        crate::api::schema::Method::LayoutSetSplitRatio(params)
+        crate::protocol::api::schema::Method::LayoutSetSplitRatio(params)
             if params.tab_id.as_deref() == Some("tab_1")
                 && params.path == vec![false, true]
                 && (params.ratio - 0.6).abs() < f32::EPSILON
@@ -208,7 +212,7 @@ fn client_double_click_selects_and_copies_endpoint_row_word() {
             matches!(
                 action,
                 ClientShellAction::Endpoint { request, .. }
-                    if matches!(request.method, crate::api::schema::Method::PaneSelectionRead(_))
+                    if matches!(request.method, crate::protocol::api::schema::Method::PaneSelectionRead(_))
             )
         })
         .expect("word-row read")
@@ -218,40 +222,44 @@ fn client_double_click_selects_and_copies_endpoint_row_word() {
     let word_request_id = request.id.clone();
     assert!(matches!(
         &request.method,
-        crate::api::schema::Method::PaneSelectionRead(params)
-            if params.anchor == crate::api::schema::PaneTextPoint { row: 0, col: 0 }
-                && params.cursor == crate::api::schema::PaneTextPoint { row: 0, col: 3 }
+        crate::protocol::api::schema::Method::PaneSelectionRead(params)
+            if params.anchor == crate::protocol::api::schema::PaneTextPoint { row: 0, col: 0 }
+                && params.cursor == crate::protocol::api::schema::PaneTextPoint { row: 0, col: 3 }
     ));
 
     let (repaint, actions) = state.handle_endpoint_result(
         "boot-1",
         &word_request_id,
-        Ok(crate::api::schema::ResponseResult::PaneSelection {
-            pane_id: "pane_1".into(),
-            text: "LIVE".into(),
-        }),
+        Ok(
+            crate::protocol::api::schema::ResponseResult::PaneSelection {
+                pane_id: "pane_1".into(),
+                text: "LIVE".into(),
+            },
+        ),
     );
     assert!(repaint);
     assert!(state
         .selection
         .as_ref()
-        .is_some_and(crate::selection::Selection::is_finalized));
+        .is_some_and(crate::utils::text::selection::Selection::is_finalized));
     let [ClientShellAction::Endpoint { request, .. }] = &actions[..] else {
         panic!("auto-copy should read the selected word");
     };
     let copy_request_id = request.id.clone();
     assert!(matches!(
         &request.method,
-        crate::api::schema::Method::PaneSelectionRead(params)
+        crate::protocol::api::schema::Method::PaneSelectionRead(params)
             if params.anchor.col == 0 && params.cursor.col == 3
     ));
     let (_, actions) = state.handle_endpoint_result(
         "boot-1",
         &copy_request_id,
-        Ok(crate::api::schema::ResponseResult::PaneSelection {
-            pane_id: "pane_1".into(),
-            text: "LIVE".into(),
-        }),
+        Ok(
+            crate::protocol::api::schema::ResponseResult::PaneSelection {
+                pane_id: "pane_1".into(),
+                text: "LIVE".into(),
+            },
+        ),
     );
     assert!(matches!(
         &actions[..],
@@ -267,7 +275,7 @@ fn pane_content_updates_preserve_active_selection_only_when_selected_cells_stay_
         let mut pane_surface = surface();
         pane_surface.surface_revision = surface_revision;
         pane_surface.panes[0].content_revision = content_revision;
-        pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        pane_surface.panes[0].scroll = Some(crate::protocol::wire::PaneSurfaceScrollMetrics {
             offset_from_bottom: 0,
             max_offset_from_bottom: 11,
             viewport_rows: 2,
@@ -308,7 +316,7 @@ fn pane_content_updates_preserve_active_selection_only_when_selected_cells_stay_
     assert!(selection.is_visible());
     assert_eq!(selection.ordered_cells(), ((12, 0), (12, 1)));
 
-    state.selection = Some(crate::selection::Selection::absolute_anchor(
+    state.selection = Some(crate::utils::text::selection::Selection::absolute_anchor(
         "pane_1".to_owned(),
         (12, 0),
     ));
@@ -320,7 +328,7 @@ fn pane_content_updates_preserve_active_selection_only_when_selected_cells_stay_
     for (surface_revision, content_revision, width, alternate_screen_active) in
         [(4, 6, 4, false), (5, 8, 3, false), (6, 9, 3, false)]
     {
-        state.selection = Some(crate::selection::Selection::absolute_anchor(
+        state.selection = Some(crate::utils::text::selection::Selection::absolute_anchor(
             "pane_1".to_owned(),
             (12, 0),
         ));
@@ -356,8 +364,8 @@ fn pane_mouse_input_keeps_stable_target_and_endpoint_encoding() {
     assert!(matches!(
         &events[..],
         [ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Down(
-                crate::protocol::ClientMouseButton::Left
+            kind: crate::protocol::wire::ClientMouseKind::Down(
+                crate::protocol::wire::ClientMouseButton::Left
             ),
             position: ClientMousePosition::Cell { column: 2, row: 1 },
             modifiers,
@@ -387,8 +395,8 @@ fn pane_mouse_input_keeps_stable_target_and_endpoint_encoding() {
                 && matches!(
                     &events[..],
                     [ClientPaneInputEvent::Mouse {
-                        kind: crate::protocol::ClientMouseKind::Up(
-                            crate::protocol::ClientMouseButton::Left
+                        kind: crate::protocol::wire::ClientMouseKind::Up(
+                            crate::protocol::wire::ClientMouseButton::Left
                         ),
                         ..
                     }]
@@ -410,7 +418,7 @@ fn pane_pixel_mouse_preserves_pane_relative_pixel_coordinates() {
     state.compose(106, 20).expect("composed frame");
     let pane = state.hits.panes[0].clone();
     let geometry =
-        crate::input::mouse::HostGeometry::new(106, 20, 1060, 400).expect("host geometry");
+        crate::protocol::keys::mouse::HostGeometry::new(106, 20, 1060, 400).expect("host geometry");
     let x = u32::from(pane.inner_rect.x) * 10 + 21;
     let y = u32::from(pane.inner_rect.y) * 20 + 21;
     let report = format!("\x1b[<0;{x};{y}M");
@@ -423,8 +431,8 @@ fn pane_pixel_mouse_preserves_pane_relative_pixel_coordinates() {
                 && matches!(
                     &events[..],
                     [ClientPaneInputEvent::Mouse {
-                        kind: crate::protocol::ClientMouseKind::Down(
-                            crate::protocol::ClientMouseButton::Left
+                        kind: crate::protocol::wire::ClientMouseKind::Down(
+                            crate::protocol::wire::ClientMouseButton::Left
                         ),
                         position: ClientMousePosition::Pixels { x: 20, y: 20, .. },
                         ..
@@ -441,8 +449,8 @@ fn pane_pixel_mouse_preserves_pane_relative_pixel_coordinates() {
         ] if pane_id == "pane_1" && matches!(
             &events[..],
             [ClientPaneInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::Up(
-                    crate::protocol::ClientMouseButton::Left
+                kind: crate::protocol::wire::ClientMouseKind::Up(
+                    crate::protocol::wire::ClientMouseButton::Left
                 ),
                 position: ClientMousePosition::Pixels { x: 20, y: 20, .. },
                 ..

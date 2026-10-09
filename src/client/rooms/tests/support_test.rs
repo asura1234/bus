@@ -93,7 +93,9 @@ pub(super) fn rendered_agent_status_colors(
 
 pub(super) fn shell_with(ui: BusUi) -> crate::client::compositor::ClientShellState {
     let mut shell = crate::client::compositor::ClientShellState::new(
-        crate::client::compositor::ClientShellConfig::from_config(&crate::config::Config::default()),
+        crate::client::compositor::ClientShellConfig::from_config(
+            &crate::utils::config::Config::default(),
+        ),
     );
     shell.bus = Some(ui);
     shell.snapshot = Some(Box::new(crate::client::compositor::tests::snapshot()));
@@ -109,12 +111,12 @@ pub(super) fn forwards_ctrl_c_to(
     outcome.requests.iter().any(|r| {
         matches!(
             r,
-            crate::protocol::ClientMessage::ClientShellPaneInput { pane_id, events }
+            crate::protocol::wire::ClientMessage::ClientShellPaneInput { pane_id, events }
                 if pane_id == pane
                     && matches!(
                         &events[..],
-                        [crate::protocol::ClientPaneInputEvent::Key {
-                            code: crate::protocol::ClientKeyCode::Char('c'),
+                        [crate::protocol::wire::ClientPaneInputEvent::Key {
+                            code: crate::protocol::wire::ClientKeyCode::Char('c'),
                             modifiers,
                             ..
                         }] if *modifiers == KeyModifiers::CONTROL.bits()
@@ -348,7 +350,8 @@ pub(super) fn png(dir: &std::path::Path, name: &str, size: (u32, u32)) -> std::p
     path
 }
 
-pub(super) const CELL: crate::kitty_graphics::HostCellSize = crate::kitty_graphics::HostCellSize {
-    width_px: 10,
-    height_px: 20,
-};
+pub(super) const CELL: crate::protocol::kitty::HostCellSize =
+    crate::protocol::kitty::HostCellSize {
+        width_px: 10,
+        height_px: 20,
+    };

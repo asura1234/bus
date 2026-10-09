@@ -1,5 +1,5 @@
 //! Whole-chip wrapping in terminal cells. No fixed limit on the number of rows.
-use crate::bus::model::AgentId;
+use crate::messaging::model::AgentId;
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 

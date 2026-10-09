@@ -5,8 +5,9 @@ use bytes::Bytes;
 use crossterm::event::{KeyModifiers, MouseEventKind};
 use tracing::debug;
 
-use crate::api::schema::{PaneReadResult, ResponseResult, SuccessResponse};
-use crate::terminal::{ScreenSnapshot, TerminalId, TerminalRuntime, UpwardMerge};
+use crate::protocol::api::schema::{PaneReadResult, ResponseResult, SuccessResponse};
+use crate::terminal::{ScreenSnapshot, TerminalRuntime, UpwardMerge};
+use crate::utils::ids::TerminalId;
 
 const INITIAL_QUIET: Duration = Duration::from_millis(10);
 const OUTPUT_QUIET: Duration = Duration::from_millis(10);
@@ -34,7 +35,7 @@ pub(crate) struct PendingAltScreenRead {
     unwrap: bool,
     initial: ScreenSnapshot,
     previous: ScreenSnapshot,
-    history: Vec<crate::ghostty::ScreenTextRow>,
+    history: Vec<crate::terminal::vt::ScreenTextRow>,
     phase: Phase,
     next_poll_at: Instant,
     step_deadline: Instant,
@@ -94,29 +95,30 @@ impl PendingAltScreenRead {
 
     pub(crate) fn frozen_snapshot(
         &self,
-        source: crate::api::schema::ReadSource,
+        source: crate::protocol::api::schema::ReadSource,
         lines: Option<u32>,
-    ) -> crate::pane::TerminalReadSnapshot {
+    ) -> crate::terminal::emulator::TerminalReadSnapshot {
         let line_limit = lines.map(|lines| lines as usize);
         match source {
-            crate::api::schema::ReadSource::Recent
-            | crate::api::schema::ReadSource::RecentUnwrapped => {
+            crate::protocol::api::schema::ReadSource::Recent
+            | crate::protocol::api::schema::ReadSource::RecentUnwrapped => {
                 let limit = line_limit.unwrap_or(80);
                 crate::terminal::snapshot_text(
                     &self.initial.rows,
                     limit,
-                    source == crate::api::schema::ReadSource::RecentUnwrapped,
+                    source == crate::protocol::api::schema::ReadSource::RecentUnwrapped,
                     self.initial.rows.len() > limit,
                 )
             }
-            crate::api::schema::ReadSource::Visible | crate::api::schema::ReadSource::Detection => {
+            crate::protocol::api::schema::ReadSource::Visible
+            | crate::protocol::api::schema::ReadSource::Detection => {
                 let snapshot = crate::terminal::snapshot_text(
                     &self.initial.rows,
                     self.initial.rows.len(),
                     false,
                     false,
                 );
-                crate::app::limit_snapshot_lines(snapshot.text, line_limit)
+                crate::server::api::input_encoding::limit_snapshot_lines(snapshot.text, line_limit)
             }
         }
     }
@@ -182,7 +184,7 @@ impl PendingAltScreenRead {
             self.next_poll_at = now + OUTPUT_QUIET;
             return Some(self);
         }
-        if screen != crate::ghostty::ActiveScreen::Alternate
+        if screen != crate::terminal::vt::ActiveScreen::Alternate
             || snapshot.cols != self.initial.cols
             || snapshot.rows.len() != self.initial.rows.len()
         {
@@ -504,7 +506,7 @@ fn send_wheel(
     events: usize,
     snapshot: &ScreenSnapshot,
 ) -> Result<(), ()> {
-    if runtime.wheel_routing() != Some(crate::pane::WheelRouting::MouseReport) {
+    if runtime.wheel_routing() != Some(crate::terminal::runtime::WheelRouting::MouseReport) {
         return Err(());
     }
     let column = snapshot.cols.saturating_sub(1) / 2;
@@ -512,7 +514,7 @@ fn send_wheel(
     let event = runtime
         .encode_mouse_wheel(
             kind,
-            crate::input::mouse::Position::Cell { column, row },
+            crate::protocol::keys::mouse::Position::Cell { column, row },
             KeyModifiers::empty(),
         )
         .ok_or(())?;
@@ -526,7 +528,7 @@ fn send_wheel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::schema::{ReadFormat, ReadSource};
+    use crate::protocol::api::schema::{ReadFormat, ReadSource};
 
     fn draw(lines: &[&str], enter_alt_screen: bool) -> Vec<u8> {
         let mut bytes = Vec::new();

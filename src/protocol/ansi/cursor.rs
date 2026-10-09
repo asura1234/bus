@@ -1,5 +1,5 @@
 use super::REVERSED_MODIFIER;
-use crate::protocol::FrameData;
+use crate::protocol::wire::FrameData;
 use std::io::Write;
 
 pub(crate) fn frame_with_drawn_cursor(mut frame: FrameData) -> FrameData {

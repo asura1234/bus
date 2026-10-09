@@ -1,4 +1,5 @@
-use crate::api;
+use crate::protocol::api::schema;
+
 use crate::server::api::terminal_read::AltScreenReadConflict;
 use crate::server::clients::connection::{latest_shell_client, ClientConnectionMode};
 use crate::server::main_loop::{non_empty_body, HeadlessServer};
@@ -10,8 +11,8 @@ use tracing::debug;
 
 type PaneApiState = (
     usize,
-    crate::layout::PaneId,
-    crate::detect::AgentState,
+    crate::utils::ids::PaneId,
+    crate::agents::AgentState,
     Option<String>,
 );
 
@@ -41,14 +42,14 @@ impl HeadlessServer {
 
     pub(in crate::server) fn handle_api_request_with_shutdown_check_inner(
         &mut self,
-        msg: api::ApiRequestMessage,
+        msg: crate::server::api::ApiRequestMessage,
         skip_default_workspace_for_request: bool,
     ) -> bool {
         if self.shutting_down {
             // During shutdown, respond with server_unavailable.
-            let response = serde_json::to_string(&api::schema::ErrorResponse {
+            let response = serde_json::to_string(&schema::ErrorResponse {
                 id: msg.request.id,
-                error: api::schema::ErrorBody {
+                error: schema::ErrorBody {
                     code: "server_unavailable".into(),
                     message: "server is shutting down".into(),
                 },
@@ -74,9 +75,9 @@ impl HeadlessServer {
             return true;
         }
 
-        let mut changed = api::request_changes_ui(&msg.request);
+        let mut changed = crate::server::api::request_changes_ui(&msg.request);
         let skip_default_workspace = skip_default_workspace_for_request
-            || matches!(&msg.request.method, api::schema::Method::ServerStop(_));
+            || matches!(&msg.request.method, schema::Method::ServerStop(_));
         changed |= self.drain_all_internal_events_with_forwarding();
 
         // Capture toast and effective pane states before the API call so we can
@@ -89,7 +90,7 @@ impl HeadlessServer {
 
         self.sync_foreground_client_state();
         if let Some(error) = self.agent_read_not_idle_error(&msg.request) {
-            let response = serde_json::to_string(&api::schema::ErrorResponse {
+            let response = serde_json::to_string(&schema::ErrorResponse {
                 id: msg.request.id.clone(),
                 error,
             })
@@ -100,9 +101,9 @@ impl HeadlessServer {
         let alt_screen_read_spec = self.alt_screen_read_spec(&msg.request);
         if matches!(
             &msg.request.method,
-            api::schema::Method::AgentPrompt(_)
-                | api::schema::Method::AgentPromptIfIdle(_)
-                | api::schema::Method::AgentPromptIfUnbound(_)
+            schema::Method::AgentPrompt(_)
+                | schema::Method::AgentPromptIfIdle(_)
+                | schema::Method::AgentPromptIfUnbound(_)
         ) {
             let deferred_changed = self
                 .app
@@ -111,9 +112,8 @@ impl HeadlessServer {
         }
         let mut response = self.dispatch_foreground_api_request(msg.request);
         if let Some(snapshot) = frozen_alt_screen_read {
-            if let Ok(mut success) = serde_json::from_str::<api::schema::SuccessResponse>(&response)
-            {
-                if let api::schema::ResponseResult::PaneRead { read } = &mut success.result {
+            if let Ok(mut success) = serde_json::from_str::<schema::SuccessResponse>(&response) {
+                if let schema::ResponseResult::PaneRead { read } = &mut success.result {
                     read.text = snapshot.text;
                     read.truncated = snapshot.truncated;
                     if let Ok(serialized) = serde_json::to_string(&success) {
@@ -123,8 +123,8 @@ impl HeadlessServer {
             }
         }
         if let Some(spec) = alt_screen_read_spec {
-            if let Ok(success) = serde_json::from_str::<api::schema::SuccessResponse>(&response) {
-                if let api::schema::ResponseResult::PaneRead { read } = success.result {
+            if let Ok(success) = serde_json::from_str::<schema::SuccessResponse>(&response) {
+                if let schema::ResponseResult::PaneRead { read } = success.result {
                     let pending =
                         crate::server::terminals::scrollback_read::PendingAltScreenRead::start(
                             spec.terminal_id,
@@ -155,8 +155,11 @@ impl HeadlessServer {
         changed
     }
 
-    fn handle_client_local_api_request(&mut self, msg: &api::ApiRequestMessage) -> bool {
-        if let api::schema::Method::NotificationShow(params) = &msg.request.method {
+    fn handle_client_local_api_request(
+        &mut self,
+        msg: &crate::server::api::ApiRequestMessage,
+    ) -> bool {
+        if let schema::Method::NotificationShow(params) = &msg.request.method {
             let response =
                 self.handle_notification_show_api(msg.request.id.clone(), params.clone());
             let _ = msg.respond_to.send(response);
@@ -164,7 +167,7 @@ impl HeadlessServer {
         }
 
         match &msg.request.method {
-            api::schema::Method::ClientWindowTitleSet(params) => {
+            schema::Method::ClientWindowTitleSet(params) => {
                 let response = self.handle_client_window_title_api(
                     msg.request.id.clone(),
                     Some(params.title.clone()),
@@ -172,7 +175,7 @@ impl HeadlessServer {
                 let _ = msg.respond_to.send(response);
                 return true;
             }
-            api::schema::Method::ClientWindowTitleClear(_) => {
+            schema::Method::ClientWindowTitleClear(_) => {
                 let response = self.handle_client_window_title_api(msg.request.id.clone(), None);
                 let _ = msg.respond_to.send(response);
                 return true;
@@ -272,7 +275,7 @@ impl HeadlessServer {
                 && should_forward_toast_to_clients(self.app.state.toast_config.delivery)
             {
                 if let Some(kind) =
-                    crate::app::actions::notification_toast_for_state_change_with_agent_labels(
+                    crate::server::notifications::policy::notification_toast_for_state_change_with_agent_labels(
                         suppress_active_tab_notifications,
                         *prev_state,
                         new_state,
@@ -288,15 +291,15 @@ impl HeadlessServer {
                         .and_then(|terminal| terminal.effective_agent_label())
                     {
                         let event_text = match kind {
-                            crate::app::state::ToastKind::NeedsAttention => "needs attention",
-                            crate::app::state::ToastKind::Finished => "finished",
-                            crate::app::state::ToastKind::UpdateInstalled => "updated",
+                            crate::server::app_state::ToastKind::NeedsAttention => "needs attention",
+                            crate::server::app_state::ToastKind::Finished => "finished",
+                            crate::server::app_state::ToastKind::UpdateInstalled => "updated",
                         };
                         let workspace_label = self.app.state.workspaces[*ws_idx].display_name_from(
                             &self.app.state.terminals,
                             &self.app.terminal_runtimes,
                         );
-                        let context = crate::app::actions::notification_context(
+                        let context = crate::server::notifications::policy::notification_context(
                             &self.app.state.workspaces[*ws_idx],
                             &workspace_label,
                             *ws_idx,
@@ -338,7 +341,7 @@ impl HeadlessServer {
             .collect()
     }
 
-    fn dispatch_foreground_api_request(&mut self, request: api::schema::Request) -> String {
+    fn dispatch_foreground_api_request(&mut self, request: schema::Request) -> String {
         if self.foreground_client_id.is_some_and(|client_id| {
             self.clients
                 .get(&client_id)
@@ -347,19 +350,19 @@ impl HeadlessServer {
             self.app.state.view.terminal_area =
                 Rect::new(0, 0, self.effective_size.0, self.effective_size.1);
         }
-        if matches!(&request.method, api::schema::Method::ServerReloadConfig(_)) {
+        if matches!(&request.method, schema::Method::ServerReloadConfig(_)) {
             let report = self.reload_server_config(true);
-            serde_json::to_string(&api::schema::SuccessResponse {
+            serde_json::to_string(&schema::SuccessResponse {
                 id: request.id.clone(),
-                result: api::schema::ResponseResult::ConfigReload {
+                result: schema::ResponseResult::ConfigReload {
                     status: report.status,
                     diagnostics: report.diagnostics,
                 },
             })
             .unwrap_or_else(|err| {
-                serde_json::to_string(&api::schema::ErrorResponse {
+                serde_json::to_string(&schema::ErrorResponse {
                     id: String::new(),
-                    error: api::schema::ErrorBody {
+                    error: schema::ErrorBody {
                         code: "serialization_error".into(),
                         message: err.to_string(),
                     },

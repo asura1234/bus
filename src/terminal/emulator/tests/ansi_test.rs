@@ -1,5 +1,5 @@
 use crate::protocol::ansi::{blit_frame_to, BlitEncoder};
-use crate::protocol::{CellData, FrameData};
+use crate::protocol::wire::{CellData, FrameData};
 
 fn make_cell(symbol: &str, fg: u32, bg: u32, modifier: u16) -> CellData {
     CellData {
@@ -27,7 +27,7 @@ fn make_frame(width: u16, height: u16, cells: Vec<CellData>) -> FrameData {
 fn batched_ascii_diff_replays_to_current_frame() {
     let prev = make_frame(4, 3, vec![make_cell("A", 0, 0, 0); 12]);
     let curr = make_frame(4, 3, vec![make_cell("B", 0, 0, 0); 12]);
-    let mut terminal = crate::ghostty::Terminal::new(4, 3, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(4, 3, 0).unwrap();
 
     let mut initial = Vec::new();
     blit_frame_to(&mut initial, &prev, None);
@@ -50,7 +50,7 @@ fn encoder_size_change_clears_cells_outside_the_new_frame() {
     let prev = make_frame(3, 2, vec![make_cell("A", 0, 0, 0); 6]);
     let curr = make_frame(2, 2, vec![make_cell("B", 0, 0, 0); 4]);
     let mut encoder = BlitEncoder::new();
-    let mut terminal = crate::ghostty::Terminal::new(3, 2, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(3, 2, 0).unwrap();
     let initial = encoder.encode(&prev, false);
     terminal.write(&initial.bytes);
     encoder.commit(prev, initial);
@@ -73,7 +73,7 @@ fn encoder_size_change_clears_cells_outside_the_new_frame() {
 /// Replays a host terminal that, like Terminal.app, keeps cells beyond a
 /// narrowed window: the emulator grid stays at the widest size, and text
 /// the host revealed is written into it directly.
-fn host_text(terminal: &crate::ghostty::Terminal, width: u16, rows: u32) -> Vec<String> {
+fn host_text(terminal: &crate::terminal::vt::Terminal, width: u16, rows: u32) -> Vec<String> {
     (0..rows)
         .map(|row| {
             (0..width)
@@ -91,7 +91,7 @@ fn host_text(terminal: &crate::ghostty::Terminal, width: u16, rows: u32) -> Vec<
 
 fn present_resized(
     encoder: &mut BlitEncoder,
-    terminal: &mut crate::ghostty::Terminal,
+    terminal: &mut crate::terminal::vt::Terminal,
     frame: FrameData,
 ) {
     // What the client does for every resize event.
@@ -105,7 +105,7 @@ fn present_resized(
 #[test]
 fn every_resize_clears_cells_the_host_kept_beyond_the_frame() {
     let mut encoder = BlitEncoder::new();
-    let mut terminal = crate::ghostty::Terminal::new(6, 2, 0).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(6, 2, 0).unwrap();
     let wide = make_frame(6, 2, vec![make_cell("W", 0, 0, 0); 12]);
     let initial = encoder.encode(&wide, false);
     terminal.write(&initial.bytes);

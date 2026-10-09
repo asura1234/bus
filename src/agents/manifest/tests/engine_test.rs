@@ -19,7 +19,7 @@ impl std::ops::Deref for Detected {
     }
 }
 
-pub(super) fn detect_input(agent: Agent, input: DetectionInput<'_>) -> Detected {
+pub(super) fn detect_input(agent: AgentKind, input: DetectionInput<'_>) -> Detected {
     let detection = detect_with_osc(agent, input);
     let matched_rule = load_manifest(agent).and_then(|loaded| {
         matched_manifest_rule(input, &loaded).map(|rule| MatchedRule {
@@ -41,7 +41,7 @@ pub(super) fn detect_loaded(input: DetectionInput<'_>, loaded: &LoadedManifest) 
     }
 }
 
-pub(super) fn detect_screen(agent: Agent, screen: &str) -> Detected {
+pub(super) fn detect_screen(agent: AgentKind, screen: &str) -> Detected {
     detect_input(
         agent,
         DetectionInput {
@@ -76,8 +76,8 @@ id = "codex"
 }
 
 pub(super) fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
-    let bus = crate::config::test_without_bus_env(&_guard);
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let bus = crate::utils::config::test_without_bus_env(&_guard);
     let old_config = std::env::var_os("XDG_CONFIG_HOME");
     let old_state = std::env::var_os("XDG_STATE_HOME");
     let base = std::env::temp_dir().join(format!(
@@ -106,7 +106,7 @@ pub(super) fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
 }
 
 pub(super) fn write_local_codex_without_reload(content: &str) {
-    let path = override_path(Agent::Codex).unwrap();
+    let path = override_path(AgentKind::Codex).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, content).unwrap();
 }
@@ -117,7 +117,7 @@ pub(super) fn write_local_codex(content: &str) {
 }
 
 pub(super) fn detect_screen_with_osc(
-    agent: Agent,
+    agent: AgentKind,
     screen: &str,
     osc_title: &str,
     osc_progress: &str,
@@ -136,7 +136,7 @@ pub(super) fn detect_screen_with_osc(
 
 #[test]
 fn known_agent_no_match_defaults_to_idle_fallback() {
-    let result = detect_screen(Agent::Codex, "ordinary prompt text");
+    let result = detect_screen(AgentKind::Codex, "ordinary prompt text");
 
     assert_eq!(result.state, AgentState::Idle);
     assert!(!result.visible_idle);
@@ -173,21 +173,21 @@ line_regex = ["^exact line$"]
 "#,
         ));
 
-        let high = detect_screen(Agent::Codex, "match win");
+        let high = detect_screen(AgentKind::Codex, "match win");
         assert_eq!(high.state, AgentState::Working);
         assert_eq!(
             high.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("high_nested_gates")
         );
 
-        let not_gate = detect_screen(Agent::Codex, "match win blocked");
+        let not_gate = detect_screen(AgentKind::Codex, "match win blocked");
         assert_eq!(not_gate.state, AgentState::Idle);
         assert_eq!(
             not_gate.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("low_contains")
         );
 
-        let line = detect_screen(Agent::Codex, "before\nexact line\nafter");
+        let line = detect_screen(AgentKind::Codex, "before\nexact line\nafter");
         assert_eq!(line.state, AgentState::Blocked);
         assert_eq!(
             line.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -237,7 +237,7 @@ fn local_override_replaces_bundled_manifest() {
     with_manifest_dirs("local-source", || {
         write_local_codex(&local_manifest("blocked", "local-ready"));
 
-        let result = detect_screen(Agent::Codex, "local-ready");
+        let result = detect_screen(AgentKind::Codex, "local-ready");
 
         assert_eq!(result.state, AgentState::Blocked);
     });
@@ -248,7 +248,7 @@ fn invalid_local_override_falls_back_to_bundled_manifest() {
     with_manifest_dirs("invalid-local-bundled-fallback", || {
         write_local_codex("id = ");
         let result = detect_input(
-            Agent::Codex,
+            AgentKind::Codex,
             DetectionInput {
                 screen: "",
                 osc_title: "⠋ project",
@@ -266,7 +266,7 @@ fn detection_uses_cached_manifest_until_explicit_reload() {
     with_manifest_dirs("cache-boundary", || {
         write_local_codex(&local_manifest("blocked", "cached-ready"));
 
-        let cached = detect_screen(Agent::Codex, "cached-ready");
+        let cached = detect_screen(AgentKind::Codex, "cached-ready");
         assert_eq!(cached.state, AgentState::Blocked);
         assert_eq!(
             cached.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -275,12 +275,12 @@ fn detection_uses_cached_manifest_until_explicit_reload() {
 
         write_local_codex_without_reload(&local_manifest("working", "new-ready"));
 
-        let unchanged = detect_screen(Agent::Codex, "new-ready");
+        let unchanged = detect_screen(AgentKind::Codex, "new-ready");
         assert_eq!(unchanged.state, AgentState::Idle);
 
         reload_manifests();
 
-        let reloaded = detect_screen(Agent::Codex, "new-ready");
+        let reloaded = detect_screen(AgentKind::Codex, "new-ready");
         assert_eq!(reloaded.state, AgentState::Working);
         assert_eq!(
             reloaded.matched_rule.as_ref().map(|rule| rule.id.as_str()),

@@ -11,7 +11,7 @@ fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeRes
         agent_name: terminal.agent_name.clone(),
         managed_agent: terminal
             .managed_agent_kind()
-            .map(crate::detect::agent_label)
+            .map(crate::agents::agent_label)
             .map(str::to_owned),
         session: terminal.persisted_agent_session.clone(),
     }
@@ -19,7 +19,7 @@ fn terminal_resume_facts(terminal: &crate::terminal::TerminalState) -> NativeRes
 
 fn for_native_resume(
     terminal: &crate::terminal::TerminalState,
-    plan: &crate::agent_resume::AgentResumePlan,
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
     cwd: &std::path::Path,
 ) -> Result<LaunchExtras, String> {
     let facts = terminal_resume_facts(terminal);
@@ -28,8 +28,8 @@ fn for_native_resume(
     }
     // Capture the same env bytes locally, without importing the CLI edge.
     let root = std::env::var_os("BUS_DATA_DIR").map(std::path::PathBuf::from);
-    let session_name = crate::session::active_name();
-    let config_root = crate::config::config_dir();
+    let session_name = crate::utils::paths::active_name();
+    let config_root = crate::utils::config::config_dir();
     if !root
         .as_ref()
         .is_some_and(|root| root.is_absolute() && config_root == root.join("herdr-config"))
@@ -60,21 +60,23 @@ fn for_native_resume(
 
 /// Map the agents-domain kind into the API's neutral serialized DTO.
 pub(crate) fn api_session_kind(
-    kind: crate::agent_resume::AgentSessionRefKind,
-) -> crate::api::schema::AgentSessionRefKind {
+    kind: crate::agents::resume::catalog::AgentSessionRefKind,
+) -> crate::protocol::api::schema::AgentSessionRefKind {
     match kind {
-        crate::agent_resume::AgentSessionRefKind::Id => crate::api::schema::AgentSessionRefKind::Id,
-        crate::agent_resume::AgentSessionRefKind::Path => {
-            crate::api::schema::AgentSessionRefKind::Path
+        crate::agents::resume::catalog::AgentSessionRefKind::Id => {
+            crate::protocol::api::schema::AgentSessionRefKind::Id
+        }
+        crate::agents::resume::catalog::AgentSessionRefKind::Path => {
+            crate::protocol::api::schema::AgentSessionRefKind::Path
         }
     }
 }
 
 struct PendingAgentResumeCandidate {
-    pane_id: crate::layout::PaneId,
-    terminal_id: crate::terminal::TerminalId,
+    pane_id: crate::utils::ids::PaneId,
+    terminal_id: crate::utils::ids::TerminalId,
     cwd: std::path::PathBuf,
-    plan: crate::agent_resume::AgentResumePlan,
+    plan: crate::agents::resume::catalog::AgentResumePlan,
     rows: u16,
     cols: u16,
 }
@@ -187,9 +189,9 @@ impl App {
         &self,
         ws_idx: usize,
         tab_idx: usize,
-        tab: &crate::workspace::Tab,
+        tab: &crate::server::workspaces::Tab,
         terminal_area: Rect,
-    ) -> Vec<crate::layout::PaneInfo> {
+    ) -> Vec<crate::server::workspaces::layout::PaneInfo> {
         let mut pane_infos = derived_pending_agent_resume_pane_infos(
             tab,
             terminal_area,
@@ -222,10 +224,10 @@ impl App {
 
     fn start_pending_agent_resume(
         &mut self,
-        pane_id: crate::layout::PaneId,
-        terminal_id: crate::terminal::TerminalId,
+        pane_id: crate::utils::ids::PaneId,
+        terminal_id: crate::utils::ids::TerminalId,
         cwd: std::path::PathBuf,
-        plan: crate::agent_resume::AgentResumePlan,
+        plan: crate::agents::resume::catalog::AgentResumePlan,
         rows: u16,
         cols: u16,
         allow_empty_theme: bool,
@@ -246,7 +248,7 @@ impl App {
         };
         let plan = match &extras.session {
             Some(session) => {
-                let Some(plan) = crate::agent_resume::plan(
+                let Some(plan) = crate::agents::resume::catalog::plan(
                     &session.source,
                     &session.agent,
                     &session.session_ref,
@@ -281,7 +283,10 @@ impl App {
             self.state.pane_scrollback_limit_bytes,
             host_terminal_theme,
             self.state.host_terminal_appearance,
-            crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
+            crate::terminal::runtime::PaneShellConfig::new(
+                &self.state.default_shell,
+                self.state.shell_mode,
+            ),
             &launch_env,
             self.event_tx.clone(),
             self.render_notify.clone(),
@@ -327,8 +332,8 @@ impl App {
 
     fn suspend_pending_agent_resume(
         &mut self,
-        pane_id: crate::layout::PaneId,
-        terminal_id: &crate::terminal::TerminalId,
+        pane_id: crate::utils::ids::PaneId,
+        terminal_id: &crate::utils::ids::TerminalId,
         reason: &str,
     ) -> bool {
         tracing::warn!(event = "bus.resume.suspended", pane = pane_id.raw(), terminal = %terminal_id, %reason,
@@ -340,7 +345,7 @@ impl App {
             let kind = terminal.managed_agent_kind();
             terminal.set_detected_state_with_screen_signals_at(
                 kind,
-                crate::detect::AgentState::Unknown,
+                crate::agents::AgentState::Unknown,
                 false,
                 false,
                 Instant::now(),
@@ -351,13 +356,13 @@ impl App {
 }
 
 fn derived_pending_agent_resume_pane_infos(
-    tab: &crate::workspace::Tab,
+    tab: &crate::server::workspaces::Tab,
     terminal_area: Rect,
-    pane_borders: crate::config::PaneBordersConfig,
+    pane_borders: crate::utils::config::PaneBordersConfig,
     pane_gaps: bool,
     pane_outer_borders: bool,
-) -> Vec<crate::layout::PaneInfo> {
-    crate::ui::apply_pane_chrome(
+) -> Vec<crate::server::workspaces::layout::PaneInfo> {
+    crate::server::rendering::surface::apply_pane_chrome(
         tab.layout.panes(terminal_area),
         pane_borders,
         pane_gaps,
@@ -365,7 +370,8 @@ fn derived_pending_agent_resume_pane_infos(
     )
     .into_iter()
     .map(|mut info| {
-        let pane_inner = crate::ui::pane_inner_rect(info.rect, info.borders);
+        let pane_inner =
+            crate::server::rendering::surface::pane_inner_rect(info.rect, info.borders);
         info.inner_rect = stable_terminal_inner_rect(pane_inner);
         info
     })
@@ -406,6 +412,27 @@ fn shell_quote(value: &str) -> String {
         return value.to_string();
     }
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+fn terminal_resume_identity_for_test(
+    terminal: &crate::terminal::TerminalState,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<crate::agents::resume::catalog::PersistedAgentSession>,
+) {
+    let facts = terminal_resume_facts(terminal);
+    (facts.agent_name, facts.managed_agent, facts.session)
+}
+
+#[cfg(test)]
+fn native_resume_is_empty_for_test(
+    terminal: &crate::terminal::TerminalState,
+    plan: &crate::agents::resume::catalog::AgentResumePlan,
+    cwd: &std::path::Path,
+) -> Result<bool, String> {
+    for_native_resume(terminal, plan, cwd).map(|extras| extras == LaunchExtras::default())
 }
 
 #[cfg(test)]

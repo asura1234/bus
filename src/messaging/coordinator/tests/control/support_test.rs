@@ -1,5 +1,5 @@
 use super::*;
-use crate::bus::transport::TransportError;
+use crate::messaging::native::TransportError;
 use serde_json::json;
 
 #[path = "agents_test.rs"]

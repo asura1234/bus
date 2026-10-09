@@ -48,7 +48,7 @@ pub(crate) fn set_host_kitty_keyboard_report_all<W: Write>(
     writer: &mut W,
     report_all_keys: bool,
 ) -> io::Result<()> {
-    let mut flags = crate::input::ime_compatible_keyboard_enhancement_flags();
+    let mut flags = crate::protocol::keys::ime_compatible_keyboard_enhancement_flags();
     if report_all_keys {
         flags |= crossterm::event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
         flags = crossterm::event::KeyboardEnhancementFlags::from_bits_retain(

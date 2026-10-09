@@ -2,30 +2,35 @@ use super::*;
 
 pub(super) fn client_shell_snapshot(
     message: ServerMessage,
-) -> Box<crate::protocol::ClientShellSnapshot> {
+) -> Box<crate::protocol::wire::ClientShellSnapshot> {
     let ServerMessage::EndpointControl { kind, data } = message else {
         panic!("expected client shell snapshot");
     };
-    assert_eq!(kind, crate::protocol::endpoint::ENDPOINT_SNAPSHOT_KIND);
+    assert_eq!(
+        kind,
+        crate::protocol::wire::handshake::ENDPOINT_SNAPSHOT_KIND
+    );
     Box::new(serde_json::from_str(&data).expect("decode client shell snapshot"))
 }
 
 pub(super) fn test_headless_server() -> HeadlessServer {
-    test_headless_server_with_event_hub(api::EventHub::default())
+    test_headless_server_with_event_hub(crate::server::api::EventHub::default())
 }
 
-pub(super) fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServer {
-    let config = crate::config::Config::default();
+pub(super) fn test_headless_server_with_event_hub(
+    event_hub: crate::server::api::EventHub,
+) -> HeadlessServer {
+    let config = crate::utils::config::Config::default();
     let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut app = crate::app::App::new(
+    let mut app = crate::server::app::App::new(
         &config,
-        crate::app::AppPolicy::TEST,
+        crate::server::app::AppPolicy::TEST,
         None,
         api_rx,
         event_hub,
     );
 
-    app.state.default_shell = crate::app::exiting_test_command().into();
+    app.state.default_shell = crate::server::api::test_support::exiting_test_command().into();
     // Parallel harnesses can read the same microsecond clock; the counter keeps their sockets apart.
     static NEXT_DIR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -108,7 +113,7 @@ pub(super) fn frame_text(frame: &FrameData) -> String {
 
 pub(super) fn headless_pane_list(server: &mut HeadlessServer) -> Vec<api::schema::PaneInfo> {
     let (respond_to, response_rx) = std::sync::mpsc::channel();
-    server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+    server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
         request: api::schema::Request {
             id: "list-titles".into(),
             method: api::schema::Method::PaneList(api::schema::PaneListParams::default()),
@@ -123,7 +128,7 @@ pub(super) fn headless_pane_list(server: &mut HeadlessServer) -> Vec<api::schema
     panes
 }
 
-pub(super) fn pane_updated_events(event_hub: &api::EventHub) -> usize {
+pub(super) fn pane_updated_events(event_hub: &crate::server::api::EventHub) -> usize {
     event_hub
         .events_after(0)
         .iter()
@@ -133,7 +138,7 @@ pub(super) fn pane_updated_events(event_hub: &api::EventHub) -> usize {
 
 pub(super) fn window_title_test_server() -> (HeadlessServer, std::sync::mpsc::Receiver<Vec<u8>>) {
     let mut server = test_headless_server();
-    server.app.state.workspaces = vec![crate::workspace::Workspace::test_new("herd")];
+    server.app.state.workspaces = vec![crate::server::workspaces::Workspace::test_new("herd")];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
 
@@ -142,7 +147,7 @@ pub(super) fn window_title_test_server() -> (HeadlessServer, std::sync::mpsc::Re
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             client_tx,
         ),
@@ -206,8 +211,8 @@ pub(super) fn test_client_writer() -> (
 
 pub(super) fn install_shared_view_test_runtime(
     server: &mut HeadlessServer,
-) -> crate::layout::PaneId {
-    let mut workspace = crate::workspace::Workspace::test_new("shared-view");
+) -> crate::utils::ids::PaneId {
+    let mut workspace = crate::server::workspaces::Workspace::test_new("shared-view");
     let pane_id = workspace.focused_pane_id().expect("focused pane");
     workspace.insert_test_runtime(
         pane_id,
@@ -216,7 +221,7 @@ pub(super) fn install_shared_view_test_runtime(
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     pane_id
 }
 
@@ -260,7 +265,7 @@ pub(super) fn connect_matching_test_shell(
 
 pub(super) fn write_shared_test_pane(
     server: &mut HeadlessServer,
-    pane_id: crate::layout::PaneId,
+    pane_id: crate::utils::ids::PaneId,
     bytes: &[u8],
 ) {
     server
@@ -274,7 +279,7 @@ pub(super) fn write_shared_test_pane(
 pub(super) fn recv_pane_surface(
     receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
     context: &str,
-) -> crate::protocol::PaneSurfaceFrame {
+) -> crate::protocol::wire::PaneSurfaceFrame {
     match read_server_message(
         receiver
             .recv()
@@ -288,7 +293,7 @@ pub(super) fn recv_pane_surface(
 pub(super) fn recv_pane_surface_patch(
     receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
     context: &str,
-) -> crate::protocol::PaneSurfacePatch {
+) -> crate::protocol::wire::PaneSurfacePatch {
     match read_server_message(
         receiver
             .recv()
@@ -303,7 +308,7 @@ pub(super) fn install_focused_test_runtime(
     server: &mut HeadlessServer,
     terminal_bytes: &[u8],
 ) -> tokio::sync::mpsc::Receiver<Bytes> {
-    let mut workspace = crate::workspace::Workspace::test_new("focus-reporting");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("focus-reporting");
     let pane_id = workspace.tabs[0].root_pane;
     let (runtime, input_rx) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
@@ -317,12 +322,12 @@ pub(super) fn install_focused_test_runtime(
     server.app.state.workspaces = vec![workspace];
     server.app.state.active = Some(0);
     server.app.state.selected = 0;
-    server.app.state.mode = crate::app::Mode::Terminal;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
     input_rx
 }
 
 pub(super) fn with_terminal_session_test_server(
-    test: impl FnOnce(&mut HeadlessServer, crate::terminal::TerminalId, String, String),
+    test: impl FnOnce(&mut HeadlessServer, crate::utils::ids::TerminalId, String, String),
 ) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -330,7 +335,7 @@ pub(super) fn with_terminal_session_test_server(
         .expect("test runtime");
     let _runtime_guard = rt.enter();
     let mut server = test_headless_server();
-    let workspace = crate::workspace::Workspace::test_new("test");
+    let workspace = crate::server::workspaces::Workspace::test_new("test");
     let pane_id = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(pane_id).expect("terminal id").clone();
     let terminal_id_string = terminal_id.to_string();
@@ -379,11 +384,11 @@ pub(super) fn with_client_pane_runtime(
 }
 
 pub(super) fn client_page_key(
-    code: crate::protocol::ClientKeyCode,
+    code: crate::protocol::wire::ClientKeyCode,
     modifiers: crossterm::event::KeyModifiers,
-    kind: crate::protocol::ClientKeyKind,
-) -> crate::protocol::ClientPaneInputEvent {
-    crate::protocol::ClientPaneInputEvent::Key {
+    kind: crate::protocol::wire::ClientKeyKind,
+) -> crate::protocol::wire::ClientPaneInputEvent {
+    crate::protocol::wire::ClientPaneInputEvent::Key {
         code,
         modifiers: modifiers.bits(),
         kind,

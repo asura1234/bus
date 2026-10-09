@@ -1,4 +1,5 @@
-use super::{Node, PaneId, PaneInfo, SplitBorder};
+use super::{Node, PaneInfo, SplitBorder};
+use crate::utils::ids::PaneId;
 use ratatui::layout::{Direction, Rect};
 use ratatui::widgets::Borders;
 

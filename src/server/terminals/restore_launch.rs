@@ -7,9 +7,10 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::server::persistence::{RestoreLaunch, RestoredSession};
 use crate::server::workspaces::Workspace;
-use crate::terminal::events::AppEvent;
+use crate::terminal::events::TerminalEvent;
 use crate::terminal::runtime::{PaneLaunchEnv, PaneShellConfig};
-use crate::terminal::{TerminalId, TerminalRuntime, TerminalState};
+use crate::terminal::{TerminalRuntime, TerminalState};
+use crate::utils::ids::TerminalId;
 use crate::utils::render::signal::RenderSignal;
 
 pub(in crate::server) struct RestoreLaunchContext<'a> {
@@ -17,7 +18,7 @@ pub(in crate::server) struct RestoreLaunchContext<'a> {
     pub(in crate::server) cols: u16,
     pub(in crate::server) scrollback_limit_bytes: usize,
     pub(in crate::server) shell_config: PaneShellConfig<'a>,
-    pub(in crate::server) events: mpsc::Sender<AppEvent>,
+    pub(in crate::server) events: mpsc::Sender<TerminalEvent>,
     pub(in crate::server) render_notify: Arc<Notify>,
     pub(in crate::server) render_dirty: Arc<RenderSignal>,
 }

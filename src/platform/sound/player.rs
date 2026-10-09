@@ -36,7 +36,7 @@ pub(super) static SOUND_DONE: &[u8] = include_bytes!("../../../assets/sounds/don
 
 /// Play a notification sound in a background thread.
 /// Silently does nothing if no audio player is available.
-pub fn play(sound: Sound, config: &crate::config::SoundConfig) {
+pub fn play(sound: Sound, config: &crate::utils::config::SoundConfig) {
     if sound_playback_disabled_by_env() {
         return;
     }
@@ -162,7 +162,7 @@ if ($script:timedOut) { throw 'sound playback timed out' }
 
 #[cfg(any(windows, test))]
 pub(super) fn windows_player_command(path: &Path) -> Command {
-    let mut command = crate::noninteractive_process::command("powershell.exe");
+    let mut command = crate::platform::console_command::command("powershell.exe");
     command
         .args([
             "-NoLogo",
@@ -351,7 +351,7 @@ pub(super) fn player_error(player: AudioPlayer, output: &Output) -> String {
 
 /// Plays a room's sound in a background thread: the named system sound, or
 /// the built-in ding when `name` is None, no longer installed, or unplayable.
-pub fn play_named(name: Option<&str>, config: &crate::config::SoundConfig) {
+pub fn play_named(name: Option<&str>, config: &crate::utils::config::SoundConfig) {
     if sound_playback_disabled_by_env() {
         return;
     }

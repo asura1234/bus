@@ -14,13 +14,13 @@ impl Worker {
     ) -> Result<Value, String> {
         match method {
             "state" => Ok(
-                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"status":self.state.room_status(r.id),"sound":r.sound_enabled(),"sound_name":r.sound_name.as_deref().unwrap_or(crate::sound::DEFAULT_SOUND_NAME),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json(),"build":build_json()}),
+                json!({"revision":self.revision,"master_room":self.state.master_room().map(|r|r.id),"visible_room":self.state.visible_room(),"rooms":self.state.rooms().map(|r|json!({"id":r.id,"name":r.name,"kind":r.kind,"notes":r.notes,"unread_count":r.unread_count,"status":self.state.room_status(r.id),"sound":r.sound_enabled(),"sound_name":r.sound_name.as_deref().unwrap_or(crate::platform::sound::DEFAULT_SOUND_NAME),"deletion_pending":r.deletion_pending,"orchestrator":self.state.orchestrator_of(r.id).map(|a|a.id)})).collect::<Vec<_>>(),"agents":self.state.agents().collect::<Vec<_>>(),"usage":self.usage.state_json(),"settings":self.settings_json(),"build":build_json()}),
             ),
             "diagnostics" => Ok(
-                json!({"version":env!("CARGO_PKG_VERSION"),"dev":true,"storage_failed":self.storage_failed,"coordinator_error":self.error,"data_dir":self.data_dir,"logs":self.data_dir.join("herdr-config/sessions/bus"),"callback_logs":self.data_dir.join("callbacks"),"agents":self.state.agents().map(|a|json!({"agent_id":a.id,"name":a.name,"status":a.status,"reason":crate::bus::diagnostics::wait_reason(a),"detail":a.actionable_error,"identity":a.runtime_identity,"current_request":a.current_request})).collect::<Vec<_>>()}),
+                json!({"version":env!("CARGO_PKG_VERSION"),"dev":true,"storage_failed":self.storage_failed,"coordinator_error":self.error,"data_dir":self.data_dir,"logs":self.data_dir.join("herdr-config/sessions/bus"),"callback_logs":self.data_dir.join("callbacks"),"agents":self.state.agents().map(|a|json!({"agent_id":a.id,"name":a.name,"status":a.status,"reason":crate::messaging::diagnostics::wait_reason(a),"detail":a.actionable_error,"identity":a.runtime_identity,"current_request":a.current_request})).collect::<Vec<_>>()}),
             ),
             "sounds" => Ok(json!({
-                "sounds": std::iter::once(json!({"name": crate::sound::DEFAULT_SOUND_NAME, "path": null}))
+                "sounds": std::iter::once(json!({"name": crate::platform::sound::DEFAULT_SOUND_NAME, "path": null}))
                     .chain(self.system_sounds().into_iter().map(|sound| json!({"name": sound.name, "path": sound.path})))
                     .collect::<Vec<_>>(),
             })),
@@ -35,8 +35,9 @@ impl Worker {
                     .as_ref()
                     .ok_or("Bus settings location unavailable")?;
                 // Change only this field of the saved file; other writers keep theirs.
-                let settings =
-                    crate::bus::settings::update(path, |settings| settings.color_blind_mode = on)?;
+                let settings = crate::messaging::prefs::settings::update(path, |settings| {
+                    settings.color_blind_mode = on
+                })?;
                 events
                     .send(BusEvent::SettingsChanged(settings))
                     .map_err(|_| "Bus UI event channel disconnected")?;
@@ -74,7 +75,7 @@ impl Worker {
         match self
             .settings_path
             .as_deref()
-            .map(crate::bus::settings::load)
+            .map(crate::messaging::prefs::settings::load)
         {
             Some(Ok(settings)) => json!(settings),
             Some(Err(error)) => json!({"error": error}),
@@ -90,9 +91,11 @@ impl Worker {
     ) -> Result<Option<Option<String>>, String> {
         Ok(match optional_text(p, "sound")? {
             None => None,
-            Some(name) if name.eq_ignore_ascii_case(crate::sound::DEFAULT_SOUND_NAME) => Some(None),
+            Some(name) if name.eq_ignore_ascii_case(crate::platform::sound::DEFAULT_SOUND_NAME) => {
+                Some(None)
+            }
             Some(name) => Some(Some(
-                crate::sound::find_sound(&self.system_sounds(), name)
+                crate::platform::sound::find_sound(&self.system_sounds(), name)
                     .map(|sound| sound.name.clone())
                     .ok_or_else(|| format!("Unknown sound {name:?}; `bus sounds` lists them"))?,
             )),
@@ -101,10 +104,10 @@ impl Worker {
 
     pub(in crate::messaging::coordinator) fn system_sounds(
         &self,
-    ) -> Vec<crate::sound::SystemSound> {
+    ) -> Vec<crate::platform::sound::SystemSound> {
         match &self.sound_dirs {
-            Some(dirs) => crate::sound::list_sounds(dirs),
-            None => crate::sound::system_sounds(),
+            Some(dirs) => crate::platform::sound::list_sounds(dirs),
+            None => crate::platform::sound::system_sounds(),
         }
     }
 
@@ -240,7 +243,7 @@ fn dev_read_source(source: Option<&str>, lines: Option<u32>) -> Result<schema::R
 
 fn read_capture(read: &schema::PaneReadResult, read_source: schema::ReadSource) -> Value {
     let mut capture = json!({
-        "at_ms": crate::bus::io::now_ms(),
+        "at_ms": crate::messaging::storage::io::now_ms(),
         "source": if read_source == schema::ReadSource::Visible { "visible" } else { "recent" },
         "truncated": read.truncated,
         "revision": read.revision,

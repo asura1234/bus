@@ -30,7 +30,7 @@ mod cursor;
 mod diff;
 mod style;
 
-use crate::protocol::{CursorState, FrameData, PaneSurfacePatchRow};
+use crate::protocol::wire::{CursorState, FrameData, PaneSurfacePatchRow};
 use cursor::clamp_cursor_position;
 pub(crate) use cursor::frame_with_drawn_cursor;
 #[cfg(test)]
@@ -107,9 +107,9 @@ impl BlitEncoder {
         // without the flash of a clear.
         let clear_before_full_redraw =
             previous_frame.is_none_or(|p| p.width != frame.width || p.height != frame.height);
-        let prof_stats =
-            crate::render_prof::enabled().then(|| compute_prof_blit_stats(frame, prev, full));
-        let prof_started = crate::render_prof::timer();
+        let prof_stats = crate::utils::render::prof::enabled()
+            .then(|| compute_prof_blit_stats(frame, prev, full));
+        let prof_started = crate::utils::render::prof::timer();
         let mut bytes = Vec::new();
         let mut next_last_visible_cursor = self.last_visible_cursor;
         let mut next_last_cursor_shape = self.last_cursor_shape;
@@ -124,15 +124,15 @@ impl BlitEncoder {
             suppress_visible_cursor,
         );
         if let Some(stats) = prof_stats {
-            crate::render_prof::duration_since("ansi_encode.total", prof_started);
-            crate::render_prof::counter("ansi_encode.bytes", bytes.len() as u64);
-            crate::render_prof::counter("ansi_encode.scanned_cells", stats.scanned_cells);
-            crate::render_prof::counter("ansi_encode.changed_cells", stats.changed_cells);
-            crate::render_prof::counter("ansi_encode.changed_runs", stats.changed_runs);
+            crate::utils::render::prof::duration_since("ansi_encode.total", prof_started);
+            crate::utils::render::prof::counter("ansi_encode.bytes", bytes.len() as u64);
+            crate::utils::render::prof::counter("ansi_encode.scanned_cells", stats.scanned_cells);
+            crate::utils::render::prof::counter("ansi_encode.changed_cells", stats.changed_cells);
+            crate::utils::render::prof::counter("ansi_encode.changed_runs", stats.changed_runs);
             if full {
-                crate::render_prof::event("ansi_encode.full");
+                crate::utils::render::prof::event("ansi_encode.full");
             } else {
-                crate::render_prof::event("ansi_encode.partial");
+                crate::utils::render::prof::event("ansi_encode.partial");
             }
         }
         EncodedBlit {

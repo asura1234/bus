@@ -7,7 +7,8 @@ use crate::protocol::api::schema::{
 use crate::server::api::errors::{encode_error, encode_success};
 use crate::server::app::App;
 use crate::server::terminals::events::{PaneZoomCommand, PaneZoomNoopReason};
-use crate::server::workspaces::layout::PaneId;
+use crate::terminal::runtime::spawn::PaneShellConfig;
+use crate::utils::ids::PaneId;
 
 type PaneSwapTarget = (usize, usize, PaneId, Option<PaneId>, Option<PaneSwapReason>);
 
@@ -51,7 +52,7 @@ impl App {
             return encode_error(id, "pane_not_found", "pane not found");
         };
         let direction = split_direction_to_layout(params.direction);
-        let shell_config = crate::pane::PaneShellConfig::new(&default_shell, self.state.shell_mode);
+        let shell_config = PaneShellConfig::new(&default_shell, self.state.shell_mode);
         let split_result = match params.ratio {
             Some(ratio) => ws.split_pane_with_ratio(
                 target_pane_id,
@@ -418,7 +419,7 @@ impl App {
         let tab = ws.tabs.get(tab_idx)?;
         let area = self.state.view.terminal_area;
         let focused_pane_id = self.public_pane_id(ws_idx, tab.layout.focused())?;
-        let panes = crate::ui::apply_pane_chrome(
+        let panes = crate::server::rendering::surface::apply_pane_chrome(
             tab.layout.panes(area),
             self.state.pane_borders,
             self.state.pane_gaps,

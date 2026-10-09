@@ -118,7 +118,7 @@ fn settings_all_rooms_row_sets_the_default_while_there_are_no_rooms() {
 
     // The coordinator's saved copy replaces the UI's.
     ui.receive_event(BusEvent::SettingsChanged(
-        crate::bus::settings::BusSettings {
+        crate::messaging::prefs::settings::BusSettings {
             color_blind_mode: true,
             ..Default::default()
         },

@@ -16,7 +16,7 @@ fn supplied_foreground_job(pid: u32, name: &str) -> crate::platform::ForegroundJ
 #[test]
 fn foreground_fact_probes_stay_lazy_for_output_and_theme_restore() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 3, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 3, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
     let no_probe = |_| -> Option<crate::platform::ForegroundJob> { panic!("unexpected probe") };
@@ -36,7 +36,7 @@ fn foreground_fact_probes_stay_lazy_for_output_and_theme_restore() {
 #[test]
 fn supplied_foreground_jobs_preserve_droid_scrollback_filtering() {
     let (tx, _rx) = mpsc::channel(4);
-    let mut terminal = crate::ghostty::Terminal::new(80, 3, 100).unwrap();
+    let mut terminal = crate::terminal::vt::Terminal::new(80, 3, 100).unwrap();
     for _ in 0..10 {
         terminal.write(b"history\r\n");
     }
@@ -64,11 +64,11 @@ fn supplied_foreground_jobs_preserve_droid_scrollback_filtering() {
 #[test]
 fn supplied_foreground_jobs_keep_transient_color_ownership_and_restore() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 3, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 3, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
-    pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
-        background: Some(crate::terminal_theme::RgbColor { r: 1, g: 2, b: 3 }),
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        background: Some(crate::utils::theme::color::RgbColor { r: 1, g: 2, b: 3 }),
         ..Default::default()
     });
     let probes = std::cell::Cell::new(0);
@@ -102,7 +102,7 @@ fn supplied_foreground_jobs_keep_transient_color_ownership_and_restore() {
 #[test]
 fn process_pty_bytes_reports_latest_libghostty_pwd_callback() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -137,7 +137,7 @@ fn process_pty_bytes_reports_latest_libghostty_pwd_callback() {
 #[test]
 fn process_pty_bytes_surfaces_live_bells_only() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -152,7 +152,7 @@ fn process_pty_bytes_surfaces_live_bells_only() {
 #[test]
 fn process_pty_bytes_reports_only_completed_title_changes() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -179,7 +179,7 @@ fn process_pty_bytes_reports_only_completed_title_changes() {
 #[test]
 fn process_pty_bytes_surfaces_clipboard_writes_without_other_results() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
 
     let result = pane.process_pty_bytes(
@@ -201,7 +201,7 @@ fn process_pty_bytes_surfaces_clipboard_writes_without_other_results() {
 #[test]
 fn seeded_history_clipboard_write_does_not_leak_into_live_output() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     pane.seed_history_ansi("\x1b]52;c;c3RhbGU=\x07");
 
@@ -213,7 +213,7 @@ fn seeded_history_clipboard_write_does_not_leak_into_live_output() {
 #[test]
 fn seeded_history_pwd_does_not_leak_into_live_output() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     pane.seed_history_ansi("\x1b]7;file:///tmp/restored\x07");
 
@@ -307,7 +307,7 @@ fn process_pty_bytes_skips_windows_powershell_prompt_cwd_when_disabled() {
 #[test]
 fn synchronized_output_suppresses_intermediate_render_requests_until_batch_ends() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane_terminal = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 
@@ -323,9 +323,9 @@ fn synchronized_output_suppresses_intermediate_render_requests_until_batch_ends(
 
 #[test]
 fn kitty_graphics_write_requests_render_with_settle_backstop() {
-    crate::kitty_graphics::set_enabled(true);
+    crate::protocol::kitty::set_enabled(true);
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane_terminal = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
     let pane_id = PaneId::from_raw(1);
 

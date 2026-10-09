@@ -1,7 +1,7 @@
 use crate::client::host_terminal::kitty::scene::ClientState;
 use crate::protocol::kitty::placement::HostCellSize;
 use crate::protocol::wire::SurfaceGraphicsVisibility as Visibility;
-use crate::protocol::{
+use crate::protocol::wire::{
     SurfaceGraphicsAsset, SurfaceGraphicsAssetKey, SurfaceGraphicsFormat, SurfaceGraphicsPlacement,
     SurfaceGraphicsScene, SurfaceGraphicsSource, SurfaceGraphicsTarget,
 };

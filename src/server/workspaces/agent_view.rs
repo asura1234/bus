@@ -1,5 +1,5 @@
-use crate::app::AppState;
-use crate::detect::AgentState;
+use crate::agents::AgentState;
+use crate::server::app_state::AppState;
 
 pub(crate) struct AgentPanelEntry {
     pub ws_idx: usize,
@@ -34,7 +34,7 @@ pub(crate) fn agent_panel_entries_from(app: &AppState) -> Vec<AgentPanelEntry> {
 pub(crate) fn apply_agent_view(app: &AppState, entries: &mut [AgentPanelEntry]) {
     if matches!(
         app.agent_panel_sort,
-        crate::app::state::AgentPanelSort::Priority
+        crate::server::app_settings::AgentPanelSort::Priority
     ) {
         entries.sort_by_key(|entry| {
             (
@@ -51,9 +51,9 @@ pub(crate) fn apply_agent_view(app: &AppState, entries: &mut [AgentPanelEntry]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::state::AgentPanelSort;
-    use crate::detect::{Agent, AgentState};
-    use crate::workspace::Workspace;
+    use crate::agents::{AgentKind, AgentState};
+    use crate::server::app_settings::AgentPanelSort;
+    use crate::server::workspaces::Workspace;
 
     fn state_with_agents() -> AppState {
         let mut state = AppState::test_new();
@@ -67,7 +67,7 @@ mod tests {
                 .attached_terminal_id
                 .clone();
             let terminal = state.terminals.get_mut(&terminal_id).unwrap();
-            terminal.detected_agent = Some(Agent::Claude);
+            terminal.detected_agent = Some(AgentKind::Claude);
             terminal.state = agent_state;
         }
         state

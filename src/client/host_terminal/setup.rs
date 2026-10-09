@@ -29,7 +29,7 @@ use super::geometry::should_query_host_terminal_theme;
 /// Returns a guard that restores the terminal when dropped.
 pub(in crate::client) fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
     ratatui::init();
-    crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+    crate::client::host_terminal::modes::clear_host_mouse_reporting(&mut io::stdout())?;
     let host_color_scheme_reports = should_enable_host_color_scheme_reports();
 
     #[cfg(windows)]
@@ -67,7 +67,7 @@ pub(in crate::client) fn setup_terminal(mouse_capture: bool) -> io::Result<Termi
         }
     }
 
-    let modify_other_keys_mode = crate::input::host_modify_other_keys_mode();
+    let modify_other_keys_mode = crate::protocol::keys::host_modify_other_keys_mode();
     if let Some(mode) = modify_other_keys_mode {
         io::stdout().write_all(mode.set_sequence())?;
         io::stdout().flush()?;
@@ -179,14 +179,14 @@ pub(in crate::client) fn write_terminal_restore_postlude(
 }
 
 pub(in crate::client) fn should_draw_host_cursor(
-    mode: crate::config::HostCursorModeConfig,
+    mode: crate::utils::config::HostCursorModeConfig,
 ) -> bool {
     match mode {
-        crate::config::HostCursorModeConfig::Auto => {
+        crate::utils::config::HostCursorModeConfig::Auto => {
             crate::platform::should_draw_host_cursor_by_default()
         }
-        crate::config::HostCursorModeConfig::Native => false,
-        crate::config::HostCursorModeConfig::Drawn => true,
+        crate::utils::config::HostCursorModeConfig::Native => false,
+        crate::utils::config::HostCursorModeConfig::Drawn => true,
     }
 }
 
@@ -288,10 +288,10 @@ pub(in crate::client) fn effective_sgr_pixel_mouse(
 }
 
 pub(in crate::client) fn set_mouse_capture(enabled: bool, sgr_pixels: bool) -> io::Result<()> {
-    crate::terminal_modes::clear_host_mouse_reporting(&mut io::stdout())?;
+    crate::client::host_terminal::modes::clear_host_mouse_reporting(&mut io::stdout())?;
     #[cfg(windows)]
     if is_ssh_session() && windows_vti_input_backend_enabled() {
-        return crate::terminal_modes::set_windows_ssh_mouse_reporting(
+        return crate::client::host_terminal::modes::set_windows_ssh_mouse_reporting(
             &mut io::stdout(),
             enabled,
             sgr_pixels,
@@ -379,7 +379,9 @@ fn restore_terminal_state(
 fn push_keyboard_enhancement_flags() -> io::Result<()> {
     execute!(
         io::stdout(),
-        PushKeyboardEnhancementFlags(crate::input::ime_compatible_keyboard_enhancement_flags())
+        PushKeyboardEnhancementFlags(
+            crate::protocol::keys::ime_compatible_keyboard_enhancement_flags()
+        )
     )
 }
 

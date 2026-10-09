@@ -1,10 +1,10 @@
 use tokio::sync::mpsc;
 
 use super::*;
-use crate::layout::PaneId;
 use crate::terminal::emulator::GhosttyPaneTerminal;
+use crate::utils::ids::PaneId;
 
-fn pane_default_theme(pane: &GhosttyPaneTerminal) -> crate::terminal_theme::TerminalTheme {
+fn pane_default_theme(pane: &GhosttyPaneTerminal) -> crate::utils::theme::color::TerminalTheme {
     let mut core = pane.core.lock().unwrap();
     let GhosttyPaneCore {
         terminal,
@@ -13,13 +13,13 @@ fn pane_default_theme(pane: &GhosttyPaneTerminal) -> crate::terminal_theme::Term
     } = &mut *core;
     render_state.update(terminal).unwrap();
     let colors = render_state.colors().unwrap();
-    crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: colors.foreground.r,
             g: colors.foreground.g,
             b: colors.foreground.b,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: colors.background.r,
             g: colors.background.g,
             b: colors.background.b,
@@ -612,17 +612,17 @@ fn host_theme_restore_waits_for_shell_and_non_alternate_screen() {
 #[test]
 fn restore_host_terminal_theme_reapplies_cached_colors() {
     let (tx, _rx) = mpsc::channel(4);
-    let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
     let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
     let pane_id = PaneId::from_raw(1);
     let shell_pid = 7;
-    let host_theme = crate::terminal_theme::TerminalTheme {
-        foreground: Some(crate::terminal_theme::RgbColor {
+    let host_theme = crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
             r: 0xaa,
             g: 0xbb,
             b: 0xcc,
         }),
-        background: Some(crate::terminal_theme::RgbColor {
+        background: Some(crate::utils::theme::color::RgbColor {
             r: 0x11,
             g: 0x22,
             b: 0x33,
@@ -638,7 +638,7 @@ fn restore_host_terminal_theme_reapplies_cached_colors() {
     }
     assert_eq!(
         pane_default_theme(&pane).background,
-        Some(crate::terminal_theme::RgbColor {
+        Some(crate::utils::theme::color::RgbColor {
             r: 0xdd,
             g: 0xee,
             b: 0xff,

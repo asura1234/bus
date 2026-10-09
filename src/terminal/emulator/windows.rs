@@ -4,7 +4,7 @@ use super::{current_cursor_state, GhosttyPaneCore};
 pub(super) fn windows_powershell_current_prompt_cwd(
     core: &mut GhosttyPaneCore,
 ) -> Option<std::path::PathBuf> {
-    if core.terminal.active_screen().ok()? != crate::ghostty::ActiveScreen::Primary {
+    if core.terminal.active_screen().ok()? != crate::terminal::vt::ActiveScreen::Primary {
         return None;
     }
     let cursor = current_cursor_state(core)?;

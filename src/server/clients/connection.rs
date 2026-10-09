@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::protocol::{
+use crate::protocol::wire::{
     ClientKeyCode, ClientKeyKind, ClientMouseButton, ClientMouseKind, ClientPaneInputEvent,
 };
 use crate::server::clients::transport::ClientWriter;
@@ -15,7 +15,7 @@ pub(crate) enum ClientConnectionMode {
 pub(crate) type RenderTarget = (
     u64,
     (u16, u16),
-    crate::kitty_graphics::HostCellSize,
+    crate::protocol::kitty::HostCellSize,
     bool,
     ClientConnectionMode,
 );
@@ -69,7 +69,7 @@ pub(crate) struct ClientShellTopology {
 }
 
 impl ClientShellLocation {
-    pub(crate) fn from_snapshot(snapshot: &crate::protocol::ClientShellSnapshot) -> Self {
+    pub(crate) fn from_snapshot(snapshot: &crate::protocol::wire::ClientShellSnapshot) -> Self {
         Self {
             focused_workspace_id: snapshot.focused_workspace_id.clone(),
             active_tab_ids: snapshot
@@ -131,7 +131,7 @@ pub(crate) struct ClientConnection {
     /// The client's terminal size after clamping.
     pub(crate) terminal_size: (u16, u16),
     /// Pixel size of one client terminal cell.
-    pub(crate) cell_size: crate::kitty_graphics::HostCellSize,
+    pub(crate) cell_size: crate::protocol::kitty::HostCellSize,
     /// Monotonic activity stamp used to choose the fallback foreground client.
     pub(crate) last_activity: u64,
     /// Render baseline for the negotiated client encoding.
@@ -143,9 +143,9 @@ pub(crate) struct ClientConnection {
     /// Whether this frontend preserves exact SGR pixel reports.
     pub(crate) pixel_mouse: bool,
     /// Last host terminal default colors reported by this client.
-    pub(crate) host_terminal_theme: crate::terminal_theme::TerminalTheme,
+    pub(crate) host_terminal_theme: crate::utils::theme::color::TerminalTheme,
     /// Last host light/dark appearance reported by this client.
-    pub(crate) host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+    pub(crate) host_terminal_appearance: Option<crate::utils::theme::color::HostAppearance>,
     /// Whether appearance came from an explicit host color-scheme report.
     pub(crate) host_terminal_appearance_explicit: bool,
     /// Last reported focus state for this client's outer terminal.
@@ -169,7 +169,7 @@ pub(crate) struct ClientConnection {
     /// Connection-local workspace and tab projection for a client-owned shell.
     pub(crate) shell_location: Option<ClientShellLocation>,
     /// Last coherent shell replacement sent to this client.
-    pub(crate) shell_snapshot: Option<crate::protocol::ClientShellSnapshot>,
+    pub(crate) shell_snapshot: Option<crate::protocol::wire::ClientShellSnapshot>,
     /// Monotonic shell replacement revision for this connection.
     pub(crate) shell_projection_revision: u64,
     /// Whether this shell is waiting for one ordered endpoint command response.
@@ -188,7 +188,7 @@ impl ClientConnection {
     #[cfg(test)]
     pub(crate) fn new(
         terminal_size: (u16, u16),
-        cell_size: crate::kitty_graphics::HostCellSize,
+        cell_size: crate::protocol::kitty::HostCellSize,
         last_activity: u64,
         writer: ClientWriter,
     ) -> Self {
@@ -204,7 +204,7 @@ impl ClientConnection {
     pub(crate) fn new_with_mode(
         mode: ClientConnectionMode,
         terminal_size: (u16, u16),
-        cell_size: crate::kitty_graphics::HostCellSize,
+        cell_size: crate::protocol::kitty::HostCellSize,
         last_activity: u64,
         writer: ClientWriter,
     ) -> Self {
@@ -217,7 +217,7 @@ impl ClientConnection {
             shell_graphics_delivery: crate::server::rendering::images::DeliveryCache::default(),
             direct_graphics: false,
             pixel_mouse: false,
-            host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
+            host_terminal_theme: crate::utils::theme::color::TerminalTheme::default(),
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
             outer_terminal_focus: None,
@@ -352,41 +352,43 @@ impl ClientConnection {
 
     pub(crate) fn update_host_theme(
         &mut self,
-        update: &crate::protocol::ClientHostThemeUpdate,
+        update: &crate::protocol::wire::ClientHostThemeUpdate,
     ) -> bool {
         let mut next_theme = self.host_terminal_theme;
         let mut changed = false;
 
         match update {
-            crate::protocol::ClientHostThemeUpdate::DefaultColor { kind, color } => {
+            crate::protocol::wire::ClientHostThemeUpdate::DefaultColor { kind, color } => {
                 let kind = match kind {
-                    crate::protocol::ClientHostDefaultColorKind::Foreground => {
-                        crate::terminal_theme::DefaultColorKind::Foreground
+                    crate::protocol::wire::ClientHostDefaultColorKind::Foreground => {
+                        crate::utils::theme::color::DefaultColorKind::Foreground
                     }
-                    crate::protocol::ClientHostDefaultColorKind::Background => {
-                        crate::terminal_theme::DefaultColorKind::Background
+                    crate::protocol::wire::ClientHostDefaultColorKind::Background => {
+                        crate::utils::theme::color::DefaultColorKind::Background
                     }
                 };
                 let color = (*color).into();
                 next_theme = next_theme.with_color(kind, color);
-                if matches!(kind, crate::terminal_theme::DefaultColorKind::Background)
-                    && !self.host_terminal_appearance_explicit
+                if matches!(
+                    kind,
+                    crate::utils::theme::color::DefaultColorKind::Background
+                ) && !self.host_terminal_appearance_explicit
                 {
                     changed |= self.set_host_appearance(Some(color.inferred_appearance()), false);
                 }
             }
-            crate::protocol::ClientHostThemeUpdate::PaletteColors(colors) => {
+            crate::protocol::wire::ClientHostThemeUpdate::PaletteColors(colors) => {
                 for &(index, color) in colors {
                     next_theme = next_theme.with_palette_color(index, color.into());
                 }
             }
-            crate::protocol::ClientHostThemeUpdate::Appearance(appearance) => {
+            crate::protocol::wire::ClientHostThemeUpdate::Appearance(appearance) => {
                 let appearance = match appearance {
-                    crate::protocol::ClientHostAppearance::Dark => {
-                        crate::terminal_theme::HostAppearance::Dark
+                    crate::protocol::wire::ClientHostAppearance::Dark => {
+                        crate::utils::theme::color::HostAppearance::Dark
                     }
-                    crate::protocol::ClientHostAppearance::Light => {
-                        crate::terminal_theme::HostAppearance::Light
+                    crate::protocol::wire::ClientHostAppearance::Light => {
+                        crate::utils::theme::color::HostAppearance::Light
                     }
                 };
                 changed |= self.set_host_appearance(Some(appearance), true);
@@ -402,7 +404,7 @@ impl ClientConnection {
 
     fn set_host_appearance(
         &mut self,
-        appearance: Option<crate::terminal_theme::HostAppearance>,
+        appearance: Option<crate::utils::theme::color::HostAppearance>,
         explicit: bool,
     ) -> bool {
         if self.host_terminal_appearance_explicit && !explicit {
@@ -485,7 +487,7 @@ mod tests {
     fn shell_client() -> ClientConnection {
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             unread_test_writer(),
         )
@@ -506,7 +508,7 @@ mod tests {
         client.track_shell_input(
             ClientShellInputTarget::Pane("w1:p1".into()),
             &[ClientPaneInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('x'),
+                code: crate::protocol::wire::ClientKeyCode::Char('x'),
                 modifiers: 0,
                 kind: ClientKeyKind::Press,
                 repeat_count: 1,
@@ -524,7 +526,7 @@ mod tests {
     #[test]
     fn physical_keys_with_the_same_semantic_code_keep_distinct_release_leases() {
         let mut client = shell_client();
-        let windows_record = crate::input::WindowsKeyRecord {
+        let windows_record = crate::protocol::keys::WindowsKeyRecord {
             key_down: true,
             repeat_count: 1,
             virtual_key_code: 0x6c,
@@ -533,7 +535,7 @@ mod tests {
             control_key_state: 0,
         };
         let key = |kind, physical_key_id| ClientPaneInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Enter,
+            code: crate::protocol::wire::ClientKeyCode::Enter,
             modifiers: 0,
             kind,
             repeat_count: 1,
@@ -557,7 +559,7 @@ mod tests {
         assert!(matches!(
             &held[0].release,
             ClientPaneInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Enter,
+                code: crate::protocol::wire::ClientKeyCode::Enter,
                 kind: ClientKeyKind::Release,
                 physical_key_id: Some(108),
                 windows_record: Some(record),

@@ -16,6 +16,6 @@ pub struct ThemeRuntimeConfig {
     pub dark_name: String,
     pub light_name: String,
     pub auto_switch: bool,
-    pub custom: Option<crate::config::CustomThemeColors>,
+    pub custom: Option<crate::utils::config::CustomThemeColors>,
     pub legacy_accent: Option<String>,
 }

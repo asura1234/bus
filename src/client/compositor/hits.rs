@@ -23,7 +23,7 @@ pub(in crate::client) struct PaneHit {
 
 #[derive(Clone)]
 pub(in crate::client) struct PaneSplitHit {
-    pub(in crate::client) direction: crate::protocol::PaneSurfaceSplitDirection,
+    pub(in crate::client) direction: crate::protocol::wire::PaneSurfaceSplitDirection,
     pub(in crate::client) pos: u16,
     pub(in crate::client) area: Rect,
     pub(in crate::client) hit_rect: Rect,
@@ -36,7 +36,7 @@ pub(in crate::client) struct ClientPaneMouseGesture {
     pub(in crate::client) button: crossterm::event::MouseButton,
     pub(in crate::client) stripped_modifiers: crossterm::event::KeyModifiers,
     pub(in crate::client) last_event: crossterm::event::MouseEvent,
-    pub(in crate::client) last_position: crate::protocol::ClientMousePosition,
+    pub(in crate::client) last_position: crate::protocol::wire::ClientMousePosition,
 }
 
 pub(in crate::client) enum ClientChromeDrag {

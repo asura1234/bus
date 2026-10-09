@@ -202,11 +202,11 @@ fn claude_long_paste_with_attached_file_binds_its_trusted_start() {
             "\n\n<pasted_content id=\"dff1\">\n{text}\n\"{file}\"\n</pasted_content id=\"dff1\">\n"
         ),
     });
-    let crate::bus::callbacks::Parsed::Started {
+    let crate::agents::providers::spool::Parsed::Started {
         session,
         turn,
         prompt,
-    } = crate::bus::callbacks::parse(Provider::ClaudeCode, &hook).expect("parse")
+    } = crate::agents::providers::spool::parse(Provider::ClaudeCode, &hook).expect("parse")
     else {
         panic!("UserPromptSubmit must parse as a start");
     };
@@ -274,11 +274,11 @@ fn claude_attached_image_binds_its_trusted_start() {
             "prompt_id": "claude-prompt",
             "prompt": hook_prompt,
         });
-        let crate::bus::callbacks::Parsed::Started {
+        let crate::agents::providers::spool::Parsed::Started {
             session,
             turn,
             prompt,
-        } = crate::bus::callbacks::parse(Provider::ClaudeCode, &hook).expect("parse")
+        } = crate::agents::providers::spool::parse(Provider::ClaudeCode, &hook).expect("parse")
         else {
             panic!("UserPromptSubmit must parse as a start");
         };

@@ -1,6 +1,9 @@
-use super::{Agent, BusState, Provider, RoomId, RuntimeStatus};
+use {
+    super::{BusState, Provider, RoomId, RuntimeStatus},
+    crate::messaging::model::RoomAgent,
+};
 
-impl Agent {
+impl RoomAgent {
     /// Pure delivery eligibility; callers decide whether to log or stall.
     pub(crate) fn wait_reason(&self) -> Option<&'static str> {
         let identity = &self.runtime_identity;
@@ -69,7 +72,7 @@ impl BusState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bus::model::Provider;
+    use crate::messaging::model::Provider;
 
     #[test]
     fn room_status_prefers_blocked_then_working_then_idle() {

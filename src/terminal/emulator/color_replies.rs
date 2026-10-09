@@ -6,16 +6,16 @@ use super::controls::osc::{
     DefaultColorQuery, OscTerminator,
 };
 use super::{GhosttyPaneCore, GhosttyPaneTerminal, PaneTerminal};
-use crate::layout::PaneId;
+use crate::utils::ids::PaneId;
 
 impl PaneTerminal {
-    pub fn apply_host_terminal_theme(&self, theme: crate::terminal_theme::TerminalTheme) {
+    pub fn apply_host_terminal_theme(&self, theme: crate::utils::theme::color::TerminalTheme) {
         self.ghostty.apply_host_terminal_theme(theme);
     }
 
     pub fn apply_host_terminal_appearance(
         &self,
-        appearance: Option<crate::terminal_theme::HostAppearance>,
+        appearance: Option<crate::utils::theme::color::HostAppearance>,
     ) -> Option<Bytes> {
         self.ghostty.apply_host_terminal_appearance(appearance)
     }
@@ -36,7 +36,7 @@ impl PaneTerminal {
 }
 
 impl GhosttyPaneTerminal {
-    pub fn apply_host_terminal_theme(&self, theme: crate::terminal_theme::TerminalTheme) {
+    pub fn apply_host_terminal_theme(&self, theme: crate::utils::theme::color::TerminalTheme) {
         if let Ok(mut core) = self.core.lock() {
             let foreground_unowned = !core.child_default_foreground_changed;
             let background_unowned = !core.child_default_background_changed;
@@ -45,10 +45,10 @@ impl GhosttyPaneTerminal {
                 core.transient_default_color_owner_pgid = None;
             }
 
-            let mut palette = crate::ghostty::default_palette();
+            let mut palette = crate::terminal::vt::default_palette();
             for (index, color) in theme.palette.iter().enumerate() {
                 if let Some(color) = color {
-                    palette[index] = crate::ghostty::RgbColor {
+                    palette[index] = crate::terminal::vt::RgbColor {
                         r: color.r,
                         g: color.g,
                         b: color.b,
@@ -70,12 +70,16 @@ impl GhosttyPaneTerminal {
 
     pub fn apply_host_terminal_appearance(
         &self,
-        appearance: Option<crate::terminal_theme::HostAppearance>,
+        appearance: Option<crate::utils::theme::color::HostAppearance>,
     ) -> Option<Bytes> {
         let mut core = self.core.lock().ok()?;
         let color_scheme = appearance.map(|appearance| match appearance {
-            crate::terminal_theme::HostAppearance::Dark => crate::ghostty::ColorScheme::Dark,
-            crate::terminal_theme::HostAppearance::Light => crate::ghostty::ColorScheme::Light,
+            crate::utils::theme::color::HostAppearance::Dark => {
+                crate::terminal::vt::ColorScheme::Dark
+            }
+            crate::utils::theme::color::HostAppearance::Light => {
+                crate::terminal::vt::ColorScheme::Light
+            }
         });
         let previous = core.terminal.set_color_scheme(color_scheme);
 
@@ -86,7 +90,7 @@ impl GhosttyPaneTerminal {
         if !transitioned
             || !core
                 .terminal
-                .mode_get(crate::ghostty::MODE_COLOR_SCHEME_REPORT)
+                .mode_get(crate::terminal::vt::MODE_COLOR_SCHEME_REPORT)
                 .unwrap_or(false)
         {
             return None;
@@ -126,7 +130,7 @@ impl GhosttyPaneTerminal {
         let alternate_screen = core
             .terminal
             .active_screen()
-            .map(|screen| screen == crate::ghostty::ActiveScreen::Alternate)
+            .map(|screen| screen == crate::terminal::vt::ActiveScreen::Alternate)
             .unwrap_or(false);
         restore_host_terminal_theme_if_needed(
             &mut core,
@@ -197,7 +201,7 @@ fn default_color_event_response(
 pub(super) fn default_color_event_color(
     core: &mut GhosttyPaneCore,
     event: DefaultColorEvent,
-) -> Option<crate::ghostty::RgbColor> {
+) -> Option<crate::terminal::vt::RgbColor> {
     match event {
         DefaultColorEvent::Query(query) => default_color_query_color(query, core),
         DefaultColorEvent::PaletteQuery(index) => palette_color_query_color(index, core),
@@ -214,7 +218,7 @@ pub(super) fn default_color_event_color(
 fn default_color_query_color(
     query: DefaultColorQuery,
     core: &mut GhosttyPaneCore,
-) -> Option<crate::ghostty::RgbColor> {
+) -> Option<crate::terminal::vt::RgbColor> {
     match query {
         DefaultColorQuery::Foreground => {
             if !core.child_default_foreground_changed {
@@ -242,7 +246,7 @@ fn default_color_query_color(
     }
 }
 
-fn cursor_color_query_color(core: &mut GhosttyPaneCore) -> Option<crate::ghostty::RgbColor> {
+fn cursor_color_query_color(core: &mut GhosttyPaneCore) -> Option<crate::terminal::vt::RgbColor> {
     if let Some(color) = core.terminal.effective_cursor_color().ok().flatten() {
         return Some(color);
     }
@@ -260,13 +264,13 @@ fn cursor_color_query_color(core: &mut GhosttyPaneCore) -> Option<crate::ghostty
 fn palette_color_query_color(
     index: u8,
     core: &mut GhosttyPaneCore,
-) -> Option<crate::ghostty::RgbColor> {
+) -> Option<crate::terminal::vt::RgbColor> {
     rendered_colors(core).map(|colors| colors.palette[usize::from(index)])
 }
 
 /// The colors this pane is currently painted with, which is what a child that
 /// asks the terminal about its own colors needs to hear.
-fn rendered_colors(core: &mut GhosttyPaneCore) -> Option<crate::ghostty::RenderColors> {
+fn rendered_colors(core: &mut GhosttyPaneCore) -> Option<crate::terminal::vt::RenderColors> {
     let GhosttyPaneCore {
         terminal,
         render_state,
@@ -278,7 +282,7 @@ fn rendered_colors(core: &mut GhosttyPaneCore) -> Option<crate::ghostty::RenderC
 
 fn osc_rgb_response(
     command: &str,
-    color: crate::ghostty::RgbColor,
+    color: crate::terminal::vt::RgbColor,
     terminator: OscTerminator,
 ) -> Bytes {
     let r = u16::from(color.r) * 257;
@@ -289,8 +293,10 @@ fn osc_rgb_response(
     Bytes::from(response)
 }
 
-fn host_theme_color_to_ghostty(color: crate::terminal_theme::RgbColor) -> crate::ghostty::RgbColor {
-    crate::ghostty::RgbColor {
+fn host_theme_color_to_ghostty(
+    color: crate::utils::theme::color::RgbColor,
+) -> crate::terminal::vt::RgbColor {
+    crate::terminal::vt::RgbColor {
         r: color.r,
         g: color.g,
         b: color.b,
@@ -326,6 +332,6 @@ pub(super) fn should_probe_host_terminal_theme_restore(core: &GhosttyPaneCore) -
     !core
         .terminal
         .active_screen()
-        .map(|screen| screen == crate::ghostty::ActiveScreen::Alternate)
+        .map(|screen| screen == crate::terminal::vt::ActiveScreen::Alternate)
         .unwrap_or(false)
 }

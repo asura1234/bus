@@ -4,8 +4,8 @@ use super::{
     Provider, ResponseResult, RoomId, RoomKind, Worker, MASTER_AGENT_NEEDS_ROOM,
 };
 use crate::agents::providers::{cursor, hook_json::HookContext, launch, spool};
-use crate::bus::orchestrator::{self, OrchestratorSpec};
 use crate::messaging::identity;
+use crate::messaging::orchestration::{self as orchestrator, OrchestratorSpec};
 
 /// Room-level launch request; provider preparation receives only LaunchSpec.
 #[derive(Clone, Debug)]
@@ -511,7 +511,7 @@ impl Worker {
                             recipient_ids: [id].into_iter().collect(),
                         },
                         Author::Human,
-                        crate::bus::io::now_ms(),
+                        crate::messaging::storage::io::now_ms(),
                         // The system prompt is the agent's first turn of its own.
                         true,
                     )

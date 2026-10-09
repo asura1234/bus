@@ -50,7 +50,7 @@ fn connected_shell_does_not_reply_to_retired_health_ping() {
     for (kind, data) in [
         ("endpoint.health.ping.v1", "probe"),
         (
-            crate::protocol::endpoint::PRESENTATION_EFFECTS_SYNC_KIND,
+            crate::protocol::wire::handshake::PRESENTATION_EFFECTS_SYNC_KIND,
             "barrier",
         ),
     ] {
@@ -95,7 +95,7 @@ fn client_read_loop_stops_after_detach() {
     protocol::write_message(
         &mut messages,
         &ClientMessage::ClipboardImage {
-            target: crate::protocol::ClientClipboardImageTarget::Pane("w1:p1".into()),
+            target: crate::protocol::wire::ClientClipboardImageTarget::Pane("w1:p1".into()),
             extension: "png".into(),
             data: vec![1, 2, 3],
         },
@@ -209,7 +209,7 @@ fn client_read_loop_closes_on_unsafe_shell_resize() {
         &ClientMessage::ClientShellResize {
             cell_width_px: 8,
             cell_height_px: 16,
-            surface_size: crate::protocol::ClientSurfaceSize {
+            surface_size: crate::protocol::wire::ClientSurfaceSize {
                 cols: MAX_CLIENT_SHELL_DIMENSION,
                 rows: MAX_CLIENT_SHELL_DIMENSION,
             },
@@ -235,7 +235,7 @@ fn client_read_loop_uses_authoritative_shell_resize_surface() {
         &ClientMessage::ClientShellResize {
             cell_width_px: 8,
             cell_height_px: 16,
-            surface_size: crate::protocol::ClientSurfaceSize { cols: 60, rows: 15 },
+            surface_size: crate::protocol::wire::ClientSurfaceSize { cols: 60, rows: 15 },
             pixel_mouse: true,
         },
     )
@@ -269,7 +269,7 @@ fn client_read_loop_keeps_single_host_theme_updates_ordered_and_palette_bounded(
         .map(|index| {
             (
                 index,
-                crate::protocol::ClientHostColor {
+                crate::protocol::wire::ClientHostColor {
                     r: index,
                     g: 0,
                     b: 0,
@@ -280,15 +280,15 @@ fn client_read_loop_keeps_single_host_theme_updates_ordered_and_palette_bounded(
     protocol::write_message(
         &mut client_stream,
         &ClientMessage::ClientShellHostTheme {
-            update: crate::protocol::ClientHostThemeUpdate::PaletteColors(colors),
+            update: crate::protocol::wire::ClientHostThemeUpdate::PaletteColors(colors),
         },
     )
     .expect("write bounded palette update");
     protocol::write_message(
         &mut client_stream,
         &ClientMessage::ClientShellHostTheme {
-            update: crate::protocol::ClientHostThemeUpdate::Appearance(
-                crate::protocol::ClientHostAppearance::Dark,
+            update: crate::protocol::wire::ClientHostThemeUpdate::Appearance(
+                crate::protocol::wire::ClientHostAppearance::Dark,
             ),
         },
     )
@@ -298,24 +298,30 @@ fn client_read_loop_keeps_single_host_theme_updates_ordered_and_palette_bounded(
         recv_server_event(&mut server_event_rx, "bounded palette update"),
         ServerEvent::ClientShellHostTheme {
             client_id: 7,
-            update: crate::protocol::ClientHostThemeUpdate::PaletteColors(colors),
+            update: crate::protocol::wire::ClientHostThemeUpdate::PaletteColors(colors),
         } if colors.len() == 256
     ));
     assert!(matches!(
         recv_server_event(&mut server_event_rx, "ordered appearance update"),
         ServerEvent::ClientShellHostTheme {
             client_id: 7,
-            update: crate::protocol::ClientHostThemeUpdate::Appearance(
-                crate::protocol::ClientHostAppearance::Dark
+            update: crate::protocol::wire::ClientHostThemeUpdate::Appearance(
+                crate::protocol::wire::ClientHostAppearance::Dark
             ),
         }
     ));
 
-    let colors = vec![(0, crate::protocol::ClientHostColor { r: 0, g: 0, b: 0 },); 257];
+    let colors = vec![
+        (
+            0,
+            crate::protocol::wire::ClientHostColor { r: 0, g: 0, b: 0 },
+        );
+        257
+    ];
     protocol::write_message(
         &mut client_stream,
         &ClientMessage::ClientShellHostTheme {
-            update: crate::protocol::ClientHostThemeUpdate::PaletteColors(colors),
+            update: crate::protocol::wire::ClientHostThemeUpdate::PaletteColors(colors),
         },
     )
     .expect("write oversized palette update");
@@ -332,8 +338,8 @@ fn client_read_loop_keeps_single_host_theme_updates_ordered_and_palette_bounded(
 #[test]
 fn pane_input_limits_charge_scroll_repeats() {
     let oversized_scroll = ClientPaneInputEvent::Mouse {
-        kind: crate::protocol::ClientMouseKind::ScrollUp,
-        position: crate::protocol::ClientMousePosition::Cell { column: 0, row: 0 },
+        kind: crate::protocol::wire::ClientMouseKind::ScrollUp,
+        position: crate::protocol::wire::ClientMousePosition::Cell { column: 0, row: 0 },
         geometry: None,
         modifiers: 0,
         lines: (MAX_INPUT_EVENT_BATCH + 1) as u16,

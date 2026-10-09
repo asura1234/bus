@@ -8,7 +8,7 @@ fn terminal_bell_targets_foreground_client_only() {
         1,
         ClientConnection::new(
             (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             background_tx,
         ),
@@ -17,15 +17,15 @@ fn terminal_bell_targets_foreground_client_only() {
         2,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             2,
             foreground_tx,
         ),
     );
     server.foreground_client_id = Some(2);
 
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::TerminalBell {
-        pane_id: crate::layout::PaneId::from_raw(1),
+    let changed = server.handle_internal_event_with_forwarding(TerminalEvent::TerminalBell {
+        pane_id: crate::utils::ids::PaneId::from_raw(1),
         count: 3,
     });
 
@@ -46,8 +46,8 @@ fn terminal_bell_targets_foreground_client_only() {
     );
 
     server.foreground_client_id = None;
-    server.handle_internal_event_with_forwarding(AppEvent::TerminalBell {
-        pane_id: crate::layout::PaneId::from_raw(1),
+    server.handle_internal_event_with_forwarding(TerminalEvent::TerminalBell {
+        pane_id: crate::utils::ids::PaneId::from_raw(1),
         count: 1,
     });
     assert!(
@@ -68,7 +68,7 @@ fn clipboard_write_targets_foreground_client_only() {
         1,
         ClientConnection::new(
             (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             background_tx,
         ),
@@ -77,7 +77,7 @@ fn clipboard_write_targets_foreground_client_only() {
         2,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             2,
             foreground_tx,
         ),
@@ -85,7 +85,7 @@ fn clipboard_write_targets_foreground_client_only() {
     server.foreground_client_id = Some(2);
     server.sync_foreground_client_state();
 
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+    let changed = server.handle_internal_event_with_forwarding(TerminalEvent::ClipboardWrite {
         content: b"test".to_vec(),
     });
 
@@ -111,7 +111,7 @@ fn clipboard_write_without_foreground_client_does_not_change_visual_state() {
     let mut server = test_headless_server();
     server.foreground_client_id = None;
 
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+    let changed = server.handle_internal_event_with_forwarding(TerminalEvent::ClipboardWrite {
         content: b"test".to_vec(),
     });
 
@@ -129,14 +129,14 @@ fn clipboard_write_failed_foreground_send_removes_client_without_visual_change()
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             foreground_tx,
         ),
     );
     server.foreground_client_id = Some(1);
 
-    let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+    let changed = server.handle_internal_event_with_forwarding(TerminalEvent::ClipboardWrite {
         content: b"test".to_vec(),
     });
 
@@ -157,7 +157,7 @@ fn semantic_notifications_broadcast_to_all_client_shells() {
             client_id,
             ClientConnection::new(
                 (80, 24),
-                crate::kitty_graphics::HostCellSize::default(),
+                crate::protocol::kitty::HostCellSize::default(),
                 client_id,
                 writer,
             ),
@@ -196,7 +196,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             shell_tx,
         ),
@@ -206,7 +206,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
         api::schema::NotificationShowParams {
             title: "plugin title".into(),
             body: Some("plugin body".into()),
-            position: Some(crate::config::ToastHerdrPosition::TopLeft),
+            position: Some(crate::utils::config::ToastHerdrPosition::TopLeft),
             sound: api::schema::NotificationShowSound::Done,
         },
     );
@@ -230,7 +230,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
             workspace_id: None,
             tab_id: None,
             pane_id: None,
-            position: Some(crate::config::ToastHerdrPosition::TopLeft),
+            position: Some(crate::utils::config::ToastHerdrPosition::TopLeft),
         })
     );
 }
@@ -245,7 +245,7 @@ fn client_local_notifications_target_foreground_client_only() {
         1,
         ClientConnection::new(
             (120, 40),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             background_tx,
         ),
@@ -254,7 +254,7 @@ fn client_local_notifications_target_foreground_client_only() {
         2,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             2,
             foreground_tx,
         ),
@@ -301,27 +301,30 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             client_tx,
         ),
     );
     server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
+    server.app.state.toast_config.delivery = crate::utils::config::ToastDelivery::System;
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
-    let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-        request: api::schema::Request {
-            id: "notify".into(),
-            method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
-                title: "build failed".into(),
-                body: Some("api workspace".into()),
-                position: Some(crate::config::ToastHerdrPosition::TopLeft),
-                sound: api::schema::NotificationShowSound::Request,
-            }),
-        },
-        respond_to,
-    });
+    let changed =
+        server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: "notify".into(),
+                method: api::schema::Method::NotificationShow(
+                    api::schema::NotificationShowParams {
+                        title: "build failed".into(),
+                        body: Some("api workspace".into()),
+                        position: Some(crate::utils::config::ToastHerdrPosition::TopLeft),
+                        sound: api::schema::NotificationShowSound::Request,
+                    },
+                ),
+            },
+            respond_to,
+        });
 
     assert!(changed);
     let response = response_rx
@@ -361,27 +364,30 @@ fn notification_show_api_preserves_colon_in_forwarded_title() {
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             client_tx,
         ),
     );
     server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
+    server.app.state.toast_config.delivery = crate::utils::config::ToastDelivery::System;
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
-    let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-        request: api::schema::Request {
-            id: "notify".into(),
-            method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
-                title: "build: failed".into(),
-                body: Some("api workspace".into()),
-                position: None,
-                sound: api::schema::NotificationShowSound::None,
-            }),
-        },
-        respond_to,
-    });
+    let changed =
+        server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: "notify".into(),
+                method: api::schema::Method::NotificationShow(
+                    api::schema::NotificationShowParams {
+                        title: "build: failed".into(),
+                        body: Some("api workspace".into()),
+                        position: None,
+                        sound: api::schema::NotificationShowSound::None,
+                    },
+                ),
+            },
+            respond_to,
+        });
 
     assert!(changed);
     let response = response_rx
@@ -411,21 +417,24 @@ fn notification_show_api_preserves_colon_in_forwarded_title() {
 #[test]
 fn notification_show_api_validates_empty_title_before_disabled_delivery() {
     let mut server = test_headless_server();
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Off;
+    server.app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Off;
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
-    let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-        request: api::schema::Request {
-            id: "notify".into(),
-            method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
-                title: "\n\t".into(),
-                body: None,
-                position: None,
-                sound: api::schema::NotificationShowSound::None,
-            }),
-        },
-        respond_to,
-    });
+    let changed =
+        server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: "notify".into(),
+                method: api::schema::Method::NotificationShow(
+                    api::schema::NotificationShowParams {
+                        title: "\n\t".into(),
+                        body: None,
+                        position: None,
+                        sound: api::schema::NotificationShowSound::None,
+                    },
+                ),
+            },
+            respond_to,
+        });
 
     assert!(changed);
     let response = response_rx
@@ -440,21 +449,24 @@ fn notification_show_api_validates_empty_title_before_disabled_delivery() {
 fn notification_show_api_reports_no_foreground_client() {
     let mut server = test_headless_server();
     server.foreground_client_id = None;
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
+    server.app.state.toast_config.delivery = crate::utils::config::ToastDelivery::System;
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
-    let changed = server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-        request: api::schema::Request {
-            id: "notify".into(),
-            method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
-                title: "build failed".into(),
-                body: None,
-                position: None,
-                sound: api::schema::NotificationShowSound::Request,
-            }),
-        },
-        respond_to,
-    });
+    let changed =
+        server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: "notify".into(),
+                method: api::schema::Method::NotificationShow(
+                    api::schema::NotificationShowParams {
+                        title: "build failed".into(),
+                        body: None,
+                        position: None,
+                        sound: api::schema::NotificationShowSound::Request,
+                    },
+                ),
+            },
+            respond_to,
+        });
 
     assert!(changed);
     let response = response_rx
@@ -479,17 +491,17 @@ fn notification_show_api_includes_sound_in_semantic_event() {
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             client_tx,
         ),
     );
     server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    server.app.state.toast_config.delivery = crate::utils::config::ToastDelivery::Herdr;
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     assert!(
-        server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+        server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
             request: api::schema::Request {
                 id: "notify".into(),
                 method: api::schema::Method::NotificationShow(
@@ -535,19 +547,19 @@ fn notification_show_api_includes_sound_in_semantic_event() {
 #[test]
 fn startup_idle_does_not_forward_completion() {
     let mut server = test_headless_server();
-    let workspace = crate::workspace::Workspace::test_new("active");
+    let workspace = crate::server::workspaces::Workspace::test_new("active");
     let pane_id = workspace.tabs[0].root_pane;
     server.app.state.workspaces = vec![workspace];
     server.app.state.ensure_test_terminals();
     server.app.state.active = Some(0);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::System;
+    server.app.state.toast_config.delivery = crate::utils::config::ToastDelivery::System;
     server.app.state.toast_config.delay_seconds = 0;
     server.app.state.sound.enabled = true;
 
     assert!(
-        server.handle_internal_event_with_forwarding(AppEvent::AgentProcessDetected {
+        server.handle_internal_event_with_forwarding(TerminalEvent::AgentProcessDetected {
             pane_id,
-            agent: crate::detect::Agent::Pi,
+            agent: crate::agents::AgentKind::Pi,
             observed_at: Instant::now(),
         })
     );
@@ -557,7 +569,7 @@ fn startup_idle_does_not_forward_completion() {
         1,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             client_tx,
         ),
@@ -570,10 +582,10 @@ fn startup_idle_does_not_forward_completion() {
     {}
 
     assert!(
-        server.handle_internal_event_with_forwarding(AppEvent::StateChanged {
+        server.handle_internal_event_with_forwarding(TerminalEvent::StateChanged {
             pane_id,
-            agent: Some(crate::detect::Agent::Pi),
-            state: crate::detect::AgentState::Idle,
+            agent: Some(crate::agents::AgentKind::Pi),
+            state: crate::agents::AgentState::Idle,
             visible_blocker: false,
             process_exited: false,
             observed_at: Instant::now(),

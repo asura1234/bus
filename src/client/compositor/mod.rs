@@ -18,15 +18,15 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 
-use crate::config::Config;
 #[cfg(test)]
-use crate::protocol::ClientMousePosition;
-use crate::protocol::{
+use crate::protocol::keys::host::RawInputEvent;
+#[cfg(test)]
+use crate::protocol::wire::ClientMousePosition;
+use crate::protocol::wire::{
     ClientMessage, ClientPaneInputEvent, ClientShellSnapshot, ClientSurfaceSize, FrameData,
     PaneSurfaceFrame,
 };
-#[cfg(test)]
-use crate::raw_input::RawInputEvent;
+use crate::utils::config::Config;
 use crate::utils::theme::Palette;
 #[cfg(test)]
 use crossterm::event::KeyCode;
@@ -92,8 +92,8 @@ pub(super) fn pane_surface_topology_signature(surface: &PaneSurfaceFrame) -> u64
         write(
             &mut hash,
             &[match split.direction {
-                crate::protocol::PaneSurfaceSplitDirection::Horizontal => 0,
-                crate::protocol::PaneSurfaceSplitDirection::Vertical => 1,
+                crate::protocol::wire::PaneSurfaceSplitDirection::Horizontal => 0,
+                crate::protocol::wire::PaneSurfaceSplitDirection::Vertical => 1,
             }],
         );
         write(
@@ -108,8 +108,8 @@ pub(super) fn pane_surface_topology_signature(surface: &PaneSurfaceFrame) -> u64
     hash
 }
 
-pub(super) fn status_priority(status: crate::api::schema::AgentStatus) -> u8 {
-    use crate::api::schema::AgentStatus;
+pub(super) fn status_priority(status: crate::protocol::api::schema::AgentStatus) -> u8 {
+    use crate::protocol::api::schema::AgentStatus;
     match status {
         AgentStatus::Blocked => 4,
         AgentStatus::Done => 3,
@@ -145,11 +145,13 @@ fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
     }
 
     target.cursor = source.cursor.as_ref().and_then(|cursor| {
-        (cursor.x < copy_width && cursor.y < copy_height).then(|| crate::protocol::CursorState {
-            x: area.x + cursor.x,
-            y: area.y + cursor.y,
-            visible: cursor.visible,
-            shape: cursor.shape,
+        (cursor.x < copy_width && cursor.y < copy_height).then(|| {
+            crate::protocol::wire::CursorState {
+                x: area.x + cursor.x,
+                y: area.y + cursor.y,
+                visible: cursor.visible,
+                shape: cursor.shape,
+            }
         })
     });
     target.graphics.clear();
@@ -160,7 +162,7 @@ fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
 pub(crate) struct ClientShellConfig {
     pub(in crate::client) copy_on_select: bool,
     pub(in crate::client) clipboard_toast_enabled: bool,
-    pub(in crate::client) clipboard_toast_position: crate::config::ToastClipboardPosition,
+    pub(in crate::client) clipboard_toast_position: crate::utils::config::ToastClipboardPosition,
     pub(in crate::client) theme_runtime: crate::utils::theme::ThemeRuntimeConfig,
     pub(in crate::client) palette: Palette,
     pub(in crate::client) mouse_capture: bool,
@@ -180,7 +182,7 @@ pub(in crate::client) struct ClientShellLayout {
 pub(crate) enum ClientShellAction {
     Endpoint {
         boot_id: String,
-        request: Box<crate::api::schema::Request>,
+        request: Box<crate::protocol::api::schema::Request>,
     },
     ClipboardWrite(Vec<u8>),
     EditComposer,
@@ -241,7 +243,8 @@ pub(in crate::client) struct ClientInputContext {
     pub(in crate::client) retained_selection: bool,
 }
 
-type ClientInputLeases = crate::input::InputLeaseTable<u8, ClientInputContext, ClientInputTarget>;
+type ClientInputLeases =
+    crate::client::panes::input_lease::InputLeaseTable<u8, ClientInputContext, ClientInputTarget>;
 
 #[derive(Clone, Debug)]
 pub(in crate::client) struct ClientPaneClick {
@@ -296,7 +299,7 @@ pub(crate) struct ClientShellState {
     pub(in crate::client) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(in crate::client) url_click_consumes_until_up: bool,
     pub(in crate::client) replaying_url_click: bool,
-    pub(in crate::client) selection: Option<crate::selection::Selection<String>>,
+    pub(in crate::client) selection: Option<crate::utils::text::selection::Selection<String>>,
     pub(in crate::client) last_pane_click: Option<ClientPaneClick>,
     pub(in crate::client) selection_autoscroll: Option<ClientSelectionAutoscroll>,
     pub(in crate::client) selection_autoscroll_deadline: Option<std::time::Instant>,
@@ -309,12 +312,12 @@ pub(crate) struct ClientShellState {
     pub(in crate::client) pane_scroll_targets: HashMap<String, usize>,
     pub(in crate::client) copy_feedback: Option<crate::utils::render::widgets::CopyFeedback>,
     pub(in crate::client) copy_feedback_deadline: Option<std::time::Instant>,
-    pub(in crate::client) host_mouse_pixels: Option<crate::input::mouse::HostPixels>,
+    pub(in crate::client) host_mouse_pixels: Option<crate::protocol::keys::mouse::HostPixels>,
     pub(in crate::client) input_leases: ClientInputLeases,
     pub(in crate::client) next_request_id: u64,
     pub(in crate::client) pending_requests: HashMap<String, PendingEndpointRequest>,
     pub(in crate::client) outer_focused: Option<bool>,
-    pub(in crate::client) host_appearance: Option<crate::terminal_theme::HostAppearance>,
+    pub(in crate::client) host_appearance: Option<crate::utils::theme::color::HostAppearance>,
     pub(in crate::client) host_appearance_explicit: bool,
     pub(in crate::client) local_config_diagnostic: Option<String>,
     pub(in crate::client) config_diagnostic: Option<String>,

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::client::compositor::status_priority;
 
-use crate::api::schema::AgentStatus;
-use crate::protocol::{ClientShellAgent, ClientShellSnapshot, PaneSurfaceFrame};
+use crate::protocol::api::schema::AgentStatus;
+use crate::protocol::wire::{ClientShellAgent, ClientShellSnapshot, PaneSurfaceFrame};
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::client) struct EndpointAgentPresentation {
@@ -119,7 +119,7 @@ fn project_aggregate_status(snapshot: &mut ClientShellSnapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{FrameData, PaneSurfacePane, SurfaceRect};
+    use crate::protocol::wire::{FrameData, PaneSurfacePane, SurfaceRect};
 
     fn agent(status: AgentStatus, sequence: u64) -> ClientShellAgent {
         ClientShellAgent {

@@ -3,7 +3,7 @@
 use super::{mpsc, BusEvent, BusState, Room, RoomId, RoomKind, Worker};
 #[cfg(test)]
 use super::{BusCommand, Method, Path, PathBuf, ResponseResult, Transport};
-use crate::bus::settings::{self, BusSettings, SoundPref};
+use crate::messaging::prefs::settings::{self, BusSettings, SoundPref};
 
 impl Worker {
     /// At launch, MASTER takes the global sound.

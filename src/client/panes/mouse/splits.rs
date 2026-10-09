@@ -19,10 +19,10 @@ impl ClientShellState {
 
     pub(super) fn pane_split_ratio(hit: &PaneSplitHit, grab_offset: i32, point: (u16, u16)) -> f32 {
         let (pointer, origin, length) = match hit.direction {
-            crate::protocol::PaneSurfaceSplitDirection::Horizontal => {
+            crate::protocol::wire::PaneSurfaceSplitDirection::Horizontal => {
                 (i32::from(point.0), i32::from(hit.area.x), hit.area.width)
             }
-            crate::protocol::PaneSurfaceSplitDirection::Vertical => {
+            crate::protocol::wire::PaneSurfaceSplitDirection::Vertical => {
                 (i32::from(point.1), i32::from(hit.area.y), hit.area.height)
             }
         };

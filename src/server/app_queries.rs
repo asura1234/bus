@@ -15,7 +15,7 @@ impl AppState {
         &'a self,
         terminal_runtimes: &'a crate::terminal::TerminalRuntimeRegistry,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> Option<&'a crate::terminal::TerminalRuntime> {
         #[cfg(test)]
         if let Some(runtime) = self.workspaces.get(ws_idx)?.test_runtimes.get(&pane_id) {
@@ -38,7 +38,7 @@ impl AppState {
     pub(crate) fn pane_visible_on_active_surface(
         &self,
         ws_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> bool {
         if self.active != Some(ws_idx) {
             return false;
@@ -61,7 +61,7 @@ impl AppState {
         &self,
         ws_idx: usize,
         tab_idx: usize,
-        pane_id: crate::layout::PaneId,
+        pane_id: crate::utils::ids::PaneId,
     ) -> bool {
         let Some(active_ws_idx) = self.active else {
             return false;

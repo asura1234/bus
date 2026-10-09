@@ -16,7 +16,7 @@ impl ClientShellState {
                     pixels
                         .pane_position(hit.inner_rect, hit.pixel_width, hit.pixel_height)
                         .and_then(|position| match position {
-                            crate::input::mouse::Position::Pixels { x, y } => {
+                            crate::protocol::keys::mouse::Position::Pixels { x, y } => {
                                 Some(ClientMousePosition::Pixels {
                                     x,
                                     y,
@@ -24,7 +24,7 @@ impl ClientShellState {
                                     row: mouse.row.saturating_sub(hit.inner_rect.y),
                                 })
                             }
-                            crate::input::mouse::Position::Cell { .. } => None,
+                            crate::protocol::keys::mouse::Position::Cell { .. } => None,
                         })
                 })
                 .unwrap_or(cell)

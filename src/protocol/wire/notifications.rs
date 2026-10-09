@@ -35,5 +35,5 @@ pub struct SemanticNotification {
     pub workspace_id: Option<String>,
     pub tab_id: Option<String>,
     pub pane_id: Option<String>,
-    pub position: Option<crate::config::ToastHerdrPosition>,
+    pub position: Option<crate::utils::config::ToastHerdrPosition>,
 }

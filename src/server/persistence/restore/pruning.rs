@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use super::{Node, RestoredSession, TileLayout};
 use crate::server::workspaces::{Tab, Workspace};
-use crate::terminal::TerminalId;
+use crate::utils::ids::TerminalId;
 
 impl RestoredSession {
     pub(in crate::server) fn discard_failed_launches(&mut self, failed: &HashSet<TerminalId>) {

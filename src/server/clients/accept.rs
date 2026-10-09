@@ -5,7 +5,7 @@ use interprocess::local_socket::traits::{Listener as _, Stream as _};
 use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 
-use crate::ipc::LocalListener;
+use crate::platform::ipc::LocalListener;
 use crate::server::clients::transport::{self, ServerEvent};
 
 /// Accepts pending thin-client connections and starts their handshake readers.

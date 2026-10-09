@@ -2,7 +2,7 @@ use std::io;
 
 use tracing::{debug, warn};
 
-use crate::protocol::NotifyKind;
+use crate::protocol::wire::NotifyKind;
 
 pub(super) fn handle_notify(kind: NotifyKind, message: &str, body: Option<&str>) {
     handle_notify_with_notifiers(

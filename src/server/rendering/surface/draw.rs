@@ -1,7 +1,7 @@
 use super::chrome::{apply_pane_chrome, pane_inner_rect, render_pane_borders};
 use super::scrollbar::{render_pane_scrollbar, should_show_scrollbar};
-use crate::app::AppState;
-use crate::layout::PaneInfo;
+use crate::server::app_state::AppState;
+use crate::server::workspaces::layout::PaneInfo;
 use crate::terminal::{TerminalRuntime, TerminalRuntimeRegistry};
 use ratatui::{layout::Rect, widgets::Borders, Frame};
 
@@ -29,9 +29,9 @@ fn runtime_for_tab_pane<'a>(
     _app: &'a AppState,
     terminal_runtimes: &'a TerminalRuntimeRegistry,
     _workspace_index: usize,
-    tab: &'a crate::workspace::Tab,
-    pane_id: crate::layout::PaneId,
-) -> Option<(&'a crate::terminal::TerminalId, &'a TerminalRuntime)> {
+    tab: &'a crate::server::workspaces::Tab,
+    pane_id: crate::utils::ids::PaneId,
+) -> Option<(&'a crate::utils::ids::TerminalId, &'a TerminalRuntime)> {
     let terminal_id = tab.terminal_id(pane_id)?;
     #[cfg(test)]
     if let Some(runtime) = _app
@@ -76,9 +76,9 @@ pub(super) fn resize_tab_panes(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
     workspace_index: usize,
-    tab: &crate::workspace::Tab,
+    tab: &crate::server::workspaces::Tab,
     area: Rect,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    cell_size: crate::protocol::kitty::HostCellSize,
 ) {
     let multi_pane = tab.layout.pane_count() > 1;
 
@@ -134,7 +134,7 @@ pub(super) fn compute_pane_infos_for_tab(
     tab_idx: usize,
     area: Rect,
     resize_panes: bool,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    cell_size: crate::protocol::kitty::HostCellSize,
 ) -> Vec<PaneInfo> {
     let Some(tab) = app
         .workspaces
@@ -216,7 +216,7 @@ fn compute_pane_infos(
     terminal_runtimes: &TerminalRuntimeRegistry,
     area: Rect,
     resize_panes: bool,
-    cell_size: crate::kitty_graphics::HostCellSize,
+    cell_size: crate::protocol::kitty::HostCellSize,
 ) -> Vec<PaneInfo> {
     let Some(workspace_index) = app.active else {
         return Vec::new();
@@ -224,7 +224,7 @@ fn compute_pane_infos(
     let Some(tab_index) = app
         .workspaces
         .get(workspace_index)
-        .map(crate::workspace::Workspace::active_tab_index)
+        .map(crate::server::workspaces::Workspace::active_tab_index)
     else {
         return Vec::new();
     };
@@ -245,7 +245,7 @@ pub(super) fn render_panes(
     frame: &mut Frame,
     target: Option<super::layout::TabSurfaceTarget>,
     pane_infos: &[PaneInfo],
-    split_borders: &[crate::layout::SplitBorder],
+    split_borders: &[crate::server::workspaces::layout::SplitBorder],
 ) {
     let Some(ws_idx) = target.map(|target| target.workspace_index) else {
         return;
@@ -268,19 +268,12 @@ pub(super) fn render_panes(
 #[cfg(test)]
 mod tests {
     use super::super::chrome::pane_border_title;
-    use super::super::text::display_width;
     use super::*;
-    use crate::app::state::Palette;
-    use crate::config::PaneBordersConfig;
-    use crate::layout::PaneId;
-    use crate::selection::Selection;
+    use crate::server::workspaces::Workspace;
     use crate::terminal::TerminalRuntime;
     use crate::terminal::TerminalState;
-    use crate::utils::render::widgets::selection::{
-        automatic_selection_bg, automatic_selection_style, render_selection_highlight,
-    };
-    use crate::workspace::Workspace;
-    use ratatui::style::{Color, Modifier, Style};
+    use crate::utils::config::PaneBordersConfig;
+    use crate::utils::text::width::display_width;
 
     include!("chrome/tests/chrome_test.rs");
     include!("tests/geometry_test.rs");

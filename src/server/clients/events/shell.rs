@@ -1,5 +1,5 @@
 use super::ServerEvent;
-use crate::protocol::{self, ServerMessage};
+use crate::protocol::wire::{self as protocol, ServerMessage};
 use crate::server::clients::connection::{
     ClientConnection, ClientConnectionMode, ClientShellInputTarget,
 };
@@ -117,7 +117,7 @@ impl HeadlessServer {
         self.send_to_client(
             client_id,
             ServerMessage::EndpointControl {
-                kind: crate::protocol::endpoint::PRESENTATION_EFFECTS_READY_KIND.into(),
+                kind: crate::protocol::wire::handshake::PRESENTATION_EFFECTS_READY_KIND.into(),
                 data: token,
             },
         )
@@ -199,7 +199,7 @@ impl HeadlessServer {
             return false;
         }
         client.terminal_size = (surface_cols, surface_rows);
-        let observed = crate::kitty_graphics::HostCellSize {
+        let observed = crate::protocol::kitty::HostCellSize {
             width_px: cell_width_px,
             height_px: cell_height_px,
         };
@@ -266,7 +266,7 @@ impl HeadlessServer {
             self.claim_shell_tab_geometry(client_id, false);
             if !another_focused_viewer {
                 if let Some(target) = self.shell_focus_target(client_id) {
-                    self.send_shell_focus_target(&target, crate::ghostty::FocusEvent::Gained);
+                    self.send_shell_focus_target(&target, crate::terminal::vt::FocusEvent::Gained);
                 }
             }
             true
@@ -276,7 +276,7 @@ impl HeadlessServer {
             }
             if !another_focused_viewer {
                 if let Some(target) = self.shell_focus_target(client_id) {
-                    self.send_shell_focus_target(&target, crate::ghostty::FocusEvent::Lost);
+                    self.send_shell_focus_target(&target, crate::terminal::vt::FocusEvent::Lost);
                 }
             }
             true

@@ -1,16 +1,26 @@
 //! Server messages applied to the foreground client's presentation and effects.
-use super::{
-    apply_reload, contains_kitty_graphics_bytes, dispatch_client_shell_actions,
-    effective_sgr_pixel_mouse, endpoint, endpoint_commands, finish_client_shell_input,
-    forward_clipboard, forward_terminal_bells, handle_notify, install_client_shell_snapshot,
-    record_received_kitty_graphics, set_mouse_capture, shell,
-    sync_client_shell_keyboard_report_all, ClientError, ClientState,
-};
 #[cfg(windows)]
-use super::{
+use crate::client::host_terminal::setup::{
     enable_windows_virtual_terminal_input, is_ssh_session, windows_vti_input_backend_enabled,
 };
-use crate::protocol::{self, ServerMessage};
+use crate::client::{
+    clipboard::forward_clipboard,
+    compositor::{self as shell, snapshot::install_client_shell_snapshot},
+    config_reload::apply_reload,
+    connection::{bootstrap as endpoint, requests as endpoint_commands},
+    effects::{
+        dispatch_client_shell_actions, finish_client_shell_input,
+        sync_client_shell_keyboard_report_all,
+    },
+    errors::ClientError,
+    host_terminal::{
+        frame_output::{contains_kitty_graphics_bytes, record_received_kitty_graphics},
+        setup::{effective_sgr_pixel_mouse, set_mouse_capture},
+    },
+    notifications::{forward_terminal_bells, handle_notify},
+    state::ClientState,
+};
+use crate::protocol::wire::{self as protocol, ServerMessage};
 use std::{
     io::{self, Write as _},
     sync::atomic::{AtomicBool, Ordering},
@@ -79,8 +89,10 @@ pub(super) fn handle_server_message(
         }
         ServerMessage::Clipboard { data } => apply_clipboard(&data, state),
         ServerMessage::WindowTitle { title } => {
-            let _ =
-                crate::terminal_effects::write_window_title(&mut io::stdout(), title.as_deref());
+            let _ = crate::client::host_terminal::effects::write_window_title(
+                &mut io::stdout(),
+                title.as_deref(),
+            );
         }
         ServerMessage::ReloadSoundConfig => apply_reload(state, write_stream)?,
         ServerMessage::MouseCapture {
@@ -111,14 +123,14 @@ pub(super) fn handle_server_message(
     Ok(false)
 }
 
-fn apply_surface_patch(patch: crate::protocol::PaneSurfacePatch, state: &mut ClientState) {
-    let patch_started = crate::render_prof::timer();
-    let apply_started = crate::render_prof::timer();
+fn apply_surface_patch(patch: crate::protocol::wire::PaneSurfacePatch, state: &mut ClientState) {
+    let patch_started = crate::utils::render::prof::timer();
+    let apply_started = crate::utils::render::prof::timer();
     let outcome = state
         .shell
         .as_mut()
         .map(|shell| shell.apply_pane_surface_patch(patch));
-    crate::render_prof::duration_since("client_surface_patch.apply", apply_started);
+    crate::utils::render::prof::duration_since("client_surface_patch.apply", apply_started);
     let compose_fallback = match outcome {
         Some(shell::ClientPaneSurfacePatchOutcome::Applied(Some(patch))) => {
             match state.present_surface_patch(patch) {
@@ -142,8 +154,8 @@ fn apply_surface_patch(patch: crate::protocol::PaneSurfacePatch, state: &mut Cli
             state.present_frame(frame);
         }
     }
-    crate::render_prof::duration_since("client_surface_patch.total", patch_started);
-    crate::render_prof::flush_if_due();
+    crate::utils::render::prof::duration_since("client_surface_patch.total", patch_started);
+    crate::utils::render::prof::flush_if_due();
 }
 
 fn handle_endpoint_response(
@@ -260,7 +272,7 @@ fn apply_endpoint_control(
     Ok(())
 }
 
-fn apply_surface(surface: crate::protocol::PaneSurfaceFrame, state: &mut ClientState) {
+fn apply_surface(surface: crate::protocol::wire::PaneSurfaceFrame, state: &mut ClientState) {
     let composed = if let Some(shell) = &mut state.shell {
         shell.set_pane_surface(surface);
         shell.compose(state.reported_size.0, state.reported_size.1)
@@ -272,7 +284,7 @@ fn apply_surface(surface: crate::protocol::PaneSurfaceFrame, state: &mut ClientS
     }
 }
 
-fn forward_terminal_frame(frame: crate::protocol::TerminalFrame, state: &ClientState) {
+fn forward_terminal_frame(frame: crate::protocol::wire::TerminalFrame, state: &ClientState) {
     if state.kitty_graphics_enabled && contains_kitty_graphics_bytes(&frame.bytes) {
         record_received_kitty_graphics(&frame.bytes);
     }

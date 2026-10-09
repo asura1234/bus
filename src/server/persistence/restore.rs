@@ -6,13 +6,16 @@ use ratatui::layout::Direction;
 use tokio::sync::{mpsc, Notify};
 use tracing::warn;
 
-use crate::detect::AgentState;
-use crate::events::AppEvent;
-use crate::render_signal::RenderSignal;
-use crate::server::workspaces::layout::{Node, PaneId, TileLayout};
+use crate::agents::AgentState;
 use crate::server::workspaces::pane::PaneState;
 use crate::server::workspaces::Workspace;
-use crate::terminal::{TerminalId, TerminalState};
+use crate::terminal::events::TerminalEvent;
+use crate::utils::render::signal::RenderSignal;
+use crate::{
+    server::workspaces::layout::{Node, TileLayout},
+    utils::ids::PaneId,
+};
+use crate::{terminal::TerminalState, utils::ids::TerminalId};
 
 use super::schema::{
     PaneAgentSessionSnapshot, PaneHistorySnapshot, TabHistorySnapshot, WorkspaceHistorySnapshot,
@@ -28,14 +31,14 @@ struct AgentRestoreState<'a> {
 }
 
 struct PaneRestoreStartup<'a> {
-    restore_plan: Option<crate::agent_resume::AgentResumePlan>,
+    restore_plan: Option<crate::agents::resume::catalog::AgentResumePlan>,
     initial_history_ansi: Option<&'a str>,
     duplicate_agent_session: bool,
 }
 
 struct RestoreModelContext {
     resume_agents_on_restore: bool,
-    events: mpsc::Sender<AppEvent>,
+    events: mpsc::Sender<TerminalEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 }
@@ -82,7 +85,7 @@ pub fn restore(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
     resume_agents_on_restore: bool,
-    events: mpsc::Sender<AppEvent>,
+    events: mpsc::Sender<TerminalEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
 ) -> RestoredSession {
@@ -365,7 +368,7 @@ fn restore_tab_pane(
     let saved_agent_name = saved_pane.and_then(|p| p.agent_name.clone());
     let saved_managed_agent = saved_pane
         .and_then(|pane| pane.managed_agent_kind.as_deref())
-        .and_then(crate::detect::parse_canonical_agent_label);
+        .and_then(crate::agents::parse_canonical_agent_label);
     let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
     let saved_history =
         old_id.and_then(|old_id| history.and_then(|history| history.panes.get(old_id)));
@@ -443,13 +446,13 @@ fn restored_pane_cwd(saved_pane: Option<&super::schema::PaneSnapshot>) -> PathBu
 
 fn restored_pending_agent_terminal(
     cwd: PathBuf,
-    plan: crate::agent_resume::AgentResumePlan,
+    plan: crate::agents::resume::catalog::AgentResumePlan,
     saved_label: Option<String>,
-    restored_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    restored_agent_session: Option<crate::agents::resume::catalog::PersistedAgentSession>,
     saved_agent_name: Option<String>,
-    saved_managed_agent: Option<crate::detect::Agent>,
+    saved_managed_agent: Option<crate::agents::AgentKind>,
 ) -> TerminalState {
-    let initial_restore_agent = crate::detect::parse_agent_label(&plan.agent);
+    let initial_restore_agent = crate::agents::parse_agent_label(&plan.agent);
     let terminal_id = TerminalId::alloc();
     let mut terminal =
         TerminalState::new(terminal_id.clone(), cwd).with_pending_agent_resume_plan(plan);
@@ -515,18 +518,18 @@ fn pane_restore_startup<'a>(
 fn restore_plan_for_snapshot(
     session: &PaneAgentSessionSnapshot,
     resume_agents_on_restore: bool,
-) -> Option<crate::agent_resume::AgentResumePlan> {
+) -> Option<crate::agents::resume::catalog::AgentResumePlan> {
     if !resume_agents_on_restore {
         return None;
     }
     let persisted = persisted_agent_session_from_snapshot(session)?;
-    crate::agent_resume::plan(&session.source, &session.agent, &persisted.session_ref)
+    crate::agents::resume::catalog::plan(&session.source, &session.agent, &persisted.session_ref)
 }
 
 fn persisted_agent_session_from_snapshot(
     session: &PaneAgentSessionSnapshot,
-) -> Option<crate::agent_resume::PersistedAgentSession> {
-    crate::agent_resume::session_ref_from_snapshot(
+) -> Option<crate::agents::resume::catalog::PersistedAgentSession> {
+    crate::agents::resume::catalog::session_ref_from_snapshot(
         &session.source,
         &session.agent,
         session.kind,
@@ -537,7 +540,7 @@ fn persisted_agent_session_from_snapshot(
 fn restored_terminal_agent_session(
     session: Option<&PaneAgentSessionSnapshot>,
     duplicate_agent_session: bool,
-) -> Option<crate::agent_resume::PersistedAgentSession> {
+) -> Option<crate::agents::resume::catalog::PersistedAgentSession> {
     if duplicate_agent_session {
         return None;
     }

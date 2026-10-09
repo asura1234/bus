@@ -9,8 +9,8 @@ use super::{GhosttyPaneTerminal, PaneTerminal, MODE_MOUSE_ANY_MOTION};
 impl PaneTerminal {
     pub fn encode_terminal_key(
         &self,
-        key: crate::input::TerminalKey,
-        protocol: crate::input::KeyboardProtocol,
+        key: crate::protocol::keys::TerminalKey,
+        protocol: crate::protocol::keys::KeyboardProtocol,
     ) -> Vec<u8> {
         self.ghostty.encode_terminal_key(key, protocol)
     }
@@ -18,7 +18,7 @@ impl PaneTerminal {
     pub(crate) fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        position: crate::input::mouse::Position,
+        position: crate::protocol::keys::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         self.ghostty.encode_mouse_button(kind, position, modifiers)
@@ -27,7 +27,7 @@ impl PaneTerminal {
     pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        position: crate::input::mouse::Position,
+        position: crate::protocol::keys::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         self.ghostty.encode_mouse_motion(kind, position, modifiers)
@@ -36,7 +36,7 @@ impl PaneTerminal {
     pub(crate) fn encode_mouse_wheel(
         &self,
         kind: crossterm::event::MouseEventKind,
-        position: crate::input::mouse::Position,
+        position: crate::protocol::keys::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         self.ghostty.encode_mouse_wheel(kind, position, modifiers)
@@ -46,8 +46,8 @@ impl PaneTerminal {
 impl GhosttyPaneTerminal {
     pub fn encode_terminal_key(
         &self,
-        key: crate::input::TerminalKey,
-        protocol: crate::input::KeyboardProtocol,
+        key: crate::protocol::keys::TerminalKey,
+        protocol: crate::protocol::keys::KeyboardProtocol,
     ) -> Vec<u8> {
         #[cfg(windows)]
         if self.core.lock().is_ok_and(|core| {
@@ -76,26 +76,26 @@ impl GhosttyPaneTerminal {
 
     fn encode_terminal_key_once(
         &self,
-        key: crate::input::TerminalKey,
-        protocol: crate::input::KeyboardProtocol,
+        key: crate::protocol::keys::TerminalKey,
+        protocol: crate::protocol::keys::KeyboardProtocol,
     ) -> Vec<u8> {
-        if matches!(protocol, crate::input::KeyboardProtocol::Legacy)
+        if matches!(protocol, crate::protocol::keys::KeyboardProtocol::Legacy)
             && key.code == crossterm::event::KeyCode::Tab
             && key.modifiers == crossterm::event::KeyModifiers::CONTROL
         {
-            return crate::input::encode_terminal_key(key, protocol);
+            return crate::protocol::keys::encode_terminal_key(key, protocol);
         }
 
         if ghostty_prefers_herdr_text_encoding(&key) {
-            return crate::input::encode_terminal_key(key, protocol);
+            return crate::protocol::keys::encode_terminal_key(key, protocol);
         }
 
         let Some(event) = ghostty_key_event_from_terminal_key(&key) else {
-            return crate::input::encode_terminal_key(key, protocol);
+            return crate::protocol::keys::encode_terminal_key(key, protocol);
         };
 
         let Ok(mut encoder) = self.key_encoder.lock() else {
-            return crate::input::encode_terminal_key(key, protocol);
+            return crate::protocol::keys::encode_terminal_key(key, protocol);
         };
         match encoder.encode(&event) {
             Ok(bytes)
@@ -104,14 +104,14 @@ impl GhosttyPaneTerminal {
             {
                 bytes
             }
-            Ok(_) | Err(_) => crate::input::encode_terminal_key(key, protocol),
+            Ok(_) | Err(_) => crate::protocol::keys::encode_terminal_key(key, protocol),
         }
     }
 
     pub(crate) fn encode_mouse_button(
         &self,
         kind: crossterm::event::MouseEventKind,
-        position: crate::input::mouse::Position,
+        position: crate::protocol::keys::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         self.encode_mouse_event(
@@ -124,7 +124,7 @@ impl GhosttyPaneTerminal {
     pub(crate) fn encode_mouse_motion(
         &self,
         kind: crossterm::event::MouseEventKind,
-        position: crate::input::mouse::Position,
+        position: crate::protocol::keys::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         self.encode_mouse_event(
@@ -137,7 +137,7 @@ impl GhosttyPaneTerminal {
     pub(crate) fn encode_mouse_wheel(
         &self,
         kind: crossterm::event::MouseEventKind,
-        position: crate::input::mouse::Position,
+        position: crate::protocol::keys::mouse::Position,
         modifiers: crossterm::event::KeyModifiers,
     ) -> Option<Vec<u8>> {
         self.encode_mouse_event(
@@ -149,8 +149,8 @@ impl GhosttyPaneTerminal {
 
     fn encode_mouse_event(
         &self,
-        mut event: crate::ghostty::MouseEvent,
-        position: crate::input::mouse::Position,
+        mut event: crate::terminal::vt::MouseEvent,
+        position: crate::protocol::keys::mouse::Position,
         require_any_motion: bool,
     ) -> Option<Vec<u8>> {
         let core = self.core.lock().ok()?;
@@ -169,8 +169,8 @@ impl GhosttyPaneTerminal {
 
 fn encoded_key_preserves_event_kind(
     bytes: &[u8],
-    key: &crate::input::TerminalKey,
-    protocol: crate::input::KeyboardProtocol,
+    key: &crate::protocol::keys::TerminalKey,
+    protocol: crate::protocol::keys::KeyboardProtocol,
 ) -> bool {
     if !protocol.reports_event_types() || key.kind == crossterm::event::KeyEventKind::Press {
         return true;
@@ -178,7 +178,7 @@ fn encoded_key_preserves_event_kind(
 
     std::str::from_utf8(bytes)
         .ok()
-        .and_then(crate::input::parse_terminal_key_sequence)
+        .and_then(crate::protocol::keys::parse_terminal_key_sequence)
         .is_some_and(|parsed| {
             parsed.code == key.code && parsed.modifiers == key.modifiers && parsed.kind == key.kind
         })

@@ -91,7 +91,7 @@ fn post_blocked(state: &mut BusState, id: AgentId) -> Result<(), String> {
     if state.room(room).is_none() {
         return Ok(());
     }
-    let now = crate::bus::io::now_ms();
+    let now = crate::messaging::storage::io::now_ms();
     let orchestrator = state
         .orchestrator_of(room)
         .filter(|orchestrator| orchestrator.id != id && !orchestrator.deletion_pending)

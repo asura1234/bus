@@ -195,7 +195,7 @@ fn agent_enter_adds_from_non_model_fields_with_its_own_directory_and_escape_canc
         // Suggestions must not hijack Enter; Tab remains path completion.
         ui.suggestions
             .entries
-            .push(crate::bus::launch::PathSuggestion {
+            .push(crate::agents::providers::suggest::PathSuggestion {
                 path: "/projects/backend".into(),
                 is_directory: true,
             });

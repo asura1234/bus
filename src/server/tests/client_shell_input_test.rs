@@ -9,7 +9,7 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
         11,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             unread_test_writer(),
         ),
@@ -20,10 +20,10 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
             client_id: 11,
             pane_id,
             events: vec![
-                crate::protocol::ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('c'),
+                crate::protocol::wire::ClientPaneInputEvent::Key {
+                    code: crate::protocol::wire::ClientKeyCode::Char('c'),
                     modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                    kind: crate::protocol::ClientKeyKind::Press,
+                    kind: crate::protocol::wire::ClientKeyKind::Press,
                     repeat_count: 1,
                     shifted_codepoint: None,
                     generated_text: None,
@@ -31,10 +31,10 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
                     physical_key_id: None,
                     windows_record: None,
                 },
-                crate::protocol::ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('c'),
+                crate::protocol::wire::ClientPaneInputEvent::Key {
+                    code: crate::protocol::wire::ClientKeyCode::Char('c'),
                     modifiers: crossterm::event::KeyModifiers::CONTROL.bits(),
-                    kind: crate::protocol::ClientKeyKind::Release,
+                    kind: crate::protocol::wire::ClientKeyKind::Release,
                     repeat_count: 1,
                     shifted_codepoint: None,
                     generated_text: None,
@@ -42,10 +42,10 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
                     physical_key_id: None,
                     windows_record: None,
                 },
-                crate::protocol::ClientPaneInputEvent::Key {
-                    code: crate::protocol::ClientKeyCode::Char('x'),
+                crate::protocol::wire::ClientPaneInputEvent::Key {
+                    code: crate::protocol::wire::ClientKeyCode::Char('x'),
                     modifiers: crossterm::event::KeyModifiers::ALT.bits(),
-                    kind: crate::protocol::ClientKeyKind::Press,
+                    kind: crate::protocol::wire::ClientKeyKind::Press,
                     repeat_count: 1,
                     shifted_codepoint: None,
                     generated_text: None,
@@ -53,11 +53,14 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
                     physical_key_id: None,
                     windows_record: None,
                 },
-                crate::protocol::ClientPaneInputEvent::Mouse {
-                    kind: crate::protocol::ClientMouseKind::Down(
-                        crate::protocol::ClientMouseButton::Left,
+                crate::protocol::wire::ClientPaneInputEvent::Mouse {
+                    kind: crate::protocol::wire::ClientMouseKind::Down(
+                        crate::protocol::wire::ClientMouseButton::Left,
                     ),
-                    position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+                    position: crate::protocol::wire::ClientMousePosition::Cell {
+                        column: 2,
+                        row: 1
+                    },
                     geometry: None,
                     modifiers: 0,
                     lines: 3,
@@ -81,7 +84,7 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
     let pane_id = server.app.session_snapshot().focused_pane_id.unwrap();
     assert!(server.paste_client_clipboard_image_path(
         11,
-        crate::protocol::ClientClipboardImageTarget::Pane(pane_id.clone()),
+        crate::protocol::wire::ClientClipboardImageTarget::Pane(pane_id.clone()),
         "/tmp/client-image.png".into(),
     ));
     assert_eq!(
@@ -90,7 +93,7 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
     );
     assert!(!server.paste_client_clipboard_image_path(
         11,
-        crate::protocol::ClientClipboardImageTarget::Pane("missing:p1".into()),
+        crate::protocol::wire::ClientClipboardImageTarget::Pane("missing:p1".into()),
         "/tmp/wrong-target.png".into(),
     ));
     assert!(input_rx.try_recv().is_err());
@@ -116,7 +119,7 @@ async fn client_shell_input_targets_runtime_without_server_shell_classification(
 #[tokio::test]
 async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("hidden-input");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("hidden-input");
     let hidden_tab = workspace.test_add_tab(Some("hidden"));
     let hidden_pane = workspace.tabs[hidden_tab].root_pane;
     let (runtime, mut input_rx) =
@@ -136,13 +139,13 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
         11,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             unread_test_writer(),
         ),
     );
-    let key = |kind| crate::protocol::ClientPaneInputEvent::Key {
-        code: crate::protocol::ClientKeyCode::Char('x'),
+    let key = |kind| crate::protocol::wire::ClientPaneInputEvent::Key {
+        code: crate::protocol::wire::ClientKeyCode::Char('x'),
         modifiers: 0,
         kind,
         repeat_count: 1,
@@ -157,7 +160,7 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
         !server.handle_server_event(ServerEvent::ClientShellPaneInput {
             client_id: 11,
             pane_id: pane_id.clone(),
-            events: vec![key(crate::protocol::ClientKeyKind::Press)],
+            events: vec![key(crate::protocol::wire::ClientKeyKind::Press)],
         })
     );
     assert!(input_rx.try_recv().is_err());
@@ -165,7 +168,7 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
         !server.handle_server_event(ServerEvent::ClientShellPaneInput {
             client_id: 11,
             pane_id,
-            events: vec![key(crate::protocol::ClientKeyKind::Release)],
+            events: vec![key(crate::protocol::wire::ClientKeyKind::Release)],
         })
     );
     assert!(!input_rx.recv().await.expect("encoded release").is_empty());
@@ -176,7 +179,7 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
 #[tokio::test]
 async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
     let mut server = test_headless_server();
-    let mut workspace = crate::workspace::Workspace::test_new("scrolled-input");
+    let mut workspace = crate::server::workspaces::Workspace::test_new("scrolled-input");
     let pane_id = workspace.tabs[0].root_pane;
     let (runtime, mut input_rx) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
@@ -199,7 +202,7 @@ async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
         11,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             unread_test_writer(),
         ),
@@ -209,7 +212,7 @@ async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
     let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
         client_id: 11,
         pane_id: public_pane_id.clone(),
-        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+        events: vec![crate::protocol::wire::ClientPaneInputEvent::TextCommit(
             "x".to_owned(),
         )],
     });
@@ -232,7 +235,7 @@ async fn client_shell_text_input_renders_only_when_resetting_scrollback() {
     let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
         client_id: 11,
         pane_id: public_pane_id,
-        events: vec![crate::protocol::ClientPaneInputEvent::TextCommit(
+        events: vec![crate::protocol::wire::ClientPaneInputEvent::TextCommit(
             "y".to_owned(),
         )],
     });
@@ -253,7 +256,7 @@ async fn client_shell_mouse_motion_delivers_without_render_when_foreground() {
         11,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             unread_test_writer(),
         ),
@@ -264,9 +267,9 @@ async fn client_shell_mouse_motion_delivers_without_render_when_foreground() {
     let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
         client_id: 11,
         pane_id,
-        events: vec![crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Moved,
-            position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+        events: vec![crate::protocol::wire::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::Moved,
+            position: crate::protocol::wire::ClientMousePosition::Cell { column: 2, row: 1 },
             geometry: None,
             modifiers: 0,
             lines: 0,
@@ -290,7 +293,7 @@ async fn client_shell_mouse_motion_promotes_and_requests_render() {
         11,
         ClientConnection::new(
             (80, 24),
-            crate::kitty_graphics::HostCellSize::default(),
+            crate::protocol::kitty::HostCellSize::default(),
             1,
             unread_test_writer(),
         ),
@@ -299,9 +302,9 @@ async fn client_shell_mouse_motion_promotes_and_requests_render() {
     let render_impact = server.handle_server_event(ServerEvent::ClientShellPaneInput {
         client_id: 11,
         pane_id,
-        events: vec![crate::protocol::ClientPaneInputEvent::Mouse {
-            kind: crate::protocol::ClientMouseKind::Moved,
-            position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+        events: vec![crate::protocol::wire::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::wire::ClientMouseKind::Moved,
+            position: crate::protocol::wire::ClientMousePosition::Cell { column: 2, row: 1 },
             geometry: None,
             modifiers: 0,
             lines: 0,

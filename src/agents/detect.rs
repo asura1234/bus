@@ -1,4 +1,4 @@
-use super::{manifest, Agent};
+use super::{manifest, AgentKind};
 
 /// The detected state of a terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +34,7 @@ pub struct AgentDetection {
 
 /// Detect state using screen content plus OSC title/progress strings.
 pub fn detect_agent_with_osc(
-    agent: Option<Agent>,
+    agent: Option<AgentKind>,
     screen_content: &str,
     osc_title: &str,
     osc_progress: &str,
@@ -58,7 +58,7 @@ pub fn detect_agent_with_osc(
     )
 }
 
-pub fn should_skip_state_update(agent: Option<Agent>, screen_content: &str) -> bool {
+pub fn should_skip_state_update(agent: Option<AgentKind>, screen_content: &str) -> bool {
     agent.is_some_and(|agent| manifest::should_skip_state_update(agent, screen_content))
 }
 

@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::agents::{Agent, AgentDetection, AgentState};
+use crate::agents::{AgentDetection, AgentKind, AgentState};
 
 pub(super) const AGENT_PENDING_IDLE_RECHECK: std::time::Duration =
     std::time::Duration::from_millis(100);
@@ -80,7 +80,7 @@ impl PendingIdleConfirmation {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct IdleScreenScanSkipInput {
     pub(super) state: AgentState,
-    pub(super) agent: Option<Agent>,
+    pub(super) agent: Option<AgentKind>,
     pub(super) pending_idle_active: bool,
     pub(super) agent_changed: bool,
     pub(super) process_exited: bool,
@@ -111,7 +111,7 @@ pub(super) enum DetectionScreenReadDecision {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DetectionScreenReadInput {
     pub(super) state: AgentState,
-    pub(super) agent: Option<Agent>,
+    pub(super) agent: Option<AgentKind>,
     pub(super) pending_idle_active: bool,
     pub(super) agent_changed: bool,
     pub(super) process_exited: bool,
@@ -287,7 +287,7 @@ pub(super) fn decide_screen_detection_publish(
 }
 
 pub(super) fn detection_update_for_publish_with_osc(
-    agent: Option<Agent>,
+    agent: Option<AgentKind>,
     content: &str,
     osc_title: &str,
     osc_progress: &str,
@@ -361,7 +361,7 @@ mod tests {
     fn screen_read_input(state: AgentState, current_seq: u64) -> DetectionScreenReadInput {
         DetectionScreenReadInput {
             state,
-            agent: Some(Agent::Codex),
+            agent: Some(AgentKind::Codex),
             pending_idle_active: false,
             agent_changed: false,
             process_exited: false,

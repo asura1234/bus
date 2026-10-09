@@ -15,7 +15,7 @@ impl Drop for RestoreRoot {
 
 #[test]
 fn bus_data_dir_keeps_absence_empty_and_inherited_path_bytes() {
-    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    let _guard = crate::utils::config::test_config_env_lock().lock().unwrap();
     let _restore = RestoreRoot(std::env::var_os("BUS_DATA_DIR"));
 
     std::env::remove_var("BUS_DATA_DIR");

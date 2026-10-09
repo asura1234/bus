@@ -207,14 +207,14 @@ fn room_orchestrator_core_worker_visible_read_returns_viewport_and_correlation_f
         .observe_status(agent, RuntimeStatus::Working, 5)
         .unwrap();
     worker.transport = Box::new(VisibleInspect);
-    let before = crate::bus::io::now_ms();
+    let before = crate::messaging::storage::io::now_ms();
     let result = call(
         &mut worker,
         "read-visible",
         "agent.read",
         json!({"agent":"codex1","source":"visible"}),
     );
-    let after = crate::bus::io::now_ms();
+    let after = crate::messaging::storage::io::now_ms();
     assert!(result.ok, "{result:?}");
     assert_eq!(result.result["agent_id"], agent.0);
     assert_eq!(result.result["name"], "codex1");
@@ -679,7 +679,7 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
         json!({"room":"test","to":["codex1"],"text":"go"}),
     );
     let message = PromptId(sent.result["message_id"].as_u64().unwrap());
-    let now = crate::bus::io::now_ms();
+    let now = crate::messaging::storage::io::now_ms();
     worker
         .state
         .observe_status(codex, RuntimeStatus::Idle, now)
@@ -690,11 +690,11 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
     assert_eq!(fresh["stage"], "queued");
     assert!(fresh["stalled_from"].is_null());
 
-    let later = now + crate::bus::model::QUEUED_STALL_MS;
+    let later = now + crate::messaging::model::QUEUED_STALL_MS;
     let stalled = request(&worker.dev_message_at(message, later).unwrap());
     assert_eq!(stalled["stage"], "stalled", "{stalled}");
     assert_eq!(stalled["stalled_from"], "queued");
-    let expected = crate::bus::diagnostics::wait_reason(worker.state.agent(codex).unwrap());
+    let expected = crate::messaging::diagnostics::wait_reason(worker.state.agent(codex).unwrap());
     assert_eq!(
         stalled["reason"],
         json!(expected.unwrap_or("not_submitted"))
@@ -705,7 +705,7 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
         .state
         .observe_status(codex, RuntimeStatus::Blocked, later)
         .unwrap();
-    let much_later = later + crate::bus::model::BLOCKED_STALL_MS;
+    let much_later = later + crate::messaging::model::BLOCKED_STALL_MS;
     let blocked = request(&worker.dev_message_at(message, much_later).unwrap());
     assert_eq!(blocked["stage"], "queued", "{blocked}");
     assert_eq!(blocked["reason"], "blocked_unanswered");

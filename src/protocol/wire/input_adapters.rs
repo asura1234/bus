@@ -123,7 +123,7 @@ impl ClientMouseKind {
 }
 
 impl ClientPaneInputEvent {
-    pub(crate) fn from_terminal_key(key: crate::input::TerminalKey) -> Option<Self> {
+    pub(crate) fn from_terminal_key(key: crate::protocol::keys::TerminalKey) -> Option<Self> {
         let tracks_release = key.generated_text.is_none() || key.has_physical_identity();
         let physical_key_id = key.physical_key_id();
         let windows_record = key.windows_record();
@@ -140,14 +140,14 @@ impl ClientPaneInputEvent {
         })
     }
 
-    pub(crate) fn to_raw_input_event(&self) -> crate::raw_input::RawInputEvent {
+    pub(crate) fn to_raw_input_event(&self) -> crate::protocol::keys::host::RawInputEvent {
         self.to_raw_input_event_with_windows_source(cfg!(any(windows, test)))
     }
 
     pub(super) fn to_raw_input_event_with_windows_source(
         &self,
         attach_windows_source: bool,
-    ) -> crate::raw_input::RawInputEvent {
+    ) -> crate::protocol::keys::host::RawInputEvent {
         match self {
             Self::Key {
                 code,
@@ -160,7 +160,7 @@ impl ClientPaneInputEvent {
                 windows_record,
                 ..
             } => {
-                let mut key = crate::input::TerminalKey::new(
+                let mut key = crate::protocol::keys::TerminalKey::new(
                     code.to_crossterm(),
                     crossterm::event::KeyModifiers::from_bits_truncate(*modifiers),
                 )
@@ -180,11 +180,11 @@ impl ClientPaneInputEvent {
                 }
                 #[cfg(not(any(windows, test)))]
                 let _ = (attach_windows_source, windows_record);
-                crate::raw_input::RawInputEvent::Key(key)
+                crate::protocol::keys::host::RawInputEvent::Key(key)
             }
-            Self::TextCommit(text) => {
-                crate::raw_input::RawInputEvent::Text(crate::input::TextCommit::new(text.clone()))
-            }
+            Self::TextCommit(text) => crate::protocol::keys::host::RawInputEvent::Text(
+                crate::protocol::keys::TextCommit::new(text.clone()),
+            ),
             Self::Mouse {
                 kind,
                 position,
@@ -195,14 +195,14 @@ impl ClientPaneInputEvent {
                     ClientMousePosition::Cell { column, row }
                     | ClientMousePosition::Pixels { column, row, .. } => (*column, *row),
                 };
-                crate::raw_input::RawInputEvent::Mouse(crossterm::event::MouseEvent {
+                crate::protocol::keys::host::RawInputEvent::Mouse(crossterm::event::MouseEvent {
                     kind: kind.to_crossterm(),
                     column,
                     row,
                     modifiers: crossterm::event::KeyModifiers::from_bits_truncate(*modifiers),
                 })
             }
-            Self::Paste(text) => crate::raw_input::RawInputEvent::Paste(text.clone()),
+            Self::Paste(text) => crate::protocol::keys::host::RawInputEvent::Paste(text.clone()),
         }
     }
 }
@@ -232,7 +232,7 @@ impl ClientInputEvent {
         }
     }
 
-    pub(crate) fn to_raw_input_event(&self) -> crate::raw_input::RawInputEvent {
+    pub(crate) fn to_raw_input_event(&self) -> crate::protocol::keys::host::RawInputEvent {
         match self {
             Self::Key {
                 code,
@@ -242,7 +242,7 @@ impl ClientInputEvent {
                 generated_text,
                 source,
             } => {
-                let mut key = crate::input::TerminalKey::new(
+                let mut key = crate::protocol::keys::TerminalKey::new(
                     code.to_crossterm(),
                     crossterm::event::KeyModifiers::from_bits_truncate(*modifiers),
                 )
@@ -255,25 +255,25 @@ impl ClientInputEvent {
                 key = key
                     .with_repeat_count(*repeat_count)
                     .with_kind(kind.to_crossterm());
-                crate::raw_input::RawInputEvent::Key(key)
+                crate::protocol::keys::host::RawInputEvent::Key(key)
             }
-            Self::TextCommit(text) => {
-                crate::raw_input::RawInputEvent::Text(crate::input::TextCommit::new(text.clone()))
-            }
+            Self::TextCommit(text) => crate::protocol::keys::host::RawInputEvent::Text(
+                crate::protocol::keys::TextCommit::new(text.clone()),
+            ),
             Self::Mouse {
                 kind,
                 column,
                 row,
                 modifiers,
-            } => crate::raw_input::RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            } => crate::protocol::keys::host::RawInputEvent::Mouse(crossterm::event::MouseEvent {
                 kind: kind.to_crossterm(),
                 column: *column,
                 row: *row,
                 modifiers: crossterm::event::KeyModifiers::from_bits_truncate(*modifiers),
             }),
-            Self::Paste { text } => crate::raw_input::RawInputEvent::Paste(text.clone()),
-            Self::FocusGained => crate::raw_input::RawInputEvent::OuterFocusGained,
-            Self::FocusLost => crate::raw_input::RawInputEvent::OuterFocusLost,
+            Self::Paste { text } => crate::protocol::keys::host::RawInputEvent::Paste(text.clone()),
+            Self::FocusGained => crate::protocol::keys::host::RawInputEvent::OuterFocusGained,
+            Self::FocusLost => crate::protocol::keys::host::RawInputEvent::OuterFocusLost,
         }
     }
 }

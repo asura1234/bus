@@ -3,15 +3,15 @@
 mod windows;
 
 use super::catalog::{normalized_agent_lookup_name, path_basename};
-use super::{agent_label, parse_agent_label, Agent};
+use super::{agent_label, parse_agent_label, AgentKind};
 
 /// Identify which agent is running from the process name.
 /// Returns `None` for plain shells or unrecognized programs.
-pub fn identify_agent(process_name: &str) -> Option<Agent> {
+pub fn identify_agent(process_name: &str) -> Option<AgentKind> {
     parse_agent_label(process_name)
 }
 
-pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
+pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(AgentKind, String)> {
     if let Some(process) = job
         .processes
         .iter()
@@ -23,7 +23,7 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
         }
     }
 
-    let mut best: Option<(u8, Agent, String)> = None;
+    let mut best: Option<(u8, AgentKind, String)> = None;
 
     for process in &job.processes {
         let candidate = normalized_process_name(process);
@@ -78,12 +78,12 @@ pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
 }
 
 /// Interpret the managed-agent marker after platform has collected raw OS facts.
-pub(crate) fn process_agent_hint(pid: u32) -> Option<Agent> {
+pub(crate) fn process_agent_hint(pid: u32) -> Option<AgentKind> {
     let environ = crate::platform::process_environment(pid)?;
     parse_agent_env_hint(&environ)
 }
 
-pub(super) fn parse_agent_env_hint(environ: &[u8]) -> Option<Agent> {
+pub(super) fn parse_agent_env_hint(environ: &[u8]) -> Option<AgentKind> {
     for record in environ.split(|&byte| byte == 0) {
         let Some(value) = record.strip_prefix(b"HERDR_AGENT=") else {
             continue;
@@ -115,7 +115,7 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
             if let Some(wrapped_agent) =
                 wrapped_agent_name_from_runtime_argv(runtime, process.argv.as_deref())
             {
-                if identify_agent(&wrapped_agent) == Some(Agent::Qwen) {
+                if identify_agent(&wrapped_agent) == Some(AgentKind::Qwen) {
                     return wrapped_agent;
                 }
             }
@@ -171,7 +171,7 @@ fn cursor_agent_name_from_bundled_node_argv(argv: &[String]) -> Option<String> {
     (package.eq_ignore_ascii_case("cursor-agent")
         && versions.eq_ignore_ascii_case("versions")
         && !version.trim().is_empty())
-    .then(|| agent_label(Agent::Cursor).to_string())
+    .then(|| agent_label(AgentKind::Cursor).to_string())
 }
 
 fn path_parent_and_basename(path: &str) -> Option<(&str, &str)> {
@@ -369,7 +369,7 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
         "bundle",
         "cli.js",
     ]) {
-        return Some(agent_label(Agent::Pi).to_string());
+        return Some(agent_label(AgentKind::Pi).to_string());
     }
 
     let components: Vec<String> = raw_components
@@ -378,12 +378,12 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
         .collect();
     for window in components.windows(5) {
         if window == ["node_modules", "@qwen-code", "qwen-code", "dist", "index"] {
-            return Some(agent_label(Agent::Qwen).to_string());
+            return Some(agent_label(AgentKind::Qwen).to_string());
         }
     }
     for window in components.windows(4) {
         if window == ["node_modules", "mastracode", "dist", "cli"] {
-            return Some(agent_label(Agent::Mastracode).to_string());
+            return Some(agent_label(AgentKind::Mastracode).to_string());
         }
     }
     None

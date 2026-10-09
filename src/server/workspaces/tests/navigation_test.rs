@@ -114,9 +114,9 @@ fn state_changed_updates_pane() {
     let mut state = app_with_workspaces(&["test"]);
     let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
 
-    state.handle_app_event(AppEvent::StateChanged {
+    state.handle_app_event(TerminalEvent::StateChanged {
         pane_id,
-        agent: Some(Agent::Pi),
+        agent: Some(AgentKind::Pi),
         state: AgentState::Working,
         visible_blocker: false,
         process_exited: false,
@@ -131,7 +131,7 @@ fn state_changed_updates_pane() {
         .clone();
     let terminal = state.terminals.get(&terminal_id).unwrap();
     assert_eq!(terminal.state, AgentState::Working);
-    assert_eq!(terminal.detected_agent, Some(Agent::Pi));
+    assert_eq!(terminal.detected_agent, Some(AgentKind::Pi));
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn terminal_cwd_report_updates_terminal_cwd_and_marks_session_dirty() {
     std::fs::create_dir_all(&cwd).unwrap();
     state.session_dirty = false;
 
-    let updates = state.handle_app_event(AppEvent::TerminalCwdReported {
+    let updates = state.handle_app_event(TerminalEvent::TerminalCwdReported {
         pane_id,
         cwd: cwd.clone(),
     });
@@ -184,7 +184,7 @@ fn navigate_pane_changes_focus_while_zoomed() {
     let right = state.workspaces[0].test_split(Direction::Horizontal);
     state.workspaces[0].layout.focus_pane(root);
     state.workspaces[0].zoomed = true;
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         ratatui::layout::Rect::new(0, 0, 100, 20),
@@ -194,7 +194,7 @@ fn navigate_pane_changes_focus_while_zoomed() {
     assert_eq!(state.view.pane_infos[0].id, root);
 
     state.navigate_pane(NavDirection::Right);
-    crate::ui::compute_view_with_runtime_registry(
+    crate::server::rendering::surface::compute_view_with_runtime_registry(
         &mut state,
         &crate::terminal::TerminalRuntimeRegistry::new(),
         ratatui::layout::Rect::new(0, 0, 100, 20),

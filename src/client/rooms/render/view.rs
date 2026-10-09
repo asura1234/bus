@@ -150,7 +150,7 @@ impl View {
             self.hits.push(Hit { rect, action });
         }
         if focused && (skip..skip + height).contains(&cursor_row) {
-            self.cursor = Some(crate::protocol::CursorState {
+            self.cursor = Some(crate::protocol::wire::CursorState {
                 x: rect.x + cursor_column.min(usize::from(rect.width - 1)) as u16,
                 y: rect.y + (cursor_row - skip) as u16,
                 visible: true,

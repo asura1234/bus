@@ -7,8 +7,8 @@ fn default_headless_size_is_effective_without_clients() {
     assert_eq!(
         server.headless_size,
         (
-            crate::config::DEFAULT_HEADLESS_COLS,
-            crate::config::DEFAULT_HEADLESS_ROWS
+            crate::utils::config::DEFAULT_HEADLESS_COLS,
+            crate::utils::config::DEFAULT_HEADLESS_ROWS
         )
     );
     assert_eq!(server.effective_size, server.headless_size);
@@ -34,12 +34,12 @@ fn server_stop_interrupts_server_event_backlog() {
 #[test]
 fn headless_api_request_drains_all_pending_internal_events_before_reading_state() {
     let mut server = test_headless_server();
-    for _ in 0..=crate::app::APP_EVENT_DRAIN_LIMIT {
+    for _ in 0..=crate::server::app::APP_EVENT_DRAIN_LIMIT {
         server
             .app
             .event_tx
-            .try_send(AppEvent::TerminalCwdReported {
-                pane_id: crate::layout::PaneId::from_raw(9_999),
+            .try_send(TerminalEvent::TerminalCwdReported {
+                pane_id: crate::utils::ids::PaneId::from_raw(9_999),
                 cwd: "relative".into(),
             })
             .unwrap();
@@ -47,10 +47,12 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     assert!(
-        server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
-            request: api::schema::Request {
+        server.handle_api_request_with_shutdown_check(crate::server::api::ApiRequestMessage {
+            request: crate::protocol::api::schema::Request {
                 id: "headless_stop_after_events".into(),
-                method: api::schema::Method::ServerStop(api::schema::EmptyParams::default()),
+                method: crate::protocol::api::schema::Method::ServerStop(
+                    crate::protocol::api::schema::EmptyParams::default()
+                ),
             },
             respond_to,
         })
@@ -68,7 +70,7 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
 #[tokio::test]
 async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_client() {
     let mut server = test_headless_server();
-    let workspace = crate::workspace::Workspace::test_new("restored");
+    let workspace = crate::server::workspaces::Workspace::test_new("restored");
     let pane_id = workspace.tabs[0].root_pane;
     let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
     server.app.state.workspaces = vec![workspace];
@@ -80,7 +82,7 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
         .terminals
         .get_mut(&terminal_id)
         .expect("test terminal should exist")
-        .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+        .pending_agent_resume_plan = Some(crate::agents::resume::catalog::AgentResumePlan {
         agent: "codex".into(),
         argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
         dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),

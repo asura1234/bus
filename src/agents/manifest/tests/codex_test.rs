@@ -34,7 +34,10 @@ const CODEX_HOOKS_TRUSTED_TABLE: &str = concat!(
 );
 
 fn codex_hooks_detection(screen: &str) -> Detected {
-    let loaded = bundled_loaded_manifest(Agent::Codex, bundled_manifest(Agent::Codex).unwrap());
+    let loaded = bundled_loaded_manifest(
+        AgentKind::Codex,
+        bundled_manifest(AgentKind::Codex).unwrap(),
+    );
     detect_loaded(
         DetectionInput {
             screen,
@@ -48,7 +51,7 @@ fn codex_hooks_detection(screen: &str) -> Detected {
 #[test]
 fn codex_osc_title_braille_spinner_is_working() {
     // "⠋" is U+280B, in the braille block
-    let result = detect_screen_with_osc(Agent::Codex, "", "⠋ llm-proxy", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, "", "⠋ llm-proxy", "");
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -59,7 +62,12 @@ fn codex_osc_title_braille_spinner_is_working() {
 
 #[test]
 fn codex_osc_title_action_required_is_blocked() {
-    let result = detect_screen_with_osc(Agent::Codex, "", "[ . ] Action Required | llm-proxy", "");
+    let result = detect_screen_with_osc(
+        AgentKind::Codex,
+        "",
+        "[ . ] Action Required | llm-proxy",
+        "",
+    );
     assert_eq!(result.state, AgentState::Blocked);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -70,7 +78,7 @@ fn codex_osc_title_action_required_is_blocked() {
 
 #[test]
 fn codex_osc_title_plain_is_idle() {
-    let result = detect_screen_with_osc(Agent::Codex, "", "llm-proxy", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, "", "llm-proxy", "");
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -94,7 +102,7 @@ fn codex_trust_directory_requires_live_chooser() {
     // The live bottom buffer can retain the shell launch title above the chooser.
     for prefix in ["", "codex\n~/work/bus\n\n✗ codex\n"] {
         let live = format!("{prefix}{screen}");
-        let result = detect_screen_with_osc(Agent::Codex, &live, "project", "");
+        let result = detect_screen_with_osc(AgentKind::Codex, &live, "project", "");
         assert_eq!(result.state, AgentState::Blocked, "prefix: {prefix:?}");
         assert_eq!(
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -109,7 +117,7 @@ fn codex_trust_directory_requires_live_chooser() {
         screen.replace("2. No, quit\n", ""),
         screen.replace("Press enter to continue\n", ""),
     ] {
-        let result = detect_screen_with_osc(Agent::Codex, &inactive, "project", "");
+        let result = detect_screen_with_osc(AgentKind::Codex, &inactive, "project", "");
         assert_eq!(result.state, AgentState::Idle);
         assert!(!result.visible_blocker);
     }
@@ -117,7 +125,7 @@ fn codex_trust_directory_requires_live_chooser() {
     let transcript = "› > You are in C:\\Users\\user\\project\n\n\
         Do you trust the contents of this\n\
         directory? Working with untrusted contents comes with higher risk.\n";
-    let result = detect_screen_with_osc(Agent::Codex, transcript, "project", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, transcript, "project", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_ne!(
@@ -145,7 +153,7 @@ fn codex_startup_update_requires_complete_live_chooser() {
         Press enter to continue\n";
 
     for screen in [chooser, wrapped] {
-        let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
+        let result = detect_screen_with_osc(AgentKind::Codex, screen, "project", "");
         assert_eq!(result.state, AgentState::Blocked);
         assert_eq!(
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -158,7 +166,7 @@ fn codex_startup_update_requires_complete_live_chooser() {
         chooser.replace("Update now", "Install"),
         format!("{wrapped}\n› Ask Codex to do anything\n"),
     ] {
-        let result = detect_screen_with_osc(Agent::Codex, &screen, "project", "");
+        let result = detect_screen_with_osc(AgentKind::Codex, &screen, "project", "");
         assert_eq!(result.state, AgentState::Idle);
         assert_ne!(
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
@@ -173,7 +181,7 @@ fn codex_background_terminal_screen_does_not_override_osc_idle() {
     // Background terminal tasks can be long-lived helpers such as dev servers.
     // They should not make Codex look busy once the foreground turn is idle.
     let screen = "background terminal running · /ps to view · /stop to close\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "llm-proxy", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "llm-proxy", "");
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -188,7 +196,7 @@ fn codex_screen_working_fallback_handles_static_osc_title() {
         ◦ Working (1m 16s • esc to interrupt) · 1 background…\n\n\
         › Use /skills to list available skills\n\n\
         gpt-5.6-sol default · /work\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
@@ -203,7 +211,7 @@ fn codex_osc_working_remains_preferred_over_screen_fallback() {
     let screen = "• Working (4s • esc to interrupt)\n\n\
         › Use /skills to list available skills\n\n\
         gpt-5.6-sol default · /work\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "⠸ project", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "⠸ project", "");
 
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
@@ -218,7 +226,7 @@ fn codex_screen_blocker_outranks_working_fallback() {
     let screen = "• Working (4s • esc to interrupt)\n\
         › 1. Yes, proceed\n\
         Press enter to confirm or esc to cancel\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Blocked);
     assert_eq!(
@@ -232,7 +240,7 @@ fn codex_screen_blocker_outranks_working_fallback() {
 #[test]
 fn codex_weak_blocker_without_current_prompt_is_blocked() {
     let result = detect_screen_with_osc(
-        Agent::Codex,
+        AgentKind::Codex,
         "do you want to continue? [y/n]\n",
         "project",
         "",
@@ -250,7 +258,7 @@ fn codex_current_prompt_keeps_weak_text_from_overriding_working_fallback() {
     let screen = "• Working (4s • esc to interrupt)\n\
         do you want to continue? [y/n]\n\
         › Use /skills to list available skills\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
@@ -265,7 +273,7 @@ fn codex_weak_blocker_ignores_finished_response_above_current_prompt() {
     let screen = "• The `wt rm` transcript now shows [y/N] / esc, matching the real prompt.\n\n\
         ─ Worked for 4m 59s ─\n\n\
         › Ask Codex to do anything\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
@@ -279,7 +287,7 @@ fn codex_weak_blocker_ignores_wrapped_current_prompt_text() {
     let screen = "› Explain why this prompt wraps before quoting the confirmation text\n\
           [y/N] / esc and whether the docs should include it\n\n\
           gpt-5.6-sol default · /work\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
@@ -293,7 +301,7 @@ fn codex_transcript_viewer_outranks_working_fallback() {
     let screen = "• Working (4s • esc to interrupt)\n\
         › transcript\n\
         ↑/↓ to scroll · pgup/pgdn to move · home/end to jump · q to quit · esc to edit prev\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Unknown);
     assert_eq!(
@@ -319,7 +327,7 @@ fn codex_screen_working_fallback_ignores_stale_and_prompt_text() {
     ];
 
     for screen in screens {
-        let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
+        let result = detect_screen_with_osc(AgentKind::Codex, screen, "project", "");
         assert_eq!(result.state, AgentState::Idle);
         assert_eq!(
             result.matched_rule.as_ref().map(|r| r.id.as_str()),
@@ -335,7 +343,7 @@ fn codex_screen_working_fallback_ignores_interrupted_short_terminal() {
     let screen = "◦ Working (1m 16s • esc to interrupt)\n\
         ■ Conversation interrupted\n\
         ›\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "project", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "project", "");
 
     assert_eq!(result.state, AgentState::Idle);
     assert_eq!(
@@ -351,7 +359,7 @@ fn codex_osc_working_beats_weak_blocker_screen() {
     // A stale [y/n] on screen triggers weak_blocker at priority 600, but an
     // active braille spinner in the OSC title is priority 1050 — OSC wins.
     let screen = "do you want to continue? [y/n]\n";
-    let result = detect_screen_with_osc(Agent::Codex, screen, "⠋ llm-proxy", "");
+    let result = detect_screen_with_osc(AgentKind::Codex, screen, "⠋ llm-proxy", "");
     assert_eq!(result.state, AgentState::Working);
     assert_eq!(
         result.matched_rule.as_ref().map(|r| r.id.as_str()),
