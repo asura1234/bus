@@ -225,8 +225,12 @@ pub(crate) fn modifier_with_underline_style(
 }
 
 /// Converts a u16 back to a ratatui `Modifier`.
+///
+/// The underline style bits are retained so an overlay round trip through a
+/// ratatui buffer keeps curly/double/dotted underlines on cells it does not touch.
 pub(super) fn u16_to_modifier(val: u16) -> ratatui::style::Modifier {
-    ratatui::style::Modifier::from_bits_truncate(val & !UNDERLINE_STYLE_MASK)
+    let known = ratatui::style::Modifier::from_bits_truncate(val).bits();
+    ratatui::style::Modifier::from_bits_retain(known | (val & UNDERLINE_STYLE_MASK))
 }
 
 impl From<ratatui::layout::Rect> for SurfaceRect {
