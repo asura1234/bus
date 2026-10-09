@@ -106,11 +106,33 @@ pub(crate) fn fill(template: &str, values: &PromptValues) -> String {
         Some((name, id)) => (name.clone(), id.0.to_string()),
         None => (UNASSIGNED_ROOM_NAME.into(), UNASSIGNED_ROOM_ID.into()),
     };
-    template
-        .replace("{{ROOM_NAME}}", &room_name)
-        .replace("{{ROOM_ID}}", &room_id)
-        .replace("{{AGENT_NAME}}", &values.agent)
-        .replace("{{DOCS}}", &values.docs.to_string_lossy())
+    let docs = values.docs.to_string_lossy();
+    let tokens = [
+        ("{{ROOM_NAME}}", room_name.as_str()),
+        ("{{ROOM_ID}}", room_id.as_str()),
+        ("{{AGENT_NAME}}", values.agent.as_str()),
+        ("{{DOCS}}", docs.as_ref()),
+    ];
+    // One pass over the template, so a name that contains placeholder text
+    // is inserted literally rather than expanded again.
+    let mut filled = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(start) = rest.find("{{") {
+        filled.push_str(&rest[..start]);
+        rest = &rest[start..];
+        match tokens.iter().find(|(token, _)| rest.starts_with(token)) {
+            Some((token, value)) => {
+                filled.push_str(value);
+                rest = &rest[token.len()..];
+            }
+            None => {
+                filled.push_str("{{");
+                rest = &rest[2..];
+            }
+        }
+    }
+    filled.push_str(rest);
+    filled
 }
 
 /// Writes the embedded Bus docs under `<data_dir>/docs/` and returns that folder.

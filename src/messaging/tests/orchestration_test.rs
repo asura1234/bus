@@ -259,3 +259,35 @@ fn an_adopted_session_renders_the_prompt_fresh_or_gets_it_as_a_message() {
 fn prompt_message_carries_the_prompt_text() {
     assert!(prompt_message("Be brief.").ends_with("\n\nBe brief."));
 }
+
+#[test]
+fn fill_keeps_placeholder_text_in_names_literal() {
+    let mut state = crate::messaging::model::BusState::new();
+    let room_name = "review {{ROOM_ID}} {{AGENT_NAME}} {{DOCS}}";
+    let room = state.create_room(room_name).unwrap();
+    let agent_name = "orch {{DOCS}}";
+    state
+        .create_agent(
+            room,
+            agent_name,
+            Provider::ClaudeCode,
+            PathBuf::from("/repo"),
+            None,
+        )
+        .unwrap();
+    let values = PromptValues {
+        room: Some((room_name.into(), room)),
+        agent: agent_name.into(),
+        docs: PathBuf::from("/data/docs"),
+    };
+    assert_eq!(
+        fill(
+            "Room {{ROOM_NAME}}; id {{ROOM_ID}}; agent {{AGENT_NAME}}; docs {{DOCS}}",
+            &values
+        ),
+        format!(
+            "Room {room_name}; id {}; agent {agent_name}; docs /data/docs",
+            room.0
+        )
+    );
+}
