@@ -516,3 +516,15 @@ fn awaited_palette_color_reply_survives_idle_between_chunks() {
         );
     }
 }
+
+#[test]
+fn legacy_escape_before_host_color_reply_preserves_both_events() {
+    let mut framer = RawInputByteFramer::with_host_input_policy(true);
+    framer.host_color_query_sent();
+    assert!(framer.push(b"\x1b").is_empty());
+
+    let reply = b"\x1b]11;rgb:1111/2222/3333\x1b\\";
+    let chunks = framer.push(reply);
+
+    assert_eq!(chunks, vec![b"\x1b".to_vec(), reply.to_vec()]);
+}

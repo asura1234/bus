@@ -103,6 +103,17 @@ pub(super) fn complete_escape_sequence_len(buffer: &[u8]) -> Option<usize> {
         return Some(1);
     }
 
+    // A complete control string is a host reply, never an Alt-modified key, so
+    // the leading Escape is the user's own key press.
+    if buffer.starts_with(b"\x1b\x1b")
+        && matches!(
+            control_string(&buffer[1..]),
+            Some(ControlString::Complete { .. })
+        )
+    {
+        return Some(1);
+    }
+
     if buffer.starts_with(b"\x1b\x1b") {
         return complete_escape_sequence_len(&buffer[1..]).map(|len| len + 1);
     }
