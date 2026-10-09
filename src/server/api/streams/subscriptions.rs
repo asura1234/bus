@@ -122,7 +122,7 @@ impl ActiveSubscription {
             })
         };
 
-        match subscription {
+        let active = match subscription {
             Subscription::WorkspaceCreated {} => {
                 Ok(event_subscription(EventKind::WorkspaceCreated))
             }
@@ -164,23 +164,22 @@ impl ActiveSubscription {
                 agent_status,
             } => {
                 let last_sequence = event_hub.current_sequence();
-                let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, api_tx)?;
-                let last_status = probe.agent_status;
-                let last_presentation = PanePresentationSnapshot::from(&probe);
-                let initial_event = agent_status
-                    .is_some_and(|wanted| wanted == probe.agent_status)
-                    .then_some(PaneAgentStatusChangedEvent {
-                        pane_id: probe.pane_id.clone(),
-                        workspace_id: probe.workspace_id,
-                        agent_status: probe.agent_status,
-                        agent: probe.agent,
-                        title: probe.title,
-                        display_agent: probe.display_agent,
-                        state_labels: probe.state_labels,
-                    });
+                pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, api_tx).map(|probe| {
+                    let last_status = probe.agent_status;
+                    let last_presentation = PanePresentationSnapshot::from(&probe);
+                    let initial_event = agent_status
+                        .is_some_and(|wanted| wanted == probe.agent_status)
+                        .then_some(PaneAgentStatusChangedEvent {
+                            pane_id: probe.pane_id.clone(),
+                            workspace_id: probe.workspace_id,
+                            agent_status: probe.agent_status,
+                            agent: probe.agent,
+                            title: probe.title,
+                            display_agent: probe.display_agent,
+                            state_labels: probe.state_labels,
+                        });
 
-                Ok(Self::AgentStatusChanged(Box::new(
-                    ActiveAgentStatusChangedSubscription {
+                    Self::AgentStatusChanged(Box::new(ActiveAgentStatusChangedSubscription {
                         pane_id: probe.pane_id,
                         status_filter: agent_status,
                         last_status: Some(last_status),
@@ -188,19 +187,23 @@ impl ActiveSubscription {
                         last_sequence,
                         initial_event,
                         request_prefix: format!("{request_id}:sub:{index}"),
-                    },
-                )))
+                    }))
+                })
             }
             Subscription::PaneScrollChanged { pane_id } => {
-                let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, api_tx)?;
-
-                Ok(Self::ScrollChanged(ActiveScrollChangedSubscription {
-                    pane_id: probe.pane_id,
-                    last_scroll: probe.scroll,
-                    request_prefix: format!("{request_id}:sub:{index}"),
-                }))
+                pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, api_tx).map(|probe| {
+                    Self::ScrollChanged(ActiveScrollChangedSubscription {
+                        pane_id: probe.pane_id,
+                        last_scroll: probe.scroll,
+                        request_prefix: format!("{request_id}:sub:{index}"),
+                    })
+                })
             }
-        }
+        };
+        active.map_err(|mut response| {
+            response.id = request_id.to_string();
+            response
+        })
     }
 
     fn output_matched_subscription(
