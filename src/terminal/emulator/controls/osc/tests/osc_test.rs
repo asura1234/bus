@@ -671,6 +671,31 @@ fn reported_cwd_accepts_file_uri_naming_the_local_host() {
     );
 }
 
+#[test]
+fn agent_osc_title_keeps_utf8_text_containing_c1_continuation_bytes() {
+    let mut t = AgentOscStateTracker::default();
+    // U+271C is encoded as E2 9C 9C; 0x9C must not end the OSC body.
+    t.observe("\x1b]0;a\u{271c}b\x07".as_bytes());
+    assert_eq!(t.latest_title(), "a\u{271c}b");
+}
+
+#[test]
+fn agent_osc_title_after_oversized_clipboard_osc_is_captured() {
+    let mut t = AgentOscStateTracker::default();
+    let mut bytes = b"\x1b]52;c;".to_vec();
+    bytes.extend(std::iter::repeat_n(b'A', 8192));
+    bytes.extend_from_slice(b"\x07\x1b]2;after clipboard\x07");
+    t.observe(&bytes);
+    assert_eq!(t.latest_title(), "after clipboard");
+}
+
+#[test]
+fn agent_osc_title_after_kitty_graphics_apc_is_captured() {
+    let mut t = AgentOscStateTracker::default();
+    t.observe(b"\x1b_Ga=T,f=100;AAAA\x1b\\\x1b]0;after image\x07");
+    assert_eq!(t.latest_title(), "after image");
+}
+
 #[cfg(unix)]
 #[test]
 fn reported_cwd_accepts_local_hostname_case_and_decodes_the_path() {

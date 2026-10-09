@@ -381,6 +381,28 @@ fn xtgettcap_query_after_emoji_output_is_answered() {
 }
 
 #[test]
+fn background_query_split_inside_string_terminator_gets_one_reply() {
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+    let pane_id = PaneId::from_raw(1);
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        background: Some(crate::utils::theme::color::RgbColor { r: 1, g: 2, b: 3 }),
+        ..Default::default()
+    });
+
+    let first = pane.process_pty_bytes(pane_id, 0, b"\x1b]11;?\x1b", &tx, |_| None);
+    let second = pane.process_pty_bytes(pane_id, 0, b"\\", &tx, |_| None);
+
+    let mut replies = first.terminal_responses;
+    replies.extend(second.terminal_responses);
+    assert_eq!(
+        replies,
+        vec![Bytes::from_static(b"\x1b]11;rgb:0101/0202/0303\x1b\\")]
+    );
+}
+
+#[test]
 fn xtgettcap_query_after_split_utf8_text_is_answered() {
     for text in ["\u{0090}", "Ð", "Ø", "Þ", "ß", "❯", "🎉"] {
         for split in 1..text.len() {
