@@ -192,3 +192,92 @@ mod callbacks;
 mod requests;
 #[path = "rooms_test.rs"]
 mod rooms;
+
+#[test]
+fn claude_image_placeholder_matches_when_text_before_the_image_ends_in_whitespace() {
+    for text in ["Look ", "Look\t", "Look \t\r\n"] {
+        let prompt = Prompt {
+            id: PromptId(1),
+            author: Author::Human,
+            text: text.into(),
+            files: vec![PathBuf::from("/tmp/a.png")],
+            recipient_ids: AgentRecipients::default(),
+            submitted_at_ms: 0,
+            compaction_limit_notice: false,
+        };
+        // Whether the hook keeps the trailing space or not, the lifted image
+        // leaves the typed text line as the whole remaining prompt.
+        assert!(prompt.matches_callback_payload("[Image #1]Look "));
+        assert!(prompt.matches_callback_payload("[Image #1]Look"));
+        assert!(prompt.matches_callback_payload(&prompt.rendered_payload()));
+        assert_eq!(prompt.text, text);
+    }
+}
+
+#[test]
+fn claude_image_placeholder_matching_preserves_internal_and_non_ascii_whitespace() {
+    let typed = "First \t\n  Last \t\n\"/tmp/a.png\"";
+    assert!(payload_matches("[Image #1]First \t\n  Last \t", typed));
+    assert!(!payload_matches("[Image #1]First\n  Last", typed));
+    assert!(!payload_matches("[Image #1]First \t\nLast", typed));
+    assert!(!payload_matches(
+        "[Image #1][Image #2]First \t\n  Last",
+        typed
+    ));
+
+    let typed = "Look\u{a0}\n\"/tmp/a.png\"";
+    assert!(payload_matches("[Image #1]Look\u{a0}", typed));
+    assert!(!payload_matches("[Image #1]Look", typed));
+}
+
+#[test]
+fn claude_image_placeholder_callbacks_bind_and_complete_prompt_with_trailing_whitespace() {
+    let (mut state, room, _, agent) = state_with_room_and_agents();
+    state.attach_file(room, "/tmp/a.png".into()).unwrap();
+    let request = submit_text(&mut state, room, agent, "Look \t");
+    let queued = submit_text(&mut state, room, agent, "queued next");
+    submit_request(&mut state, request, "launch-claude", 10);
+
+    assert_eq!(
+        state.accept_callback(ProviderCallback {
+            callback_id: "image-start".into(),
+            sequence: 11,
+            occurred_at_ms: 11,
+            agent_id: agent,
+            launch_id: "launch-claude".into(),
+            provider_session_id: Some("provider-session".into()),
+            provider_turn_id: Some("turn-1".into()),
+            provider_prompt_id: None,
+            prompt_payload: Some("[Image #1]Look \t".into()),
+            kind: CallbackEventKind::PromptStarted,
+        }),
+        CallbackDisposition::AcceptedBinding
+    );
+    assert_eq!(
+        state.accept_callback(ProviderCallback::final_event(
+            "image-final",
+            12,
+            agent,
+            "launch-claude",
+            "provider-session",
+            "turn-1",
+            "[Image #1]Look",
+            "finished",
+        )),
+        CallbackDisposition::AcceptedPendingSettlement
+    );
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 13)
+        .unwrap();
+
+    assert_eq!(
+        state.request(request).unwrap().phase,
+        RequestPhase::Completed
+    );
+    assert_eq!(
+        state.room(room).unwrap().latest_replies[&agent].text,
+        "finished"
+    );
+    assert_eq!(state.next_queued_request(agent), Some(queued));
+    assert_eq!(state.request(request).unwrap().prompt.text, "Look \t");
+}

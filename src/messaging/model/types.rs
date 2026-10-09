@@ -478,7 +478,8 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    images > 0 && images == lifted && payload[length..] == remaining
+    let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
+    images > 0 && images == lifted && &payload[length..] == remaining
 }
 
 /// Whether `line` is exactly one path quoted the way `Prompt::rendered_payload`
