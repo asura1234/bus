@@ -103,6 +103,7 @@ impl BusState {
             files: draft.files,
             recipient_ids: draft.recipient_ids,
             submitted_at_ms: now_ms,
+            compaction_limit_notice: false,
         };
         let mut request_ids = Vec::with_capacity(prompt.recipient_ids.len());
         for agent_id in prompt.recipient_ids.iter().copied() {

@@ -35,6 +35,9 @@ mod persistence_tests;
 #[path = "recovery_test.rs"]
 mod recovery_tests;
 
+#[path = "compaction_test.rs"]
+mod compaction_tests;
+
 #[path = "scheduling_test.rs"]
 mod scheduling_tests;
 

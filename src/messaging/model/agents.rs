@@ -143,10 +143,12 @@ impl BusState {
 
     /// Marks the agent's provider context as reset by `agent clear`.
     pub(crate) fn begin_session_reset(&mut self, id: AgentId) -> Result<(), ModelError> {
-        self.agents
+        let agent = self
+            .agents
             .get_mut(&id)
-            .ok_or(ModelError::UnknownAgent(id))?
-            .session_reset_pending = true;
+            .ok_or(ModelError::UnknownAgent(id))?;
+        agent.session_reset_pending = true;
+        agent.compactions = Compactions::default();
         Ok(())
     }
 

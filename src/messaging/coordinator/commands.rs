@@ -50,6 +50,9 @@ impl Worker {
                 self.set_all_rooms_sound(None, Some(name), events)?;
                 return Ok(());
             }
+            BusCommand::SetMaxCompactionsPerAgent(limit) => {
+                return self.set_max_compactions_per_agent(limit, events);
+            }
             BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),
             BusCommand::SetDraftText(id, text) => state.set_draft_text(id, &text),
             BusCommand::SetRecipients(id, recipients) => state.set_draft_recipients(id, recipients),

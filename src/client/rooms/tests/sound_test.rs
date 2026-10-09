@@ -85,9 +85,11 @@ fn settings_keyboard_and_mouse_toggle_room_sound() {
     )));
     assert_eq!(ui.settings_field, 4);
     assert_eq!(queued_sound(&ui).last(), Some(&(rooms[1], true)));
-    // Down stops at the last room.
+    // The new compaction setting follows the last room.
     key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
-    assert_eq!(ui.settings_field, 4);
+    assert_eq!(ui.settings_field, 5);
+    key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    assert_eq!(ui.settings_field, 5);
     assert!(!ui.settings.color_blind_mode);
 }
 

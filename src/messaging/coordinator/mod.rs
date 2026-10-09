@@ -55,6 +55,7 @@ pub(crate) enum BusCommand {
     SetAllRoomsSound(bool),
     /// Every work room's sound name (None is Bus's own ding), also saved for new rooms.
     SetAllRoomsSoundName(Option<String>),
+    SetMaxCompactionsPerAgent(u32),
     RenameAgent(AgentId, String),
     DeleteRoom(RoomId),
     DeleteAgent(AgentId),

@@ -54,6 +54,7 @@ pub(super) enum Action {
     ToggleSound(SoundTarget),
     /// Picks the next (true) or previous system sound for a Settings sound row.
     CycleSound(SoundTarget, bool),
+    AdjustCompactionLimit(bool),
     Cancel,
     Add,
 }
@@ -140,6 +141,9 @@ pub(super) enum SoundSettingsLine {
     /// `field` is the row's Settings focus index; color blind mode is field 0.
     Sound {
         target: SoundTarget,
+        field: usize,
+    },
+    Compactions {
         field: usize,
     },
 }

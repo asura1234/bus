@@ -2,6 +2,48 @@ use super::*;
 use crossterm::event::MouseEventKind::ScrollDown;
 
 #[test]
+fn compaction_notice_history_is_one_plain_line_without_a_reply_slot() {
+    let (mut ui, room, author) = fixture();
+    let mut state = ui.snapshot.state.clone();
+    let text = "author -> orchestrator: reached 5 compactions; get a handover note and replace it.";
+    state
+        .submit_message_from(
+            room,
+            Draft {
+                text: text.into(),
+                files: vec![],
+                recipient_ids: [author].into(),
+            },
+            Author::Agent(author),
+            1_000,
+        )
+        .unwrap();
+    // A saved notice keeps its presentation even when loaded into a new UI.
+    let mut saved = serde_json::to_value(&state).unwrap();
+    for request in saved["requests"].as_object_mut().unwrap().values_mut() {
+        request["prompt"]["compaction_limit_notice"] = true.into();
+    }
+    let state = serde_json::from_value::<BusState>(saved).unwrap();
+    let lines = ui.history.lines(
+        &state,
+        state.room(room).unwrap(),
+        120,
+        1,
+        2_000,
+        &mut Default::default(),
+    );
+    let text_lines: Vec<_> = lines
+        .iter()
+        .filter(|line| !line.text.is_empty())
+        .map(|line| line.text.as_str())
+        .collect();
+    assert_eq!(text_lines, [text]);
+    assert!(lines
+        .iter()
+        .all(|line| line.styles.is_empty() && line.raw_markdown.is_none()));
+}
+
+#[test]
 fn pending_replies_reserve_indented_slots_in_recipient_order() {
     let (mut ui, room, author) = fixture();
     let mut snapshot = (*ui.snapshot).clone();

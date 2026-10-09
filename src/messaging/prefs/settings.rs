@@ -2,14 +2,17 @@
 //!
 //! Choices that are not tied to one room live here, so a change made in any
 //! Bus is what every Bus launched afterwards starts with: color blind mode,
-//! MASTER's sound (every session has MASTER), and the last All rooms sound,
-//! which a new work room starts with. A room's own sound stays in its session. Running Bus
-//! instances read this file at launch and when they create a room; they do
-//! not follow another instance's changes live.
+//! MASTER's sound (every session has MASTER), the last All rooms sound, and
+//! the worker compaction limit. A room's own sound stays in its session.
+//! Sounds are read at launch and room creation; the coordinator reads the
+//! compaction limit each tick so settings changes can re-arm notices.
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::messaging::storage::{io, sessions as local_sessions};
+
+pub(crate) const MIN_COMPACTIONS_PER_AGENT: u32 = 1;
+pub(crate) const MAX_COMPACTIONS_PER_AGENT: u32 = 100;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
@@ -20,6 +23,9 @@ pub(crate) struct BusSettings {
     /// The last All rooms choice: set on every work room at once, and what
     /// each new work room starts with.
     pub(crate) room_sound: SoundPref,
+    /// Notify the room when a worker reaches this many compactions.
+    #[serde(deserialize_with = "deserialize_compaction_limit")]
+    pub(crate) max_compactions_per_agent: u32,
 }
 
 impl Default for BusSettings {
@@ -31,8 +37,26 @@ impl Default for BusSettings {
                 name: None,
             },
             room_sound: SoundPref::default(),
+            max_compactions_per_agent: 5,
         }
     }
+}
+
+pub(crate) fn validate_compaction_limit(value: u32) -> Result<(), String> {
+    if (MIN_COMPACTIONS_PER_AGENT..=MAX_COMPACTIONS_PER_AGENT).contains(&value) {
+        Ok(())
+    } else {
+        Err("Max compactions per agent must be between 1 and 100.".into())
+    }
+}
+
+fn deserialize_compaction_limit<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    validate_compaction_limit(value).map_err(serde::de::Error::custom)?;
+    Ok(value)
 }
 
 /// A sound notification choice: on or off, and the system sound by name
@@ -93,6 +117,7 @@ pub(crate) fn update(
 }
 
 pub(crate) fn save(path: &Path, settings: &BusSettings) -> Result<(), String> {
+    validate_compaction_limit(settings.max_compactions_per_agent)?;
     let failed = |error: &dyn std::fmt::Display| {
         format!("Could not save Bus settings to {}: {error}", path.display())
     };
@@ -105,6 +130,30 @@ pub(crate) fn save(path: &Path, settings: &BusSettings) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compaction_limit_defaults_to_five_and_validates_config_values() {
+        let root = std::env::temp_dir().join(format!("bus-compaction-settings-{}", io::now_ns()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        let defaults = serde_json::to_value(load(&path).unwrap()).unwrap();
+        assert_eq!(defaults["max_compactions_per_agent"], 5);
+        for value in [1, 5, 100] {
+            std::fs::write(&path, format!("{{\"max_compactions_per_agent\":{value}}}")).unwrap();
+            let loaded = load(&path).unwrap();
+            assert_eq!(
+                serde_json::to_value(&loaded).unwrap()["max_compactions_per_agent"],
+                value
+            );
+            save(&path, &loaded).unwrap();
+            assert_eq!(load(&path).unwrap(), loaded);
+        }
+        for value in ["0", "101", "-1", "1.5", "\"five\""] {
+            std::fs::write(&path, format!("{{\"max_compactions_per_agent\":{value}}}")).unwrap();
+            assert!(load(&path).is_err(), "invalid limit {value}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn color_blind_mode_defaults_off_and_round_trips() {

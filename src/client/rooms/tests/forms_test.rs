@@ -59,6 +59,53 @@ fn settings_space_does_not_toggle_color_blind_mode() {
 }
 
 #[test]
+fn settings_compaction_limit_is_visible_and_editable_with_arrow_keys() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+    let screen = room_screen(&mut ui, 120, 40);
+    assert!(screen.contains("Max compactions per agent"), "{screen}");
+    assert!(screen.contains("‹ 5 ›"), "{screen}");
+    for _ in 0..10 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    key(&mut ui, KeyCode::Right, KeyModifiers::NONE);
+    assert_eq!(
+        serde_json::to_value(&ui.settings).unwrap()["max_compactions_per_agent"],
+        6
+    );
+    assert!(ui
+        .pending
+        .iter()
+        .any(|p| matches!(p.command, BusCommand::SetMaxCompactionsPerAgent(6))));
+    key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
+    assert_eq!(
+        serde_json::to_value(&ui.settings).unwrap()["max_compactions_per_agent"],
+        5
+    );
+}
+
+#[test]
+fn settings_compaction_limit_mouse_controls_respect_the_allowed_range() {
+    let (mut ui, _, _) = fixture();
+    ui.action(render::Action::Settings);
+    room_screen(&mut ui, 120, 40);
+    assert!(ui
+        .view
+        .hits
+        .iter()
+        .any(|hit| hit.action == render::Action::AdjustCompactionLimit(true)));
+    ui.settings.max_compactions_per_agent = 100;
+    let before = ui.pending.len();
+    ui.action(render::Action::AdjustCompactionLimit(true));
+    assert_eq!(ui.settings.max_compactions_per_agent, 100);
+    assert_eq!(ui.pending.len(), before);
+    ui.settings.max_compactions_per_agent = 1;
+    ui.action(render::Action::AdjustCompactionLimit(false));
+    assert_eq!(ui.settings.max_compactions_per_agent, 1);
+    assert_eq!(ui.pending.len(), before);
+}
+
+#[test]
 fn settings_footer_advertises_enter_as_the_only_toggle_key() {
     let (mut ui, _, _) = fixture();
     ui.action(render::Action::Settings);

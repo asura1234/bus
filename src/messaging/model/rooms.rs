@@ -340,6 +340,7 @@ impl BusState {
             files,
             recipient_ids: AgentRecipients::default(),
             submitted_at_ms: now_ms,
+            compaction_limit_notice: false,
         };
         // The latest prompt is what rings and what the composer recalls, as
         // for an agent's `send --as` to other agents.

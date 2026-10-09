@@ -180,7 +180,7 @@ impl BusUi {
         let targets = self.sound_settings_targets();
         match code {
             KeyCode::Up => self.settings_field = self.settings_field.saturating_sub(1),
-            KeyCode::Down => self.settings_field = (self.settings_field + 1).min(targets.len()),
+            KeyCode::Down => self.settings_field = (self.settings_field + 1).min(targets.len() + 1),
             // Enter alone toggles (Space is deliberately inert in Settings).
             KeyCode::Enter => match self.settings_field {
                 0 => self.toggle_color_blind_mode(),
@@ -191,7 +191,9 @@ impl BusUi {
                 }
             },
             KeyCode::Left | KeyCode::Right => {
-                if let Some(target) = self
+                if self.settings_field == targets.len() + 1 {
+                    self.adjust_compaction_limit(code == KeyCode::Right);
+                } else if let Some(target) = self
                     .settings_field
                     .checked_sub(1)
                     .and_then(|i| targets.get(i))

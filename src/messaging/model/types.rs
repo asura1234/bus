@@ -164,6 +164,9 @@ pub(crate) struct Prompt {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) recipient_ids: AgentRecipients,
     pub(crate) submitted_at_ms: u64,
+    /// Render a code-driven compaction notice as one plain chat line.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) compaction_limit_notice: bool,
 }
 
 fn human_author() -> Author {
@@ -339,6 +342,9 @@ pub(crate) struct RoomAgent {
 pub(crate) struct Compactions {
     pub(crate) count: u32,
     pub(crate) last_at_ms: Option<u64>,
+    /// Saved with the notice; clears only on context reset or a higher limit.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) limit_notice_sent: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

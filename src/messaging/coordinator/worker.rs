@@ -238,6 +238,7 @@ impl Worker {
             }
         }
         self.settle_requests()?;
+        self.refresh_compaction_notices()?;
         self.submit_ready_while(can_deliver).inspect_err(|_| {
             tracing::warn!(
                 event = "bus.coordinator.failed",

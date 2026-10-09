@@ -122,6 +122,15 @@ impl History {
         width: u16,
         now: u64,
     ) {
+        if prompt.compaction_limit_notice {
+            lines.extend(wrap_header(
+                vec![(prompt.text.clone(), Tone::Text)],
+                width,
+                "",
+                RowAnchor::new(prompt.id, None, RowKind::PromptBody),
+            ));
+            return;
+        }
         let mut header = vec![
             (
                 participant_label(state, &prompt.author),
@@ -178,6 +187,9 @@ impl History {
         width: u16,
     ) {
         let prompt = exchange.prompt;
+        if prompt.compaction_limit_notice {
+            return;
+        }
         for agent_id in &prompt.recipient_ids {
             let Some(agent) = state.agent(*agent_id) else {
                 continue;

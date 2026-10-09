@@ -3,6 +3,23 @@ use super::super::{forms::Form, render::SoundTarget, BusUi, Effect};
 use crate::messaging::coordinator::BusCommand;
 
 impl BusUi {
+    pub(super) fn adjust_compaction_limit(&mut self, forward: bool) {
+        use crate::messaging::prefs::settings::{
+            MAX_COMPACTIONS_PER_AGENT, MIN_COMPACTIONS_PER_AGENT,
+        };
+        self.settings_field = self.sound_settings_targets().len() + 1;
+        let current = self.settings.max_compactions_per_agent;
+        let next = if forward {
+            current.saturating_add(1).min(MAX_COMPACTIONS_PER_AGENT)
+        } else {
+            current.saturating_sub(1).max(MIN_COMPACTIONS_PER_AGENT)
+        };
+        if next != current {
+            self.settings.max_compactions_per_agent = next;
+            self.queue(BusCommand::SetMaxCompactionsPerAgent(next), Effect::None);
+        }
+    }
+
     pub(super) fn toggle_sound(&mut self, target: SoundTarget) {
         match target {
             SoundTarget::Room(room) => {
@@ -85,7 +102,10 @@ impl BusUi {
     pub(super) fn reveal_settings_field(&mut self) {
         let lines = self.sound_settings_lines();
         let Some(line) = lines.iter().position(|line| {
-            matches!(line, super::super::render::SoundSettingsLine::Sound { field, .. } if *field == self.settings_field)
+            matches!(line,
+                super::super::render::SoundSettingsLine::Sound { field, .. }
+                | super::super::render::SoundSettingsLine::Compactions { field }
+                if *field == self.settings_field)
         }) else {
             self.settings_scroll = 0;
             return;

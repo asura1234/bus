@@ -65,6 +65,11 @@ impl BusUi {
             lines.push(SoundSettingsLine::Empty("No rooms yet"));
         }
         lines.extend(targets);
+        lines.push(SoundSettingsLine::Empty(""));
+        lines.push(SoundSettingsLine::Heading("AGENTS"));
+        lines.push(SoundSettingsLine::Compactions {
+            field: self.sound_settings_targets().len() + 1,
+        });
         lines
     }
 
@@ -363,7 +368,7 @@ impl BusUi {
         }
         view.row(
             Rect::new(x, footer, width, 1),
-            "Close (Esc) · ↑↓ move · Enter toggles · ←→ sound",
+            "Close (Esc) · ↑↓ move · Enter toggles · ←→ change",
             Some(Action::Cancel),
             false,
             true,
@@ -377,6 +382,9 @@ impl BusUi {
             }
             SoundSettingsLine::Empty(text) => {
                 view.row(rect, *text, None, false, true);
+            }
+            SoundSettingsLine::Compactions { field } => {
+                self.compaction_settings_row(view, rect, *field);
             }
             SoundSettingsLine::Sound { target, field } => {
                 let Some((label, enabled, sound)) = self.sound_row(*target) else {
@@ -426,6 +434,39 @@ impl BusUi {
                 );
             }
         }
+    }
+
+    fn compaction_settings_row(&self, view: &mut View, rect: Rect, field: usize) {
+        let selected = self.settings_field == field;
+        let value = self.settings.max_compactions_per_agent.to_string();
+        let choice_width = value.len() as u16 + 4;
+        let choice_x = rect.x + rect.width.saturating_sub(choice_width);
+        view.row(
+            Rect::new(
+                rect.x,
+                rect.y,
+                rect.width.saturating_sub(choice_width + 1),
+                1,
+            ),
+            "Max compactions per agent (1–100)",
+            None,
+            selected,
+            false,
+        );
+        view.row(
+            Rect::new(choice_x, rect.y, 2, 1),
+            "‹",
+            Some(Action::AdjustCompactionLimit(false)),
+            selected,
+            true,
+        );
+        view.row(
+            Rect::new(choice_x + 2, rect.y, choice_width - 2, 1),
+            format!("{value} ›"),
+            Some(Action::AdjustCompactionLimit(true)),
+            selected,
+            false,
+        );
     }
 
     fn agent_fields(&self, view: &mut View, main: Rect, form: &Form) -> u16 {

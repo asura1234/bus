@@ -6,6 +6,43 @@ use super::{BusCommand, Method, Path, PathBuf, ResponseResult, Transport};
 use crate::messaging::prefs::settings::{self, BusSettings, SoundPref};
 
 impl Worker {
+    pub(super) fn refresh_compaction_notices(&mut self) -> Result<(), String> {
+        let limit = self
+            .settings_path
+            .as_deref()
+            .and_then(|path| settings::load(path).ok())
+            .unwrap_or_default()
+            .max_compactions_per_agent;
+        self.apply_compaction_limit(limit)
+    }
+
+    fn apply_compaction_limit(&mut self, limit: u32) -> Result<(), String> {
+        let mut state = self.state.clone();
+        if state
+            .notify_compaction_limits(limit, crate::messaging::storage::io::now_ms())
+            .map_err(|error| error.to_string())?
+        {
+            self.save(state)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn set_max_compactions_per_agent(
+        &mut self,
+        limit: u32,
+        events: &mpsc::Sender<BusEvent>,
+    ) -> Result<(), String> {
+        settings::validate_compaction_limit(limit)?;
+        let path = self
+            .settings_path
+            .as_deref()
+            .ok_or("Bus settings location unavailable")?;
+        let saved = settings::update(path, |settings| settings.max_compactions_per_agent = limit)?;
+        self.apply_compaction_limit(limit)?;
+        let _ = events.send(BusEvent::SettingsChanged(saved));
+        Ok(())
+    }
+
     /// At launch, MASTER takes the global sound.
     pub(super) fn apply_global_settings(&mut self) -> Result<(), String> {
         let Some(path) = self.settings_path.clone() else {

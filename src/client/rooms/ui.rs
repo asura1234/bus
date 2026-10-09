@@ -114,7 +114,7 @@ pub(in crate::client) struct BusUi {
     pub(super) settings: crate::messaging::prefs::settings::BusSettings,
     /// None keeps toggles in memory only.
     pub(super) settings_path: Option<std::path::PathBuf>,
-    /// Settings focus: 0 is color blind mode, then one row per sound room.
+    /// Settings focus: color blind mode, sound rows, then the compaction limit.
     pub(super) settings_field: usize,
     pub(super) settings_scroll: usize,
     /// Set only by the coordinator-owning client; `None` never plays a sound.
