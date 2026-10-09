@@ -164,13 +164,21 @@ A typical PR review loop, run by the orchestrator:
 1. Ask two or more reviewers on different providers to run `review-pr` on the
    branch.
 2. Send their findings to the author agent to run `address-review-comments`.
-3. If findings are flagged for a decision, ask every reviewer for a
-   recommendation, form your own, and pick the best (best-of-N). If the
-   recommendations disagree sharply, stop and ask the human.
+3. For each open or flagged issue, poll the author and every reviewer for a
+   recommendation. Forward all recommendations to the author to run the
+   `best-of-n` skill. A clear winner (`universal` or `clear`) is applied by the
+   author, and the round continues unblocked. With no clear winner, defer a
+   nonblocking issue: record it in the workflow's deferred list, with its
+   recommendations and why it does not block, and ask the human later in
+   MASTER at the next human checkpoint. The round continues unblocked. For a
+   blocking issue without a clear winner, halt progress and ask the human in
+   MASTER; resume only after their decision.
 4. Repeat until every reviewer says ready.
 5. If the branch touches delivery, callbacks or launch, have an agent run
    `just e2e` (live round trips with every provider) and report its table.
-6. Tell the human the branch is ready for their regression test before merge.
+6. Ask the human in MASTER about any deferred issues, then tell them the branch
+   is ready for their regression test before merge. If a deferred decision
+   requires a fix, send it to the author and repeat the review loop first.
 
 ## Steer agents without waiting
 
@@ -207,7 +215,9 @@ Ask before anything outside the room's goal or the workflow's decision rules:
   and deleting agents in your own room is not on this list: do it as the
   workflow needs and log it.
 - Changing the goal or dropping a requirement.
-- Reviewers or best-of-N candidates that disagree sharply.
+- A blocking review issue with no clear winner after the author runs
+  `best-of-n`. Nonblocking issues without a clear winner stay in the workflow's
+  deferred list for the next human checkpoint and do not halt the round.
 - A hard gate that no option can meet.
 
 If the human gave you full control for a decision, decide, record it in the

@@ -33,9 +33,21 @@ These rules are binding for every Bus orchestrator. Commands use an installed
 - **Keep follow-ups in the running workflow file, not in your context.**
   Unless the graph has a pause or human check before them, execute them in
   order; never defer them to later. If the room has no running workflow, create
-  one (workflow-create) that holds the follow-up steps. *Why:* follow-ups kept
-  in an agent's context or deferred get lost; the workflow file is the
-  executable plan.
+  one (workflow-create) that holds the follow-up steps. The review rule below
+  is the exception for nonblocking issues without a clear winner. *Why:*
+  follow-ups kept in an agent's context or deferred without a record get lost;
+  the workflow file is the executable plan.
+- **Resolve review issues through the author.** For each open or flagged issue
+  in a review round, poll the author and every reviewer for a recommendation
+  and forward all recommendations to the author to run the `best-of-n` skill.
+  With a clear winner (`universal` or `clear`), the author applies it and the
+  round continues unblocked. With no clear winner on a nonblocking issue,
+  record it in the workflow's deferred list, with its recommendations and why
+  it does not block, and ask the human later in MASTER at the next human
+  checkpoint; the round continues unblocked. With no clear winner on a
+  blocking issue, halt progress and ask the human in MASTER; resume only after
+  their decision. *Why:* the author adjudicates technical approaches; only an
+  unresolved blocking issue stops the review round.
 - **Brief workers directly.** Write tasks, constraints and decisions as your
   own instructions; never label them as coming from the human or as
   human-approved. *Why:* a worker cannot verify who is behind a message, so the
