@@ -61,33 +61,3 @@ fn hit_test_columns_keep_saturating_width_arithmetic() {
     );
     assert_eq!(word_bounds_at_column("ab", u16::MAX, |_| u16::MAX), None);
 }
-
-#[test]
-fn url_hit_mapping_preserves_wide_character_pre_wrap() {
-    let mut terminal = crate::terminal::vt::Terminal::new(11, 3, 100).unwrap();
-    terminal.write("https://a/界b".as_bytes());
-    let rows = terminal.screen_text_rows().unwrap();
-    assert_eq!(rows[1].cells[0].graphemes, vec!['界' as u32]);
-
-    let text = terminal.read_text_screen((0, 0), (10, 2), false).unwrap();
-    assert_eq!(text.trim_end(), "https://a/界b");
-    let hit = logical_cell_for_visible_cell(&text, 11, 1, 0, width)
-        .and_then(|cell| url_at_column(&text, cell.logical_col, width));
-
-    assert_eq!(hit, Some("https://a/界b"));
-}
-
-#[test]
-fn url_hit_mapping_keeps_link_after_edge_combining_mark() {
-    let mut terminal = crate::terminal::vt::Terminal::new(4, 6, 100).unwrap();
-    terminal.write("abcx\u{301}https://a/".as_bytes());
-    let rows = terminal.screen_text_rows().unwrap();
-    assert_eq!(rows[0].cells[3].graphemes, vec!['x' as u32, 0x301]);
-    assert_eq!(rows[1].cells[0].graphemes, vec!['h' as u32]);
-
-    let text = terminal.read_text_screen((0, 0), (3, 5), false).unwrap();
-    let hit = logical_cell_for_visible_cell(&text, 4, 1, 0, width)
-        .and_then(|cell| url_at_column(&text, cell.logical_col, width));
-
-    assert_eq!(hit, Some("https://a/"));
-}

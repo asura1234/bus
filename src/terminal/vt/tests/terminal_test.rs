@@ -1,4 +1,5 @@
 use super::*;
+use crate::utils::text::hit_testing;
 
 pub(super) fn write_numbered_lines(terminal: &mut Terminal, count: usize) {
     for i in 0..count {
@@ -278,4 +279,43 @@ fn grapheme_cluster_mode_is_default_and_survives_full_reset() {
     terminal.write(b"\x1bc");
 
     assert!(terminal.mode_get(MODE_GRAPHEME_CLUSTER).unwrap());
+}
+
+/// Width rules matching the VT for the characters these URL-hit tests write.
+fn hit_test_width(ch: char) -> u16 {
+    match ch {
+        '\u{301}' => 0,
+        '界' => 2,
+        _ => 1,
+    }
+}
+
+#[test]
+fn url_hit_mapping_preserves_wide_character_pre_wrap() {
+    let mut terminal = Terminal::new(11, 3, 100).unwrap();
+    terminal.write("https://a/界b".as_bytes());
+    let rows = terminal.screen_text_rows().unwrap();
+    assert_eq!(rows[1].cells[0].graphemes, vec!['界' as u32]);
+
+    let text = terminal.read_text_screen((0, 0), (10, 2), false).unwrap();
+    assert_eq!(text.trim_end(), "https://a/界b");
+    let hit = hit_testing::logical_cell_for_visible_cell(&text, 11, 1, 0, hit_test_width)
+        .and_then(|cell| hit_testing::url_at_column(&text, cell.logical_col, hit_test_width));
+
+    assert_eq!(hit, Some("https://a/界b"));
+}
+
+#[test]
+fn url_hit_mapping_keeps_link_after_edge_combining_mark() {
+    let mut terminal = Terminal::new(4, 6, 100).unwrap();
+    terminal.write("abcx\u{301}https://a/".as_bytes());
+    let rows = terminal.screen_text_rows().unwrap();
+    assert_eq!(rows[0].cells[3].graphemes, vec!['x' as u32, 0x301]);
+    assert_eq!(rows[1].cells[0].graphemes, vec!['h' as u32]);
+
+    let text = terminal.read_text_screen((0, 0), (3, 5), false).unwrap();
+    let hit = hit_testing::logical_cell_for_visible_cell(&text, 4, 1, 0, hit_test_width)
+        .and_then(|cell| hit_testing::url_at_column(&text, cell.logical_col, hit_test_width));
+
+    assert_eq!(hit, Some("https://a/"));
 }
