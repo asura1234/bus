@@ -113,26 +113,33 @@ pub(crate) fn fill(template: &str, values: &PromptValues) -> String {
         ("{{AGENT_NAME}}", values.agent.as_str()),
         ("{{DOCS}}", docs.as_ref()),
     ];
-    // One pass over the template, so a name that contains placeholder text
-    // is inserted literally rather than expanded again.
-    let mut filled = String::with_capacity(template.len());
-    let mut rest = template;
-    while let Some(start) = rest.find("{{") {
-        filled.push_str(&rest[..start]);
-        rest = &rest[start..];
-        match tokens.iter().find(|(token, _)| rest.starts_with(token)) {
-            Some((token, value)) => {
-                filled.push_str(value);
-                rest = &rest[token.len()..];
+    // The same sequential replacements as always, except that a placeholder
+    // lying wholly inside an earlier inserted value stays literal. Each byte
+    // records which inserted value it came from (0 = the template).
+    let mut text = template.to_owned();
+    let mut origin = vec![0_usize; text.len()];
+    for (index, (token, value)) in tokens.iter().enumerate() {
+        let mut filled = String::with_capacity(text.len());
+        let mut filled_origin = Vec::with_capacity(origin.len());
+        let mut copied = 0;
+        for (start, _) in text.match_indices(token) {
+            let end = start + token.len();
+            let source = origin[start];
+            if source != 0 && origin[start..end].iter().all(|&o| o == source) {
+                continue;
             }
-            None => {
-                filled.push_str("{{");
-                rest = &rest[2..];
-            }
+            filled.push_str(&text[copied..start]);
+            filled_origin.extend_from_slice(&origin[copied..start]);
+            filled.push_str(value);
+            filled_origin.extend(std::iter::repeat_n(index + 1, value.len()));
+            copied = end;
         }
+        filled.push_str(&text[copied..]);
+        filled_origin.extend_from_slice(&origin[copied..]);
+        text = filled;
+        origin = filled_origin;
     }
-    filled.push_str(rest);
-    filled
+    text
 }
 
 /// Writes the embedded Bus docs under `<data_dir>/docs/` and returns that folder.

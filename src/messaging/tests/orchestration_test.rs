@@ -291,3 +291,39 @@ fn fill_keeps_placeholder_text_in_names_literal() {
         )
     );
 }
+
+#[test]
+fn fill_replaces_placeholders_after_literal_open_braces() {
+    let rendered = fill(
+        "Room {{{ROOM_NAME}}}; id {{{ROOM_ID}}}; agent {{{AGENT_NAME}}}; docs {{{DOCS}}}",
+        &values(Some(("pr-123", 7)), Path::new("/data")),
+    );
+    assert_eq!(
+        rendered,
+        "Room {pr-123}; id {7}; agent {orch}; docs {/data/docs}"
+    );
+}
+
+#[test]
+fn fill_matches_sequential_replacement_when_no_name_holds_a_placeholder() {
+    let values = PromptValues {
+        room: Some(("a{".into(), RoomId(7))),
+        agent: "CS".into(),
+        docs: PathBuf::from("/data/docs"),
+    };
+    let sequential = |template: &str| {
+        template
+            .replace("{{ROOM_NAME}}", "a{")
+            .replace("{{ROOM_ID}}", "7")
+            .replace("{{AGENT_NAME}}", "CS")
+            .replace("{{DOCS}}", "/data/docs")
+    };
+    for template in [
+        "Room {{ROOM_NAME}} ({{ROOM_ID}}), agent {{AGENT_NAME}}, docs {{DOCS}}",
+        "{{{ROOM_ID}}} {{{{AGENT_NAME}}}} {{ROOM_ID}",
+        // Text completed by an inserted value expands as it always did.
+        "{{ROOM_NAME}}{ROOM_ID}} {{DO{{AGENT_NAME}}}}",
+    ] {
+        assert_eq!(fill(template, &values), sequential(template), "{template}");
+    }
+}
