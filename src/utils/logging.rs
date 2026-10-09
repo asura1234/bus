@@ -89,6 +89,7 @@ pub(crate) fn startup(role: &'static str, dev: bool) {
         pid = std::process::id(),
         dev,
         version = env!("CARGO_PKG_VERSION"),
+        build_id = ?crate::utils::version::build_id(),
         "bus starting"
     );
 }

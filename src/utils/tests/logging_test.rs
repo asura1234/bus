@@ -160,6 +160,7 @@ fn startup_records_explicit_dev_and_existing_metadata() {
             &format!("pid={}", std::process::id()),
             &format!("dev={dev}"),
             &format!("version=\"{}\"", env!("CARGO_PKG_VERSION")),
+            &format!("build_id={:?}", crate::utils::version::build_id()),
             "bus starting",
         ] {
             assert!(logs.contains(field), "missing {field}: {logs}");
