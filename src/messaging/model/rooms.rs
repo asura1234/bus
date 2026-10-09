@@ -1,6 +1,6 @@
 //! Rooms operations for the messaging state.
 use super::state::normalized_name;
-use super::types::MASTER_ROOM_ID;
+use super::types::{ReportTurn, MASTER_ROOM_ID};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
@@ -32,6 +32,7 @@ impl BusState {
                 kind: RoomKind::Work,
                 sound: None,
                 sound_name: None,
+                report_turns: BTreeMap::new(),
             },
         );
         Ok(id)
@@ -79,6 +80,7 @@ impl BusState {
                         kind: RoomKind::Master,
                         sound: None,
                         sound_name: None,
+                        report_turns: BTreeMap::new(),
                     },
                 );
                 MASTER_ROOM_ID
@@ -352,6 +354,46 @@ impl BusState {
         Ok(id)
     }
 
+    /// The first notice id `agent`'s provider turn `turn` (session and turn
+    /// id) could have posted in `room`: one after its previous turn's last
+    /// final. Before any recorded turn, or for a turn without an id, 0.
+    pub(crate) fn report_turn_start(
+        &self,
+        room: RoomId,
+        agent: AgentId,
+        turn: Option<(&Option<String>, &str)>,
+    ) -> u64 {
+        match (self.rooms.get(&room), turn) {
+            (Some(room), Some(turn)) => report_turn_floor(room, agent, turn),
+            _ => 0,
+        }
+    }
+
+    /// Records that `agent`'s provider turn `turn` reached a final, so a later
+    /// turn's report is not compared with what this one posted.
+    pub(crate) fn end_report_turn(
+        &mut self,
+        room: RoomId,
+        agent: AgentId,
+        session: Option<String>,
+        turn: String,
+    ) {
+        let next_notice = self.next_id;
+        let Some(room) = self.rooms.get_mut(&room) else {
+            return;
+        };
+        let first_notice = report_turn_floor(room, agent, (&session, &turn));
+        room.report_turns.insert(
+            agent,
+            ReportTurn {
+                session,
+                turn,
+                first_notice,
+                next_notice,
+            },
+        );
+    }
+
     pub(crate) fn select_room(&mut self, room: RoomId) -> Result<(), ModelError> {
         self.mark_room_seen(room)?;
         self.visible_room = Some(room);
@@ -373,6 +415,16 @@ impl BusState {
             .unread_count = 0;
         Ok(())
     }
+}
+
+fn report_turn_floor(room: &Room, agent: AgentId, (session, turn): (&Option<String>, &str)) -> u64 {
+    room.report_turns.get(&agent).map_or(0, |last| {
+        if &last.session == session && last.turn == turn {
+            last.first_notice
+        } else {
+            last.next_notice
+        }
+    })
 }
 
 fn work_room_name(name: &str) -> Result<String, ModelError> {

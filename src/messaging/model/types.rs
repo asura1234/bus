@@ -239,6 +239,21 @@ pub(crate) struct Room {
     /// The system sound this room rings with, by name; None is Bus's own ding.
     #[serde(default)]
     pub(crate) sound_name: Option<String>,
+    /// Per MASTER agent, the provider turn its last final ended, so a report
+    /// is compared only with the messages its own turn sent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) report_turns: BTreeMap<AgentId, ReportTurn>,
+}
+
+/// A provider turn that ended with a final callback, and the notice ids it
+/// spans: notices from `first_notice` on were posted during or after it, and
+/// those from `next_notice` on after its last final.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct ReportTurn {
+    pub(crate) session: Option<String>,
+    pub(crate) turn: String,
+    pub(crate) first_notice: u64,
+    pub(crate) next_notice: u64,
 }
 
 impl Room {
