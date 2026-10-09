@@ -555,3 +555,119 @@ fn agents_cannot_take_the_reserved_human_name() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn agent_clear_does_not_reset_provider_when_reset_intent_cannot_be_saved() {
+    use std::sync::{Arc, Mutex};
+    struct ResetCommands(Arc<Mutex<Vec<String>>>);
+    impl Transport for ResetCommands {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            let Method::AgentPromptIfIdle(params) = method else {
+                panic!("unexpected request: {method:?}");
+            };
+            self.0.lock().unwrap().push(params.text);
+            Ok(ResponseResult::AgentPrompted {
+                agent: owned_agent_info(&params.target, "bus-r1-a2", Some("old-session")),
+            })
+        }
+    }
+    let (mut worker, _room, agent, dir) = fixture();
+    worker
+        .state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch".into()),
+                terminal_id: Some("term_internal".into()),
+                pane_id: Some("w1:p2".into()),
+                session_id: Some("old-session".into()),
+            },
+        )
+        .unwrap();
+    worker.state.confirm_hook_setup(agent).unwrap();
+    worker
+        .state
+        .observe_status(agent, RuntimeStatus::Idle, 1)
+        .unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let reset_commands = Arc::new(Mutex::new(Vec::new()));
+    worker.transport = Box::new(ResetCommands(Arc::clone(&reset_commands)));
+    worker
+        .store
+        .fail_once_at(crate::messaging::storage::state_store::SaveStage::TempSync);
+    let response = call(
+        &mut worker,
+        "clear-save-failure",
+        "agent.clear",
+        json!({"agent":"codex1"}),
+    );
+    assert!(!response.ok, "{response:?}");
+    let persisted = worker.store.load().unwrap().unwrap();
+    assert!(!persisted.agent(agent).unwrap().session_reset_pending);
+    let typed = reset_commands.lock().unwrap().clone();
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        typed.is_empty(),
+        "cannot reset a provider while the saved identity has no reset intent: {typed:?}"
+    );
+}
+
+#[test]
+fn agent_clear_keeps_reset_intent_only_while_the_reset_may_have_been_typed() {
+    struct RefuseReset(bool);
+    impl Transport for RefuseReset {
+        fn request(&mut self, method: Method) -> Result<ResponseResult, TransportError> {
+            let Method::AgentPromptIfIdle(_) = method else {
+                panic!("unexpected request: {method:?}");
+            };
+            Err(TransportError {
+                message: "identity changed".into(),
+                code: None,
+                definitely_rejected: self.0,
+            })
+        }
+    }
+    for definitely_rejected in [true, false] {
+        let (mut worker, _room, agent, dir) = fixture();
+        worker
+            .state
+            .set_agent_runtime_identity(
+                agent,
+                AgentRuntimeIdentity {
+                    launch_id: Some("launch".into()),
+                    terminal_id: Some("term_internal".into()),
+                    pane_id: Some("w1:p2".into()),
+                    session_id: Some("old-session".into()),
+                },
+            )
+            .unwrap();
+        worker.state.confirm_hook_setup(agent).unwrap();
+        worker
+            .state
+            .observe_status(agent, RuntimeStatus::Idle, 1)
+            .unwrap();
+        worker.save(worker.state.clone()).unwrap();
+        worker.transport = Box::new(RefuseReset(definitely_rejected));
+        let response = call(
+            &mut worker,
+            "clear-refused",
+            "agent.clear",
+            json!({"agent":"codex1"}),
+        );
+        assert!(!response.ok, "{response:?}");
+        assert_eq!(error_message(&response), "identity changed");
+        let persisted = worker.store.load().unwrap().unwrap();
+        let pending = !definitely_rejected;
+        assert_eq!(
+            persisted.agent(agent).unwrap().session_reset_pending,
+            pending
+        );
+        assert_eq!(
+            worker.state.agent(agent).unwrap().session_reset_pending,
+            pending
+        );
+        drop(worker);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
