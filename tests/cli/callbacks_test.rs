@@ -84,6 +84,7 @@ fn callback_cli_continues_existing_launch_spool_without_reset_or_replay() {
     for turn in ["next-turn", "next-turn", "following-turn"] {
         let payload = serde_json::json!({
             "session_id": "saved-session",
+            "transcript_path": root.join("saved-transcript.jsonl"),
             "hook_event_name": "UserPromptSubmit",
             "turn_id": turn,
             "prompt": "synthetic saved-launch prompt"
