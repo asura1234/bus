@@ -164,3 +164,88 @@ fn replacement_scene_without_repeated_asset_bytes_keeps_resident_data() {
     );
     assert!(String::from_utf8_lossy(&bytes).contains("a=t,t=d"));
 }
+
+#[test]
+fn distinct_assets_with_colliding_host_ids_finish_encoding() {
+    use crate::client::host_terminal::kitty::scene::host_image_id;
+    use crate::protocol::kitty::placement::KittyImageFormat;
+    use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
+    use std::time::Duration;
+
+    let scope = "endpoint-a:boot-1";
+    let mut by_host_id = HashMap::new();
+    let mut collision = None;
+    for image_id in 1_u32..=900_001 {
+        let data = image_id.to_le_bytes().to_vec();
+        let mut fingerprint = std::collections::hash_map::DefaultHasher::new();
+        data.len().hash(&mut fingerprint);
+        1_u32.hash(&mut fingerprint);
+        1_u32.hash(&mut fingerprint);
+        KittyImageFormat::Rgba.hash(&mut fingerprint);
+        data.hash(&mut fingerprint);
+        let mut image = asset(
+            SurfaceGraphicsTarget::Pane {
+                pane_id: "w1:p1".into(),
+            },
+            fingerprint.finish(),
+            data,
+        );
+        let SurfaceGraphicsSource::Terminal {
+            image_id: source_id,
+            ..
+        } = &mut image.key.source;
+        *source_id = image_id;
+        let id = host_image_id(scope, &image.key);
+        if let Some(previous) = by_host_id.insert(id, image.clone()) {
+            collision = Some((previous, image));
+            break;
+        }
+    }
+    let (first, second) = collision.expect("find distinct assets sharing a host image ID");
+    assert_ne!(first.key, second.key);
+    assert_ne!(first.key.data_fingerprint, second.key.data_fingerprint);
+
+    let mut desired = scene(first, 0, 0);
+    let second_scene = scene(second, 2, 0);
+    desired.assets.extend(second_scene.assets);
+    desired.placements.extend(second_scene.placements);
+    let mut state = ClientState::default();
+    state.set_scope(scope);
+    state.set_scene(desired);
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let bytes = state.encode(
+            Visibility::Main,
+            (0, 0),
+            HostCellSize {
+                width_px: 8,
+                height_px: 16,
+            },
+        );
+        let _ = completed_tx.send(bytes);
+    });
+    let bytes = completed_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("encoding a finite scene must finish despite a host ID collision");
+    let output = String::from_utf8_lossy(&bytes);
+    let uploads = output
+        .split("\x1b_G")
+        .filter(|command| command.starts_with("a=t,t=d,"))
+        .map(|command| {
+            command
+                .split(';')
+                .next()
+                .unwrap()
+                .split(',')
+                .find_map(|parameter| parameter.strip_prefix("i="))
+                .expect("uploaded image ID")
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(uploads.len(), 2, "both assets need independent host images");
+    assert_eq!(
+        output.matches("a=p,").count(),
+        2,
+        "both images must be placed"
+    );
+}

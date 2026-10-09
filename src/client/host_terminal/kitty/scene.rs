@@ -20,6 +20,9 @@ pub(crate) struct ClientState {
     scope: String,
     scene: SurfaceGraphicsScene,
     assets: HashMap<SurfaceGraphicsAssetKey, Vec<u8>>,
+    /// Host image ID held by each placed asset. Hashed IDs can collide, and two
+    /// distinct images sharing one ID would replace each other forever.
+    image_ids: HashMap<SurfaceGraphicsAssetKey, u32>,
     host: HostGraphicsCache,
     reset_pending: bool,
     stale_images: Vec<u32>,
@@ -38,6 +41,7 @@ impl ClientState {
         self.scope = scope.to_owned();
         self.scene = SurfaceGraphicsScene::default();
         self.assets.clear();
+        self.image_ids.clear();
         self.stale_images.clear();
         self.forced_delete_images.clear();
         self.reset_pending = true;
@@ -66,27 +70,30 @@ impl ClientState {
     }
 
     pub(crate) fn set_scene(&mut self, mut scene: SurfaceGraphicsScene) {
-        let desired = scene
-            .placements
-            .iter()
-            .map(|placement| placement.asset.clone())
-            .collect::<HashSet<_>>();
-        let previous = self
-            .scene
-            .placements
-            .iter()
-            .map(|placement| placement.asset.clone())
-            .collect::<HashSet<_>>();
-        self.stale_images.extend(
-            previous
-                .difference(&desired)
-                .map(|key| host_image_id(&self.scope, key)),
-        );
         let placed = scene
             .placements
             .iter()
             .map(|placement| placement.asset.clone())
             .collect::<HashSet<_>>();
+        let stale_images = &mut self.stale_images;
+        self.image_ids.retain(|key, image_id| {
+            let keep = placed.contains(key);
+            if !keep {
+                stale_images.push(*image_id);
+            }
+            keep
+        });
+        for placement in &scene.placements {
+            if self.image_ids.contains_key(&placement.asset) {
+                continue;
+            }
+            let held = self.image_ids.values().copied().collect::<HashSet<_>>();
+            let mut image_id = host_image_id(&self.scope, &placement.asset);
+            while held.contains(&image_id) {
+                image_id = 10_000 + (image_id - 10_000 + 1) % 900_000;
+            }
+            self.image_ids.insert(placement.asset.clone(), image_id);
+        }
         self.assets.retain(|key, _| placed.contains(key));
         for asset in std::mem::take(&mut scene.assets) {
             if asset.data.len() as u64 == asset.key.data_len && placed.contains(&asset.key) {
@@ -128,6 +135,7 @@ impl ClientState {
                 client_host_placement(
                     &self.scope,
                     placement,
+                    *self.image_ids.get(&placement.asset)?,
                     self.assets.get(&placement.asset).map(Vec::as_slice),
                     visibility,
                     main_origin,
@@ -157,6 +165,7 @@ pub(crate) fn host_image_id(scope: &str, key: &SurfaceGraphicsAssetKey) -> u32 {
 fn client_host_placement(
     scope: &str,
     placement: &SurfaceGraphicsPlacement,
+    host_image_id: u32,
     data: Option<&[u8]>,
     visibility: Visibility,
     main_origin: (u16, u16),
@@ -189,7 +198,6 @@ fn client_host_placement(
     signature.hash(&mut hasher);
     let raw = hasher.finish();
     let pane_id = PaneId::from_raw((raw as u32).max(1));
-    let host_image_id = host_image_id(scope, &placement.asset);
     let cols = placement.cols.min(u32::from(u16::MAX)) as u16;
     let rows = placement.rows.min(u32::from(u16::MAX)) as u16;
     Some(HostPlacement {
