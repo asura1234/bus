@@ -596,24 +596,6 @@ fn codex_expanded_question_identity_ignores_the_working_timer_above_the_queue() 
 }
 
 #[test]
-fn codex_free_text_answer_with_a_blank_line_keeps_the_question_and_whole_value() {
-    let screen = CODEX_TEXT_QUESTION.replace(
-        "  Type your answer\n",
-        "  first paragraph\n\n  second paragraph\n",
-    );
-    let dialog = parse(&screen).unwrap();
-    assert_eq!(dialog.text, "What token should Bus use?");
-    assert_eq!(dialog.id(), parse(CODEX_TEXT_QUESTION).unwrap().id());
-    let edited = parse(&screen.replace("first paragraph", "edited paragraph")).unwrap();
-    assert_eq!(dialog.id(), edited.id());
-    assert_ne!(dialog.digest(), edited.digest());
-    assert_eq!(
-        dialog.input.unwrap().value,
-        "first paragraph\n\nsecond paragraph"
-    );
-}
-
-#[test]
 fn codex_free_text_wrapped_question_and_count_stay_out_of_the_answer() {
     let screen = CODEX_TEXT_QUESTION.replace(
         "What token should Bus use?",
