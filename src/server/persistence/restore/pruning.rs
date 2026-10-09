@@ -29,6 +29,10 @@ fn prune_workspace(
     failed: &HashSet<TerminalId>,
     tab_number_base: usize,
 ) {
+    let active_number = workspace
+        .tabs
+        .get(workspace.active_tab)
+        .map(|tab| tab.number);
     workspace.tabs.retain_mut(|tab| prune_tab(tab, failed));
     let surviving: HashSet<_> = workspace
         .tabs
@@ -38,9 +42,17 @@ fn prune_workspace(
     workspace
         .public_pane_numbers
         .retain(|id, _| surviving.contains(id));
+    // Follow the saved active tab to its new index when earlier tabs were dropped;
+    // only a dropped active tab falls back to the clamped old position.
     workspace.active_tab = workspace
-        .active_tab
-        .min(workspace.tabs.len().saturating_sub(1));
+        .tabs
+        .iter()
+        .position(|tab| Some(tab.number) == active_number)
+        .unwrap_or_else(|| {
+            workspace
+                .active_tab
+                .min(workspace.tabs.len().saturating_sub(1))
+        });
     workspace.next_public_tab_number = workspace
         .tabs
         .iter()

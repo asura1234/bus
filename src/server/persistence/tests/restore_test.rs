@@ -728,3 +728,42 @@ fn snapshot_with_saved_pane_history() -> (SessionSnapshot, SessionHistorySnapsho
     };
     (snapshot, history)
 }
+
+#[test]
+fn failed_restore_of_earlier_tab_preserves_surviving_active_tab() {
+    let (mut snapshot, _) = snapshot_with_saved_pane_history();
+    let workspace = &mut snapshot.workspaces[0];
+    let original_tab = serde_json::to_value(&workspace.tabs[0]).unwrap();
+    workspace.tabs = (0..3)
+        .map(|index| {
+            let mut tab = original_tab.clone();
+            tab["custom_name"] = serde_json::json!(format!("tab-{index}"));
+            tab["layout"] = serde_json::json!({ "Pane": index });
+            tab["focused"] = serde_json::json!(index);
+            tab["root_pane"] = serde_json::json!(index);
+            let pane = original_tab["panes"]["0"].clone();
+            tab["panes"] = serde_json::json!({ index.to_string(): pane });
+            serde_json::from_value(tab).unwrap()
+        })
+        .collect();
+    workspace.public_tab_numbers = vec![1, 2, 3];
+    workspace.active_tab = 1;
+    let (events, _events_rx) = mpsc::channel(8);
+    let mut restored = restore(
+        &snapshot,
+        None,
+        false,
+        events,
+        Arc::new(Notify::new()),
+        Arc::new(RenderSignal::new()),
+    );
+    let workspace = &restored.workspaces[0];
+    assert_eq!(workspace.tabs[workspace.active_tab].number, 2);
+    let failed = HashSet::from([restored.launches[0].terminal_id.clone()]);
+
+    restored.discard_failed_launches(&failed);
+
+    let workspace = &restored.workspaces[0];
+    assert_eq!(workspace.tabs.len(), 2);
+    assert_eq!(workspace.tabs[workspace.active_tab].number, 2);
+}
