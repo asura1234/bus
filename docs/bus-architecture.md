@@ -3,7 +3,7 @@
 Status: decided. It describes the target folder and module layout of the repository. Bus is a prototype: it keeps no fallbacks and no
 backward compatibility with older saves, configs, peers or herdr-era names, and it has no CI.
 
-S11 checkpoint: shared filesystem mechanics, neutral provider harnesses, restore planning and package input closure are complete. The enforced limit is
+S12 checkpoint: canonical imports and AgentKind/TerminalEvent/RoomAgent spellings are in place; compatibility wiring is removed and the final import graph is enforced. Shared filesystem mechanics, neutral provider harnesses, restore planning and package input closure are complete. The enforced limit is
 800 handwritten production lines per file, with shared test scopes and the generated FFI exception. H14 production
 Clippy rules are active at 100 function lines, cognitive complexity 25 and 11 arguments; tests are exempt from these
 selected rules. Python retains Ruff E9,F and has no complexity lint policy.
@@ -39,7 +39,7 @@ selected rules. Python retains Ruff E9,F and has no complexity lint policy.
   - `cli/`: `cli_test.rs`, `callbacks_test.rs` (`--bus-callback` spooling), `paths_test.rs` (`--paths` and data-dir isolation)
   - `fixtures/`: key corpora, endpoint golden JSON, session files (data files keep their names)
 - `tools/`: repo-level tooling that belongs to no single skill, one Python package and one test root
-  - `quality/`: UI hot-path check and the import-boundary report for graph 3a (enforcement activates in S12)
+  - `quality/`: UI hot-path check and the enforced import-boundary audit for graph 3a
   - `acceptance/`: `harness_test.py`, `existing_instance_test.py`, `e2e_test.py`, `live_ui_test.py`, `screen_test.py` (e2e and
     live-UI tests and their helpers, all test code)
   - `keyboard/`: raw-tty helper and the key capture tools
@@ -400,4 +400,4 @@ installed `share/bus` default directory, runtime source-file lookup or user-file
 remain supported. `orchestration/README.md` documents the source-to-emitted filename map, the placeholders Bus fills
 (`{{ROOM_NAME}}`, `{{ROOM_ID}}`, `{{AGENT_NAME}}`, `{{DOCS}}`), and the control CLI as the only way to drive Bus.
 
-S11 packaging closure: Cargo includes all Rust sources, registered integration suites and fixtures, authored Markdown, native Ghostty sources/metadata and the build script. Zig caches, dependency caches and built outputs are excluded. Nix retains the patched portable-pty dependency as a path source; Cargo registry normalization removes the local patch table, so registry publication is a distinct dependency contract, not the Nix/repository build. No runtime resolver or installed default directory is added. The final import graph remains report-only until S12.
+S11 packaging closure: Cargo includes all Rust sources, registered integration suites and fixtures, authored Markdown, native Ghostty sources/metadata and the build script. Zig caches, dependency caches and built outputs are excluded. Nix retains the patched portable-pty dependency as a path source; Cargo registry normalization removes the local patch table, so registry publication is a distinct dependency contract, not the Nix/repository build. No runtime resolver or installed default directory is added. The final import graph is enforced, including grouped/aliased/relative paths and physical owners reached through re-exports. Unknown paths fail; generated or procedural macro expansion still requires compiler verification. Live hook commands and herdr/HERDR operational spellings remain unchanged until S13.

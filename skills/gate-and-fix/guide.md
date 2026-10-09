@@ -22,8 +22,8 @@ replace `rebase-origin-main` or PR creation.
   files changed. No changed-file filter can remove a category or a skill test.
   - **Lint**: Cargo fmt, all-target Clippy with warnings denied, Ruff `E9,F` over all first-party
     Python, and the static hot-path architecture contract. The lint lane runs the hot-path and
-    import-boundary pytest suites under `tools/tests/`, then prints the import-boundary report.
-    Boundaries are report-only until S12 enables enforcement. These checks read source text;
+    import-boundary pytest suites under `tools/tests/`, then checks test placement and file sizes before enforcing the final import graph.
+    Unknown source/target owners and forbidden component or inner edges fail the lane. These checks read source text;
     they are not UI tests. Rust formatting and Python syntax/pyflakes violations fail the gate.
     Python style-only rules and LibTV's TypeScript-specific complexity limits are not imported. All
     first-party handwritten production Rust/Python files have an 800-line cap. Comments and blank lines count;

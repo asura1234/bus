@@ -229,9 +229,9 @@ def lint() -> int:
             *roots,
         ),
         run(sys.executable, "-m", "pytest", "-q", *ARCHITECTURE_TESTS),
-        run(sys.executable, "-m", IMPORT_BOUNDARIES),
         run(sys.executable, "-m", "tools.quality.placement", "--enforce"),
         file_lengths(),
+        run(sys.executable, "-m", IMPORT_BOUNDARIES, "--enforce"),
     ]
     return int(any(results))
 

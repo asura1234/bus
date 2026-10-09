@@ -248,15 +248,19 @@ class BusQualityTest(unittest.TestCase):
                 calls,
             )
             self.assertIn(
-                (sys.executable, "-m", "tools.quality.import_boundaries"), calls
+                (sys.executable, "-m", "tools.quality.import_boundaries", "--enforce"), calls
             )
             self.assertIn(
                 (sys.executable, "-m", "tools.quality.placement", "--enforce"), calls
             )
-            # Import boundaries remain report-only; test placement is enforced.
+            # Preserve the historical test identity; S12 enforces the graph last.
             self.assertNotIn(
-                (sys.executable, "-m", "tools.quality.import_boundaries", "--enforce"),
+                (sys.executable, "-m", "tools.quality.import_boundaries"),
                 calls,
+            )
+            self.assertEqual(
+                calls[-1],
+                (sys.executable, "-m", "tools.quality.import_boundaries", "--enforce"),
             )
 
     def test_lint_rejects_an_empty_python_inventory_instead_of_scanning_the_cwd(self):
