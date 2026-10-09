@@ -5,7 +5,7 @@ set -euo pipefail
 
 readonly bus_cutover_repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly bus_cutover_session_id=${1:-}
-readonly bus_cutover_session_dir="${XDG_DATA_HOME:-$HOME/.local/share}/bus/sessions/$bus_cutover_session_id"
+readonly bus_cutover_session_dir="${BUS_CUTOVER_SESSION_DIR:-$HOME/.local/share/bus/sessions/$bus_cutover_session_id}"
 readonly bus_cutover_binary="$bus_cutover_repo/target/debug/bus"
 readonly bus_cutover_candidate_target="$bus_cutover_repo/target/cutover-candidate"
 readonly bus_cutover_candidate="$bus_cutover_candidate_target/debug/bus"

@@ -55,6 +55,17 @@ class CutoverTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "revision mismatch"):
             cutover.record(self.candidate, self.head, self.manifest)
 
+    def test_default_session_root_matches_bus_even_when_xdg_data_home_is_set(self):
+        result = subprocess.run(
+            ["bash", "-c", 'source "$1" 0123456789abcdef; printf "%s" "$bus_cutover_session_dir"',
+             "cutover-test", str(Path(cutover.__file__).with_suffix(".sh"))],
+            env={key: value for key, value in {**os.environ, "XDG_DATA_HOME": str(self.root)}.items()
+                 if key != "BUS_CUTOVER_SESSION_DIR"},
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, str(Path.home() / ".local/share/bus/sessions/0123456789abcdef"))
+
     def run_cutover(self, outcome):
         repo = self.root / "repo"
         (repo / "tools").mkdir(parents=True)
@@ -83,7 +94,7 @@ main
         candidate = self.candidate if outcome != "stale_candidate" else installed
         result = subprocess.run(
             ["bash", "-c", body, "cutover-test", str(repo / "tools/cutover.sh")],
-            env={**os.environ, "XDG_DATA_HOME": str(self.root / "data"),
+            env={**os.environ, "BUS_CUTOVER_SESSION_DIR": str(session),
                  "FIXTURE_HEAD": self.head, "FIXTURE_CANDIDATE": str(candidate),
                  "FIXTURE_OUTCOME": outcome},
             capture_output=True, text=True, timeout=15,
