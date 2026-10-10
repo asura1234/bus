@@ -145,7 +145,9 @@ Verifying a single comment is only the foundation. With multiple lanes in parall
 
 ## Taking ownership of PR reviewer tests
 
-Tests left by the reviewer are regression evidence pending adjudication, including new files that still run red and new cases in existing test files. The author first reconciles each
+Tests left by the reviewer are regression evidence pending adjudication, including new files that still run red and new cases in existing test files. They are identified
+from the working tree as well as from the test paths cited in findings: every uncommitted new test file or new case the review rounds left counts, including a
+green probe that opened no finding (review-pr records it only under "本轮探索区域 / 运行的测试"). The author first reconciles each
 test with its claim, its actual assertion, and its worktree hunk; red by itself is not worktree pollution, and does not automatically prove the reviewer's
 expectation correct. Whether to adopt is still decided by the same verification and adjudication rules, and tests are not modified before every claim is adjudicated.
 
@@ -165,6 +167,7 @@ Which one follows from the claim's disposition; the disposition itself is unchan
 - APPLY: committed with the repair, red turned green as above.
 - REJECT or HOUSEKEEPING: a green test is committed when it adds coverage. A red test for a claim that does not hold is rewritten to assert the
   correct (current, verified) behavior and committed when it still adds coverage; otherwise it is folded into an existing test or removed.
+- No finding (a green probe the reviewer kept without a finding): committed when it adds coverage, otherwise folded into an existing test or removed.
 - FLAG: a green test that pins current behavior is committed when it adds coverage; a red test is removed and its path, assertion, and red output go
   into the FLAG item's evidence, so the developer can restore it if they rule for the change. Committing it red or rewritten would decide for the developer.
 - Removal is never a way to manufacture green for an APPLY claim, and a scoped run removes a probe outside the chunk's test allowlist rather than expanding it.
