@@ -63,7 +63,8 @@ flowchart TD
     sendback -- yes --> applydec
     sendback -- no --> blocked
 
-    recordblock --> blocked
+    recordblock --> informblocked["Orchestrator: inform developer in MASTER (link deferred.md)"]
+    informblocked --> blocked
     allready -- yes --> verify{Developer verification required?}
     verify -- yes --> regress[Developer: regression test and merge approval]:::developer
     regress --> approved{Passed and approved?}
@@ -72,10 +73,13 @@ flowchart TD
     verify -- no --> merge[Author: run merge-pr]
     merge --> mergeok{merge-pr merged the PR?}
     mergeok -- yes --> mainco{PR worktree is the main checkout?}
-    mainco -- yes --> merged(["PR merged (deferred issues in temp/#lt;branch#gt;/deferred.md)"]):::success
+    mainco -- yes --> anydeferred{"Any deferred issues in temp/#lt;branch#gt;/deferred.md?"}
     mainco -- no --> removeagents[Orchestrator: remove the room agents working in the PR worktree]
     removeagents --> closewt[Orchestrator: run worktree-close on the PR worktree]
-    closewt --> merged
+    closewt --> anydeferred
+    anydeferred -- yes --> informmerged["Orchestrator: inform developer in MASTER (link deferred.md)"]
+    anydeferred -- no --> merged(["PR merged"]):::success
+    informmerged --> merged
     mergeok -- no --> blocked(["PR merge blocked"]):::failure
 
     classDef start fill:#dbeafe,stroke:#1d4ed8
@@ -90,7 +94,7 @@ flowchart TD
 
 | Agent | Provider | Role |
 |---|---|---|
-| orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, adds and removes agents, polls recommendations for flagged issues and forwards them, records deferred issues in `temp/<branch>/deferred.md` (what the issue is, the recommendations, why it is out of scope, nonblocking or blocking), asks and alerts the developer in MASTER, keeps the workflow file current. After the merge, when the PR worktree is not the main checkout, removes the room agents working in it and runs worktree-close on it from outside. Never writes code. |
+| orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, adds and removes agents, polls recommendations for flagged issues and forwards them, records deferred issues in `temp/<branch>/deferred.md` (what the issue is, the recommendations, why it is out of scope, nonblocking or blocking), asks and alerts the developer in MASTER, keeps the workflow file current. After the merge, when the PR worktree is not the main checkout, removes the room agents working in it and runs worktree-close on it from outside. Informs the developer in MASTER with a link to `temp/<branch>/deferred.md` when it has entries at "PR merged" and when a blocking deferred issue ends at "PR merge blocked". Never writes code. |
 | developer | - | Answers allowance alerts; decides Abandon that is not single purpose; reads `temp/<branch>/deferred.md` after the workflow ends; optionally runs the pre-merge regression test and approval. |
 | author | claude | split-pr, address-review-comments, best-of-n, applies decisions and CI fixes, push, merge-pr |
 | claude-review | claude | review-pr |
