@@ -806,12 +806,15 @@ mod tests {
     #[test]
     fn old_submit_ack_preserves_newer_text_and_another_room_draft() {
         let (mut ui, room) = ui();
+        ui.locals.get_mut(&room).unwrap().text.insert("sent prompt");
+        ui.text_changed(room);
+        let saved = ui.pending.front().expect("draft save").id;
         ui.request_send(room);
-        ui.settle();
+        acknowledge(&mut ui, saved, true);
         let id = ui.pending.front().expect("submit").id;
         ui.locals.get_mut(&room).unwrap().text.insert("next prompt");
         ui.text_changed(room);
         acknowledge(&mut ui, id, true);
-        assert_eq!(ui.locals[&room].text.text, "next prompt");
+        assert_eq!(ui.locals[&room].text.text, "sent promptnext prompt");
     }
 }

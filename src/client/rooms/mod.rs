@@ -277,6 +277,9 @@ mod tests {
     #[path = "send_latency_test.rs"]
     mod send_latency_tests;
 
+    #[path = "send_first_enter_test.rs"]
+    mod send_first_enter_tests;
+
     include!("tests/composer_test.rs");
     include!("tests/forms_test.rs");
     include!("tests/layout_test.rs");

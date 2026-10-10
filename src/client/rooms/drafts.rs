@@ -99,6 +99,18 @@ impl BusUi {
             self.suggestions.query_id += 1;
             return;
         }
+        // An Enter on an empty composer (often a second Enter after a send)
+        // has nothing to send. Submitting it would only come back as "The
+        // message has no text or files" and sit over the next typed message.
+        if !self.draft_has_content(room) {
+            tracing::debug!(
+                event = "bus.message.ignored",
+                room_id = room.0,
+                reason = "empty_draft",
+                "Room send with an empty draft ignored"
+            );
+            return;
+        }
         if self
             .locals
             .get(&room)
@@ -153,6 +165,23 @@ impl BusUi {
         // turn a later plain Enter into a queued send.
         self.send_queued = false;
         self.history_follow_tail = true;
+    }
+
+    /// The local text, or a file the coordinator holds or is still attaching.
+    fn draft_has_content(&self, room: RoomId) -> bool {
+        self.locals
+            .get(&room)
+            .is_some_and(|local| !local.text.text.is_empty())
+            || self
+                .snapshot
+                .state
+                .room(room)
+                .is_some_and(|room| !room.draft.files.is_empty())
+            || self
+                .pending
+                .iter()
+                .chain(&self.failed)
+                .any(|p| matches!(&p.command, BusCommand::AttachFile(id, _) if *id == room))
     }
 
     pub(super) fn apply_external_edit(&mut self, room: RoomId, text: String) {
