@@ -106,11 +106,35 @@ pub(crate) fn fill(template: &str, values: &PromptValues) -> String {
         Some((name, id)) => (name.clone(), id.0.to_string()),
         None => (UNASSIGNED_ROOM_NAME.into(), UNASSIGNED_ROOM_ID.into()),
     };
-    template
-        .replace("{{ROOM_NAME}}", &room_name)
-        .replace("{{ROOM_ID}}", &room_id)
-        .replace("{{AGENT_NAME}}", &values.agent)
-        .replace("{{DOCS}}", &values.docs.to_string_lossy())
+    let docs = values.docs.to_string_lossy();
+    let tokens = [
+        ("{{ROOM_NAME}}", room_name.as_str()),
+        ("{{ROOM_ID}}", room_id.as_str()),
+        ("{{AGENT_NAME}}", values.agent.as_str()),
+        ("{{DOCS}}", &docs),
+    ];
+    // One pass over the template: inserted values are never scanned again, so a
+    // room or agent name containing placeholder text stays literal. On a `{`
+    // that starts no token, only that brace is copied, so `{{{ROOM_ID}}}` still
+    // finds the token at the next brace.
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(at) = rest.find('{') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        match tokens.iter().find(|(token, _)| rest.starts_with(token)) {
+            Some((token, value)) => {
+                out.push_str(value);
+                rest = &rest[token.len()..];
+            }
+            None => {
+                out.push('{');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Writes the embedded Bus docs under `<data_dir>/docs/` and returns that folder.

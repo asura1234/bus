@@ -256,3 +256,85 @@ fn an_adopted_session_renders_the_prompt_fresh_or_gets_it_as_a_message() {
 fn prompt_message_carries_the_prompt_text() {
     assert!(prompt_message("Be brief.").ends_with("\n\nBe brief."));
 }
+
+#[test]
+fn fill_keeps_placeholder_text_in_names_literal() {
+    let mut state = crate::messaging::model::BusState::new();
+    let room_name = "review {{ROOM_ID}} {{AGENT_NAME}} {{DOCS}}";
+    let room = state.create_room(room_name).unwrap();
+    let agent_name = "orch {{DOCS}}";
+    state
+        .create_agent(
+            room,
+            agent_name,
+            Provider::ClaudeCode,
+            PathBuf::from("/repo"),
+            None,
+        )
+        .unwrap();
+    let values = PromptValues {
+        room: Some((room_name.into(), room)),
+        agent: agent_name.into(),
+        docs: PathBuf::from("/data/docs"),
+    };
+    assert_eq!(
+        fill(
+            "Room {{ROOM_NAME}}; id {{ROOM_ID}}; agent {{AGENT_NAME}}; docs {{DOCS}}",
+            &values
+        ),
+        format!(
+            "Room {room_name}; id {}; agent {agent_name}; docs /data/docs",
+            room.0
+        )
+    );
+}
+
+#[test]
+fn fill_replaces_placeholders_after_literal_open_braces() {
+    let rendered = fill(
+        "Room {{{ROOM_NAME}}}; id {{{ROOM_ID}}}; agent {{{AGENT_NAME}}}; docs {{{DOCS}}}",
+        &values(Some(("pr-123", 7)), Path::new("/data")),
+    );
+    assert_eq!(
+        rendered,
+        "Room {pr-123}; id {7}; agent {orch}; docs {/data/docs}"
+    );
+}
+
+#[test]
+fn fill_matches_sequential_replacement_when_no_value_is_rescanned() {
+    let values = PromptValues {
+        room: Some(("a{".into(), RoomId(7))),
+        agent: "CS".into(),
+        docs: PathBuf::from("/data/docs"),
+    };
+    let sequential = |template: &str| {
+        template
+            .replace("{{ROOM_NAME}}", "a{")
+            .replace("{{ROOM_ID}}", "7")
+            .replace("{{AGENT_NAME}}", "CS")
+            .replace("{{DOCS}}", "/data/docs")
+    };
+    for template in [
+        "Room {{ROOM_NAME}} ({{ROOM_ID}}), agent {{AGENT_NAME}}, docs {{DOCS}}",
+        "{{{ROOM_ID}}} {{{{AGENT_NAME}}}} {{ROOM_ID}",
+    ] {
+        assert_eq!(fill(template, &values), sequential(template), "{template}");
+    }
+}
+
+#[test]
+fn fill_never_completes_a_placeholder_from_inserted_text() {
+    let values = PromptValues {
+        room: Some(("ID}}{{ROOM_".into(), RoomId(7))),
+        agent: "{{DO".into(),
+        docs: PathBuf::from("/data/docs"),
+    };
+    for (template, expected) in [
+        ("{{ROOM_NAME}}{{ROOM_NAME}}", "ID}}{{ROOM_ID}}{{ROOM_"),
+        ("{{AGENT_NAME}}CS}}", "{{DOCS}}"),
+        ("{{ROOM_NAME}}ID}}", "ID}}{{ROOM_ID}}"),
+    ] {
+        assert_eq!(fill(template, &values), expected, "{template}");
+    }
+}
