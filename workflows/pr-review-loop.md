@@ -18,7 +18,7 @@ human's regression test passes.
 flowchart TD
     start([Human: get PR 123 merge-ready]):::human --> review
 
-    subgraph round [Review round, at most 4]
+    subgraph round [Review round, at most 5]
         review[claude-review + codex-review + cursor-review: review-pr in parallel]
         review --> ready{All reviewers ready?}
         ready -- no --> open{Open or flagged issues?}
@@ -44,7 +44,7 @@ flowchart TD
     deferred -- no --> regress
     later -- fix needed --> fix
     later -- otherwise --> regress[Human: regression test]:::human
-    ready -- round 4 still not ready --> stuck[Human: cut scope or continue]:::human
+    ready -- round 5 still not ready --> stuck[Human: cut scope or continue]:::human
     stuck --> review
     regress -- problem --> fix
     regress -- ok --> merge([Human: merge])
@@ -86,7 +86,7 @@ flowchart TD
   checkpoint, before regression testing.
 - With no clear winner on a blocking issue, the orchestrator halts progress and
   asks the human in MASTER. Resume only after the human decides.
-- Cap: 4 rounds. After that, ask the human to cut scope or allow more rounds.
+- Cap: 5 rounds. After that, ask the human to cut scope or allow more rounds.
 - The human merges; the orchestrator never does.
 
 ## Deferred
@@ -95,5 +95,6 @@ flowchart TD
 
 ## Log
 
+- 2026-10-10: Review-round cap raised from 4 to 5.
 - 2026-10-09: Routed open or flagged issues through author-run best-of-n; only blocking issues without a clear winner halt the round for the human.
 - 2026-10-06: Drafted with the human.
