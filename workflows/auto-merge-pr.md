@@ -53,8 +53,7 @@ flowchart TD
         ci{CI green?}
         ci -- no --> cifix[author: fix CI, push]
         cifix --> ci
-        ci -- yes --> cap{"Round #lt; 5?"}
-        cap -- yes --> review
+        ci -- yes --> review
     end
 
     anyabandon -- yes --> single{Abandon reason is single purpose?}
@@ -63,12 +62,6 @@ flowchart TD
     nopreset --> sendback{Developer sends it back to fix?}
     sendback -- yes --> applydec
     sendback -- no --> blocked
-
-    cap -- no --> stuck[Developer: decide after the round cap]:::developer
-    stuck --> capcall{Developer's call?}
-    capcall -- cut scope --> applydec
-    capcall -- more rounds --> review
-    capcall -- stop --> blocked
 
     recordblock --> blocked
     allready -- yes --> verify{Developer verification required?}
@@ -98,7 +91,7 @@ flowchart TD
 | Agent | Provider | Role |
 |---|---|---|
 | orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, adds and removes agents, polls recommendations for flagged issues and forwards them, records deferred issues in `temp/<branch>/deferred.md` (what the issue is, the recommendations, why it is out of scope, nonblocking or blocking), asks and alerts the developer in MASTER, keeps the workflow file current. After the merge, when the PR worktree is not the main checkout, removes the room agents working in it and runs worktree-close on it from outside. Never writes code. |
-| developer | - | Answers allowance alerts; decides Abandon that is not single purpose and the round cap; reads `temp/<branch>/deferred.md` after the workflow ends; optionally runs the pre-merge regression test and approval. |
+| developer | - | Answers allowance alerts; decides Abandon that is not single purpose; reads `temp/<branch>/deferred.md` after the workflow ends; optionally runs the pre-merge regression test and approval. |
 | author | claude | split-pr, address-review-comments, best-of-n, applies decisions and CI fixes, push, merge-pr |
 | claude-review | claude | review-pr |
 | codex-review | codex | review-pr |
