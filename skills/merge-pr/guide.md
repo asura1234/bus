@@ -280,3 +280,18 @@ The price is worth paying, but the window must be closed in section 6.
 Measured failure: a hand-written "full" sha had only its first 8 characters right, and GitHub replied
 `Head branch was modified. Review and try the merge again.` — which sounds like someone pushed to the branch,
 so the investigation ran off course into branch history, while the branch had not changed by a single byte.
+
+## Holding before merge
+
+`--hold-before-merge` is for a developer manual test of the exact tree that will merge. It runs sections 1-6 in full, including the
+review-lane retake and every merge assertion, and stops only where the next step would be `gh pr merge`. `--no-merge` stops at the
+start of section 6 and proves less: it skips the retake and the assertions, so it cannot say the PR is ready to merge.
+
+The hold report states `ready to merge at <merge_head>, holding for developer verification`, then the OUTPUT items as of that moment:
+per-check CI conclusions with each red check's attribution and evidence, review handling and the verdict text, the merge method that
+would be used (normal, or `--admin` with the release basis for each remaining red check), and any unhandled FLAG last. There is no
+merge commit yet, and no review-metrics line is appended.
+
+After the developer approves, run merge-pr again **without** the flag. It re-verifies from section 1, because HEAD, CI or review may
+have moved while the developer tested, and merges only if every assertion still holds; `--match-head-commit` pins the merge to the
+re-verified head. A push during the test therefore leads to a fresh full pass, not a merge of the tree the developer did not test.
