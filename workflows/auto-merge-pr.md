@@ -19,15 +19,13 @@ flowchart TD
     askverify --> measure["Orchestrator: measure total changed lines (git diff --shortstat base...head)"]
 
     measure --> big{"Total changed lines >= 3000?"}
-    big -- yes --> split[Author: run split-pr]
+    big -- yes --> split["Author: run split-pr --publish (classify parts, write the plan)"]
     big -- no --> review
-    split --> shape{split-pr shape?}
-    shape -- train --> train[Orchestrator: review the parts one after another, in stack order]
-    shape -- parallel --> par[Orchestrator: review the parts in parallel, each with its own copy of this loop]
-    shape -- mixed --> mixed[Orchestrator: review the prerequisite parts first, then the rest in parallel]
-    train -- each part --> review
-    par -- each part --> review
-    mixed -- each part --> review
+    split --> approveplan["Orchestrator: approve the split plan (split-pr CONFIRM)"]
+    approveplan --> buildparts["Author: split-pr builds each part in its own worktree (worktree-new), then publishes the PRs"]
+    buildparts --> splitok{split-pr succeeded?}
+    splitok -- "no: preflight ERROR, redesign STOP, helper or coverage failure, failed publish wave" --> blocked
+    splitok -- yes --> splitdone(["PR split"]):::failure
 
     subgraph round [Review round]
         review["Reviewers: run review-pr in parallel (Claude, Codex, optional Cursor)"]
@@ -52,7 +50,7 @@ flowchart TD
         applydec[Author: apply developer's decision, push] --> review
     end
 
-    anyabandon -- yes --> single{Abandon reason is single purpose?}
+    anyabandon -- yes --> single{"Abandon reason is dimension 6 (multi-purpose)?"}
     single -- yes --> split
     single -- no --> nopreset[Developer: no preset strategy, decide]:::developer
     nopreset --> sendback{Developer sends it back to fix?}
@@ -89,13 +87,37 @@ flowchart TD
     class usage current
 ```
 
+## After a split
+
+"PR split" means this run merges nothing: the original PR is replaced by its
+parts. The orchestrator follows split-pr's RETURN report (shape, parts, PRs):
+
+- **train** (stacked): run this workflow once per part, one after another,
+  bottom first. Merge strictly bottom up: only the bottom PR merges, into the
+  base, never a PR into its parent branch. After a parent merges, assign an
+  agent to run `split-pr restack --publish`, which rebases the children onto
+  the base and retargets their PRs, before the next part starts.
+- **parallel** (separate PRs): run this workflow per part at the same time,
+  each with its own author and reviewers, in the part worktree split-pr already
+  created; assign an agent to run `worktree-new` only for a part that has none.
+- **mixed**: run the prerequisite parts first as a train, then the independent
+  parts in parallel. A part with two or more parents under the default `wait`
+  policy stays a local branch until restack leaves it a single base, and only
+  then gets its run.
+- **Original PR**: split-pr never deletes the source branch and keeps it until
+  every part is verified and the developer authorizes cleanup. The orchestrator
+  asks the developer in MASTER to close the original PR once all parts have
+  PRs, linking the original `temp/<branch>/deferred.md`.
+- **deferred.md**: each part's run keeps its own `temp/<part-branch>/deferred.md`
+  and hands it off at that part's exit.
+
 ## Participants
 
 | Agent | Provider | Role |
 |---|---|---|
-| orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, adds and removes agents, polls recommendations for flagged issues and forwards them, records deferred issues in `temp/<branch>/deferred.md` (what the issue is, the recommendations, why it is out of scope, nonblocking or blocking), asks and alerts the developer in MASTER, keeps the workflow file current. After the merge, when the PR worktree is not the main checkout, removes the room agents working in it and runs worktree-close on it from outside. Informs the developer in MASTER with a link to `temp/<branch>/deferred.md` when it has entries at "PR merged" and when a blocking deferred issue ends at "PR merge blocked". Never writes code. |
-| developer | - | Answers allowance alerts; decides Abandon that is not single purpose; reads `temp/<branch>/deferred.md` after the workflow ends; optionally runs the manual test and merge approval while merge-pr holds before the merge. |
-| author | claude | split-pr, address-review-comments, best-of-n, applies decisions, push, merge-pr (which waits for and fixes CI), with `--hold-before-merge` first when developer verification is required |
+| orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, approves the split plan at split-pr CONFIRM and runs the parts as in "After a split", adds and removes agents, polls recommendations for flagged issues and forwards them, records deferred issues in `temp/<branch>/deferred.md` (what the issue is, the recommendations, why it is out of scope, nonblocking or blocking), asks and alerts the developer in MASTER, keeps the workflow file current. After the merge, when the PR worktree is not the main checkout, removes the room agents working in it and runs worktree-close on it from outside. Informs the developer in MASTER with a link to `temp/<branch>/deferred.md` when it has entries at "PR merged" and when a blocking deferred issue ends at "PR merge blocked". Never writes code. |
+| developer | - | Answers allowance alerts; decides Abandon whose reason is not dimension 6 (multi-purpose); reads `temp/<branch>/deferred.md` after the workflow ends; optionally runs the manual test and merge approval while merge-pr holds before the merge. |
+| author | claude | split-pr --publish, address-review-comments, best-of-n, applies decisions, push, merge-pr (which waits for and fixes CI), with `--hold-before-merge` first when developer verification is required |
 | claude-review | claude | review-pr |
 | codex-review | codex | review-pr |
 | cursor-review (optional) | cursor | review-pr |
