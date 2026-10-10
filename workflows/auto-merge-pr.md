@@ -113,6 +113,9 @@ You handle these yourself:
   step that failed; for a failed publish wave, restack mode with the plan path
   publishes the parts that are now publishable. A part that only a redesign
   could make independent is the developer's call.
+- **Flaky test:** the author reports it and continues once a rerun passes;
+  record it in `deferred.md`. After "PR merged", start the fix as its own PR,
+  e.g. assign an agent to fix it in a separate worktree.
 - **Usage limit mid-run:** judge by the provider's reset time. Swap another
   model into that lane, keeping the reviewers on different models, or wait for
   the reset.
@@ -121,9 +124,9 @@ You handle these yourself:
 
 | Role | Model | Does |
 |---|---|---|
-| Orchestrator | any | Steers the run to "PR merged" and recovers from the cases above. Names and staffs the agents and changes the team as the run needs. Asks the merge-permission question once; that answer is the permission to merge. Gets the PR goal and non-goals locked, approves the split plan, decides whether splitting fixes an Abandon, records out-of-scope findings in `deferred.md`, triages flagged issues, and on the developer's behalf has the author apply best-of-n's top-ranked option. Informs the developer in MASTER at "PR merge blocked", and at "PR merged" when `deferred.md` has entries. Writing `deferred.md` and running worktree-close are its only hands-on actions; it delegates everything else. |
+| Orchestrator | any | Steers the run to "PR merged" and recovers from the cases above. Names and staffs the agents and changes the team as the run needs. Asks the merge-permission question once; that answer is the permission to merge. Gets the PR goal and non-goals locked, approves the split plan, decides whether splitting fixes an Abandon, records out-of-scope findings and flaky tests the author reports in `deferred.md`, triages flagged issues, and on the developer's behalf has the author apply best-of-n's top-ranked option. Informs the developer in MASTER at "PR merge blocked", and at "PR merged" when `deferred.md` has entries; after "PR merged", starts each recorded flaky test as its own PR. Writing `deferred.md` and running worktree-close are its only hands-on actions; it delegates everything else. |
 | Developer | - | Answers the merge-permission question; supplies the PR goal and non-goals when none is locked; optionally runs the manual test and merge approval while merge-pr holds; recovers from "PR merge blocked". |
-| Author | any | split-pr, address-review-comments (which commits the reviewers' tests), best-of-n, fixes, merge-pr (which handles CI and new GitHub review comments, pushing its own fixes). Before split-pr or merge-pr, commits any reviewer tests still left in the worktree. |
+| Author | any | split-pr, address-review-comments (which commits the reviewers' tests), best-of-n, fixes, merge-pr (which handles CI and new GitHub review comments, pushing its own fixes). Before split-pr or merge-pr, commits any reviewer tests still left in the worktree. A flaky test found while running gate-and-fix or merge-pr is not fixed in this PR: it reports the test, error and diagnosis to the orchestrator and continues once a rerun passes. |
 | Reviewers | different models: at least Claude and Codex, Cursor optional | review-pr, each with `--reviewer` set to its own agent name. |
 
 All agents for one PR share its worktree (any worktree, not necessarily the
