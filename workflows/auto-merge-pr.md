@@ -46,14 +46,10 @@ flowchart TD
         bonverdict -- toss-up --> blocking{Blocking?}
         blocking -- no --> defer["Orchestrator: record it in temp/#lt;branch#gt;/deferred.md"]
         blocking -- yes --> recordblock["Orchestrator: record it in temp/#lt;branch#gt;/deferred.md"]
-        flag -- no --> ci
-        applyfirst --> ci
-        defer --> ci
-        applydec[Author: apply developer's decision, push] --> ci
-        ci{CI green?}
-        ci -- no --> cifix[Author: fix CI, push]
-        cifix --> ci
-        ci -- yes --> review
+        flag -- no --> review
+        applyfirst --> review
+        defer --> review
+        applydec[Author: apply developer's decision, push] --> review
     end
 
     anyabandon -- yes --> single{Abandon reason is single purpose?}
@@ -96,7 +92,7 @@ flowchart TD
 |---|---|---|
 | orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, adds and removes agents, polls recommendations for flagged issues and forwards them, records deferred issues in `temp/<branch>/deferred.md` (what the issue is, the recommendations, why it is out of scope, nonblocking or blocking), asks and alerts the developer in MASTER, keeps the workflow file current. After the merge, when the PR worktree is not the main checkout, removes the room agents working in it and runs worktree-close on it from outside. Informs the developer in MASTER with a link to `temp/<branch>/deferred.md` when it has entries at "PR merged" and when a blocking deferred issue ends at "PR merge blocked". Never writes code. |
 | developer | - | Answers allowance alerts; decides Abandon that is not single purpose; reads `temp/<branch>/deferred.md` after the workflow ends; optionally runs the pre-merge regression test and approval. |
-| author | claude | split-pr, address-review-comments, best-of-n, applies decisions and CI fixes, push, merge-pr |
+| author | claude | split-pr, address-review-comments, best-of-n, applies decisions, push, merge-pr (which waits for and fixes CI) |
 | claude-review | claude | review-pr |
 | codex-review | codex | review-pr |
 | cursor-review (optional) | cursor | review-pr |
