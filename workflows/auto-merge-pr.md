@@ -16,7 +16,7 @@ flowchart TD
     big -- no --> lockgoal["Orchestrator: get the PR goal and non-goals locked (ask the developer once if none is locked)"]
     lockgoal --> review
     split --> approveplan["Orchestrator: approve the split plan (split-pr CONFIRM)"]
-    approveplan --> splitok{split-pr built and published every part?}
+    approveplan --> splitok{"split-pr built every part and published every publishable one?"}
     splitok -- no --> splitfailed(["Split failed (orchestrator recovers)"]):::failure
     splitok -- yes --> splitdone(["PR split (orchestrator recovers)"]):::failure
 
@@ -81,8 +81,10 @@ worktree-close never removes the main checkout's `temp/`, so the link survives.
 
 best-of-n is there to keep the developer out of failure resolution: whatever
 its verdict (universal, clear or toss-up), the author applies the top-ranked
-option and its triage records the choice. Only blocking flagged issues and
-questions best-of-n hands back reach the developer.
+option. best-of-n keeps the ranking in its own ledger
+(`temp/best-of-n/<branch-slug>/ledger.json`, rendered as `decisions.md`).
+Only blocking flagged issues and questions best-of-n hands back reach the
+developer.
 
 ## Failure recovery
 
@@ -98,6 +100,8 @@ You handle these yourself:
   Run this workflow once per part and carry over the start answer instead of
   asking again. Start a part once all its parents have merged; parts with no
   open parent can run in parallel, each with its own author and reviewers.
+  A part with two or more parents stays a local branch under split-pr's
+  default `wait` policy until restack leaves it one base; that is expected.
   A train merges strictly bottom up, never into a parent branch; after a
   parent merges, have an agent run `split-pr restack <plan> --publish` with
   the plan path (`temp/split-pr/<source-slug>/plan.json` in the worktree where
@@ -119,7 +123,7 @@ You handle these yourself:
 |---|---|---|
 | Orchestrator | any | Steers the run to "PR merged" and recovers from the cases above. Names and staffs the agents and changes the team as the run needs. Asks the merge-permission question once; that answer is the permission to merge. Gets the PR goal and non-goals locked, approves the split plan, decides whether splitting fixes an Abandon, records out-of-scope findings in `deferred.md`, triages flagged issues, and on the developer's behalf has the author apply best-of-n's top-ranked option. Informs the developer in MASTER at "PR merge blocked", and at "PR merged" when `deferred.md` has entries. Writing `deferred.md` and running worktree-close are its only hands-on actions; it delegates everything else. |
 | Developer | - | Answers the merge-permission question; supplies the PR goal and non-goals when none is locked; optionally runs the manual test and merge approval while merge-pr holds; recovers from "PR merge blocked". |
-| Author | any | split-pr, address-review-comments (which commits the reviewers' tests), best-of-n, fixes, merge-pr (which handles CI). |
+| Author | any | split-pr, address-review-comments (which commits the reviewers' tests), best-of-n, fixes, merge-pr (which handles CI and new GitHub review comments, pushing its own fixes). Before split-pr or merge-pr, commits any reviewer tests still left in the worktree. |
 | Reviewers | different models: at least Claude and Codex, Cursor optional | review-pr, each with `--reviewer` set to its own agent name. |
 
 All agents for one PR share its worktree (any worktree, not necessarily the
