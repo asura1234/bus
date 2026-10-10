@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn compaction_limit_defaults_to_five_and_validates_config_values() {
-        let root = std::env::temp_dir().join(format!("bus-compaction-settings-{}", io::now_ns()));
+        let root = crate::utils::test_temp::unique_temp_path("bus-compaction-settings");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("settings.json");
         let defaults = serde_json::to_value(load(&path).unwrap()).unwrap();

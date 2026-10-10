@@ -5,13 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 #[test]
 fn private_control_refuses_a_shared_directory_without_changing_permissions() {
-    let path = std::env::temp_dir().join(format!(
-        "bdp-{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let path = crate::utils::test_temp::unique_temp_path("bdp");
     fs::create_dir(&path).unwrap();
     restrict_socket_permissions(&path, 0o755).unwrap();
     let (tx, _rx) = std::sync::mpsc::sync_channel(0);
@@ -31,13 +25,7 @@ fn private_control_refuses_a_shared_directory_without_changing_permissions() {
 #[cfg(unix)]
 #[test]
 fn private_control_client_refuses_an_endpoint_in_a_shared_directory() {
-    let path = std::env::temp_dir().join(format!(
-        "bdc-{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let path = crate::utils::test_temp::unique_temp_path("bdc");
     fs::create_dir(&path).unwrap();
     restrict_socket_permissions(&path, 0o700).unwrap();
     let (tx, _rx) = std::sync::mpsc::sync_channel(0);

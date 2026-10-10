@@ -1,10 +1,7 @@
 use super::*;
 
 fn temp_root(label: &str) -> PathBuf {
-    std::env::temp_dir().join(format!(
-        "bus-orch-{label}-{}",
-        crate::messaging::storage::io::now_ns()
-    ))
+    crate::utils::test_temp::unique_temp_path(&format!("bus-orch-{label}"))
 }
 
 fn values(room: Option<(&str, u64)>, data: &Path) -> PromptValues {

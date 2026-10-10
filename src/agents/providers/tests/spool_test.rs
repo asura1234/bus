@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn concurrent_hook_writers_publish_all_records_and_duplicates_are_stable() {
-        let dir = std::env::temp_dir().join(format!("bus-callback-{}", bus_io::now_ns()));
+        let dir = crate::utils::test_temp::unique_temp_path("bus-callback");
         initialize(
             &dir,
             &Manifest {
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn neutral_spool_preserves_manifest_and_record_wire_fields() {
-        let dir = std::env::temp_dir().join(format!("bus-neutral-spool-wire-{}", bus_io::now_ns()));
+        let dir = crate::utils::test_temp::unique_temp_path("bus-neutral-spool-wire");
         let manifest = Manifest {
             routing_key: RoutingKey(9),
             provider: Provider::ClaudeCode,
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn neutral_spool_rejects_provider_mismatch_and_sequence_overflow_without_events() {
         let dir =
-            std::env::temp_dir().join(format!("bus-neutral-spool-overflow-{}", bus_io::now_ns()));
+            crate::utils::test_temp::unique_temp_path("bus-neutral-spool-overflow");
         initialize(
             &dir,
             &Manifest {
@@ -265,10 +265,7 @@ mod tests {
     #[test]
     fn neutral_spool_keeps_private_modes_and_refuses_manifest_symlinks() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!(
-            "bus-neutral-spool-permissions-{}",
-            bus_io::now_ns()
-        ));
+        let dir = crate::utils::test_temp::unique_temp_path("bus-neutral-spool-permissions");
         let manifest = Manifest {
             routing_key: RoutingKey(1),
             provider: Provider::Cursor,

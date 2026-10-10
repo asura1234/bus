@@ -151,10 +151,7 @@ mod tests {
     fn newly_created_shell_rejection_is_retried_before_launch_only() {
         use interprocess::local_socket::traits::Listener;
         use std::io::{BufRead, Write};
-        let dir = std::env::temp_dir().join(format!(
-            "bus-start-{}",
-            crate::messaging::storage::io::now_ns()
-        ));
+        let dir = crate::utils::test_temp::unique_temp_path("bus-start");
         crate::messaging::storage::io::private_dir(&dir).unwrap();
         let path = dir.join("api.sock");
         let listener = crate::platform::ipc::bind_local_listener(&path).unwrap();
@@ -223,10 +220,7 @@ mod tests {
     fn actual_json_socket_uses_guarded_method_and_old_server_rejects_it() {
         use interprocess::local_socket::traits::Listener;
         use std::io::{BufRead, Write};
-        let dir = std::env::temp_dir().join(format!(
-            "bus-socket-{}",
-            crate::messaging::storage::io::now_ns()
-        ));
+        let dir = crate::utils::test_temp::unique_temp_path("bus-socket");
         crate::messaging::storage::io::private_dir(&dir).unwrap();
         let path = dir.join("api.sock");
         let listener = crate::platform::ipc::bind_local_listener(&path).unwrap();

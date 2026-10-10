@@ -62,7 +62,7 @@ fn hook_merge_moves_bus_entries_from_another_executable_and_fails_closed_on_look
 
 #[test]
 fn project_hook_install_preserves_unrelated_entries_and_refuses_corrupt_files() {
-    let dir = std::env::temp_dir().join(format!("bus-hook-install-{}", bus_io::now_ns()));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-hook-install");
     bus_io::private_dir(&dir).unwrap();
     let path = dir.join("hooks.json");
     let original = json!({"custom":42,"hooks":{"stop":[{"command":"existing"}]}});
