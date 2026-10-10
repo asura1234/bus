@@ -1,100 +1,114 @@
 # Workflow: pr-123 review loop
 
-<!-- Example. A PR is written; reviewers on different models review it until
-all of them say ready, then the human regression-tests it before merge. -->
-
-## Goal
-
-PR #123 is ready to merge: every reviewer says ready, CI is green, and the
-human's regression test passes.
-
-## Non-goals
-
-- New features beyond the PR's scope. Reviewers file them as follow-ups.
-
 ## Graph
 
 ```mermaid
 flowchart TD
-    start([Human: get PR 123 merge-ready]):::human --> review
+    begin(["Get PR merge-ready"]):::start --> usage
 
-    subgraph round [Review round, at most 5]
-        review[claude-review + codex-review + cursor-review: review-pr in parallel]
-        review --> ready{All reviewers ready?}
-        ready -- no --> open{Open or flagged issues?}
-        open -- yes --> poll[Orchestrator: poll author and every reviewer for recommendations]
-        poll --> bestof[Orchestrator: forward all recommendations to author]
-        bestof --> rank[author: run best-of-n]
-        rank --> pick{Clear winner?}
-        pick -- yes --> apply[author: apply winner, continue unblocked]
-        apply --> fix
-        pick -- no --> blocking{Issue blocking?}
-        blocking -- no --> defer[Orchestrator: record in Deferred list, continue unblocked]
-        defer --> fix
-        blocking -- yes --> ask[Orchestrator: halt progress, ask human in MASTER]:::human
-        ask -- human decision --> fix
-        open -- no --> fix[author: address-review-comments, push]
-        fix --> ci{CI green?}
-        ci -- no --> fix
-        ci -- yes --> review
+    usage[Orchestrator: check Claude and Codex allowance in bus state] --> low{"Claude or Codex allowance below 5%?"}
+    low -- yes --> alert[Orchestrator: alert developer in MASTER]
+    alert --> direction[Developer: give direction]:::developer
+    direction --> proceed{Developer says proceed?}
+    proceed -- yes --> cursorout
+    proceed -- no --> blocked
+    low -- no --> cursorout{Cursor out of allowance?}
+    cursorout -- yes --> dropcursor[Orchestrator: leave cursor-review out of the reviewers]
+    cursorout -- no --> askverify
+    dropcursor --> askverify[Orchestrator: ask developer whether pre-merge verification is required, record the answer]
+    askverify --> measure["Orchestrator: measure total changed lines (git diff --shortstat base...head)"]
+
+    measure --> big{"Total changed lines >= 3000?"}
+    big -- yes --> split[author: run split-pr]
+    big -- no --> review
+    split --> shape{split-pr shape?}
+    shape -- train --> train[Orchestrator: review the parts one after another, in stack order]
+    shape -- parallel --> par[Orchestrator: review the parts in parallel, each with its own copy of this loop]
+    shape -- mixed --> mixed[Orchestrator: review the prerequisite parts first, then the rest in parallel]
+    train -- each part --> review
+    par -- each part --> review
+    mixed -- each part --> review
+
+    subgraph round [Review round]
+        review["claude-review + codex-review + cursor-review: review-pr in parallel"]
+        review --> allready{Every reviewer Ready?}
+        allready -- no --> anyabandon{Any Abandon?}
+        anyabandon -- Needs Refinement --> address[author: run address-review-comments, push APPLY fixes]
+        address --> outscope{"Any finding outside the PR goal and non-goals?"}
+        outscope -- yes --> recordscope["Orchestrator: record it in temp/#lt;branch#gt;/deferred.md"]
+        outscope -- no --> flag
+        recordscope --> flag{Any FLAG?}
+        flag -- yes --> poll[Orchestrator: poll author and every reviewer for a recommendation, forward all to author]
+        poll --> bestof[author: run best-of-n]
+        bestof --> bonverdict{best-of-n verdict?}
+        bonverdict -- universal --> applyfirst[author: apply first place, push]
+        bonverdict -- clear --> applyfirst
+        bonverdict -- toss-up --> blocking{Blocking?}
+        blocking -- no --> defer["Orchestrator: record it in temp/#lt;branch#gt;/deferred.md"]
+        blocking -- yes --> ask[Orchestrator: halt, ask developer in MASTER]
+        ask --> decide[Developer: decide]:::developer
+        decide --> applydec[author: apply developer's decision, push]
+        flag -- no --> ci
+        applyfirst --> ci
+        defer --> ci
+        applydec --> ci
+        ci{CI green?}
+        ci -- no --> cifix[author: fix CI, push]
+        cifix --> ci
+        ci -- yes --> cap{"Round #lt; 5?"}
+        cap -- yes --> review
     end
 
-    ready -- yes --> deferred{Deferred issues?}
-    deferred -- yes --> later[Human in MASTER: decide deferred issues]:::human
-    deferred -- no --> regress
-    later -- fix needed --> fix
-    later -- otherwise --> regress[Human: regression test]:::human
-    ready -- round 5 still not ready --> stuck[Human: cut scope or continue]:::human
-    stuck --> review
-    regress -- problem --> fix
-    regress -- ok --> merge([Human: merge])
+    anyabandon -- yes --> single{"Abandon reason is single purpose (review dimension 6)?"}
+    single -- yes --> split
+    single -- no --> nopreset[Developer: no preset strategy, decide]:::developer
+    nopreset --> sendback{Developer sends it back to fix?}
+    sendback -- yes --> applydec
+    sendback -- no --> blocked
 
-    classDef human fill:#fde2e4,stroke:#c9184a
+    cap -- no --> stuck[Developer: decide after the round cap]:::developer
+    stuck --> capcall{Developer's call?}
+    capcall -- cut scope --> applydec
+    capcall -- more rounds --> review
+    capcall -- stop --> blocked
+
+    allready -- yes --> deferred{"Entries in temp/#lt;branch#gt;/deferred.md?"}
+    deferred -- yes --> later[Developer in MASTER: decide each deferred issue]:::developer
+    later --> fixdeferred{Any deferred issue to fix?}
+    fixdeferred -- yes --> applydec
+    fixdeferred -- no --> verify
+    deferred -- no --> verify{Developer verification required?}
+    verify -- yes --> regress[Developer: regression test and merge approval]:::developer
+    regress --> approved{Passed and approved?}
+    approved -- yes --> merge
+    approved -- no --> applydec
+    verify -- no --> merge[author: run merge-pr]
+    merge --> mergeok{merge-pr merged the PR?}
+    mergeok -- yes --> merged(["PR merged"]):::success
+    mergeok -- no --> blocked(["PR merge blocked"]):::failure
+
+    classDef start fill:#dbeafe,stroke:#1d4ed8
+    classDef success fill:#dcfce7,stroke:#15803d
+    classDef failure fill:#fee2e2,stroke:#b91c1c
+    classDef developer fill:#fde2e4,stroke:#c9184a
     classDef current stroke-width:3px,stroke:#2563eb
-    class review current
+    class usage current
 ```
 
 ## Participants
 
-| Agent | Provider | Role | Worktree / branch |
-|---|---|---|---|
-| author | claude | best-of-n, address-review-comments, push | main worktree, PR branch |
-| claude-review | claude | review-pr | main worktree, read-only |
-| codex-review | codex | review-pr | main worktree, read-only |
-| cursor-review | cursor | review-pr | main worktree, read-only |
+| Agent | Provider | Role |
+|---|---|---|
+| orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, adds and removes agents, polls recommendations for flagged issues and forwards them, records `temp/<branch>/deferred.md` entries (what the issue is, the recommendations, why it is out of scope or nonblocking), asks the developer in MASTER, keeps the workflow file current. Never writes code. |
+| developer | - | Answers allowance alerts; decides Abandon that is not single purpose, blocking toss-ups, deferred issues and the round cap; optionally runs the pre-merge regression test and approval. |
+| author | claude | split-pr, address-review-comments, best-of-n, applies decisions and CI fixes, push, merge-pr |
+| claude-review | claude | review-pr |
+| codex-review | codex | review-pr |
+| cursor-review (optional) | cursor | review-pr |
 
-## Gates
+All agents share one worktree on the PR branch (any worktree, not necessarily
+the main checkout); reviewers only read, the author is the only writer.
 
-- CI green on the pushed head before each review round.
-- Every reviewer answers ready on the same head commit.
-
-## Coordination
-
-- Reviewers only read; the author is the only writer on the branch.
-- Each round reviews the delta since the previous round (`review-pr` round 2+).
-
-## Decision rules
-
-- For each open or flagged issue in a review round, the orchestrator polls the
-  author and every reviewer for a recommendation and forwards all
-  recommendations to the author, who runs the `best-of-n` skill.
-- A clear winner (`universal` or `clear`) is applied by the author; the round
-  continues unblocked.
-- With no clear winner, a nonblocking issue goes in the workflow's Deferred
-  list, with its recommendations and why it does not block. The round continues
-  unblocked; the orchestrator asks the human in MASTER at the next human
-  checkpoint, before regression testing.
-- With no clear winner on a blocking issue, the orchestrator halts progress and
-  asks the human in MASTER. Resume only after the human decides.
-- Cap: 5 rounds. After that, ask the human to cut scope or allow more rounds.
-- The human merges; the orchestrator never does.
-
-## Deferred
-
-- None.
-
-## Log
-
-- 2026-10-10: Review-round cap raised from 4 to 5.
-- 2026-10-09: Routed open or flagged issues through author-run best-of-n; only blocking issues without a clear winner halt the round for the human.
-- 2026-10-06: Drafted with the human.
+Reviewers must be on different models; at minimum both Claude and Codex
+review. Cursor is optional: when it is out of allowance it is left out of the
+reviewer set, without an alert.
