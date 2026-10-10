@@ -31,7 +31,7 @@ fn embedded_docs_match_the_repository_copies() {
         ("orchestrator-guide.md", "orchestration/guide.md"),
         ("orchestrator-rules.md", "orchestration/rules.md"),
         ("templates/workflow-template.md", "workflows/template.md"),
-        ("workflows/pr-review-loop.md", "workflows/pr-review-loop.md"),
+        ("workflows/auto-merge-pr.md", "workflows/auto-merge-pr.md"),
         (
             "workflows/cross-repo-feature.md",
             "workflows/cross-repo-feature.md",

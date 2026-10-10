@@ -1,4 +1,4 @@
-# Workflow: pr-123 review loop
+# Workflow: auto-merge-pr
 
 ## Graph
 
@@ -59,7 +59,7 @@ flowchart TD
         cap -- yes --> review
     end
 
-    anyabandon -- yes --> single{"Abandon reason is single purpose (review dimension 6)?"}
+    anyabandon -- yes --> single{Abandon reason is single purpose?}
     single -- yes --> split
     single -- no --> nopreset[Developer: no preset strategy, decide]:::developer
     nopreset --> sendback{Developer sends it back to fix?}
