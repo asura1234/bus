@@ -21,7 +21,8 @@ INPUT = [plan | pr] [--round latest|N] [--github] [--pr <n>] [--review-file <pat
         [--scope <FILE_LIST|chunk.json>]
 
 HARD RULES
-- Automatically modify only claims finally adjudicated APPLY; REJECT / FLAG / HOUSEKEEPING do not change the repository.
+- Automatically modify only claims finally adjudicated APPLY; REJECT / FLAG / HOUSEKEEPING do not change the repository,
+  except that PR mode lands or removes every reviewer-added test (PASS 4); that is landing, not a repair.
 - The main agent exclusively owns deduplication, cross-claim comparison, disposition, triage, remediation grouping, and landing.
 - Evidence gathering answers only local facts: no adjudication, no repair suggestions, no patches, no repository changes; disposition, conflict resolution, and repair direction belong to main alone.
 - Claim truth, goal scope, and repair design are judged separately: `SUPPORTED` does not approve the scope or the repair; main first rules on scope, then independently derives the repair for admitted claims.
@@ -158,6 +159,11 @@ do not expand the manifest or the locked Goal yourself. Adopt only probes from t
 IF mode == pr: include the reviewer test files/case hunks for APPLY claims in the allowlist; after the repair, narrowly run those tests and
 directly related regressions, confirming red turns green without weakening effective assertions. When landing, commit and push the repair together with the
 adopted new tests through commit-and-push, explicitly checking that new untracked files are also in the commit; never commit only the author's own production code.
+IF mode == pr: no reviewer-added test stays uncommitted. Each test for a non-APPLY claim is committed green (a red REJECT probe rewritten
+to assert the correct behavior when it still adds coverage), folded into an existing test, or removed with the reason in triage.md;
+a red FLAG probe is removed with its path, assertion, and red output in the FLAG evidence. Rules: review-response-guide
+"Taking ownership of PR reviewer tests". commit-and-push lands them even with no APPLY; after the push,
+`git status --porcelain --untracked-files=all -- <reviewer test paths>` must print nothing, else STOP.
 
 main decides itself whether to work serially or dispatch writers: with few groups, overlapping files, or trivial changes, doing it yourself is usually faster; dispatching pays off only when the
 allowlists of multiple groups are pairwise disjoint, have no dependencies, and each group's workload is genuinely substantial. In plan mode the same plan file always has a single writer.
