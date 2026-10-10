@@ -97,28 +97,36 @@ impl BusUi {
         )
     }
 
-    fn current_notice(&self) -> Option<String> {
-        self.visible_error().map(str::to_owned).or_else(|| {
-            let room = self.room?;
-            let errors = self
-                .snapshot
-                .state
-                .agents()
-                .filter(|agent| agent.room_id == room)
-                .filter_map(|agent| {
-                    agent
-                        .actionable_error
-                        .as_ref()
-                        .map(|error| format!("{}: {error}", agent.name))
-                })
-                .collect::<Vec<_>>()
-                .join(" · ");
-            (!errors.is_empty()).then_some(errors)
-        })
+    /// Agent notices (such as a turn that ended without a captured reply)
+    /// stay in message status and history; the client log records each new
+    /// one. Only errors the human must act on become a toast.
+    fn agent_notices(&self) -> Option<String> {
+        let room = self.room?;
+        let notices = self
+            .snapshot
+            .state
+            .agents()
+            .filter(|agent| agent.room_id == room)
+            .filter_map(|agent| {
+                agent
+                    .actionable_error
+                    .as_ref()
+                    .map(|error| format!("{}: {error}", agent.name))
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
+        (!notices.is_empty()).then_some(notices)
     }
 
     pub(super) fn sync_toast(&mut self) {
-        let notice = self.current_notice();
+        let notices = self.agent_notices();
+        if notices != self.observed_agent_notices {
+            if let Some(notices) = &notices {
+                tracing::info!(event = "bus.agent.notice", notices = %notices, "Agent notice");
+            }
+            self.observed_agent_notices = notices;
+        }
+        let notice = self.visible_error().map(str::to_owned);
         if notice == self.observed_notice {
             return;
         }

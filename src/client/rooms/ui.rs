@@ -68,6 +68,8 @@ pub(in crate::client) struct BusUi {
     pub(super) dismissed_snapshot_error: Option<String>,
     pub(super) toast: Option<Toast>,
     pub(super) observed_notice: Option<String>,
+    /// Agent notices last written to the client log, so each is logged once.
+    pub(super) observed_agent_notices: Option<String>,
     pub(super) toast_animation_last_tick: Option<std::time::Instant>,
     pub(super) failed: Vec<Pending>,
     // Storage recovered after these commands were rejected but before they
@@ -168,6 +170,7 @@ impl BusUi {
             dismissed_snapshot_error: None,
             toast: None,
             observed_notice: None,
+            observed_agent_notices: None,
             toast_animation_last_tick: None,
             failed: Vec::new(),
             terminal: None,
@@ -803,12 +806,15 @@ mod tests {
     #[test]
     fn old_submit_ack_preserves_newer_text_and_another_room_draft() {
         let (mut ui, room) = ui();
+        ui.locals.get_mut(&room).unwrap().text.insert("sent prompt");
+        ui.text_changed(room);
+        let saved = ui.pending.front().expect("draft save").id;
         ui.request_send(room);
-        ui.settle();
+        acknowledge(&mut ui, saved, true);
         let id = ui.pending.front().expect("submit").id;
         ui.locals.get_mut(&room).unwrap().text.insert("next prompt");
         ui.text_changed(room);
         acknowledge(&mut ui, id, true);
-        assert_eq!(ui.locals[&room].text.text, "next prompt");
+        assert_eq!(ui.locals[&room].text.text, "sent promptnext prompt");
     }
 }

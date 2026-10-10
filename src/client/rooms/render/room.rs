@@ -48,7 +48,9 @@ impl BusUi {
             return;
         };
         let width = main.width.saturating_sub(4);
-        let status = self.room_status(room.id, width);
+        // Nothing is ever drawn below the composer. A toast, or the Ctrl+R
+        // recall search, titles the composer's top border instead.
+        let title = self.composer_title(room.id, width.saturating_sub(2));
         let recipients = super::super::recipients::layout(
             local.recipients.iter().filter_map(|id| {
                 self.snapshot
@@ -59,7 +61,7 @@ impl BusUi {
             width,
         );
         let chat_search = self.chat_search.clone();
-        let layout = self.composer_layout(view, main, local, &recipients, &status);
+        let layout = self.composer_layout(view, main, local, &recipients);
         self.recipient_scroll = self.recipient_scroll.min(view.recipient_max_scroll);
         let history_y = self.room_header(view, main, room, local, layout);
         self.notes_view(view, local);
@@ -111,12 +113,15 @@ impl BusUi {
         };
         view.history_text = Rect::new(layout.x, history_y, width, view.history.height);
         self.history_rows(view, content);
-        view.lines(
-            Rect::new(layout.x, main.bottom().saturating_sub(1), width, 1),
-            &status,
-            None,
-            true,
-        );
+        if !title.is_empty() && view.composer_box.height > 0 {
+            view.row(
+                Rect::new(layout.x, view.composer_box.y, width, 1),
+                format!(" {title} "),
+                None,
+                false,
+                false,
+            );
+        }
         self.recipient_bar_view(view, local, &recipients, layout);
         self.composer_editor_view(view, local, layout);
         let files = self.draft_files(room);
@@ -126,40 +131,20 @@ impl BusUi {
         self.recipient_menu_view(view, room, local, layout);
     }
 
-    // The caller resolved its selected room before rendering; reuse that ID
-    // rather than looking it up again and unwrapping the selection.
-    fn room_status(&self, room: RoomId, width: u16) -> String {
-        let queued: usize = self
-            .snapshot
-            .state
-            .agents()
-            .filter(|a| a.room_id == room)
-            .map(|a| self.snapshot.state.queued_requests(a.id).len())
-            .sum();
-        let notice = self.toast_text_at(std::time::Instant::now(), width);
-        let search_status = self
-            .history_search
-            .as_ref()
-            .map(|search| (search.query.clone(), search.selected));
-        let search_status = search_status.map(|(query, selected)| {
-            let total = self.filtered_history(room, &query).len().max(1);
-            (query, selected, total)
-        });
-        notice
+    /// The active toast, else the Ctrl+R recall search, which has no panel
+    /// of its own. Request and agent notices go to the client log instead.
+    fn composer_title(&self, room: RoomId, width: u16) -> String {
+        self.toast_text_at(std::time::Instant::now(), width)
             .or_else(|| {
-                search_status.as_ref().map(|(query, selected, total)| {
-                    format!("search {query}  {}/{total}", selected + 1)
-                })
+                let search = self.history_search.as_ref()?;
+                let total = self.filtered_history(room, &search.query).len().max(1);
+                Some(format!(
+                    "search {}  {}/{total}",
+                    search.query,
+                    search.selected + 1
+                ))
             })
-            .unwrap_or_else(|| {
-                // A pending send shows nothing: it completes in milliseconds,
-                // so a status row only flashes; the client log records it.
-                if queued > 0 {
-                    format!("{queued} queued requests")
-                } else {
-                    String::new()
-                }
-            })
+            .unwrap_or_default()
     }
 
     fn composer_layout(
@@ -168,12 +153,11 @@ impl BusUi {
         main: Rect,
         local: &LocalRoom,
         recipients: &RecipientLayout,
-        status: &str,
     ) -> RoomLayout {
         let x = main.x + 2;
         let width = main.width.saturating_sub(4);
-        let bottom = main.bottom();
-        let composer_bottom = bottom.saturating_sub(u16::from(!status.is_empty()));
+        // The composer box always ends on the last row; none is reserved.
+        let composer_bottom = main.bottom();
         // Preserve the eight-row room header/notes, at least three history
         // rows, a three-row draft, and its four chrome rows. The logical chip
         // list still wraps without a row limit and scrolls in this viewport.
@@ -185,7 +169,6 @@ impl BusUi {
         };
         view.recipient_max_scroll = recipients.height.saturating_sub(bar_height);
         // One active draft per frame, independent of agent/pane cardinality.
-        // Keep the box flush with the bottom unless a real notice needs a row.
         let max_height = composer_bottom.saturating_sub(bar_height + 4);
         let text_height = if self.notes_focus {
             // In short terminals, notes need a visible row and caret before
