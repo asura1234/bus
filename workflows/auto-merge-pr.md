@@ -45,13 +45,11 @@ flowchart TD
         bonverdict -- clear --> applyfirst
         bonverdict -- toss-up --> blocking{Blocking?}
         blocking -- no --> defer["Orchestrator: record it in temp/#lt;branch#gt;/deferred.md"]
-        blocking -- yes --> ask[Orchestrator: halt, ask developer in MASTER]
-        ask --> decide[Developer: decide]:::developer
-        decide --> applydec[author: apply developer's decision, push]
+        blocking -- yes --> recordblock["Orchestrator: record it in temp/#lt;branch#gt;/deferred.md"]
         flag -- no --> ci
         applyfirst --> ci
         defer --> ci
-        applydec --> ci
+        applydec[author: apply developer's decision, push] --> ci
         ci{CI green?}
         ci -- no --> cifix[author: fix CI, push]
         cifix --> ci
@@ -72,19 +70,15 @@ flowchart TD
     capcall -- more rounds --> review
     capcall -- stop --> blocked
 
-    allready -- yes --> deferred{"Entries in temp/#lt;branch#gt;/deferred.md?"}
-    deferred -- yes --> later[Developer in MASTER: decide each deferred issue]:::developer
-    later --> fixdeferred{Any deferred issue to fix?}
-    fixdeferred -- yes --> applydec
-    fixdeferred -- no --> verify
-    deferred -- no --> verify{Developer verification required?}
+    recordblock --> blocked
+    allready -- yes --> verify{Developer verification required?}
     verify -- yes --> regress[Developer: regression test and merge approval]:::developer
     regress --> approved{Passed and approved?}
     approved -- yes --> merge
     approved -- no --> applydec
     verify -- no --> merge[author: run merge-pr]
     merge --> mergeok{merge-pr merged the PR?}
-    mergeok -- yes --> merged(["PR merged"]):::success
+    mergeok -- yes --> merged(["PR merged (deferred issues in temp/#lt;branch#gt;/deferred.md)"]):::success
     mergeok -- no --> blocked(["PR merge blocked"]):::failure
 
     classDef start fill:#dbeafe,stroke:#1d4ed8
@@ -99,8 +93,8 @@ flowchart TD
 
 | Agent | Provider | Role |
 |---|---|---|
-| orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, adds and removes agents, polls recommendations for flagged issues and forwards them, records `temp/<branch>/deferred.md` entries (what the issue is, the recommendations, why it is out of scope or nonblocking), asks the developer in MASTER, keeps the workflow file current. Never writes code. |
-| developer | - | Answers allowance alerts; decides Abandon that is not single purpose, blocking toss-ups, deferred issues and the round cap; optionally runs the pre-merge regression test and approval. |
+| orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, adds and removes agents, polls recommendations for flagged issues and forwards them, records deferred issues in `temp/<branch>/deferred.md` (what the issue is, the recommendations, why it is out of scope, nonblocking or blocking), asks and alerts the developer in MASTER, keeps the workflow file current. Never writes code. |
+| developer | - | Answers allowance alerts; decides Abandon that is not single purpose and the round cap; reads `temp/<branch>/deferred.md` after the workflow ends; optionally runs the pre-merge regression test and approval. |
 | author | claude | split-pr, address-review-comments, best-of-n, applies decisions and CI fixes, push, merge-pr |
 | claude-review | claude | review-pr |
 | codex-review | codex | review-pr |
