@@ -125,39 +125,69 @@ fn room_notes_have_a_box_and_top_section_is_separated_from_history() {
     assert!(ui.send_intent.is_none());
 }
 
+/// The composer's bottom border is the window's last row, so no row exists
+/// below it for any notice, search or queue status.
+fn assert_composer_on_last_row(ui: &mut BusUi, cols: u16, rows: u16, case: &str) -> String {
+    ui.compute_view(cols, rows);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
+    ui.render(&mut buffer);
+    let editor = composer_rect(ui);
+    assert_eq!(editor.bottom() + 1, rows - 1, "{case}: row under the composer");
+    assert_eq!(buffer[(editor.x - 1, rows - 1)].symbol(), "└", "{case}");
+    assert_eq!(buffer[(editor.right(), rows - 1)].symbol(), "┘", "{case}");
+    for x in editor.x..editor.right() {
+        assert_eq!(buffer[(x, rows - 1)].symbol(), "─", "{case}: text under the composer");
+    }
+    buffer.content.iter().map(|cell| cell.symbol()).collect()
+}
+
 #[test]
-fn composer_sits_on_last_row_unless_a_visible_notice_needs_it() {
-    let (mut ui, room, _) = fixture();
+fn nothing_is_drawn_under_the_composer() {
+    let (mut ui, room, agent) = fixture();
     for (cols, rows, lines) in [(100, 30, 1), (100, 30, 80), (60, 12, 80)] {
         ui.locals.get_mut(&room).unwrap().text = editor::Editor::new("draft\n".repeat(lines));
+        assert_composer_on_last_row(&mut ui, cols, rows, "idle");
+
+        ui.show_toast("Save failed");
+        let screen = assert_composer_on_last_row(&mut ui, cols, rows, "toast");
+        assert!(screen.contains("Save failed"), "the toast titles the composer:\n{screen}");
         ui.toast = None;
-        for notice in [false, true] {
-            if notice {
-                ui.show_toast("Save failed");
-            }
-            ui.compute_view(cols, rows);
-            let mut buffer =
-                ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, cols, rows));
-            ui.render(&mut buffer);
-            let editor = composer_rect(&ui);
-            let border_y = rows - 1 - u16::from(notice);
-            assert_eq!(editor.bottom() + 1, border_y, "no empty footer row");
-            assert_eq!(buffer[(editor.x - 1, border_y)].symbol(), "└");
-            assert_eq!(buffer[(editor.right(), border_y)].symbol(), "┘");
-            for x in editor.x..editor.right() {
-                assert_eq!(buffer[(x, border_y)].symbol(), "─");
-            }
-            if notice {
-                let footer: String = (editor.x..editor.right())
-                    .map(|x| buffer[(x, rows - 1)].symbol())
-                    .collect();
-                assert!(footer.starts_with("Save failed"));
-            }
-        }
-        ui.toast.as_mut().unwrap().started_at -= std::time::Duration::from_secs(15);
-        ui.compute_view(cols, rows);
-        assert_eq!(composer_rect(&ui).bottom() + 1, rows - 1);
+
+        ui.send_intent = Some(room);
+        assert_composer_on_last_row(&mut ui, cols, rows, "pending send");
+        ui.send_intent = None;
     }
+
+    // An agent notice goes to the client log, not the screen.
+    let mut snapshot = (*ui.snapshot).clone();
+    let notice = "Provider turn ended without a captured reply; request closed.";
+    snapshot.state.set_agent_error(agent, Some(notice.into())).unwrap();
+    snapshot.revision += 1;
+    let capture = crate::utils::logging::test_capture::Capture::default();
+    capture.run(|| ui.receive_snapshot(Arc::new(snapshot)));
+    assert!(capture.text().contains("bus.agent.notice"), "{}", capture.text());
+    assert!(ui.toast.is_none());
+    let screen = assert_composer_on_last_row(&mut ui, 100, 30, "agent notice");
+    assert!(!screen.contains("captured reply"), "{screen}");
+
+    // Queued requests are counted nowhere under the composer.
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    for text in ["one", "two", "three"] {
+        snapshot.state.set_draft_text(room, text).unwrap();
+        snapshot.state.submit_draft_queued(room, 1).unwrap();
+    }
+    assert!(!snapshot.state.queued_requests(agent).is_empty());
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    let screen = assert_composer_on_last_row(&mut ui, 100, 30, "queued requests");
+    assert!(!screen.contains("queued requests"), "{screen}");
+
+    // The Ctrl+R recall search titles the composer instead.
+    key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    assert!(ui.history_search.is_some());
+    let screen = assert_composer_on_last_row(&mut ui, 100, 30, "recall search");
+    assert!(screen.contains("search   1/"), "{screen}");
 }
 
 #[test]

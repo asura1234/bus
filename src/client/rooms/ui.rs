@@ -68,6 +68,8 @@ pub(in crate::client) struct BusUi {
     pub(super) dismissed_snapshot_error: Option<String>,
     pub(super) toast: Option<Toast>,
     pub(super) observed_notice: Option<String>,
+    /// Agent notices last written to the client log, so each is logged once.
+    pub(super) observed_agent_notices: Option<String>,
     pub(super) toast_animation_last_tick: Option<std::time::Instant>,
     pub(super) failed: Vec<Pending>,
     // Storage recovered after these commands were rejected but before they
@@ -168,6 +170,7 @@ impl BusUi {
             dismissed_snapshot_error: None,
             toast: None,
             observed_notice: None,
+            observed_agent_notices: None,
             toast_animation_last_tick: None,
             failed: Vec::new(),
             terminal: None,
