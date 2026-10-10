@@ -54,9 +54,12 @@ EXPECTED_H2_TITLES: Mapping[ReviewMode, tuple[str, ...]] = {
         "代码就绪状态",
     ),
 }
+# A multi-purpose PR gets its own Abandon spelling so an orchestrator can route it to
+# split-pr instead of treating it like an unsalvageable Abandon.
+PR_SPLIT_ABANDON = "Abandon (dimension 6: multi-purpose, split with split-pr)"
 LEGAL_VERDICTS: Mapping[ReviewMode, set[str]] = {
     "plan": {"可执行（Ready）", "需要完善（Needs Refinement）", "废弃（Abandon）"},
-    "pr": {"Ready", "Needs Refinement", "Abandon"},
+    "pr": {"Ready", "Needs Refinement", "Abandon", PR_SPLIT_ABANDON},
 }
 
 
