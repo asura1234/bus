@@ -86,15 +86,7 @@ class SkillMigrationContractTest(unittest.TestCase):
             verdicts["plan"],
             {"可执行（Ready）", "需要完善（Needs Refinement）", "废弃（Abandon）"},
         )
-        self.assertEqual(
-            verdicts["pr"],
-            {
-                "Ready",
-                "Needs Refinement",
-                "Abandon",
-                "Abandon (dimension 6: multi-purpose, split with split-pr)",
-            },
-        )
+        self.assertEqual(verdicts["pr"], {"Ready", "Needs Refinement", "Abandon"})
         # Task review left with execute-plan; only plan and PR reviews remain.
         self.assertEqual(set(verdicts), {"plan", "pr"})
         markdown = "\n".join(

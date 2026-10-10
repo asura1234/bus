@@ -208,18 +208,16 @@ REPORT:
     location / dimension / observation / evidence / impact / optional possible remediation
   Do not attach severity, blocking, adoption recommendations, or source-agent labels to findings.
   Substantive problems go into `新问题与建议`; wording consistency drift and dimension 6 `XS` / `S` out-of-goal slices go into
-  `同步清单`. Dimension 6 slices of `M` or larger go into new problems, the possible remediation uses `split-pr`, and the verdict is the split Abandon.
+  `同步清单`. Dimension 6 slices of `M` or larger go into new problems, and the possible remediation uses `split-pr`.
   When there is no finding, the corresponding section reads `无。`.
 
   Verdict:
     Ready:
       no qualifying finding blocks Ready, every prior problem is closed, and goal-related coverage is complete (per the guide's proof rules)
     Needs Refinement:
-      a locally repairable substantive problem exists; never escalate because of round count
-    Abandon (dimension 6: multi-purpose, split with split-pr):
-      a dimension 6 out-of-goal slice of `M` or larger (address-review-comments cannot split, so this cannot converge as Needs Refinement)
+      a locally repairable substantive problem exists, or a dimension 6 out-of-goal slice of `M` or larger; never escalate because of round count
     Abandon:
-      fundamental architecture error or not locally salvageable; when both reasons hold, write this plain Abandon
+      fundamental architecture error or not locally salvageable; dimension 6 alone never yields Abandon
 
   Before completion, Read(docs/guides/review-format.md) completely.
   Write <round-NN/review.md> strictly per the PR template.

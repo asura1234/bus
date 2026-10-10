@@ -23,7 +23,7 @@ overturn an archived decision with its own approach. Only when new source eviden
 
 Before investigation, proof, delegation, and output, uniformly apply code-review-guide "goal-relevance admission". Dimension 6 is the only exception:
 it must write out-of-goal diff as a scope comment by cumulative slice size, but does not authorize deep review of that slice. `XS` / `S` go into the sync list,
-`M` and larger go into new problems, recommend `split-pr`, and yield the split Abandon; a Good Samaritan inclusion permit adds no follow-up repair obligation.
+`M` and larger go into new problems and recommend `split-pr`; a Good Samaritan inclusion permit adds no follow-up repair obligation.
 Diff coverage and round boundaries can only further narrow the scope of other dimensions.
 
 ## The plan is input, not a code-review target

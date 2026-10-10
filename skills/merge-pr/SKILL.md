@@ -10,7 +10,7 @@ tails must not be read, and why only the latest comment round is handled all liv
 
 ```text
 INPUT = [<pr-number>] [--no-merge] [--poll-seconds N (default 30)] [--max-wait N (default 1800)]
-        [--rebase-max-commits N (default 20)] [--hold-before-merge]
+        [--rebase-max-commits N (default 20)]
 
 repo   = git rev-parse --show-toplevel
 branch = git branch --show-current
@@ -174,7 +174,7 @@ IF any IN-SCOPE red check exists:
 
 ========== 6. Merge ==========
 
-IF --no-merge   -- stops before the retake and assertions; --hold-before-merge stops after all of them, right before the merge command
+IF --no-merge
   Report the current state and conclusion, STOP. Do not merge.
 
 First **retake** the review lane; do not assert from section 2's conclusion (reasons in guide.md "Review must be retaken before merging"):
@@ -209,9 +209,8 @@ IF `verdict.approved == false`
 --   and must be attributed exactly like a red check, otherwise STOP.
 
 merge_head = the HEAD last taken in section 1
--- Read the **full 40-character sha** with `git rev-parse`; never hand-complete it (guide.md "merge_head must be read, not hand-written").
-IF --hold-before-merge
-  Report "ready to merge at <merge_head>, holding for developer verification" and the state summary (guide.md "Holding before merge"), STOP. Do not merge.
+-- Read the **full 40-character sha** with `git rev-parse`; never hand-complete a short sha (a wrong hand-written one is reported by GitHub as
+--   "Head branch was modified", sending the whole investigation off course).
 
 IF failed and other are both empty:
   gh pr merge <pr> --squash --delete-branch=false --match-head-commit <merge_head>
@@ -220,7 +219,8 @@ ELSE:
   --   no unnamed summaries like "the rest are environment issues".
   gh pr merge <pr> --squash --admin --delete-branch=false --match-head-commit <merge_head>
 
--- `--match-head-commit` is not optional: without it a push after the signals were taken merges a tree that was never verified.
+-- `--match-head-commit` is not optional: someone may push between taking signals and merging; without it a tree that was never
+--   verified gets merged into master.
 
 Read back: `gh pr view <pr> --json state,mergedAt,mergeCommit`
 IF state != "MERGED"

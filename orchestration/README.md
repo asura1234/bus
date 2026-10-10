@@ -24,7 +24,7 @@ content, not another editable source layer.
 | `orchestration/rules.md` | `<BUS_DATA_DIR>/docs/orchestrator-rules.md` |
 | `workflows/create.md` | `<BUS_DATA_DIR>/docs/workflow-create.md` |
 | `workflows/template.md` | `<BUS_DATA_DIR>/docs/templates/workflow-template.md` |
-| `workflows/auto-merge-pr.md` | `<BUS_DATA_DIR>/docs/workflows/auto-merge-pr.md` |
+| `workflows/pr-review-loop.md` | `<BUS_DATA_DIR>/docs/workflows/pr-review-loop.md` |
 | `workflows/cross-repo-feature.md` | `<BUS_DATA_DIR>/docs/workflows/cross-repo-feature.md` |
 
 Links and `DOCS` paths in the guides address the generated docs folder. The

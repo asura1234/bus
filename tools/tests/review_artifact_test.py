@@ -235,19 +235,6 @@ FENCED_HEADING_MUST_SURVIVE
         self.assertEqual(result.stdout, expected)
         self.assertEqual(output.read_text(), expected)
 
-    def test_pr_split_abandon_verdict_survives_rendering(self) -> None:
-        verdict = "- **判定**：Abandon (dimension 6: multi-purpose, split with split-pr)"
-        review = _write(
-            self.root / "round-02" / "review.md",
-            _pr_review().replace("- **判定**：Needs Refinement", verdict),
-        )
-        output = review.with_name("chat-response.md")
-
-        result = _run_cli(review, output)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(verdict, output.read_text())
-
     def test_round_one_keeps_canonical_no_previous_findings(self) -> None:
         review = _write(self.root / "round-01" / "review.md", _plan_review(1))
         output = review.with_name("chat-response.md")

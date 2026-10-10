@@ -16,7 +16,7 @@ selected rules. Python retains Ruff E9,F and has no complexity lint policy.
   - `rules.md`, `guide.md`, `how-to-bus-cli.md`: binding rules, working guide, control CLI reference
 - `workflows/`: Markdown only; the standard workflow library
   - `create.md`: how to draft and revise a workflow (the `workflow-create` skill points here)
-  - `template.md`, `auto-merge-pr.md`, `cross-repo-feature.md`
+  - `template.md`, `pr-review-loop.md`, `cross-repo-feature.md`
 - `skills/`: agent workflow skills; `.agents/skills` and `.claude/skills` link here
   - `skill-architecture.md`: the shared skill contract
   - one folder per skill: `SKILL.md`, `guide.md`, `references/` and the skill's own `scripts/` (quality lanes, review lanes, PR signals,
