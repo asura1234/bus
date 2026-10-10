@@ -74,11 +74,7 @@ fn tick_until(
 
 #[test]
 fn one_enter_sends_promptly_in_a_busy_master_room_without_further_input() {
-    let dir = std::env::temp_dir().join(format!(
-        "bus-send-latency-{}-{}",
-        std::process::id(),
-        crate::messaging::storage::io::now_ns()
-    ));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-send-latency");
     let (seed, master, _) = busy_session();
     let (handle, commands) = BusHandle::start_for_test(dir.clone(), &seed);
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
