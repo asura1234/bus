@@ -8,8 +8,8 @@ flowchart TD
 
     usage[Orchestrator: check Claude and Codex allowance in bus state] --> low{"Claude or Codex allowance below 5%?"}
     low -- yes --> alert[Orchestrator: alert developer in MASTER]
-    alert --> direction[Developer: give direction]:::developer
-    direction --> proceed{Developer says proceed?}
+    alert --> devdirection[Developer: give direction]:::developer
+    devdirection --> proceed{Developer says proceed?}
     proceed -- yes --> cursorout
     proceed -- no --> blocked
     low -- no --> cursorout{Cursor out of allowance?}
