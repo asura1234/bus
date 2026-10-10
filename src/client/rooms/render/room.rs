@@ -152,9 +152,9 @@ impl BusUi {
                 })
             })
             .unwrap_or_else(|| {
-                if self.send_intent.is_some() {
-                    "Saving latest draft before sending…".into()
-                } else if queued > 0 {
+                // A pending send shows nothing: it completes in milliseconds,
+                // so a status row only flashes; the client log records it.
+                if queued > 0 {
                     format!("{queued} queued requests")
                 } else {
                     String::new()

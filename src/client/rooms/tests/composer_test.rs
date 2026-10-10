@@ -545,3 +545,15 @@ fn deleting_the_line_continuation_marker_restores_enter_to_send() {
     assert_eq!(ui.locals[&room].text.text, "ready to send");
     assert_eq!(ui.send_intent, Some(room));
 }
+
+#[test]
+fn pending_send_leaves_the_status_line_under_the_composer_empty() {
+    let (mut ui, room, _) = fixture();
+    ui.open_room(room);
+    ui.locals.get_mut(&room).unwrap().text.insert("ready to send");
+    let idle = room_screen(&mut ui, 100, 30);
+    ui.send_intent = Some(room);
+    let pending = room_screen(&mut ui, 100, 30);
+    // The send is logged; flashing a status row for it only moves the composer.
+    assert_eq!(pending, idle);
+}
