@@ -4,6 +4,7 @@ use super::{
     BusSnapshot, BusState, CoordinatorLease, Duration, JsonStore, Mutex, PathBuf, RequestId,
     RuntimeStatus, StoragePause, Transport,
 };
+use crate::messaging::storage::state_store::JournalOp;
 
 pub(super) struct Worker {
     pub(super) state: BusState,
@@ -121,6 +122,26 @@ impl Worker {
         Ok(())
     }
 
+    /// Commits a composer draft edit or send through the store's journal:
+    /// durable before it is acknowledged, without a full `state.json` save.
+    pub(super) fn journal(&mut self, state: BusState, op: JournalOp) -> Result<(), String> {
+        if let Err(error) = self.store.journal(op) {
+            self.pause_storage(&error);
+            return Err(self.storage_notice().into());
+        }
+        self.state = state;
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// Folds journal entries into `state.json` so a binary that predates the
+    /// journal, such as a cutover rollback, still sees every acknowledged edit.
+    fn fold_journal(&mut self) {
+        if self.storage_pause.is_none() && self.store.has_unfolded_journal() {
+            let _ = self.save(self.state.clone());
+        }
+    }
+
     pub(super) fn run(
         mut self,
         commands: mpsc::Receiver<(u64, BusCommand)>,
@@ -138,6 +159,7 @@ impl Worker {
                 .unwrap_or_else(|| commands.recv_timeout(timeout))
             {
                 Ok((id, BusCommand::Shutdown)) => {
+                    self.fold_journal();
                     self.last_command_id = id;
                     if let Ok(mut shared) = snapshots.lock() {
                         *shared = Arc::new(self.snapshot());
@@ -148,7 +170,10 @@ impl Worker {
                     });
                     break;
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.fold_journal();
+                    break;
+                }
                 Ok((_id, BusCommand::Dev(call))) => {
                     let response = self.dev_response_with_events(&call.request, Some(&events));
                     // A disconnected client does not cancel or replay a committed action.
@@ -179,6 +204,11 @@ impl Worker {
                         command_id: id,
                         result,
                     });
+                    // The client settles a command only once a snapshot shows
+                    // it; do not make that wait for this loop's poll tick.
+                    if let Ok(mut shared) = snapshots.lock() {
+                        *shared = Arc::new(self.snapshot());
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }

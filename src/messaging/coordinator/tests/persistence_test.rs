@@ -455,3 +455,54 @@ fn storage_retry_delay_doubles_and_stops_at_thirty_seconds() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn journaled_drafts_and_sends_are_durable_and_survive_a_paused_full_save() {
+    let (mut worker, agent, room, dir, _) = fixture(Provider::Codex, vec![]);
+    let (events, received) = mpsc::channel();
+    worker
+        .command(
+            BusCommand::SetRecipients(room, [agent].into_iter().collect()),
+            &events,
+        )
+        .unwrap();
+    let saved = std::fs::read(dir.join("state.json")).unwrap();
+    worker
+        .command(BusCommand::SetDraftText(room, "ship it".into()), &events)
+        .unwrap();
+    worker.command(BusCommand::Submit(room), &events).unwrap();
+    worker
+        .command(BusCommand::SetDraftText(room, "next".into()), &events)
+        .unwrap();
+    assert_eq!(
+        std::fs::read(dir.join("state.json")).unwrap(),
+        saved,
+        "composer edits and sends must not rewrite the whole state"
+    );
+    // What a restart would see, before any full save folds the journal.
+    let durable = JsonStore::new(dir.join("state.json"))
+        .load()
+        .unwrap()
+        .unwrap();
+    assert_eq!(durable, worker.state);
+    assert_eq!(durable.room(room).unwrap().draft.text, "next");
+
+    // A full save that fails pauses storage; the journal is not a divergence.
+    let mut changed = worker.state.clone();
+    changed.set_room_notes(room, "notes").unwrap();
+    worker.store.fail_once_at(SaveStage::TempWrite);
+    assert_eq!(worker.save(changed).unwrap_err(), STORAGE_RETRYING);
+    worker.retry_storage(Instant::now() + Duration::from_secs(2), &events);
+    assert!(worker.storage_pause.is_none());
+    assert!(matches!(
+        received.try_iter().last(),
+        Some(BusEvent::StorageRecovered)
+    ));
+    assert!(!worker.store.has_unfolded_journal());
+    assert_eq!(
+        JsonStore::new(dir.join("state.json")).load_base().unwrap(),
+        Some(worker.state.clone())
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

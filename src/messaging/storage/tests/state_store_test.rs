@@ -255,3 +255,136 @@ fn saved_sound_orchestrator_compactions_notes_and_draft_reload() {
     );
     fs::remove_dir_all(dir).expect("cleanup");
 }
+
+fn room_with_recipient(state: &mut BusState) -> crate::messaging::model::RoomId {
+    let room = state.create_room("work").expect("room");
+    let agent = state
+        .create_agent(room, "author", Provider::Codex, "/project".into(), None)
+        .expect("agent");
+    state
+        .set_draft_recipients(room, [agent])
+        .expect("recipients");
+    room
+}
+
+#[test]
+fn journaled_drafts_and_sends_survive_reload_without_rewriting_state() {
+    let dir = temp_dir("journal");
+    let path = dir.join("state.json");
+    let store = JsonStore::new(path.clone());
+    let mut state = BusState::new();
+    let room = room_with_recipient(&mut state);
+    store.save(&state).expect("save");
+    let saved = fs::read(&path).expect("state");
+
+    for (text, send) in [("first", true), ("sec", false), ("second", false)] {
+        state.set_draft_text(room, text).expect("draft");
+        store
+            .journal(JournalOp::DraftText {
+                room,
+                text: text.into(),
+            })
+            .expect("journal draft");
+        if send {
+            state.submit_draft(room, 7).expect("send");
+            store
+                .journal(JournalOp::Submit {
+                    room,
+                    queued: false,
+                    now_ms: 7,
+                })
+                .expect("journal send");
+        }
+    }
+
+    assert_eq!(
+        fs::read(&path).expect("state"),
+        saved,
+        "state.json untouched"
+    );
+    let reloaded = JsonStore::new(path.clone())
+        .load()
+        .expect("load")
+        .expect("state");
+    assert_eq!(reloaded, state);
+    assert_eq!(reloaded.room(room).expect("room").draft.text, "second");
+    assert_eq!(reloaded.requests().count(), 1);
+    let mut base = BusState::new();
+    room_with_recipient(&mut base);
+    assert_eq!(JsonStore::new(path).load_base().expect("base"), Some(base));
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn a_full_save_folds_the_journal_and_a_stale_journal_is_never_replayed() {
+    let dir = temp_dir("journal-fold");
+    let path = dir.join("state.json");
+    let journal = dir.join("state.journal.json");
+    let store = JsonStore::new(path.clone());
+    let mut state = BusState::new();
+    let room = room_with_recipient(&mut state);
+    store.save(&state).expect("save");
+    state.set_draft_text(room, "sent once").expect("draft");
+    store
+        .journal(JournalOp::DraftText {
+            room,
+            text: "sent once".into(),
+        })
+        .expect("journal draft");
+    state.submit_draft(room, 7).expect("send");
+    store
+        .journal(JournalOp::Submit {
+            room,
+            queued: false,
+            now_ms: 7,
+        })
+        .expect("journal send");
+    let stale = fs::read(&journal).expect("journal");
+
+    store.save(&state).expect("fold");
+    assert!(!journal.exists());
+    assert!(!store.has_unfolded_journal());
+    // A crash can leave the journal behind the save that folded it.
+    fs::write(&journal, stale).expect("stale journal");
+    let reloaded = JsonStore::new(path).load().expect("load").expect("state");
+    assert_eq!(reloaded, state, "folded entries replay at most once");
+    assert_eq!(reloaded.requests().count(), 1);
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn a_failed_journal_write_is_not_recorded() {
+    let dir = temp_dir("journal-fail");
+    let path = dir.join("state.json");
+    let store = JsonStore::new(path.clone());
+    let mut state = BusState::new();
+    let room = room_with_recipient(&mut state);
+    store.save(&state).expect("save");
+    store.fail_once_at(SaveStage::TempSync);
+    let op = JournalOp::DraftText {
+        room,
+        text: "lost".into(),
+    };
+    assert!(store.journal(op).unwrap_err().retryable_io());
+    assert!(!store.has_unfolded_journal());
+    assert_eq!(JsonStore::new(path).load().expect("load"), Some(state));
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn a_state_file_changed_by_someone_else_is_checked_again_before_saving() {
+    let dir = temp_dir("fingerprint");
+    let path = dir.join("state.json");
+    let store = JsonStore::new(path.clone());
+    store.save(&BusState::new()).expect("save");
+    fs::write(&path, b"{broken by another writer").expect("corrupt");
+    assert!(matches!(
+        store.save(&BusState::new()),
+        Err(StoreError::ExistingStateUnreadable { .. })
+    ));
+    assert_eq!(
+        fs::read(&path).expect("unchanged"),
+        b"{broken by another writer"
+    );
+    fs::remove_dir_all(dir).expect("cleanup");
+}

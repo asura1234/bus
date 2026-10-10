@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) use super::journal::JournalOp;
+use super::journal::{push_coalesced, replay, JournalDocument, JournalEntry};
 use crate::messaging::model::BusState;
 
 pub(crate) const STORE_VERSION: u64 = 1;
@@ -103,10 +105,40 @@ impl StoreError {
 struct StoredDocument {
     version: u64,
     state: BusState,
+    /// The last journal entry this state already contains.
+    #[serde(default)]
+    journal_seq: u64,
+}
+
+/// What this store last read or wrote, so a save can trust its own file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Fingerprint {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl Fingerprint {
+    fn of(path: &std::path::Path) -> Option<Self> {
+        let metadata = std::fs::symlink_metadata(path).ok()?;
+        metadata.is_file().then(|| Self {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        })
+    }
+}
+
+#[derive(Default)]
+struct JournalState {
+    /// The last sequence number used by a journal entry or a full save.
+    seq: u64,
+    /// Entries newer than the last full save, oldest first.
+    entries: Vec<JournalEntry>,
+    verified: Option<Fingerprint>,
 }
 
 pub(crate) struct JsonStore {
     path: PathBuf,
+    journal: std::sync::Mutex<JournalState>,
     #[cfg(test)]
     fail_stage: std::sync::Mutex<Option<SaveStage>>,
 }
@@ -115,9 +147,25 @@ impl JsonStore {
     pub(crate) fn new(path: PathBuf) -> Self {
         Self {
             path,
+            journal: std::sync::Mutex::new(JournalState::default()),
             #[cfg(test)]
             fail_stage: std::sync::Mutex::new(None),
         }
+    }
+
+    fn journal_path(&self) -> PathBuf {
+        self.path.with_extension("journal.json")
+    }
+
+    fn journal_state(&self) -> std::sync::MutexGuard<'_, JournalState> {
+        self.journal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether journal entries still wait for a full save to fold them in.
+    pub(crate) fn has_unfolded_journal(&self) -> bool {
+        !self.journal_state().entries.is_empty()
     }
 
     #[cfg(test)]
@@ -143,7 +191,54 @@ impl JsonStore {
         &self.path
     }
 
+    /// The durable state: `state.json` plus every newer journal entry.
     pub(crate) fn load(&self) -> Result<Option<BusState>, StoreError> {
+        let Some((mut state, base_seq)) = self.load_document()? else {
+            return Ok(None);
+        };
+        let entries = self.load_journal()?;
+        replay(&mut state, &entries, base_seq);
+        let mut journal = self.journal_state();
+        journal.seq = entries
+            .iter()
+            .map(|entry| entry.seq)
+            .fold(base_seq, u64::max);
+        journal.entries = entries
+            .into_iter()
+            .filter(|entry| entry.seq > base_seq)
+            .collect();
+        Ok(Some(state))
+    }
+
+    /// Exactly what the last full save wrote, without the journal.
+    pub(crate) fn load_base(&self) -> Result<Option<BusState>, StoreError> {
+        Ok(self.load_document()?.map(|(state, _)| state))
+    }
+
+    fn load_journal(&self) -> Result<Vec<JournalEntry>, StoreError> {
+        let path = self.journal_path();
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => return Err(StoreError::Io { path, source }),
+        };
+        let document = serde_json::from_slice::<JournalDocument>(&bytes).map_err(|source| {
+            StoreError::Corrupt {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        if !document.supported() {
+            return Err(StoreError::UnsupportedVersion {
+                path,
+                found: document.version,
+            });
+        }
+        Ok(document.entries)
+    }
+
+    fn load_document(&self) -> Result<Option<(BusState, u64)>, StoreError> {
+        let fingerprint = Fingerprint::of(&self.path);
         let bytes = match std::fs::read(&self.path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -182,12 +277,16 @@ impl JsonStore {
                 source,
             }
         })?;
-        Ok(Some(document.state))
+        self.journal_state().verified = fingerprint;
+        Ok(Some((document.state, document.journal_seq)))
     }
 
     pub(crate) fn save(&self, state: &BusState) -> Result<(), StoreError> {
-        if self.path.exists() {
-            self.load()
+        // Re-reading a large state on every save is most of its cost. A file
+        // still exactly as this store last read or wrote it is known readable.
+        let verified = self.journal_state().verified;
+        if self.path.exists() && (verified.is_none() || Fingerprint::of(&self.path) != verified) {
+            self.load_document()
                 .map_err(|error| StoreError::ExistingStateUnreadable {
                     path: self.path.clone(),
                     detail: error.to_string(),
@@ -213,9 +312,11 @@ impl JsonStore {
             bytes: 0,
             source,
         })?;
+        let journal_seq = self.journal_state().seq;
         let bytes = serde_json::to_vec_pretty(&StoredDocument {
             version: STORE_VERSION,
             state: state.clone(),
+            journal_seq,
         })
         .map_err(|source| StoreError::Corrupt {
             path: self.path.clone(),
@@ -229,7 +330,50 @@ impl JsonStore {
             stage: error.stage,
             bytes: bytes.len(),
             source: error.source,
+        })?;
+        let mut journal = self.journal_state();
+        journal.verified = Fingerprint::of(&self.path);
+        // The saved state contains every entry up to `journal_seq`; loading
+        // ignores them, so removing the file only keeps the directory tidy.
+        journal.entries.retain(|entry| entry.seq > journal_seq);
+        if journal.entries.is_empty() {
+            let _ = std::fs::remove_file(self.journal_path());
+        }
+        Ok(())
+    }
+
+    /// Durably records `op`, already applied by the caller to its in-memory
+    /// state, without rewriting `state.json`.
+    pub(crate) fn journal(&self, op: JournalOp) -> Result<(), StoreError> {
+        let mut journal = self.journal_state();
+        let mut entries = journal.entries.clone();
+        push_coalesced(
+            &mut entries,
+            JournalEntry {
+                seq: journal.seq + 1,
+                op,
+            },
+        );
+        let path = self.journal_path();
+        let bytes =
+            serde_json::to_vec(&JournalDocument::new(entries.clone())).map_err(|source| {
+                StoreError::Corrupt {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
+        crate::platform::fs::atomic_write_detailed_with_checkpoint(&path, &bytes, |stage| {
+            self.injected_failure(stage)
         })
+        .map_err(|error| StoreError::SaveIo {
+            path: error.path,
+            stage: error.stage,
+            bytes: bytes.len(),
+            source: error.source,
+        })?;
+        journal.seq += 1;
+        journal.entries = entries;
+        Ok(())
     }
 }
 
