@@ -19,7 +19,7 @@ flowchart TD
     askverify --> measure["Orchestrator: measure total changed lines (git diff --shortstat base...head)"]
 
     measure --> big{"Total changed lines >= 3000?"}
-    big -- yes --> split[author: run split-pr]
+    big -- yes --> split[Author: run split-pr]
     big -- no --> review
     split --> shape{split-pr shape?}
     shape -- train --> train[Orchestrator: review the parts one after another, in stack order]
@@ -30,18 +30,18 @@ flowchart TD
     mixed -- each part --> review
 
     subgraph round [Review round]
-        review["claude-review + codex-review + cursor-review: review-pr in parallel"]
+        review["Reviewers: run review-pr in parallel (Claude, Codex, optional Cursor)"]
         review --> allready{Every reviewer Ready?}
         allready -- no --> anyabandon{Any Abandon?}
-        anyabandon -- Needs Refinement --> address[author: run address-review-comments, push APPLY fixes]
+        anyabandon -- Needs Refinement --> address[Author: run address-review-comments, push APPLY fixes]
         address --> outscope{"Any finding outside the PR goal and non-goals?"}
         outscope -- yes --> recordscope["Orchestrator: record it in temp/#lt;branch#gt;/deferred.md"]
         outscope -- no --> flag
         recordscope --> flag{Any FLAG?}
         flag -- yes --> poll[Orchestrator: poll author and every reviewer for a recommendation, forward all to author]
-        poll --> bestof[author: run best-of-n]
+        poll --> bestof[Author: run best-of-n]
         bestof --> bonverdict{best-of-n verdict?}
-        bonverdict -- universal --> applyfirst[author: apply first place, push]
+        bonverdict -- universal --> applyfirst[Author: apply first place, push]
         bonverdict -- clear --> applyfirst
         bonverdict -- toss-up --> blocking{Blocking?}
         blocking -- no --> defer["Orchestrator: record it in temp/#lt;branch#gt;/deferred.md"]
@@ -49,9 +49,9 @@ flowchart TD
         flag -- no --> ci
         applyfirst --> ci
         defer --> ci
-        applydec[author: apply developer's decision, push] --> ci
+        applydec[Author: apply developer's decision, push] --> ci
         ci{CI green?}
-        ci -- no --> cifix[author: fix CI, push]
+        ci -- no --> cifix[Author: fix CI, push]
         cifix --> ci
         ci -- yes --> review
     end
@@ -69,7 +69,7 @@ flowchart TD
     regress --> approved{Passed and approved?}
     approved -- yes --> merge
     approved -- no --> applydec
-    verify -- no --> merge[author: run merge-pr]
+    verify -- no --> merge[Author: run merge-pr]
     merge --> mergeok{merge-pr merged the PR?}
     mergeok -- yes --> mainco{PR worktree is the main checkout?}
     mainco -- yes --> merged(["PR merged (deferred issues in temp/#lt;branch#gt;/deferred.md)"]):::success
