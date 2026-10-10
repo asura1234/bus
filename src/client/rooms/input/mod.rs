@@ -37,7 +37,7 @@ impl BusUi {
                 return true;
             }
         }
-        if self.deletion_input(event) {
+        if self.deletion_input(event) || self.alert_input(event) {
             outcome.repaint = true;
             return true;
         }
@@ -98,8 +98,8 @@ impl BusUi {
             }
             return true;
         }
-        if self.deletion.is_some() {
-            self.deletion_input(event);
+        if self.deletion.is_some() || self.alert.is_some() {
+            let _ = self.deletion_input(event) || self.alert_input(event);
             outcome.repaint = true;
             return true;
         }
@@ -314,10 +314,7 @@ impl BusUi {
                             .all(|p| p.starts_with('/') || p.starts_with("~/"))
                 });
             if let (Some(room), Some(paths)) = (self.room, paths) {
-                for path in paths {
-                    let path = self.keep_temporary_image(room, path);
-                    self.queue(BusCommand::AttachFile(room, path), Effect::Files(room));
-                }
+                self.attach_paths(room, paths);
             } else {
                 self.insert(text);
             }
@@ -512,6 +509,7 @@ impl BusUi {
             Action::Delete(target) => self.start_delete(target),
             Action::CancelDelete => self.cancel_delete(),
             Action::ConfirmDelete => self.confirm_delete(),
+            Action::DismissAlert => self.dismiss_alert(),
             Action::ScrollFiles(forward) => {
                 self.file_scroll = if forward {
                     self.file_scroll.saturating_add(1)

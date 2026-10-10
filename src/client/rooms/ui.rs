@@ -30,6 +30,7 @@ pub(super) struct ViewKey {
     pub terminal: Option<AgentId>,
     pub form: Option<std::mem::Discriminant<super::forms::Form>>,
     pub deletion: bool,
+    pub alert: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +82,7 @@ pub(in crate::client) struct BusUi {
     pub(super) terminal_navigation: u64,
     pub(super) form: Option<Form>,
     pub(super) deletion: Option<super::deletion::DeleteDialog>,
+    pub(super) alert: Option<super::alert::Alert>,
     pub(super) rename: Option<Rename>,
     pub(super) notes_focus: bool,
     pub(super) recipient_menu: bool,
@@ -179,6 +181,7 @@ impl BusUi {
             terminal_navigation: 0,
             form: None,
             deletion: None,
+            alert: None,
             rename: None,
             notes_focus: false,
             recipient_menu: false,

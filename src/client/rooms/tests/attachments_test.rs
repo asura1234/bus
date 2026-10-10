@@ -230,3 +230,115 @@ fn pasted_temporary_images_are_copied_into_the_room_attachments() {
     );
     std::fs::remove_dir_all(&temp).unwrap();
 }
+
+/// A PNG whose header (and so its dimensions) reads, but whose compressed
+/// pixels fail to decode.
+fn corrupt_png(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let path = png(dir, name, (200, 80));
+    let mut bytes = std::fs::read(&path).unwrap();
+    let pixels = bytes.windows(4).position(|chunk| chunk == b"IDAT").unwrap() + 4;
+    bytes[pixels] = 0;
+    std::fs::write(&path, bytes).unwrap();
+    assert_eq!(image::image_dimensions(&path).unwrap(), (200, 80));
+    assert!(image::open(&path).is_err());
+    path
+}
+
+fn attached_paths(ui: &BusUi) -> Vec<String> {
+    ui.pending
+        .iter()
+        .filter_map(|pending| match &pending.command {
+            BusCommand::AttachFile(_, path) => Some(path.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn paste(ui: &mut BusUi, text: &str) {
+    ui.input(
+        &RawInputEvent::Paste(text.into()),
+        false,
+        &mut Default::default(),
+    );
+}
+
+/// Refused: nothing is attached, and a dialog names the file and the decode
+/// error until Enter dismisses it.
+fn assert_refused_with_dialog(ui: &mut BusUi, name: &str) {
+    assert_eq!(attached_paths(ui), Vec::<String>::new(), "a corrupt image is not attached");
+    let screen = room_screen(ui, 100, 30);
+    assert!(
+        screen.contains(&format!("Could not attach \"{name}\"")),
+        "the dialog names the refused file: {screen}"
+    );
+    assert!(screen.contains("not a readable image"), "the dialog says why: {screen}");
+    assert!(screen.contains("OK (Enter)"), "the dialog can be dismissed: {screen}");
+    key(ui, KeyCode::Enter, KeyModifiers::NONE);
+    let screen = room_screen(ui, 100, 30);
+    assert!(!screen.contains("Could not attach"), "Enter dismisses the dialog");
+    assert_eq!(attached_paths(ui), Vec::<String>::new(), "dismissing attaches nothing");
+}
+
+#[test]
+fn corrupt_image_dropped_into_the_composer_is_refused_with_a_dialog() {
+    let dir = thumbnail_dir("drop-corrupt");
+    let path = corrupt_png(&dir, "damaged drop.png");
+    let (mut ui, _, _) = fixture();
+    // Terminals deliver a drop as a paste of the shell-escaped path.
+    paste(&mut ui, &format!("{} ", path.display().to_string().replace(' ', "\\ ")));
+    assert_refused_with_dialog(&mut ui, "damaged drop.png");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn corrupt_image_path_pasted_into_the_composer_is_refused_with_a_dialog() {
+    let dir = thumbnail_dir("paste-corrupt");
+    let path = corrupt_png(&dir, "damaged.png");
+    let (mut ui, _, _) = fixture();
+    paste(&mut ui, &path.display().to_string());
+    assert_refused_with_dialog(&mut ui, "damaged.png");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn corrupt_pasted_image_data_is_refused_with_a_dialog_and_never_saved() {
+    let dir = thumbnail_dir("data-corrupt");
+    let bytes = std::fs::read(corrupt_png(&dir, "source.png")).unwrap();
+    let root = dir.join("data");
+    let (mut ui, _, _) = fixture();
+    ui.attach_image_data(Some(root.clone()), &bytes, "png");
+    assert_eq!(attached_paths(&ui), Vec::<String>::new());
+    let screen = room_screen(&mut ui, 100, 30);
+    assert!(screen.contains("Could not attach the clipboard image"), "{screen}");
+    assert!(screen.contains("not a readable image"), "{screen}");
+    assert!(!root.join("attachments").exists(), "a corrupt paste leaves no file behind");
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(!room_screen(&mut ui, 100, 30).contains("Could not attach"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn valid_images_attach_by_drop_pasted_path_and_pasted_data_as_before() {
+    let dir = thumbnail_dir("valid-attach");
+    let dropped = png(&dir, "good drop.png", (20, 10));
+    let pasted = png(&dir, "good.png", (20, 10));
+    let notes = dir.join("notes.png.md");
+    std::fs::write(&notes, "not an image").unwrap();
+    let root = dir.join("data");
+    let (mut ui, _, _) = fixture();
+    paste(&mut ui, &format!("{} ", dropped.display().to_string().replace(' ', "\\ ")));
+    paste(&mut ui, &pasted.display().to_string());
+    paste(&mut ui, &notes.display().to_string());
+    ui.attach_image_data(Some(root.clone()), &std::fs::read(&pasted).unwrap(), "png");
+
+    let attached = attached_paths(&ui);
+    assert_eq!(attached.len(), 4, "{attached:?}");
+    // A temp-folder image may be attached as Bus's own copy of it.
+    for (path, source) in attached.iter().zip([&dropped, &pasted]) {
+        assert_eq!(std::fs::read(path).unwrap(), std::fs::read(source).unwrap());
+    }
+    assert_eq!(attached[2], notes.display().to_string(), "non-image files are unaffected");
+    assert!(std::path::Path::new(&attached[3]).starts_with(root.join("attachments")));
+    assert!(!room_screen(&mut ui, 100, 30).contains("Could not attach"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

@@ -307,10 +307,7 @@ impl BusUi {
         };
         if !entry.is_directory && matches!(self.form, Some(Form::Files(_))) {
             if let Some(room) = self.room {
-                self.queue(
-                    BusCommand::AttachFile(room, entry.path.display().to_string()),
-                    Effect::Files(room),
-                );
+                self.attach_paths(room, vec![entry.path.display().to_string()]);
                 self.open_room(room);
             }
             return;
@@ -426,10 +423,7 @@ impl BusUi {
             form @ Form::Agent { .. } => self.add_agent_form(form),
             Form::Files(editor) => {
                 if let Some(room) = self.room {
-                    self.queue(
-                        BusCommand::AttachFile(room, editor.text),
-                        Effect::Files(room),
-                    );
+                    self.attach_paths(room, vec![editor.text]);
                     self.open_room(room);
                 }
             }

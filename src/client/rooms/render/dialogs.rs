@@ -1,4 +1,4 @@
-//! Forms, sound-setting rows and deletion confirmation views.
+//! Forms, sound-setting rows, deletion confirmation and error dialogs.
 use super::super::{chat_search::ChatSearch, deletion::DeleteTarget, forms::Form, BusUi};
 use super::geometry::agent_form_gap;
 use super::text::{display, provider, wrap};
@@ -9,6 +9,8 @@ use ratatui::layout::Rect;
 /// The chat-search panel: a border, the query row, the key hint, a border.
 // Border, the 3-row query field, the key hint, border.
 pub(super) const SEARCH_BOX_HEIGHT: u16 = 6;
+/// The widest a centered dialog grows on a wide screen.
+const DIALOG_WIDTH: u16 = 66;
 const SEARCH_LABEL: &str = "Find ";
 /// Enter steps to older matches (up the history), as a find in a chat starts
 /// from the newest message. Down also goes newer: it works in every terminal,
@@ -156,8 +158,7 @@ impl BusUi {
                 (format!("Delete agent \"{name}\"?"), "This will close the agent and permanently delete its session data from this room.".into())
             }
         };
-        let width = area.width.saturating_sub(2).min(66);
-        let text_width = width.saturating_sub(4);
+        let text_width = dialog_text_width(area);
         let mut body = wrap(dialog.error.as_ref().map_or(message.as_str(), |error| {
             if error.contains("server") {
                 "Bus server needs an update before deletion can finish. Session data was kept."
@@ -168,39 +169,7 @@ impl BusUi {
         if dialog.command_id.is_some() {
             body.push("Stopping sessions…".into());
         }
-        let height = (body.len().saturating_add(6)).min(usize::from(area.height)) as u16;
-        let rect = Rect::new(
-            area.x + area.width.saturating_sub(width) / 2,
-            area.y + area.height.saturating_sub(height) / 2,
-            width,
-            height,
-        );
-        view.dialog = rect;
-        view.dialog_rows_start = view.rows.len();
-        view.hits.clear();
-        view.cursor = None;
-        let x = rect.x + 2;
-        view.row(
-            Rect::new(x, rect.y + 1, text_width, 1),
-            title,
-            None,
-            false,
-            false,
-        );
-        for (index, line) in body
-            .into_iter()
-            .take(usize::from(height.saturating_sub(5)))
-            .enumerate()
-        {
-            view.row(
-                Rect::new(x, rect.y + 2 + index as u16, text_width, 1),
-                line,
-                None,
-                false,
-                true,
-            );
-        }
-        let y = rect.bottom().saturating_sub(2);
+        let (x, y) = dialog_frame(view, area, title, body);
         let ready = dialog.command_id.is_none();
         if dialog.error.is_none() {
             view.row(
@@ -217,6 +186,22 @@ impl BusUi {
             ready.then_some(Action::ConfirmDelete),
             false,
             !ready,
+        );
+    }
+
+    pub(super) fn alert_view(&self, view: &mut View, area: Rect) {
+        let Some(alert) = &self.alert else {
+            return;
+        };
+        let text_width = dialog_text_width(area);
+        let body = wrap(&alert.message, text_width);
+        let (x, y) = dialog_frame(view, area, alert.title.clone(), body);
+        view.row(
+            Rect::new(x, y, text_width.min(10), 1),
+            "OK (Enter)",
+            Some(Action::DismissAlert),
+            false,
+            false,
         );
     }
 
@@ -725,4 +710,53 @@ pub(super) fn search_panel(view: &mut View, search: &ChatSearch, x: u16, width: 
             shape: 2,
         });
     }
+}
+
+/// The text width of a centered dialog over `area`.
+fn dialog_text_width(area: Rect) -> u16 {
+    area.width
+        .saturating_sub(2)
+        .min(DIALOG_WIDTH)
+        .saturating_sub(4)
+}
+
+/// Draws a centered dialog of `title` over `body` (rows already wrapped to
+/// `dialog_text_width`) and returns where its button row starts.
+fn dialog_frame(view: &mut View, area: Rect, title: String, body: Vec<String>) -> (u16, u16) {
+    let width = area.width.saturating_sub(2).min(DIALOG_WIDTH);
+    let text_width = width.saturating_sub(4);
+    let height = (body.len().saturating_add(6)).min(usize::from(area.height)) as u16;
+    let rect = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    view.dialog = rect;
+    view.dialog_rows_start = view.rows.len();
+    view.hits.clear();
+    view.cursor = None;
+    let x = rect.x + 2;
+    view.row(
+        Rect::new(x, rect.y + 1, text_width, 1),
+        title,
+        None,
+        false,
+        false,
+    );
+    for (index, line) in body
+        .into_iter()
+        .take(usize::from(height.saturating_sub(5)))
+        .enumerate()
+    {
+        view.row(
+            Rect::new(x, rect.y + 2 + index as u16, text_width, 1),
+            line,
+            None,
+            false,
+            true,
+        );
+    }
+    let y = rect.bottom().saturating_sub(2);
+    (x, y)
 }

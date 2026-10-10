@@ -231,6 +231,7 @@ impl BusUi {
             terminal: self.terminal,
             form: self.form.as_ref().map(std::mem::discriminant),
             deletion: self.deletion.is_some(),
+            alert: self.alert.is_some(),
         };
         if self
             .view_key
@@ -269,6 +270,9 @@ impl BusUi {
         }
         if self.deletion.is_some() {
             self.delete_view(&mut view, Rect::new(0, 0, cols, rows));
+        }
+        if self.alert.is_some() {
+            self.alert_view(&mut view, Rect::new(0, 0, cols, rows));
         }
         // Kitty images draw above text, so hide them under anything that can
         // cover the history. A notice is not one: the room view shows it on
