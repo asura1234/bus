@@ -9,8 +9,7 @@ impl AppState {
         }
     }
 
-    /// Returns true when the given (workspace, tab, pane) refers to the
-    /// currently focused pane in the active workspace's active tab.
+    /// Returns the runtime attached to the given pane in the workspace.
     pub(crate) fn runtime_for_pane_in_workspace<'a>(
         &'a self,
         terminal_runtimes: &'a crate::terminal::TerminalRuntimeRegistry,
@@ -57,6 +56,8 @@ impl AppState {
         }
     }
 
+    /// Returns true when the given (workspace, tab, pane) refers to the
+    /// currently focused pane in the active workspace's active tab.
     pub fn is_active_pane(
         &self,
         ws_idx: usize,

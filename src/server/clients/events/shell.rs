@@ -331,19 +331,18 @@ impl HeadlessServer {
             if releases.is_empty() {
                 return false;
             }
-            if let Some(client) = self.clients.get_mut(&client_id) {
-                client.track_shell_input(ClientShellInputTarget::Pane(pane_id.clone()), &releases);
-            }
             let scroll_before = runtime.scroll_metrics();
-            if let Err(err) = apply_client_pane_input_events(runtime, &releases) {
+            if let Err(err) = apply_and_track_client_pane_input(
+                runtime,
+                self.clients.get_mut(&client_id),
+                &pane_id,
+                &releases,
+            ) {
                 warn!(target: "bus::server::main_loop", client_id, pane_id, err = %err, "targeted client shell release failed");
             }
             return runtime.scroll_metrics() != scroll_before;
         }
         let interaction = client_pane_input_has_interaction(&events);
-        if let Some(client) = self.clients.get_mut(&client_id) {
-            client.track_shell_input(ClientShellInputTarget::Pane(pane_id.clone()), &events);
-        }
         let foreground_changed = interaction && self.promote_client_to_foreground(client_id);
         let geometry_changed = interaction && self.claim_shell_tab_geometry(client_id, false);
         let Some(runtime) = self.app.state.runtime_for_pane_in_workspace(
@@ -354,7 +353,12 @@ impl HeadlessServer {
             return foreground_changed | geometry_changed;
         };
         let scroll_before = runtime.scroll_metrics();
-        if let Err(err) = apply_client_pane_input_events(runtime, &events) {
+        if let Err(err) = apply_and_track_client_pane_input(
+            runtime,
+            self.clients.get_mut(&client_id),
+            &pane_id,
+            &events,
+        ) {
             warn!(target: "bus::server::main_loop", client_id, pane_id, err = %err, "targeted client shell input failed");
         }
         foreground_changed | geometry_changed || runtime.scroll_metrics() != scroll_before
@@ -393,6 +397,25 @@ impl HeadlessServer {
         );
         false
     }
+}
+
+/// Applies events in order and records disconnect cleanup only for events the pane accepted: a
+/// press rejected by a full PTY queue must not be released later, and a rejected release must
+/// keep its press held so disconnect still releases it.
+fn apply_and_track_client_pane_input(
+    runtime: &crate::terminal::TerminalRuntime,
+    mut client: Option<&mut ClientConnection>,
+    pane_id: &str,
+    events: &[protocol::ClientPaneInputEvent],
+) -> Result<(), String> {
+    for event in events {
+        let event = std::slice::from_ref(event);
+        apply_client_pane_input_events(runtime, event)?;
+        if let Some(client) = client.as_deref_mut() {
+            client.track_shell_input(ClientShellInputTarget::Pane(pane_id.to_owned()), event);
+        }
+    }
+    Ok(())
 }
 
 fn client_pane_input_releases_press(event: &protocol::ClientPaneInputEvent) -> bool {

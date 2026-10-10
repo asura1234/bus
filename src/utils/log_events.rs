@@ -51,9 +51,25 @@ pub(crate) fn api_request_completed(
     let subsystem = "api";
     let message = "api request completed";
     if outcome != "ok" || (changes_ui && !is_routine_api_method(method)) {
-        tracing::info!(event, subsystem, outcome, request_id, method, "{message}");
+        tracing::info!(
+            target: "bus::utils::logging",
+            event,
+            subsystem,
+            outcome,
+            request_id,
+            method,
+            "{message}"
+        );
     } else {
-        tracing::debug!(event, subsystem, outcome, request_id, method, "{message}");
+        tracing::debug!(
+            target: "bus::utils::logging",
+            event,
+            subsystem,
+            outcome,
+            request_id,
+            method,
+            "{message}"
+        );
     }
 }
 

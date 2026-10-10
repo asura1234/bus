@@ -79,3 +79,81 @@ fn procargs2_env_does_not_treat_argv_as_environment() {
     let env = procargs2_env(&buf).expect("expected env block");
     assert_eq!(env, b"PATH=/usr/bin\0");
 }
+
+#[test]
+fn procargs2_argv_preserves_empty_arguments() {
+    let buf = build_procargs2(
+        "/usr/bin/node",
+        &["node", "/opt/bin/codex", "", "--verbose"],
+        &["PATH=/usr/bin"],
+    );
+
+    assert_eq!(
+        procargs2_argv(&buf),
+        Some(vec![
+            "node".to_string(),
+            "/opt/bin/codex".to_string(),
+            String::new(),
+            "--verbose".to_string(),
+        ]),
+        "an empty positional argument must not discard the entire process argv"
+    );
+    assert_eq!(procargs2_env(&buf), Some(&b"PATH=/usr/bin\0"[..]));
+}
+
+#[test]
+fn process_argv_reads_a_live_process_with_empty_arguments() {
+    struct ChildGuard(std::process::Child);
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let ordinary_child = ChildGuard(
+        Command::new("/bin/sh")
+            .args(["-c", "read value", "ordinary"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn the ordinary argv control"),
+    );
+    let ordinary_argv = process_argv(ordinary_child.0.id());
+    drop(ordinary_child);
+    assert_eq!(
+        ordinary_argv,
+        Some(vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "read value".to_string(),
+            "ordinary".to_string(),
+        ]),
+        "the native argv reader must work for the ordinary control process"
+    );
+
+    let child = ChildGuard(
+        Command::new("/bin/sh")
+            .args(["-c", "read value", ""])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn a shell waiting on its piped stdin"),
+    );
+    let argv = process_argv(child.0.id());
+    drop(child);
+
+    assert_eq!(
+        argv,
+        Some(vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "read value".to_string(),
+            String::new(),
+        ]),
+        "valid empty arguments returned by the kernel must be preserved"
+    );
+}

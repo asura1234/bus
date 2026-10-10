@@ -222,3 +222,33 @@ fn live_terminal_word_end_expands_through_a_long_wide_soft_wrap() {
         })
     );
 }
+
+#[test]
+fn live_terminal_previous_word_start_expands_through_a_long_wide_soft_wrap() {
+    let (tx, _rx) = mpsc::channel(4);
+    let mut terminal = crate::terminal::vt::Terminal::new(2, 3, 200).unwrap();
+    let word = "界".repeat(130);
+    terminal.write(word.as_bytes());
+    let pane = PaneTerminal::new(GhosttyPaneTerminal::new(terminal, tx).unwrap());
+    let text_match = pane
+        .search_text_window(
+            &word,
+            true,
+            TerminalSearchDirection::Forward,
+            TerminalTextPoint { row: 0, col: 0 },
+            None,
+            1,
+        )
+        .matches[0];
+
+    for motion in [
+        TerminalWordMotion::PreviousStart,
+        TerminalWordMotion::PreviousBigStart,
+    ] {
+        assert_eq!(
+            pane.word_motion_target(text_match.end.row, text_match.end.col, motion),
+            Some(text_match.start),
+            "motion {motion:?} stopped inside the wrapped word"
+        );
+    }
+}

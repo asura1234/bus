@@ -33,7 +33,9 @@ pub(crate) fn copy_feedback_rect(
     let y = match position {
         ToastClipboardPosition::TopLeft
         | ToastClipboardPosition::TopCenter
-        | ToastClipboardPosition::TopRight => area.y + offset_rows.min(area.height),
+        | ToastClipboardPosition::TopRight => {
+            area.y + offset_rows.min(area.height.saturating_sub(height))
+        }
         ToastClipboardPosition::BottomLeft
         | ToastClipboardPosition::BottomCenter
         | ToastClipboardPosition::BottomRight => {

@@ -82,7 +82,9 @@ fn staging_dir() -> PathBuf {
 fn ensure_staging_dir() -> io::Result<PathBuf> {
     let dir = staging_dir();
     fs::create_dir_all(&dir)?;
-    let metadata = fs::metadata(&dir)?;
+    // The name is predictable, so a preexisting symlink would redirect the chmod and the stale
+    // cleanup below into an unrelated directory; only a real directory is accepted.
+    let metadata = fs::symlink_metadata(&dir)?;
     if !metadata.is_dir() {
         return Err(io::Error::other(format!(
             "clipboard image staging path is not a directory: {}",

@@ -119,3 +119,25 @@ fn light_theme_aliases_resolve() {
         );
     }
 }
+
+#[test]
+fn default_color_responses_reject_non_ascii_hex() {
+    for response in ["\x1b]10;#界\x07", "\x1b]11;#界界\x1b\\"] {
+        assert_eq!(
+            crate::utils::theme::color::parse_default_color_response(response),
+            None,
+            "non-ASCII hexadecimal color must be ignored: {response:?}"
+        );
+    }
+}
+
+#[test]
+fn palette_color_responses_reject_non_ascii_hex() {
+    for response in ["\x1b]4;0;#界\x07", "\x1b]4;255;#界界\x1b\\"] {
+        assert_eq!(
+            crate::utils::theme::color::parse_palette_color_response(response),
+            None,
+            "non-ASCII hexadecimal color must be ignored: {response:?}"
+        );
+    }
+}

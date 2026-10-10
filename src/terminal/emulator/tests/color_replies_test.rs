@@ -953,3 +953,68 @@ fn process_pty_bytes_tracks_default_color_set_and_reset_before_replying() {
     );
     assert!(rx.try_recv().is_err());
 }
+
+#[test]
+fn process_pty_bytes_answers_default_color_query_after_oversized_clipboard_write() {
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+    let pane_id = PaneId::from_raw(1);
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        foreground: None,
+        background: Some(crate::utils::theme::color::RgbColor {
+            r: 0x00,
+            g: 0x2b,
+            b: 0x36,
+        }),
+        ..Default::default()
+    });
+    let mut bytes = b"\x1b]52;c;".to_vec();
+    bytes.extend(std::iter::repeat_n(b'A', 4096));
+    bytes.extend_from_slice(b"\x07\x1b]11;?\x1b\\");
+
+    let result = pane.process_pty_bytes(pane_id, 0, &bytes, &tx, |_| None);
+
+    assert_eq!(
+        result.terminal_responses,
+        vec![Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x1b\\")]
+    );
+}
+
+#[test]
+fn process_pty_bytes_answers_default_color_query_after_kitty_graphics_apc() {
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::terminal::vt::Terminal::new(20, 5, 0).unwrap();
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+    let pane_id = PaneId::from_raw(1);
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        foreground: Some(crate::utils::theme::color::RgbColor {
+            r: 0x83,
+            g: 0x94,
+            b: 0x96,
+        }),
+        background: None,
+        ..Default::default()
+    });
+
+    let result = pane.process_pty_bytes(
+        pane_id,
+        0,
+        b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b]10;?\x07",
+        &tx,
+        |_| None,
+    );
+
+    assert!(result
+        .terminal_responses
+        .iter()
+        .any(|reply| reply.as_ref() == b"\x1b]10;rgb:8383/9494/9696\x07"));
+    assert_eq!(
+        result
+            .terminal_responses
+            .iter()
+            .filter(|reply| reply.starts_with(b"\x1b]10;"))
+            .count(),
+        1
+    );
+}

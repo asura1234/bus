@@ -33,3 +33,20 @@ pub(crate) fn env_lock() -> EnvLock {
         appdata: std::env::var_os("APPDATA"),
     }
 }
+
+#[cfg(not(windows))]
+#[test]
+fn tilde_path_with_repeated_separator_stays_relative_to_home() {
+    let _lock = mutex().lock().unwrap();
+    let previous = std::env::var_os("HOME");
+    let home = std::path::PathBuf::from("/tmp/bus-tilde-home");
+    std::env::set_var("HOME", &home);
+
+    let expanded = crate::utils::home_path::expand_tilde_path("~//projects/bus");
+
+    match previous {
+        Some(previous) => std::env::set_var("HOME", previous),
+        None => std::env::remove_var("HOME"),
+    }
+    assert_eq!(expanded, home.join("projects/bus"));
+}

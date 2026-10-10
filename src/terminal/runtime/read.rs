@@ -55,23 +55,33 @@ pub(super) fn publish_reported_cwd(
     pane_id: PaneId,
     cwd: std::path::PathBuf,
     reported_cwd: &Arc<Mutex<Option<std::path::PathBuf>>>,
+    published_cwd: &mut Option<std::path::PathBuf>,
     events: &mpsc::Sender<TerminalEvent>,
 ) {
     let Some(cwd) = usable_reported_cwd(cwd) else {
         return;
     };
     if let Ok(mut current) = reported_cwd.lock() {
-        if current.as_ref() == Some(&cwd) {
-            return;
+        if current.as_ref() != Some(&cwd) {
+            *current = Some(cwd.clone());
         }
-        *current = Some(cwd.clone());
     }
-    if let Err(err) = events.try_send(TerminalEvent::TerminalCwdReported { pane_id, cwd }) {
-        warn!(
+    // Dedupe against what the server actually received, not the runtime cache:
+    // a report dropped by a full event queue must go out again on the next
+    // prompt, since shells repeat the same directory every time.
+    if published_cwd.as_ref() == Some(&cwd) {
+        return;
+    }
+    match events.try_send(TerminalEvent::TerminalCwdReported {
+        pane_id,
+        cwd: cwd.clone(),
+    }) {
+        Ok(()) => *published_cwd = Some(cwd),
+        Err(err) => warn!(
             pane = pane_id.raw(),
             err = %err,
             "failed to send terminal cwd report"
-        );
+        ),
     }
 }
 
@@ -111,6 +121,7 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
         rt,
         agent_detection,
     } = context;
+    let mut published_cwd = None;
     Box::new(move |bytes: &[u8]| {
         let _content_write_guard = match content_write_lock.lock() {
             Ok(guard) => guard,
@@ -149,7 +160,7 @@ pub(super) fn pty_read_callback(context: PtyReadContext) -> PtyReadCallback {
             });
         }
         if let Some(cwd) = result.reported_cwd.clone() {
-            publish_reported_cwd(pane_id, cwd, &reported_cwd, &events);
+            publish_reported_cwd(pane_id, cwd, &reported_cwd, &mut published_cwd, &events);
         }
         for content in result.clipboard_writes {
             if let Err(err) = events.try_send(TerminalEvent::ClipboardWrite { content }) {

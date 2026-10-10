@@ -92,3 +92,54 @@ fn stop_request_empty_response_waits_for_socket_state() {
     );
     assert!(handle.join().unwrap().contains("server.stop"));
 }
+
+#[cfg(unix)]
+#[test]
+fn stop_without_any_recorded_local_session_succeeds() {
+    struct RestoreEnv(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            for (key, value) in self.0.drain(..) {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    let lock = crate::utils::config::test_config_env_lock().lock().unwrap();
+    let bus_env = crate::utils::config::test_without_bus_env(&lock);
+    let restore = RestoreEnv(
+        [
+            "HOME",
+            "BUS_DEV",
+            "BUS_LOG",
+            "BUS_DEV_EXISTING_SERVER",
+            "HERDR_SOCKET_PATH",
+            "HERDR_CLIENT_SOCKET_PATH",
+            "HERDR_CONFIG_PATH",
+        ]
+        .into_iter()
+        .map(|key| (key, std::env::var_os(key)))
+        .collect(),
+    );
+    let home = std::env::temp_dir().join(format!(
+        "bus-stop-empty-home-{}-{}",
+        std::process::id(),
+        crate::messaging::storage::io::now_ns()
+    ));
+    std::fs::create_dir_all(&home).unwrap();
+    std::env::set_var("HOME", &home);
+
+    let result = crate::cli::run(&["stop".to_owned()]);
+
+    drop(restore);
+    drop(bus_env);
+    drop(lock);
+    std::fs::remove_dir_all(&home).unwrap();
+    assert!(
+        result.is_ok(),
+        "stopping when no local server has ever existed should succeed: {result:?}"
+    );
+}

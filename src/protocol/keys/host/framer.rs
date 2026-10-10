@@ -9,7 +9,7 @@ use super::mouse::{
 use super::replies::{
     discard_host_reply_csi_tail, split_paste_color_replies,
     starts_with_incomplete_default_color_response, starts_with_incomplete_host_cell_size_report,
-    starts_with_incomplete_host_color_scheme_report,
+    starts_with_incomplete_host_color_scheme_report, starts_with_incomplete_palette_color_response,
 };
 use super::sequence::{
     control_string, control_string_terminator_for_family, find_subsequence, plausible_osc_tail,
@@ -303,6 +303,18 @@ impl RawInputByteFramer {
             tracing::trace!(
                 len = self.buffer.len(),
                 "waiting for host color response terminator"
+            );
+            return true;
+        }
+
+        // Palette replies stream in by the hundred after a color query, so one
+        // can straddle an idle flush; hold it only while those replies are awaited.
+        if self.host_color_replies_awaited > 0
+            && starts_with_incomplete_palette_color_response(&self.buffer)
+        {
+            tracing::trace!(
+                len = self.buffer.len(),
+                "waiting for host palette color response terminator"
             );
             return true;
         }

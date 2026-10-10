@@ -161,4 +161,30 @@ mod tests {
 
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn git_space_metadata_discovers_bare_repo_with_numeric_true_config() {
+        let bare = temp_test_dir("bare-numeric-true");
+        run_git(&bare, &["init", "--bare", "."]);
+        run_git(&bare, &["config", "core.bare", "1"]);
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&bare)
+            .args(["rev-parse", "--is-bare-repository"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "true");
+
+        let cwd = bare.join("refs");
+        let info = git_worktree_info(&cwd);
+        let label = crate::server::workspaces::workspace_auto_label(&cwd);
+        let expected_label = bare.file_name().unwrap().to_str().unwrap().to_string();
+        std::fs::remove_dir_all(&bare).unwrap();
+
+        assert_eq!(label, expected_label);
+        let info = info.expect("Git's numeric true boolean must identify a bare repo");
+        assert!(info.is_bare);
+        assert_eq!(info.repo_root, bare);
+    }
 }

@@ -247,3 +247,104 @@ async fn full_render_backpressure_does_not_disable_responsive_peer_patches() {
 
     shutdown_test_runtimes(&mut server);
 }
+
+fn retained_frame_after_scrollback_matches_full_render(
+    cols: u16,
+    rows: u16,
+    borders: crate::utils::config::PaneBordersConfig,
+) {
+    let mut server = test_headless_server();
+    server.app.state.pane_scrollbars = true;
+    server.app.state.pane_borders = borders;
+    let mut workspace = crate::server::workspaces::Workspace::test_new("scrollback-retained");
+    let pane_id = workspace.focused_pane_id().expect("focused pane");
+    workspace.insert_test_runtime(
+        pane_id,
+        crate::terminal::TerminalRuntime::test_with_scrollback_bytes(cols, rows, 1 << 20, b"BASE"),
+    );
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::server::app_settings::Mode::Terminal;
+    let (control, render) = connect_test_shell(&mut server, 7, cols, rows);
+    let _ = control.recv().expect("snapshot");
+    server.render_and_stream();
+    let initial = recv_pane_surface(&render, "initial surface");
+
+    let mut output = Vec::new();
+    for line in 0..40 {
+        output.extend_from_slice(format!("\r\nL{line}").as_bytes());
+    }
+    write_shared_test_pane(&mut server, pane_id, &output);
+    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    let _ = recv_pane_surface_patch(&render, "retained patch");
+    let retained = server.clients[&7]
+        .render_state
+        .last_pane_surface()
+        .expect("retained surface")
+        .clone();
+
+    server.clients.get_mut(&7).unwrap().request_repaint();
+    server.render_and_stream();
+    let full = recv_pane_surface(&render, "full replacement surface");
+    assert_eq!(
+        retained.frame.cells, full.frame.cells,
+        "retained frame diverged from full render; initial panes {:?}, full panes {:?}",
+        initial.panes, full.panes
+    );
+    assert_eq!(retained.panes, full.panes);
+    assert!(
+        full.panes[0]
+            .scroll
+            .is_some_and(|scroll| scroll.max_offset_from_bottom > 0),
+        "probe must exercise a pane with scrollback: {:?}",
+        full.panes
+    );
+
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn retained_scrollback_patch_matches_full_render_for_wide_pane() {
+    retained_frame_after_scrollback_matches_full_render(
+        80,
+        23,
+        crate::utils::config::PaneBordersConfig::Auto,
+    );
+}
+
+#[tokio::test]
+async fn retained_scrollback_patch_matches_full_render_for_wide_bordered_pane() {
+    retained_frame_after_scrollback_matches_full_render(
+        80,
+        23,
+        crate::utils::config::PaneBordersConfig::Always,
+    );
+}
+
+#[tokio::test]
+async fn retained_scrollback_patch_matches_full_render_for_narrow_bordered_pane() {
+    retained_frame_after_scrollback_matches_full_render(
+        6,
+        10,
+        crate::utils::config::PaneBordersConfig::Always,
+    );
+}
+
+#[tokio::test]
+async fn retained_scrollback_patch_matches_full_render_for_narrow_pane() {
+    retained_frame_after_scrollback_matches_full_render(
+        5,
+        10,
+        crate::utils::config::PaneBordersConfig::Auto,
+    );
+}
+
+#[tokio::test]
+async fn retained_scrollback_patch_matches_full_render_for_bordered_pane_at_gutter_threshold() {
+    retained_frame_after_scrollback_matches_full_render(
+        7,
+        10,
+        crate::utils::config::PaneBordersConfig::Always,
+    );
+}

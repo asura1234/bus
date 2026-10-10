@@ -82,6 +82,15 @@ pub(super) fn starts_with_incomplete_default_color_response(buffer: &[u8]) -> bo
     ) && matches!(buffer.get(..5), Some(b"\x1b]10;" | b"\x1b]11;"))
 }
 
+pub(super) fn starts_with_incomplete_palette_color_response(buffer: &[u8]) -> bool {
+    matches!(
+        control_string(buffer),
+        Some(ControlString::Incomplete {
+            family: ControlStringFamily::Osc
+        })
+    ) && buffer.starts_with(b"\x1b]4;")
+}
+
 pub(super) fn starts_with_incomplete_host_color_scheme_report(buffer: &[u8]) -> bool {
     buffer.starts_with(b"\x1b[?")
         && (GHOSTTY_COLOR_SCHEME_DARK_REPORT.starts_with(buffer)

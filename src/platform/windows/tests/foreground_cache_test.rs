@@ -228,3 +228,91 @@ fn windows_foreground_selection_cache_retains_live_escaped_agent() {
     };
     assert_eq!(cache.get(10, &snapshot), None);
 }
+
+#[test]
+fn windows_foreground_selection_cache_hit_does_not_read_process_commands() {
+    let snapshot = super::super::ProcessSnapshot::new(vec![
+        test_entry(4_000_000_000, 1, "powershell.exe", &["powershell.exe"]),
+        test_entry(4_000_000_004, 4_000_000_000, "codex.exe", &["codex.exe"]),
+    ]);
+    let job = super::super::foreground_job_from_entry(snapshot.entry(4_000_000_004).unwrap());
+    let mut cache = super::super::ForegroundSelectionCache::default();
+    cache.remember_for_test(4_000_000_000, &snapshot, &job);
+
+    // A later snapshot has the same topology; ToolHelp never fills command metadata,
+    // so it is read lazily per process on first use.
+    let unread = |pid, parent_pid, name: &str| super::super::WindowsProcessEntry {
+        pid,
+        parent_pid,
+        name: name.to_string(),
+        command: std::sync::OnceLock::new(),
+    };
+    let next = super::super::ProcessSnapshot::new(vec![
+        unread(4_000_000_000, 1, "powershell.exe"),
+        unread(4_000_000_004, 4_000_000_000, "codex.exe"),
+    ]);
+
+    assert_eq!(cache.get(4_000_000_000, &next), Some(job));
+    let read_pids = next
+        .entries
+        .iter()
+        .filter(|entry| entry.command.get().is_some())
+        .map(|entry| entry.pid)
+        .collect::<Vec<_>>();
+    assert!(
+        read_pids.is_empty(),
+        "a cache hit must not open processes to read their commands: {read_pids:?}"
+    );
+}
+
+#[test]
+fn windows_foreground_selection_cache_invalidates_raw_stale_parent_links() {
+    let snapshot = super::super::ProcessSnapshot::new(vec![
+        test_entry_with_creation_time(10, 1, "powershell.exe", &["powershell.exe"], Some(2)),
+        test_entry_with_creation_time(20, 10, "codex.exe", &["codex.exe"], Some(3)),
+        test_entry_with_creation_time(30, 10, "claude.exe", &["claude.exe"], Some(1)),
+        test_entry_with_creation_time(40, 30, "node.exe", &["node.exe"], Some(4)),
+    ]);
+    let job = super::super::foreground_job_from_entry(snapshot.entry(20).unwrap());
+    let descendants = snapshot.descendant_signatures(10);
+    assert_eq!(
+        descendants
+            .iter()
+            .map(|entry| entry.pid)
+            .collect::<Vec<_>>(),
+        vec![20]
+    );
+    let cached = super::super::CachedForegroundSelection::from_snapshot_with_identities(
+        10,
+        &snapshot,
+        &job,
+        descendants,
+        vec![super::super::ProcessIdentity::Stub {
+            running: true,
+            creation_time: Some(3),
+        }],
+        super::super::ProcessIdentity::Stub {
+            running: true,
+            creation_time: Some(2),
+        },
+        super::super::ProcessIdentity::Stub {
+            running: true,
+            creation_time: Some(3),
+        },
+    );
+    assert!(cached.is_some());
+    let mut cache = super::super::ForegroundSelectionCache::default();
+    cache.remember(10, cached);
+
+    // Raw topology cannot validate this filtered selection without inspecting
+    // creation times. A miss lets the caller reselect outside the cache mutex.
+    assert_eq!(cache.get(10, &snapshot), None);
+    assert_eq!(
+        snapshot
+            .descendants(10)
+            .iter()
+            .map(|entry| entry.pid)
+            .collect::<Vec<_>>(),
+        vec![20]
+    );
+}

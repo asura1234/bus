@@ -259,3 +259,56 @@ fn a_newly_promoted_client_gets_the_window_title_again() {
     );
     shutdown_test_runtimes(&mut server);
 }
+
+#[tokio::test]
+async fn foreground_window_title_uses_that_clients_remembered_tab() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::server::workspaces::Workspace::test_new("independent-titles");
+    workspace.tabs[0].custom_name = Some("first".into());
+    let second_tab = workspace.test_add_tab(Some("second"));
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
+    let second_tab_id = server.app.public_tab_id(0, second_tab).unwrap();
+    let (first_control, _first_render) = connect_matching_test_shell(&mut server, 91);
+    let (second_control, _second_render) = connect_matching_test_shell(&mut server, 92);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    server.app.configure_window_title("{tab}");
+
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    assert!(server.handle_client_shell_api_request(
+        92,
+        crate::server::api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: "navigate-second-client".into(),
+                method: api::schema::Method::TabFocus(api::schema::TabTarget {
+                    tab_id: second_tab_id.clone(),
+                }),
+            },
+            respond_to,
+        },
+    ));
+    let response: api::schema::SuccessResponse =
+        serde_json::from_str(&response_rx.recv().unwrap()).unwrap();
+    assert_eq!(response.id, "navigate-second-client");
+    server.sync_window_title();
+    assert_eq!(
+        next_window_title(&second_control),
+        Some(Some("second".into()))
+    );
+
+    assert!(server.handle_server_event(ServerEvent::ClientShellFocus {
+        client_id: 91,
+        focused: true,
+    }));
+    assert_eq!(server.foreground_client_id, Some(91));
+    assert_eq!(server.shell_tab_id_for_client(91), Some(first_tab_id));
+    assert_eq!(server.shell_tab_id_for_client(92), Some(second_tab_id));
+    server.sync_window_title();
+    let first_title = next_window_title(&first_control);
+    shutdown_test_runtimes(&mut server);
+    assert_eq!(first_title, Some(Some("first".into())));
+}

@@ -138,3 +138,47 @@ fn every_resize_clears_cells_the_host_kept_beyond_the_frame() {
     );
     assert_eq!(host_text(&terminal, 6, 2), ["      ", "      "]);
 }
+
+#[test]
+fn drawn_cursor_remains_visible_on_a_wide_character_continuation() {
+    let mut source = crate::terminal::vt::Terminal::new(4, 2, 0).unwrap();
+    source.write("界\x1b[1;2H".as_bytes());
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    let pane = super::GhosttyPaneTerminal::new(source, tx).unwrap();
+    let cursor = pane.cursor_state().expect("visible pane cursor");
+    assert!(cursor.visible);
+
+    let mut rendered = ratatui::Terminal::new(ratatui::backend::TestBackend::new(4, 2)).unwrap();
+    rendered
+        .draw(|frame| pane.render(frame, ratatui::layout::Rect::new(0, 0, 4, 2), false))
+        .unwrap();
+    let frame = FrameData::from_ratatui_buffer(
+        rendered.backend().buffer(),
+        Some(crate::protocol::wire::CursorState {
+            x: cursor.x,
+            y: cursor.y,
+            visible: cursor.visible,
+            shape: cursor.shape,
+        }),
+    );
+    let drawn = crate::protocol::ansi::frame_with_drawn_cursor(frame);
+    let encoded = BlitEncoder::new().encode_with_suppressed_visible_cursor(&drawn, false);
+    let mut host = crate::terminal::vt::Terminal::new(4, 2, 0).unwrap();
+    host.write(&encoded.bytes);
+
+    let mut state = crate::terminal::vt::RenderState::new().unwrap();
+    state.update(&host).unwrap();
+    let mut iterator = crate::terminal::vt::RowIterator::new().unwrap();
+    let mut rows = state.populate_row_iterator(&mut iterator).unwrap();
+    assert!(rows.next());
+    let mut row_cells = crate::terminal::vt::RowCells::new().unwrap();
+    let mut cells = rows.populate_cells(&mut row_cells).unwrap();
+    assert!(cells.next());
+    assert_eq!(cells.grapheme_text().unwrap(), "界");
+    assert!(
+        cells.basic_data().unwrap().style.inverse,
+        "drawn cursor at ({}, {}) must remain visible on the wide glyph",
+        cursor.x,
+        cursor.y
+    );
+}

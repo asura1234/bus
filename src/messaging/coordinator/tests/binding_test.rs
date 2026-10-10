@@ -268,3 +268,94 @@ fn cleared_cursor_keeps_its_session_when_the_server_refuses_the_new_chat() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn cleared_agent_releases_its_previous_adopted_session_reservation() {
+    let (mut worker, owner, room, dir, _) = fixture(Provider::Cursor, vec![]);
+    let old_session = "11111111-2222-3333-4444-555555555555";
+    let new_session = "66666666-7777-8888-9999-aaaaaaaaaaaa";
+    let mut identity = worker.state.agent(owner).unwrap().runtime_identity.clone();
+    identity.session_id = Some(old_session.into());
+    worker
+        .state
+        .set_agent_runtime_identity(owner, identity)
+        .unwrap();
+    std::fs::write(dir.join("callbacks/launch/adopted-session"), old_session).unwrap();
+    worker.state.begin_session_reset(owner).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    record(
+        &dir,
+        Provider::Cursor,
+        json!({"hook_event_name":"beforeSubmitPrompt", "conversation_id":new_session,
+            "generation_id":"fresh-turn", "prompt":"new conversation"}),
+    );
+    for _ in 0..2 {
+        worker
+            .consume_callbacks(owner, &dir.join("callbacks/launch"))
+            .unwrap();
+    }
+    assert_eq!(
+        worker
+            .state
+            .agent(owner)
+            .unwrap()
+            .runtime_identity
+            .session_id
+            .as_deref(),
+        Some(new_session)
+    );
+    let (events, received) = mpsc::channel();
+    let result = worker.command(
+        BusCommand::AddAgent(AddAgent {
+            room,
+            name: "previous conversation".into(),
+            provider: Provider::Cursor,
+            cwd: dir.to_string_lossy().into_owned(),
+            extra_args: format!("--resume {old_session}"),
+            consent_project_hooks: false,
+        }),
+        &events,
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        result.is_ok(),
+        "clear moved the owner to another conversation: {result:?}"
+    );
+    assert!(received
+        .try_iter()
+        .any(|event| matches!(event, BusEvent::SetupRequired { .. })));
+}
+
+#[test]
+fn an_unbound_launch_still_reserves_its_adopted_session() {
+    let (mut worker, owner, room, dir, _) = fixture(Provider::Cursor, vec![]);
+    let session = "11111111-2222-3333-4444-555555555555";
+    let mut identity = worker.state.agent(owner).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    worker
+        .state
+        .set_agent_runtime_identity(owner, identity)
+        .unwrap();
+    std::fs::write(dir.join("callbacks/launch/adopted-session"), session).unwrap();
+    let (events, _) = mpsc::channel();
+    let result = worker.command(
+        BusCommand::AddAgent(AddAgent {
+            room,
+            name: "twin".into(),
+            provider: Provider::Cursor,
+            cwd: dir.to_string_lossy().into_owned(),
+            extra_args: format!("--resume {session}"),
+            consent_project_hooks: false,
+        }),
+        &events,
+    );
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.contains("already belongs to Bus agent")),
+        "{result:?}"
+    );
+}

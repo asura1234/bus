@@ -95,26 +95,39 @@ pub(in crate::platform::windows) fn descendant_entries(
     root_pid: u32,
     snapshot: &ProcessSnapshot,
 ) -> Vec<&WindowsProcessEntry> {
+    walk_descendant_entries(root_pid, snapshot, |parent, child| {
+        let parent_creation_time = parent.and_then(|entry| entry.command().creation_time);
+        let child_creation_time = child.command().creation_time;
+        // ToolHelp retains the original parent PID after its exit. An older child
+        // belongs to a previous owner of the parent's reused PID, not this tree.
+        !child_creation_time
+            .zip(parent_creation_time)
+            .is_some_and(|(child, parent)| child < parent)
+    })
+}
+
+fn walk_descendant_entries(
+    root_pid: u32,
+    snapshot: &ProcessSnapshot,
+    include: impl Fn(Option<&WindowsProcessEntry>, &WindowsProcessEntry) -> bool,
+) -> Vec<&WindowsProcessEntry> {
     let mut output = Vec::new();
-    let mut queue = VecDeque::new();
+    let mut queue = VecDeque::from([root_pid]);
     let mut visited = HashSet::new();
     visited.insert(root_pid);
-    if let Some(root_children) = snapshot.children_by_parent.get(&root_pid) {
-        for &index in root_children {
-            let entry = &snapshot.entries[index];
-            if visited.insert(entry.pid) {
-                queue.push_back(entry);
+    while let Some(parent_pid) = queue.pop_front() {
+        let Some(children) = snapshot.children_by_parent.get(&parent_pid) else {
+            continue;
+        };
+        let parent = snapshot.entry(parent_pid);
+        for &index in children {
+            let child = &snapshot.entries[index];
+            if !include(parent, child) {
+                continue;
             }
-        }
-    }
-    while let Some(entry) = queue.pop_front() {
-        output.push(entry);
-        if let Some(next) = snapshot.children_by_parent.get(&entry.pid) {
-            for &index in next {
-                let child = &snapshot.entries[index];
-                if visited.insert(child.pid) {
-                    queue.push_back(child);
-                }
+            if visited.insert(child.pid) {
+                output.push(child);
+                queue.push_back(child.pid);
             }
         }
     }
@@ -221,7 +234,10 @@ impl ForegroundSelectionCache {
         snapshot: &ProcessSnapshot,
     ) -> Option<ForegroundJob> {
         if let Some(cached) = self.entries.get_mut(&shell_pid) {
-            let current_descendants = descendant_entries(shell_pid, snapshot);
+            // Retained handles validate cached identities without reading commands.
+            // Extra raw parent links cause a miss and filtered reselection outside
+            // the cache mutex, rather than inspecting process creation times here.
+            let current_descendants = walk_descendant_entries(shell_pid, snapshot, |_, _| true);
             let topology_matches = current_descendants.len() == cached.descendants.len()
                 && cached
                     .descendants

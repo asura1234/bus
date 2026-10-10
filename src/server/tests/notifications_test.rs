@@ -704,3 +704,338 @@ fn no_handle_internal_event_bypass_in_module() {
         bypass_lines.join("\n  ")
     );
 }
+
+#[test]
+fn scheduled_tasks_settle_due_managed_agent_deadline_so_idle_loop_does_not_spin() {
+    let mut server = test_headless_server();
+    let workspace = crate::server::workspaces::Workspace::test_new("active");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.tabs[0].panes[&pane_id]
+        .attached_terminal_id
+        .clone();
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+
+    let started = Instant::now();
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .expect("test terminal")
+        .begin_managed_agent(
+            "worker".into(),
+            crate::agents::AgentKind::Codex,
+            started,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        );
+
+    // The managed agent stays silent: no terminal event arrives after the settle delay.
+    let before_settle = started + Duration::from_secs(2);
+    assert!(!server.handle_scheduled_tasks_headless(before_settle, false));
+    assert!(!server.app.state.session_dirty);
+    assert!(server.app.event_hub.events_after(0).is_empty());
+
+    let after_settle = started + Duration::from_secs(3) + Duration::from_millis(1);
+    assert!(server.handle_scheduled_tasks_headless(after_settle, false));
+    let next = server.app.next_headless_loop_deadline(after_settle, false);
+    assert!(
+        next.is_none_or(|deadline| deadline > after_settle),
+        "a due managed-agent deadline must be consumed by the scheduler, \
+         otherwise the loop sleeps until a past instant and spins: next={next:?} now={after_settle:?}"
+    );
+    assert!(server.app.state.session_dirty);
+    assert_eq!(server.app.event_hub.events_after(0).len(), 1);
+
+    let after_timeout = started + Duration::from_secs(30) + Duration::from_millis(1);
+    assert!(server.handle_scheduled_tasks_headless(after_timeout, false));
+    assert_eq!(
+        server.app.state.terminals[&terminal_id].next_managed_agent_deadline(),
+        None,
+        "a silent managed launch past its timeout should be released by the scheduler"
+    );
+    assert!(server.app.state.terminals[&terminal_id]
+        .agent_name
+        .is_none());
+    let events = server.app.event_hub.events_after(0);
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|(_, event)| matches!(
+        event.event,
+        crate::protocol::api::schema::EventKind::PaneUpdated
+    )));
+    assert!(!server.handle_scheduled_tasks_headless(after_timeout, false));
+    assert_eq!(server.app.event_hub.events_after(0).len(), 2);
+}
+
+#[test]
+fn scheduled_tasks_make_a_silent_idle_managed_agent_ready_after_settle() {
+    let mut server = test_headless_server();
+    let workspace = crate::server::workspaces::Workspace::test_new("agent");
+    let pane_id = workspace.tabs[0].root_pane;
+    let terminal_id = workspace.tabs[0].panes[&pane_id]
+        .attached_terminal_id
+        .clone();
+    let unrelated = crate::server::workspaces::Workspace::test_new("unrelated");
+    let unrelated_pane = unrelated.tabs[0].root_pane;
+    let unrelated_terminal_id = unrelated.tabs[0].panes[&unrelated_pane]
+        .attached_terminal_id
+        .clone();
+    server.app.state.workspaces = vec![workspace, unrelated];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    let started = Instant::now();
+    let terminal = server.app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.begin_managed_agent(
+        "worker".into(),
+        crate::agents::AgentKind::Codex,
+        started,
+        Duration::from_secs(3),
+        Duration::from_secs(30),
+    );
+    terminal.set_detected_state(
+        Some(crate::agents::AgentKind::Codex),
+        crate::agents::AgentState::Idle,
+    );
+    let later_terminal = server
+        .app
+        .state
+        .terminals
+        .get_mut(&unrelated_terminal_id)
+        .unwrap();
+    later_terminal.begin_managed_agent(
+        "later".into(),
+        crate::agents::AgentKind::Codex,
+        started,
+        Duration::from_secs(20),
+        Duration::from_secs(30),
+    );
+    later_terminal.set_detected_state(
+        Some(crate::agents::AgentKind::Codex),
+        crate::agents::AgentState::Idle,
+    );
+
+    let after_settle = started + Duration::from_secs(3);
+    assert!(server.handle_scheduled_tasks_headless(after_settle, false));
+    let terminal = &server.app.state.terminals[&terminal_id];
+    assert!(terminal.managed_agent_interactive_ready());
+    assert_eq!(terminal.agent_name.as_deref(), Some("worker"));
+    assert_eq!(terminal.next_managed_agent_deadline(), None);
+    let later_terminal = &server.app.state.terminals[&unrelated_terminal_id];
+    assert!(later_terminal.managed_agent_launch_pending());
+    assert_eq!(
+        later_terminal.next_managed_agent_deadline(),
+        Some(started + Duration::from_secs(20))
+    );
+    assert!(server.app.state.session_dirty);
+    let events = server.app.event_hub.events_after(0);
+    assert_eq!(events.len(), 1, "only the affected pane should be updated");
+    let crate::protocol::api::schema::EventData::PaneUpdated { pane } = &events[0].1.data else {
+        panic!("expected readiness to publish a pane update");
+    };
+    assert_eq!(pane.pane_id, server.app.public_pane_id(0, pane_id).unwrap());
+    assert!(!server.handle_scheduled_tasks_headless(after_settle, false));
+}
+
+fn notify_messages_after_agent_exit(
+    delay_seconds: u64,
+    delivery: crate::utils::config::ToastDelivery,
+) -> Vec<String> {
+    let mut server = test_headless_server();
+    let mut workspace = crate::server::workspaces::Workspace::test_new("agents");
+    let pane_id = workspace.tabs[0].root_pane;
+    workspace.tabs[0].set_custom_name("worker".into());
+    workspace.test_add_tab(Some("other"));
+    workspace.active_tab = 1;
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.toast_config.delivery = delivery;
+    server.app.state.toast_config.delay_seconds = delay_seconds;
+
+    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
+    server.clients.insert(
+        1,
+        ClientConnection::new(
+            (80, 24),
+            crate::protocol::kitty::HostCellSize::default(),
+            1,
+            client_tx,
+        ),
+    );
+    server.foreground_client_id = Some(1);
+    server.sync_foreground_client_state();
+    server.handle_internal_event_with_forwarding(TerminalEvent::StateChanged {
+        pane_id,
+        agent: Some(crate::agents::AgentKind::Codex),
+        state: crate::agents::AgentState::Working,
+        visible_blocker: false,
+        process_exited: false,
+        observed_at: Instant::now(),
+    });
+    while client_control_rx
+        .recv_timeout(Duration::from_millis(20))
+        .is_ok()
+    {}
+
+    server.handle_internal_event_with_forwarding(TerminalEvent::StateChanged {
+        pane_id,
+        agent: Some(crate::agents::AgentKind::Codex),
+        state: crate::agents::AgentState::Idle,
+        visible_blocker: false,
+        process_exited: true,
+        observed_at: Instant::now(),
+    });
+    if delay_seconds != 0 {
+        let deliveries = server
+            .app
+            .state
+            .drain_due_agent_notifications(Instant::now() + Duration::from_secs(delay_seconds + 1));
+        for delivery in &deliveries {
+            server.forward_agent_notification_delivery(delivery);
+        }
+    }
+    let mut messages = Vec::new();
+    while let Ok(bytes) = client_control_rx.recv_timeout(Duration::from_millis(50)) {
+        if let ServerMessage::Notify {
+            kind,
+            message,
+            body,
+        } = read_server_message(bytes)
+        {
+            let expected_kind = match delivery {
+                crate::utils::config::ToastDelivery::System => protocol::NotifyKind::SystemToast,
+                crate::utils::config::ToastDelivery::Terminal => protocol::NotifyKind::Toast,
+                _ => panic!("test requires client notification delivery"),
+            };
+            assert_eq!(kind, expected_kind);
+            assert_eq!(body.as_deref(), Some("agents · 1 · worker"));
+            messages.push(message);
+        }
+    }
+    messages
+}
+
+#[test]
+fn agent_exit_while_working_notifies_finished_with_delayed_system_delivery() {
+    assert_eq!(
+        notify_messages_after_agent_exit(5, crate::utils::config::ToastDelivery::System),
+        vec!["codex finished".to_string()]
+    );
+}
+
+#[test]
+fn agent_exit_while_working_notifies_finished_with_immediate_system_delivery() {
+    assert_eq!(
+        notify_messages_after_agent_exit(0, crate::utils::config::ToastDelivery::System),
+        vec!["codex finished".to_string()]
+    );
+}
+
+#[test]
+fn agent_exit_while_working_notifies_finished_with_delayed_terminal_delivery() {
+    assert_eq!(
+        notify_messages_after_agent_exit(5, crate::utils::config::ToastDelivery::Terminal),
+        vec!["codex finished".to_string()]
+    );
+}
+
+#[test]
+fn agent_exit_while_working_notifies_finished_with_immediate_terminal_delivery() {
+    assert_eq!(
+        notify_messages_after_agent_exit(0, crate::utils::config::ToastDelivery::Terminal),
+        vec!["codex finished".to_string()]
+    );
+}
+
+fn notify_messages_after_unknown_agent_exit(
+    delay_seconds: u64,
+    delivery: crate::utils::config::ToastDelivery,
+) -> Vec<String> {
+    let mut server = test_headless_server();
+    let mut workspace = crate::server::workspaces::Workspace::test_new("agents");
+    let pane_id = workspace.tabs[0].root_pane;
+    workspace.test_add_tab(Some("other"));
+    workspace.active_tab = 1;
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.toast_config.delivery = delivery;
+    server.app.state.toast_config.delay_seconds = delay_seconds;
+
+    let (client_tx, client_control_rx, _client_rx) = test_client_writer();
+    server.clients.insert(
+        1,
+        ClientConnection::new(
+            (80, 24),
+            crate::protocol::kitty::HostCellSize::default(),
+            1,
+            client_tx,
+        ),
+    );
+    server.foreground_client_id = Some(1);
+    server.sync_foreground_client_state();
+    server.handle_internal_event_with_forwarding(TerminalEvent::AgentProcessDetected {
+        pane_id,
+        agent: crate::agents::AgentKind::Codex,
+        observed_at: Instant::now(),
+    });
+    while client_control_rx
+        .recv_timeout(Duration::from_millis(20))
+        .is_ok()
+    {}
+
+    server.handle_internal_event_with_forwarding(TerminalEvent::StateChanged {
+        pane_id,
+        agent: Some(crate::agents::AgentKind::Codex),
+        state: crate::agents::AgentState::Idle,
+        visible_blocker: false,
+        process_exited: true,
+        observed_at: Instant::now(),
+    });
+    if delay_seconds != 0 {
+        let deliveries = server
+            .app
+            .state
+            .drain_due_agent_notifications(Instant::now() + Duration::from_secs(delay_seconds + 1));
+        for delivery in &deliveries {
+            server.forward_agent_notification_delivery(delivery);
+        }
+    }
+    let mut messages = Vec::new();
+    while let Ok(bytes) = client_control_rx.recv_timeout(Duration::from_millis(50)) {
+        if let ServerMessage::Notify { message, .. } = read_server_message(bytes) {
+            messages.push(message);
+        }
+    }
+    messages
+}
+
+#[test]
+fn unknown_state_agent_exit_notifies_the_same_with_immediate_and_delayed_delivery() {
+    let immediate =
+        notify_messages_after_unknown_agent_exit(0, crate::utils::config::ToastDelivery::System);
+    let delayed =
+        notify_messages_after_unknown_agent_exit(5, crate::utils::config::ToastDelivery::System);
+    assert!(
+        delayed.is_empty(),
+        "a never-working agent has no completion"
+    );
+    assert_eq!(immediate, delayed);
+    assert!(immediate.is_empty());
+}
+
+#[test]
+fn unknown_state_agent_exit_notifies_the_same_with_immediate_and_delayed_terminal_delivery() {
+    let immediate =
+        notify_messages_after_unknown_agent_exit(0, crate::utils::config::ToastDelivery::Terminal);
+    let delayed =
+        notify_messages_after_unknown_agent_exit(5, crate::utils::config::ToastDelivery::Terminal);
+    assert!(
+        delayed.is_empty(),
+        "a never-working agent has no completion"
+    );
+    assert_eq!(immediate, delayed);
+    assert!(immediate.is_empty());
+}

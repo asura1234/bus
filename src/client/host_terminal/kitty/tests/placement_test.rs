@@ -105,3 +105,14 @@ fn clipped_placement_crops_negative_viewport_offsets() {
 }
 
 include!("../../tests/kitty_test.rs");
+
+#[test]
+fn clipped_placement_crops_after_left_subcell_offset() {
+    let mut placement = test_placement(-1, 0);
+    placement.placement.x_offset = 4;
+    let (clipped, _) = clipped_placement(&placement).expect("partially visible placement");
+
+    // Only the six image pixels past the four-pixel offset are left of the view.
+    assert_eq!(clipped.source_x, 6);
+    assert_eq!(clipped.x_offset, 0);
+}

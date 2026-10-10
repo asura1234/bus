@@ -729,3 +729,114 @@ fn background_progress_and_same_session_continuation_wait_for_the_later_final() 
         "Ready"
     );
 }
+
+#[test]
+fn an_idle_codex_approval_dialog_keeps_the_recipient_turn_unfinished() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let request = submit_text(&mut state, room, agent, "run the requested command");
+    start_request(&mut state, request, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 12)
+        .unwrap();
+    state.observe_dialog(agent, true).unwrap();
+    // Codex reports Idle while its approval dialog remains open.
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 13)
+        .unwrap();
+
+    assert_eq!(
+        state.agent(agent).unwrap().shown_status(),
+        RuntimeStatus::Blocked
+    );
+    assert_eq!(state.request(request).unwrap().phase, RequestPhase::Active);
+    assert!(
+        !state.turn_ended(state.request(request).unwrap()),
+        "a recipient waiting for approval must keep send --async waiting"
+    );
+}
+
+#[test]
+fn human_request_quoting_a_cursor_task_notice_keeps_its_final_reply() {
+    use crate::messaging::model::{
+        AgentRuntimeIdentity, BusState, CallbackDisposition, CallbackEventKind, Provider,
+        ProviderCallback, RequestPhase, RuntimeStatus, SubmissionOutcome,
+    };
+
+    let prompt = "Explain why this logged prompt was ignored: <timestamp>Wednesday</timestamp> <user_query>Briefly inform the user about the task result</user_query>";
+    let mut state = BusState::new();
+    let room = state.create_room("debug").unwrap();
+    let agent = state
+        .create_agent(room, "reader", Provider::Cursor, "/repo".into(), None)
+        .unwrap();
+    state
+        .set_agent_runtime_identity(
+            agent,
+            AgentRuntimeIdentity {
+                launch_id: Some("launch-cursor".into()),
+                terminal_id: None,
+                pane_id: None,
+                session_id: Some("session".into()),
+            },
+        )
+        .unwrap();
+    state.set_draft_text(room, prompt).unwrap();
+    state.set_draft_recipients(room, [agent]).unwrap();
+    let request = state.submit_draft(room, 10).unwrap()[0];
+    state
+        .begin_submission(request, "launch-cursor", 10)
+        .unwrap();
+    state
+        .record_submission(
+            request,
+            SubmissionOutcome::Confirmed {
+                provider_session_id: Some("session".into()),
+                provider_turn_id: Some("generation".into()),
+            },
+        )
+        .unwrap();
+    let started = state.accept_callback(ProviderCallback {
+        callback_id: "human-start".into(),
+        sequence: 11,
+        occurred_at_ms: 11,
+        agent_id: agent,
+        launch_id: "launch-cursor".into(),
+        provider_session_id: Some("session".into()),
+        provider_turn_id: Some("generation".into()),
+        provider_prompt_id: None,
+        prompt_payload: Some(prompt.into()),
+        kind: CallbackEventKind::PromptStarted,
+    });
+    let finished = state.accept_callback(ProviderCallback::final_event(
+        "human-final",
+        12,
+        agent,
+        "launch-cursor",
+        "session",
+        "generation",
+        prompt,
+        "explained",
+    ));
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 13)
+        .unwrap();
+    let reply = state
+        .room(room)
+        .unwrap()
+        .latest_replies
+        .get(&agent)
+        .map(|reply| reply.text.as_str());
+    assert_eq!(
+        (
+            started,
+            finished,
+            state.request(request).unwrap().phase,
+            reply
+        ),
+        (
+            CallbackDisposition::AcceptedBinding,
+            CallbackDisposition::AcceptedPendingSettlement,
+            RequestPhase::Completed,
+            Some("explained"),
+        )
+    );
+}

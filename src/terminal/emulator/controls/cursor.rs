@@ -47,6 +47,10 @@ impl DecscusrTracker {
                 } else if byte == 0x1b {
                     DecscusrParseState::Escape
                 } else {
+                    // RIS resets the native cursor style, so the pane falls back to the host default too.
+                    if byte == b'c' {
+                        self.cursor_shape_overridden = false;
+                    }
                     DecscusrParseState::Ground
                 };
             }
@@ -59,7 +63,12 @@ impl DecscusrTracker {
                     self.state = DecscusrParseState::Escape;
                 } else if byte.is_ascii_digit() && *collecting_first_param {
                     let digit = u16::from(byte - b'0');
-                    *first_param = Some(first_param.unwrap_or(0).saturating_mul(10) + digit);
+                    *first_param = Some(
+                        first_param
+                            .unwrap_or(0)
+                            .saturating_mul(10)
+                            .saturating_add(digit),
+                    );
                 } else if byte == b';' || byte == b':' {
                     *collecting_first_param = false;
                 } else if byte == b' ' {

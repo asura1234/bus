@@ -24,6 +24,22 @@ class BusQualityTest(unittest.TestCase):
             with self.subTest(policy=policy), self.assertRaises(ValueError):
                 quality.clippy_commands(policy)
 
+    def test_cli_test_binary_follows_cargo_llvm_cov_target_dir(self):
+        self.assertEqual(quality.llvm_cov_target({}), quality.ROOT / "target/llvm-cov-target")
+        self.assertEqual(
+            quality.llvm_cov_target({"CARGO_TARGET_DIR": "/tmp/gate-target"}),
+            Path("/tmp/gate-target/llvm-cov-target"),
+        )
+        self.assertEqual(
+            quality.llvm_cov_target({"CARGO_TARGET_DIR": "out"}),
+            quality.ROOT / "out/llvm-cov-target",
+        )
+        self.assertEqual(
+            quality.llvm_cov_target({"CARGO_TARGET_DIR": "/tmp/gate-target",
+                                     "CARGO_LLVM_COV_TARGET_DIR": "/tmp/cov"}),
+            Path("/tmp/cov"),
+        )
+
     def test_selected_production_lints_run_before_test_target_allowances(self):
         policy = {"test_files": ["*_test.*"], "test_dirs": ["tests"],
                   "production_clippy_lints": ["clippy::too_many_lines",

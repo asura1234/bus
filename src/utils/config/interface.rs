@@ -155,7 +155,6 @@ pub struct UiConfig {
     pub sound: SoundConfig,
 }
 
-/// Cursor shape (DECSCUSR) used for the forced IME anchor.
 impl Default for UiConfig {
     fn default() -> Self {
         Self {

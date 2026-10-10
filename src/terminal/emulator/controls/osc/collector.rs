@@ -2,6 +2,7 @@ pub(super) fn is_ignored_string_intro(byte: u8) -> bool {
     matches!(byte, b'P' | b'_' | b'^' | b'X')
 }
 
+/// Collects complete OSC bodies from a raw byte stream. Consumers receive only
 /// bodies, keeping the framing state machine independent from OSC commands.
 #[derive(Debug, Default)]
 pub(super) struct OscStreamCollector {

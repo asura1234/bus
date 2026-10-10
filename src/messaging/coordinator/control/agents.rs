@@ -139,14 +139,23 @@ impl Worker {
             }
             None => return Err("The agent has no provider session yet".into()),
         };
+        // The reset intent is durable before the provider can start a fresh
+        // session, so that session's callbacks rebind instead of being rejected.
+        let before = self.state.clone();
+        let mut state = before.clone();
+        state.begin_session_reset(id).map_err(|e| e.to_string())?;
+        self.save(state)?;
         match self.transport.request(method) {
             Ok(ResponseResult::AgentPrompted { .. }) => {}
             Ok(other) => return Err(format!("Unexpected response to {text}: {other:?}")),
+            // Only a definite rejection proves no reset was typed; an
+            // uncertain one keeps the intent for a session that may follow.
+            Err(error) if error.definitely_rejected => {
+                self.save(before)?;
+                return Err(error.message);
+            }
             Err(error) => return Err(error.message),
         }
-        let mut state = self.state.clone();
-        state.begin_session_reset(id).map_err(|e| e.to_string())?;
-        self.save(state)?;
         Ok(json!({"agent_id": id, "sent": text, "stage": "cleared"}))
     }
 }

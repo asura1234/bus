@@ -389,3 +389,25 @@ fn frame_data_rejects_mismatched_cell_count() {
     };
     assert!(frame.to_ratatui_buffer().is_none());
 }
+
+#[test]
+fn frame_replacement_preserves_underline_style_on_unmodified_cells() {
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 2, 1));
+    let cell = buffer.cell_mut((0, 0)).unwrap();
+    cell.set_symbol("x");
+    cell.modifier = modifier_with_underline_style(Modifier::UNDERLINED, 3);
+    let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
+    assert_eq!(underline_style_from_modifier(frame.cells[0].modifier), 3);
+
+    let mut composed = frame.to_ratatui_buffer().unwrap();
+    composed.cell_mut((1, 0)).unwrap().bg = Color::Red;
+    frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+
+    assert_eq!(frame.cells[0].symbol, "x");
+    assert_eq!(
+        underline_style_from_modifier(frame.cells[0].modifier),
+        3,
+        "an overlay changing another cell must preserve the pane's curly underline"
+    );
+    assert_eq!(frame.cells[1].bg, color_to_u32(Color::Red));
+}

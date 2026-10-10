@@ -147,7 +147,7 @@ fn option_line(full: &str) -> Option<OptionLine> {
     }
     let number = rest[..digits].parse().ok()?;
     let after_dot = rest[digits..].strip_prefix('.')?;
-    // `1.Yes` 不是选项；`1.` 或 `1. ` 是选项正文被折到下一行。
+    // `1.Yes` is not an option; `1.` or `1. ` can wrap the label to the next line.
     let wrapped = after_dot.trim().is_empty();
     if !wrapped && !after_dot.starts_with([' ', '\t']) {
         return None;
@@ -474,15 +474,19 @@ fn numbered(lines: &[&str], styles: &[Vec<Style>]) -> Option<Dialog> {
     }
     // Codex's last numbered row is its editable Other field. Typing replaces
     // the placeholder itself; Enter on an empty field leaves the form open.
-    if let Some(hint) = hint.as_deref().filter(|hint| codex_text_footer(hint)) {
+    if let Some(footer) = (end..lines.len()).find(|&index| codex_text_footer(lines[index])) {
         if lines[..start].iter().any(|line| {
             unboxed(line).trim().trim_start_matches(['•', '◦']).trim() == "Queued follow-up inputs"
         }) {
             if let Some(last) = options.last().filter(|option| option.selected) {
+                let value = std::iter::once(last.label.as_str())
+                    .chain(lines[end..footer].iter().map(|line| unboxed(line).trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 return question_dialog(
                     title(&lines[..start]),
-                    hint,
-                    &last.label,
+                    unboxed(lines[footer]).trim(),
+                    value.trim_end(),
                     "Other",
                     "ctrl+]",
                 );
@@ -537,7 +541,7 @@ fn numbered_options(lines: &[&str], start: usize) -> (Vec<OptionLine>, usize) {
             if option.number as usize != options.len() + 1 {
                 break;
             }
-            // Codex 把放不下的选项正文折到下一行，编号行上只剩 `› 1.`。
+            // Codex can wrap the whole label, leaving only `› 1.` on this line.
             if option.label.is_empty()
                 && !lines.get(index + 1).is_some_and(|next| {
                     let text = unboxed(next);

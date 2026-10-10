@@ -80,9 +80,10 @@ pub(crate) fn is_background_task_notice(prompt: &str) -> bool {
 
 fn notice_body(prompt: &str) -> &str {
     let mut text = prompt.trim();
-    if let Some(rest) = text
-        .find("</timestamp>")
-        .map(|index| &text[index + "</timestamp>".len()..])
+    // Only Cursor's leading wrapper; a human message may quote one mid-text.
+    if let Some((_, rest)) = text
+        .strip_prefix("<timestamp>")
+        .and_then(|rest| rest.split_once("</timestamp>"))
     {
         text = rest.trim();
     }

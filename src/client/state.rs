@@ -7,6 +7,7 @@ use std::{
         Arc,
     },
 };
+use tracing::warn;
 
 /// State tracking for the thin client.
 pub(super) struct ClientState {
@@ -123,8 +124,15 @@ impl ClientState {
                 shell.bus_graphics_erased();
             }
         }
-        let _ = write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics);
-        let _ = stdout.flush();
+        let written = write_encoded_frame_with_graphics(&mut stdout, &encoded.bytes, graphics)
+            .and_then(|()| stdout.flush());
+        if let Err(error) = written {
+            // The host never accepted this frame, so it must not become the diff
+            // baseline; keep the full repaint for the next frame.
+            warn!(%error, "failed to present frame");
+            self.request_repaint();
+            return;
+        }
         if let Some(shell) = self.shell.as_mut() {
             shell.bus_frame_presented(cleared);
         }

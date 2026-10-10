@@ -6,6 +6,13 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+// The Windows actor's forwarder and writer are platform-independent threads;
+// compiling them here runs its submission tests on Unix CI too.
+#[allow(dead_code)]
+mod windows_submission {
+    include!("../actor/windows.rs");
+}
+
 fn test_wake_pair() -> (fd::WakeWriter, OwnedFd) {
     let pipe = fd::create_wake_pipe().expect("wake pipe");
     (pipe.writer, pipe.read_fd)
@@ -582,4 +589,41 @@ fn resize_writes_terminal_responses_after_applying_resize() {
         .expect("peer receives resize response");
     assert_eq!(Bytes::from(buf), response);
     handle.shutdown();
+}
+
+#[test]
+fn queued_input_runs_promptly_after_text_only_submission_delay() {
+    let (poll_tx, poll_rx) = std_mpsc::channel();
+    let (handle, mut peer, _read_rx) =
+        actor_with_socket_pair_and_poll_observer(false, Some(poll_tx));
+    peer.set_read_timeout(Some(Duration::from_millis(500)))
+        .expect("peer timeout");
+    let completion = handle
+        .queue_user_input_submission(
+            Bytes::from_static(b"prompt"),
+            Bytes::new(),
+            Duration::from_millis(150),
+        )
+        .expect("text-only submission accepted");
+    let mut prompt = [0; 6];
+    peer.read_exact(&mut prompt).expect("prompt reaches peer");
+    assert_eq!(&prompt, b"prompt");
+    while poll_rx.try_recv().is_ok() {}
+
+    handle
+        .try_write_user_input(Bytes::from_static(b"user"))
+        .expect("input queues during submission delay");
+    poll_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("actor consumes wake for queued input");
+    completion
+        .recv_timeout(Duration::from_secs(1))
+        .expect("text-only submission reports completion")
+        .expect("text-only submission succeeds");
+
+    let mut user = [0; 4];
+    let received = peer.read_exact(&mut user);
+    handle.shutdown();
+    received.expect("queued input must not wait for the one-second idle poll after completion");
+    assert_eq!(&user, b"user");
 }

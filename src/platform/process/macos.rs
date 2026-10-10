@@ -379,9 +379,7 @@ fn procargs2_argv(buf: &[u8]) -> Option<Vec<String>> {
             .position(|&b| b == 0)
             .map(|offset| current + offset)
             .unwrap_or(rest.len());
-        if end == current {
-            return None;
-        }
+        // Empty arguments are legal argv entries (`cmd "" x`); only argv[0] is padding-adjacent.
         argv.push(String::from_utf8_lossy(&rest[current..end]).into_owned());
         current = end + 1;
     }

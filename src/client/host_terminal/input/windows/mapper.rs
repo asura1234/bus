@@ -43,6 +43,12 @@ impl WindowsInputMapper {
                 self.with_pending_win32_flush(items)
             }
             WindowsInputRecord::Focus(focused) => {
+                // The console queues mouse records only while focused, so a release
+                // made elsewhere never arrives; forget held buttons on focus loss so
+                // the next press is a fresh Down, matching the router dropping leases.
+                if !focused {
+                    self.mouse_buttons = WindowsMouseButtons::default();
+                }
                 self.with_pending_win32_flush(vec![PlatformInputItem::Semantic(if focused {
                     crate::protocol::wire::ClientInputEvent::FocusGained
                 } else {

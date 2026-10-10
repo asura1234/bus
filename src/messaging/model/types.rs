@@ -239,6 +239,21 @@ pub(crate) struct Room {
     /// The system sound this room rings with, by name; None is Bus's own ding.
     #[serde(default)]
     pub(crate) sound_name: Option<String>,
+    /// Per MASTER agent, the provider turn its last final ended, so a report
+    /// is compared only with the messages its own turn sent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) report_turns: BTreeMap<AgentId, ReportTurn>,
+}
+
+/// A provider turn that ended with a final callback, and the notice ids it
+/// spans: notices from `first_notice` on were posted during or after it, and
+/// those from `next_notice` on after its last final.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct ReportTurn {
+    pub(crate) session: Option<String>,
+    pub(crate) turn: String,
+    pub(crate) first_notice: u64,
+    pub(crate) next_notice: u64,
 }
 
 impl Room {
@@ -299,7 +314,7 @@ pub(crate) struct RoomAgent {
     /// The reported dialog was answered through Bus, so its closing is expected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) dialog_answered: bool,
-    /// 通过 Bus 选定的选项号，关闭通知要写明是哪一项。
+    /// The option chosen through Bus, so the closing notice can name it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) dialog_answer: Option<u32>,
     pub(crate) actionable_error: Option<String>,
@@ -318,6 +333,11 @@ pub(crate) struct RoomAgent {
     pub(crate) orchestrates: Option<RoomId>,
     #[serde(default)]
     pub(crate) compactions: Compactions,
+    /// The launch and spool sequence of the last compaction hook counted. State
+    /// is saved before the envelope is unlinked, so a crash between the two
+    /// replays it; identical hooks reuse one callback id, so the sequence is the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_compaction_callback: Option<(String, u64)>,
     /// `agent clear` reset the provider context: the next callback that names a
     /// different provider session rebinds this agent to it instead of being rejected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -478,7 +498,8 @@ pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    images > 0 && images == lifted && payload[length..] == remaining
+    let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
+    images > 0 && images == lifted && &payload[length..] == remaining
 }
 
 /// Whether `line` is exactly one path quoted the way `Prompt::rendered_payload`

@@ -543,4 +543,206 @@ mod ring_coalescing {
             .unwrap();
         assert!(new_message_should_ring(&state, &next));
     }
+
+    #[test]
+    fn an_agent_report_to_the_human_rings_even_when_the_human_sends_before_the_snapshot() {
+        let mut state = BusState::default();
+        let master = state.ensure_master_room();
+        let orchestrator = state
+            .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
+            .unwrap();
+        let mut next = state.clone();
+        next.post_to_human(master, orchestrator, "gate passed".into(), Vec::new(), 5)
+            .unwrap();
+        next.submit_message_from(
+            master,
+            Draft {
+                text: "next step".into(),
+                files: Vec::new(),
+                recipient_ids: AgentRecipients::from([orchestrator]),
+            },
+            Author::Human,
+            6,
+        )
+        .unwrap();
+        assert!(
+            new_message_should_ring(&state, &next),
+            "a later human send must not hide the new agent report from sound notifications"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn live_sound_reload_updates_bus_room_playback() {
+    use crate::client::compositor::{ClientShellConfig, ClientShellState};
+    use crate::client::{
+        config_reload::apply_reload,
+        connection::bootstrap::{EndpointTransport, ServerConnection},
+        state::ClientState,
+    };
+    use crate::messaging::model::{Author, Draft, Provider};
+    use crate::utils::config::Config;
+    use std::{io, os::unix::fs::PermissionsExt, sync::Arc, time::Duration};
+
+    const CHILD_ENV: &str = "BUS_SOUND_RELOAD_TEST_CHILD";
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let qualified_name = concat!(
+            module_path!(),
+            "::live_sound_reload_updates_bus_room_playback"
+        );
+        let test_name = qualified_name.split_once("::").unwrap().1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env(CHILD_ENV, "1")
+            .env_remove("NEXTEST")
+            .env_remove("BUS_DISABLE_SOUND")
+            .env_remove("BUS_SESSION_ID")
+            .env_remove("BUS_DEV_EXISTING_SERVER")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated sound reload failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+
+    struct AcceptingTransport;
+    impl EndpointTransport for AcceptingTransport {
+        fn send(&mut self, _: &crate::protocol::wire::ClientMessage) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct ProbeDir(std::path::PathBuf);
+    impl ProbeDir {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for ProbeDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let base = ProbeDir(std::path::PathBuf::from("/tmp").join(format!(
+        "bus-sound-reload-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    )));
+    std::fs::create_dir_all(base.path()).unwrap();
+    let root = base.path().join("data");
+    let bin = base.path().join("bin");
+    let log = base.path().join("played.txt");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    let player = bin.join(if cfg!(target_os = "macos") {
+        "afplay"
+    } else {
+        "paplay"
+    });
+    std::fs::write(
+        &player,
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$BUS_SOUND_RELOAD_TEST_LOG\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&player, std::fs::Permissions::from_mode(0o755)).unwrap();
+    unsafe {
+        std::env::set_var("PATH", &bin);
+        std::env::set_var("BUS_SOUND_RELOAD_TEST_LOG", &log);
+        std::env::set_var("BUS_DATA_DIR", &root);
+        std::env::set_var("HERDR_SOCKET_PATH", root.join("absent-api.sock"));
+        std::env::set_var("HERDR_CLIENT_SOCKET_PATH", root.join("absent-client.sock"));
+    }
+
+    let old_path = base.path().join("old.mp3");
+    let new_path = base.path().join("new.mp3");
+    std::fs::write(&old_path, b"sound fixture").unwrap();
+    std::fs::write(&new_path, b"sound fixture").unwrap();
+    let mut config = Config::default();
+    config.ui.sound.done_path = Some(old_path);
+    let mut shell = ClientShellState::new(ClientShellConfig::from_config(&config));
+    shell.start_bus(&config.ui.sound).unwrap();
+    shell.bus.as_mut().unwrap().handle.take();
+
+    let mut state = ClientState {
+        blit_encoder: crate::protocol::ansi::BlitEncoder::new(),
+        mouse_capture_active: false,
+        endpoint_mouse_capture_requested: false,
+        endpoint_sgr_pixels_requested: false,
+        host_palette_query_pending: Arc::default(),
+        host_palette_query_progress: Arc::default(),
+        shell_mouse_capture_preference: true,
+        pane_keyboard_report_all: false,
+        keyboard_report_all_active: false,
+        reported_size: (100, 30),
+        reported_cell_size: (0, 0),
+        sound_config: config.ui.sound,
+        kitty_graphics_enabled: false,
+        pixel_geometry_enabled: false,
+        pixel_geometry_exact: false,
+        redraw_on_focus_gained: false,
+        repaint_pending: false,
+        draw_host_cursor: false,
+        detached_process_children: Vec::new(),
+        shell: Some(shell),
+    };
+    let config_path = crate::utils::config::config_path();
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config_path,
+        format!("[ui.sound]\ndone_path = {:?}\n", new_path),
+    )
+    .unwrap();
+    apply_reload(&mut state, &mut ServerConnection::new(AcceptingTransport)).unwrap();
+    assert_eq!(state.sound_config.done_path.as_ref(), Some(&new_path));
+
+    let bus = state.shell.as_mut().unwrap().bus.as_mut().unwrap();
+    let mut next = (*bus.snapshot).clone();
+    let room = next.state.create_room("sound-reload").unwrap();
+    let agent = next
+        .state
+        .create_agent(room, "sender", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    next.state.set_room_sound(room, true).unwrap();
+    bus.receive_snapshot(Arc::new(next.clone()));
+    std::thread::sleep(Duration::from_millis(2100));
+    next.state
+        .submit_message_from(
+            room,
+            Draft {
+                text: "finished".into(),
+                recipient_ids: [agent].into(),
+                ..Default::default()
+            },
+            Author::Agent(agent),
+            1,
+        )
+        .unwrap();
+    next.revision += 1;
+    bus.receive_snapshot(Arc::new(next));
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let played = loop {
+        if let Ok(text) = std::fs::read_to_string(&log) {
+            if !text.is_empty() {
+                break text;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "room notification should invoke the audio player"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(
+        played.trim(),
+        new_path.to_str().unwrap(),
+        "room notification should use the reloaded custom sound"
+    );
 }

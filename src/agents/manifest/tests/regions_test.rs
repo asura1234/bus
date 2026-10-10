@@ -69,3 +69,41 @@ contains = ["active"]
 // OSC rule tests — exercise the new osc_title / osc_progress regions against
 // the bundled Claude and Codex manifests.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn every_region_slices_empty_and_multibyte_screens_on_line_boundaries() {
+    let names = [
+        "whole_recent",
+        "after_last_prompt_marker",
+        "before_current_prompt_marker",
+        "whole_recent_without_current_prompt_marker",
+        "current_prompt_block_marker",
+        "after_current_prompt_block_marker",
+        "prompt_box_body",
+        "above_prompt_box",
+        "last_non_empty_above_prompt_box",
+        "after_last_horizontal_rule",
+        "bottom_lines(2)",
+        "bottom_non_empty_lines(2)",
+        "top_non_empty_lines(2)",
+    ];
+    let screen = "• 修复🙂\n─────\n› 输入\n─────\n状态🙂";
+    for name in names {
+        let input = |screen| DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        };
+        assert_eq!(region(input(""), name), "", "{name}");
+        let sliced = region(input(screen), name);
+        assert!(screen.contains(sliced), "{name}: {sliced:?}");
+    }
+    let input = DetectionInput {
+        screen,
+        osc_title: "",
+        osc_progress: "",
+    };
+    assert_eq!(region(input, "prompt_box_body"), "› 输入\n");
+    assert_eq!(region(input, "bottom_lines(2)"), "─────\n状态🙂");
+    assert_eq!(region(input, "after_last_horizontal_rule"), "状态🙂");
+}

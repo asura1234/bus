@@ -1,5 +1,8 @@
 //! Display filtering and cell-aware wrapping/offsets.
 use crate::messaging::model::{Provider, RuntimeStatus};
+use ratatui::buffer::CellWidth;
+use ratatui::style::Style;
+use ratatui::text::Span;
 use std::ops::Range;
 use unicode_width::UnicodeWidthChar;
 
@@ -26,7 +29,29 @@ pub(in crate::client::rooms) fn cell_width(c: char) -> usize {
     }
 }
 pub(super) fn cells(text: &str) -> usize {
-    text.chars().map(cell_width).sum()
+    graphemes(text).map(|(_, width)| width).sum()
+}
+/// Source byte ranges and cell widths of the grapheme clusters the buffer
+/// draws for `text`. `display` maps characters one to one, so walking its
+/// clusters by character count recovers the source ranges.
+fn graphemes(text: &str) -> impl Iterator<Item = (Range<usize>, usize)> + '_ {
+    let shown = Span::raw(display(text));
+    let clusters: Vec<_> = shown
+        .styled_graphemes(Style::default())
+        .map(|grapheme| {
+            (
+                grapheme.symbol.chars().count(),
+                usize::from(grapheme.symbol.cell_width()),
+            )
+        })
+        .collect();
+    let mut chars = text.char_indices().map(|(index, _)| index).peekable();
+    clusters.into_iter().map(move |(count, width)| {
+        let start = chars.peek().copied().unwrap_or(text.len());
+        let _ = chars.nth(count.saturating_sub(1));
+        let end = chars.peek().copied().unwrap_or(text.len());
+        (start..end, width)
+    })
 }
 /// Word-wraps `text` into byte ranges, one per terminal row. Every byte except
 /// the newline separators belongs to exactly one row, so cursors and
@@ -44,12 +69,14 @@ pub(in crate::client::rooms) fn wrap_ranges(text: &str, width: u16) -> Vec<Range
         let mut start = base;
         let mut used = 0;
         let mut breakpoint = None;
-        for (offset, c) in source.char_indices() {
-            let index = base + offset;
-            let size = cell_width(c);
-            if c == ' ' || c == '\t' {
+        // Whole grapheme clusters, measured as the buffer draws them, so a
+        // joined emoji never splits across rows.
+        for (range, size) in graphemes(source) {
+            let index = base + range.start;
+            let end = base + range.end;
+            if matches!(&source[range], " " | "\t") {
                 used += size;
-                breakpoint = Some(index + c.len_utf8());
+                breakpoint = Some(end);
                 continue;
             }
             if size > 1 {
@@ -77,7 +104,7 @@ pub(in crate::client::rooms) fn wrap_ranges(text: &str, width: u16) -> Vec<Range
             }
             used += size;
             if size > 1 {
-                breakpoint = Some(index + c.len_utf8());
+                breakpoint = Some(end);
             }
         }
         base += source.len();
@@ -108,19 +135,15 @@ pub(in crate::client::rooms) fn wrapped_position(
     });
     (row, column)
 }
-/// Byte offset of the cell at `column` in `text`: before the character there,
+/// Byte offset of the cell at `column` in `text`: before the grapheme there,
 /// or after it when `inclusive` (a forward drag includes the cell under the
 /// pointer). Columns past the end map to the end of the text.
 pub(in crate::client::rooms) fn cell_offset(text: &str, column: usize, inclusive: bool) -> usize {
     let mut used = 0;
-    for (index, c) in text.char_indices() {
-        used += cell_width(c);
+    for (range, width) in graphemes(text) {
+        used += width;
         if used > column {
-            return if inclusive {
-                index + c.len_utf8()
-            } else {
-                index
-            };
+            return if inclusive { range.end } else { range.start };
         }
     }
     text.len()

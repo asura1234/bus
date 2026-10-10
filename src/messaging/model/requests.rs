@@ -311,8 +311,9 @@ impl BusState {
         ) {
             return None;
         }
+        // A visible dialog blocks the agent even while Codex reports Idle.
         if matches!(
-            agent.status,
+            agent.shown_status(),
             RuntimeStatus::Working | RuntimeStatus::Blocked
         ) {
             return None;
@@ -391,11 +392,14 @@ impl BusState {
         ) {
             return false;
         }
+        // A visible dialog (Codex reports Idle while it waits on an approval)
+        // means the turn is waiting on an answer, not finished.
         self.agents.get(&request.agent_id).is_some_and(|agent| {
-            request.turn_ended_at_ms.is_some()
-                || (agent.busy_revision > request.submission_status_revision
-                    && agent.status == RuntimeStatus::Idle
-                    && agent.status_revision > agent.busy_revision)
+            !agent.dialog
+                && (request.turn_ended_at_ms.is_some()
+                    || (agent.busy_revision > request.submission_status_revision
+                        && agent.status == RuntimeStatus::Idle
+                        && agent.status_revision > agent.busy_revision))
         })
     }
 
@@ -502,8 +506,13 @@ impl BusState {
         request_state.expected_launch_id = launch;
         request_state.group = Some(lead);
         request_state.steered = true;
+        // Until the native write is confirmed, the member keeps the lead's
+        // previous boundary so a definite rejection can restore it.
         if let Some(lead) = self.requests.get_mut(&lead) {
-            lead.submission_status_revision = status_revision;
+            let previous = std::mem::replace(&mut lead.submission_status_revision, status_revision);
+            if let Some(member) = self.requests.get_mut(&request) {
+                member.submission_status_revision = previous;
+            }
         }
         Ok(())
     }
@@ -529,12 +538,19 @@ impl BusState {
                 request_state.uncertain_outcome = true;
             }
             SubmissionOutcome::DefinitelyRejected { .. } => {
+                // Nothing was typed, so the lead's turn keeps the work it
+                // was already seen doing.
+                let lead = request_state.group;
+                let previous = request_state.submission_status_revision;
                 request_state.phase = RequestPhase::Queued;
                 request_state.expected_launch_id = None;
                 request_state.group = None;
                 request_state.steered = false;
                 let agent_id = request_state.agent_id;
                 self.queues.entry(agent_id).or_default().insert(0, request);
+                if let Some(lead) = lead.and_then(|lead| self.requests.get_mut(&lead)) {
+                    lead.submission_status_revision = previous;
+                }
             }
         }
         Ok(())

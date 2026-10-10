@@ -336,13 +336,18 @@ fn run_input_forwarder(
                         // A started text write is committed. Finish Enter even if the caller
                         // stops waiting so a timeout cannot leave a partial prompt.
                         std::thread::sleep(delay);
-                        let accepting = accepting
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        if !*accepting {
-                            return Err(pty_actor_closed());
-                        }
-                        write_submission_part(&write_tx, enter, None)
+                        // Enqueue under the gate so shutdown stays ordered against Enter, but
+                        // wait outside it: shutdown must not block behind a backpressured write.
+                        let completion = {
+                            let accepting = accepting
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if !*accepting {
+                                return Err(pty_actor_closed());
+                            }
+                            send_submission_part(&write_tx, enter, None)?
+                        };
+                        wait_submission_part(completion)
                     })
                 };
                 let failed = result
@@ -362,6 +367,14 @@ fn write_submission_part(
     bytes: Bytes,
     deadline: Option<Instant>,
 ) -> std::io::Result<()> {
+    wait_submission_part(send_submission_part(write_tx, bytes, deadline)?)
+}
+
+fn send_submission_part(
+    write_tx: &std_mpsc::Sender<PtyIoWriteCommand>,
+    bytes: Bytes,
+    deadline: Option<Instant>,
+) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
     let (reply, completion) = std_mpsc::channel();
     write_tx
         .send(PtyIoWriteCommand::SubmissionPart {
@@ -370,6 +383,12 @@ fn write_submission_part(
             reply,
         })
         .map_err(|_| pty_actor_closed())?;
+    Ok(completion)
+}
+
+fn wait_submission_part(
+    completion: std_mpsc::Receiver<std::io::Result<()>>,
+) -> std::io::Result<()> {
     completion
         .recv()
         .unwrap_or_else(|_| Err(pty_actor_closed()))

@@ -92,3 +92,30 @@ fn restrict_socket_permissions_keeps_owner_read_write_only() {
     drop(_listener);
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn prepare_socket_path_preserves_an_existing_regular_file() {
+    let dir = PathBuf::from("/tmp").join(format!(
+        "socket-file-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&dir).unwrap();
+    let socket_path = dir.join("endpoint.sock");
+    let contents = b"existing user data";
+    fs::write(&socket_path, contents).unwrap();
+
+    let result = prepare_socket_path(&socket_path);
+    let remaining_contents = fs::read(&socket_path).ok();
+    fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(
+        remaining_contents.as_deref(),
+        Some(contents.as_slice()),
+        "preparing a socket path must preserve an existing regular file"
+    );
+    assert!(result.is_err(), "a regular file is not a stale socket");
+}

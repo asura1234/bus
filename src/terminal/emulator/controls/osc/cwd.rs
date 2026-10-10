@@ -9,14 +9,17 @@ pub(in crate::terminal::emulator) fn parse_reported_cwd(value: &[u8]) -> Option<
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
-/// Collects complete OSC bodies from a raw byte stream. Consumers receive only
 pub(super) fn parse_file_uri_cwd(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let path = if rest.starts_with('/') {
         rest
     } else if let Some(slash) = rest.find('/') {
         let host = &rest[..slash];
-        if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) {
+        if !(host.is_empty()
+            || host.eq_ignore_ascii_case("localhost")
+            || crate::platform::hostname()
+                .is_some_and(|local_host| host.eq_ignore_ascii_case(&local_host)))
+        {
             return None;
         }
         &rest[slash..]

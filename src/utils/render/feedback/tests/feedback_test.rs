@@ -21,3 +21,23 @@ fn copy_feedback_rect_uses_configured_position() {
         area.x + area.width.saturating_sub(bottom.width) / 2
     );
 }
+
+#[test]
+fn top_copy_feedback_with_config_banner_stays_inside_short_area() {
+    let area = Rect::new(0, 0, 40, 3);
+    let feedback = CopyFeedback {
+        message: "copied to clipboard".to_owned(),
+    };
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    crate::utils::render::feedback::render_copy_feedback_buffer(
+        &mut buffer,
+        area,
+        &feedback,
+        1,
+        ToastClipboardPosition::TopCenter,
+        &crate::utils::theme::Palette::catppuccin(),
+    );
+
+    let popup = copy_feedback_rect(area, &feedback, 1, ToastClipboardPosition::TopCenter);
+    assert!(popup.bottom() <= area.bottom());
+}

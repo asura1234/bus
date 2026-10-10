@@ -15,9 +15,10 @@ pub(super) fn new_message_should_ring(previous: &BusState, next: &BusState) -> b
 }
 
 /// The first sound-enabled room that gained a message the Human did not
-/// write: an agent's final reply, or a prompt authored by an agent (`send
-/// --as`). Every new prompt counts, not only each room's latest, because the
-/// Human may send right after an agent within one snapshot interval.
+/// write: an agent's final reply, a prompt authored by an agent (`send
+/// --as`), or an agent's report to the Human. Every new prompt counts, not
+/// only each room's latest, because the Human may send right after an agent
+/// within one snapshot interval.
 pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomId> {
     let rings = |room: RoomId| next.room(room).is_some_and(Room::sound_enabled);
     let new_reply = next
@@ -44,6 +45,11 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
                 .rooms()
                 .filter_map(|room| room.latest_prompt.as_ref().map(|prompt| prompt.id)),
         )
+        .chain(
+            previous
+                .rooms()
+                .flat_map(|room| room.notices.iter().map(|prompt| prompt.id)),
+        )
         .collect();
     // Dialog notices to orchestrators are delivery-only and never ring.
     next.requests()
@@ -52,6 +58,10 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
         .chain(
             next.rooms()
                 .filter_map(|room| room.latest_prompt.as_ref().map(|prompt| (room.id, prompt))),
+        )
+        .chain(
+            next.rooms()
+                .flat_map(|room| room.notices.iter().map(move |prompt| (room.id, prompt))),
         )
         .find(|(room, prompt)| {
             prompt.author != Author::Human && !known.contains(&prompt.id) && rings(*room)

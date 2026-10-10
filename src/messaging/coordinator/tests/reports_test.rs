@@ -279,3 +279,178 @@ fn an_unprompted_cursor_orchestrator_turn_is_reported_in_master() {
     bus.worker.consume_callbacks(orchestrator, &spool).unwrap();
     assert_eq!(bus.reports(), ["Gate passed."]);
 }
+
+#[test]
+fn separate_orchestrator_turns_with_identical_text_each_publish_a_report() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let orchestrator = bus.orchestrator;
+    bus.claude_turn(
+        orchestrator,
+        "first-build",
+        "First background build finished",
+        "All tests passed.",
+    );
+    assert_eq!(bus.reports(), ["All tests passed."]);
+    let mut state = bus.worker.state.clone();
+    state.mark_room_seen(bus.master).unwrap();
+    bus.worker.save(state).unwrap();
+
+    bus.claude_turn(
+        orchestrator,
+        "second-build",
+        "Second background build finished",
+        "All tests passed.",
+    );
+    let reports = bus.reports();
+    assert_eq!(
+        reports,
+        ["All tests passed.", "All tests passed."],
+        "distinct provider turns must each publish their report even when the text repeats"
+    );
+    assert_eq!(bus.worker.state.room(bus.master).unwrap().unread_count, 1);
+}
+
+#[test]
+fn a_later_turn_that_already_sent_its_report_is_not_posted_twice() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (master, orchestrator) = (bus.master, bus.orchestrator);
+    bus.claude_turn(
+        orchestrator,
+        "first",
+        "<task-notification>",
+        "Merged PR 12.",
+    );
+    let mut state = bus.worker.state.clone();
+    // What `bus send --to human` does during the next turn.
+    state
+        .post_to_human(master, orchestrator, "Merged PR 13.".into(), Vec::new(), 3)
+        .unwrap();
+    bus.worker.save(state).unwrap();
+    bus.claude_turn(
+        orchestrator,
+        "second",
+        "<task-notification>",
+        "Merged PR 13.",
+    );
+    assert_eq!(bus.reports(), ["Merged PR 12.", "Merged PR 13."]);
+}
+
+#[test]
+fn a_message_an_earlier_turn_sent_does_not_absorb_a_later_turns_report() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (master, orchestrator) = (bus.master, bus.orchestrator);
+    let mut state = bus.worker.state.clone();
+    state
+        .post_to_human(master, orchestrator, "Gate passed.".into(), Vec::new(), 3)
+        .unwrap();
+    bus.worker.save(state).unwrap();
+    bus.claude_turn(orchestrator, "first", "<task-notification>", "Gate passed.");
+    assert_eq!(bus.reports(), ["Gate passed."]);
+    bus.claude_turn(
+        orchestrator,
+        "second",
+        "<task-notification>",
+        "Gate passed.",
+    );
+    assert_eq!(bus.reports(), ["Gate passed.", "Gate passed."]);
+}
+
+#[test]
+fn state_saved_without_report_turns_loads_and_dedupes_as_before() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let (master, orchestrator) = (bus.master, bus.orchestrator);
+    bus.claude_turn(
+        orchestrator,
+        "first",
+        "<task-notification>",
+        "All tests passed.",
+    );
+    let path = bus.dir.join("state.json");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("\"report_turns\""));
+
+    // Rewrite the saved state into the shape older builds wrote.
+    let mut document: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("report_turns");
+                map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    strip(&mut document);
+    std::fs::write(&path, document.to_string()).unwrap();
+    // Release the data directory's lock before reopening it.
+    let elsewhere = bus.dir.with_extension("elsewhere");
+    drop(std::mem::replace(
+        &mut bus.worker,
+        Worker::open(elsewhere.clone(), Box::new(Accepting)).unwrap(),
+    ));
+    let reopened = Worker::open(bus.dir.clone(), Box::new(Accepting)).unwrap();
+    drop(std::mem::replace(&mut bus.worker, reopened));
+    std::fs::remove_dir_all(elsewhere).unwrap();
+    assert!(bus
+        .worker
+        .state
+        .room(master)
+        .unwrap()
+        .report_turns
+        .is_empty());
+
+    // Without a recorded turn the report is compared with the last message,
+    // as before; the turn is recorded from here on.
+    bus.claude_turn(
+        orchestrator,
+        "second",
+        "<task-notification>",
+        "All tests passed.",
+    );
+    assert_eq!(bus.reports(), ["All tests passed."]);
+    bus.claude_turn(
+        orchestrator,
+        "third",
+        "<task-notification>",
+        "All tests passed.",
+    );
+    assert_eq!(bus.reports(), ["All tests passed.", "All tests passed."]);
+}
+
+#[test]
+fn a_room_without_report_turns_saves_without_the_field() {
+    let bus = fixture(Provider::ClaudeCode);
+    let saved = std::fs::read_to_string(bus.dir.join("state.json")).unwrap();
+    assert!(!saved.contains("report_turns"), "{saved}");
+}
+
+#[test]
+fn persisted_report_turn_boundary_separates_the_next_report_after_restart() {
+    let mut bus = fixture(Provider::ClaudeCode);
+    let orchestrator = bus.orchestrator;
+    bus.claude_turn(
+        orchestrator,
+        "before-restart",
+        "First background build finished",
+        "All tests passed.",
+    );
+    assert_eq!(bus.reports(), ["All tests passed."]);
+
+    let elsewhere = bus.dir.with_extension("restart-placeholder");
+    drop(std::mem::replace(
+        &mut bus.worker,
+        Worker::open(elsewhere.clone(), Box::new(Accepting)).unwrap(),
+    ));
+    let reopened = Worker::open(bus.dir.clone(), Box::new(Accepting)).unwrap();
+    drop(std::mem::replace(&mut bus.worker, reopened));
+    std::fs::remove_dir_all(elsewhere).unwrap();
+
+    bus.claude_turn(
+        orchestrator,
+        "after-restart",
+        "Second background build finished",
+        "All tests passed.",
+    );
+    assert_eq!(bus.reports(), ["All tests passed.", "All tests passed."]);
+}

@@ -148,13 +148,16 @@ fn unwrapped_text(rows: &[ScreenTextRow]) -> String {
     let mut lines = Vec::new();
     let mut current = String::new();
     for row in rows {
-        current.push_str(row_text(row).trim_end());
+        // Trailing spaces of a soft-wrapped row are real text; only logical line ends are padding.
+        current.push_str(&row_text(row));
         if !row.soft_wrapped {
-            lines.push(std::mem::take(&mut current));
+            lines.push(current.trim_end().to_string());
+            current.clear();
         }
     }
+    let current = current.trim_end();
     if !current.is_empty() {
-        lines.push(current);
+        lines.push(current.to_string());
     }
     while lines.last().is_some_and(|line| line.trim().is_empty()) {
         lines.pop();
@@ -174,7 +177,8 @@ fn lines_to_text(lines: Vec<String>) -> String {
 fn row_text(row: &ScreenTextRow) -> String {
     let mut text = String::new();
     for cell in &row.cells {
-        if cell.wide == CellWide::SpacerTail {
+        // SpacerHead pads the last column when a wide char wraps to the next row.
+        if matches!(cell.wide, CellWide::SpacerTail | CellWide::SpacerHead) {
             continue;
         }
         if cell.graphemes.is_empty()
@@ -297,7 +301,7 @@ mod tests {
         assert_eq!(
             snapshot_text(&rows, 2, true, true),
             TerminalReadSnapshot {
-                text: "helloworld\n".into(),
+                text: "hello world\n".into(),
                 truncated: true,
             }
         );

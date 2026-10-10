@@ -360,3 +360,54 @@ fn only_the_selected_room_offers_a_delete_button() {
         assert_eq!(deletable, [selected]);
     }
 }
+
+#[test]
+fn delete_warning_ctrl_c_preserves_the_underlying_draft() {
+    let (mut ui, room, _) = fixture();
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("keep this draft");
+    ui.start_delete(deletion::DeleteTarget::Room(room));
+
+    key(&mut ui, KeyCode::Char('c'), KeyModifiers::CONTROL);
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+
+    assert_eq!(ui.locals[&room].text.text, "keep this draft");
+    assert!(ui.pending.is_empty());
+    assert!(ui.deletion.is_none());
+}
+
+#[test]
+fn recipient_menu_enter_does_not_select_all_after_the_highlighted_agent_disappears() {
+    let (mut ui, room, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot
+        .state
+        .create_agent(room, "second", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    let removed = snapshot
+        .state
+        .create_agent(room, "third", Provider::Codex, "/project".into(), None)
+        .unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    key(&mut ui, KeyCode::Char('p'), KeyModifiers::CONTROL);
+    for _ in 0..3 {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+    }
+    assert_eq!(ui.recipient_index, 3);
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.delete_agent(removed).unwrap();
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.compute_view(100, 30);
+    assert!(ui.recipient_menu);
+    assert!(ui.locals[&room].recipients.is_empty());
+
+    key(&mut ui, KeyCode::Enter, KeyModifiers::NONE);
+
+    assert!(
+        ui.locals[&room].recipients.len() <= 1,
+        "only the explicitly highlighted All row may select every surviving agent"
+    );
+}

@@ -13,6 +13,9 @@ pub(super) struct PendingReport {
     master: RoomId,
     agent: AgentId,
     text: String,
+    /// The provider session and turn the final ends.
+    session: Option<String>,
+    turn: Option<String>,
     /// The final answers a message posted in MASTER, so it already shows
     /// there as that message's reply.
     shown_in_master: bool,
@@ -42,6 +45,8 @@ pub(super) fn pending_report(
         master,
         agent: agent.id,
         text: text.trim().to_owned(),
+        session: callback.provider_session_id.clone(),
+        turn: callback.provider_turn_id.clone(),
         shown_in_master,
     })
 }
@@ -64,27 +69,33 @@ pub(super) fn post_report(
         CallbackDisposition::Rejected(
             CallbackRejection::UnrelatedTurn | CallbackRejection::NoActiveRequest,
         ) => true,
-        _ => false,
+        _ => return,
     };
-    if !reports {
-        return;
-    }
-    // The orchestrator already posted this text itself with `send --to human`.
+    // The orchestrator already posted this text itself with `send --to human`
+    // during this turn; an earlier turn's same words are a separate report.
+    let first = state.report_turn_start(
+        report.master,
+        report.agent,
+        report.turn.as_deref().map(|turn| (&report.session, turn)),
+    );
     let already_posted = state.room(report.master).is_some_and(|room| {
         room.notices
             .iter()
             .rev()
+            .take_while(|notice| notice.id.0 >= first)
             .find(|notice| notice.author == Author::Agent(report.agent))
             .is_some_and(|notice| notice.text.trim() == report.text)
     });
-    if already_posted {
-        return;
+    if reports && !already_posted {
+        if let Err(error) =
+            state.post_to_human(report.master, report.agent, report.text, Vec::new(), now_ms)
+        {
+            tracing::warn!(event = "bus.report.failed", agent_id = report.agent.0, %error,
+                "Orchestrator report not shown in MASTER");
+        }
     }
-    if let Err(error) =
-        state.post_to_human(report.master, report.agent, report.text, Vec::new(), now_ms)
-    {
-        tracing::warn!(event = "bus.report.failed", agent_id = report.agent.0, %error,
-            "Orchestrator report not shown in MASTER");
+    if let Some(turn) = report.turn {
+        state.end_report_turn(report.master, report.agent, report.session, turn);
     }
 }
 

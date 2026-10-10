@@ -282,3 +282,41 @@ fn room_notes_drafts_and_names_are_room_local_and_ids_survive_renames() {
     );
     assert!(state.agent(agent).expect("agent").details_disclosed);
 }
+
+#[test]
+fn deleting_the_visible_room_drops_its_orchestrators_master_requests_and_shows_master() {
+    let mut state = BusState::new();
+    let master = state.ensure_master_room();
+    let pr = state.create_room("pr-123").unwrap();
+    let orchestrator = master_agent(&mut state, "claude-orch");
+    state.bind_orchestrator(orchestrator, pr).unwrap();
+    let queued = submit_text(&mut state, master, orchestrator, "status?");
+    state.select_room(pr).unwrap();
+
+    state.prepare_delete_room(pr).unwrap();
+    state.delete_room(pr).unwrap();
+
+    assert_eq!(state.visible_room(), Some(master));
+    assert!(state.request(queued).is_none());
+    assert!(!state.queues.contains_key(&orchestrator));
+    assert!(state.orchestrator_of(pr).is_none());
+    assert!(state
+        .requests()
+        .all(|request| request.agent_id != orchestrator));
+}
+
+#[test]
+fn a_saved_work_room_named_master_is_renamed_past_existing_old_names() {
+    let mut state = BusState::new();
+    let old = state.create_room("Master (old)").unwrap();
+    let clashing = state.create_room("placeholder").unwrap();
+    // Sessions saved before MASTER existed could name a work room anything.
+    state.rooms.get_mut(&clashing).unwrap().name = "master".into();
+
+    let master = state.ensure_master_room();
+
+    assert_eq!(state.room(old).unwrap().name, "Master (old)");
+    assert_eq!(state.room(clashing).unwrap().name, "Master (old 2)");
+    assert_eq!(state.room(master).unwrap().name, MASTER_ROOM_NAME);
+    assert_eq!(state.room(clashing).unwrap().kind, RoomKind::Work);
+}

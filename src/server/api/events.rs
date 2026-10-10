@@ -5,7 +5,10 @@ use crate::server::app::{App, Mode, OverlayPaneState};
 use crate::server::terminals::respawn::RuntimeExitAction;
 use crate::terminal::events::TerminalEvent;
 impl App {
-    pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: TerminalEvent) -> bool {
+    pub(in crate::server) fn handle_internal_event_with_render_impact(
+        &mut self,
+        ev: TerminalEvent,
+    ) -> bool {
         match ev {
             ev @ TerminalEvent::TerminalBell { .. } => {
                 self.handle_internal_event(ev);
@@ -18,11 +21,11 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_internal_event(&mut self, ev: TerminalEvent) {
+    pub(in crate::server) fn handle_internal_event(&mut self, ev: TerminalEvent) {
         let _ = self.handle_internal_event_with_pane_updates(ev);
     }
 
-    pub(crate) fn handle_internal_event_with_pane_updates(
+    pub(in crate::server) fn handle_internal_event_with_pane_updates(
         &mut self,
         ev: TerminalEvent,
     ) -> Vec<crate::server::terminals::events::PaneStateUpdate> {
@@ -193,7 +196,7 @@ impl App {
         }
     }
 
-    pub(crate) fn emit_pane_state_update(
+    pub(in crate::server) fn emit_pane_state_update(
         &mut self,
         update: &crate::server::terminals::events::PaneStateUpdate,
     ) {
@@ -251,7 +254,11 @@ impl App {
         self.event_hub.push(event);
     }
 
-    pub(crate) fn emit_pane_updated(&mut self, ws_idx: usize, pane_id: crate::utils::ids::PaneId) {
+    pub(in crate::server) fn emit_pane_updated(
+        &mut self,
+        ws_idx: usize,
+        pane_id: crate::utils::ids::PaneId,
+    ) {
         if let Some(pane) = self.pane_info(ws_idx, pane_id) {
             self.emit_event(crate::protocol::api::schema::EventEnvelope {
                 event: crate::protocol::api::schema::EventKind::PaneUpdated,
@@ -260,11 +267,11 @@ impl App {
         }
     }
 
-    pub(crate) fn sync_focus_events(&mut self) {
+    pub(in crate::server) fn sync_focus_events(&mut self) {
         self.sync_focus_events_with_outer_event(None);
     }
 
-    pub(crate) fn accept_current_focus_without_events(&mut self) {
+    pub(in crate::server) fn accept_current_focus_without_events(&mut self) {
         self.last_focus = self.state.active.and_then(|idx| {
             self.state
                 .workspaces
@@ -273,7 +280,7 @@ impl App {
         });
     }
 
-    pub(crate) fn accept_current_focus_with_api_events(&mut self) {
+    pub(in crate::server) fn accept_current_focus_with_api_events(&mut self) {
         let current_focus = self.state.active.and_then(|idx| {
             self.state
                 .workspaces
@@ -351,7 +358,7 @@ impl App {
         self.last_focus = current_focus;
     }
 
-    pub(crate) fn send_pane_focus_event(
+    pub(in crate::server) fn send_pane_focus_event(
         &self,
         ws_idx: usize,
         pane_id: crate::utils::ids::PaneId,
@@ -436,7 +443,7 @@ impl App {
         })
     }
 
-    pub(crate) fn emit_workspace_open_events(&mut self, ws_idx: usize) {
+    pub(in crate::server::api) fn emit_workspace_open_events(&mut self, ws_idx: usize) {
         let workspace_info = self.workspace_info(ws_idx);
         let Some(tab) = self.tab_info(ws_idx, 0) else {
             return;
@@ -454,7 +461,11 @@ impl App {
         self.emit_layout_updated_event(ws_idx, 0);
     }
 
-    pub(crate) fn emit_tab_created_events(&mut self, ws_idx: usize, tab_idx: usize) {
+    pub(in crate::server::api) fn emit_tab_created_events(
+        &mut self,
+        ws_idx: usize,
+        tab_idx: usize,
+    ) {
         let Some(tab) = self.tab_info(ws_idx, tab_idx) else {
             return;
         };

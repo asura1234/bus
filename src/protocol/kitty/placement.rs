@@ -358,8 +358,14 @@ fn clipped_source(
         )
         .max(1);
 
-    let crop_left_px = left_clip_cells.saturating_mul(placement.cell_size.width_px);
-    let crop_top_px = top_clip_cells.saturating_mul(placement.cell_size.height_px);
+    // The image starts at its pixel offset inside the first cell, so the
+    // clipped cells hide that much less of it.
+    let crop_left_px = left_clip_cells
+        .saturating_mul(placement.cell_size.width_px)
+        .saturating_sub(placement.placement.x_offset);
+    let crop_top_px = top_clip_cells
+        .saturating_mul(placement.cell_size.height_px)
+        .saturating_sub(placement.placement.y_offset);
     let visible_width_px = visible_cols.saturating_mul(placement.cell_size.width_px);
     let visible_height_px = visible_rows.saturating_mul(placement.cell_size.height_px);
 

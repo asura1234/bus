@@ -286,3 +286,54 @@ fn kitty_graphics_unicode_placeholder_placement_is_queryable() {
     assert_eq!(placements[0].render.grid_cols, 2);
     assert_eq!(placements[0].render.grid_rows, 1);
 }
+
+#[test]
+fn clipped_scrolled_placement_crops_after_subcell_offset() {
+    use crate::protocol::kitty::apc::encode_kitty_data;
+    use crate::protocol::kitty::placement::{
+        clipped_placement, HostCellSize, HostPlacement, HostSourceKey,
+    };
+    use crate::utils::ids::PaneId;
+    use ratatui::layout::Rect;
+
+    let mut terminal = Terminal::new(10, 5, 1_000_000).unwrap();
+    terminal.enable_kitty_graphics().unwrap();
+    terminal.resize(10, 5, 10, 10).unwrap();
+    let mut upload = Vec::new();
+    encode_kitty_data(
+        &mut upload,
+        "a=T,t=d,f=32,s=30,v=30,i=7,p=3,c=3,r=3,Y=5,C=1,q=2",
+        &vec![255; 30 * 30 * 4],
+    );
+    terminal.write(&upload);
+    terminal.write(b"\x1b[5;1H\n");
+    let mut placements = terminal
+        .kitty_image_placements_with_data_filter(|_| true)
+        .unwrap();
+    assert_eq!(placements.len(), 1);
+    let image = placements.remove(0);
+    assert_eq!(image.render.viewport_row, -1);
+    assert_eq!(image.render.pixel_height, 30);
+    assert_eq!(image.y_offset, 5);
+
+    let placement = HostPlacement {
+        pane_id: PaneId::from_raw(1),
+        host_image_id: None,
+        area: Rect::new(0, 0, 10, 5),
+        cell_size: HostCellSize {
+            width_px: 10,
+            height_px: 10,
+        },
+        source_key: HostSourceKey::Terminal {
+            pane_id: PaneId::from_raw(1),
+            image_id: image.image_id,
+        },
+        placement: image,
+        scrollback_offset: 0,
+    };
+    let (clipped, _) = clipped_placement(&placement).expect("partially visible placement");
+
+    // The image starts five pixels into the scrolled-away row, so only five
+    // image pixels, rather than a complete ten-pixel cell, are above the view.
+    assert_eq!(clipped.source_y, 5);
+}

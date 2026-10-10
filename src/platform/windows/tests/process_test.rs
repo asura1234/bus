@@ -155,3 +155,120 @@ fn pane_runtime_marker_is_added_only_to_git_bash_environment() {
         .is_none());
     fs::remove_dir_all(root).expect("remove Git Bash fixture");
 }
+
+#[test]
+fn windows_signal_processes_terminates_running_process_on_kill() {
+    assert_windows_signal_terminates_process(crate::platform::Signal::Kill);
+}
+
+#[test]
+fn windows_signal_processes_terminates_running_process_on_terminate() {
+    assert_windows_signal_terminates_process(crate::platform::Signal::Terminate);
+}
+
+fn assert_windows_signal_terminates_process(signal: crate::platform::Signal) {
+    let shell =
+        std::env::var_os("ComSpec").unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into());
+    let mut child = Command::new(shell)
+        .args(["/D", "/Q", "/C", "ping -n 30 127.0.0.1 > NUL"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn cmd");
+    let pid = child.id();
+    assert!(super::super::process_exists(pid));
+
+    super::super::signal_processes(&[pid], crate::platform::Signal::Hangup);
+    assert!(super::super::process_exists(pid), "Hangup remains a no-op");
+    super::super::signal_processes(&[pid], signal);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while super::super::process_exists(pid) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    let still_running = super::super::process_exists(pid);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        !still_running,
+        "{signal:?} must terminate the process it was given"
+    );
+}
+
+#[test]
+fn windows_session_processes_excludes_orphan_created_before_reused_shell_pid() {
+    let entries = vec![
+        // The orphan was spawned by an earlier process that also had pid 10 and has exited;
+        // the toolhelp snapshot still reports that stale parent id.
+        test_entry_with_creation_time(20, 10, "codex.exe", &["codex.exe"], Some(100)),
+        test_entry_with_creation_time(10, 1, "powershell.exe", &["powershell.exe"], Some(200)),
+        test_entry_with_creation_time(30, 10, "node.exe", &["node.exe"], Some(300)),
+    ];
+
+    let snapshot = super::super::ProcessSnapshot::new(entries);
+    let mut pids = super::super::session_processes_from_snapshot(10, &snapshot);
+    pids.sort_unstable();
+
+    assert_eq!(pids, vec![10, 30]);
+}
+
+#[test]
+fn windows_session_processes_excludes_stale_nested_parent_links_and_their_subtrees() {
+    let snapshot = super::super::ProcessSnapshot::new(vec![
+        test_entry_with_creation_time(10, 1, "powershell.exe", &[], Some(100)),
+        test_entry_with_creation_time(20, 10, "cmd.exe", &[], Some(200)),
+        test_entry_with_creation_time(30, 20, "orphan.exe", &[], Some(150)),
+        test_entry_with_creation_time(40, 30, "orphan-child.exe", &[], Some(400)),
+        test_entry_with_creation_time(50, 20, "node.exe", &[], Some(300)),
+        test_entry_with_creation_time(60, 10, "cmd.exe", &[], Some(300)),
+    ]);
+
+    assert_eq!(
+        super::super::session_processes_from_snapshot(10, &snapshot),
+        vec![10, 20, 60, 50]
+    );
+}
+
+#[test]
+fn windows_session_processes_preserves_equal_and_unknown_creation_times() {
+    for (parent_time, child_time) in [
+        (Some(200), Some(200)),
+        (Some(200), None),
+        (None, Some(100)),
+        (None, None),
+    ] {
+        let snapshot = super::super::ProcessSnapshot::new(vec![
+            test_entry_with_creation_time(10, 1, "powershell.exe", &[], parent_time),
+            test_entry_with_creation_time(20, 10, "cmd.exe", &[], child_time),
+        ]);
+
+        assert_eq!(
+            super::super::session_processes_from_snapshot(10, &snapshot),
+            vec![10, 20],
+            "parent time {parent_time:?}, child time {child_time:?}"
+        );
+    }
+}
+
+#[test]
+fn windows_available_pane_shell_ignores_stale_orphan_subtree() {
+    let snapshot = super::super::ProcessSnapshot::new(vec![
+        test_entry_with_creation_time(10, 1, "powershell.exe", &[], Some(200)),
+        test_entry_with_creation_time(20, 10, "codex.exe", &[], Some(100)),
+        test_entry_with_creation_time(30, 20, "node.exe", &[], Some(300)),
+    ]);
+
+    assert_eq!(
+        super::super::session_processes_from_snapshot(10, &snapshot),
+        vec![10]
+    );
+    assert_eq!(
+        super::super::available_pane_shell_from_snapshot(10, &snapshot).as_deref(),
+        Some("powershell.exe")
+    );
+    assert!(super::super::session_processes_from_snapshot(99, &snapshot).is_empty());
+    // The raw walk still accepts an unavailable root, whose age cannot be checked.
+    assert_eq!(super::super::descendant_entries(1, &snapshot).len(), 1);
+}

@@ -112,3 +112,25 @@ fn expired_coordinator_toast_stays_in_diagnostics_without_reappearing() {
     ui.receive_snapshot(Arc::new(repeated));
     assert_eq!(ui.toast.as_ref().unwrap().started_at, started_at);
 }
+
+#[test]
+fn a_wide_character_toast_scrolls_far_enough_to_render_its_tail() {
+    let (mut ui, _, _) = fixture();
+    ui.show_toast_for(
+        "一二三四五六七八九十甲乙丙丁戊己庚辛",
+        std::time::Duration::from_secs(30),
+    );
+    let mut rendered = String::new();
+    for elapsed_ms in (0..15_000).step_by(125) {
+        ui.toast.as_mut().unwrap().started_at =
+            std::time::Instant::now() - std::time::Duration::from_millis(elapsed_ms);
+        ui.compute_view(36, 30);
+        let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 36, 30));
+        ui.render(&mut buffer);
+        rendered.extend((0..36).flat_map(|x| buffer[(x, 29)].symbol().chars()));
+    }
+    assert!(
+        rendered.contains('辛'),
+        "the notice's final character must become visible before expiration"
+    );
+}

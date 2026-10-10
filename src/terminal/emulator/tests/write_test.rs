@@ -340,3 +340,154 @@ fn kitty_graphics_write_requests_render_with_settle_backstop() {
     assert!(result.request_render);
     assert_eq!(result.render_delay, Some(KITTY_GRAPHICS_REDRAW_SETTLE));
 }
+
+#[test]
+fn xtgettcap_query_after_utf8_prompt_glyph_is_answered() {
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+    let pane_id = PaneId::from_raw(1);
+
+    // "❯" is E2 9D AF in UTF-8; its continuation byte must not open an 8-bit OSC.
+    pane.process_pty_bytes(pane_id, 0, "~/bus ❯ ".as_bytes(), &tx, |_| None);
+    let result = pane.process_pty_bytes(pane_id, 0, b"\x1bP+q5463\x1b\\", &tx, |_| None);
+
+    assert_eq!(
+        result.terminal_responses,
+        vec![super::support::expected_xtgettcap_response("5463", None)]
+    );
+}
+
+#[test]
+fn xtgettcap_query_after_emoji_output_is_answered() {
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+    let pane_id = PaneId::from_raw(1);
+
+    // Emoji start with F0 9F; 0x9F must not open an 8-bit APC string.
+    let result = pane.process_pty_bytes(
+        pane_id,
+        0,
+        "build ok 🎉\r\n\x1bP+q5463\x1b\\".as_bytes(),
+        &tx,
+        |_| None,
+    );
+
+    assert_eq!(
+        result.terminal_responses,
+        vec![super::support::expected_xtgettcap_response("5463", None)]
+    );
+}
+
+#[test]
+fn background_query_split_inside_string_terminator_gets_one_reply() {
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 100).unwrap();
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+    let pane_id = PaneId::from_raw(1);
+    pane.apply_host_terminal_theme(crate::utils::theme::color::TerminalTheme {
+        background: Some(crate::utils::theme::color::RgbColor { r: 1, g: 2, b: 3 }),
+        ..Default::default()
+    });
+
+    let first = pane.process_pty_bytes(pane_id, 0, b"\x1b]11;?\x1b", &tx, |_| None);
+    let second = pane.process_pty_bytes(pane_id, 0, b"\\", &tx, |_| None);
+
+    let mut replies = first.terminal_responses;
+    replies.extend(second.terminal_responses);
+    assert_eq!(
+        replies,
+        vec![Bytes::from_static(b"\x1b]11;rgb:0101/0202/0303\x1b\\")]
+    );
+}
+
+#[test]
+fn xtgettcap_query_after_split_utf8_text_is_answered() {
+    for text in ["\u{0090}", "Ð", "Ø", "Þ", "ß", "❯", "🎉"] {
+        for split in 1..text.len() {
+            let (tx, _rx) = mpsc::channel(4);
+            let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
+            let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+            let pane_id = PaneId::from_raw(1);
+            let bytes = text.as_bytes();
+            pane.process_pty_bytes(pane_id, 0, &bytes[..split], &tx, |_| None);
+            let mut tail = bytes[split..].to_vec();
+            tail.extend_from_slice(b"\x1bP+q5463\x1b\\");
+
+            let result = pane.process_pty_bytes(pane_id, 0, &tail, &tx, |_| None);
+
+            assert_eq!(
+                result.terminal_responses,
+                vec![super::support::expected_xtgettcap_response("5463", None)],
+                "text={text:?}, split={split}"
+            );
+        }
+    }
+}
+
+#[test]
+fn xtgettcap_tracker_keeps_utf8_st_bytes_inside_ignored_strings() {
+    use crate::terminal::emulator::controls::xtgettcap::XtgettcapQueryTracker;
+
+    let mut oversized_dcs = b"\x1bP+q".to_vec();
+    oversized_dcs.extend(std::iter::repeat_n(b'A', 1025));
+    for prefix in [
+        b"\x1b]2;".to_vec(),
+        b"\x1b_G".to_vec(),
+        b"\x1b^".to_vec(),
+        b"\x1bX".to_vec(),
+        b"\x1bPignored".to_vec(),
+        oversized_dcs,
+    ] {
+        let mut tracker = XtgettcapQueryTracker::default();
+        tracker.observe(&prefix);
+        // The middle byte of U+2713 is 0x9C, but it is not an ST.
+        for byte in "✓".as_bytes() {
+            tracker.observe(&[*byte]);
+        }
+        // Only this standalone 0x9C ends the original ignored string.
+        tracker.observe(b"\x1bP+q5463\x9c");
+        assert!(tracker.drain_pending().is_empty(), "prefix={prefix:?}");
+
+        tracker.observe(b"\x1bP+q5463\x1b\\");
+        let responses = tracker.drain_pending();
+        assert_eq!(responses.len(), 1, "prefix={prefix:?}");
+        assert_eq!(responses[0].end_offset, 10);
+        assert_eq!(responses[0].bytes, b"\x1bP1+r5463\x1b\\"[..]);
+    }
+}
+
+#[test]
+fn xtgettcap_tracker_preserves_utf8_bytes_in_query_body() {
+    use crate::terminal::emulator::controls::xtgettcap::XtgettcapQueryTracker;
+
+    let mut tracker = XtgettcapQueryTracker::default();
+    tracker.observe("\x1bP+q5463\u{009c}\x1b\\".as_bytes());
+    assert!(tracker.drain_pending().is_empty());
+
+    tracker.observe(b"\x1bP+q5463\x1b\\");
+    let responses = tracker.drain_pending();
+    assert_eq!(responses.len(), 1);
+    assert_eq!(responses[0].bytes, b"\x1bP1+r5463\x1b\\"[..]);
+}
+
+#[test]
+fn xtgettcap_query_interrupts_an_incomplete_utf8_character() {
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::terminal::vt::Terminal::new(80, 24, 0).unwrap();
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+
+    let result = pane.process_pty_bytes(
+        PaneId::from_raw(1),
+        0,
+        b"\xe2\x1bP+q5463\x1b\\",
+        &tx,
+        |_| None,
+    );
+
+    assert_eq!(
+        result.terminal_responses,
+        vec![super::support::expected_xtgettcap_response("5463", None)]
+    );
+}

@@ -528,7 +528,9 @@ impl DetectionTask {
         status.last_screen_scan_detection_content_seq = current_detection_content_seq;
         let content_changed = content != status.last_detection_text;
         status.last_detection_text.clone_from(&content);
-        if agents::should_skip_state_update(agent, &content) {
+        // A confirmed process exit is not a screen inference, so a retained
+        // viewer must not hold it back.
+        if !process_exited && agents::should_skip_state_update(agent, &content) {
             status.pending_idle.clear();
             return;
         }

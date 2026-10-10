@@ -1030,3 +1030,219 @@ fn wait_returns_as_soon_as_a_recipient_waits_on_a_dialog() {
     assert_eq!(response["error"]["code"], "agent_waiting_on_dialog");
     assert_eq!(response["result"], blocked);
 }
+
+#[test]
+fn send_async_recovers_from_transient_server_busy_after_queued_receipt() {
+    let mut output = Vec::new();
+    let mut polls = 0;
+    let mut pauses = Vec::new();
+    let outcome = run_with_pause(
+        &[
+            "send", "--room", "7", "--to", "a1", "--text", "go", "--async",
+        ]
+        .map(String::from),
+        &mut output,
+        &mut |request: &Request, _| {
+            if request.method == "message.send" {
+                return Ok(Response::success(
+                    &request.id,
+                    json!({"message_id": 19, "request_ids": [41], "stage": "queued"}),
+                ));
+            }
+            assert_eq!(request.method, "message.status");
+            assert_eq!(request.params, json!({"message": "19"}));
+            polls += 1;
+            Ok(match polls {
+                1 => Response::success(&request.id, status(vec![recipient(1, "queued", false)])),
+                2 => Response::failure("", "server_busy", "Development connection limit reached"),
+                3 => Response::success(&request.id, status(vec![recipient(1, "delivered", true)])),
+                _ => panic!("must stop following once the recipient's turn ended"),
+            })
+        },
+        |pause| pauses.push(pause),
+    );
+    let lines: Vec<Value> = String::from_utf8(output)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        outcome.is_ok(),
+        "transient overload must not end a queued send: {lines:?}"
+    );
+    assert_eq!(polls, 3);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["result"]["stage"], "queued");
+    assert_eq!(lines[1]["result"]["requests"][0]["turn_ended"], true);
+    assert_eq!(lines[0]["id"], lines[1]["id"]);
+    assert!(pauses.iter().all(|pause| !pause.is_zero()));
+}
+
+#[test]
+fn wait_recovers_from_transient_server_busy_before_its_deadline() {
+    let mut polls = 0;
+    let completed = json!({"message_id": 19, "complete": true, "requests": [{
+        "request_id": 41, "agent_id": 1, "stage": "completed", "turn_ended": true,
+    }]});
+    let (outcome, response) = run_captured(
+        &[
+            "wait",
+            "--message",
+            "19",
+            "--timeout",
+            "2",
+            "--request-id",
+            "wait-19",
+        ],
+        |request, timeout| {
+            assert_eq!(request.method, "message.status");
+            assert!(timeout.is_some_and(|remaining| remaining <= Duration::from_secs(2)));
+            polls += 1;
+            Ok(match polls {
+                1 => Response::success(&request.id, status(vec![recipient(1, "queued", false)])),
+                2 => Response::failure("", "server_busy", "Development connection limit reached"),
+                3 => Response::success(&request.id, completed.clone()),
+                _ => panic!("must stop waiting once the message completed"),
+            })
+        },
+    );
+    assert!(
+        outcome.is_ok(),
+        "transient overload must not end wait: {response}"
+    );
+    assert_eq!(polls, 3);
+    assert_eq!(response["id"], "wait-19");
+    assert_eq!(response["result"], completed);
+}
+
+#[test]
+fn agent_read_recovers_from_transient_server_busy_with_the_same_request_id() {
+    let mut calls = 0;
+    let (outcome, response) = run_captured(
+        &[
+            "agent",
+            "read",
+            "a1",
+            "--source",
+            "visible",
+            "--request-id",
+            "read-a1",
+        ],
+        |request, _| {
+            assert_eq!(request.id, "read-a1");
+            assert_eq!(request.method, "agent.read");
+            calls += 1;
+            Ok(match calls {
+                1 => Response::failure("", "server_busy", "Development connection limit reached"),
+                2 => Response::success(&request.id, json!({"text": "Ready"})),
+                _ => panic!("must stop retrying once the read succeeds"),
+            })
+        },
+    );
+    assert!(
+        outcome.is_ok(),
+        "a transient overload must not fail an observation: {response}"
+    );
+    assert_eq!(calls, 2);
+    assert_eq!(response["id"], "read-a1");
+    assert_eq!(response["result"]["text"], "Ready");
+}
+
+#[test]
+fn agent_read_reports_server_busy_after_its_retry_budget() {
+    let mut calls = 0;
+    let (outcome, response) = run_captured(
+        &[
+            "agent",
+            "read",
+            "a1",
+            "--source",
+            "visible",
+            "--request-id",
+            "read-a1",
+        ],
+        |request, _| {
+            assert_eq!(request.id, "read-a1");
+            calls += 1;
+            Ok(Response::failure(
+                "",
+                "server_busy",
+                "Development connection limit reached",
+            ))
+        },
+    );
+    assert!(outcome.is_err());
+    assert_eq!(calls, 6);
+    assert_eq!(response["id"], "read-a1");
+    assert_eq!(response["error"]["code"], "server_busy");
+}
+
+#[test]
+fn wait_preserves_last_status_when_server_busy_persists_until_deadline() {
+    let pending = status(vec![recipient(1, "queued", false)]);
+    let started = std::time::Instant::now();
+    let mut calls = 0;
+    let (outcome, response) = run_captured(
+        &[
+            "wait",
+            "--message",
+            "19",
+            "--timeout",
+            "1",
+            "--request-id",
+            "wait-19",
+        ],
+        |request, timeout| {
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "wait must retain its deadline"
+            );
+            assert!(timeout.is_some_and(|remaining| remaining <= Duration::from_secs(1)));
+            calls += 1;
+            Ok(if calls == 1 {
+                Response::success(&request.id, pending.clone())
+            } else {
+                Response::failure("", "server_busy", "Development connection limit reached")
+            })
+        },
+    );
+    assert!(outcome.is_err());
+    assert!(calls >= 2);
+    assert_eq!(response["id"], "wait-19");
+    assert_eq!(response["error"]["code"], "timeout");
+    assert_eq!(response["result"], pending);
+}
+
+#[test]
+fn async_following_caps_overload_backoff_and_recovers_after_extended_server_busy() {
+    let mut calls = 0;
+    let mut pauses = Vec::new();
+    let completed = status(vec![recipient(1, "delivered", true)]);
+    let response = follow_message(
+        "follow-19",
+        &json!(19),
+        &mut |request: &Request, timeout| {
+            assert_eq!(request.method, "message.status");
+            assert_eq!(request.params, json!({"message": "19"}));
+            assert!(timeout.is_none());
+            calls += 1;
+            assert!(calls <= 9, "following must end after the turn completes");
+            Ok(if calls <= 8 {
+                Response::failure("", "server_busy", "Development connection limit reached")
+            } else {
+                Response::success(&request.id, completed.clone())
+            })
+        },
+        &mut |pause| pauses.push(pause),
+    );
+    assert!(response.ok);
+    assert_eq!(response.result, completed);
+    assert_eq!(calls, 9);
+    assert_eq!(pauses.len(), 8);
+    assert_eq!(pauses[0], Duration::from_millis(100));
+    assert!(pauses.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert!(pauses.iter().all(|pause| *pause <= Duration::from_secs(2)));
+    assert!(pauses[5..]
+        .iter()
+        .all(|pause| *pause == Duration::from_secs(2)));
+}

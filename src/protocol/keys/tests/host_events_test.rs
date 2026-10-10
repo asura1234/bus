@@ -192,3 +192,23 @@ fn parses_ghostty_default_background_response() {
         }
     ));
 }
+
+#[test]
+fn shipped_logging_filters_suppress_host_input_payloads() {
+    use crate::utils::logging::test_capture::Capture;
+
+    let input = b"\x1b[200~synthetic-secret-payload\x1b[201~";
+    for filter in [crate::utils::logging::DEV_FILTER, "bus=info"] {
+        let capture = Capture::default();
+        capture.run_filtered(filter, || {
+            let events = RawInputFramer::default().push(input);
+            assert!(matches!(events.as_slice(), [RawInputEvent::Paste(_)]));
+            tracing::info!(target: "bus::logging_test", "input parsed");
+        });
+
+        let text = capture.text();
+        assert!(text.contains("input parsed"));
+        assert!(!text.contains("synthetic-secret-payload"));
+        assert!(!text.contains("raw input event parsed"));
+    }
+}

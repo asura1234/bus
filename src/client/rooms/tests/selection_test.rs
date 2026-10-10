@@ -170,3 +170,64 @@ fn typed_text_in_inputs_has_no_highlight_background() {
     let cells = typed_cells(&mut ui, "formname");
     assert!(cells.iter().all(|bg| *bg != highlight), "form: {cells:?}");
 }
+
+#[test]
+fn dragging_after_a_joined_emoji_copies_the_rendered_character() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().text.insert("a👩‍💻b");
+    ui.compute_view(100, 30);
+    let rect = composer_rect(&ui);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    assert_eq!(buffer[(rect.x + 3, rect.y)].symbol(), "b");
+
+    let copied = drag_copy(&mut ui, (rect.x + 3, rect.y), (rect.x + 3, rect.y));
+
+    assert_eq!(copied.as_deref(), Some("b"));
+}
+
+#[test]
+fn dragging_a_combining_character_copies_the_whole_rendered_cell() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().text.insert("ae\u{301}b");
+    ui.compute_view(100, 30);
+    let rect = composer_rect(&ui);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    assert_eq!(buffer[(rect.x + 1, rect.y)].symbol(), "e\u{301}");
+
+    let copied = drag_copy(&mut ui, (rect.x + 1, rect.y), (rect.x + 1, rect.y));
+
+    assert_eq!(copied.as_deref(), Some("e\u{301}"));
+}
+
+#[test]
+fn the_composer_caret_counts_a_joined_emoji_as_two_cells() {
+    let (mut ui, room, _) = fixture();
+    ui.locals.get_mut(&room).unwrap().text.insert("a👩‍💻b");
+    ui.compute_view(100, 30);
+    let rect = composer_rect(&ui);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+
+    let cursor = ui.cursor().expect("composer caret");
+
+    assert_eq!((cursor.x, cursor.y), (rect.x + 4, rect.y));
+}
+
+#[test]
+fn the_composer_caret_stays_on_the_row_when_a_joined_emoji_fits_at_its_edge() {
+    let (mut ui, room, _) = fixture();
+    ui.compute_view(100, 30);
+    let width = composer_rect(&ui).width;
+    let draft = format!("{}👩‍💻b", "a".repeat(usize::from(width - 3)));
+    ui.locals.get_mut(&room).unwrap().text.insert(&draft);
+    ui.compute_view(100, 30);
+    let rect = composer_rect(&ui);
+    let mut buffer = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 100, 30));
+    ui.render(&mut buffer);
+    let cursor = ui.cursor().expect("composer caret");
+
+    assert_eq!((cursor.x, cursor.y), (rect.right() - 1, rect.y));
+    assert_eq!(buffer[(rect.right() - 1, rect.y)].symbol(), "b");
+}

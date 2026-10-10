@@ -119,6 +119,14 @@ impl crate::client::compositor::ClientShellState {
         self.bus = Some(bus);
         Ok(())
     }
+
+    /// A live `[ui.sound]` reload reaches room notifications. A view that
+    /// does not own the coordinator stays silent.
+    pub(crate) fn reload_bus_sound(&mut self, sound: &crate::utils::config::SoundConfig) {
+        if let Some(config) = self.bus.as_mut().and_then(|bus| bus.sound_config.as_mut()) {
+            config.clone_from(sound);
+        }
+    }
     pub(crate) fn tick_bus(&mut self, outcome: &mut super::compositor::ClientShellInput) -> bool {
         let changed = self.bus.as_mut().is_some_and(BusUi::tick);
         self.dispatch_bus_terminal_focus(outcome);

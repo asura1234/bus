@@ -34,6 +34,8 @@ pub(crate) struct PendingAltScreenRead {
     lines: usize,
     unwrap: bool,
     initial: ScreenSnapshot,
+    // Revision of `initial`; `observed_content_seq` moves on during traversal.
+    initial_content_seq: u64,
     previous: ScreenSnapshot,
     history: Vec<crate::terminal::vt::ScreenTextRow>,
     phase: Phase,
@@ -74,6 +76,7 @@ impl PendingAltScreenRead {
             previous: initial.clone(),
             history: initial.rows.clone(),
             initial,
+            initial_content_seq: content_seq,
             phase: Phase::SettleInitial,
             next_poll_at: now + INITIAL_QUIET,
             step_deadline: now + INITIAL_QUIET,
@@ -93,7 +96,25 @@ impl PendingAltScreenRead {
         self.output_quiet_until.unwrap_or(self.next_poll_at)
     }
 
-    pub(crate) fn frozen_snapshot(
+    /// Answer a concurrent read from the screen captured before traversal, with
+    /// range facts and revision taken from that same screen.
+    pub(in crate::server) fn frozen_read(
+        &self,
+        source: crate::protocol::api::schema::ReadSource,
+        lines: Option<u32>,
+    ) -> crate::server::api::input_encoding::TerminalReadObservation {
+        let rows = self.initial.rows.len();
+        crate::server::api::input_encoding::observe_snapshot(
+            self.frozen_snapshot(source, lines),
+            source,
+            lines,
+            (u16::try_from(rows).unwrap_or(u16::MAX), self.initial.cols),
+            || Some(rows as u64),
+            || self.initial_content_seq,
+        )
+    }
+
+    fn frozen_snapshot(
         &self,
         source: crate::protocol::api::schema::ReadSource,
         lines: Option<u32>,
@@ -471,6 +492,19 @@ impl PendingAltScreenRead {
             crate::terminal::snapshot_text(&self.history, self.lines, self.unwrap, truncated);
         self.read.text = snapshot.text;
         self.read.truncated = snapshot.truncated;
+        // The passive response described only the initial viewport; restate
+        // the range for the harvested window. Below the top the harvested
+        // rows are only a lower bound on what exists.
+        let harvested = self.history.len();
+        self.read.returned_lines = harvested.min(self.lines) as u32;
+        self.read.available_lines = self.read.available_lines.map(|passive| {
+            if self.reached_top {
+                harvested as u64
+            } else {
+                passive.max(harvested as u64)
+            }
+        });
+        self.read.exhausted = self.read.exhausted.map(|_| !snapshot.truncated);
         let response = serde_json::to_string(&SuccessResponse {
             id: self.request_id,
             result: ResponseResult::PaneRead { read: self.read },

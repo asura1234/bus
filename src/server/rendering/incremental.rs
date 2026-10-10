@@ -103,6 +103,35 @@ fn apply_rows(
     Some(rows)
 }
 
+fn retained_pane_content_rect(
+    app: &app::App,
+    frame: &FrameData,
+    pane: &protocol::PaneSurfacePane,
+) -> Option<Rect> {
+    let (workspace_index, pane_id) = app.parse_pane_id(&pane.pane_id)?;
+    let tab_index = app
+        .state
+        .workspaces
+        .get(workspace_index)?
+        .find_tab_index_for_pane(pane_id)?;
+    let layout = crate::server::rendering::surface::compute_tab_surface_for(
+        &app.state,
+        &app.terminal_runtimes,
+        Some(crate::server::rendering::surface::TabSurfaceTarget {
+            workspace_index,
+            tab_index,
+        }),
+        Rect::new(0, 0, frame.width, frame.height),
+        false,
+        crate::protocol::kitty::HostCellSize::default(),
+    );
+    let info = layout.pane_infos.iter().find(|info| info.id == pane_id)?;
+    Some(crate::server::rendering::surface::pane_inner_rect(
+        info.rect,
+        info.borders,
+    ))
+}
+
 fn retained_scrollbar_patch(
     app: &app::App,
     frame: &mut FrameData,
@@ -114,6 +143,9 @@ fn retained_scrollbar_patch(
         .filter(|metrics| metrics.max_offset_from_bottom > 0)
         .filter(|_| app.state.pane_scrollbars && !alternate_screen_active)
         .and_then(|_| {
+            // The column after terminal content can be a border when the full
+            // layout has not reserved a scrollbar gutter.
+            let content_rect = retained_pane_content_rect(app, frame, pane)?;
             let rect = protocol::SurfaceRect {
                 x: pane.inner_rect.x.checked_add(pane.inner_rect.width)?,
                 y: pane.inner_rect.y,
@@ -121,8 +153,8 @@ fn retained_scrollbar_patch(
                 height: pane.inner_rect.height,
             };
             (rect_fits_frame(rect, frame)
-                && rect.x >= pane.rect.x
-                && rect.x < pane.rect.x.saturating_add(pane.rect.width))
+                && rect.x >= content_rect.x
+                && rect.x < content_rect.right())
             .then_some(rect)
         });
     let patch_rect = next_rect.or(pane.scrollbar_rect);

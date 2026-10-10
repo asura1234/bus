@@ -151,9 +151,10 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
     let mut body = first.to_owned();
     for line in &lines[index + 1..] {
         let line = cursor_input_line(kind, line.trim().trim_end_matches('│').trim());
+        // Only Codex prints its model under the composer; elsewhere a wrapped prompt
+        // line may itself start with a model name.
         if line.starts_with(['─', '╰', '└'])
-            || line.starts_with("GPT-")
-            || line.starts_with("gpt-")
+            || kind == AgentKind::Codex && (line.starts_with("GPT-") || line.starts_with("gpt-"))
             || line.starts_with("? for")
             || line.starts_with("/ commands")
         {

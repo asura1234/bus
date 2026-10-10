@@ -371,6 +371,7 @@ impl PtyIoActorRunner {
 
             self.apply_pending_controls();
 
+            let had_submission = self.active_submission.is_some();
             if !self.pending_writes.is_empty() {
                 match self.flush_pending_writes_once() {
                     Ok(Some(boundary)) => self.complete_submission_boundary(boundary),
@@ -382,6 +383,11 @@ impl PtyIoActorRunner {
                 }
             }
             self.schedule_submission_enter();
+            if had_submission && self.active_submission.is_none() {
+                // Input queued behind the submission may have had its wake drained
+                // already; drain it now instead of sleeping until the idle poll.
+                continue;
+            }
 
             if let Some(poll_observer) = &self.poll_observer {
                 let _ = poll_observer.send(());

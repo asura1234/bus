@@ -68,3 +68,49 @@ fn retained_text_search_is_literal_and_unicode_case_aware() {
     assert_eq!(search_primary(&buffer, "a.b", true).len(), 1);
     assert!(search_primary(&buffer, "a?b", true).is_empty());
 }
+
+#[test]
+fn bounded_search_window_navigates_all_matches_in_both_directions() {
+    let buffer = RetainedTextBuffer::new(
+        8,
+        (0..9)
+            .map(|_| {
+                text_row(
+                    "target  ".chars().map(|ch| text_cell(&ch.to_string())),
+                    false,
+                )
+            })
+            .collect(),
+    );
+
+    for direction in [
+        TerminalSearchDirection::Forward,
+        TerminalSearchDirection::Backward,
+    ] {
+        let mut previous = None;
+        let mut cursor = TerminalTextPoint { row: 8, col: 7 };
+        for step in 0..18 {
+            let result = buffer.search_window(
+                "target",
+                true,
+                crate::terminal::vt::ActiveScreen::Primary,
+                direction,
+                cursor,
+                previous,
+                3,
+            );
+            let current = result.current.unwrap();
+            let text_match = result.matches[current];
+            let expected_row = match direction {
+                TerminalSearchDirection::Forward => step % 9,
+                TerminalSearchDirection::Backward => 8 - (step % 9),
+            };
+            assert_eq!(result.total, 9);
+            assert_eq!(result.matches.len(), 3);
+            assert_eq!(text_match.start.row, expected_row);
+            assert_eq!(result.current_global, Some(expected_row as usize));
+            previous = Some((text_match.start, text_match.end));
+            cursor = text_match.start;
+        }
+    }
+}

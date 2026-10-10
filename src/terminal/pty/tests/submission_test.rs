@@ -174,3 +174,63 @@ fn expired_queued_submission_is_not_written() {
         vec![b"first".as_slice(), b"\r".as_slice()]
     );
 }
+
+#[test]
+fn shutdown_returns_while_submission_enter_is_backpressured() {
+    let (data_tx, mut data_rx) = mpsc::channel(1);
+    let (control_tx, _control_rx) = std_mpsc::channel();
+    let (write_tx, write_rx) = std_mpsc::channel();
+    let accepting = Arc::new(Mutex::new(true));
+    let handle = PtyIoActorHandle {
+        data_tx,
+        control_tx,
+        write_tx: write_tx.clone(),
+        response_order: Arc::new(Mutex::new(())),
+        accepting: Arc::clone(&accepting),
+    };
+    let completion = handle
+        .queue_user_input_submission(
+            Bytes::from_static(b"prompt"),
+            Bytes::from_static(b"\r"),
+            Duration::ZERO,
+            None,
+        )
+        .expect("submission queues");
+    let input_thread = std::thread::spawn(move || {
+        run_input_forwarder(&mut data_rx, write_tx, accepting);
+    });
+
+    let PtyIoWriteCommand::SubmissionPart { bytes, reply, .. } = write_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("text write queued")
+    else {
+        panic!("expected text submission part");
+    };
+    assert_eq!(bytes.as_ref(), b"prompt");
+    reply.send(Ok(())).expect("text flush completes");
+    let PtyIoWriteCommand::SubmissionPart { bytes, reply, .. } = write_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("enter write queued")
+    else {
+        panic!("expected Enter submission part");
+    };
+    assert_eq!(bytes.as_ref(), b"\r");
+
+    let (shutdown_tx, shutdown_rx) = std_mpsc::channel();
+    let shutdown_thread = std::thread::spawn(move || {
+        handle.shutdown();
+        shutdown_tx.send(()).expect("shutdown observer alive");
+    });
+    let shutdown_result = shutdown_rx.recv_timeout(Duration::from_millis(250));
+
+    // Release the pending write before asserting so a failed probe cannot
+    // leave either worker blocked after the test returns.
+    reply.send(Ok(())).expect("release Enter write");
+    completion
+        .recv_timeout(Duration::from_secs(1))
+        .expect("submission reports completion")
+        .expect("submission succeeds once Enter is flushed");
+    shutdown_thread.join().expect("shutdown thread joins");
+    input_thread.join().expect("input thread joins");
+    shutdown_result.expect("shutdown must return before a blocked Enter write completes");
+}

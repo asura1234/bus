@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
+use windows_sys::Win32::System::Threading::PROCESS_TERMINATE;
 use windows_sys::Win32::System::Threading::PROCESS_VM_READ;
 
 pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
@@ -87,7 +88,7 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
     }
 
     for &pid in pids {
-        let Some(process) = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION) else {
+        let Some(process) = ProcessHandle::open(pid, PROCESS_TERMINATE) else {
             continue;
         };
         unsafe {

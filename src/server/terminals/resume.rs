@@ -316,9 +316,9 @@ impl App {
                     err = %err,
                     "failed to start shell for deferred agent resume"
                 );
-                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
-                    terminal.clear_agent_runtime_identity_after_respawn();
-                }
+                // No process ran, so nothing replaced the saved conversation:
+                // keep it for a later restart once the shell is fixed.
+                self.suspend_pending_agent_resume(pane_id, &terminal_id, "shell failed to start");
                 return false;
             }
         };

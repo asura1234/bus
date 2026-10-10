@@ -321,3 +321,31 @@ fn the_query_has_its_own_field_after_a_dim_label() {
     assert_eq!(query.symbol(), "n");
     assert_ne!(query.fg, hint_grey, "only the query is bright");
 }
+
+#[test]
+fn cancelling_recall_after_switching_rooms_preserves_the_destination_draft() {
+    let (mut ui, first, _) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    let second = snapshot.state.create_room("second").unwrap();
+    snapshot
+        .state
+        .set_draft_text(second, "second unsent draft")
+        .unwrap();
+    snapshot.revision += 1;
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.open_room(first);
+    let local = ui.locals.get_mut(&first).unwrap();
+    local.text.insert("first unsent draft");
+    local.recall.push("first older prompt".into());
+    key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
+    assert_eq!(ui.locals[&first].text.text, "first older prompt");
+
+    ui.open_room(second);
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+
+    assert_eq!(ui.locals[&second].text.text, "second unsent draft");
+    assert!(!ui.pending.iter().any(|pending| matches!(
+        &pending.command,
+        BusCommand::SetDraftText(room, text) if *room == second && text == "first unsent draft"
+    )));
+}

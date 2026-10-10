@@ -310,3 +310,22 @@ fn resize_returns_in_band_size_report_response() {
         vec![Bytes::from_static(b"\x1B[48;40;100;720;900t")]
     );
 }
+
+#[test]
+fn key_event_utf8_is_independent_of_source_mutation() {
+    use crate::terminal::vt::{ffi, KeyEncoder, KeyEvent};
+
+    let terminal = crate::terminal::vt::Terminal::new(20, 3, 100).unwrap();
+    let mut encoder = KeyEncoder::new().unwrap();
+    encoder.set_from_terminal(&terminal);
+    let mut event = KeyEvent::new().unwrap();
+    event.set_action(ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS);
+    event.set_key(ffi::GhosttyKey_GHOSTTY_KEY_A);
+    let mut text = String::from("a");
+    event.set_utf8(&text);
+    assert_eq!(encoder.encode(&event).unwrap(), b"a");
+
+    text.replace_range(.., "b");
+
+    assert_eq!(encoder.encode(&event).unwrap(), b"a");
+}

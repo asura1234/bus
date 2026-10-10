@@ -104,3 +104,85 @@ fn bus_sessions_is_read_only_and_succeeds_when_no_sessions_exist() {
     assert!(!home.join(".local/share/bus").exists());
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[test]
+fn bus_stop_without_recorded_session_emits_false_without_creating_state() {
+    let home = isolated_home("stop-empty");
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .arg("stop")
+        .env_remove("BUS_DATA_DIR")
+        .env_remove("BUS_SESSION_ID")
+        .env("HOME", &home)
+        .output()
+        .expect("stop without a session");
+    let created_state = home.join(".local/share/bus").exists();
+    std::fs::remove_dir_all(home).unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response, serde_json::json!({"stopped": false}));
+    assert_eq!(String::from_utf8(output.stdout).unwrap().lines().count(), 1);
+    assert!(
+        !created_state,
+        "a no-op stop must not create a session registry"
+    );
+}
+
+#[test]
+fn bus_stop_preserves_invalid_record_and_missing_session_errors() {
+    for (record, error) in [
+        ("invalid-id", "The last local Bus session record is invalid"),
+        (
+            "0123456789abcdef",
+            "Bus session '0123456789abcdef' was not found",
+        ),
+    ] {
+        let home = isolated_home("stop-invalid");
+        let base = home.join(".local/share/bus");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("last-session"), record).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+            .arg("stop")
+            .env_remove("BUS_DATA_DIR")
+            .env_remove("BUS_SESSION_ID")
+            .env("HOME", &home)
+            .output()
+            .expect("stop with an invalid session record");
+        let retained_record = std::fs::read_to_string(base.join("last-session")).unwrap();
+        let created_sessions = base.join("sessions").exists();
+        std::fs::remove_dir_all(home).unwrap();
+
+        assert!(
+            !output.status.success(),
+            "an invalid record must remain an error"
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains(error));
+        assert!(output.stdout.is_empty());
+        assert_eq!(retained_record, record);
+        assert!(!created_sessions);
+    }
+}
+
+#[test]
+fn bus_stop_validates_explicit_data_root_without_a_recorded_session() {
+    let home = isolated_home("stop-explicit-root");
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .arg("stop")
+        .env("BUS_DATA_DIR", "relative-bus-root")
+        .env_remove("BUS_SESSION_ID")
+        .env("HOME", &home)
+        .output()
+        .expect("stop with an invalid explicit root");
+    let created_state = home.join(".local/share/bus").exists();
+    std::fs::remove_dir_all(home).unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("BUS_DATA_DIR must be an absolute directory"));
+    assert!(output.stdout.is_empty());
+    assert!(!created_state);
+}

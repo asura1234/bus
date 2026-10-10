@@ -319,3 +319,293 @@ async fn client_shell_mouse_motion_promotes_and_requests_render() {
     );
     shutdown_test_runtimes(&mut server);
 }
+
+#[tokio::test]
+async fn client_shell_failed_release_retains_disconnect_cleanup() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::server::workspaces::Workspace::test_new("failed-release");
+    let runtime_pane_id = workspace.tabs[0].root_pane;
+    let (runtime, mut input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[>3u",
+            1,
+        );
+    workspace.insert_test_runtime(runtime_pane_id, runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    let pane_id = server.app.public_pane_id(0, runtime_pane_id).unwrap();
+    server.clients.insert(
+        11,
+        ClientConnection::new(
+            (80, 24),
+            crate::protocol::kitty::HostCellSize::default(),
+            1,
+            unread_test_writer(),
+        ),
+    );
+    let key = |kind| crate::protocol::wire::ClientPaneInputEvent::Key {
+        code: crate::protocol::wire::ClientKeyCode::Char('x'),
+        modifiers: 0,
+        kind,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text: None,
+        tracks_release: true,
+        physical_key_id: Some(0x2d),
+        windows_record: None,
+    };
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: pane_id.clone(),
+        events: vec![key(crate::protocol::wire::ClientKeyKind::Press)],
+    });
+    assert_eq!(
+        input_rx.try_recv().expect("press must reach the live PTY"),
+        Bytes::from_static(b"x")
+    );
+
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: pane_id.clone(),
+        events: vec![crate::protocol::wire::ClientPaneInputEvent::TextCommit(
+            "pending".into(),
+        )],
+    });
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id,
+        events: vec![key(crate::protocol::wire::ClientKeyKind::Release)],
+    });
+    assert_eq!(
+        input_rx
+            .try_recv()
+            .expect("queued input must survive saturation"),
+        Bytes::from_static(b"pending")
+    );
+    assert!(input_rx.try_recv().is_err(), "release was not queued");
+
+    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 11 });
+    assert_eq!(
+        input_rx
+            .try_recv()
+            .expect("disconnect must release the key after the live PTY queue recovers"),
+        Bytes::from_static(b"\x1b[120;1:3u")
+    );
+    assert!(input_rx.try_recv().is_err());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn client_shell_disconnect_releases_only_accepted_batch_presses() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::server::workspaces::Workspace::test_new("partial-input-batch");
+    let runtime_pane_id = workspace.tabs[0].root_pane;
+    let (runtime, mut input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[>3u",
+            2,
+        );
+    workspace.insert_test_runtime(runtime_pane_id, runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    let pane_id = server.app.public_pane_id(0, runtime_pane_id).unwrap();
+    server.clients.insert(
+        11,
+        ClientConnection::new(
+            (80, 24),
+            crate::protocol::kitty::HostCellSize::default(),
+            1,
+            unread_test_writer(),
+        ),
+    );
+    let key = |character, physical_key_id| crate::protocol::wire::ClientPaneInputEvent::Key {
+        code: crate::protocol::wire::ClientKeyCode::Char(character),
+        modifiers: 0,
+        kind: crate::protocol::wire::ClientKeyKind::Press,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text: None,
+        tracks_release: true,
+        physical_key_id: Some(physical_key_id),
+        windows_record: None,
+    };
+
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: pane_id.clone(),
+        events: vec![crate::protocol::wire::ClientPaneInputEvent::TextCommit(
+            "pending".into(),
+        )],
+    });
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id,
+        events: vec![key('x', 0x2d), key('y', 0x15)],
+    });
+    assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"pending"));
+    assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"x"));
+    assert!(
+        input_rx.try_recv().is_err(),
+        "the second press was not queued"
+    );
+
+    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 11 });
+    let mut releases = Vec::new();
+    while let Ok(bytes) = input_rx.try_recv() {
+        releases.push(bytes);
+    }
+    assert_eq!(
+        releases,
+        vec![Bytes::from_static(b"\x1b[120;1:3u")],
+        "disconnect must not release a key whose press was rejected by the full live PTY queue"
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn hidden_pane_failed_release_retains_disconnect_cleanup() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::server::workspaces::Workspace::test_new("hidden-release");
+    let runtime_pane_id = workspace.tabs[0].root_pane;
+    let other_tab = workspace.test_add_tab(Some("other"));
+    let (runtime, mut input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            80,
+            24,
+            0,
+            b"\x1b[>3u",
+            1,
+        );
+    workspace.insert_test_runtime(runtime_pane_id, runtime);
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    let pane_id = server.app.public_pane_id(0, runtime_pane_id).unwrap();
+    let other_tab_id = server.app.public_tab_id(0, other_tab).unwrap();
+    let (control_rx, _render_rx) = connect_test_shell(&mut server, 11, 80, 24);
+    let _ = control_rx.recv().expect("initial snapshot");
+    let key = |kind| crate::protocol::wire::ClientPaneInputEvent::Key {
+        code: crate::protocol::wire::ClientKeyCode::Char('x'),
+        modifiers: 0,
+        kind,
+        repeat_count: 1,
+        shifted_codepoint: None,
+        generated_text: None,
+        tracks_release: true,
+        physical_key_id: Some(0x2d),
+        windows_record: None,
+    };
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: pane_id.clone(),
+        events: vec![key(crate::protocol::wire::ClientKeyKind::Press)],
+    });
+    assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"x"));
+    assert!(server.focus_shell_client_on_tab(11, &other_tab_id));
+    assert!(!server.shell_client_views_pane(11, 0, runtime_pane_id));
+    server
+        .app
+        .state
+        .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, runtime_pane_id)
+        .unwrap()
+        .try_send_bytes(Bytes::from_static(b"pending"))
+        .unwrap();
+    let activity_before = server.clients[&11].last_activity;
+
+    assert!(
+        !server.handle_server_event(ServerEvent::ClientShellPaneInput {
+            client_id: 11,
+            pane_id,
+            events: vec![key(crate::protocol::wire::ClientKeyKind::Release)],
+        })
+    );
+    assert_eq!(server.clients[&11].last_activity, activity_before);
+    assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"pending"));
+    assert!(input_rx.try_recv().is_err());
+
+    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 11 });
+    assert_eq!(
+        input_rx.try_recv().expect("hidden held key cleanup"),
+        Bytes::from_static(b"\x1b[120;1:3u")
+    );
+    assert!(input_rx.try_recv().is_err());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[cfg(unix)]
+#[test]
+fn clipboard_image_staging_rejects_symlink_directory() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    const CHILD_ROOT: &str = "BUS_CLIPBOARD_STAGING_SYMLINK_TEST_ROOT";
+    const TEST_NAME: &str =
+        "server::tests::client_shell_input_tests::clipboard_image_staging_rejects_symlink_directory";
+
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        let root = std::path::PathBuf::from(root);
+        let victim = root.join("victim");
+        let before = std::fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+        let unrelated_file = victim.join("unrelated-document.txt");
+
+        let staged = crate::server::clients::clipboard_images::stage(11, "png", b"image");
+
+        let after = std::fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            (after, unrelated_file.exists(), staged.is_err()),
+            (before, true, true),
+            "clipboard staging must reject a preexisting staging-directory symlink without chmod or deletion in its target"
+        );
+        return;
+    }
+
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "bus-clipboard-staging-symlink-test-{}-{unique}",
+        std::process::id()
+    ));
+    let shared_temp = root.join("shared-temp");
+    let victim = root.join("victim");
+    std::fs::create_dir_all(&shared_temp).unwrap();
+    std::fs::create_dir(&victim).unwrap();
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let unrelated_file = std::fs::File::create(victim.join("unrelated-document.txt")).unwrap();
+    unrelated_file
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1)),
+        )
+        .unwrap();
+    let user_id = unsafe { libc::geteuid() };
+    symlink(
+        &victim,
+        shared_temp.join(format!("bus-clipboard-images-{user_id}")),
+    )
+    .unwrap();
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg(TEST_NAME)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("TMPDIR", &shared_temp)
+        .env(CHILD_ROOT, &root)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    assert!(
+        output.status.success(),
+        "isolated staging probe failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

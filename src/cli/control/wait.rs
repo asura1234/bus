@@ -6,6 +6,26 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// The control server rejects a connection over its shared client limit with
+/// `server_busy` before reading the request, so the same request can be sent
+/// again. Retries back off from the first delay up to the cap.
+const BUSY_FIRST_DELAY: Duration = Duration::from_millis(100);
+const BUSY_MAX_DELAY: Duration = Duration::from_secs(2);
+/// Retries of a command without a wait deadline before its overload is reported.
+const BUSY_RETRIES: u32 = 5;
+
+fn is_server_busy(response: &Response) -> bool {
+    !response.ok
+        && response
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == "server_busy")
+}
+
+fn next_busy_delay(delay: Duration) -> Duration {
+    (delay * 2).min(BUSY_MAX_DELAY)
+}
+
 /// `send --async`: reads the message's status until every recipient has worked
 /// on it and gone idle again (`turn_ended`), with no deadline. Orchestrators
 /// run it as a background tool call and are woken when it exits, so a long
@@ -23,6 +43,7 @@ pub(super) fn follow_message(
         Value::String(text) => text.clone(),
         other => other.to_string(),
     };
+    let mut busy_delay = BUSY_FIRST_DELAY;
     loop {
         let request = Request {
             id: next_request_id(),
@@ -33,6 +54,11 @@ pub(super) fn follow_message(
             // The server can be briefly unreachable, e.g. while it saves;
             // keep following rather than report a failed delivery.
             Err(_) => pause(Duration::from_secs(1)),
+            // Following has no deadline, so overload only slows it down.
+            Ok(response) if is_server_busy(&response) => {
+                pause(busy_delay);
+                busy_delay = next_busy_delay(busy_delay);
+            }
             Ok(response) if !response.ok => return response,
             Ok(response) => match async_outcome(&response.result) {
                 Some(Ok(())) => return response,
@@ -121,6 +147,8 @@ pub(super) fn execute(
         params: command.params,
     };
     let mut last_status = Value::Null;
+    let mut busy_delay = BUSY_FIRST_DELAY;
+    let mut busy_retries = 0;
     loop {
         let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         if remaining == Some(Duration::ZERO) {
@@ -138,6 +166,20 @@ pub(super) fn execute(
             }
         };
         response.id.clone_from(&id);
+        if is_server_busy(&response) {
+            // A wait retries until its deadline; other commands a few times.
+            let remaining =
+                deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            if remaining.is_none() {
+                if busy_retries == BUSY_RETRIES {
+                    return response;
+                }
+                busy_retries += 1;
+            }
+            thread::sleep(remaining.map_or(busy_delay, |remaining| busy_delay.min(remaining)));
+            busy_delay = next_busy_delay(busy_delay);
+            continue;
+        }
         if !response.ok || deadline.is_none() || response.result["complete"] == true {
             return response;
         }

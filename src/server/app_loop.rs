@@ -90,6 +90,44 @@ impl App {
         .min()
     }
 
+    pub(super) fn reconcile_managed_agents_at(&mut self, now: Instant) -> bool {
+        let changed_terminals: std::collections::HashSet<_> = self
+            .state
+            .terminals
+            .values_mut()
+            .filter_map(|terminal| {
+                (terminal
+                    .next_managed_agent_deadline()
+                    .is_some_and(|deadline| now >= deadline)
+                    && terminal.reconcile_managed_agent_at(now, false))
+                .then(|| terminal.id.clone())
+            })
+            .collect();
+        if changed_terminals.is_empty() {
+            return false;
+        }
+
+        self.state.mark_session_dirty();
+        let mut updated_panes = Vec::new();
+        for (ws_idx, workspace) in self.state.workspaces.iter().enumerate() {
+            for tab in &workspace.tabs {
+                for pane_id in tab.layout.pane_ids() {
+                    if tab
+                        .panes
+                        .get(&pane_id)
+                        .is_some_and(|pane| changed_terminals.contains(&pane.attached_terminal_id))
+                    {
+                        updated_panes.push((ws_idx, pane_id));
+                    }
+                }
+            }
+        }
+        for (ws_idx, pane_id) in updated_panes {
+            self.emit_pane_updated(ws_idx, pane_id);
+        }
+        true
+    }
+
     #[cfg(test)]
     pub(crate) fn drain_internal_events(&mut self) -> bool {
         self.drain_internal_events_up_to(APP_EVENT_DRAIN_LIMIT).1

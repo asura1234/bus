@@ -449,6 +449,75 @@ fn wrapped_agent_name_from_runtime_argv_ignores_plain_shell_flags() {
 }
 
 #[test]
+fn python_no_site_flag_does_not_hide_the_wrapped_agent_script() {
+    let argv: Vec<String> = ["python3", "-S", "/opt/hermes/bin/hermes"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(
+        wrapped_agent_name_from_runtime_argv("python3", Some(&argv)).as_deref(),
+        Some("hermes")
+    );
+}
+
+#[test]
+fn python_no_site_flag_identifies_versioned_runtimes_in_foreground_jobs() {
+    for runtime in ["python", "python3", "/opt/python/bin/python3.12"] {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                runtime,
+                &[runtime, "-S", "/opt/hermes/bin/hermes"],
+            )],
+        };
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((AgentKind::Hermes, "hermes".to_string())),
+            "{runtime}"
+        );
+    }
+}
+
+#[test]
+fn runtime_value_options_and_python_inline_commands_keep_their_argument_boundaries() {
+    for (runtime, args) in [
+        ("python3", vec!["-W", "codex", "/opt/hermes/bin/hermes"]),
+        ("python3", vec!["-X", "codex", "/opt/hermes/bin/hermes"]),
+        ("node", vec!["-r", "codex", "/opt/hermes/bin/hermes"]),
+        ("bun", vec!["--import", "codex", "/opt/hermes/bin/hermes"]),
+        ("bash", vec!["-o", "errexit", "/opt/hermes/bin/hermes"]),
+        ("python3", vec!["--", "/opt/hermes/bin/hermes"]),
+    ] {
+        let argv: Vec<String> = std::iter::once(runtime)
+            .chain(args)
+            .map(String::from)
+            .collect();
+        assert_eq!(
+            wrapped_agent_name_from_runtime_argv(runtime, Some(&argv)).as_deref(),
+            Some("hermes"),
+            "{argv:?}"
+        );
+    }
+    for args in [
+        vec!["-S", "-c", "codex"],
+        vec!["-S", "-m", "codex"],
+        vec!["-W", "codex"],
+        vec!["-X", "codex"],
+    ] {
+        let argv: Vec<String> = std::iter::once("python3")
+            .chain(args)
+            .map(String::from)
+            .collect();
+        assert_eq!(
+            wrapped_agent_name_from_runtime_argv("python3", Some(&argv)),
+            None,
+            "{argv:?}"
+        );
+    }
+}
+
+#[test]
 fn identify_agent_in_job_ignores_python_c_argument_named_codex() {
     let job = crate::platform::ForegroundJob {
         process_group_id: 123,

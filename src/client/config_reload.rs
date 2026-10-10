@@ -41,6 +41,7 @@ pub(super) fn apply_reload(
     let (frame, resize) = if let Some(shell) = state.shell.as_mut() {
         let previous_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
         shell.reload_client_config();
+        shell.reload_bus_sound(&state.sound_config);
         let next_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
         let resize = (previous_size != next_size).then(|| {
             shell.invalidate_pane_surface();

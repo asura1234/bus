@@ -425,6 +425,11 @@ impl BusUi {
         }
         self.file_scroll = 0;
         self.detail_path = None;
+        // Recall restores its saved draft into the current room, so close it
+        // while that is still the room it came from.
+        if self.room != Some(room) {
+            self.cancel_search();
+        }
         self.room = Some(room);
         self.terminal = None;
         self.target_pane = None;

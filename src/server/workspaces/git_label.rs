@@ -140,7 +140,15 @@ fn path_is_git_dir_layout(path: &Path) -> bool {
 
 fn git_dir_is_bare(git_dir: &Path) -> bool {
     read_git_config_value(&git_dir.join("config"), "core", "bare")
-        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+        .is_some_and(|value| git_config_bool_is_true(&value))
+}
+
+// Git accepts true/yes/on and any nonzero integer as a true boolean; `git config core.bare 1` stores "1".
+fn git_config_bool_is_true(value: &str) -> bool {
+    ["true", "yes", "on"]
+        .iter()
+        .any(|word| value.eq_ignore_ascii_case(word))
+        || value.parse::<i64>().is_ok_and(|number| number != 0)
 }
 
 fn read_git_config_value(path: &Path, section: &str, key: &str) -> Option<String> {

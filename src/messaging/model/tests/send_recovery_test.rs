@@ -130,3 +130,68 @@ fn queued_expiry_preserves_busy_work_and_captures_each_rejection_reason() {
         assert_eq!(state.request(id).unwrap().failure_reason, reason);
     }
 }
+
+#[test]
+fn queued_expiry_preserves_messages_behind_an_idle_codex_approval_dialog() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    state.confirm_hook_setup(agent).unwrap();
+    let current = submit_text(&mut state, room, agent, "run the requested command");
+    start_request(&mut state, current, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 12)
+        .unwrap();
+    state.observe_dialog(agent, true).unwrap();
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 13)
+        .unwrap();
+    let queued = submit_text(&mut state, room, agent, "continue after approval");
+
+    let expired = state
+        .expire_stalled_queued_requests(13 + QUEUED_STALL_MS)
+        .unwrap();
+
+    assert!(
+        expired.is_empty(),
+        "an agent waiting on a visible approval is blocked, so its queued work must not expire"
+    );
+    assert_eq!(state.queued_requests(agent), &[queued]);
+    assert_eq!(state.request(queued).unwrap().phase, RequestPhase::Queued);
+    assert_eq!(state.agent(agent).unwrap().current_request, Some(current));
+}
+
+#[test]
+fn a_rejected_steering_write_preserves_the_original_turn_end_evidence() {
+    let (mut state, room, agent, _) = state_with_room_and_agents();
+    let lead = submit_text(&mut state, room, agent, "original task");
+    start_request(&mut state, lead, "launch-codex", 10);
+    state
+        .observe_status(agent, RuntimeStatus::Working, 12)
+        .unwrap();
+    let correction = submit_text(&mut state, room, agent, "correction");
+    assert_eq!(state.next_steering(agent), Some((correction, lead)));
+    state.begin_steering(correction, lead).unwrap();
+    state
+        .record_steering(
+            correction,
+            SubmissionOutcome::DefinitelyRejected {
+                message: "Agent is not ready; prompt was not sent".into(),
+            },
+        )
+        .unwrap();
+    // The original turn finished before the native steering write arrived;
+    // no correction was typed, and no final reply was captured.
+    state
+        .observe_status(agent, RuntimeStatus::Idle, 13)
+        .unwrap();
+
+    assert!(
+        state.turn_ended(state.request(lead).unwrap()),
+        "rejecting a correction must preserve the original request's observed work"
+    );
+    assert_eq!(
+        state.settle_ended_request(agent, 13 + TURN_SETTLE_MS),
+        Some(lead)
+    );
+    assert_eq!(state.request(lead).unwrap().phase, RequestPhase::Abandoned);
+    assert_eq!(state.next_queued_request(agent), Some(correction));
+}

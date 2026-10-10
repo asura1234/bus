@@ -382,8 +382,31 @@ fn signature(state: &BusState, room: &Room) -> u64 {
     for reply in room.latest_replies.values() {
         (reply.request_id.0, reply.received_at_ms).hash(&mut hash);
     }
-    for agent in state.agents().filter(|a| a.room_id == room.id) {
-        (agent.id.0, &agent.name, agent.color).hash(&mut hash);
+    // Headers name prompt authors and recipients from any room (a work room's
+    // MASTER orchestrator), so their names and colors key the layout too.
+    let mut agents: BTreeSet<AgentId> = state
+        .agents()
+        .filter(|a| a.room_id == room.id)
+        .map(|a| a.id)
+        .collect();
+    let prompts = state
+        .requests()
+        .filter(|r| r.room_id == room.id && !r.delivery_only())
+        .map(|r| &r.prompt)
+        .chain(&room.notices)
+        .chain(room.latest_prompt.as_ref());
+    for prompt in prompts {
+        agents.extend(prompt.recipient_ids.iter().copied());
+        if let Author::Agent(id) = prompt.author {
+            agents.insert(id);
+        }
+    }
+    for id in agents {
+        id.0.hash(&mut hash);
+        state
+            .agent(id)
+            .map(|agent| (&agent.name, agent.color))
+            .hash(&mut hash);
     }
     hash.finish()
 }

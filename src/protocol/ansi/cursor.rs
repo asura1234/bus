@@ -1,10 +1,13 @@
+use super::diff::cell_width;
 use super::REVERSED_MODIFIER;
-use crate::protocol::wire::FrameData;
+use crate::protocol::wire::{CellData, FrameData};
 use std::io::Write;
 
 pub(crate) fn frame_with_drawn_cursor(mut frame: FrameData) -> FrameData {
     if let Some(cursor) = frame.cursor.as_ref().filter(|cursor| cursor.visible) {
         let (x, y) = clamp_cursor_position(&frame, cursor.x, cursor.y);
+        let row_start = usize::from(y) * usize::from(frame.width);
+        let x = drawn_cursor_column(x, |col| frame.cells.get(row_start + usize::from(col)));
         let idx = (y as usize)
             .saturating_mul(frame.width as usize)
             .saturating_add(x as usize);
@@ -13,6 +16,33 @@ pub(crate) fn frame_with_drawn_cursor(mut frame: FrameData) -> FrameData {
         }
     }
     frame
+}
+
+/// Moves a cursor on a wide glyph's continuation cell back to the glyph.
+/// Only the glyph's own cell is written to the host, so reversing the
+/// continuation alone would leave the drawn cursor invisible.
+pub(super) fn drawn_cursor_column<'a>(
+    x: u16,
+    cell_at: impl Fn(u16) -> Option<&'a CellData>,
+) -> u16 {
+    let mut col = 0u16;
+    while col < x {
+        let Some(cell) = cell_at(col) else {
+            return x;
+        };
+        // Mirrors the blit walk: skipped cells are never written, so they
+        // cover nothing beyond themselves.
+        let width = if cell.skip {
+            1
+        } else {
+            cell_width(cell).max(1)
+        };
+        if usize::from(x - col) < width {
+            return col;
+        }
+        col = col.saturating_add(u16::try_from(width).unwrap_or(u16::MAX));
+    }
+    x
 }
 
 #[derive(Clone, Copy)]

@@ -73,3 +73,66 @@ fn a_cross_room_group_shows_its_reply_once_in_each_room() {
         assert!(lines.iter().all(|line| !line.text.contains('…')));
     }
 }
+
+#[test]
+fn cached_work_history_updates_a_renamed_master_recipient() {
+    let mut state = BusState::default();
+    let master = state.ensure_master_room();
+    let work = state.create_room("work").unwrap();
+    let orchestrator = state
+        .create_agent(
+            master,
+            "old-orchestrator",
+            Provider::Codex,
+            "/project".into(),
+            None,
+        )
+        .unwrap();
+    state.bind_orchestrator(orchestrator, work).unwrap();
+    state
+        .submit_message_from(
+            work,
+            Draft {
+                text: "question for the orchestrator".into(),
+                files: Vec::new(),
+                recipient_ids: [orchestrator].into(),
+            },
+            Author::Human,
+            1_000,
+        )
+        .unwrap();
+    let mut history = History::default();
+    let before = history.lines(
+        &state,
+        state.room(work).unwrap(),
+        100,
+        1,
+        2_000,
+        &mut Thumbnails::default(),
+    );
+    assert!(before
+        .iter()
+        .any(|line| line.text.contains("old-orchestrator")));
+
+    state
+        .rename_agent(orchestrator, "new-orchestrator")
+        .unwrap();
+    let after = history.lines(
+        &state,
+        state.room(work).unwrap(),
+        100,
+        2,
+        2_000,
+        &mut Thumbnails::default(),
+    );
+    assert!(
+        after
+            .iter()
+            .any(|line| line.text.starts_with("You → new-orchestrator")),
+        "a new revision must show the recipient's current name: {:?}",
+        after
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+    );
+}

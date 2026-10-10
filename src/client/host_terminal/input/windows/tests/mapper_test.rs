@@ -369,3 +369,119 @@ fn vti_real_ctrl_c_record_stays_semantic() {
         }]
     );
 }
+
+#[test]
+fn vti_focus_loss_preserves_pending_escape_and_mouse_event_order() {
+    use crate::protocol::wire::{
+        ClientInputEvent, ClientKeyCode, ClientMouseButton, ClientMouseKind,
+    };
+
+    for (button_state, button) in [
+        (0x0001, ClientMouseButton::Left),
+        (0x0002, ClientMouseButton::Right),
+        (0x0004, ClientMouseButton::Middle),
+    ] {
+        for escape in [
+            key_char('\x1b'),
+            key_vk_with_scan_unicode(0x1b, 0x01, '\x1b', 0),
+        ] {
+            let mut translator = WindowsInputTranslator::default();
+            let pressed = WindowsInputRecord::Mouse(WindowsMouseRecord {
+                x: 3,
+                y: 2,
+                button_state,
+                control_key_state: 0,
+                event_flags: 0,
+            });
+            let down = ClientInputEvent::Mouse {
+                kind: ClientMouseKind::Down(button),
+                column: 3,
+                row: 2,
+                modifiers: 0,
+            };
+            assert_eq!(translator.translate(pressed), vec![down.clone()]);
+            assert!(translator.translate(escape).is_empty());
+
+            let lost = translator.translate(WindowsInputRecord::Focus(false));
+            assert!(
+                matches!(
+                    lost.as_slice(),
+                    [
+                        ClientInputEvent::Key {
+                            code: ClientKeyCode::Esc,
+                            ..
+                        },
+                        ClientInputEvent::FocusLost
+                    ]
+                ),
+                "pending Escape must precede focus loss: {lost:?}"
+            );
+            assert_eq!(
+                translator.translate(WindowsInputRecord::Focus(true)),
+                vec![ClientInputEvent::FocusGained]
+            );
+            assert_eq!(translator.translate(pressed), vec![down]);
+            assert!(translator.idle().is_empty());
+        }
+    }
+}
+
+#[test]
+fn vti_focus_return_drops_late_release_and_preserves_drag_sequence() {
+    use crate::protocol::wire::{ClientInputEvent, ClientMouseButton, ClientMouseKind};
+
+    let mut translator = WindowsInputTranslator::default();
+    let pressed = WindowsMouseRecord {
+        x: 3,
+        y: 2,
+        button_state: 0x0001,
+        control_key_state: 0,
+        event_flags: 0,
+    };
+    let mouse = |kind| ClientInputEvent::Mouse {
+        kind,
+        column: 3,
+        row: 2,
+        modifiers: 0,
+    };
+    let down = mouse(ClientMouseKind::Down(ClientMouseButton::Left));
+    let up = mouse(ClientMouseKind::Up(ClientMouseButton::Left));
+    assert_eq!(
+        translator.translate(WindowsInputRecord::Mouse(pressed)),
+        vec![down.clone()]
+    );
+    assert_eq!(
+        translator.translate(WindowsInputRecord::Focus(false)),
+        vec![ClientInputEvent::FocusLost]
+    );
+    assert_eq!(
+        translator.translate(WindowsInputRecord::Focus(true)),
+        vec![ClientInputEvent::FocusGained]
+    );
+    let released = WindowsMouseRecord {
+        button_state: 0,
+        ..pressed
+    };
+    assert!(translator
+        .translate(WindowsInputRecord::Mouse(released))
+        .is_empty());
+    assert_eq!(
+        translator.translate(WindowsInputRecord::Mouse(pressed)),
+        vec![down.clone()]
+    );
+    assert_eq!(
+        translator.translate(WindowsInputRecord::Mouse(WindowsMouseRecord {
+            event_flags: 1,
+            ..pressed
+        })),
+        vec![mouse(ClientMouseKind::Drag(ClientMouseButton::Left))]
+    );
+    assert_eq!(
+        translator.translate(WindowsInputRecord::Mouse(released)),
+        vec![up]
+    );
+    assert_eq!(
+        translator.translate(WindowsInputRecord::Mouse(pressed)),
+        vec![down]
+    );
+}

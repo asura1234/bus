@@ -496,3 +496,95 @@ fn blit_frame_hides_previous_visible_cursor_when_next_frame_has_none() {
         "diff redraw should hide a previously visible cursor when the next frame has none"
     );
 }
+
+#[test]
+fn retained_drawn_cursor_patch_remains_visible_on_wide_continuation() {
+    let mut previous = make_frame(
+        3,
+        1,
+        vec![
+            make_cell("界", 0, 0, 0),
+            make_cell("", 0, 0, 0),
+            make_cell(" ", 0, 0, 0),
+        ],
+    );
+    previous.cursor = Some(CursorState {
+        x: 2,
+        y: 0,
+        visible: true,
+        shape: 0,
+    });
+    let drawn = frame_with_drawn_cursor(previous);
+    let mut encoder = BlitEncoder::new();
+    let initial = encoder.encode_with_suppressed_visible_cursor(&drawn, false);
+    encoder.commit(drawn, initial);
+
+    let cursor = Some(CursorState {
+        x: 1,
+        y: 0,
+        visible: true,
+        shape: 0,
+    });
+    let rows = encoder
+        .patch_rows_with_drawn_cursor(&[], cursor.as_ref())
+        .expect("cursor-only retained patch");
+    let patch = encoder
+        .encode_patch(&rows, cursor, true)
+        .expect("valid cursor-only patch");
+    let bytes = String::from_utf8(patch.bytes).unwrap();
+    assert!(
+        bytes.contains("\x1b[0;7;39;49m界"),
+        "moving the drawn cursor onto a wide continuation must repaint its visible glyph: {bytes:?}"
+    );
+}
+
+#[test]
+fn drawn_cursor_patch_matches_full_frame_when_glyph_width_changes() {
+    for (previous_symbols, next_symbols) in [
+        (["a", "b", "c", "d"], ["界", "", "c", "d"]),
+        (["界", "", "c", "d"], ["a", "b", "c", "d"]),
+    ] {
+        let cursor = Some(CursorState {
+            x: 1,
+            y: 0,
+            visible: true,
+            shape: 0,
+        });
+        let mut previous = make_frame(
+            4,
+            1,
+            previous_symbols
+                .iter()
+                .map(|symbol| make_cell(symbol, 0, 0, 0))
+                .collect(),
+        );
+        previous.cursor = cursor.clone();
+        let previous = frame_with_drawn_cursor(previous);
+        let mut encoder = BlitEncoder::new();
+        let initial = encoder.encode_with_suppressed_visible_cursor(&previous, false);
+        encoder.commit(previous, initial);
+
+        let rows = vec![PaneSurfacePatchRow {
+            x: 0,
+            y: 0,
+            cells: next_symbols
+                .iter()
+                .map(|symbol| make_cell(symbol, 0, 0, 0))
+                .collect(),
+        }];
+        let mut next = make_frame(4, 1, rows[0].cells.clone());
+        next.cursor = cursor.clone();
+        let expected = frame_with_drawn_cursor(next);
+        let full = encoder.encode_with_suppressed_visible_cursor(&expected, false);
+        let drawn_rows = encoder
+            .patch_rows_with_drawn_cursor(&rows, cursor.as_ref())
+            .expect("width-changing drawn cursor rows");
+        let patch = encoder
+            .encode_patch(&drawn_rows, cursor.clone(), true)
+            .expect("valid width-changing patch");
+        assert_eq!(patch.bytes, full.bytes);
+        assert!(encoder.commit_patch(&drawn_rows, cursor, patch));
+        assert_eq!(encoder.last_frame.as_ref(), Some(&expected));
+        assert_eq!(expected.cursor.as_ref().unwrap().x, 1);
+    }
+}

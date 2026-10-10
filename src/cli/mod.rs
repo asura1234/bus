@@ -46,6 +46,14 @@ pub(crate) fn config_override() -> Option<fn(&mut crate::utils::config::Config)>
         .then_some(apply_config as fn(&mut crate::utils::config::Config))
 }
 
+fn print_paths(root: &std::path::Path, base: &std::path::Path, dev: bool) -> io::Result<()> {
+    help::write_stdout_line(format_args!(
+        "{}",
+        serde_json::json!({"data":root,"session_base":base,"dev":dev,"logs":crate::utils::paths::data_dir(),"callback_logs":root.join("callbacks/<launch-id>/hook.log"),"config":crate::utils::config::config_dir(),"state":crate::utils::config::state_dir(),"xdg_config":std::env::var("XDG_CONFIG_HOME").ok(),"xdg_state":std::env::var("XDG_STATE_HOME").ok()})
+    ));
+    Ok(())
+}
+
 pub(crate) fn run(args: &[String]) -> io::Result<()> {
     let invocation = parse_invocation(args).map_err(io::Error::other)?;
     let dev = invocation.dev;
@@ -88,6 +96,17 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             }
             let session = registry.resume(target.clone()).map_err(io::Error::other)?;
             (session.root, Some(session.id))
+        }
+        // With no session ever recorded there is no server to stop.
+        Action::Stop
+            if explicit_root.is_none()
+                && matches!(
+                    std::fs::symlink_metadata(base.join("last-session")),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound
+                ) =>
+        {
+            help::write_stdout_line(format_args!("{}", serde_json::json!({"stopped": false})));
+            return Ok(());
         }
         // Stop targets the same session as control commands.
         Action::Control(_) | Action::Stop => match explicit_root {
@@ -138,13 +157,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             stop::run()
         }
         Action::Run | Action::Resume(_) => run_session(&registry, local_session_id, dev),
-        Action::Paths => {
-            help::write_stdout_line(format_args!(
-                "{}",
-                serde_json::json!({"data":root,"session_base":base,"dev":dev,"logs":crate::utils::paths::data_dir(),"callback_logs":root.join("callbacks/<launch-id>/hook.log"),"config":crate::utils::config::config_dir(),"state":crate::utils::config::state_dir(),"xdg_config":std::env::var("XDG_CONFIG_HOME").ok(),"xdg_state":std::env::var("XDG_STATE_HOME").ok()})
-            ));
-            Ok(())
-        }
+        Action::Paths => print_paths(&root, &base, dev),
         Action::Sessions | Action::Help => unreachable!(),
     }
 }

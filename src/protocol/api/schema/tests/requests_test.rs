@@ -521,3 +521,40 @@ fn pane_link_activate_round_trips() {
     let restored: ResponseResult = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, response);
 }
+
+#[cfg(unix)]
+#[test]
+fn runtime_status_silent_socket_is_unavailable() {
+    use std::io::BufRead;
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let socket_path = std::path::Path::new("/tmp")
+        .join(format!("bus-status-{}-{nonce:x}.sock", std::process::id()));
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    let (release, wait_for_release) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream);
+        let mut request = String::new();
+        reader.read_line(&mut request).unwrap();
+        let request: serde_json::Value = serde_json::from_str(&request).unwrap();
+        assert_eq!(request["method"], "ping");
+        wait_for_release.recv().unwrap();
+    });
+
+    let result = crate::protocol::api::read_runtime_status_at(
+        &socket_path,
+        std::time::Duration::from_millis(50),
+    );
+    release.send(()).unwrap();
+    server.join().unwrap();
+    std::fs::remove_file(&socket_path).unwrap();
+
+    assert!(
+        matches!(result, Ok(None)),
+        "a status receive timeout must classify the API as unavailable, got {result:?}"
+    );
+}

@@ -203,76 +203,6 @@ impl HeadlessServer {
         self.focus_shell_client_on_tab(client_id, &tab_id)
     }
 
-    fn shell_locations_may_need_reconcile(method: &api::schema::Method) -> bool {
-        use crate::protocol::api::schema::Method;
-
-        matches!(
-            method,
-            Method::PaneClose(_)
-                | Method::PaneCloseIfIdentity(_)
-                | Method::PaneSplit(_)
-                | Method::TabClose(_)
-                | Method::TabCreate(_)
-                | Method::WorkspaceClose(_)
-                | Method::WorkspaceCreate(_)
-        )
-    }
-
-    fn shell_endpoint_claims_geometry(method: &api::schema::Method) -> bool {
-        use crate::protocol::api::schema::Method;
-
-        matches!(
-            method,
-            Method::LayoutSetSplitRatio(_)
-                | Method::PaneClose(_)
-                | Method::PaneCloseIfIdentity(_)
-                | Method::PaneCopyMotion(_)
-                | Method::PaneCopySearch(_)
-                | Method::PaneFocus(_)
-                | Method::PaneFocusDirection(_)
-                | Method::PaneInputSet(_)
-                | Method::PaneLinkActivate(_)
-                | Method::PaneRename(_)
-                | Method::PaneResize(_)
-                | Method::PaneScroll(_)
-                | Method::PaneSplit(_)
-                | Method::PaneSwap(_)
-                | Method::PaneZoom(_)
-                | Method::TabClose(_)
-                | Method::TabCreate(_)
-                | Method::TabFocus(_)
-                | Method::TabRename(_)
-                | Method::WorkspaceClose(_)
-                | Method::WorkspaceCreate(_)
-                | Method::WorkspaceFocus(_)
-                | Method::WorkspaceMove(_)
-                | Method::WorkspaceRename(_)
-        )
-    }
-
-    fn public_request_may_change_geometry(method: &api::schema::Method) -> bool {
-        use crate::protocol::api::schema::Method;
-
-        matches!(
-            method,
-            Method::LayoutSetSplitRatio(_)
-                | Method::PaneClose(_)
-                | Method::PaneCloseIfIdentity(_)
-                | Method::PaneFocus(_)
-                | Method::PaneFocusDirection(_)
-                | Method::PaneResize(_)
-                | Method::PaneSplit(_)
-                | Method::PaneSwap(_)
-                | Method::PaneZoom(_)
-                | Method::TabClose(_)
-                | Method::TabCreate(_)
-                | Method::TabFocus(_)
-                | Method::WorkspaceClose(_)
-                | Method::WorkspaceCreate(_)
-                | Method::WorkspaceFocus(_)
-        )
-    }
-
     fn apply_shell_navigation_request(
         &mut self,
         client_id: u64,
@@ -367,10 +297,25 @@ impl HeadlessServer {
         HashMap<String, ShellFocusTarget>,
     ) {
         let focused_tabs_after = self.focused_shell_tabs();
+        // A surface lease change deactivates or activates a viewer, so compare over clients
+        // active on either side; an inactive viewer has no effective focus target.
+        let mut focus_after = self
+            .shell_focus_targets()
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let activated = focus_after
+            .keys()
+            .filter(|client_id| {
+                !focus_before
+                    .iter()
+                    .any(|(before_id, _)| before_id == *client_id)
+            })
+            .map(|&client_id| (client_id, None))
+            .collect::<Vec<_>>();
         let mut lost = HashMap::<String, ShellFocusTarget>::new();
         let mut gained = HashMap::<String, ShellFocusTarget>::new();
-        for (client_id, before) in focus_before {
-            let after = self.shell_focus_target(client_id);
+        for (client_id, before) in focus_before.into_iter().chain(activated) {
+            let after = focus_after.remove(&client_id).flatten();
             let (lost_target, gained_target) = classify_shell_focus_transition(
                 before.as_ref(),
                 after.as_ref(),

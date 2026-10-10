@@ -1,5 +1,8 @@
 //! Visible notices and time-based toast scrolling/expiry.
-use super::{render::display, BusUi};
+use super::{
+    render::{cell_width, display},
+    BusUi,
+};
 
 const DEFAULT_TOAST_DURATION: std::time::Duration = std::time::Duration::from_secs(15);
 const TOAST_EDGE_PAUSE: std::time::Duration = std::time::Duration::from_secs(1);
@@ -56,7 +59,16 @@ impl BusUi {
         let message = display(&toast.message);
         let characters = message.chars().collect::<Vec<_>>();
         let visible = usize::from(width);
-        let maximum_offset = characters.len().saturating_sub(visible);
+        // Scroll one character per step, but measure in terminal cells so
+        // wide (CJK) text scrolls until its tail fits.
+        let mut tail_cells = 0;
+        let maximum_offset = characters
+            .iter()
+            .rposition(|c| {
+                tail_cells += cell_width(*c);
+                tail_cells > visible
+            })
+            .map_or(0, |index| (index + 1).min(characters.len() - 1));
         if maximum_offset == 0 {
             return Some(message);
         }
@@ -72,7 +84,17 @@ impl BusUi {
         } else {
             maximum_offset
         };
-        Some(characters.into_iter().skip(offset).take(visible).collect())
+        let mut used = 0;
+        Some(
+            characters
+                .into_iter()
+                .skip(offset)
+                .take_while(|c| {
+                    used += cell_width(*c);
+                    used <= visible
+                })
+                .collect(),
+        )
     }
 
     fn current_notice(&self) -> Option<String> {

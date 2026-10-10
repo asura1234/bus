@@ -195,11 +195,16 @@ impl BusUi {
             KeyCode::Esc | KeyCode::Tab => self.recipient_menu = false,
             KeyCode::Up => self.recipient_index = self.recipient_index.saturating_sub(1),
             KeyCode::Down => self.recipient_index = (self.recipient_index + 1).min(ids.len()),
-            KeyCode::Enter | KeyCode::Char(' ') => self.toggle_recipient(
-                self.recipient_index
-                    .checked_sub(1)
-                    .and_then(|i| ids.get(i).copied()),
-            ),
+            KeyCode::Enter | KeyCode::Char(' ') => match self.recipient_index.checked_sub(1) {
+                None => self.toggle_recipient(None),
+                Some(i) => {
+                    // A snapshot can delete the highlighted agent; its stale
+                    // row selects nothing rather than falling back to All.
+                    if let Some(&id) = ids.get(i) {
+                        self.toggle_recipient(Some(id));
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -326,6 +331,13 @@ impl BusUi {
                         };
                         let changed = editor.key(code, modifiers);
                         if changed {
+                            // Same invalidation as `insert`: edited text is no
+                            // longer the recalled prompt or a trailing `\`.
+                            if !self.notes_focus {
+                                local.history_index = None;
+                                local.live_draft = None;
+                            }
+                            self.pending_line_continue = false;
                             if self.notes_focus {
                                 self.notes_changed(room);
                             } else {

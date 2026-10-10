@@ -280,3 +280,57 @@ async fn presentation_sync_epoch_replays_modes_and_title() {
     )));
     shutdown_test_runtimes(&mut server);
 }
+
+#[tokio::test]
+async fn deactivating_last_focused_surface_reports_pane_focus_lost() {
+    let mut server = test_headless_server();
+    let mut input_rx = install_focused_test_runtime(&mut server, b"\x1b[?1004h");
+    let (control_rx, _render_rx) = connect_matching_test_shell(&mut server, 81);
+    let _ = control_rx.recv().expect("initial shell snapshot");
+    assert!(server.handle_server_event(ServerEvent::ClientShellFocus {
+        client_id: 81,
+        focused: true,
+    }));
+    assert_eq!(
+        input_rx.try_recv().expect("initial focus gain"),
+        Bytes::from_static(b"\x1b[I")
+    );
+
+    assert!(server.set_client_shell_surface_active(81, false).unwrap().0);
+    assert!(server.focused_shell_tabs().is_empty());
+    let focus_lost = input_rx.try_recv();
+    shutdown_test_runtimes(&mut server);
+    assert_eq!(
+        focus_lost.expect("last focused surface must release pane focus"),
+        Bytes::from_static(b"\x1b[O")
+    );
+}
+
+#[tokio::test]
+async fn activating_focused_surface_reports_pane_focus_gained() {
+    let mut server = test_headless_server();
+    let mut input_rx = install_focused_test_runtime(&mut server, b"\x1b[?1004h");
+    let (control_rx, _render_rx) = connect_matching_test_shell(&mut server, 82);
+    let _ = control_rx.recv().expect("initial shell snapshot");
+    assert!(server.handle_server_event(ServerEvent::ClientShellFocus {
+        client_id: 82,
+        focused: true,
+    }));
+    assert_eq!(
+        input_rx.try_recv().expect("initial focus gain"),
+        Bytes::from_static(b"\x1b[I")
+    );
+    assert!(server.set_client_shell_surface_active(82, false).unwrap().0);
+    while input_rx.try_recv().is_ok() {}
+    assert!(server.focused_shell_tabs().is_empty());
+    assert_eq!(server.clients[&82].outer_terminal_focus, Some(true));
+
+    assert!(server.set_client_shell_surface_active(82, true).unwrap().0);
+    assert_eq!(server.focused_shell_tabs().len(), 1);
+    let focus_gained = input_rx.try_recv();
+    shutdown_test_runtimes(&mut server);
+    assert_eq!(
+        focus_gained.expect("activated focused surface must acquire pane focus"),
+        Bytes::from_static(b"\x1b[I")
+    );
+}

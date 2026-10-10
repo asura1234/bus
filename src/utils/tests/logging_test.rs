@@ -167,3 +167,19 @@ fn startup_records_explicit_dev_and_existing_metadata() {
         }
     }
 }
+
+#[test]
+fn api_request_completion_respects_shared_logging_target() {
+    let capture = test_capture::Capture::default();
+    capture.run_filtered("bus::utils::logging=info", || {
+        api_request_started("request-fixture", "workspace.focus", true);
+        api_request_completed("request-fixture", "workspace.focus", "ok", true);
+    });
+
+    let logs = capture.text();
+    assert!(logs.contains("api.request.start"), "{logs}");
+    assert!(
+        logs.contains("api.request.complete"),
+        "the shared logging target must retain request completion: {logs}"
+    );
+}
