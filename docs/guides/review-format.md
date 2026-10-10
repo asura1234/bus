@@ -145,7 +145,7 @@ ledger, proof evidence, verdicts, and response gate are unchanged.
 
 ## 代码就绪状态
 
-- **判定**：Ready | Needs Refinement | Abandon
+- **判定**：Ready | Needs Refinement | Abandon (dimension 6: multi-purpose, split with split-pr) | Abandon
 - **收敛趋势**：<only the count and scope trend of `新问题与建议`; Round 1 uses `首轮`>
 ```
 
