@@ -175,6 +175,45 @@ impl BusHandle {
         )
     }
 
+    /// A real coordinator thread over `seed`, saved to `data_dir`, whose
+    /// terminal server lists no agents. The extra sender injects dev calls the
+    /// way the dev control socket does.
+    #[cfg(test)]
+    pub(crate) fn start_for_test(
+        data_dir: PathBuf,
+        seed: &BusState,
+    ) -> (Self, mpsc::SyncSender<(u64, BusCommand)>) {
+        struct NoAgents;
+        impl Transport for NoAgents {
+            fn request(
+                &mut self,
+                _: Method,
+            ) -> Result<ResponseResult, crate::messaging::native::TransportError> {
+                Ok(ResponseResult::AgentList { agents: vec![] })
+            }
+        }
+        io::private_dir(&data_dir).unwrap();
+        JsonStore::new(data_dir.join("state.json"))
+            .save(seed)
+            .unwrap();
+        let mut worker = Worker::open(data_dir, Box::new(NoAgents)).unwrap();
+        worker.dev_enabled = true;
+        let snapshots = Arc::new(Mutex::new(Arc::new(worker.snapshot())));
+        let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
+        let (event_tx, events) = mpsc::channel();
+        let shared = Arc::clone(&snapshots);
+        std::thread::spawn(move || worker.run(receiver, event_tx, shared));
+        (
+            Self {
+                _dev_control: None,
+                commands: commands.clone(),
+                snapshots,
+                events,
+            },
+            commands,
+        )
+    }
+
     pub(crate) fn start(data_dir: PathBuf, target: ConnectionTarget) -> Result<Self, String> {
         let mut worker = Worker::open(data_dir.clone(), Box::new(BusTransport::new(target)))?;
         worker.dev_enabled = diagnostics::dev_enabled();

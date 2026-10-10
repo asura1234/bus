@@ -274,6 +274,9 @@ mod tests {
     #[path = "sound_test.rs"]
     mod sound_tests;
 
+    #[path = "send_latency_test.rs"]
+    mod send_latency_tests;
+
     include!("tests/composer_test.rs");
     include!("tests/forms_test.rs");
     include!("tests/layout_test.rs");

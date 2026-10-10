@@ -94,9 +94,9 @@ impl Worker {
         if now < *next_retry {
             return;
         }
-        match self.store.load() {
-            // Compare with the exact last commit: status-only polls may have
-            // advanced in-memory observation revisions since that write.
+        match self.store.load_base() {
+            // Compare with the exact last commit: status-only polls and journal
+            // entries may have advanced the in-memory state since that write.
             Ok(Some(durable)) if durable == self.durable_state => {}
             Ok(_) => {
                 self.require_storage_repair("divergent_or_missing");

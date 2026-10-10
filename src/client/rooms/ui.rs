@@ -60,6 +60,8 @@ pub(in crate::client) struct BusUi {
     pub(super) pending: VecDeque<Pending>,
     pub next_id: u64,
     pub send_intent: Option<RoomId>,
+    /// When the pending send was requested, for its acknowledgement log.
+    pub(super) send_requested_at: Option<std::time::Instant>,
     /// The pending send waits for each agent's own turn instead of steering.
     pub(super) send_queued: bool,
     pub error: Option<String>,
@@ -159,6 +161,7 @@ impl BusUi {
             pending: VecDeque::new(),
             next_id: 1,
             send_intent: None,
+            send_requested_at: None,
             send_queued: false,
             recovered_storage_failures: BTreeSet::new(),
             error: None,
@@ -266,11 +269,20 @@ impl BusUi {
             }
             BusEvent::CommandFinished { command_id, result } => {
                 if let Some(pending) = self.pending.iter_mut().find(|p| p.id == command_id) {
-                    if matches!(pending.command, BusCommand::Submit(_)) {
+                    if matches!(
+                        pending.command,
+                        BusCommand::Submit(_) | BusCommand::SubmitQueued(_)
+                    ) {
+                        // From the Enter that asked for this send to its answer.
+                        let enter_to_ack_ms = self
+                            .send_requested_at
+                            .take()
+                            .map(|at| at.elapsed().as_millis() as u64);
                         tracing::info!(
                             event = "bus.message.ack",
                             command_id,
                             outcome = if result.is_ok() { "queued" } else { "rejected" },
+                            enter_to_ack_ms,
                             "Room received submit acknowledgement"
                         );
                     }
@@ -503,6 +515,17 @@ impl BusUi {
             } else if self.quitting.is_some() && self.failed.is_empty() && !self.exit_ready {
                 self.queue(BusCommand::Shutdown, Effect::Shutdown);
             }
+        }
+    }
+
+    /// How soon the client loop should tick again. A command waiting on the
+    /// coordinator (a draft save, a send) settles only on a tick, so a 100 ms
+    /// cadence would add up to that much to every step of Enter's round trip.
+    pub fn tick_interval(&self) -> std::time::Duration {
+        if self.pending.is_empty() && self.send_intent.is_none() {
+            std::time::Duration::from_millis(100)
+        } else {
+            std::time::Duration::from_millis(10)
         }
     }
 

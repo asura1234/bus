@@ -3,6 +3,7 @@ use super::{
     mpsc, schema, AgentId, BusCommand, BusEvent, BusState, Method, Provider, ResponseResult,
     RoomId, Worker,
 };
+use crate::messaging::storage::state_store::JournalOp;
 
 impl Worker {
     pub(super) fn command(
@@ -54,7 +55,10 @@ impl Worker {
                 return self.set_max_compactions_per_agent(limit, events);
             }
             BusCommand::SetNotes(id, text) => state.set_room_notes(id, &text),
-            BusCommand::SetDraftText(id, text) => state.set_draft_text(id, &text),
+            BusCommand::SetDraftText(id, text) => {
+                state.set_draft_text(id, &text).map_err(|e| e.to_string())?;
+                return self.journal(state, JournalOp::DraftText { room: id, text });
+            }
             BusCommand::SetRecipients(id, recipients) => state.set_draft_recipients(id, recipients),
             BusCommand::AttachFile(room, path) => {
                 let home = std::env::home_dir().ok_or("Home directory unavailable")?;
@@ -112,7 +116,14 @@ impl Worker {
             state.submit_draft(room, now)
         }
         .map_err(|e| e.to_string())?;
-        self.save(state)?;
+        self.journal(
+            state,
+            JournalOp::Submit {
+                room,
+                queued,
+                now_ms: now,
+            },
+        )?;
         for id in requests {
             super::super::diagnostics::request(&self.state, id, "bus.message.queued", "persisted");
         }

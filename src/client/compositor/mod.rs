@@ -433,7 +433,10 @@ impl ClientShellState {
     }
 
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {
-        let default = std::time::Duration::from_millis(100);
+        let default = self.bus.as_ref().map_or(
+            std::time::Duration::from_millis(100),
+            crate::client::rooms::BusUi::tick_interval,
+        );
         self.selection_autoscroll_deadline
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)
