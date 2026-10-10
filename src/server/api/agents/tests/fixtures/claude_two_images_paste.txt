@@ -1,0 +1,9 @@
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ please review this screenshot
+  "/private/tmp/claude-501/-Users-dylanliu-work-bus/d274b864-9483-4f60-b030-d05748dd5124/scratchpad/capture/work-claud
+  e-two/paste-0123456789abcdef.png" "/private/tmp/claude-501/-Users-dylanliu-work-bus/d274b864-9483-4f60-b030-d05748dd
+  5124/scratchpad/capture/work-claude-two/paste-0123456789abcdef-1.png"
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  [Opus 5.5 (1M context)] │ work-claude-two
+  Context ░░░░░░░░░░ 0%
+  ⏵⏵ auto mode on (shift+tab to cycle)

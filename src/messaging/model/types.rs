@@ -474,59 +474,22 @@ pub(super) fn clock(at_ms: u64) -> String {
         .unwrap_or_else(|| "--:--".into())
 }
 
-/// Whether a provider's submit hook reports the prompt Bus typed as `typed`.
-///
-/// Claude Code (2.1.291) turns each typed line that is one quoted image path
-/// into an image attachment: its hook reports one `[Image #N]` placeholder per
-/// image first (N counts the session's images), then the remaining lines with
-/// blank ones dropped. Only that exact shape matches besides the typed text.
+/// Whether a provider's submit hook reports the prompt Bus typed as `typed`:
+/// the typed text itself, or Claude Code's shape after it lifts quoted image
+/// paths into attachments (see `claude_lifted_images`). Nothing else matches.
 pub(super) fn payload_matches(payload: &str, typed: &str) -> bool {
+    use crate::agents::providers::claude_code::hooks::{
+        claude_image_placeholders, claude_lifted_images,
+    };
     let payload = normalized_payload(payload);
     let typed = normalized_payload(typed);
     if payload == typed {
         return true;
     }
-    let (length, images) =
-        crate::agents::providers::claude_code::hooks::claude_image_placeholders(&payload);
-    let mut lifted = 0;
-    let remaining = typed
-        .split('\n')
-        .filter(|line| {
-            let image = is_quoted_image_path(line);
-            lifted += usize::from(image);
-            !image && !line.trim().is_empty()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let (length, images) = claude_image_placeholders(&payload);
+    let (lifted, remaining) = claude_lifted_images(&typed);
     let remaining = remaining.trim_end_matches(|character: char| character.is_ascii_whitespace());
     images > 0 && images == lifted && &payload[length..] == remaining
-}
-
-/// Whether `line` is exactly one path quoted the way `Prompt::rendered_payload`
-/// quotes attachments, naming an image Claude Code attaches.
-fn is_quoted_image_path(line: &str) -> bool {
-    let Some(path) = line
-        .strip_prefix('"')
-        .and_then(|rest| rest.strip_suffix('"'))
-    else {
-        return false;
-    };
-    let mut escaped = false;
-    for character in path.chars() {
-        match (escaped, character) {
-            (false, '\\') => escaped = true,
-            (false, '"') => return false,
-            _ => escaped = false,
-        }
-    }
-    std::path::Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            ["png", "jpg", "jpeg", "gif", "webp"]
-                .iter()
-                .any(|image| extension.eq_ignore_ascii_case(image))
-        })
 }
 
 fn normalized_payload(value: &str) -> String {

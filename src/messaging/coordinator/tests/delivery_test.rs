@@ -1063,3 +1063,47 @@ fn cursor_background_task_notice_is_not_the_room_reply() {
     drop(worker);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_paste_the_provider_never_showed_is_requeued_and_retried_after_a_pause() {
+    let not_shown = || {
+        Err(TransportError {
+            // Exactly what the API client reports: the server's message, no code.
+            message: crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE.into(),
+            code: Some("agent_prompt_not_shown".into()),
+            definitely_rejected: true,
+        })
+    };
+    let (mut worker, agent, room, dir, calls) =
+        fixture(Provider::ClaudeCode, vec![not_shown(), not_shown()]);
+    let request = queue(&mut worker, room, agent, "look\n\"/tmp/shot.png\"");
+    worker.submit_ready().unwrap();
+    let prompts = |calls: &Arc<Mutex<Vec<&'static str>>>| {
+        calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| call.starts_with("agent.prompt"))
+            .count()
+    };
+    assert_eq!(prompts(&calls), 1);
+    let state = &worker.state;
+    assert_eq!(state.request(request).unwrap().phase, RequestPhase::Queued);
+    assert!(!state.request(request).unwrap().uncertain_outcome);
+    assert_eq!(state.agent(agent).unwrap().current_request, None);
+    assert_eq!(
+        state.agent(agent).unwrap().delivery_rejection.as_deref(),
+        Some("prompt_not_shown")
+    );
+
+    // Each attempt pastes and clears in the agent's pane: not on every tick.
+    worker.submit_ready().unwrap();
+    assert_eq!(prompts(&calls), 1);
+    for at in worker.withdrawn_at.values_mut() {
+        *at -= crate::messaging::coordinator::delivery::PROMPT_NOT_SHOWN_RETRY;
+    }
+    worker.submit_ready().unwrap();
+    assert_eq!(prompts(&calls), 2);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}

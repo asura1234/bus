@@ -184,8 +184,11 @@ impl App {
                     "Prompt submission queued in native terminal writer");
                 std::thread::spawn(move || {
                     let completed = completion.recv();
+                    let not_shown =
+                        |err: &std::io::Error| crate::terminal::runtime::PromptNotShown::is(err);
                     let outcome = match &completed {
                         Ok(Ok(())) => "written",
+                        Ok(Err(err)) if not_shown(err) => "not_shown",
                         Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => "timeout",
                         Ok(Err(_)) => "write_failed",
                         Err(_) => "writer_closed",
@@ -196,6 +199,11 @@ impl App {
                         "Native prompt and Enter submission completed; this is not model acceptance");
                     let response = match completed {
                         Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
+                        Ok(Err(err)) if not_shown(&err) => encode_error(
+                            id,
+                            crate::protocol::api::AGENT_PROMPT_NOT_SHOWN,
+                            err.to_string(),
+                        ),
                         Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
                             encode_error(id, "timeout", err.to_string())
                         }

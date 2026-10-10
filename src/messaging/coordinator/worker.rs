@@ -22,6 +22,9 @@ pub(super) struct Worker {
     /// Each agent's latest dialog wait and how many polls it has held.
     pub(super) dialog_seen: BTreeMap<AgentId, (Option<String>, u8)>,
     pub(super) delivery_waits: BTreeMap<AgentId, (RequestId, &'static str)>,
+    /// When each agent's provider last failed to show a pasted prompt, which
+    /// the server then withdrew; the retry waits `PROMPT_NOT_SHOWN_RETRY`.
+    pub(super) withdrawn_at: BTreeMap<AgentId, std::time::Instant>,
     /// When each agent last began a turn of its own that has not settled.
     pub(super) own_turns: BTreeMap<AgentId, std::time::Instant>,
     pub(super) dev_enabled: bool,
@@ -78,6 +81,7 @@ impl Worker {
             branch_checks: BTreeMap::new(),
             dialog_seen: BTreeMap::new(),
             delivery_waits: BTreeMap::new(),
+            withdrawn_at: BTreeMap::new(),
             own_turns: BTreeMap::new(),
             dev_enabled: false,
             dev_receipts: BTreeMap::new(),

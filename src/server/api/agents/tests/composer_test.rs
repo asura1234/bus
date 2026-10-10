@@ -166,3 +166,116 @@ fn wrapped_cursor_prompt_keeps_model_name_at_start_of_continuation() {
         InputObservation::Pending
     );
 }
+
+/// Screens captured from the installed providers after Bus's bracketed paste
+/// of `text\n"<image path>"` (Claude Code 2.1.296, codex-cli 0.162.0, Cursor
+/// Agent 2026.10.01): a real 120x32 PTY rendered by a VT emulator, with no
+/// Enter ever sent. The capture directory is kept verbatim in the paths.
+const CAPTURE: &str =
+    "/private/tmp/claude-501/-Users-dylanliu-work-bus/d274b864-9483-4f60-b030-d05748dd5124/scratchpad/capture";
+
+fn captured_payload(text: &str, dir: &str, images: usize) -> String {
+    let quoted = (0..images)
+        .map(|index| {
+            let suffix = if index == 0 {
+                String::new()
+            } else {
+                format!("-{index}")
+            };
+            format!("\"{CAPTURE}/{dir}/paste-0123456789abcdef{suffix}.png\"")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.is_empty() {
+        quoted
+    } else {
+        format!("{text}\n{quoted}")
+    }
+}
+
+#[test]
+fn claude_shows_a_pasted_image_path_as_a_leading_image_chip_that_is_still_our_draft() {
+    for (screen, text, dir) in [
+        (
+            include_str!("fixtures/claude_image_paste.txt"),
+            "please review this screenshot",
+            "work-claude",
+        ),
+        (
+            include_str!("fixtures/claude_image_multiline_paste.txt"),
+            "first line\nsecond line\nthird line",
+            "work-claude-multiline",
+        ),
+        (
+            include_str!("fixtures/claude_image_only_paste.txt"),
+            "",
+            "work-claude-image-only",
+        ),
+    ] {
+        let expected = captured_payload(text, dir, 1);
+        assert_eq!(
+            observe(AgentKind::Claude, screen, &expected),
+            InputObservation::Pending,
+            "{screen}"
+        );
+    }
+    // Two paths on one line stay literal text in Claude's composer.
+    assert_eq!(
+        observe(
+            AgentKind::Claude,
+            include_str!("fixtures/claude_two_images_paste.txt"),
+            &captured_payload("please review this screenshot", "work-claude-two", 2)
+        ),
+        InputObservation::Pending
+    );
+}
+
+#[test]
+fn an_image_chip_never_makes_someone_elses_draft_ours() {
+    let screen = include_str!("fixtures/claude_image_paste.txt");
+    for expected in [
+        captured_payload("please review this", "work-claude", 1),
+        captured_payload("please review this screenshot", "work-claude", 0),
+        "please review this screenshot\n\"/tmp/notes.diff\"".to_owned(),
+        captured_payload("please review this screenshot", "work-claude", 2),
+    ] {
+        assert_eq!(
+            observe(AgentKind::Claude, screen, &expected),
+            InputObservation::Other,
+            "{expected}"
+        );
+    }
+}
+
+#[test]
+fn codex_and_cursor_keep_a_pasted_image_path_as_text() {
+    let expected = |dir| captured_payload("please review this screenshot", dir, 1);
+    assert_eq!(
+        observe(
+            AgentKind::Codex,
+            include_str!("fixtures/codex_image_paste.txt"),
+            &expected("work-codex")
+        ),
+        InputObservation::Pending
+    );
+    assert_eq!(
+        observe(
+            AgentKind::Cursor,
+            include_str!("fixtures/cursor_image_paste.txt"),
+            &expected("work-cursor")
+        ),
+        InputObservation::Pending
+    );
+}
+
+#[test]
+fn current_cursor_composer_uses_an_arrow_prompt_inside_half_block_borders() {
+    assert_eq!(
+        observe(
+            AgentKind::Cursor,
+            include_str!("fixtures/cursor_empty.txt"),
+            "from bus"
+        ),
+        InputObservation::Empty
+    );
+}

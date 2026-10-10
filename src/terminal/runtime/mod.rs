@@ -7,7 +7,7 @@ mod io;
 mod read;
 mod shutdown;
 mod submission;
-pub(crate) use submission::InputObservation;
+pub(crate) use submission::{InputObservation, PromptNotShown};
 pub(crate) mod spawn;
 
 #[cfg(all(test, unix))]
