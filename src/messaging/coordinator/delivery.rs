@@ -4,6 +4,11 @@ use super::{
     RuntimeStatus, SubmissionOutcome, Worker, OWN_TURN_GRACE,
 };
 
+/// How long a prompt the provider never showed waits before Bus pastes it
+/// again. Each attempt pastes into and clears the agent's input box, and the
+/// queued stall closes the request after `QUEUED_STALL_MS` if none succeeds.
+pub(super) const PROMPT_NOT_SHOWN_RETRY: std::time::Duration = std::time::Duration::from_secs(20);
+
 impl Worker {
     #[cfg(test)]
     pub(super) fn submit_ready(&mut self) -> Result<(), String> {
@@ -17,6 +22,9 @@ impl Worker {
         self.expire_queued_now()?;
         self.delivery_waits
             .retain(|id, _| self.state.agent(*id).is_some());
+        self.withdrawn_at.retain(|id, at| {
+            self.state.agent(*id).is_some() && at.elapsed() < PROMPT_NOT_SHOWN_RETRY
+        });
         let agents: Vec<_> = self.state.agents().cloned().collect();
         for agent in agents {
             // A command may have arrived while polling or sending to a prior
@@ -38,6 +46,9 @@ impl Worker {
                 }
             } else {
                 self.delivery_waits.remove(&agent.id);
+            }
+            if self.withdrawn_at.contains_key(&agent.id) {
+                continue;
             }
             if let Some((request, lead)) = self.state.next_steering(agent.id) {
                 if agent.hook_setup_confirmed && !agent.session_binding_invalidated {
@@ -161,12 +172,25 @@ impl Worker {
             elapsed_ms = started.elapsed().as_millis() as u64,
             "Native submit result; uncertain outcomes are never retried"
         );
+        self.note_withdrawn(agent.id, &outcome);
         let mut state = self.state.clone();
         state
             .record_submission(request, outcome)
             .map_err(|e| e.to_string())?;
         self.save(state)?;
         Ok(())
+    }
+
+    fn note_withdrawn(
+        &mut self,
+        agent: crate::messaging::model::AgentId,
+        outcome: &SubmissionOutcome,
+    ) {
+        if let SubmissionOutcome::DefinitelyRejected { message } = outcome {
+            if message.contains(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE) {
+                self.withdrawn_at.insert(agent, std::time::Instant::now());
+            }
+        }
     }
 
     /// Types `request` into the agent's running turn, the way a person types
@@ -225,6 +249,7 @@ impl Worker {
         tracing::info!(event = "bus.delivery.result", request_id = request.0, lead_id = lead.0,
             mode = "steer", outcome = ?outcome,
             elapsed_ms = started.elapsed().as_millis() as u64, "Typed into the running turn");
+        self.note_withdrawn(agent.id, &outcome);
         let mut state = self.state.clone();
         state
             .record_steering(request, outcome)

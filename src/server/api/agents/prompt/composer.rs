@@ -65,11 +65,27 @@ pub(super) fn observe(kind: AgentKind, screen: &str, expected: &str) -> InputObs
             .filter(|c| !c.is_whitespace())
             .collect::<String>()
     };
-    if normalize(&body) == normalize(expected) || collapsed_paste(kind, &body, expected) {
+    if normalize(&body) == normalize(expected)
+        || collapsed_paste(kind, &body, expected)
+        || kind == AgentKind::Claude && lifted_images(&body, expected, normalize)
+    {
         InputObservation::Pending
     } else {
         InputObservation::Other
     }
+}
+
+/// Claude Code shows a pasted line that is one quoted image path as a leading
+/// `[Image #N]` chip. The draft is ours only when every chip stands for one of
+/// our image lines and the rest is exactly our remaining text.
+fn lifted_images(body: &str, expected: &str, normalize: impl Fn(&str) -> String) -> bool {
+    use crate::agents::providers::claude_code::hooks::{
+        claude_image_placeholders, claude_lifted_images,
+    };
+    let (length, images) = claude_image_placeholders(body);
+    let (lifted, remaining) =
+        claude_lifted_images(&expected.replace("\r\n", "\n").replace('\r', "\n"));
+    images > 0 && images == lifted && normalize(&body[length..]) == normalize(&remaining)
 }
 
 fn collapsed_paste(kind: AgentKind, body: &str, expected: &str) -> bool {
@@ -128,14 +144,15 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
             }
         })
         .collect();
-    let marker = match kind {
-        AgentKind::Claude => '❯',
-        AgentKind::Cursor => '>',
-        _ => '›',
+    // Cursor Agent 2026.10 draws `→` inside half-block borders; older builds `>`.
+    let markers: &[char] = match kind {
+        AgentKind::Claude => &['❯'],
+        AgentKind::Cursor => &['>', '→'],
+        _ => &['›'],
     };
     let index = lines.iter().enumerate().rev().find_map(|(index, line)| {
         let prompt = line.trim_start().trim_start_matches('│').trim_start();
-        (prompt.starts_with(marker)
+        (prompt.starts_with(markers)
             && (kind != AgentKind::Claude
                 || index > 0 && plain_rule(screen.lines().nth(index - 1)?)))
         .then_some(index)
@@ -144,7 +161,7 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
         .trim_start()
         .trim_start_matches('│')
         .trim_start()
-        .strip_prefix(marker)?
+        .strip_prefix(markers)?
         .trim_end_matches('│')
         .trim();
     let first = cursor_input_line(kind, first);
@@ -153,7 +170,7 @@ fn input(kind: AgentKind, screen: &str) -> Option<String> {
         let line = cursor_input_line(kind, line.trim().trim_end_matches('│').trim());
         // Only Codex prints its model under the composer; elsewhere a wrapped prompt
         // line may itself start with a model name.
-        if line.starts_with(['─', '╰', '└'])
+        if line.starts_with(['─', '╰', '└', '▀'])
             || kind == AgentKind::Codex && (line.starts_with("GPT-") || line.starts_with("gpt-"))
             || line.starts_with("? for")
             || line.starts_with("/ commands")

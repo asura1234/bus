@@ -236,3 +236,29 @@ async fn enter_never_accepted_times_out_without_repasting_or_reporting_success()
     }
     assert!(enters > 1, "must retry ignored Enter");
 }
+
+#[tokio::test]
+async fn an_unrecognised_paste_is_cleared_and_reported_as_not_submitted() {
+    let (mut app, method, mut writes) = provider_fixture(AgentKind::Claude, true, "");
+    let response = start(&mut app, method);
+    assert_eq!(
+        next_write(&mut writes),
+        Bytes::from_static(b"\x1b[200~from bus\x1b[201~")
+    );
+    // A rendering the observer cannot attribute to Bus: never press Enter on it.
+    redraw(&app, AgentKind::Claude, "[Pasted text #3] from bus?");
+    std::thread::sleep(Duration::from_millis(2_200));
+    assert_eq!(next_write(&mut writes), Bytes::from_static(b"\x01"));
+    assert_eq!(next_write(&mut writes), Bytes::from_static(b"\x0b"));
+    redraw(&app, AgentKind::Claude, "");
+    let response = response.recv_timeout(Duration::from_secs(3)).unwrap();
+    assert!(response.contains("agent_prompt_not_shown"), "{response}");
+    assert!(!response.contains("agent_prompted"));
+    while let Ok(bytes) = writes.try_recv() {
+        assert_ne!(
+            bytes,
+            Bytes::from_static(b"\r"),
+            "never Enter an unrecognised draft"
+        );
+    }
+}

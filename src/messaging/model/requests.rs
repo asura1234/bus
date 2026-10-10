@@ -647,6 +647,8 @@ impl BusState {
 pub(crate) fn rejection_reason(message: &str) -> &'static str {
     if message.contains("input box is not empty") || message.contains("composer is not empty") {
         "input_box_not_empty"
+    } else if message.contains(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE) {
+        "prompt_not_shown"
     } else if message.contains("blocked") {
         "agent_blocked"
     } else if message.contains("not ready") || message.contains("not an active") {

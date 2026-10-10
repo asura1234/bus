@@ -17,6 +17,31 @@ pub(crate) enum InputObservation {
     Accepted,
 }
 
+/// The paste never rendered as Bus's draft, so no Enter was ever sent and the
+/// provider cannot have taken it; the unrecognised draft was cleared. Unlike a
+/// plain timeout this is a definite non-delivery, safe to try again.
+#[derive(Debug)]
+pub(crate) struct PromptNotShown;
+
+impl std::fmt::Display for PromptNotShown {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(crate::protocol::api::AGENT_PROMPT_NOT_SHOWN_MESSAGE)
+    }
+}
+
+impl std::error::Error for PromptNotShown {}
+
+impl PromptNotShown {
+    pub(crate) fn is(error: &io::Error) -> bool {
+        error
+            .get_ref()
+            .is_some_and(|inner| inner.downcast_ref::<Self>().is_some())
+    }
+}
+
+/// Time allowed after the deadline to clear a paste that never showed.
+const WITHDRAW_GRACE: Duration = Duration::from_secs(1);
+
 struct ObservedSubmission {
     terminal: Arc<PaneTerminal>,
     io: PaneRuntimeIo,
@@ -24,7 +49,7 @@ struct ObservedSubmission {
     inspect: Box<dyn Fn(&str) -> InputObservation + Send>,
     enter: Bytes,
     clear: Vec<Bytes>,
-    deadline: Instant,
+    deadline: std::cell::Cell<Instant>,
 }
 
 impl TerminalRuntime {
@@ -46,7 +71,9 @@ impl TerminalRuntime {
             inspect: Box::new(inspect),
             enter,
             clear,
-            deadline: deadline.unwrap_or_else(|| Instant::now() + delay + Duration::from_secs(2)),
+            deadline: std::cell::Cell::new(
+                deadline.unwrap_or_else(|| Instant::now() + delay + Duration::from_secs(2)),
+            ),
         };
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -62,7 +89,7 @@ impl ObservedSubmission {
     }
 
     fn check_deadline(&self) -> io::Result<()> {
-        if Instant::now() >= self.deadline {
+        if Instant::now() >= self.deadline.get() {
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "Provider did not accept prompt before submission deadline",
@@ -75,8 +102,12 @@ impl ObservedSubmission {
     fn write(&self, bytes: Bytes, delay: Duration) -> io::Result<()> {
         self.check_deadline()?;
         self.io
-            .queue_user_input_submission(bytes, Bytes::new(), delay, Some(self.deadline))?
-            .recv_timeout(self.deadline.saturating_duration_since(Instant::now()))
+            .queue_user_input_submission(bytes, Bytes::new(), delay, Some(self.deadline.get()))?
+            .recv_timeout(
+                self.deadline
+                    .get()
+                    .saturating_duration_since(Instant::now()),
+            )
             .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?
     }
 
@@ -109,16 +140,33 @@ impl ObservedSubmission {
             key,
             Bytes::new(),
             Duration::ZERO,
-            Some(self.deadline),
+            Some(self.deadline.get()),
         )?;
         drop(guard);
         completion
-            .recv_timeout(self.deadline.saturating_duration_since(Instant::now()))
+            .recv_timeout(
+                self.deadline
+                    .get()
+                    .saturating_duration_since(Instant::now()),
+            )
             .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
         // Keep editing keys in separate input events for Ink providers. Check
         // for emptiness again before sending the next key or another line kill.
         std::thread::sleep(Duration::from_millis(25));
         Ok(false)
+    }
+
+    /// No Enter was sent. A draft the observer cannot attribute to Bus is our
+    /// unrendered paste or someone's edit; neither may be submitted, and our
+    /// paste must not linger for a later delivery or a person to send. Clear
+    /// it and report a definite non-delivery only once the box is empty.
+    fn withdraw_unshown(&self, timeout: io::Error) -> io::Result<()> {
+        if self.observe() != InputObservation::Other {
+            return Err(timeout);
+        }
+        self.deadline.set(Instant::now() + WITHDRAW_GRACE);
+        self.clear_draft()?;
+        Err(io::Error::other(PromptNotShown))
     }
 
     fn run(&self, text: Bytes, delay: Duration) -> io::Result<()> {
@@ -127,7 +175,9 @@ impl ObservedSubmission {
         // Paste may be buffered by the provider after the PTY flush. Wait for
         // the owned draft to render before attempting the first Enter.
         while self.observe() != InputObservation::Pending {
-            self.check_deadline()?;
+            if let Err(error) = self.check_deadline() {
+                return self.withdraw_unshown(error);
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
         let mut last_enter = None;
@@ -155,7 +205,7 @@ impl ObservedSubmission {
                     Bytes::new(),
                     self.enter.clone(),
                     Duration::ZERO,
-                    Some(self.deadline),
+                    Some(self.deadline.get()),
                 )?)
             } else {
                 None
@@ -163,7 +213,11 @@ impl ObservedSubmission {
             drop(guard);
             if let Some(completion) = completion {
                 completion
-                    .recv_timeout(self.deadline.saturating_duration_since(Instant::now()))
+                    .recv_timeout(
+                        self.deadline
+                            .get()
+                            .saturating_duration_since(Instant::now()),
+                    )
                     .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))??;
                 last_enter = Some(Instant::now());
             }

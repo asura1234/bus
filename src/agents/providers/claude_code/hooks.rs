@@ -143,6 +143,52 @@ pub(crate) fn claude_image_placeholders(prompt: &str) -> (usize, usize) {
     (length, count)
 }
 
+/// Claude Code turns each typed line that is one quoted image path into an
+/// image attachment. Its composer and its submit hook then show one
+/// `[Image #N]` placeholder per image first (N counts the session's images),
+/// followed by the remaining lines with blank ones dropped. Returns how many
+/// lines of `typed` it lifts and the text left behind.
+pub(crate) fn claude_lifted_images(typed: &str) -> (usize, String) {
+    let mut lifted = 0;
+    let remaining = typed
+        .split('\n')
+        .filter(|line| {
+            let image = is_quoted_image_path(line);
+            lifted += usize::from(image);
+            !image && !line.trim().is_empty()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (lifted, remaining)
+}
+
+/// Whether `line` is exactly one path quoted the way Bus quotes attachments
+/// (`"path"`, with `\\` and `\"` escaped), naming an image Claude Code attaches.
+fn is_quoted_image_path(line: &str) -> bool {
+    let Some(path) = line
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return false;
+    };
+    let mut escaped = false;
+    for character in path.chars() {
+        match (escaped, character) {
+            (false, '\\') => escaped = true,
+            (false, '"') => return false,
+            _ => escaped = false,
+        }
+    }
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["png", "jpg", "jpeg", "gif", "webp"]
+                .iter()
+                .any(|image| extension.eq_ignore_ascii_case(image))
+        })
+}
+
 /// Background agents and session crons wake the turn again. Claude reports a
 /// shell-only turn settled even while those unrelated shells remain running.
 fn claude_turn_awaits_background(value: &Value) -> bool {
