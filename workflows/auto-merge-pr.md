@@ -62,8 +62,11 @@ flowchart TD
     recordblock --> informblocked["Orchestrator: inform developer in MASTER (link deferred.md)"]
     informblocked --> blocked
     allready -- yes --> verify{Developer verification required?}
-    verify -- yes --> regress[Developer: regression test and merge approval]:::developer
-    regress --> approved{Passed and approved?}
+    verify -- yes --> holdmerge["Author: run merge-pr --hold-before-merge"]
+    holdmerge --> holding{merge-pr ready and holding?}
+    holding -- no --> blocked
+    holding -- yes --> manualtest[Developer: manual test and merge approval]:::developer
+    manualtest --> approved{Approved?}
     approved -- yes --> merge
     approved -- no --> applydec
     verify -- no --> merge[Author: run merge-pr]
@@ -91,8 +94,8 @@ flowchart TD
 | Agent | Provider | Role |
 |---|---|---|
 | orchestrator | any | Checks provider allowance, runs the size check and assigns split-pr, adds and removes agents, polls recommendations for flagged issues and forwards them, records deferred issues in `temp/<branch>/deferred.md` (what the issue is, the recommendations, why it is out of scope, nonblocking or blocking), asks and alerts the developer in MASTER, keeps the workflow file current. After the merge, when the PR worktree is not the main checkout, removes the room agents working in it and runs worktree-close on it from outside. Informs the developer in MASTER with a link to `temp/<branch>/deferred.md` when it has entries at "PR merged" and when a blocking deferred issue ends at "PR merge blocked". Never writes code. |
-| developer | - | Answers allowance alerts; decides Abandon that is not single purpose; reads `temp/<branch>/deferred.md` after the workflow ends; optionally runs the pre-merge regression test and approval. |
-| author | claude | split-pr, address-review-comments, best-of-n, applies decisions, push, merge-pr (which waits for and fixes CI) |
+| developer | - | Answers allowance alerts; decides Abandon that is not single purpose; reads `temp/<branch>/deferred.md` after the workflow ends; optionally runs the manual test and merge approval while merge-pr holds before the merge. |
+| author | claude | split-pr, address-review-comments, best-of-n, applies decisions, push, merge-pr (which waits for and fixes CI), with `--hold-before-merge` first when developer verification is required |
 | claude-review | claude | review-pr |
 | codex-review | codex | review-pr |
 | cursor-review (optional) | cursor | review-pr |
