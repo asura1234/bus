@@ -14,7 +14,6 @@ mod files {
 
 mod bus_io {
     pub(super) use crate::agents::providers::hook_json::private_dir;
-    pub(super) use crate::utils::time::now_ns;
 }
 
 fn merge_hooks(document: Value, provider: Provider, binary: &Path) -> Result<Value, String> {

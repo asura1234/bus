@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn private_dir_creates_missing_roots_owner_only_even_when_racing() {
         use std::os::unix::fs::PermissionsExt;
-        let base = std::env::temp_dir().join(format!("bus-private-dir-{}", super::now_ns()));
+        let base = crate::utils::test_temp::unique_temp_path("bus-private-dir");
         let root = base.join("data");
         std::thread::scope(|scope| {
             for _ in 0..8 {
@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn exclusive_lock_is_released_on_drop_and_atomic_files_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("bus-lock-test-{}", super::now_ns()));
+        let dir = crate::utils::test_temp::unique_temp_path("bus-lock-test");
         super::private_dir(&dir).unwrap();
         let lease = super::lock(&dir.join("lock")).unwrap();
         assert!(super::lock(&dir.join("lock")).is_err());
@@ -98,7 +98,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn storage_write_and_lock_reject_real_and_dangling_symlinks() {
-        let dir = std::env::temp_dir().join(format!("bus-symlink-policy-{}", super::now_ns()));
+        let dir = crate::utils::test_temp::unique_temp_path("bus-symlink-policy");
         super::private_dir(&dir).unwrap();
         let target = dir.join("real");
         std::fs::write(&target, b"original").unwrap();

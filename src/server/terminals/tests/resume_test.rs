@@ -27,7 +27,7 @@ fn terminal_resume_facts_are_an_owned_snapshot_of_only_saved_identity() {
 
 #[test]
 fn native_resume_entry_keeps_foreign_server_context_out_of_capture_validation() {
-    let root = std::env::temp_dir().join("bus-resume-foreign-context");
+    let root = crate::utils::test_temp::unique_temp_path("bus-resume-foreign-context");
     let mut terminal =
         crate::terminal::TerminalState::new(crate::utils::ids::TerminalId::alloc(), root.clone());
     terminal.restore_managed_agent("bus-r1-a2".into(), crate::agents::AgentKind::Codex);
@@ -84,7 +84,7 @@ fn marker_resume_test_argv() -> Vec<String> {
 #[cfg(unix)]
 #[tokio::test]
 async fn invalid_bus_resume_context_does_not_launch_or_retry_and_keeps_session() {
-    let root = std::env::temp_dir().join("bus-resume-missing-context-test");
+    let root = crate::utils::test_temp::unique_temp_path("bus-resume-missing-context-test");
     let _env = test_support::ProcessEnvironment::enter(Some(&root), Some("bus"));
     let mut app = test_app();
     let workspace = crate::server::workspaces::Workspace::test_new("restored-bus");

@@ -2,7 +2,7 @@
 
 #[test]
 fn suggestions_report_directory_kind_without_ui_filesystem_reads() {
-    let dir = std::env::temp_dir().join(format!("bus-suggestions-{}", bus_io::now_ns()));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-suggestions");
     std::fs::create_dir(&dir).unwrap();
     std::fs::create_dir(dir.join("folder")).unwrap();
     std::fs::write(dir.join("file.md"), b"fixture").unwrap();

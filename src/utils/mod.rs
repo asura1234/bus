@@ -16,4 +16,7 @@ pub(crate) mod version;
 #[cfg(test)]
 #[path = "config/tests/env_test.rs"]
 pub(crate) mod test_env;
+#[cfg(test)]
+#[path = "tests/temp_path_test.rs"]
+pub(crate) mod test_temp;
 pub(crate) mod time;

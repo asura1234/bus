@@ -417,10 +417,7 @@ fn a_steered_group_survives_a_restart() {
     let worker = std::mem::replace(
         &mut fixture.worker,
         Worker::open(
-            std::env::temp_dir().join(format!(
-                "bus-steering-swap-{}",
-                crate::messaging::storage::io::now_ns()
-            )),
+            crate::utils::test_temp::unique_temp_path("bus-steering-swap"),
             Box::new(Native(native.clone())),
         )
         .unwrap(),

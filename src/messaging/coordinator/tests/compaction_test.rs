@@ -10,7 +10,7 @@ impl Transport for NoAgents {
 }
 
 fn setup(orchestrated: bool) -> (Worker, AgentId, RoomId, Option<AgentId>, PathBuf) {
-    let dir = std::env::temp_dir().join(format!("bus-compaction-{}", io::now_ns()));
+    let dir = crate::utils::test_temp::unique_temp_path("bus-compaction");
     let mut worker = Worker::open(dir.clone(), Box::new(NoAgents)).unwrap();
     worker.settings_path = Some(dir.join("settings.json"));
     let mut state = worker.state.clone();

@@ -10,7 +10,7 @@ fn bus_callback_dispatches_inside_inherited_herdr_session_and_spools_atomically(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("bus-cli-callback-{nonce}"));
+    let dir = std::env::temp_dir().join(format!("bus-cli-callback-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(
         dir.join("manifest.json"),
@@ -71,7 +71,10 @@ fn callback_cli_continues_existing_launch_spool_without_reset_or_replay() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let root = std::env::temp_dir().join(format!("bus-cli-saved-spool-{nonce}"));
+    let root = std::env::temp_dir().join(format!(
+        "bus-cli-saved-spool-{}-{nonce}",
+        std::process::id()
+    ));
     let dir = root.join("callbacks/saved-launch");
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = br#"{"agent_id":7,"provider":"codex","launch_id":"saved-launch"}"#;
@@ -163,7 +166,7 @@ fn callback_cli_rejects_wrong_launch_and_oversized_input_without_spooling() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("bus-cli-rejected-{nonce}"));
+    let dir = std::env::temp_dir().join(format!("bus-cli-rejected-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     std::fs::write(
         dir.join("manifest.json"),
