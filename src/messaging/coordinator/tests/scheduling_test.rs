@@ -45,7 +45,7 @@ impl Transport for FreshLaunchNative {
                 self.commands
                     .send((
                         1,
-                        BusCommand::Dev(crate::messaging::control::server::DevCall {
+                        BusCommand::Control(crate::messaging::control::server::ControlCall {
                             request: crate::messaging::control::Request {
                                 id: format!("fresh-status-{}", self.polls),
                                 method: "message.status".into(),
@@ -153,7 +153,7 @@ impl Transport for PollingNative {
                     BusCommand::Shutdown
                 } else {
                     let (reply, _) = mpsc::sync_channel(1);
-                    BusCommand::Dev(crate::messaging::control::server::DevCall {
+                    BusCommand::Control(crate::messaging::control::server::ControlCall {
                         request: crate::messaging::control::Request {
                             id: format!("status-{}", io::now_ns()),
                             method: "message.status".into(),
@@ -254,7 +254,7 @@ fn a_stalled_queued_message_is_closed_and_never_fires_after_readiness_returns() 
     let now = io::now_ms();
     let message = worker.state.request(request).unwrap().prompt.id;
     assert_eq!(
-        worker.dev_message_at(message, now).unwrap()["requests"][0]["stage"],
+        worker.control_message_at(message, now).unwrap()["requests"][0]["stage"],
         "stalled"
     );
     worker.submit_ready().unwrap();
@@ -263,7 +263,7 @@ fn a_stalled_queued_message_is_closed_and_never_fires_after_readiness_returns() 
         RequestPhase::Abandoned
     );
     assert!(worker.state.queued_requests(agent).is_empty());
-    let response = worker.dev_message_at(message, now).unwrap();
+    let response = worker.control_message_at(message, now).unwrap();
     assert_eq!(response["complete"], true);
     assert_eq!(response["requests"][0]["reason"], "not_submitted");
     assert!(!calls
@@ -306,7 +306,7 @@ fn reporting_a_queued_stall_closes_it_durably_before_the_sender_stops_waiting() 
     let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
     let request = stalled_queue(&mut worker, agent, room);
     let message = worker.state.request(request).unwrap().prompt.id;
-    let response = worker.dev_message(message).unwrap();
+    let response = worker.control_message(message).unwrap();
     assert_eq!(response["complete"], true);
     assert_eq!(response["requests"][0]["stage"], "abandoned");
     assert_eq!(response["requests"][0]["reason"], "not_submitted");

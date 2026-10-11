@@ -62,8 +62,8 @@ impl Worker {
                     .map_err(|_| "Bus UI event channel disconnected")?;
                 Ok(json!({"stage":"queued"}))
             }
-            "agent.read" => self.dev_read(
-                self.dev_agent(required(p, "agent")?, None)?,
+            "agent.read" => self.control_read(
+                self.control_agent(required(p, "agent")?, None)?,
                 optional_text(p, "source")?,
                 optional_u32(p, "lines")?,
             ),
@@ -111,13 +111,13 @@ impl Worker {
         }
     }
 
-    pub(in crate::messaging::coordinator) fn dev_read(
+    pub(in crate::messaging::coordinator) fn control_read(
         &mut self,
         id: AgentId,
         source: Option<&str>,
         lines: Option<u32>,
     ) -> Result<Value, String> {
-        let read_source = dev_read_source(source, lines)?;
+        let read_source = control_read_source(source, lines)?;
         let agent = self.state.agent(id).ok_or("Unknown agent")?;
         let target = agent
             .runtime_identity
@@ -233,7 +233,10 @@ fn build_json() -> Value {
     })
 }
 
-fn dev_read_source(source: Option<&str>, lines: Option<u32>) -> Result<schema::ReadSource, String> {
+fn control_read_source(
+    source: Option<&str>,
+    lines: Option<u32>,
+) -> Result<schema::ReadSource, String> {
     let read_source = match source {
         Some("recent") => schema::ReadSource::Recent,
         Some("visible") => schema::ReadSource::Visible,

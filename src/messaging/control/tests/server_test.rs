@@ -88,7 +88,7 @@ fn client_reaches_a_bus_still_on_the_legacy_socket_name() {
     // A Bus started before the rename listens on dev-control.sock.
     std::fs::rename(dir.socket(), dir.0.join("dev-control.sock")).unwrap();
     let worker = thread::spawn(move || {
-        let (_, BusCommand::Dev(call)) = rx.recv().unwrap() else {
+        let (_, BusCommand::Control(call)) = rx.recv().unwrap() else {
             panic!("expected a control call")
         };
         call.reply
@@ -121,7 +121,7 @@ fn roundtrip_returns_exact_worker_outcome_with_disjoint_command_ids() {
     let server = start(&dir.0, tx).unwrap();
     let worker = thread::spawn(move || {
         for expected_id in ["snapshot", "bad-command"] {
-            let (command_id, BusCommand::Dev(dev)) =
+            let (command_id, BusCommand::Control(dev)) =
                 rx.recv_timeout(Duration::from_secs(5)).unwrap()
             else {
                 panic!("wrong coordinator command");
@@ -165,7 +165,7 @@ fn malformed_and_idle_clients_do_not_delay_healthy_requests() {
     assert_eq!(error.code, "invalid_request");
     assert!(!error.message.contains("secret"));
     let worker = thread::spawn(move || {
-        let (_, BusCommand::Dev(dev)) = rx.recv_timeout(Duration::from_secs(2)).unwrap() else {
+        let (_, BusCommand::Control(dev)) = rx.recv_timeout(Duration::from_secs(2)).unwrap() else {
             panic!()
         };
         dev.reply
@@ -218,7 +218,7 @@ fn oversized_worker_response_is_replaced_with_bounded_error() {
     let (tx, rx) = mpsc::sync_channel(1);
     let _server = start(&dir.0, tx).unwrap();
     let worker = thread::spawn(move || {
-        let (_, BusCommand::Dev(dev)) = rx.recv_timeout(Duration::from_secs(5)).unwrap() else {
+        let (_, BusCommand::Control(dev)) = rx.recv_timeout(Duration::from_secs(5)).unwrap() else {
             panic!()
         };
         dev.reply
@@ -278,7 +278,7 @@ fn unanswered_coordinator_request_has_finite_deadline() {
     let _server = start(&dir.0, tx).unwrap();
     let result = request(&dir.0, &call("never-finished")).unwrap();
     assert_eq!(result.error.unwrap().code, "coordinator_timeout");
-    let (_, BusCommand::Dev(dev)) = rx.try_recv().unwrap() else {
+    let (_, BusCommand::Control(dev)) = rx.try_recv().unwrap() else {
         panic!()
     };
     assert!(dev
@@ -336,7 +336,7 @@ fn client_rejects_a_response_for_another_request() {
     let (tx, rx) = mpsc::sync_channel(1);
     let _server = start(&dir.0, tx).unwrap();
     let worker = thread::spawn(move || {
-        let (_, BusCommand::Dev(dev)) = rx.recv_timeout(Duration::from_secs(5)).unwrap() else {
+        let (_, BusCommand::Control(dev)) = rx.recv_timeout(Duration::from_secs(5)).unwrap() else {
             panic!()
         };
         dev.reply
@@ -366,7 +366,7 @@ fn completed_responses_remain_counted_until_peers_close() {
             serde_json::to_string(&call(&format!("retain-{id}"))).unwrap()
         )
         .unwrap();
-        let (_, BusCommand::Dev(dev)) = rx.recv_timeout(Duration::from_secs(2)).unwrap() else {
+        let (_, BusCommand::Control(dev)) = rx.recv_timeout(Duration::from_secs(2)).unwrap() else {
             panic!()
         };
         dev.reply

@@ -84,7 +84,7 @@ pub(crate) enum BusCommand {
         input: String,
         directories_only: bool,
     },
-    Dev(control::DevCall),
+    Control(control::ControlCall),
     Shutdown,
 }
 

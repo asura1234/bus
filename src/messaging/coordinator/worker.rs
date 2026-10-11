@@ -29,12 +29,12 @@ pub(super) struct Worker {
     pub(super) own_turns: BTreeMap<AgentId, std::time::Instant>,
     pub(super) dev_enabled: bool,
     /// Mutation receipts by request ID, so a retried request replays its
-    /// response instead of running twice. Oldest first in `dev_receipt_order`.
-    pub(super) dev_receipts: BTreeMap<String, control_dispatch::DevReceipt>,
-    pub(super) dev_receipt_order: std::collections::VecDeque<String>,
-    pub(super) dev_receipt_bytes: usize,
+    /// response instead of running twice. Oldest first in `control_receipt_order`.
+    pub(super) control_receipts: BTreeMap<String, control_dispatch::ControlReceipt>,
+    pub(super) control_receipt_order: std::collections::VecDeque<String>,
+    pub(super) control_receipt_bytes: usize,
     /// How long a receipt is kept before it may be evicted to make room.
-    pub(super) dev_receipt_retention: Duration,
+    pub(super) control_receipt_retention: Duration,
     /// Provider allowance for dev `state`; in memory only, never persisted.
     pub(super) usage: usage::Usage,
     /// The UI's settings file; set only for a real launch so tests never touch it.
@@ -84,10 +84,10 @@ impl Worker {
             withdrawn_at: BTreeMap::new(),
             own_turns: BTreeMap::new(),
             dev_enabled: false,
-            dev_receipts: BTreeMap::new(),
-            dev_receipt_order: std::collections::VecDeque::new(),
-            dev_receipt_bytes: 0,
-            dev_receipt_retention: control_dispatch::DEV_RECEIPT_RETENTION,
+            control_receipts: BTreeMap::new(),
+            control_receipt_order: std::collections::VecDeque::new(),
+            control_receipt_bytes: 0,
+            control_receipt_retention: control_dispatch::CONTROL_RECEIPT_RETENTION,
             usage: usage::Usage::default(),
             settings_path: None,
             sound_dirs: None,
@@ -178,8 +178,8 @@ impl Worker {
                     self.fold_journal();
                     break;
                 }
-                Ok((_id, BusCommand::Dev(call))) => {
-                    let response = self.dev_response_with_events(&call.request, Some(&events));
+                Ok((_id, BusCommand::Control(call))) => {
+                    let response = self.control_response_with_events(&call.request, Some(&events));
                     // A disconnected client does not cancel or replay a committed action.
                     let _ = call.reply.try_send(response);
                 }
@@ -330,7 +330,7 @@ fn collect_delivery_commands(
 
 fn interrupts_delivery(command: &BusCommand) -> bool {
     match command {
-        BusCommand::Dev(call) => control_dispatch::is_mutation(&call.request.method),
+        BusCommand::Control(call) => control_dispatch::is_mutation(&call.request.method),
         _ => true,
     }
 }

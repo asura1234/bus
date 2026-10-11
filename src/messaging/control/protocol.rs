@@ -67,7 +67,7 @@ impl Response {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct DevCall {
+pub(crate) struct ControlCall {
     pub request: Request,
     pub reply: SyncSender<Response>,
 }
