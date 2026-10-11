@@ -19,10 +19,10 @@ use std::path::{Path, PathBuf};
 pub(super) const EFFECTS_ENV: &str = "BUS_TUI_EFFECTS";
 /// The image the clipboard stand-in serves; set in the scratch environment.
 pub(super) const CLIPBOARD_IMAGE_ENV: &str = "BUS_TUI_CLIPBOARD_IMAGE";
-pub(crate) const COMMANDS: &[&str] = &["open", "osascript", "afplay", "terminal-notifier"];
+pub(super) const COMMANDS: &[&str] = &["open", "osascript", "afplay", "terminal-notifier"];
 
 /// Runs a stand-in when this process is one; returns its exit code.
-pub(crate) fn run(command: &str, args: &[String]) -> i32 {
+pub(super) fn run(command: &str, args: &[String]) -> i32 {
     let (effect, code) = match command {
         "open" => (
             json!({"kind": "open", "target": args.last(), "args": args}),

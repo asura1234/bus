@@ -47,7 +47,7 @@ fn link_or_copy(binary: &Path, link: &Path) -> std::io::Result<()> {
 
 /// The provider a fake should play, when this process is one: invoked under a
 /// provider's name inside a driver session.
-pub(crate) fn fake_provider(argv0: &str) -> Option<&'static str> {
+pub(super) fn fake_provider(argv0: &str) -> Option<&'static str> {
     stand_in(argv0, PROVIDER_NAMES)
 }
 
@@ -58,7 +58,7 @@ pub(super) fn stand_in(argv0: &str, names: &[&'static str]) -> Option<&'static s
     names.iter().copied().find(|candidate| *candidate == name)
 }
 
-pub(crate) fn run(provider: &str, args: &[String]) -> i32 {
+pub(super) fn run(provider: &str, args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--version" || a == "-v") {
         let _ = writeln!(std::io::stdout(), "0.0.0 (bus tui fake {provider})");
         return 0;
