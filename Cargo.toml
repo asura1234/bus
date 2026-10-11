@@ -13,6 +13,7 @@ include = [
     "tests/**/*",
     "orchestration/**/*",
     "workflows/**/*",
+    "docs/dev-tools.md",
     "vendor/libghostty-vt/**/*",
     "!vendor/libghostty-vt/.zig-cache/**/*",
     "!vendor/libghostty-vt/zig-out/**/*",
