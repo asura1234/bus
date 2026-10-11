@@ -2,7 +2,7 @@
 use super::super::{
     chat_search::ChatSearch,
     history::{Line, Tone},
-    links::{visible_links, Candidate, Target, LINK},
+    links::{visible_links, Candidate},
     recipients::Layout as RecipientLayout,
     thumbnails::Placement,
     BusUi, ComposerSize, LocalRoom,
@@ -345,8 +345,7 @@ impl BusUi {
             .enumerate()
         {
             let rect = Rect::new(x, history_y + index as u16, width, 1);
-            // An attachment is a link over its name or picture only, so a
-            // press beside it, or a drag across it, selects like any row.
+            // An attachment's hit is its link, not the whole row.
             let attachment = match &line.action {
                 Some(Action::OpenFile(path)) => Some(path),
                 _ => None,
@@ -359,16 +358,7 @@ impl BusUi {
                 matches!(line.tone, Tone::Muted),
             );
             if let Some(path) = attachment {
-                let cells = line
-                    .thumbnail
-                    .as_ref()
-                    .map_or(line.text.width() as u16, |thumbnail| thumbnail.cols);
-                let link_rect = Rect::new(x, rect.y, cells.min(width), 1);
-                if link_rect.width > 0 {
-                    view.hit(link_rect, Action::OpenFile(path.clone()));
-                    view.history_links
-                        .push((link_rect, Target::Path(path.clone())));
-                }
+                view.attachment_link(rect, line, path);
             }
             if let Some(thumbnail) = line.thumbnail.as_ref().filter(|thumbnail| {
                 // Partly scrolled thumbnails keep their blank rows and name.
@@ -403,21 +393,7 @@ impl BusUi {
                 view.select(rect, &line.text, 0, &(from..to), newline);
             }
             self.history_row_styles(view, line, rect);
-            for link in links.get(index).into_iter().flatten() {
-                let column = line.text[..link.range.start].width() as u16;
-                let text = &line.text[link.range.clone()];
-                let link_rect = Rect::new(
-                    rect.x + column,
-                    rect.y,
-                    (text.width() as u16).min(width.saturating_sub(column)),
-                    1,
-                );
-                view.row(link_rect, text, None, false, false);
-                view.style_last_row(link_rect, LINK);
-                if link_rect.width > 0 {
-                    view.history_links.push((link_rect, link.target.clone()));
-                }
-            }
+            view.text_links(rect, line, links.get(index).map_or(&[], Vec::as_slice));
             highlight_history_row(view, line, line_index, rect, current_match.as_ref());
         }
     }

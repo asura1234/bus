@@ -2,6 +2,7 @@
 mod dialogs;
 #[path = "layout.rs"]
 mod geometry;
+mod history_links;
 #[cfg(feature = "dev-tools")]
 mod hits;
 mod paint;
