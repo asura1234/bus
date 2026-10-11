@@ -6,12 +6,14 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
     echo "Usage: ./run dev [Bus arguments]" >&2
     echo "       ./run dev-control <command> [arguments]" >&2
+    echo "       ./run tui <verb> [arguments]" >&2
     echo "" >&2
     echo "Examples:" >&2
     echo "  ./run dev" >&2
     echo "  ./run dev resume --last" >&2
     echo "  ./run dev sessions" >&2
     echo "  ./run dev-control agent read 3 --source recent --lines 80" >&2
+    echo "  ./run tui start" >&2
 }
 
 case "${1:-}" in
@@ -30,6 +32,15 @@ case "${1:-}" in
             exit 1
         fi
         exec "$binary" --dev "$@"
+        ;;
+    tui)
+        shift
+        cd "$REPO_ROOT"
+        # The driver runs a scratch Bus from its own build; target/debug stays
+        # the binary ./run dev uses.
+        target_dir="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+        cargo build --locked --profile tui-driver --bin bus >&2
+        exec "$target_dir/tui-driver/bus" --dev tui "$@"
         ;;
     -h|--help)
         usage

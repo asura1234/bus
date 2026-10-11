@@ -36,6 +36,7 @@ selected rules. Python retains Ruff E9,F and has no complexity lint policy.
   - `client/`: `client_test.rs`, `startup_test.rs`, `lifecycle_test.rs`, `window_title_test.rs`, `output_test.rs`,
     `persistence_test.rs`, `shared_view_test.rs`, `room_screen_test.rs`, `room_screen_support_test.rs`, `screen_support_test.rs`
   - `cli/`: `cli_test.rs`, `callbacks_test.rs` (`--bus-callback` spooling), `paths_test.rs` (`--paths` and data-dir isolation)
+  - `tui/`: `driver_test.rs` (`bus --dev tui` against scratch sessions, and its refusal to touch a running session)
   - `fixtures/`: key corpora, endpoint golden JSON, session files (data files keep their names)
 - `tools/`: repo-level tooling that belongs to no single skill, one Python package and one test root
   - `quality/`: UI hot-path check and the enforced import-boundary audit for graph 3a
@@ -263,6 +264,11 @@ Files are split by ownership, not by helper.
 - `cli/`: the `bus` command
   - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
   - `control.rs` (control commands used by orchestrators and humans), `help.rs`, `tests/{parse_test,execute_test}.rs`
+- `devtools/`: dev tools that inspect or drive Bus itself; they ship in every build and run only behind `--dev`
+  - `tui/`: `bus --dev tui`, the TUI driver (reference: `docs/tui-driver.md`): `mod.rs` (verbs, start/stop, waits), `args.rs`,
+    `session.rs` (scratch session paths, the guards that refuse live sessions, the scrubbed environment), `host.rs` (the per-session
+    process that owns the hidden terminal), `screen.rs` (libghostty-vt screen as text and styled cells), `input.rs` (keys and SGR
+    mouse), `predicate.rs` (`wait --state`), `trace.rs` (run folder), `fake_agents.rs` (fake provider CLIs), `tests/`
 
 Local test moves use literal includes where needed to retain their full S9b names. In particular, CLI stop/guidance tests keep
 `utils::paths::tests`, the runtime PTY setup case keeps `terminal::pty::spawn::unix::tests`, and graphics tests keep their Kitty
@@ -278,8 +284,9 @@ dependency rule, and an import-boundary check in `tools/quality` fails the gate 
 
 ```mermaid
 flowchart TD
-  main --> cli & server & client & agents
+  main --> cli & server & client & agents & devtools
   cli --> client & messaging & protocol & platform
+  devtools --> terminal & messaging & protocol & platform
   client --> messaging & agents & protocol & platform
   server --> terminal & messaging & agents & protocol & platform
   messaging --> agents & protocol & platform
@@ -289,7 +296,8 @@ flowchart TD
 ```
 
 The graph is acyclic. `main` is the composition root: it dispatches to `cli`, the hidden `server` and `client` entries, and the
-`--bus-callback` hook entry in `agents`.
+`--bus-callback` hook entry in `agents`, and `bus --dev tui` in `devtools` (including the fake provider CLIs a driver session
+runs, which are `bus` under a provider's name).
 
 - `messaging` never imports `terminal`, `server` or `client`: it reaches agents through the server's JSON API and the provider hook
   spool. `agents/providers` never imports `messaging`: it takes a room-free `LaunchSpec` and emits neutral provider events.
@@ -381,6 +389,9 @@ focus and geometry), `rendering/` (what each client sees) and `notifications/`. 
 
 **client**. The TUI: host terminal setup and input, the one server connection, the frame compositor, pane input and the room UI. It hosts
 the coordinator in its process but only through `BusHandle`.
+
+**devtools**. Commands that inspect or drive Bus itself, starting with the TUI driver. Every driver session is a fresh Bus the
+driver starts in a generated `/tmp` data directory; nothing in `devtools` attaches to an existing session.
 
 **cli**. The `bus` command: session pick, server start and same-build check, client launch, `stop`, and the control commands.
 

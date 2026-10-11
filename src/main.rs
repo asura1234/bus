@@ -3,6 +3,7 @@ use std::io;
 mod agents;
 mod cli;
 mod client;
+mod devtools;
 mod messaging;
 mod platform;
 mod protocol;
@@ -31,6 +32,13 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    // A driver session's fake provider CLIs are this binary under a provider's name.
+    if let Some(provider) = raw_args
+        .first()
+        .and_then(|arg0| devtools::tui::fake_provider(arg0))
+    {
+        std::process::exit(devtools::tui::run_fake_agent(provider, &raw_args[1..]));
+    }
     if raw_args.get(1).map(String::as_str) == Some("--bus-callback") {
         let logging_options = cli::logging_options();
         let diagnostics_dir = std::env::var_os("BUS_CALLBACK_DIR").map(std::path::PathBuf::from);
@@ -56,6 +64,14 @@ fn main() -> io::Result<()> {
                 cli::config_override(),
                 cli::stop::stop_active_server,
             )
+        }
+        // Dev tools exist only behind --dev.
+        Some("--dev") if raw_args.get(2).map(String::as_str) == Some("tui") => {
+            std::process::exit(devtools::tui::run(&raw_args[3..]))
+        }
+        Some("tui") => {
+            eprintln!("error: tui is a dev tool; run `bus --dev tui ...`");
+            std::process::exit(2)
         }
         Some("--version" | "-V") if raw_args.len() == 2 => {
             platform::begin_cli_output();
