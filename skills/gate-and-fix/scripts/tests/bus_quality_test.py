@@ -279,6 +279,40 @@ class BusQualityTest(unittest.TestCase):
                 (sys.executable, "-m", "tools.quality.import_boundaries", "--enforce"),
             )
 
+    def test_lint_also_clippies_the_dev_tools_variant_with_the_same_policy(self):
+        policy = quality.tomllib.loads(quality.LINT_POLICY.read_text(encoding="utf-8"))
+        with (
+            patch.object(quality, "python_roots", return_value=("tools",)),
+            patch.object(quality, "file_lengths", return_value=0),
+            patch.object(quality, "run", return_value=0) as run,
+        ):
+            self.assertEqual(quality.lint(), 0)
+            calls = [call.args for call in run.call_args_list]
+        for argv in quality.clippy_commands(policy):
+            self.assertIn(argv, calls)
+        variant = quality.clippy_commands(policy, features=("--features", "dev-tools"))
+        for argv in variant:
+            self.assertEqual(argv[:4], ("cargo", "clippy", "--features", "dev-tools"))
+            self.assertIn(argv, calls)
+
+    def test_a_failing_dev_tools_variant_fails_integration(self):
+        for nextest in (False, True):
+            with (
+                self.subTest(nextest=nextest),
+                patch.object(quality.shutil, "which", return_value="nextest" if nextest else None),
+                patch.object(quality, "state", return_value={"unit": True}),
+                patch.object(quality, "save_state") as save,
+                patch.object(quality, "rust_test", return_value=0),
+                patch.object(quality, "run", return_value=1) as run,
+            ):
+                self.assertEqual(quality.integration(), 1)
+                argv = run.call_args.args
+                expected = ("cargo", "nextest", "run") if nextest else ("cargo", "test")
+                self.assertEqual(argv[: len(expected)], expected)
+                self.assertIn("dev-tools", argv)
+                self.assertEqual(argv[argv.index("--test") + 1], "cli")
+                self.assertFalse(save.call_args.args[0]["integration"])
+
     def test_lint_rejects_an_empty_python_inventory_instead_of_scanning_the_cwd(self):
         with (
             patch.object(quality, "python_roots", return_value=()),
@@ -293,6 +327,7 @@ class BusQualityTest(unittest.TestCase):
             patch.object(quality, "state", return_value={"unit": True}),
             patch.object(quality, "save_state") as save,
             patch.object(quality, "rust_test", return_value=0) as rust_test,
+            patch.object(quality, "run", return_value=0),
         ):
             self.assertEqual(quality.integration(), 0)
             self.assertEqual(rust_test.call_args_list[0].args, ("--test", "*"))

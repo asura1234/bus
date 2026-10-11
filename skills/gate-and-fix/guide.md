@@ -20,7 +20,8 @@ replace `rebase-origin-main` or PR creation.
   that those layers passed.
 - Every round runs all four checks plus `git diff --check <base>...HEAD`, regardless of which
   files changed. No changed-file filter can remove a category or a skill test.
-  - **Lint**: Cargo fmt, all-target Clippy with warnings denied, Ruff `E9,F` over all first-party
+  - **Lint**: Cargo fmt, all-target Clippy with warnings denied (for the default build and again
+    for the `dev-tools` variant that `./run dev` builds), Ruff `E9,F` over all first-party
     Python, and the static hot-path architecture contract. The lint lane runs the hot-path and
     import-boundary pytest suites under `tools/tests/`, then checks test placement and file sizes before enforcing the final import graph.
     Unknown source/target owners and forbidden component or inner edges fail the lane. These checks read source text;
@@ -42,6 +43,8 @@ replace `rebase-origin-main` or PR creation.
     path ensure CLI tests measure this commit rather than an old `target/debug/bus`.
   - **Integration**: all Rust integration targets under `tests/`, then the in-process
     `IN_PROCESS_SERVER_TESTS` harness. The same prefix drives nextest and libtest filters.
+    Then the `cli` target again with `--features dev-tools`, uninstrumented, so the dev variant's
+    test tooling is built and run; coverage measures only the default build.
     No real LLM agents are launched.
   - **Coverage**: cargo-llvm-cov exports the fresh unit + integration profiles. The Rust production
     line percentage must meet its fixed floor in

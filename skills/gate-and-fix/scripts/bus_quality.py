@@ -34,6 +34,10 @@ RUST_EXCLUDE = "|".join(
     )
 )
 IN_PROCESS_SERVER_TESTS = "server::tests::"
+# The dev variant (`./run dev`) compiles test tooling behind this feature; lint
+# it with the same policy and run the CLI tests that reach it.
+DEV_TOOLS_FEATURES = ("--features", "dev-tools")
+DEV_TOOLS_TEST_TARGET = "cli"
 ARCHITECTURE_TESTS = (
     "tools/tests/ui_hot_path_test.py",
     "tools/tests/import_boundaries_test.py",
@@ -79,9 +83,11 @@ def configured_test_scopes(policy: dict) -> dict | None:
     return {key: tuple(policy[key]) for key in keys}
 
 
-def clippy_commands(policy: dict, target: str | None = None) -> tuple[tuple[str, ...], ...]:
+def clippy_commands(
+    policy: dict, target: str | None = None, features: tuple[str, ...] = ()
+) -> tuple[tuple[str, ...], ...]:
     """Check production before allowing selected lints while compiling tests."""
-    base = ("cargo", "clippy", *(("--target", target) if target else ()))
+    base = ("cargo", "clippy", *features, *(("--target", target) if target else ()))
     all_targets = (*base, "--all-targets", "--locked", "--", "-D", "warnings")
     scopes = configured_test_scopes(policy)
     selected = policy.get("production_clippy_lints", [])
@@ -213,11 +219,11 @@ def lint() -> int:
     roots = python_roots()
     if not roots:
         raise ValueError("no Python source roots found")
+    policy = tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))
     results = [
         run("cargo", "fmt", "--check"),
-        *(run(*argv) for argv in clippy_commands(
-            tomllib.loads(LINT_POLICY.read_text(encoding="utf-8"))
-        )),
+        *(run(*argv) for argv in clippy_commands(policy)),
+        *(run(*argv) for argv in clippy_commands(policy, features=DEV_TOOLS_FEATURES)),
         run(
             sys.executable,
             "-m",
@@ -281,11 +287,27 @@ def unit() -> int:
     return int(not value["unit"])
 
 
+def dev_tools_test() -> int:
+    """Run the CLI tests on the dev variant; coverage measures only the release one."""
+    if shutil.which("cargo-nextest"):
+        return run(
+            "cargo", "nextest", "run", "--locked", *DEV_TOOLS_FEATURES,
+            "--test", DEV_TOOLS_TEST_TARGET, "--no-fail-fast",
+            "--status-level", "fail", "--final-status-level", "fail",
+            "--failure-output", "final", "--success-output", "never",
+        )
+    return run(
+        "cargo", "test", "--locked", *DEV_TOOLS_FEATURES,
+        "--test", DEV_TOOLS_TEST_TARGET, "--no-fail-fast", "--quiet",
+    )
+
+
 def integration() -> int:
     value = state()
     results = [
         rust_test("--test", "*"),
         rust_test("--bin", "bus", in_process_server=True),
+        dev_tools_test(),
     ]
     value["integration"] = not any(results)
     save_state(value)
