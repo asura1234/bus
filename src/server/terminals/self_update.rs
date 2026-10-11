@@ -212,6 +212,17 @@ impl App {
         });
         Some(match started {
             Ok(_) => {
+                // A resumed agent's own session, which its exit cleared and
+                // Codex reports again only on its next prompt.
+                if let Some(session) = update.session.clone() {
+                    if let Some(terminal) = self.state.workspaces[ws_idx]
+                        .terminal_id(pane_id)
+                        .cloned()
+                        .and_then(|id| self.state.terminals.get_mut(&id))
+                    {
+                        terminal.set_managed_agent_launch_session(session);
+                    }
+                }
                 tracing::info!(event = "bus.self_update.relaunched", agent = %update.name,
                     failure = ?failure, "Started the agent again after its update");
                 match failure {
@@ -278,10 +289,12 @@ impl App {
         let Some(terminal) = self.state.terminals.get_mut(terminal_id) else {
             return false;
         };
+        let session = terminal.persisted_agent_session.clone();
         terminal.self_update = Some(SelfUpdate {
             name,
             kind,
             args,
+            session,
             success: spec.success,
             phase: SelfUpdatePhase::Installing {
                 deadline: now + SELF_UPDATE_INSTALL_TIMEOUT,
@@ -303,6 +316,17 @@ impl App {
                 crate::agents::manifest::auto_update(kind, &runtime.visible_text()).is_some()
             })
     }
+}
+
+/// The arguments to type again after `kind`'s update: the command a restore
+/// typed into the pane's shell, without its executable. A restored agent's
+/// command resumes its own session, so its relaunch does too.
+pub(crate) fn managed_relaunch_args(
+    kind: Option<crate::agents::AgentKind>,
+    argv: &[String],
+) -> Option<Vec<String>> {
+    let (executable, args) = argv.split_first()?;
+    (executable == crate::agents::interactive_agent_executable(kind?)).then(|| args.to_vec())
 }
 
 fn failed_install(update: &SelfUpdate, reason: &str) -> String {

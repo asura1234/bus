@@ -109,6 +109,8 @@ pub struct SelfUpdate {
     pub name: String,
     pub kind: AgentKind,
     pub args: Vec<String>,
+    /// The session the agent was running, bound again after the relaunch.
+    pub session: Option<crate::agents::resume::catalog::PersistedAgentSession>,
     /// Text the agent prints when the install succeeded, before it exits.
     pub success: String,
     pub phase: SelfUpdatePhase,
