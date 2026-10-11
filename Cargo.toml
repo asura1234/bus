@@ -48,6 +48,10 @@ path = "tests/cli/cli_test.rs"
 name = "room-screen"
 path = "tests/client/room_screen_test.rs"
 
+[[test]]
+name = "tui-driver"
+path = "tests/tui/driver_test.rs"
+
 [dependencies]
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }

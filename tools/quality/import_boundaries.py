@@ -31,6 +31,7 @@ DEPENDENCIES = {
     "server": frozenset({"terminal", "messaging", "agents", "protocol", "platform"}),
     "client": frozenset({"messaging", "agents", "protocol", "platform"}),
     "cli": frozenset({"client", "messaging", "protocol", "platform"}),
+    "devtools": frozenset({"terminal", "messaging", "protocol", "platform"}),
 }
 EXCEPTIONS = {"src/server/tests/render_scale_test.rs": frozenset({"client"})}
 IDENTIFIER = r"(?:r#)?[A-Za-z_]\w*"
