@@ -507,7 +507,7 @@ fn storage_recovery_in_the_failed_command_batch_requeues_the_unsaved_draft() {
 #[test]
 fn deleting_a_recalled_prompt_keeps_the_edit_as_the_live_draft() {
     let (mut ui, room, _) = fixture();
-    ui.locals.get_mut(&room).unwrap().recall = vec!["previous prompt".into()];
+    ui.locals.get_mut(&room).unwrap().recall = vec![Recalled::now("previous prompt".into())];
     ui.input(
         &RawInputEvent::Paste("unfinished draft".into()),
         false,

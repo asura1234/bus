@@ -23,7 +23,10 @@ fn ctrl_e_moves_to_line_end_and_shift_toggles_composer_size() {
 #[test]
 fn ctrl_r_searches_history_and_shift_opens_a_room_form() {
     let (mut ui, room, _) = fixture();
-    ui.locals.get_mut(&room).unwrap().recall = vec!["alpha path".into(), "beta note".into()];
+    ui.locals.get_mut(&room).unwrap().recall = vec![
+        Recalled::now("alpha path".into()),
+        Recalled::now("beta note".into()),
+    ];
     key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
     assert!(ui.form.is_none());
     assert_eq!(ui.locals[&room].text.text, "beta note");
@@ -43,7 +46,8 @@ fn ctrl_r_searches_history_and_shift_opens_a_room_form() {
 #[test]
 fn up_browses_recall_and_esc_esc_saves_the_draft() {
     let (mut ui, room, _) = fixture();
-    ui.locals.get_mut(&room).unwrap().recall = vec!["older".into(), "newer".into()];
+    ui.locals.get_mut(&room).unwrap().recall =
+        vec![Recalled::now("older".into()), Recalled::now("newer".into())];
     ui.locals.get_mut(&room).unwrap().text.insert("live");
     key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     assert_eq!(ui.locals[&room].text.text, "newer");
@@ -56,11 +60,44 @@ fn up_browses_recall_and_esc_esc_saves_the_draft() {
     key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
     assert!(ui.locals[&room].text.text.is_empty());
     assert_eq!(
-        ui.locals[&room].recall.last().map(String::as_str),
+        ui.locals[&room].recall.last().map(|r| r.text.as_str()),
         Some("live")
     );
     key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     assert_eq!(ui.locals[&room].text.text, "live");
+}
+
+#[test]
+fn up_recalls_an_archived_edit_before_the_older_sent_prompt_it_edits() {
+    let (mut ui, room, agent) = fixture();
+    let mut snapshot = (*ui.snapshot).clone();
+    snapshot.state.set_draft_recipients(room, [agent]).unwrap();
+    for (text, at_ms) in [("first", 10), ("draft-a", 20)] {
+        snapshot.state.set_draft_text(room, text).unwrap();
+        snapshot.state.submit_draft(room, at_ms).unwrap();
+    }
+    ui.receive_snapshot(Arc::new(snapshot));
+    ui.locals
+        .get_mut(&room)
+        .unwrap()
+        .text
+        .insert("draft-a edited");
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    key(&mut ui, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(ui.locals[&room].text.text.is_empty());
+
+    assert_eq!(
+        ui.filtered_history(room, ""),
+        ["draft-a edited", "draft-a", "first"]
+    );
+    for expected in ["draft-a edited", "draft-a", "first", "first"] {
+        key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
+        assert_eq!(ui.locals[&room].text.text, expected);
+    }
+    for expected in ["draft-a", "draft-a edited", ""] {
+        key(&mut ui, KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(ui.locals[&room].text.text, expected);
+    }
 }
 
 #[test]
@@ -138,7 +175,7 @@ fn cursor_movement_preserves_live_draft_while_browsing_recall() {
     let (mut ui, room, _) = fixture();
     let local = ui.locals.get_mut(&room).unwrap();
     local.text.insert("live draft");
-    local.recall = vec!["recalled prompt".into()];
+    local.recall = vec![Recalled::now("recalled prompt".into())];
 
     key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     key(&mut ui, KeyCode::Left, KeyModifiers::NONE);
@@ -155,7 +192,7 @@ fn notes_deletion_preserves_the_composer_recall_draft() {
     let local = ui.locals.get_mut(&room).unwrap();
     local.text.insert("live draft");
     local.notes.insert("notes");
-    local.recall = vec!["recalled prompt".into()];
+    local.recall = vec![Recalled::now("recalled prompt".into())];
 
     key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
     key(&mut ui, KeyCode::F(3), KeyModifiers::NONE);
@@ -204,7 +241,9 @@ fn switching_rooms_restores_the_recall_source_even_after_an_old_save_ack() {
     ui.receive_snapshot(Arc::new(snapshot));
     let local = ui.locals.get_mut(&first).unwrap();
     local.text.insert("first live draft");
-    local.recall.push("first recalled prompt".into());
+    local
+        .recall
+        .push(Recalled::now("first recalled prompt".into()));
     key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
     let preview = ui
         .pending
@@ -279,7 +318,7 @@ fn reopening_the_current_room_preserves_recall_and_its_accepted_prompt() {
     ui.receive_snapshot(Arc::new(snapshot));
     let local = ui.locals.get_mut(&first).unwrap();
     local.text.insert("live draft");
-    local.recall.push("recalled prompt".into());
+    local.recall.push(Recalled::now("recalled prompt".into()));
     key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
     key(&mut ui, KeyCode::Char('p'), KeyModifiers::NONE);
 
@@ -302,7 +341,7 @@ fn room_switching_preserves_up_down_recall_without_ctrl_r() {
     ui.receive_snapshot(Arc::new(snapshot));
     let local = ui.locals.get_mut(&first).unwrap();
     local.text.insert("live draft");
-    local.recall.push("recalled prompt".into());
+    local.recall.push(Recalled::now("recalled prompt".into()));
     key(&mut ui, KeyCode::Up, KeyModifiers::NONE);
 
     ui.open_room(second);

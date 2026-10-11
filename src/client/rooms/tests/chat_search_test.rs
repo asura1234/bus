@@ -336,7 +336,9 @@ fn cancelling_recall_after_switching_rooms_preserves_the_destination_draft() {
     ui.open_room(first);
     let local = ui.locals.get_mut(&first).unwrap();
     local.text.insert("first unsent draft");
-    local.recall.push("first older prompt".into());
+    local
+        .recall
+        .push(Recalled::now("first older prompt".into()));
     key(&mut ui, KeyCode::Char('r'), KeyModifiers::CONTROL);
     assert_eq!(ui.locals[&first].text.text, "first older prompt");
 

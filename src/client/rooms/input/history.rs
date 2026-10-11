@@ -33,33 +33,39 @@ impl BusUi {
         self.text_changed(room);
     }
 
+    /// Recall entries oldest first. Local drafts (sent or archived with Esc
+    /// Esc) and persisted prompts merge by time, so an archived edit of a
+    /// sent prompt is newer than that prompt and comes back on the first Up.
     pub(super) fn history_entries(&self, room: RoomId) -> Vec<String> {
-        let mut entries = self
+        let state = &self.snapshot.state;
+        let mut stamped: Vec<(u64, &str)> = self
             .locals
             .get(&room)
-            .map(|local| local.recall.clone())
-            .unwrap_or_default();
-        for request in self
-            .snapshot
-            .state
+            .into_iter()
+            .flat_map(|local| &local.recall)
+            .map(|recalled| (recalled.at_ms, recalled.text.as_str()))
+            .collect();
+        let prompts = state
             .requests()
             .filter(|request| request.room_id == room && !request.delivery_only())
-        {
-            if entries.last() != Some(&request.prompt.text) {
-                entries.push(request.prompt.text.clone());
-            }
-        }
-        if let Some(text) = self
-            .snapshot
-            .state
-            .room(room)
-            .and_then(|room| room.latest_prompt.as_ref())
-            .map(|prompt| prompt.text.clone())
-        {
-            if entries.last() != Some(&text) {
-                entries.push(text);
-            }
-        }
+            .map(|request| &request.prompt)
+            .chain(
+                state
+                    .room(room)
+                    .and_then(|room| room.latest_prompt.as_ref()),
+            );
+        stamped.extend(prompts.map(|prompt| (prompt.submitted_at_ms, prompt.text.as_str())));
+        // Stable, so same-millisecond entries keep local-before-persisted order.
+        stamped.sort_by_key(|(at_ms, _)| *at_ms);
+        // Each text once, at its newest position: Up walks distinct prompts.
+        let mut seen = std::collections::HashSet::new();
+        let mut entries: Vec<String> = stamped
+            .into_iter()
+            .rev()
+            .filter(|(_, text)| seen.insert(*text))
+            .map(|(_, text)| text.to_owned())
+            .collect();
+        entries.reverse();
         entries
     }
 

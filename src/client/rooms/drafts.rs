@@ -13,6 +13,23 @@ pub(super) enum ComposerSize {
     Compact,
 }
 
+/// A prompt this client saved for Up/Down recall, stamped so it orders
+/// against the persisted prompts that also feed recall.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Recalled {
+    pub text: String,
+    pub at_ms: u64,
+}
+
+impl Recalled {
+    pub fn now(text: String) -> Self {
+        Self {
+            text,
+            at_ms: crate::utils::time::now_ms(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct LocalRoom {
     pub text: Editor,
@@ -23,7 +40,7 @@ pub(super) struct LocalRoom {
     pub composer_scroll: Option<usize>,
     // The notes box scrolls the same way: None follows the caret.
     pub notes_scroll: Option<usize>,
-    pub recall: Vec<String>,
+    pub recall: Vec<Recalled>,
     pub stash: Vec<String>,
     pub history_index: Option<usize>,
     pub live_draft: Option<String>,
@@ -153,8 +170,8 @@ impl BusUi {
         self.error = None;
         if let Some(local) = self.locals.get_mut(&room) {
             let text = local.text.text.clone();
-            if !text.is_empty() && local.recall.last() != Some(&text) {
-                local.recall.push(text);
+            if !text.is_empty() && local.recall.last().map(|r| &r.text) != Some(&text) {
+                local.recall.push(Recalled::now(text));
             }
             local.history_index = None;
             local.live_draft = None;

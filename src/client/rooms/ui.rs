@@ -1,4 +1,4 @@
-pub(super) use super::drafts::{ComposerSize, LocalRoom};
+pub(super) use super::drafts::{ComposerSize, LocalRoom, Recalled};
 use super::editor::Editor;
 pub(super) use super::toast::Toast;
 use super::{
