@@ -1,7 +1,7 @@
 //! Durable request grouping, history caching, headers and age labels.
 use super::super::render::{display, provider, wrap, wrap_ranges, Action};
 use super::super::thumbnails::{Thumbnails, MAX_ROWS};
-use super::{History, Line, MarkdownSource, RowAnchor, RowKind, ThumbnailRow, Tone};
+use super::{History, Line, LinkScope, MarkdownSource, RowAnchor, RowKind, ThumbnailRow, Tone};
 use crate::messaging::model::{
     AgentId, Author, BusState, Prompt, Request, RequestId, RequestPhase, Room, RoomId,
 };
@@ -103,6 +103,7 @@ impl History {
                 tone: Tone::Text,
                 spans: Vec::new(),
                 styles: Vec::new(),
+                links: None,
                 thumbnail: None,
                 raw_markdown: None,
                 continued: false,
@@ -168,6 +169,7 @@ impl History {
         ));
         let prompt_source = MarkdownSource::Prompt(prompt.id);
         active_markdown.insert(prompt_source);
+        let scope = link_scope(state, &prompt.author);
         lines.extend(
             self.markdown_block(prompt_source, &prompt.text)
                 .lines(
@@ -177,7 +179,10 @@ impl History {
                     RowAnchor::new(prompt.id, None, RowKind::PromptBody),
                 )
                 .iter()
-                .cloned(),
+                .map(|line| Line {
+                    links: Some(scope.clone()),
+                    ..line.clone()
+                }),
         );
     }
 
@@ -240,11 +245,15 @@ impl History {
             if let Some(request) = quote {
                 let source = MarkdownSource::Reply(request);
                 active_markdown.insert(source);
+                let scope = link_scope(state, &Author::Agent(*agent_id));
                 lines.extend(
                     self.markdown_block(source, text)
                         .lines(width, source, "    ", reply_anchor)
                         .iter()
-                        .cloned(),
+                        .map(|line| Line {
+                            links: Some(scope.clone()),
+                            ..line.clone()
+                        }),
                 );
                 lines.push(Line {
                     text: "    Quote".into(),
@@ -252,6 +261,7 @@ impl History {
                     tone: Tone::Muted,
                     spans: Vec::new(),
                     styles: Vec::new(),
+                    links: None,
                     thumbnail: None,
                     raw_markdown: None,
                     continued: false,
@@ -274,6 +284,7 @@ fn push_body(lines: &mut Vec<Line>, text: &str, width: u16, indent: &str, anchor
         tone: Tone::Text,
         spans: Vec::new(),
         styles: Vec::new(),
+        links: None,
         thumbnail: None,
         raw_markdown: None,
         continued: index > 0 && rows[index - 1].end == row.start,
@@ -322,6 +333,7 @@ fn wrap_header(
                 tone: Tone::Muted,
                 spans: line_spans,
                 styles: Vec::new(),
+                links: None,
                 thumbnail: None,
                 raw_markdown: None,
                 continued: index > 0,
@@ -349,6 +361,14 @@ fn participant_label(state: &BusState, participant: &Author) -> String {
             .map(|agent| agent.name.clone())
             .unwrap_or_else(|| "Agent".into()),
     }
+}
+
+fn link_scope(state: &BusState, author: &Author) -> LinkScope {
+    let cwd = match author {
+        Author::Agent(id) => state.agent(*id).map(|agent| Arc::from(agent.cwd.as_path())),
+        Author::Human | Author::Bus => None,
+    };
+    LinkScope { cwd }
 }
 
 fn participant_tone(participant: &Author) -> Tone {
@@ -449,22 +469,34 @@ fn push_prompt_files(
     width: u16,
     thumbnails: &mut Thumbnails,
 ) {
+    if prompt.files.is_empty() {
+        return;
+    }
+    // Attachments belong to the message above them: they go before its
+    // trailing blank row, and a blank row separates them from the replies.
+    let trailing = lines
+        .iter()
+        .rev()
+        .take_while(|line| line.text.is_empty() && line.thumbnail.is_none())
+        .count();
+    let gap = lines.split_off(lines.len() - trailing);
     for (index, path) in prompt.files.iter().enumerate() {
         let file_anchor = RowAnchor {
             position: index,
             ..RowAnchor::new(prompt.id, None, RowKind::File)
         };
         // With an image protocol the picture stands in for the file:
-        // its rows open the file detail, and no name row follows. The
-        // name shows only where no picture can be drawn.
+        // its rows open the file, and no name row follows. The name
+        // shows only where no picture can be drawn.
         if let Some((cols, rows)) = thumbnails.size(path, width) {
             let shared: Arc<std::path::Path> = Arc::from(path.as_path());
             lines.extend((0..rows).map(|row| Line {
                 text: String::new(),
-                action: Some(Action::FileDetail(path.clone())),
+                action: Some(Action::OpenFile(path.clone())),
                 tone: Tone::Muted,
                 spans: Vec::new(),
                 styles: Vec::new(),
+                links: None,
                 thumbnail: Some(ThumbnailRow {
                     path: Arc::clone(&shared),
                     cols,
@@ -483,15 +515,14 @@ fn push_prompt_files(
             }));
             continue;
         }
+        let name = display(&path.file_name().unwrap_or_default().to_string_lossy());
         lines.push(Line {
-            text: format!(
-                "[{}]",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ),
-            action: Some(Action::FileDetail(path.clone())),
-            tone: Tone::Muted,
+            styles: vec![(name.clone(), super::super::links::LINK)],
+            text: name,
+            action: Some(Action::OpenFile(path.clone())),
+            tone: Tone::Text,
             spans: Vec::new(),
-            styles: Vec::new(),
+            links: None,
             thumbnail: None,
             raw_markdown: None,
             continued: false,
@@ -500,4 +531,24 @@ fn push_prompt_files(
             anchor: file_anchor,
         });
     }
+    if gap.is_empty() {
+        lines.push(Line {
+            text: String::new(),
+            action: None,
+            tone: Tone::Text,
+            spans: Vec::new(),
+            styles: Vec::new(),
+            links: None,
+            thumbnail: None,
+            raw_markdown: None,
+            continued: false,
+            rejoin_space: false,
+            copy_from: 0,
+            anchor: RowAnchor {
+                position: prompt.files.len(),
+                ..RowAnchor::new(prompt.id, None, RowKind::File)
+            },
+        });
+    }
+    lines.extend(gap);
 }
