@@ -401,6 +401,10 @@ impl Host {
         let mut since = Instant::now();
         loop {
             std::thread::sleep(Duration::from_millis(20));
+            // A dead Bus's last screen never changes; that is not stable.
+            if let Some(reason) = self.exited() {
+                return failure("bus_exited", reason);
+            }
             let grid = self.grid();
             let current = region(&grid);
             if current != last {

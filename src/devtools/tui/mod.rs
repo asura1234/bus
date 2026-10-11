@@ -492,13 +492,15 @@ fn wait(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
             .last()
             .and_then(|line| serde_json::from_str(line).ok())
             .unwrap_or(Value::Null);
-        return Ok(if output.ok() {
-            json!({"ok": true, "message": reply})
-        } else {
-            let mut response = failure("timeout", format!("message {message} did not settle"));
-            response["message"] = reply;
-            response
-        });
+        if output.ok() {
+            return Ok(json!({"ok": true, "message": reply}));
+        }
+        if let Some(exited) = bus_exited(name) {
+            return Ok(exited);
+        }
+        let mut response = failure("timeout", format!("message {message} did not settle"));
+        response["message"] = reply;
+        return Ok(response);
     }
     let command = args::wait_command(parsed, timeout)?;
     Ok(request(name, &command))
@@ -510,12 +512,22 @@ fn wait_state(name: &str, predicate: &predicate::Predicate, timeout: Duration) -
         Err(error) => return error,
     };
     let started = Instant::now();
+    let mut result = Value::Null;
     loop {
         let output = bus_command(&binary, &env, &["state"], Duration::from_secs(20));
-        let state: Value = serde_json::from_str(output.stdout.trim()).unwrap_or(Value::Null);
-        let result = &state["result"];
-        if predicate.holds(result) {
-            return json!({"ok": true, "waited_ms": started.elapsed().as_millis() as u64});
+        // Never judge a predicate against a state Bus did not report.
+        match state_result(&output) {
+            Some(state) => {
+                if predicate.holds(&state) {
+                    return json!({"ok": true, "waited_ms": started.elapsed().as_millis() as u64});
+                }
+                result = state;
+            }
+            None => {
+                if let Some(exited) = bus_exited(name) {
+                    return exited;
+                }
+            }
         }
         if started.elapsed() >= timeout {
             let mut response = failure(
@@ -526,11 +538,34 @@ fn wait_state(name: &str, predicate: &predicate::Predicate, timeout: Duration) -
                     timeout.as_millis()
                 ),
             );
-            response["actual"] = predicate.actual(result);
+            response["actual"] = predicate.actual(&result);
             return response;
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+/// The `result` of a successful `bus state`, or None when it failed.
+fn state_result(output: &CommandOutput) -> Option<Value> {
+    if !output.ok() {
+        return None;
+    }
+    let mut state: Value = serde_json::from_str(output.stdout.trim()).ok()?;
+    state.get_mut("result").map(Value::take)
+}
+
+/// The `bus_exited` failure when the session's Bus is gone, from its host.
+fn bus_exited(name: &str) -> Option<Value> {
+    let status = request(name, &Command::Status);
+    if status["ok"].as_bool() != Some(true) {
+        return Some(status);
+    }
+    (status["alive"].as_bool() == Some(false)).then(|| {
+        failure(
+            "bus_exited",
+            status["exited"].as_str().unwrap_or("bus exited").to_owned(),
+        )
+    })
 }
 
 /// Runs steps from a JSON file in one session; stops at the first failure.

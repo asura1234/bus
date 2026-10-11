@@ -322,3 +322,33 @@ fn stop_from_the_work_dir_keeps_a_relative_run_dir() {
     assert!(run.starts_with(&caller), "{}", run.display());
     assert!(kept, "{} has no pty.cast after stop", run.display());
 }
+
+#[test]
+fn waits_report_a_bus_that_exited() {
+    let session = Session::start("dead");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    // A stability wait already running when Bus dies must not pass on its
+    // frozen last screen.
+    let name = session.0.clone();
+    let stable =
+        std::thread::spawn(move || tui(&name, &["wait", "--stable", "3s", "--timeout", "15s"]));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let _ = scratch_bus(&session, &["stop"]);
+    let (code, value) = stable.join().unwrap();
+    assert_eq!(code, 3, "wait --stable after Bus exited: {value}");
+    let (code, value) = tui(
+        &session.0,
+        &["wait", "--text", "never shown", "--timeout", "2s"],
+    );
+    assert_eq!(code, 3, "wait --text after Bus exited: {value}");
+    for predicate in ["visible_room == 99", "visible_room != 1"] {
+        let (code, value) = tui(
+            &session.0,
+            &["wait", "--state", predicate, "--timeout", "2s"],
+        );
+        assert_eq!(
+            code, 3,
+            "wait --state {predicate} after Bus exited: {value}"
+        );
+    }
+}
