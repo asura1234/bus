@@ -204,8 +204,10 @@ fn spawn_pump(
             out.seq += 1;
             out.last_output = Instant::now();
             out.bells += u64::from(feed.bells);
+            // The emulator hands over OSC 52 text already decoded.
             for write in feed.clipboard_writes {
-                out.clipboard.push(decode_clipboard(&write));
+                out.clipboard
+                    .push(String::from_utf8_lossy(&write).into_owned());
             }
             drop(out);
             if !feed.responses.is_empty() {
@@ -247,20 +249,15 @@ fn spawn_reaper(
     });
 }
 
-/// OSC 52 payloads arrive as `c;<base64>`; keep the decoded text.
-fn decode_clipboard(write: &[u8]) -> String {
-    use base64::Engine as _;
-    let text = String::from_utf8_lossy(write);
-    let payload = text.rsplit(';').next().unwrap_or(&text);
-    base64::engine::general_purpose::STANDARD
-        .decode(payload.trim())
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_else(|_| text.into_owned())
-}
-
 impl Host {
     fn bus(&self, args: &[&str]) -> CommandOutput {
         bus_command(&self.info.binary, &self.env, args, Duration::from_secs(20))
+    }
+
+    /// Waits for the scratch Bus, then publishes the session.
+    fn ready(&self) -> Result<(), String> {
+        self.wait_ready()?;
+        self.paths.write_info(&self.info).map_err(|e| e.to_string())
     }
 
     fn wait_ready(&self) -> Result<(), String> {

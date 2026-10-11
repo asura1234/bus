@@ -192,6 +192,10 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     let col = found["matches"][0]["col"].as_u64().unwrap();
     let dragged = session.ok(&["drag", &row, &col.to_string(), &row, &(col + 9).to_string()]);
     assert_eq!(dragged["copied"][0], "fake reply");
+    // "fake" is all base64 letters; the copy still comes back as shown.
+    let dragged = session.ok(&["drag", &row, &col.to_string(), &row, &(col + 3).to_string()]);
+    assert_eq!(dragged["copied"][0], "fake");
+
     let resized = session.ok(&["resize", "100x30"]);
     assert_eq!(resized["size"][0], 100);
     let snapshot = session.ok(&["snapshot"]);
