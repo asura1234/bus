@@ -33,6 +33,7 @@ report = its stdout line; run_dir = dirname(report)
 FOR EACH case in the report, in order:
   name = case ID lowercased (e.g. app-07)
   Run: T start --name <name> --size <doc size, default 120x40> --run-dir <run_dir>/sessions
+    (add `--graphics none` only for a case the doc runs without a picture terminal; default kitty)
   IF start fails: leave Session `none` and mark every step of the case FAIL, the start error as
     Evidence and Seen, `none` for Trace and Screenshot; continue.
   Record the start output's run_dir as the case's `Session`.

@@ -63,6 +63,7 @@ pub(super) struct HostOptions {
     pub rows: u16,
     pub run_dir: PathBuf,
     pub token: String,
+    pub graphics: super::session::Graphics,
 }
 
 /// Entry of the hidden `bus --dev tui __host` process.
@@ -115,7 +116,7 @@ fn start(
     let mut command = CommandBuilder::new(&binary);
     command.arg("--dev");
     command.env_clear();
-    for (key, value) in &env {
+    for (key, value) in env.iter().chain(&options.graphics.env(paths)) {
         command.env(key, value);
     }
     command.cwd(paths.work_dir());
@@ -169,6 +170,8 @@ fn start(
         run_dir: options.run_dir.clone(),
         binary,
         size: (options.cols, options.rows),
+        home: paths.home_dir(),
+        graphics: options.graphics,
     };
     Ok(Host {
         paths: paths.clone(),

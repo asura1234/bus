@@ -62,6 +62,10 @@ you saw. You do not decide what the product should do, and you never change the 
 - Hover details (a chip's full path): a draft chip in the composer is `hover --hit
   remove-file:NAME`, an attachment in history is `hover --hit file:NAME`; or `--text`. Then
   read the screen.
+- Isolation: the scratch Bus's `~` is its own empty home (`status` prints `home`); put any
+  `~/` fixture there, never in your home. Pictures follow `start --graphics`: `kitty` (the
+  default) for inline pictures, `none` when the doc wants Bus without a picture terminal;
+  your own terminal never changes it.
 - Opens: links and files Bus opens are `open` effects with the exact target; nothing opens.
 - Real screenshots need macOS, Ghostty in /Applications and Screen Recording permission; a
   window flashes briefly. If the grid does not fit the screen the driver says so; resize the

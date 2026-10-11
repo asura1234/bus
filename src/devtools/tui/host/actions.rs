@@ -212,7 +212,8 @@ impl Host {
                "bus_pid": self.info.bus_pid, "alive": self.exited().is_none(),
                "exited": self.exited(), "size": self.info.size, "seq": frames,
                "data_dir": self.info.data_dir, "run_dir": self.info.run_dir,
-               "binary": self.info.binary})
+               "binary": self.info.binary, "home": self.info.home,
+               "graphics": self.info.graphics})
     }
 
     fn snapshot(&self, rows: Option<(u16, u16)>) -> Value {

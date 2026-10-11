@@ -554,6 +554,49 @@ fn pasting_an_absolute_path_into_the_composer_attaches_it() {
 }
 
 #[test]
+fn the_scratch_bus_lists_its_own_home_not_the_developers() {
+    let session = Session::start("home");
+    let status = session.ok(&["status"]);
+    let home = PathBuf::from(status["home"].as_str().unwrap());
+    assert_eq!(home, session_dir(&session.0).join("home"), "{status}");
+    assert_eq!(status["graphics"], "kitty", "the default: {status}");
+    std::fs::write(home.join("scratch-home-marker.txt"), b"x").unwrap();
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    // The file form starts at `~/` and suggests what is there.
+    session.ok(&["press", "ctrl+o"]);
+    session.ok(&[
+        "wait",
+        "--text",
+        "scratch-home-marker.txt",
+        "--timeout",
+        "5s",
+    ]);
+}
+
+#[test]
+fn start_takes_the_graphics_identity_and_refuses_unknown_ones() {
+    let name = session_name("gfx");
+    let runs = run_dir();
+    let (code, status) = tui(
+        &name,
+        &[
+            "start",
+            "--graphics",
+            "none",
+            "--size",
+            "100x30",
+            "--run-dir",
+            runs.to_str().unwrap(),
+        ],
+    );
+    let session = Session(name);
+    assert_eq!(code, 0, "{status}");
+    assert_eq!(session.ok(&["status"])["graphics"], "none");
+    let (code, refused) = tui(&session_name("gfx2"), &["start", "--graphics", "iterm2"]);
+    assert_eq!(code, 2, "{refused}");
+}
+
+#[test]
 fn a_refused_root_override_leaves_the_directory_untouched() {
     use std::os::unix::fs::PermissionsExt;
     let base = PathBuf::from(format!("/tmp/bus-tui-it-root{}", std::process::id()));

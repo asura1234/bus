@@ -85,11 +85,18 @@ region of the room UI `--hit NAME` (see `hits`). Prefer `--hit`, then `--text`.
 Run `bus --dev tui VERB --help` for one verb.
 
 ### start
-`start [--name NAME] [--size COLSxROWS] [--run-dir DIR]`
+`start [--name NAME] [--size COLSxROWS] [--run-dir DIR] [--graphics kitty|none]`
 
 Starts a fresh scratch Bus (default size 160x45) and waits until it answers
 `bus state` and has drawn its first room. Prints the session status with
 `ready_ms`. A relative `--run-dir` is taken from the current directory.
+The scratch Bus gets its own empty `HOME` (`home/` in the session directory,
+`status` prints it), so `~`, the file form's suggestions and anything Bus
+writes under `~` never touch the developer's home; the caller's terminal
+identity (`TERM_PROGRAM`, `LC_TERMINAL`, ...) is dropped. `--graphics` picks
+how Bus draws pictures instead: `kitty` (default) draws them with the Kitty
+graphics protocol, which the driver's screen and `screenshot --real` show;
+`none` makes Bus show attachments as file names.
 Refused when the session name is running or still starting, when 4 sessions
 run, when the target belongs to a live Bus, when inherited
 `BUS_*`/`HERDR_*` variables point at it, or when the binary is

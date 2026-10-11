@@ -214,6 +214,11 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
     // The host runs in the session dir, which stop deletes; a relative
     // --run-dir means the caller's cwd.
     let run_root = parsed.take_value("--run-dir").map(|dir| cwd.join(dir));
+    let graphics = parsed
+        .take_value("--graphics")
+        .map(|value| session::Graphics::parse(&value))
+        .transpose()?
+        .unwrap_or_default();
     parsed.finish()?;
     if let Some(message) = effects::unsupported_os(std::env::consts::OS) {
         return Ok(failure("refused", message));
@@ -253,6 +258,7 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
         .args(["--dev", "tui", "__host", "--name", name])
         .args(["--size", &format!("{cols}x{rows}")])
         .args(["--token", &claim.token])
+        .args(["--graphics", graphics.as_str()])
         .arg("--run-dir")
         .arg(&run_dir)
         .stdin(Stdio::null())
@@ -703,6 +709,11 @@ fn run_host(args: &[String]) -> i32 {
             return Err("--run-dir must be absolute".into());
         }
         let token = parsed.take_value("--token").ok_or("missing --token")?;
+        let graphics = parsed
+            .take_value("--graphics")
+            .map(|value| session::Graphics::parse(&value))
+            .transpose()?
+            .unwrap_or_default();
         parsed.finish()?;
         Ok(host::HostOptions {
             name,
@@ -710,6 +721,7 @@ fn run_host(args: &[String]) -> i32 {
             rows,
             run_dir,
             token,
+            graphics,
         })
     })();
     match options {
