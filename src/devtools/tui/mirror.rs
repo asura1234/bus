@@ -6,6 +6,7 @@
 //! The mirror never touches the developer's terminals: it is a new Ghostty
 //! process with default configuration, found only by its own process id, and
 //! the replay drops clipboard writes, notifications and bells first.
+use super::effects::{string_end, NOTIFICATION_OSC};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -27,18 +28,15 @@ pub(super) fn strip_effects(bytes: &[u8]) -> Vec<u8> {
     while i < bytes.len() {
         match bytes[i] {
             0x1b if matches!(bytes.get(i + 1), Some(b']' | b'_' | b'P')) => {
-                let end = string_end(bytes, i + 2);
+                let (end, terminator) = string_end(bytes, i + 2).unwrap_or((bytes.len(), 0));
                 let is_osc = bytes[i + 1] == b']';
                 let dropped = is_osc && {
-                    let body = &bytes[i + 2..end.min(bytes.len())];
-                    let number: Vec<u8> = body
-                        .iter()
-                        .take_while(|b| b.is_ascii_digit())
-                        .copied()
-                        .collect();
-                    matches!(number.as_slice(), b"52" | b"9" | b"99" | b"777")
+                    let body = &bytes[i + 2..end];
+                    let digits = body.iter().take_while(|b| b.is_ascii_digit()).count();
+                    let number = std::str::from_utf8(&body[..digits]).unwrap_or("");
+                    number == "52" || NOTIFICATION_OSC.contains(&number)
                 };
-                let stop = (end + terminator_len(bytes, end)).min(bytes.len());
+                let stop = end + terminator;
                 if !dropped {
                     out.extend_from_slice(&bytes[i..stop]);
                 }
@@ -52,26 +50,6 @@ pub(super) fn strip_effects(bytes: &[u8]) -> Vec<u8> {
         }
     }
     out
-}
-
-/// Index of the terminator (BEL or ESC \) of a string starting at `from`.
-fn string_end(bytes: &[u8], from: usize) -> usize {
-    let mut j = from;
-    while j < bytes.len() {
-        if bytes[j] == 0x07 || (bytes[j] == 0x1b && bytes.get(j + 1) == Some(&b'\\')) {
-            return j;
-        }
-        j += 1;
-    }
-    bytes.len()
-}
-
-fn terminator_len(bytes: &[u8], at: usize) -> usize {
-    match bytes.get(at) {
-        Some(0x07) => 1,
-        Some(0x1b) => 2,
-        _ => 0,
-    }
 }
 
 /// Entry of the hidden `__replay` verb, which runs inside the mirror window:

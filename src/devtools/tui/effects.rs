@@ -145,6 +145,28 @@ pub(super) fn matches(effect: &Value, kind: &str, target: Option<&str>) -> bool 
         })
 }
 
+/// The OSC numbers of terminal notifications.
+pub(super) const NOTIFICATION_OSC: [&str; 3] = ["9", "99", "777"];
+
+/// Where a terminal string (OSC, APC, DCS) whose body starts at `from` ends,
+/// and the length of its terminator: BEL, ST (`ESC \`), or any other ESC,
+/// which cancels the string and starts the next sequence, as terminals do.
+/// None while it is unterminated, an ESC at the very end included.
+pub(super) fn string_end(bytes: &[u8], from: usize) -> Option<(usize, usize)> {
+    let at = bytes
+        .get(from..)?
+        .iter()
+        .position(|&b| b == 0x07 || b == 0x1b)?
+        + from;
+    let terminator = match (bytes[at], bytes.get(at + 1)) {
+        (0x07, _) => 1,
+        (_, Some(b'\\')) => 2,
+        (_, Some(_)) => 0,
+        (_, None) => return None,
+    };
+    Some((at, terminator))
+}
+
 /// Collects terminal notifications (OSC 9, 99, 777) across output chunks.
 #[derive(Default)]
 pub(super) struct OscWatch {
@@ -161,11 +183,7 @@ impl OscWatch {
         let mut keep_from = joined.len();
         while i + 1 < joined.len() {
             if joined[i] == 0x1b && joined[i + 1] == b']' {
-                let Some(end) = joined[i + 2..]
-                    .iter()
-                    .position(|&b| b == 0x07 || b == 0x1b)
-                    .map(|p| p + i + 2)
-                else {
+                let Some((end, terminator)) = string_end(&joined, i + 2) else {
                     // An unterminated string waits for the next chunk, within reason.
                     if joined.len() - i < 64 * 1024 {
                         keep_from = i;
@@ -174,11 +192,11 @@ impl OscWatch {
                 };
                 let body = String::from_utf8_lossy(&joined[i + 2..end]).into_owned();
                 if let Some((number, text)) = body.split_once(';') {
-                    if matches!(number, "9" | "99" | "777") {
+                    if NOTIFICATION_OSC.contains(&number) {
                         found.push((number.to_owned(), text.to_owned()));
                     }
                 }
-                i = end + 1;
+                i = end + terminator;
             } else {
                 i += 1;
             }
