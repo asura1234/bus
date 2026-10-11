@@ -42,7 +42,13 @@ you saw. You do not decide what the product should do, and you never change the 
   colours for a separate accessible palette, some barely different (`#dd00ff` to `#dd33ff`),
   some far apart (`#aa7733` to `#eebbff`): compare `cells`, do not eyeball.
 - The add-agent form: providers are hits `provider:claude|codex|cursor`; its PWD field starts
-  as `~/`.
+  as `~/`. While path suggestions show, the first Tab (or Enter) in PWD completes the path; a
+  second Tab moves to the next field.
+- The recipient picker (Ctrl+P): rows are hits `recipient:NAME`; the All row is
+  `recipient:none`.
+- Drafts: the composer text reaches the saved `state.json` only when you switch rooms or quit,
+  and `bus state` does not carry it. Judge a live draft from the screen (`snapshot`, `find`);
+  use `state.json` only after a room switch or quit.
 - Attaching: Ctrl+O opens the path form, which starts with `~/`: clear it (Ctrl+A, Ctrl+K),
   type one absolute path, Enter. The form takes exactly one path: a paste lands after the `~/`,
   and space-separated paths are read as one (an error chip). To attach several files at once,
