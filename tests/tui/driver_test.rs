@@ -17,22 +17,23 @@ fn run_dir() -> PathBuf {
     std::env::temp_dir().join(format!("bus-tui-it-runs-{}", std::process::id()))
 }
 
-/// This test process's own driver root: other drivers on the machine never
-/// count against its session cap, and it never sees their sessions.
-fn root() -> PathBuf {
-    PathBuf::from(format!("/tmp/bus-tui-it{}", std::process::id()))
+/// Each session's own driver root: no other driver on the machine, and no
+/// other test however the runner schedules them, counts against its cap.
+fn root(name: &str) -> PathBuf {
+    PathBuf::from(format!("/tmp/bti-{name}"))
 }
 
 fn session_dir(name: &str) -> PathBuf {
-    root().join(name)
+    root(name).join(name)
 }
 
-/// `bus` with only this suite's driver settings: no inherited session.
-fn bus() -> Command {
+/// `bus` for session NAME with only this suite's driver settings: no
+/// inherited session.
+fn bus(name: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bus"));
     // cargo builds the driver into target/debug; allow it for this suite only.
     command.env("BUS_TUI_ALLOW_TARGET_DEBUG", "1");
-    command.env("BUS_TUI_ROOT", root());
+    command.env("BUS_TUI_ROOT", root(name));
     for key in [
         "BUS_DATA_DIR",
         "BUS_SESSION_ID",
@@ -46,7 +47,7 @@ fn bus() -> Command {
 
 /// `tui bus ARGS` against a session's scratch Bus.
 fn scratch_bus(session: &Session, args: &[&str]) -> Output {
-    bus()
+    bus(&session.0)
         .args(["--dev", "tui", "bus", "--name", &session.0])
         .args(args)
         .output()
@@ -59,7 +60,7 @@ fn tui(name: &str, args: &[&str]) -> (i32, Value) {
 }
 
 fn tui_raw(name: &str, args: &[&str], env: &[(&str, &str)]) -> Output {
-    let mut command = bus();
+    let mut command = bus(name);
     command
         .args(["--dev", "tui"])
         .args(args)
@@ -109,9 +110,9 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = tui(&self.0, &["stop"]);
-        // The last session of this process leaves no root behind.
-        let _ = std::fs::remove_file(root().join(".start.lock"));
-        let _ = std::fs::remove_dir(root());
+        // A stopped session leaves no root behind.
+        let _ = std::fs::remove_file(root(&self.0).join(".start.lock"));
+        let _ = std::fs::remove_dir(root(&self.0));
     }
 }
 
@@ -143,7 +144,7 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     // A fake Claude agent answers through Bus's real hooks.
     let work = session_dir(&session.0).join("work");
     let work = work.to_str().unwrap();
-    let status = bus()
+    let status = bus(&session.0)
         .args(["--dev", "tui", "bus", "--name", &session.0])
         .args([
             "agent",
@@ -260,6 +261,8 @@ fn the_driver_refuses_to_touch_a_running_session() {
     let foreign = session_name("live");
     let data = session_dir(&foreign).join("data");
     std::fs::create_dir_all(&data).unwrap();
+    // A root the driver made, so the live Bus is what gets refused.
+    std::fs::write(root(&foreign).join(".start.lock"), b"").unwrap();
     let socket = data.join("control.sock");
     let _live = std::os::unix::net::UnixListener::bind(&socket).unwrap();
     let (code, refused) = tui(&foreign, &["start"]);
@@ -268,7 +271,7 @@ fn the_driver_refuses_to_touch_a_running_session() {
         .as_str()
         .unwrap()
         .contains("live Bus"));
-    let _ = std::fs::remove_dir_all(session_dir(&foreign));
+    let _ = std::fs::remove_dir_all(root(&foreign));
 
     // A second host for the running session, wrong token or right, is
     // refused before it touches anything.
@@ -276,7 +279,7 @@ fn the_driver_refuses_to_touch_a_running_session() {
     let claim: Value = serde_json::from_str(&std::fs::read_to_string(marker).unwrap()).unwrap();
     let runs = run_dir();
     for token in ["wrong", claim["token"].as_str().unwrap()] {
-        let host = bus()
+        let host = bus(&session.0)
             .args(["--dev", "tui", "__host", "--name", &session.0])
             .args(["--size", "80x24", "--token", token, "--run-dir"])
             .arg(&runs)
@@ -327,7 +330,7 @@ fn stop_from_the_work_dir_keeps_a_relative_run_dir() {
     let caller = std::env::temp_dir().join(format!("bus-tui-it-cwd-{}", std::process::id()));
     std::fs::create_dir_all(&caller).unwrap();
     let caller = caller.canonicalize().unwrap();
-    let started = bus()
+    let started = bus(&name)
         .current_dir(&caller)
         .args(["--dev", "tui", "start", "--name", &name, "--size", "80x24"])
         .args(["--run-dir", "runs"])
@@ -337,7 +340,7 @@ fn stop_from_the_work_dir_keeps_a_relative_run_dir() {
     let (code, status) = parse(started);
     assert_eq!(code, 0, "{status}");
     // `stop` run from inside the session, as an agent there would.
-    let stopped = bus()
+    let stopped = bus(&session.0)
         .current_dir(session_dir(&session.0).join("work"))
         .args(["--dev", "tui", "stop", "--name", &session.0])
         .output()
