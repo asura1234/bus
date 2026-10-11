@@ -157,6 +157,21 @@ fn processes_and_run_roots() {
     assert!(driver_root().ends_with("bus-tui"));
 }
 
+/// True once `check` holds, within two seconds. Another test thread that
+/// spawns a child while a lock file is open hands the child that open file
+/// for a moment (fork to exec), and a flock belongs to the open file, so a
+/// released lock can stay held for a few milliseconds in this process.
+fn eventually(mut check: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !check() {
+        if std::time::Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    true
+}
+
 #[test]
 fn a_session_is_owned_by_its_start_then_by_its_host_lock() {
     let root = temp_root("owner");
@@ -179,14 +194,18 @@ fn a_session_is_owned_by_its_start_then_by_its_host_lock() {
         serde_json::to_string(&orphan).unwrap(),
     )
     .unwrap();
-    assert!(!paths.owned());
-    let lock = paths.take_ownership(&claim.token).unwrap();
+    assert!(eventually(|| !paths.owned()));
+    let mut lock = None;
+    assert!(eventually(|| {
+        lock = paths.take_ownership(&claim.token).ok();
+        lock.is_some()
+    }));
     assert!(paths.owned());
     // A second host for the same session is refused.
     assert!(paths.take_ownership(&claim.token).is_err());
     drop(lock);
-    assert!(!paths.owned());
-    assert!(owned_sessions(&root).is_empty());
+    assert!(eventually(|| !paths.owned()));
+    assert!(eventually(|| owned_sessions(&root).is_empty()));
     let _ = std::fs::remove_dir_all(&root);
 }
 
