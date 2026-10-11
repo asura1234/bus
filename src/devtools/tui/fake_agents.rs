@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 
 /// Set in the scratch Bus's environment; the fake only runs where it is set.
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
-pub(crate) const PROVIDER_NAMES: &[&str] = &["claude", "codex", "cursor-agent"];
+const PROVIDER_NAMES: &[&str] = &["claude", "codex", "cursor-agent"];
 
 /// Links each provider name in `bin_dir` to the `bus` binary.
 pub(super) fn install(bin_dir: &Path, binary: &Path) -> std::io::Result<()> {
@@ -132,14 +132,29 @@ impl FakeAgent {
         self.hook("SessionStart", json!({"source": "startup"}));
     }
 
+    /// Draws an empty prompt box under the transcript and remembers where its
+    /// first line starts, so a draft can be redrawn in place.
     fn draw_prompt(&self, draft: &str) {
+        let rule = "─".repeat(60);
+        let mut out = std::io::stdout();
+        let _ = write!(out, "\r\n{rule}\r\n\x1b7");
+        let _ = out.flush();
+        self.redraw(draft);
+    }
+
+    /// Redraws the prompt line with the draft. Continuation lines are
+    /// indented under the `❯`, as Claude Code draws them.
+    fn redraw(&self, draft: &str) {
+        let lines = draft.split('\n').count();
         let rule = "─".repeat(60);
         let mut out = std::io::stdout();
         let _ = write!(
             out,
-            "\r\n{rule}\r\n❯ {draft}\r\n{rule}\r\n  ? for shortcuts · fake {}\r\n\x1b[3A\x1b[{}G",
+            "\x1b8\x1b[J❯ {}\r\n{rule}\r\n  ? for shortcuts · fake {}\x1b[{}A\r\x1b[{}C",
+            draft.replace('\n', "\r\n  "),
             self.provider,
-            3 + draft.chars().count()
+            1 + lines,
+            2 + draft.rsplit('\n').next().unwrap_or("").chars().count()
         );
         let _ = out.flush();
     }
@@ -148,7 +163,8 @@ impl FakeAgent {
         self.turns += 1;
         let turn = format!("{}-{}", self.session, self.turns);
         let mut out = std::io::stdout();
-        let _ = write!(out, "\x1b[3B\r\n> {prompt}\r\n");
+        // Replace the box with the submitted prompt, as Claude Code does.
+        let _ = write!(out, "\x1b8\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "));
         let _ = out.flush();
         self.hook(
             "UserPromptSubmit",
@@ -158,7 +174,7 @@ impl FakeAgent {
             spin(seconds);
         }
         let reply = format!("fake reply: {}", prompt.trim());
-        let _ = write!(out, "⏺ {reply}\r\n");
+        let _ = write!(out, "⏺ {}\r\n", reply.replace('\n', "\r\n  "));
         let _ = out.flush();
         self.hook(
             "Stop",
@@ -182,16 +198,16 @@ impl FakeAgent {
                 match event {
                     Input::Text(text) => {
                         draft.push_str(&text);
-                        let mut out = std::io::stdout();
-                        let _ = write!(out, "{}", text.replace('\n', " "));
-                        let _ = out.flush();
+                        self.redraw(&draft);
                     }
                     Input::Backspace => {
                         if draft.pop().is_some() {
-                            let mut out = std::io::stdout();
-                            let _ = write!(out, "\x08 \x08");
-                            let _ = out.flush();
+                            self.redraw(&draft);
                         }
+                    }
+                    Input::KillLine => {
+                        kill_line(&mut draft);
+                        self.redraw(&draft);
                     }
                     Input::Enter if !draft.trim().is_empty() => {
                         let prompt = std::mem::take(&mut draft);
@@ -205,9 +221,21 @@ impl FakeAgent {
     }
 }
 
+/// Empties the draft's last line, or when it is empty already, joins it to
+/// the line before, so repeated kills clear a multi-line draft.
+fn kill_line(draft: &mut String) {
+    match draft.rfind('\n') {
+        Some(at) if at + 1 == draft.len() => {
+            draft.pop();
+        }
+        Some(at) => draft.truncate(at + 1),
+        None => draft.clear(),
+    }
+}
+
 /// A prompt containing `fake:work N` keeps the fake busy for N seconds (at
 /// most 600), so a driver can see a Working agent and a live spinner.
-pub(super) fn work_seconds(prompt: &str) -> Option<u64> {
+fn work_seconds(prompt: &str) -> Option<u64> {
     let rest = prompt.split("fake:work").nth(1)?;
     let seconds: u64 = rest.split_whitespace().next()?.parse().ok()?;
     Some(seconds.min(600))
@@ -235,9 +263,11 @@ fn spin(seconds: u64) {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum Input {
+enum Input {
     Text(String),
     Backspace,
+    /// Ctrl+K or Ctrl+U.
+    KillLine,
     Enter,
     Interrupt,
 }
@@ -245,7 +275,7 @@ pub(super) enum Input {
 /// Splits raw terminal input into text, Enter, Backspace and Ctrl+C/D,
 /// unwrapping bracketed pastes and dropping other escape sequences. Bytes of
 /// an unfinished sequence stay in `pending`.
-pub(super) fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
+fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
     let mut events = Vec::new();
     let mut text = Vec::new();
     let mut i = 0;
@@ -266,9 +296,14 @@ pub(super) fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
             continue;
         }
         match rest[0] {
-            b'\r' | b'\n' => {
+            // Claude Code submits on CR; a typed LF (Ctrl+J) is a newline.
+            b'\r' => {
                 flush(&mut text, &mut events);
                 events.push(Input::Enter);
+                i += 1;
+            }
+            b'\n' => {
+                text.push(b'\n');
                 i += 1;
             }
             0x7f | 0x08 => {
@@ -279,6 +314,12 @@ pub(super) fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
             0x03 | 0x04 => {
                 flush(&mut text, &mut events);
                 events.push(Input::Interrupt);
+                i += 1;
+            }
+            // Ctrl+K and Ctrl+U: Bus withdraws a draft with them.
+            0x0b | 0x15 => {
+                flush(&mut text, &mut events);
+                events.push(Input::KillLine);
                 i += 1;
             }
             0x1b => {
@@ -306,6 +347,12 @@ pub(super) fn drain_input(pending: &mut Vec<u8>) -> Vec<Input> {
                 i += 1;
             }
         }
+    }
+    // A character split across reads waits in `pending` for its last bytes.
+    if i == pending.len() {
+        let split = text.len() - super::trace::complete_utf8_len(&text);
+        text.truncate(text.len() - split);
+        i -= split;
     }
     flush(&mut text, &mut events);
     pending.drain(..i);

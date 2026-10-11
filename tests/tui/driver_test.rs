@@ -196,6 +196,31 @@ fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
     let dragged = session.ok(&["drag", &row, &col.to_string(), &row, &(col + 3).to_string()]);
     assert_eq!(dragged["copied"][0], "fake");
 
+    // A multi-line message reaches the fake Claude as one prompt.
+    let sent = scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "a1",
+            "--text",
+            "line one\nline two",
+        ],
+    );
+    let receipt = String::from_utf8_lossy(&sent.stdout).to_string();
+    assert!(sent.status.success(), "{receipt}");
+    let receipt: Value = serde_json::from_str(receipt.trim()).unwrap();
+    let id = receipt["result"]["message_id"].to_string();
+    let settled = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
+    assert!(
+        settled
+            .to_string()
+            .contains("fake reply: line one\\nline two"),
+        "the reply should answer the whole two-line prompt: {settled}"
+    );
+
     let resized = session.ok(&["resize", "100x30"]);
     assert_eq!(resized["size"][0], 100);
     let snapshot = session.ok(&["snapshot"]);

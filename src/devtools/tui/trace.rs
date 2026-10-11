@@ -10,6 +10,17 @@ pub(super) struct Trace {
     started: Instant,
     cast: BufWriter<File>,
     requests: BufWriter<File>,
+    /// The start of a character the last output read split.
+    output_tail: Vec<u8>,
+}
+
+/// How many leading bytes end on a character boundary: all of them, unless
+/// they end inside a multi-byte character that a later read completes.
+pub(super) fn complete_utf8_len(bytes: &[u8]) -> usize {
+    match std::str::from_utf8(bytes) {
+        Err(error) if error.error_len().is_none() => error.valid_up_to(),
+        _ => bytes.len(),
+    }
 }
 
 impl Trace {
@@ -29,6 +40,7 @@ impl Trace {
             started: Instant::now(),
             cast,
             requests: BufWriter::new(File::create(run_dir.join("trace.ndjson"))?),
+            output_tail: Vec::new(),
         })
     }
 
@@ -38,7 +50,13 @@ impl Trace {
     }
 
     pub fn output(&mut self, bytes: &[u8]) {
-        self.event("o", &String::from_utf8_lossy(bytes));
+        let mut joined = std::mem::take(&mut self.output_tail);
+        joined.extend_from_slice(bytes);
+        let complete = complete_utf8_len(&joined);
+        self.output_tail = joined.split_off(complete);
+        if !joined.is_empty() {
+            self.event("o", &String::from_utf8_lossy(&joined));
+        }
     }
 
     pub fn input(&mut self, bytes: &[u8]) {

@@ -89,3 +89,27 @@ fn blank_grids_and_text_join_rows() {
     assert_eq!(grid.text(), "\n");
     assert!(grid.cursor.is_none());
 }
+
+#[test]
+fn asciicast_output_keeps_a_character_split_across_reads() {
+    let dir = std::env::temp_dir().join(format!("screen-test-cast-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut trace = super::super::trace::Trace::open(&dir, 10, 2).unwrap();
+    let bytes = "界".as_bytes();
+    trace.output(&bytes[..1]);
+    trace.output(&bytes[1..]);
+    trace.flush();
+    let cast = std::fs::read_to_string(dir.join("pty.cast")).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let text: String = cast
+        .lines()
+        .skip(1)
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).unwrap()[2]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(text, "界");
+}

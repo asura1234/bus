@@ -53,3 +53,34 @@ fn install_links_every_provider_name() {
     install(&dir, &binary).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_character_split_across_reads_is_not_garbled() {
+    let mut pending = "你".as_bytes()[..1].to_vec();
+    let mut events = drain_input(&mut pending);
+    assert!(events.is_empty());
+    pending.extend_from_slice(&"你".as_bytes()[1..]);
+    events.extend(drain_input(&mut pending));
+    assert_eq!(events, vec![Input::Text("你".into())]);
+    assert!(pending.is_empty());
+}
+
+#[test]
+fn repeated_kills_clear_a_multi_line_draft() {
+    let mut draft = "one\ntwo".to_owned();
+    for expected in ["one\n", "one", ""] {
+        kill_line(&mut draft);
+        assert_eq!(draft, expected);
+    }
+    let mut pending = b"a\x0bb\x15\n".to_vec();
+    assert_eq!(
+        drain_input(&mut pending),
+        vec![
+            Input::Text("a".into()),
+            Input::KillLine,
+            Input::Text("b".into()),
+            Input::KillLine,
+            Input::Text("\n".into()),
+        ]
+    );
+}
