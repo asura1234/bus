@@ -15,10 +15,11 @@ use std::process::{Command, Stdio};
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
 const PROVIDER_NAMES: &[&str] = &["claude", "codex", "cursor-agent"];
 
-/// Links each provider name in `bin_dir` to the `bus` binary.
+/// Links each provider name, and each effect stand-in, in `bin_dir` to the
+/// `bus` binary.
 pub(super) fn install(bin_dir: &Path, binary: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(bin_dir)?;
-    for name in PROVIDER_NAMES {
+    for name in PROVIDER_NAMES.iter().chain(super::effects::COMMANDS) {
         let link = bin_dir.join(exe_name(name));
         let _ = std::fs::remove_file(&link);
         link_or_copy(binary, &link)?;
@@ -47,12 +48,14 @@ fn link_or_copy(binary: &Path, link: &Path) -> std::io::Result<()> {
 /// The provider a fake should play, when this process is one: invoked under a
 /// provider's name inside a driver session.
 pub(crate) fn fake_provider(argv0: &str) -> Option<&'static str> {
+    stand_in(argv0, PROVIDER_NAMES)
+}
+
+/// The name of `names` this process runs under, inside a driver session only.
+pub(super) fn stand_in(argv0: &str, names: &[&'static str]) -> Option<&'static str> {
     std::env::var_os(FAKE_AGENT_ENV)?;
     let name = Path::new(argv0).file_stem()?.to_str()?;
-    PROVIDER_NAMES
-        .iter()
-        .copied()
-        .find(|provider| *provider == name)
+    names.iter().copied().find(|candidate| *candidate == name)
 }
 
 pub(crate) fn run(provider: &str, args: &[String]) -> i32 {
@@ -88,6 +91,8 @@ struct FakeAgent {
     hooks: Value,
     session: String,
     turns: u64,
+    /// Images attached so far; Claude numbers `[Image #N]` across a session.
+    images: usize,
 }
 
 impl FakeAgent {
@@ -97,6 +102,7 @@ impl FakeAgent {
             hooks,
             session: pseudo_uuid(),
             turns: 0,
+            images: 0,
         }
     }
 
@@ -142,19 +148,21 @@ impl FakeAgent {
         self.redraw(draft);
     }
 
-    /// Redraws the prompt line with the draft. Continuation lines are
-    /// indented under the `❯`, as Claude Code draws them.
+    /// Redraws the prompt line the way Claude Code shows a draft: image lines
+    /// as leading `[Image #N]` chips, the other lines after them.
+    /// Continuation lines are indented under the `❯`, as Claude Code draws them.
     fn redraw(&self, draft: &str) {
-        let lines = draft.split('\n').count();
+        let (shown, _) = lift_images(draft, self.images);
+        let lines = shown.split('\n').count();
         let rule = "─".repeat(60);
         let mut out = std::io::stdout();
         let _ = write!(
             out,
             "\x1b8\x1b[J❯ {}\r\n{rule}\r\n  ? for shortcuts · fake {}\x1b[{}A\r\x1b[{}C",
-            draft.replace('\n', "\r\n  "),
+            shown.replace('\n', "\r\n  "),
             self.provider,
             1 + lines,
-            2 + draft.rsplit('\n').next().unwrap_or("").chars().count()
+            2 + shown.rsplit('\n').next().unwrap_or("").chars().count()
         );
         let _ = out.flush();
     }
@@ -194,6 +202,7 @@ impl FakeAgent {
                 Ok(count) => count,
             };
             pending.extend_from_slice(&buffer[..count]);
+
             for event in drain_input(&mut pending) {
                 match event {
                     Input::Text(text) => {
@@ -210,7 +219,9 @@ impl FakeAgent {
                         self.redraw(&draft);
                     }
                     Input::Enter if !draft.trim().is_empty() => {
-                        let prompt = std::mem::take(&mut draft);
+                        let (prompt, images) =
+                            lift_images(&std::mem::take(&mut draft), self.images);
+                        self.images += images;
                         self.submit(&prompt);
                     }
                     Input::Enter => {}
@@ -223,7 +234,7 @@ impl FakeAgent {
 
 /// Empties the draft's last line, or when it is empty already, joins it to
 /// the line before, so repeated kills clear a multi-line draft.
-fn kill_line(draft: &mut String) {
+pub(super) fn kill_line(draft: &mut String) {
     match draft.rfind('\n') {
         Some(at) if at + 1 == draft.len() => {
             draft.pop();
@@ -231,6 +242,39 @@ fn kill_line(draft: &mut String) {
         Some(at) => draft.truncate(at + 1),
         None => draft.clear(),
     }
+}
+
+/// Claude Code turns each draft line that is one quoted image path into an
+/// image attachment: one leading `[Image #N]` per image (numbered after the
+/// session's earlier images), then the other non-blank lines. Returns that
+/// prompt and how many images it lifted.
+pub(super) fn lift_images(draft: &str, earlier: usize) -> (String, usize) {
+    let is_image = |line: &str| {
+        line.len() > 2
+            && line.starts_with('"')
+            && line.ends_with('"')
+            && std::path::Path::new(&line[1..line.len() - 1])
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| {
+                    ["png", "jpg", "jpeg", "gif", "webp"]
+                        .iter()
+                        .any(|image| e.eq_ignore_ascii_case(image))
+                })
+    };
+    let lines: Vec<&str> = draft.split('\n').collect();
+    let images = lines.iter().filter(|line| is_image(line)).count();
+    let chips: String = (1..=images)
+        .map(|n| format!("[Image #{}]", earlier + n))
+        .collect();
+    if images == 0 {
+        return (draft.to_owned(), 0);
+    }
+    let rest: Vec<&str> = lines
+        .into_iter()
+        .filter(|line| !is_image(line) && !line.trim().is_empty())
+        .collect();
+    (format!("{chips}{}", rest.join("\n")), images)
 }
 
 /// A prompt containing `fake:work N` keeps the fake busy for N seconds (at

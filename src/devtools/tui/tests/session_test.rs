@@ -106,6 +106,15 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
     assert_eq!(get("TERM"), Some(OsString::from("xterm-256color")));
     assert!(env.iter().all(|(k, _)| !k.starts_with("HERDR_")));
     assert_eq!(get(OWNER_ENV), Some(OsString::from("tok")));
+    // The effect stand-ins log inside the session and serve its fixture image.
+    assert_eq!(
+        get("BUS_TUI_EFFECTS"),
+        Some(OsString::from("/tmp/bus-tui/s1/effects.ndjson"))
+    );
+    assert_eq!(
+        get("BUS_TUI_CLIPBOARD_IMAGE"),
+        Some(OsString::from("/tmp/bus-tui/s1/clipboard.png"))
+    );
     let without_path = scratch_env(&paths, "tok", &[]);
     assert!(without_path.iter().any(|(k, _)| k == "PATH"));
 }

@@ -5,16 +5,29 @@
 //! existing session. See `docs/tui-driver.md` for the command reference, which
 //! is also this command's `--help`.
 mod args;
+mod effects;
 mod fake_agents;
+mod fixtures;
 mod host;
 mod input;
+mod mirror;
+mod picture;
 mod predicate;
 mod protocol;
 mod screen;
 mod session;
 mod trace;
 
-pub(crate) use fake_agents::{fake_provider, run as run_fake_agent};
+/// When this process is one of a driver session's stand-ins (a fake provider
+/// CLI or an effect recorder), runs it and returns its exit code.
+pub(crate) fn run_stand_in(args: &[String]) -> Option<i32> {
+    let arg0 = args.first()?;
+    if let Some(provider) = fake_agents::fake_provider(arg0) {
+        return Some(fake_agents::run(provider, &args[1..]));
+    }
+    let command = fake_agents::stand_in(arg0, effects::COMMANDS)?;
+    Some(effects::run(command, &args[1..]))
+}
 
 use protocol::{exit_code, failure, Command, EXIT_NO_SESSION, EXIT_OK, EXIT_USAGE};
 use serde_json::{json, Value};
@@ -53,6 +66,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
             }
         }
         Some("__host") => run_host(&args[1..]),
+        Some("__replay") => run_replay(&args[1..]),
         Some("snapshot") if args.iter().any(|a| a == "--plain") => {
             let rest: Vec<String> = args[1..]
                 .iter()
@@ -135,6 +149,7 @@ fn dispatch(verb: &str, rest: &[String]) -> Value {
         "wait" | "expect" => wait(&name, &mut parsed),
         "journey" => journey(&name, &mut parsed),
         "gc" => gc(&mut parsed),
+        "fixture" => fixture(&name, &mut parsed),
         _ => args::command(verb, &mut parsed).map(|command| request(&name, &command)),
     };
     result.unwrap_or_else(|message| failure("usage", message))
@@ -326,6 +341,8 @@ fn prepare_target(
             ),
         ));
     }
+    // Refusals that keep the driver off a live Bus come before the session cap.
+    target_guards(paths, inherited)?;
     if owned.len() >= session::MAX_SESSIONS {
         return Err(failure(
             "refused",
@@ -336,7 +353,6 @@ fn prepare_target(
             ),
         ));
     }
-    target_guards(paths, inherited)?;
     if paths.dir.exists() {
         if !paths.is_driver_dir() {
             return Err(failure(
@@ -697,6 +713,43 @@ fn run_host(args: &[String]) -> i32 {
             eprintln!("bus tui host: {message}");
             EXIT_USAGE
         }
+    }
+}
+
+/// `fixture KIND [--name FILE] [--text TEXT]`: files for the session to send.
+fn fixture(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
+    let kind = parsed
+        .positional()
+        .ok_or("usage: fixture image|file|clipboard-image [--name FILE] [--text TEXT]")?;
+    let file = parsed.take_value("--name");
+    let text = parsed.take_value("--text");
+    parsed.finish()?;
+    let paths = paths(name);
+    if !session::session_alive(&paths) {
+        return Ok(failure(
+            "no_session",
+            format!("no running driver session {name:?}"),
+        ));
+    }
+    fixtures::create(&paths, &kind, file, text)
+}
+
+/// Runs inside the `screenshot --real` mirror window.
+fn run_replay(args: &[String]) -> i32 {
+    let mut parsed = match args::Parsed::parse(args) {
+        Ok(parsed) => parsed,
+        Err(message) => return usage(message),
+    };
+    let (Some(raw), Some(ready), Some(size)) = (
+        parsed.take_value("--raw"),
+        parsed.take_value("--ready"),
+        parsed.take_value("--size"),
+    ) else {
+        return usage("usage: __replay --raw FILE --ready FILE --size COLSxROWS".into());
+    };
+    match args::parse_size(&size) {
+        Ok((cols, rows)) => mirror::replay(Path::new(&raw), Path::new(&ready), cols, rows),
+        Err(message) => usage(message),
     }
 }
 

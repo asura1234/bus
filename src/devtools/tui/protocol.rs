@@ -23,6 +23,26 @@ pub(super) enum Target {
         nth: Option<usize>,
         rows: Option<(u16, u16)>,
     },
+    /// A named region from the room UI's `ui hits`.
+    Hit {
+        name: String,
+    },
+}
+
+/// Rows and, optionally, columns of the screen, both inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct Region {
+    pub rows: Option<(u16, u16)>,
+    pub cols: Option<(u16, u16)>,
+}
+
+/// What a cell's style must be; `None` and empty mean any.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct Style {
+    pub fg: Option<String>,
+    pub bg: Option<String>,
+    pub attrs: Vec<String>,
+    pub no_attrs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,10 +103,39 @@ pub(super) enum Command {
     },
     WaitStable {
         stable_ms: u64,
-        rows: Option<(u16, u16)>,
+        region: Region,
+        timeout_ms: u64,
+    },
+    /// Waits until the region's styled cells differ from just before the
+    /// last input.
+    WaitChanged {
+        region: Region,
+        timeout_ms: u64,
+    },
+    WaitStyle {
+        target: Target,
+        style: Style,
+        timeout_ms: u64,
+    },
+    /// Waits for an effect recorded since the last input (`all`: ever).
+    WaitEffect {
+        kind: String,
+        target: Option<String>,
+        all: bool,
         timeout_ms: u64,
     },
     Clipboard,
+    Screenshot {
+        real: bool,
+        out: Option<std::path::PathBuf>,
+    },
+    Hits,
+    Effects {
+        kind: Option<String>,
+    },
+    Focus {
+        gained: bool,
+    },
     Stop,
 }
 

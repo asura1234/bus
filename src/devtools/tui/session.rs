@@ -147,6 +147,16 @@ impl SessionPaths {
         self.dir.join("host.log")
     }
 
+    /// What the session's effect stand-ins recorded, one JSON line each.
+    pub fn effects_log(&self) -> PathBuf {
+        self.dir.join("effects.ndjson")
+    }
+
+    /// The image the clipboard stand-in hands to Bus's image paste.
+    pub fn clipboard_image(&self) -> PathBuf {
+        self.dir.join("clipboard.png")
+    }
+
     pub fn read_info(&self) -> Option<SessionInfo> {
         let text = std::fs::read_to_string(self.info_file()).ok()?;
         serde_json::from_str(&text).ok()
@@ -637,9 +647,17 @@ pub(super) fn scratch_env(
         // Copies then go out as OSC 52, which the driver captures, instead of
         // reaching the developer's clipboard through pbcopy.
         ("SSH_TTY".into(), "/dev/null".into()),
-        // Lets the provider names in `bin_dir` act as fake agents.
+        // Lets the provider and OS command names in `bin_dir` act as stand-ins.
         (super::fake_agents::FAKE_AGENT_ENV.into(), "1".into()),
         (OWNER_ENV.into(), token.into()),
+        (
+            super::effects::EFFECTS_ENV.into(),
+            paths.effects_log().into(),
+        ),
+        (
+            super::effects::CLIPBOARD_IMAGE_ENV.into(),
+            paths.clipboard_image().into(),
+        ),
     ]);
     #[cfg(unix)]
     env.push(("SHELL".into(), "/bin/sh".into()));

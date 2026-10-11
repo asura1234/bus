@@ -8,6 +8,7 @@ use super::trace::Trace;
 use super::{bus_command, CommandOutput};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
+use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 mod actions;
+mod visual;
+mod waits;
 
 /// How long an action waits for the first frame after its input.
 const FRAME_WAIT: Duration = Duration::from_millis(500);
@@ -47,6 +50,11 @@ struct Host {
     token: String,
     /// Locked for the host's life: the session is owned while it is.
     _owner: std::fs::File,
+    /// The screen just before the last input, for `wait --changed`.
+    before_input: RefCell<Option<Grid>>,
+    /// Effects recorded before the last input; `wait --effect` looks after it.
+    effects_mark: Cell<usize>,
+    shots: Cell<u32>,
 }
 
 pub(super) struct HostOptions {
@@ -144,7 +152,13 @@ fn start(
     ));
     let trace = Arc::new(Mutex::new(trace));
     let child = Arc::new(Mutex::new(child));
-    spawn_pump(reader, output.clone(), writer.clone(), trace.clone());
+    spawn_pump(
+        reader,
+        output.clone(),
+        writer.clone(),
+        trace.clone(),
+        paths.effects_log(),
+    );
     spawn_reaper(child.clone(), output.clone());
 
     let info = SessionInfo {
@@ -167,6 +181,9 @@ fn start(
         trace,
         token: options.token.clone(),
         _owner: owner,
+        before_input: RefCell::new(None),
+        effects_mark: Cell::new(0),
+        shots: Cell::new(0),
     })
 }
 
@@ -185,9 +202,11 @@ fn spawn_pump(
     output: Arc<(Mutex<Output>, Condvar)>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     trace: Arc<Mutex<Trace>>,
+    effects_log: PathBuf,
 ) {
     std::thread::spawn(move || {
         let mut buffer = vec![0u8; 65536];
+        let mut osc = super::effects::OscWatch::default();
         loop {
             let count = match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
@@ -196,6 +215,11 @@ fn spawn_pump(
             let bytes = &buffer[..count];
             if let Ok(mut trace) = trace.lock() {
                 trace.output(bytes);
+            }
+            for (number, text) in osc.feed(bytes) {
+                let effect = json!({"kind": "terminal_notification", "osc": number,
+                                    "target": text, "at_ms": super::effects::now_ms()});
+                super::effects::append(&effects_log, &effect);
             }
             let (lock, ready) = &*output;
             let Ok(mut out) = lock.lock() else { break };

@@ -60,7 +60,7 @@ path = "tests/tui/driver_test.rs"
 # driver and any dependency that exists only for it. Release builds
 # (`./run prod`, `just build`, Nix, npm) leave it off. The runtime `--dev`
 # flag is separate: it gates dev-tier control commands in either variant.
-dev-tools = []
+dev-tools = ["dep:fontdue"]
 
 [dependencies]
 base64 = "0.22.1"
@@ -70,6 +70,8 @@ clap = { version = "4.5", default-features = false, features = ["std", "help", "
 clap_complete = "4.5"
 crossterm = "0.29"
 ctrlc = { version = "3", features = ["termination"] }
+# Rasterizes the TUI driver's cell screenshots; dev variant only.
+fontdue = { version = "0.9", optional = true }
 # Decodes chat attachments into Bus room-history thumbnails.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 interprocess = "2.4.2"

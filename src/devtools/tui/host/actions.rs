@@ -12,6 +12,7 @@ impl Host {
     /// be delivered and change nothing.
     fn act(&self, chunks: &[Vec<u8>], gap: Duration) -> Value {
         let before = self.grid();
+        self.mark_input(&before);
         let (frames_before, _) = self.counters();
         let started = Instant::now();
         for (index, chunk) in chunks.iter().enumerate() {
@@ -70,6 +71,7 @@ impl Host {
                 }
                 Ok((*row, *col))
             }
+            Target::Hit { name } => self.hit_cell(name),
             Target::Text {
                 text,
                 regex,
@@ -156,21 +158,21 @@ impl Host {
                 mods,
             } => self.scroll(&target, up, notches, &mods),
             Command::Resize { cols, rows } => self.resize(cols, rows),
-            Command::WaitText {
-                text,
-                regex,
-                gone,
-                rows,
-                timeout_ms,
-            } => self.wait_text(&text, regex, gone, rows, Duration::from_millis(timeout_ms)),
-            Command::WaitStable {
-                stable_ms,
-                rows,
-                timeout_ms,
-            } => self.wait_stable(
-                Duration::from_millis(stable_ms),
-                rows,
-                Duration::from_millis(timeout_ms),
+            Command::WaitText { .. }
+            | Command::WaitStable { .. }
+            | Command::WaitChanged { .. }
+            | Command::WaitStyle { .. }
+            | Command::WaitEffect { .. } => self.wait(command),
+            Command::Screenshot { real, out } => self.screenshot(real, out),
+            Command::Hits => self.hits_response(),
+            Command::Effects { kind } => self.effects(kind.as_deref()),
+            Command::Focus { gained } => self.act(
+                &[if gained {
+                    b"\x1b[I".to_vec()
+                } else {
+                    b"\x1b[O".to_vec()
+                }],
+                Duration::ZERO,
             ),
             Command::Clipboard => {
                 let copied = self
@@ -322,6 +324,7 @@ impl Host {
 
     fn resize(&mut self, cols: u16, rows: u16) -> Value {
         let before = self.grid();
+        self.mark_input(&before);
         let (frames_before, _) = self.counters();
         let started = Instant::now();
         if let Ok(mut out) = self.output.0.lock() {
@@ -348,88 +351,9 @@ impl Host {
         json!({"ok": true, "size": [cols, rows], "frame": frame,
                "changed_rows": row_diff(&before, &after).len(), "cursor": after.cursor})
     }
-
-    fn wait_text(
-        &self,
-        text: &str,
-        regex: bool,
-        gone: bool,
-        rows: Option<(u16, u16)>,
-        timeout: Duration,
-    ) -> Value {
-        let needle = match needle(text, regex) {
-            Ok(needle) => needle,
-            Err(error) => return error,
-        };
-        let started = Instant::now();
-        let (lock, ready) = &*self.output;
-        loop {
-            let grid = self.grid();
-            let matches = screen::find(&grid, &needle, rows);
-            if matches.is_empty() == gone {
-                return json!({"ok": true, "waited_ms": started.elapsed().as_millis() as u64,
-                              "matches": matches});
-            }
-            if let Some(reason) = self.exited() {
-                return failure("bus_exited", reason);
-            }
-            if started.elapsed() >= timeout {
-                let what = if gone { "still visible" } else { "not visible" };
-                let mut response = failure(
-                    "timeout",
-                    format!("{text:?} {what} after {} ms", timeout.as_millis()),
-                );
-                response["excerpt"] = json!(excerpt(&grid, rows));
-                return response;
-            }
-            let Ok(out) = lock.lock() else {
-                return failure("bus_exited", "screen lock poisoned");
-            };
-            let _ = ready.wait_timeout(out, Duration::from_millis(50));
-        }
-    }
-
-    fn wait_stable(&self, stable: Duration, rows: Option<(u16, u16)>, timeout: Duration) -> Value {
-        let started = Instant::now();
-        let region = |grid: &Grid| -> Vec<String> {
-            let (first, last) = rows.unwrap_or((0, grid.rows.saturating_sub(1)));
-            (first..=last.min(grid.rows.saturating_sub(1)))
-                .map(|row| grid.row_text(usize::from(row)))
-                .collect()
-        };
-        let mut last = region(&self.grid());
-        let mut since = Instant::now();
-        loop {
-            std::thread::sleep(Duration::from_millis(20));
-            // A dead Bus's last screen never changes; that is not stable.
-            if let Some(reason) = self.exited() {
-                return failure("bus_exited", reason);
-            }
-            let grid = self.grid();
-            let current = region(&grid);
-            if current != last {
-                last = current;
-                since = Instant::now();
-            } else if since.elapsed() >= stable {
-                return json!({"ok": true, "waited_ms": started.elapsed().as_millis() as u64});
-            }
-            if started.elapsed() >= timeout {
-                let mut response = failure(
-                    "timeout",
-                    format!(
-                        "region never stayed unchanged for {} ms within {} ms",
-                        stable.as_millis(),
-                        timeout.as_millis()
-                    ),
-                );
-                response["excerpt"] = json!(excerpt(&grid, rows));
-                return response;
-            }
-        }
-    }
 }
 
-fn needle(text: &str, regex: bool) -> Result<Needle<'_>, Value> {
+pub(super) fn needle(text: &str, regex: bool) -> Result<Needle<'_>, Value> {
     if regex {
         regex::Regex::new(text)
             .map(Needle::Regex)
@@ -439,7 +363,7 @@ fn needle(text: &str, regex: bool) -> Result<Needle<'_>, Value> {
     }
 }
 
-fn excerpt(grid: &Grid, rows: Option<(u16, u16)>) -> Vec<String> {
+pub(super) fn excerpt(grid: &Grid, rows: Option<(u16, u16)>) -> Vec<String> {
     let (first, last) = rows.unwrap_or((0, grid.rows.saturating_sub(1)));
     (first..=last.min(grid.rows.saturating_sub(1)))
         .map(|row| format!("{row:>3}│ {}", grid.row_text(usize::from(row))))

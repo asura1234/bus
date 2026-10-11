@@ -66,6 +66,16 @@ fn a_character_split_across_reads_is_not_garbled() {
 }
 
 #[test]
+fn image_lines_become_leading_chips_like_claude_code() {
+    let draft = "please look\n\"/tmp/a b/shot.png\"\n\"/tmp/notes.txt\"";
+    assert_eq!(
+        lift_images(draft, 2),
+        ("[Image #3]please look\n\"/tmp/notes.txt\"".to_owned(), 1)
+    );
+    assert_eq!(lift_images("plain\ntext", 0), ("plain\ntext".to_owned(), 0));
+}
+
+#[test]
 fn repeated_kills_clear_a_multi_line_draft() {
     let mut draft = "one\ntwo".to_owned();
     for expected in ["one\n", "one", ""] {
