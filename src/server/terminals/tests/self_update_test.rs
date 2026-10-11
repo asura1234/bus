@@ -244,3 +244,64 @@ async fn an_agent_bus_did_not_start_keeps_its_chooser() {
     assert!(harness.writes.try_recv().is_err());
     assert_eq!(harness.phase(), None);
 }
+
+#[test]
+fn a_restored_agent_relaunches_with_the_command_its_restore_typed() {
+    let resume: Vec<String> = ["codex", "resume", "saved-session", "-c", "hooks=bus"]
+        .map(String::from)
+        .into();
+    assert_eq!(
+        managed_relaunch_args(Some(AgentKind::Codex), &resume),
+        Some(resume[1..].to_vec())
+    );
+    // Not the managed agent's own executable, or no managed agent: no relaunch.
+    assert_eq!(
+        managed_relaunch_args(Some(AgentKind::Claude), &resume),
+        None
+    );
+    assert_eq!(managed_relaunch_args(None, &resume), None);
+    assert_eq!(managed_relaunch_args(Some(AgentKind::Codex), &[]), None);
+}
+
+#[tokio::test]
+async fn a_restored_agent_resumes_its_own_session_after_the_update() {
+    let mut harness = codex_at_update_chooser();
+    // As after a Bus restart: restored, not started, with the resume command.
+    let terminal = harness.terminal();
+    terminal.clear_agent_name();
+    terminal.restore_managed_agent(NAME.into(), AgentKind::Codex);
+    terminal.set_persisted_agent_session(crate::agents::resume::catalog::PersistedAgentSession {
+        source: "herdr:codex".into(),
+        agent: "codex".into(),
+        session_ref: crate::agents::resume::catalog::AgentSessionRef::id("saved-session").unwrap(),
+    });
+    terminal.managed_agent_args = Some(
+        ["resume", "saved-session", "-c", "hooks=bus"]
+            .map(String::from)
+            .into(),
+    );
+    terminal.set_detected_state(Some(AgentKind::Codex), AgentState::Blocked);
+    let now = Instant::now();
+    assert!(harness.app.supervise_self_updates(now));
+    assert_eq!(
+        harness.writes.try_recv().unwrap(),
+        Bytes::from_static(b"\r")
+    );
+
+    harness.exit_with("🎉 Update ran successfully! Please restart Codex.");
+    assert!(harness.app.supervise_self_updates(now));
+    let relaunch = String::from_utf8_lossy(&harness.writes.try_recv().unwrap()).into_owned();
+    assert!(
+        relaunch.contains("codex resume saved-session"),
+        "{relaunch}"
+    );
+    let terminal = harness.terminal();
+    assert_eq!(terminal.agent_name.as_deref(), Some(NAME));
+    assert_eq!(
+        terminal
+            .persisted_agent_session
+            .as_ref()
+            .map(|session| session.session_ref.value.as_str()),
+        Some("saved-session")
+    );
+}
