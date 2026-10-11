@@ -68,6 +68,9 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         print_help(dev);
         return Ok(());
     }
+    if let Action::Tui(args) = &invocation.action {
+        return run_tui(dev, args);
+    }
 
     let explicit_root = bus_data_dir();
     let base = sessions::default_base_dir().map_err(io::Error::other)?;
@@ -119,7 +122,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             }
         },
         Action::Paths => (explicit_root.unwrap_or_else(|| base.clone()), None),
-        Action::Sessions | Action::Help => unreachable!(),
+        Action::Sessions | Action::Help | Action::Tui(_) => unreachable!(),
     };
     if !root.is_absolute() {
         return Err(io::Error::other(
@@ -159,8 +162,38 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         }
         Action::Run | Action::Resume(_) => run_session(&registry, local_session_id, dev),
         Action::Paths => print_paths(&root, &base, dev),
-        Action::Sessions | Action::Help => unreachable!(),
+        Action::Sessions | Action::Help | Action::Tui(_) => unreachable!(),
     }
+}
+
+/// The TUI driver is test tooling: only the dev variant (cargo feature
+/// `dev-tools`, built by `./run dev`) compiles it in, and only a `--dev`
+/// invocation reaches it. The release variant has no driver code at all.
+fn run_tui(dev: bool, args: &[String]) -> io::Result<()> {
+    #[cfg(not(feature = "dev-tools"))]
+    {
+        let _ = (dev, args);
+        refuse_tui("the TUI driver is only in the dev variant of Bus (built by `./run dev`); this binary is the release variant")
+    }
+    #[cfg(feature = "dev-tools")]
+    {
+        if !dev {
+            refuse_tui("dev tool: run `bus --dev tui ...`");
+        }
+        tui_driver(args)
+    }
+}
+
+/// Usage errors exit 2 with one line, as the driver's own errors do.
+fn refuse_tui(message: &str) -> ! {
+    eprintln!("error: DEV_TOOLS_UNAVAILABLE {message}");
+    std::process::exit(2)
+}
+
+/// The driver in `src/devtools` plugs in here.
+#[cfg(feature = "dev-tools")]
+fn tui_driver(_args: &[String]) -> io::Result<()> {
+    Err(io::Error::other("the TUI driver is not built yet"))
 }
 
 /// Every session runs its control socket in the data root, and the socket
@@ -307,6 +340,27 @@ mod tests {
         assert_eq!(
             parse_invocation(&args(&["stop", "bus"])).unwrap_err(),
             USAGE
+        );
+    }
+
+    #[test]
+    fn tui_takes_every_later_argument_and_keeps_a_leading_dev() {
+        assert_eq!(
+            parse_invocation(&args(&[
+                "--dev", "tui", "start", "--dev", "--size", "80x24"
+            ]))
+            .unwrap(),
+            Invocation {
+                dev: true,
+                action: Action::Tui(args(&["start", "--dev", "--size", "80x24"])),
+            }
+        );
+        assert_eq!(
+            parse_invocation(&args(&["tui"])).unwrap(),
+            Invocation {
+                dev: false,
+                action: Action::Tui(vec![]),
+            }
         );
     }
 

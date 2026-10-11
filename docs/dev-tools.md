@@ -20,6 +20,9 @@ ships the dev tools, release and npm installs included. The gate keeps dev
 tools out of normal sessions' agents and help text. It is not a security
 boundary: any process of the same user can reach the session's private
 control.sock.
+Separately, test tooling (the TUI driver, `bus --dev tui`) is compiled only into the dev
+variant: cargo feature `dev-tools`, built by `./run dev`. The release variant (`./run prod`,
+`just build`, Nix, npm) leaves it out entirely, and its `tui` command only says so.
 focus queues a visible Bus view change; its receipt does not claim the view has rendered.
 room seen clears a room's unread count without changing the visible Bus view.
 room sound turns that room's new-message sound on or off; MASTER starts on, work rooms off.

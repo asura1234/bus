@@ -5,7 +5,12 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     echo "Usage: ./run dev [Bus arguments]" >&2
+    echo "       ./run prod [Bus arguments]" >&2
     echo "       ./run dev-control <command> [arguments]" >&2
+    echo "" >&2
+    echo "dev builds the dev variant (cargo feature dev-tools: the TUI driver and other" >&2
+    echo "test tooling) and launches it with --dev. prod builds the release variant, the" >&2
+    echo "one npm ships, which leaves that tooling out, and launches it as is." >&2
     echo "" >&2
     echo "Examples:" >&2
     echo "  ./run dev" >&2
@@ -18,8 +23,14 @@ case "${1:-}" in
     dev)
         shift
         cd "$REPO_ROOT"
-        cargo build --locked --bin bus
+        cargo build --locked --bin bus --features dev-tools
         exec "$REPO_ROOT/target/debug/bus" --dev "$@"
+        ;;
+    prod)
+        shift
+        cd "$REPO_ROOT"
+        cargo build --locked --release --bin bus
+        exec "$REPO_ROOT/target/release/bus" "$@"
         ;;
     dev-control)
         shift

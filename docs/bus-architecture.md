@@ -193,7 +193,8 @@ Files are split by ownership, not by helper.
   - `control/`: `server.rs` (`control.sock`, run by every session; `send --as` must name an agent in the room or its
     orchestrator, other commands trust the caller), `protocol.rs` (framing). The coordinator's `control/mod.rs` holds
     the method table, where each method has a tier: agent-tier methods answer in every session, dev-tier methods only in
-    a session started with `--dev` (`dev_tools_disabled` otherwise); see `docs/dev-tools.md`
+    a session started with `--dev` (`dev_tools_disabled` otherwise); see `docs/dev-tools.md`. Test tooling (the TUI
+    driver) is a separate, compile-time split: cargo feature `dev-tools`, on only in `./run dev`
   - `prefs/`: `settings.rs` (`settings.json`), `colors.rs` (agent palette)
   - `orchestration.rs`: embed `orchestration/` and `workflows/`, write the docs into the Bus data root, and fill MASTER
     prompt placeholders; compiled-in copies are the only defaults in every build

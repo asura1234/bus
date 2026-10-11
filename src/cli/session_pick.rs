@@ -12,6 +12,8 @@ pub(super) enum Action {
     Paths,
     Help,
     Control(Vec<String>),
+    /// `bus --dev tui ...`: the TUI driver, in the dev variant only.
+    Tui(Vec<String>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -61,6 +63,10 @@ pub(super) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                     index += 1;
                 }
                 action = Some(Action::Resume(target.ok_or_else(|| USAGE.to_owned())?));
+            }
+            "tui" if action.is_none() => {
+                action = Some(Action::Tui(args[index + 1..].to_vec()));
+                break;
             }
             value if action.is_none() && !value.starts_with('-') => {
                 action = Some(Action::Control(args[index..].to_vec()));
