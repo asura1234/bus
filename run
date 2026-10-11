@@ -25,7 +25,21 @@ usage() {
 build_bus() {
     local output executable
     output=$(cargo build --locked --message-format=json-render-diagnostics "$@") || return $?
-    executable=$(printf '%s\n' "$output" | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -n 1)
+    # Decode Cargo's JSON messages properly: a path may hold escaped quotes.
+    executable=$(printf '%s\n' "$output" | python3 -I -c '
+import json, sys
+found = ""
+for line in sys.stdin:
+    try:
+        message = json.loads(line)
+    except ValueError:
+        continue
+    target = message.get("target") or {}
+    if message.get("reason") == "compiler-artifact" and message.get("executable") \
+            and target.get("name", "bus") == "bus":
+        found = message["executable"]
+print(found)
+')
     if [[ -z "$executable" ]]; then
         echo "Cargo reported no bus executable for this build." >&2
         return 1

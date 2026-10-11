@@ -16,7 +16,7 @@ REAL_CARGO = shutil.which("cargo")
 @unittest.skipUnless(os.name == "posix" and REAL_CARGO, "requires POSIX and Cargo")
 class RunConfiguredTargetTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="bus-run-config-", dir="/private/tmp")
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="bus-run-config-")
         self.addCleanup(self.temp_dir.cleanup)
         self.root = Path(self.temp_dir.name).resolve()
         self.bin_dir = self.root / "bin"
@@ -110,3 +110,21 @@ class RunConfiguredTargetTests(unittest.TestCase):
             ["default-target", "--dev", "state"],
         )
         self.assertFalse(self.target_dir.exists(), "dev-control never builds")
+
+    def test_launchers_decode_cargo_reported_executable_paths(self) -> None:
+        self.env["CARGO_TARGET_DIR"] = str(self.root / 'build "quoted"')
+        for mode in ("dev", "prod"):
+            with self.subTest(mode=mode):
+                args = ["fresh-configured", *(["--dev"] if mode == "dev" else []), "--paths"]
+                result = subprocess.run(
+                    [str(self.root / "run"), mode, "--paths"],
+                    cwd=self.root.parent,
+                    env=self.env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                profile = "debug" if mode == "dev" else "release"
+                self.assertTrue((Path(self.env["CARGO_TARGET_DIR"]) / profile / "bus").is_file())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.bus_args.read_text(encoding="utf-8").splitlines(), args)
