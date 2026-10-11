@@ -1,6 +1,6 @@
 //! Draft/notes editing, key handling, recipients and image attachment persistence.
 use super::super::{
-    editor::Editor, forms::RenameTarget, render::Action, BusUi, ComposerSize, Effect,
+    editor::Editor, forms::RenameTarget, render::Action, BusUi, ComposerSize, Effect, Recalled,
 };
 use crate::messaging::{
     coordinator::BusCommand,
@@ -375,8 +375,8 @@ impl BusUi {
             return;
         };
         let text = std::mem::take(&mut local.text.text);
-        if !text.is_empty() && local.recall.last() != Some(&text) {
-            local.recall.push(text);
+        if !text.is_empty() && local.recall.last().map(|r| &r.text) != Some(&text) {
+            local.recall.push(Recalled::now(text));
         }
         local.text = Editor::default();
         local.history_index = None;
