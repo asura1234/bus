@@ -2,7 +2,7 @@
 use super::super::{
     chat_search::ChatSearch,
     history::{Line, Tone},
-    links::{visible_links, Candidate, LINK},
+    links::{visible_links, Candidate, Target, LINK},
     recipients::Layout as RecipientLayout,
     thumbnails::Placement,
     BusUi, ComposerSize, LocalRoom,
@@ -345,13 +345,31 @@ impl BusUi {
             .enumerate()
         {
             let rect = Rect::new(x, history_y + index as u16, width, 1);
+            // An attachment is a link over its name or picture only, so a
+            // press beside it, or a drag across it, selects like any row.
+            let attachment = match &line.action {
+                Some(Action::OpenFile(path)) => Some(path),
+                _ => None,
+            };
             view.row(
                 rect,
                 &line.text,
-                line.action.clone(),
+                line.action.clone().filter(|_| attachment.is_none()),
                 false,
                 matches!(line.tone, Tone::Muted),
             );
+            if let Some(path) = attachment {
+                let cells = line
+                    .thumbnail
+                    .as_ref()
+                    .map_or(line.text.width() as u16, |thumbnail| thumbnail.cols);
+                let link_rect = Rect::new(x, rect.y, cells.min(width), 1);
+                if link_rect.width > 0 {
+                    view.hit(link_rect, Action::OpenFile(path.clone()));
+                    view.history_links
+                        .push((link_rect, Target::Path(path.clone())));
+                }
+            }
             if let Some(thumbnail) = line.thumbnail.as_ref().filter(|thumbnail| {
                 // Partly scrolled thumbnails keep their blank rows and name.
                 thumbnail.row == 0

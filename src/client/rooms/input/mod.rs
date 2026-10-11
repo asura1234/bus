@@ -152,14 +152,6 @@ impl BusUi {
             return Some(true);
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-            if let Some(Action::OpenFile(path)) = &hit {
-                outcome
-                    .actions
-                    .push(crate::client::compositor::ClientShellAction::OpenPath(
-                        path.clone(),
-                    ));
-                return Some(true);
-            }
             if let Some(action) = hit {
                 let double = self.last_click.as_ref().is_some_and(|(last, time)| {
                     *last == action && time.elapsed() < std::time::Duration::from_millis(400)

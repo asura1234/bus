@@ -201,3 +201,85 @@ fn urls_and_relative_paths_from_the_agent_cwd_open_on_click() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dragging_an_attachment_name_copies_without_opening() {
+    let dir = scratch("attachment-drag");
+    let doc = dir.join("notes.md");
+    std::fs::write(&doc, "notes").unwrap();
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&doc));
+    settled_screen(&mut ui);
+    let (x, y) = locate(&ui, "notes.md");
+    let mut all = actions(&mut ui, MouseEventKind::Down(Left), x, y);
+    all.extend(actions(&mut ui, MouseEventKind::Drag(Left), x + 7, y));
+    all.extend(actions(&mut ui, MouseEventKind::Up(Left), x + 7, y));
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(opened(&all), None, "dragging must not open the attachment");
+    let copied = all.iter().find_map(|action| match action {
+        ClientShellAction::ClipboardWrite(bytes) => String::from_utf8(bytes.clone()).ok(),
+        _ => None,
+    });
+    assert_eq!(copied.as_deref(), Some("notes.md"));
+}
+
+#[test]
+fn releasing_over_a_link_after_pressing_other_text_does_not_open_it() {
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        "go",
+        "before https://example.test after",
+    );
+    settled_screen(&mut ui);
+    let (x, y) = locate(&ui, "before ");
+    let end = locate(&ui, "https://example.test");
+    let mut all = actions(&mut ui, MouseEventKind::Down(Left), x, y);
+    all.extend(actions(&mut ui, MouseEventKind::Up(Left), end.0, end.1));
+    assert_eq!(
+        opened(&all),
+        None,
+        "a different release cell is not a plain click"
+    );
+}
+
+#[test]
+fn clicking_blank_space_beside_an_attachment_name_does_not_open_it() {
+    let dir = scratch("attachment-blank");
+    let doc = dir.join("notes.md");
+    std::fs::write(&doc, "notes").unwrap();
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&doc));
+    settled_screen(&mut ui);
+    let (x, y) = locate(&ui, "notes.md");
+    let all = click(&mut ui, (x + 12, y));
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        opened(&all),
+        None,
+        "blank history cells are not an attachment link"
+    );
+}
+
+#[test]
+fn a_picture_opens_from_its_own_cells_only() {
+    let dir = thumbnail_dir("picture-link");
+    let image = png(&dir, "shot.png", (200, 80));
+    let (mut ui, room, agent) = fixture();
+    exchange_with_files(&mut ui, room, agent, std::slice::from_ref(&image));
+    ui.graphics = Some(thumbnails::Protocol::Iterm2);
+    ui.thumbnails.set_protocol(thumbnails::Protocol::Iterm2);
+    ui.thumbnails.set_cell(Some(CELL));
+    ui.compute_view(100, 40);
+    let picture = ui.view.thumbnails[0].clone();
+    let inside = (picture.x + picture.cols - 1, picture.y + picture.rows - 1);
+    let beside = (picture.x + picture.cols + 2, picture.y);
+    assert_eq!(opened(&click(&mut ui, beside)), None, "beside the picture");
+    assert_eq!(
+        opened(&click(&mut ui, inside)),
+        Some(image.display().to_string())
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

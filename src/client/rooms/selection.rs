@@ -100,13 +100,16 @@ impl BusUi {
                     Some(Action::Composer) if self.view.composer.contains(point) => {
                         Region::Composer
                     }
-                    None if self.view.history_text.contains(point) => Region::History,
+                    None | Some(Action::OpenFile(_)) if self.view.history_text.contains(point) => {
+                        Region::History
+                    }
                     _ => return false,
                 };
                 self.clear_selection();
                 if region == Region::History {
                     let point = self.history_point(column, row, false);
                     self.history_selection = Some((point, point));
+                    self.pressed_link = self.link_at(column, row).cloned();
                 } else {
                     let offset = self.editor_offset(region, column, row, false);
                     self.action(if region == Region::Notes {
@@ -136,6 +139,13 @@ impl BusUi {
                     return false;
                 };
                 if region == Region::History {
+                    if self
+                        .pressed_link
+                        .as_ref()
+                        .is_some_and(|(rect, _)| !rect.contains((column, row).into()))
+                    {
+                        self.pressed_link = None;
+                    }
                     if let Some((anchor, _)) = self.history_selection {
                         let before = self.history_point(column, row, false);
                         let head = if before >= anchor {
@@ -180,27 +190,33 @@ impl BusUi {
         }
     }
 
-    /// A click that selected nothing opens the link under it. The press
+    /// A click that selected nothing opens the link under it: the button
+    /// went down and came up on the same link without leaving it. The press
     /// still starts a selection, so dragging across a link selects and
     /// copies it as plain text.
-    fn open_clicked_link(&self, column: u16, row: u16, outcome: &mut ClientShellInput) {
+    fn open_clicked_link(&mut self, column: u16, row: u16, outcome: &mut ClientShellInput) {
+        let pressed = self.pressed_link.take();
         if self
             .history_selection
             .is_none_or(|(anchor, head)| anchor != head)
         {
             return;
         }
-        if let Some((_, target)) = self
-            .view
+        if let Some((_, target)) =
+            pressed.filter(|pressed| self.link_at(column, row) == Some(pressed))
+        {
+            outcome.actions.push(match target {
+                Target::Url(url) => ClientShellAction::OpenSafeWebUrl(url),
+                Target::Path(path) => ClientShellAction::OpenPath(path),
+            });
+        }
+    }
+
+    fn link_at(&self, column: u16, row: u16) -> Option<&(Rect, Target)> {
+        self.view
             .history_links
             .iter()
             .find(|(rect, _)| rect.contains((column, row).into()))
-        {
-            outcome.actions.push(match target {
-                Target::Url(url) => ClientShellAction::OpenSafeWebUrl(url.clone()),
-                Target::Path(path) => ClientShellAction::OpenPath(path.clone()),
-            });
-        }
     }
 
     /// Editor byte offset under the pointer, using the last frame's viewport.
@@ -281,6 +297,7 @@ impl BusUi {
     pub(super) fn clear_selection(&mut self) {
         self.drag = None;
         self.history_selection = None;
+        self.pressed_link = None;
         for local in self.locals.values_mut() {
             local.notes.anchor = None;
             local.text.anchor = None;
