@@ -43,8 +43,9 @@ replace `rebase-origin-main` or PR creation.
     path ensure CLI tests measure this commit rather than an old `target/debug/bus`.
   - **Integration**: all Rust integration targets under `tests/`, then the in-process
     `IN_PROCESS_SERVER_TESTS` harness. The same prefix drives nextest and libtest filters.
-    Then the `cli` target again with `--features dev-tools`, uninstrumented, so the dev variant's
-    test tooling is built and run; coverage measures only the default build.
+    Then the dev variant, uninstrumented, with `--features dev-tools`: the `cli` and `tui-driver`
+    targets and the `devtools::` unit tests in the `bus` binary, so the dev variant's test tooling
+    is built and run; coverage measures only the default build.
     No real LLM agents are launched.
   - **Coverage**: cargo-llvm-cov exports the fresh unit + integration profiles. The Rust production
     line percentage must meet its fixed floor in

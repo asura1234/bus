@@ -37,7 +37,9 @@ IN_PROCESS_SERVER_TESTS = "server::tests::"
 # The dev variant (`./run dev`) compiles test tooling behind this feature; lint
 # it with the same policy and run the CLI tests that reach it.
 DEV_TOOLS_FEATURES = ("--features", "dev-tools")
-DEV_TOOLS_TEST_TARGET = "cli"
+DEV_TOOLS_TEST_TARGETS = ("cli", "tui-driver")
+# The driver's own unit tests live in the bus binary under this module path.
+DEV_TOOLS_UNIT_PREFIX = "devtools::"
 ARCHITECTURE_TESTS = (
     "tools/tests/ui_hot_path_test.py",
     "tools/tests/import_boundaries_test.py",
@@ -288,18 +290,30 @@ def unit() -> int:
 
 
 def dev_tools_test() -> int:
-    """Run the CLI tests on the dev variant; coverage measures only the release one."""
+    """Run the dev variant's test tooling: the CLI and driver targets, then the
+    driver's unit tests. Coverage measures only the release variant."""
+    targets = [arg for target in DEV_TOOLS_TEST_TARGETS for arg in ("--test", target)]
     if shutil.which("cargo-nextest"):
-        return run(
-            "cargo", "nextest", "run", "--locked", *DEV_TOOLS_FEATURES,
-            "--test", DEV_TOOLS_TEST_TARGET, "--no-fail-fast",
-            "--status-level", "fail", "--final-status-level", "fail",
+        common = (
+            "--no-fail-fast", "--status-level", "fail", "--final-status-level", "fail",
             "--failure-output", "final", "--success-output", "never",
         )
-    return run(
-        "cargo", "test", "--locked", *DEV_TOOLS_FEATURES,
-        "--test", DEV_TOOLS_TEST_TARGET, "--no-fail-fast", "--quiet",
-    )
+        results = [
+            run("cargo", "nextest", "run", "--locked", *DEV_TOOLS_FEATURES, *targets, *common),
+            run(
+                "cargo", "nextest", "run", "--locked", *DEV_TOOLS_FEATURES, "--bin", "bus",
+                *common, "-E", f"test(/^{re.escape(DEV_TOOLS_UNIT_PREFIX)}/)",
+            ),
+        ]
+    else:
+        results = [
+            run("cargo", "test", "--locked", *DEV_TOOLS_FEATURES, *targets, "--no-fail-fast", "--quiet"),
+            run(
+                "cargo", "test", "--locked", *DEV_TOOLS_FEATURES, "--bin", "bus",
+                "--no-fail-fast", "--quiet", DEV_TOOLS_UNIT_PREFIX,
+            ),
+        ]
+    return int(any(results))
 
 
 def integration() -> int:

@@ -41,7 +41,7 @@ def references(root, name):
         ("messaging", {"agents", "protocol", "platform"}),
         ("server", {"terminal", "messaging", "agents", "protocol", "platform"}),
         ("client", {"messaging", "agents", "protocol", "platform"}),
-        ("cli", {"client", "messaging", "protocol", "platform"}),
+        ("cli", {"client", "devtools", "messaging", "protocol", "platform"}),
     ],
 )
 def test_component_graph_matches_architecture(owner, targets):

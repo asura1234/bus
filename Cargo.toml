@@ -14,6 +14,8 @@ include = [
     "orchestration/**/*",
     "workflows/**/*",
     "docs/dev-tools.md",
+    # The tui driver's --help is compiled in from it.
+    "docs/tui-driver.md",
     "vendor/libghostty-vt/**/*",
     "!vendor/libghostty-vt/.zig-cache/**/*",
     "!vendor/libghostty-vt/zig-out/**/*",
@@ -48,6 +50,10 @@ path = "tests/cli/cli_test.rs"
 [[test]]
 name = "room-screen"
 path = "tests/client/room_screen_test.rs"
+
+[[test]]
+name = "tui-driver"
+path = "tests/tui/driver_test.rs"
 
 [features]
 # Test tooling compiled only into the dev variant (`./run dev`): the TUI

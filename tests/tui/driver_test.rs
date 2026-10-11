@@ -1,0 +1,541 @@
+//! `bus --dev tui` against the built binary: a scratch Bus driven only through
+//! the driver CLI, and the guards that keep it away from every other Bus.
+// Only the dev variant has the driver; the gate runs this target in its
+// dev-tools lane, and an explicit `--test '*'` must still build without it.
+#![cfg(all(unix, feature = "dev-tools"))]
+
+use serde_json::Value;
+use std::path::PathBuf;
+use std::process::{Command, Output};
+
+/// Each test drives its own session; names stay unique across test processes.
+fn session_name(tag: &str) -> String {
+    format!("it{}-{tag}", std::process::id() % 100_000)
+}
+
+fn run_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("bus-tui-it-runs-{}", std::process::id()))
+}
+
+/// Each session's own driver root: no other driver on the machine, and no
+/// other test however the runner schedules them, counts against its cap.
+fn root(name: &str) -> PathBuf {
+    PathBuf::from(format!("/tmp/bti-{name}"))
+}
+
+fn session_dir(name: &str) -> PathBuf {
+    root(name).join(name)
+}
+
+/// `bus` for session NAME with only this suite's driver settings: no
+/// inherited session.
+fn bus(name: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bus"));
+    // cargo builds the driver into target/debug; allow it for this suite only.
+    command.env("BUS_TUI_ALLOW_TARGET_DEBUG", "1");
+    command.env("BUS_TUI_ROOT", root(name));
+    for key in [
+        "BUS_DATA_DIR",
+        "BUS_SESSION_ID",
+        "HERDR_SOCKET_PATH",
+        "BUS_TUI_SESSION",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
+/// `tui bus ARGS` against a session's scratch Bus.
+fn scratch_bus(session: &Session, args: &[&str]) -> Output {
+    bus(&session.0)
+        .args(["--dev", "tui", "bus", "--name", &session.0])
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn tui(name: &str, args: &[&str]) -> (i32, Value) {
+    let output = tui_raw(name, args, &[]);
+    parse(output)
+}
+
+fn tui_raw(name: &str, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut command = bus(name);
+    command
+        .args(["--dev", "tui"])
+        .args(args)
+        .args(["--name", name]);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output().expect("run bus --dev tui")
+}
+
+fn parse(output: Output) -> (i32, Value) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().last().unwrap_or("null");
+    let value = serde_json::from_str(line).unwrap_or(Value::Null);
+    (output.status.code().unwrap_or(-1), value)
+}
+
+/// Stops the session even when an assertion fails mid-test.
+struct Session(String);
+
+impl Session {
+    fn start(tag: &str) -> Self {
+        let name = session_name(tag);
+        let runs = run_dir();
+        let (code, status) = tui(
+            &name,
+            &[
+                "start",
+                "--size",
+                "140x40",
+                "--run-dir",
+                runs.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(code, 0, "start failed: {status}");
+        assert_eq!(status["alive"], true);
+        Self(name)
+    }
+
+    fn ok(&self, args: &[&str]) -> Value {
+        let (code, value) = tui(&self.0, args);
+        assert_eq!(code, 0, "{args:?} failed: {value}");
+        value
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = tui(&self.0, &["stop"]);
+        // A stopped session leaves no root behind.
+        let _ = std::fs::remove_file(root(&self.0).join(".start.lock"));
+        let _ = std::fs::remove_dir(root(&self.0));
+    }
+}
+
+fn bus_state(session: &Session) -> Value {
+    let output = scratch_bus(session, &["state"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<Value>(stdout.trim()).unwrap()["result"].clone()
+}
+
+#[test]
+fn a_room_and_a_message_round_trip_through_real_keys_and_clicks() {
+    let session = Session::start("flow");
+    // The fresh scratch Bus draws its default room.
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+
+    // Create a room by keys.
+    session.ok(&["press", "ctrl+shift+r"]);
+    session.ok(&["wait", "--text", "Room name"]);
+    session.ok(&["type", "review"]);
+    let entered = session.ok(&["press", "enter"]);
+    assert!(entered["frame"].is_object(), "{entered}");
+    session.ok(&["wait", "--state", "rooms.*.name == review"]);
+
+    // Focus the default room by clicking its sidebar entry.
+    let clicked = session.ok(&["click", "--text", "# bus", "--rows", "3-8"]);
+    assert_eq!(clicked["at"][0], 5);
+    session.ok(&["wait", "--state", "visible_room == 1"]);
+
+    // A fake Claude agent answers through Bus's real hooks.
+    let work = session_dir(&session.0).join("work");
+    let work = work.to_str().unwrap();
+    let status = bus(&session.0)
+        .args(["--dev", "tui", "bus", "--name", &session.0])
+        .args([
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "a1",
+            "--provider",
+            "claude",
+            "--pwd",
+            work,
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+
+    // Send through the composer: choose the agent, type, Enter.
+    session.ok(&["click", "--text", "Choose agents"]);
+    session.ok(&["click", "--text", "[ ] a1"]);
+    session.ok(&["press", "esc"]);
+    session.ok(&["click", "--text", "Message selected agents"]);
+    session.ok(&["type", "hello from the driver"]);
+    session.ok(&["press", "enter"]);
+    let reply = session.ok(&[
+        "wait",
+        "--text",
+        "fake reply: hello from the driver",
+        "--timeout",
+        "20s",
+    ]);
+    assert_eq!(reply["matches"].as_array().unwrap().len(), 1);
+    let rooms = bus_state(&session)["rooms"].as_array().unwrap().len();
+    assert_eq!(rooms, 3);
+
+    // A drag over the reply copies it through OSC 52 into the driver.
+    let found = session.ok(&["find", "fake reply"]);
+    let row = found["matches"][0]["row"].as_u64().unwrap().to_string();
+    let col = found["matches"][0]["col"].as_u64().unwrap();
+    let dragged = session.ok(&["drag", &row, &col.to_string(), &row, &(col + 9).to_string()]);
+    assert_eq!(dragged["copied"][0], "fake reply");
+    // "fake" is all base64 letters; the copy still comes back as shown.
+    let dragged = session.ok(&["drag", &row, &col.to_string(), &row, &(col + 3).to_string()]);
+    assert_eq!(dragged["copied"][0], "fake");
+
+    // A multi-line message reaches the fake Claude as one prompt.
+    let sent = scratch_bus(
+        &session,
+        &[
+            "send",
+            "--room",
+            "bus",
+            "--to",
+            "a1",
+            "--text",
+            "line one\nline two",
+        ],
+    );
+    let receipt = String::from_utf8_lossy(&sent.stdout).to_string();
+    assert!(sent.status.success(), "{receipt}");
+    let receipt: Value = serde_json::from_str(receipt.trim()).unwrap();
+    let id = receipt["result"]["message_id"].to_string();
+    let settled = session.ok(&["wait", "--message", &id, "--timeout", "30s"]);
+    assert!(
+        settled
+            .to_string()
+            .contains("fake reply: line one\\nline two"),
+        "the reply should answer the whole two-line prompt: {settled}"
+    );
+
+    let resized = session.ok(&["resize", "100x30"]);
+    assert_eq!(resized["size"][0], 100);
+    let snapshot = session.ok(&["snapshot"]);
+    assert_eq!(snapshot["size"][1], 30);
+
+    let (code, stopped) = tui(&session.0, &["stop"]);
+    assert_eq!(code, 0, "{stopped}");
+    let run = PathBuf::from(stopped["run_dir"].as_str().unwrap());
+    assert!(run.join("trace.ndjson").is_file());
+    assert!(run.join("pty.cast").is_file());
+    assert!(!session_dir(&session.0).exists());
+}
+
+#[test]
+fn the_driver_refuses_to_touch_a_running_session() {
+    let session = Session::start("guard");
+    // The same name again would be the running session: refused.
+    let (code, refused) = tui(&session.0, &["start"]);
+    assert_eq!(code, 1, "{refused}");
+    assert_eq!(refused["error"]["code"], "refused");
+
+    // An inherited BUS_DATA_DIR pointing at the target is refused.
+    let other = session_name("env");
+    let target = session_dir(&other).join("data");
+    let (code, refused) = parse(tui_raw(
+        &other,
+        &["start"],
+        &[("BUS_DATA_DIR", target.to_str().unwrap())],
+    ));
+    assert_eq!(code, 1, "{refused}");
+    assert!(refused["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("BUS_DATA_DIR"));
+
+    // A directory a live Bus serves is refused, even at the driver's own path.
+    let foreign = session_name("live");
+    let data = session_dir(&foreign).join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    // A root the driver made, so the live Bus is what gets refused.
+    std::fs::write(root(&foreign).join(".start.lock"), b"").unwrap();
+    let socket = data.join("control.sock");
+    let _live = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let (code, refused) = tui(&foreign, &["start"]);
+    assert_eq!(code, 1, "{refused}");
+    assert!(refused["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("live Bus"));
+    let _ = std::fs::remove_dir_all(root(&foreign));
+
+    // A second host for the running session, wrong token or right, is
+    // refused before it touches anything.
+    let marker = session_dir(&session.0).join("bus-tui-session");
+    let claim: Value = serde_json::from_str(&std::fs::read_to_string(marker).unwrap()).unwrap();
+    let runs = run_dir();
+    for token in ["wrong", claim["token"].as_str().unwrap()] {
+        let host = bus(&session.0)
+            .args(["--dev", "tui", "__host", "--name", &session.0])
+            .args(["--size", "80x24", "--token", token, "--run-dir"])
+            .arg(&runs)
+            .output()
+            .unwrap();
+        assert_eq!(host.status.code(), Some(1), "{host:?}");
+    }
+    assert!(!session_dir(&session.0).join("host.error").exists());
+
+    // The running session is untouched by all of the above.
+    assert_eq!(session.ok(&["status"])["alive"], true);
+}
+
+#[test]
+fn exit_codes_follow_the_contract() {
+    let missing = session_name("none");
+    let (code, value) = tui(&missing, &["snapshot"]);
+    assert_eq!(code, 3, "{value}");
+    let (code, _) = tui(&missing, &["teleport"]);
+    assert_eq!(code, 2);
+    let (code, _) = tui(&missing, &["click"]);
+    assert_eq!(code, 2);
+    let session = Session::start("codes");
+    let (code, timeout) = tui(
+        &session.0,
+        &["wait", "--text", "never shown", "--timeout", "300ms"],
+    );
+    assert_eq!(code, 1);
+    assert!(timeout["excerpt"].is_array());
+    let (code, _) = tui(&session.0, &["click", "--text", "never shown"]);
+    assert_eq!(code, 1);
+    // `bus tui` without --dev is refused.
+    let plain = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .arg("tui")
+        .output()
+        .unwrap();
+    assert_eq!(plain.status.code(), Some(2));
+    let help = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["--dev", "tui", "click", "--help"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&help.stdout).contains("### click"));
+}
+
+#[test]
+fn stop_from_the_work_dir_keeps_a_relative_run_dir() {
+    let name = session_name("rel");
+    let caller = std::env::temp_dir().join(format!("bus-tui-it-cwd-{}", std::process::id()));
+    std::fs::create_dir_all(&caller).unwrap();
+    let caller = caller.canonicalize().unwrap();
+    let started = bus(&name)
+        .current_dir(&caller)
+        .args(["--dev", "tui", "start", "--name", &name, "--size", "80x24"])
+        .args(["--run-dir", "runs"])
+        .output()
+        .unwrap();
+    let session = Session(name);
+    let (code, status) = parse(started);
+    assert_eq!(code, 0, "{status}");
+    // `stop` run from inside the session, as an agent there would.
+    let stopped = bus(&session.0)
+        .current_dir(session_dir(&session.0).join("work"))
+        .args(["--dev", "tui", "stop", "--name", &session.0])
+        .output()
+        .unwrap();
+    let (code, stopped) = parse(stopped);
+    let run = PathBuf::from(stopped["run_dir"].as_str().unwrap_or_default());
+    let kept = run.join("pty.cast").is_file();
+    let _ = std::fs::remove_dir_all(&caller);
+    assert_eq!(code, 0, "{stopped}");
+    assert_eq!(stopped["ok"], true, "{stopped}");
+    assert!(run.starts_with(&caller), "{}", run.display());
+    assert!(kept, "{} has no pty.cast after stop", run.display());
+}
+
+#[test]
+fn waits_report_a_bus_that_exited() {
+    let session = Session::start("dead");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    // A stability wait already running when Bus dies must not pass on its
+    // frozen last screen.
+    let name = session.0.clone();
+    let stable =
+        std::thread::spawn(move || tui(&name, &["wait", "--stable", "3s", "--timeout", "15s"]));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let _ = scratch_bus(&session, &["stop"]);
+    let (code, value) = stable.join().unwrap();
+    assert_eq!(code, 3, "wait --stable after Bus exited: {value}");
+    let (code, value) = tui(
+        &session.0,
+        &["wait", "--text", "never shown", "--timeout", "2s"],
+    );
+    assert_eq!(code, 3, "wait --text after Bus exited: {value}");
+    for predicate in ["visible_room == 99", "visible_room != 1"] {
+        let (code, value) = tui(
+            &session.0,
+            &["wait", "--state", predicate, "--timeout", "2s"],
+        );
+        assert_eq!(
+            code, 3,
+            "wait --state {predicate} after Bus exited: {value}"
+        );
+    }
+}
+
+#[test]
+fn a_refused_root_override_leaves_the_directory_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = PathBuf::from(format!("/tmp/bus-tui-it-root{}", std::process::id()));
+    let live = base.join("live-data");
+    let foreign = base.join("foreign");
+    for dir in [&live, &foreign] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("state.json"), b"{\"sentinel\":true}").unwrap();
+    }
+    let _listener = std::os::unix::net::UnixListener::bind(live.join("control.sock")).unwrap();
+    let snapshot = |dir: &PathBuf| {
+        let mode = std::fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        names.sort();
+        (mode, names)
+    };
+    let runs = run_dir();
+    let cases = [
+        // An inherited live Bus data dir as the root.
+        (&live, vec![("BUS_DATA_DIR", live.to_str().unwrap())]),
+        // A directory with someone else's files in it.
+        (&foreign, vec![]),
+    ];
+    let mut results = Vec::new();
+    for (dir, extra) in cases {
+        let before = snapshot(dir);
+        let mut env = vec![("BUS_TUI_ROOT", dir.to_str().unwrap())];
+        env.extend(extra);
+        let (code, reply) = parse(tui_raw(
+            &session_name("root"),
+            &["start", "--run-dir", runs.to_str().unwrap()],
+            &env,
+        ));
+        results.push((dir.clone(), code, reply, before, snapshot(dir)));
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    for (dir, code, reply, before, after) in results {
+        assert_eq!(code, 1, "{}: {reply}", dir.display());
+        assert_eq!(reply["error"]["code"], "refused", "{reply}");
+        assert_eq!(
+            after,
+            before,
+            "{} was changed by a refused start",
+            dir.display()
+        );
+    }
+}
+
+#[test]
+fn a_root_inside_a_live_data_dir_is_refused_however_it_is_spelled() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = PathBuf::from(format!("/tmp/bus-tui-it-alias{}", std::process::id()));
+    let live = base.join("live-data");
+    let root = live.join("driver");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(live.join("state.json"), b"{\"sentinel\":true}").unwrap();
+    let _listener = std::os::unix::net::UnixListener::bind(live.join("control.sock")).unwrap();
+    // On macOS the canonical spelling is /private/tmp/…, the root's is /tmp/….
+    let canonical = live.canonicalize().unwrap();
+    let snapshot = || {
+        let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        let names: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        (mode, names)
+    };
+    let before = snapshot();
+    let name = session_name("alias");
+    let (code, reply) = parse(tui_raw(
+        &name,
+        &["start", "--run-dir", run_dir().to_str().unwrap()],
+        &[
+            ("BUS_TUI_ROOT", root.to_str().unwrap()),
+            ("BUS_DATA_DIR", canonical.to_str().unwrap()),
+        ],
+    ));
+    let after = snapshot();
+    if code == 0 {
+        let _ = tui_raw(
+            &name,
+            &["stop"],
+            &[("BUS_TUI_ROOT", root.to_str().unwrap())],
+        );
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    assert_eq!(code, 1, "{reply}");
+    assert_eq!(reply["error"]["code"], "refused", "{reply}");
+    assert_eq!(
+        after, before,
+        "start touched a live Bus data dir through an alias"
+    );
+}
+
+#[test]
+fn a_root_override_with_dot_components_is_refused_before_anything_is_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = PathBuf::from(format!("/tmp/bus-tui-it-dots{}", std::process::id()));
+    let live = base.join("live");
+    let actual_root = live.join("d");
+    std::fs::create_dir_all(&actual_root).unwrap();
+    std::fs::set_permissions(&actual_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(live.join("state.json"), b"{\"sentinel\":true}").unwrap();
+    let _listener = std::os::unix::net::UnixListener::bind(live.join("control.sock")).unwrap();
+    let missing = base.join("m");
+    let snapshot = || {
+        let mode = std::fs::metadata(&actual_root)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        let names: Vec<_> = std::fs::read_dir(&actual_root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        (mode, names)
+    };
+    let before = snapshot();
+    let canonical = live.canonicalize().unwrap();
+    let mut results = Vec::new();
+    // `m` is missing, so `m/..` cannot be resolved; and a relative root.
+    for requested in [
+        format!("{}/m/../live/d", base.display()),
+        format!("{}/./live/d", base.display()),
+        "relative/root".to_owned(),
+    ] {
+        let name = session_name("dots");
+        let (code, reply) = parse(tui_raw(
+            &name,
+            &["start", "--run-dir", run_dir().to_str().unwrap()],
+            &[
+                ("BUS_TUI_ROOT", requested.as_str()),
+                ("BUS_DATA_DIR", canonical.to_str().unwrap()),
+            ],
+        ));
+        if code == 0 {
+            let _ = tui_raw(&name, &["stop"], &[("BUS_TUI_ROOT", requested.as_str())]);
+        }
+        results.push((requested, code, reply, snapshot(), missing.exists()));
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    for (requested, code, reply, after, created) in results {
+        assert_eq!(code, 1, "{requested}: {reply}");
+        assert_eq!(reply["error"]["code"], "refused", "{requested}: {reply}");
+        assert_eq!(after, before, "{requested} changed the live data dir");
+        assert!(!created, "{requested} created its missing component");
+    }
+}

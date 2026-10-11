@@ -4,3 +4,5 @@
 mod callbacks;
 #[path = "paths_test.rs"]
 mod paths;
+#[path = "variant_test.rs"]
+mod variant;

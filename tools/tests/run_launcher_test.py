@@ -196,6 +196,69 @@ printf '{"reason":"compiler-artifact","executable":"%s"}\\n' "$PWD/$CARGO_TARGET
                 self.assertIn("Cargo reported no bus executable", result.stderr)
                 self.assertFalse(self.bus_args.exists())
 
+    def test_tui_builds_the_dev_variant_into_its_own_target_dir_never_target_debug(self) -> None:
+        self._write_executable(
+            self.bin_dir / "cargo",
+            """#!/bin/sh
+set -eu
+printf '%s\\n' "$@" > "$FAKE_CARGO_ARGS"
+mkdir -p "$CARGO_TARGET_DIR/debug"
+cat > "$CARGO_TARGET_DIR/debug/bus" <<'BUS'
+#!/bin/sh
+{ echo driver-build; printf '%s\\n' "$@"; } > "$FAKE_BUS_ARGS"
+BUS
+chmod +x "$CARGO_TARGET_DIR/debug/bus"
+printf '{"reason":"compiler-artifact","executable":"%s"}\\n' "$CARGO_TARGET_DIR/debug/bus"
+""",
+        )
+        result = self._run("tui", "snapshot", "--plain")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.cargo_args.read_text(encoding="utf-8").splitlines(),
+            ["build", "--locked", "--message-format=json-render-diagnostics", "--bin", "bus", "--features", "dev-tools"],
+        )
+        self.assertTrue((self.root / "target" / "tui-driver" / "debug" / "bus").is_file())
+        self.assertEqual(
+            self.bus_args.read_text(encoding="utf-8").splitlines(),
+            ["driver-build", "--dev", "tui", "snapshot", "--plain"],
+        )
+
+    def test_tui_never_runs_a_stale_driver_after_a_failed_build(self) -> None:
+        result = self._run("tui", "start", cargo_exit=9)
+
+        self.assertEqual(result.returncode, 9)
+        self.assertFalse(self.bus_args.exists())
+
+    def test_tui_never_rebuilds_the_debug_binary_of_an_inherited_target_dir(self) -> None:
+        self._write_executable(
+            self.bin_dir / "cargo",
+            """#!/bin/sh
+set -eu
+printf '%s\\n' "$CARGO_TARGET_DIR" > "$FAKE_CARGO_ARGS"
+printf '{"reason":"compiler-artifact","executable":"%s"}\\n' "$CARGO_TARGET_DIR/debug/bus"
+""",
+        )
+        # The dir ./run dev would build into as well, default or shared.
+        for inherited in (self.root / "target", self.root / "shared-target"):
+            with self.subTest(inherited=inherited.name):
+                result = subprocess.run(
+                    [str(self.root / "run"), "tui", "status"],
+                    cwd=self.root.parent,
+                    env={
+                        **os.environ,
+                        "PATH": f"{self.bin_dir}{os.pathsep}{os.environ['PATH']}",
+                        "CARGO_TARGET_DIR": str(inherited),
+                        "FAKE_CARGO_ARGS": str(self.cargo_args),
+                        "FAKE_BUS_ARGS": str(self.bus_args),
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                built_into = Path(self.cargo_args.read_text(encoding="utf-8").strip())
+                self.assertEqual(built_into, inherited / "tui-driver", result.stderr)
+
     def test_dev_never_launches_an_existing_binary_after_a_failed_build(self) -> None:
         result = self._run("dev", cargo_exit=17)
 

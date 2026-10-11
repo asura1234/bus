@@ -3,6 +3,9 @@ use std::io;
 mod agents;
 mod cli;
 mod client;
+// Test tooling (the TUI driver): only the dev variant compiles it in.
+#[cfg(feature = "dev-tools")]
+mod devtools;
 mod messaging;
 mod platform;
 mod protocol;
@@ -31,6 +34,14 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    // A driver session's fake provider CLIs are this binary under a provider's name.
+    #[cfg(feature = "dev-tools")]
+    if let Some(provider) = raw_args
+        .first()
+        .and_then(|arg0| devtools::tui::fake_provider(arg0))
+    {
+        std::process::exit(devtools::tui::run_fake_agent(provider, &raw_args[1..]));
+    }
     if raw_args.get(1).map(String::as_str) == Some("--bus-callback") {
         let logging_options = cli::logging_options();
         let diagnostics_dir = std::env::var_os("BUS_CALLBACK_DIR").map(std::path::PathBuf::from);
