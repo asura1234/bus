@@ -195,10 +195,10 @@ fn refuse_tui(message: &str) -> ! {
     std::process::exit(2)
 }
 
-/// The driver in `src/devtools` plugs in here.
+/// The driver prints its own JSON and exits with its own code contract.
 #[cfg(feature = "dev-tools")]
-fn tui_driver(_args: &[String]) -> io::Result<()> {
-    Err(io::Error::other("the TUI driver is not built yet"))
+fn tui_driver(args: &[String]) -> io::Result<()> {
+    std::process::exit(crate::devtools::tui::run(args))
 }
 
 /// Every session runs its control socket in the data root, and the socket

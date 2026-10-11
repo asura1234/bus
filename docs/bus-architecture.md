@@ -268,10 +268,11 @@ Files are split by ownership, not by helper.
 - `cli/`: the `bus` command
   - `mod.rs` (argv: `--dev`, `--paths`, `sessions`, `resume`, `stop`), `session_pick.rs`, `launch.rs` (start or validate the server, then run the client), `stop.rs`
   - `control.rs` (control commands used by orchestrators and the developer), `help.rs`, `tests/{parse_test,execute_test}.rs`
-- `devtools/`: dev tools that inspect or drive Bus itself; they ship in every build and run only behind `--dev`
+- `devtools/`: test tooling that drives Bus itself; compiled only into the dev variant (cargo feature `dev-tools`) and run only
+  behind `--dev`
   - `tui/`: `bus --dev tui`, the TUI driver (reference: `docs/tui-driver.md`): `mod.rs` (verbs, start/stop, waits), `args.rs`,
-    `session.rs` (scratch session paths, the guards that refuse live sessions, the scrubbed environment), `host.rs` (the per-session
-    process that owns the hidden terminal), `screen.rs` (libghostty-vt screen as text and styled cells), `input.rs` (keys and SGR
+    `session.rs` (scratch session paths, the guards that refuse live sessions, the scrubbed environment), `host/` (the per-session
+    process that owns the hidden terminal, and its actions), `screen.rs` (libghostty-vt screen as text and styled cells), `input.rs` (keys and SGR
     mouse), `predicate.rs` (`wait --state`), `trace.rs` (run folder), `fake_agents.rs` (fake provider CLIs), `tests/`
 
 Local test moves use literal includes where needed to retain their full S9b names. In particular, CLI stop/guidance tests keep
@@ -289,7 +290,7 @@ dependency rule, and an import-boundary check in `tools/quality` fails the gate 
 ```mermaid
 flowchart TD
   main --> cli & server & client & agents & devtools
-  cli --> client & messaging & protocol & platform
+  cli --> client & devtools & messaging & protocol & platform
   devtools --> terminal & messaging & protocol & platform
   client --> messaging & agents & protocol & platform
   server --> terminal & messaging & agents & protocol & platform
@@ -300,8 +301,8 @@ flowchart TD
 ```
 
 The graph is acyclic. `main` is the composition root: it dispatches to `cli`, the hidden `server` and `client` entries, and the
-`--bus-callback` hook entry in `agents`, and `bus --dev tui` in `devtools` (including the fake provider CLIs a driver session
-runs, which are `bus` under a provider's name).
+`--bus-callback` hook entry in `agents`, and the fake provider CLIs a driver session runs in `devtools` (they are `bus` under a
+provider's name). `cli` routes `bus --dev tui` to `devtools`. Both edges exist only in the dev variant.
 
 - `messaging` never imports `terminal`, `server` or `client`: it reaches agents through the server's JSON API and the provider hook
   spool. `agents/providers` never imports `messaging`: it takes a room-free `LaunchSpec` and emits neutral provider events.
@@ -394,7 +395,8 @@ focus and geometry), `rendering/` (what each client sees) and `notifications/`. 
 **client**. The TUI: host terminal setup and input, the one server connection, the frame compositor, pane input and the room UI. It hosts
 the coordinator in its process but only through `BusHandle`.
 
-**devtools**. Commands that inspect or drive Bus itself, starting with the TUI driver. Every driver session is a fresh Bus the
+**devtools**. Test tooling that drives Bus itself, starting with the TUI driver, compiled only with the `dev-tools` feature: a
+release build has none of it. Every driver session is a fresh Bus the
 driver starts in a generated `/tmp` data directory; nothing in `devtools` attaches to an existing session.
 
 **cli**. The `bus` command: session pick, server start and same-build check, client launch, `stop`, and the control commands.

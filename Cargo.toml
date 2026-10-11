@@ -52,6 +52,7 @@ path = "tests/client/room_screen_test.rs"
 [[test]]
 name = "tui-driver"
 path = "tests/tui/driver_test.rs"
+required-features = ["dev-tools"]
 
 [features]
 # Test tooling compiled only into the dev variant (`./run dev`): the TUI

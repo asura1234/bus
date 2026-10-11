@@ -367,7 +367,7 @@ pub(super) fn ensure_binary_allowed(binary: &Path, allow_target_debug: bool) -> 
         && (parts[n - 1] == "bus" || parts[n - 1] == "bus.exe");
     if is_target_debug && !allow_target_debug {
         return Err(format!(
-            "refusing to drive {}: target/debug/bus is the developer's ./run dev binary; use ./run tui, which builds target/tui-driver/bus",
+            "refusing to drive {}: target/debug/bus is the developer's ./run dev binary; use ./run tui, which builds into target/tui-driver",
             binary.display()
         ));
     }

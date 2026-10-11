@@ -2,11 +2,14 @@
 
 `bus --dev tui` starts a fresh Bus in a hidden terminal and lets you read its
 screen as text, type, press keys, click, drag, scroll, resize and wait for
-conditions. It is a dev tool: it works only behind `--dev`.
+conditions. It is test tooling: only the dev variant (cargo feature
+`dev-tools`, as `./run dev` builds) contains it, and it runs only behind
+`--dev`. A release build (`./run prod`, `just build`, npm) refuses `tui`.
 
-In the Bus repository, run `./run tui VERB …`. It builds your working tree
-into `target/tui-driver/bus` and runs `--dev tui` from there, never touching
-`target/debug`. Everywhere else, run `bus --dev tui VERB …`.
+In the Bus repository, run `./run tui VERB …`. It builds the dev variant of
+your working tree into `target/tui-driver` (or `$CARGO_TARGET_DIR`) and runs
+`--dev tui` from there, never touching `target/debug`. Everywhere else, run
+`bus --dev tui VERB …` from a dev-variant build.
 
 Every session is a new Bus the driver starts itself. That Bus gets its own
 generated data directory under `/tmp/bus-tui/NAME/`, its own server and its
