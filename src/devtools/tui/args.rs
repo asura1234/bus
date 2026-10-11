@@ -18,6 +18,11 @@ impl Parsed {
         let mut parsed = Self::default();
         let mut iter = args.iter();
         while let Some(arg) = iter.next() {
+            // After `--` everything is text, so `type -- --model` types it.
+            if arg == "--" {
+                parsed.positionals.extend(iter.cloned());
+                break;
+            }
             if SWITCHES.contains(&arg.as_str()) {
                 parsed.switches.push(arg.clone());
             } else if arg.starts_with("--") && arg.len() > 2 {
@@ -147,6 +152,11 @@ fn target(parsed: &mut Parsed, text_flag: &str) -> Result<Target, String> {
             rows: rows_flag(parsed)?,
         });
     }
+    cell_target(parsed)
+}
+
+/// A `ROW COL` target.
+fn cell_target(parsed: &mut Parsed) -> Result<Target, String> {
     let row = parsed.positional().ok_or("give ROW COL or --text TEXT")?;
     let col = parsed.positional().ok_or("give ROW COL or --text TEXT")?;
     Ok(Target::Cell {
@@ -245,7 +255,7 @@ fn pointer_command(verb: &str, parsed: &mut Parsed) -> Result<Command, String> {
                     };
                     (text(from), text(to))
                 }
-                (None, None) => (target(parsed, "--no-text")?, target(parsed, "--no-text")?),
+                (None, None) => (cell_target(parsed)?, cell_target(parsed)?),
                 _ => return Err("give both --from-text and --to-text".into()),
             };
             Command::Drag {

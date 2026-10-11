@@ -186,3 +186,28 @@ fn help_comes_from_the_doc_sections() {
         );
     }
 }
+
+#[test]
+fn text_after_a_double_dash_is_never_a_flag() {
+    let mut typed = parsed(&["--", "--model opus"]);
+    assert_eq!(
+        command("type", &mut typed).unwrap(),
+        Command::Type {
+            text: "--model opus".into()
+        }
+    );
+    let mut pasted = parsed(&["--name", "s2", "--", "--name"]);
+    assert_eq!(pasted.take_value("--name").as_deref(), Some("s2"));
+    assert_eq!(
+        command("paste", &mut pasted).unwrap(),
+        Command::Paste {
+            text: "--name".into()
+        }
+    );
+}
+
+#[test]
+fn drag_rejects_the_undocumented_no_text_flag() {
+    assert!(command("drag", &mut parsed(&["--no-text", "a", "--no-text", "b"])).is_err());
+    assert!(command("drag", &mut parsed(&["1", "2", "3", "4"])).is_ok());
+}

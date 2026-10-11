@@ -53,3 +53,25 @@ fn wheel_and_paste_encodings() {
     assert_eq!(paste("a", true), b"\x1b[200~a\x1b[201~");
     assert_eq!(paste("a", false), b"a");
 }
+
+#[test]
+fn navigation_keys_bus_binds_are_pressable() {
+    for key in [
+        "pageup",
+        "pagedown",
+        "home",
+        "end",
+        "delete",
+        "shift+pageup",
+    ] {
+        assert!(
+            encode_key(key, KeyboardProtocol::Legacy).is_ok(),
+            "{key} is not pressable"
+        );
+    }
+    assert_eq!(
+        encode_key("pageup", KeyboardProtocol::Legacy).unwrap(),
+        b"\x1b[5~"
+    );
+    assert!(encode_key("bogus+pageup", KeyboardProtocol::Legacy).is_err());
+}

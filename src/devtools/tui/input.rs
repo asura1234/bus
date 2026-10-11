@@ -10,7 +10,7 @@ pub(super) fn encode_key(name: &str, protocol: KeyboardProtocol) -> Result<Vec<u
         "+" => "plus",
         other => other,
     };
-    let (code, modifiers) = crate::utils::config::parse_key_combo(normalized)
+    let (code, modifiers) = parse_chord(normalized)
         .ok_or_else(|| format!("unknown key {name:?}; examples: enter, esc, ctrl+n, alt+up, f6"))?;
     // A lone ESC byte waits out Bus's escape timeout (up to 150 ms while mouse
     // capture is on); `CSI 27 u` is unambiguous once kitty keys are on.
@@ -27,6 +27,31 @@ pub(super) fn encode_key(name: &str, protocol: KeyboardProtocol) -> Result<Vec<u
         ));
     }
     Ok(bytes)
+}
+
+/// Bus's key-combo syntax, plus the navigation keys Bus binds but its
+/// config syntax has no names for.
+fn parse_chord(chord: &str) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
+    use crossterm::event::KeyCode;
+    let (mods, key) = match chord.rsplit_once('+') {
+        Some((mods, key)) if !key.is_empty() => (Some(mods), key),
+        _ => (None, chord),
+    };
+    let code = match key.trim().to_ascii_lowercase().as_str() {
+        "pageup" | "pgup" => KeyCode::PageUp,
+        "pagedown" | "pgdn" => KeyCode::PageDown,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "delete" | "del" => KeyCode::Delete,
+        "insert" | "ins" => KeyCode::Insert,
+        _ => return crate::utils::config::parse_key_combo(chord),
+    };
+    let modifiers = match mods {
+        // Reuse Bus's modifier parsing on a stand-in key.
+        Some(mods) => crate::utils::config::parse_key_combo(&format!("{mods}+a"))?.1,
+        None => crossterm::event::KeyModifiers::empty(),
+    };
+    Some((code, modifiers))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
