@@ -98,3 +98,86 @@ fn only_existing_paths_link_and_the_check_never_blocks() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn quoted_existing_paths_with_spaces_link_as_one_target() {
+    let dir = Path::new("/tmp").join(format!("bus-links-spaces-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("My Document.md");
+    std::fs::write(&file, "x").unwrap();
+    let text = format!("files: [\"{}\"]", file.display());
+    let mut probe = PathProbe::default();
+    row_links(&mut probe, &text, 0, None);
+    probe.settle();
+    let links: Vec<_> = row_links(&mut probe, &text, 0, None)
+        .into_iter()
+        .map(|link| (text[link.range].to_owned(), link.target))
+        .collect();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(links, [(file.display().to_string(), Target::Path(file))]);
+}
+
+#[test]
+fn urls_keep_balanced_parentheses_in_destination() {
+    let url = "https://en.wikipedia.org/wiki/Function_(mathematics)";
+    assert_eq!(
+        spans(&format!("see {url}."), None),
+        [(url, Target::Url(url.into()))]
+    );
+}
+
+#[test]
+fn network_share_paths_are_never_link_candidates() {
+    // Probing `//host/share/...` makes Windows open an SMB session to `host`
+    // while the row merely renders, before any click.
+    assert!(spans("see //evil.example/share/report.txt", None).is_empty());
+}
+
+#[test]
+fn the_probe_never_checks_a_network_share() {
+    let mut probe = PathProbe::default();
+    for share in ["//evil.example/share/a.md", r"\\evil.example\share\a.md"] {
+        assert_eq!(probe.exists(Path::new(share)), Some(false), "{share}");
+    }
+    assert!(probe.worker.is_none(), "no check was queued");
+    assert!(spans(r"see \\evil.example\share\report.txt", Some("/repo")).is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_share_forms_are_never_link_candidates() {
+    for text in [
+        r"\\host\share\a.txt",
+        r"\\?\UNC\host\share\a.txt",
+        r"\\.\pipe\bus",
+        "//host/share/a.txt",
+    ] {
+        assert!(spans(text, Some(r"C:\repo")).is_empty(), "{text}");
+    }
+    // A relative path under a working directory on a share is on that share.
+    assert!(spans("src/main.rs", Some(r"\\host\share\repo")).is_empty());
+    assert_eq!(
+        spans(r"C:\repo\a.txt", None),
+        [(r"C:\repo\a.txt", path(r"C:\repo\a.txt"))]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_quoted_sentence_still_links_the_path_inside_it() {
+    let dir = Path::new("/tmp").join(format!("bus-links-prose-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("plan.md");
+    std::fs::write(&file, "x").unwrap();
+    let text = format!("he said \"see {} now\"", file.display());
+    let mut probe = PathProbe::default();
+    row_links(&mut probe, &text, 0, Some(&dir));
+    probe.settle();
+    let links: Vec<_> = row_links(&mut probe, &text, 0, Some(&dir))
+        .into_iter()
+        .map(|link| text[link.range].to_owned())
+        .collect();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(links, [file.display().to_string()]);
+}

@@ -64,7 +64,13 @@ pub(super) fn candidates(text: &str, cwd: Option<&Path>, home: Option<&Path>) ->
     let mut found = Vec::new();
     let mut start = None;
     for (index, c) in text.char_indices().chain([(text.len(), ' ')]) {
-        match (start, delimiter(c)) {
+        // The words inside are scanned too, in case the quote is prose.
+        if start.is_none() {
+            found.extend(quoted_path(text, index, c, cwd, home));
+        }
+        // A URL keeps its parentheses; unbalanced closing ones are trimmed below.
+        let in_url = matches!(c, '(' | ')') && start.is_some_and(|from| url(&text[from..index]));
+        match (start, delimiter(c) && !in_url) {
             (None, false) => start = Some(index),
             (Some(from), true) => {
                 start = None;
@@ -78,18 +84,55 @@ pub(super) fn candidates(text: &str, cwd: Option<&Path>, home: Option<&Path>) ->
     found
 }
 
+fn url(token: &str) -> bool {
+    token.starts_with("http://") || token.starts_with("https://")
+}
+
+/// A quoted path with spaces in it, `"/a/My Document.md"`, is one path.
+fn quoted_path(
+    text: &str,
+    index: usize,
+    open: char,
+    cwd: Option<&Path>,
+    home: Option<&Path>,
+) -> Option<Candidate> {
+    let close = match open {
+        '"' | '\'' | '`' => open,
+        '“' => '”',
+        '‘' => '’',
+        '「' => '」',
+        _ => return None,
+    };
+    let from = index + open.len_utf8();
+    let inner = &text[from..from + text[from..].find(close)?];
+    // Without a space the plain token scan finds the same path.
+    if !inner.contains(' ') || inner.trim() != inner || inner.contains(['\n', '\t']) {
+        return None;
+    }
+    candidate(text, from..from + inner.len(), cwd, home)
+        .filter(|candidate| matches!(candidate.target, Target::Path(_)))
+}
+
 fn candidate(
     text: &str,
     mut range: Range<usize>,
     cwd: Option<&Path>,
     home: Option<&Path>,
 ) -> Option<Candidate> {
-    // Sentence punctuation after a link is not part of it.
-    while text[range.clone()].ends_with(['.', ',', ';', ':', '!', '?']) {
-        range.end -= 1;
+    // Sentence punctuation after a link is not part of it, nor is a closing
+    // parenthesis that opened before it.
+    loop {
+        let token = &text[range.clone()];
+        if token.ends_with(['.', ',', ';', ':', '!', '?'])
+            || token.ends_with(')') && token.matches(')').count() > token.matches('(').count()
+        {
+            range.end -= 1;
+        } else {
+            break;
+        }
     }
     let token = &text[range.clone()];
-    if token.starts_with("http://") || token.starts_with("https://") {
+    if url(token) {
         return (token.len() > "https://".len()).then(|| Candidate {
             target: Target::Url(token.to_owned()),
             range,
@@ -99,6 +142,9 @@ fn candidate(
         return None;
     }
     let path = strip_location(token);
+    if network_share(path) {
+        return None;
+    }
     let target = if let Some(rest) = path.strip_prefix("~/") {
         home?.join(rest)
     } else if path.starts_with('/') || windows_absolute(path) {
@@ -111,10 +157,37 @@ fn candidate(
     } else {
         return None;
     };
-    Some(Candidate {
+    (!resolves_to_network_share(&target)).then_some(Candidate {
         range,
         target: Target::Path(target),
     })
+}
+
+/// `//host/share` and `\\host\share` name a network share, and so do the
+/// `\\?\UNC\` and `\\.\` forms. Checking whether one exists contacts that host (on
+/// Windows with the developer's credentials), so a message never makes Bus
+/// look one up.
+fn network_share(path: &str) -> bool {
+    path.starts_with("//") || path.starts_with("\\\\")
+}
+
+/// A target that resolved onto a share, such as a relative path under a
+/// working directory on one.
+#[cfg(windows)]
+fn resolves_to_network_share(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(
+            prefix.kind(),
+            Prefix::UNC(..) | Prefix::VerbatimUNC(..) | Prefix::DeviceNS(..)
+        )
+    )
+}
+
+#[cfg(not(windows))]
+fn resolves_to_network_share(path: &Path) -> bool {
+    network_share(&path.to_string_lossy())
 }
 
 /// `src/main.rs:12` and `src/main.rs:12:5` open `src/main.rs`.
@@ -190,6 +263,9 @@ impl PathProbe {
         if let Some(known) = self.known.get(path) {
             return *known;
         }
+        if resolves_to_network_share(path) {
+            return Some(false);
+        }
         if self.known.len() >= MAX_KNOWN {
             self.known.retain(|_, known| known.is_none());
         }
@@ -252,7 +328,9 @@ impl PathProbe {
 }
 
 /// The links of one displayed row: URLs, and paths known to exist. Bytes
-/// before `copy_from` are layout indent and never link.
+/// before `copy_from` are layout indent and never link. Where candidates
+/// overlap, the first one that links wins: a quoted path with spaces over the
+/// words inside it.
 pub(super) fn row_links(
     probe: &mut PathProbe,
     text: &str,
@@ -261,17 +339,24 @@ pub(super) fn row_links(
 ) -> Vec<Candidate> {
     let home = probe.home.clone();
     let body = text.get(copy_from..).unwrap_or_default();
-    candidates(body, cwd, home.as_deref())
-        .into_iter()
-        .filter(|candidate| match &candidate.target {
+    let mut links: Vec<Candidate> = Vec::new();
+    for candidate in candidates(body, cwd, home.as_deref()) {
+        let links_to = match &candidate.target {
             Target::Url(_) => true,
             Target::Path(path) => probe.exists(path) == Some(true),
-        })
-        .map(|candidate| Candidate {
-            range: candidate.range.start + copy_from..candidate.range.end + copy_from,
-            ..candidate
-        })
-        .collect()
+        };
+        if links_to
+            && links
+                .last()
+                .is_none_or(|last| last.range.end <= candidate.range.start + copy_from)
+        {
+            links.push(Candidate {
+                range: candidate.range.start + copy_from..candidate.range.end + copy_from,
+                ..candidate
+            });
+        }
+    }
+    links
 }
 
 /// The links of each displayed history row, in order.
