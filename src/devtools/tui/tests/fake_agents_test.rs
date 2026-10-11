@@ -230,3 +230,82 @@ fn a_draft_wider_than_the_pane_leaves_no_stale_prompt_box() {
         "{after:#?}"
     );
 }
+
+#[test]
+fn wide_character_wraps_keep_one_prompt_box_in_an_odd_width_pane() {
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(79, 12).unwrap();
+    for line in 0..30 {
+        screen.feed(format!("transcript {line}\r\n").as_bytes());
+    }
+    screen.feed(format!("\r\n{}\r\n", "─".repeat(60)).as_bytes());
+    screen.feed(prompt_box("", "claude", 79).as_bytes());
+    // A wide character cannot occupy the single cell left at a row's end.
+    let draft = "界".repeat(156);
+    screen.feed(prompt_box(&draft, "claude", 79).as_bytes());
+    screen.feed(prompt_box(&format!("{draft}y"), "claude", 79).as_bytes());
+    let rows = |screen: &Screen| -> Vec<String> {
+        screen
+            .grid()
+            .cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .map(|row| row.trim_end().to_owned())
+            .collect()
+    };
+    let visible = rows(&screen);
+    assert_eq!(
+        visible.iter().filter(|row| row.starts_with('❯')).count(),
+        1,
+        "wide-character wrapping must keep one composer: {visible:#?}"
+    );
+    screen.feed(submitted(&format!("{draft}y")).as_bytes());
+    let visible = rows(&screen);
+    assert!(
+        visible.iter().all(|row| !row.starts_with('❯')),
+        "submitted text must not remain in a stale composer: {visible:#?}"
+    );
+}
+
+#[test]
+fn a_wrapped_draft_with_wide_characters_leaves_no_stale_prompt_box() {
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(80, 24).unwrap();
+    let rows = |screen: &Screen| -> Vec<String> {
+        screen
+            .grid()
+            .cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .map(|row| row.trim_end().to_owned())
+            .collect()
+    };
+    // Width 160, but the 39th `审` would start in column 79 and wraps early,
+    // so the draft takes three rows, not two.
+    let draft = format!("a{}{}", "审".repeat(39), "x".repeat(79));
+    assert_eq!(screen_rows(&format!("❯ {draft}"), 80), 3);
+    screen.feed(format!("\r\n{}\r\n", "─".repeat(60)).as_bytes());
+    screen.feed(prompt_box("", "claude", 80).as_bytes());
+    screen.feed(prompt_box(&draft, "claude", 80).as_bytes());
+    let prompts = rows(&screen)
+        .into_iter()
+        .filter(|row| row.starts_with('❯'))
+        .count();
+    assert_eq!(prompts, 1, "{:#?}", rows(&screen));
+    screen.feed(submitted(&draft).as_bytes());
+    let after = rows(&screen);
+    assert!(
+        after.iter().all(|row| !row.starts_with('❯')),
+        "after submit: {after:#?}"
+    );
+}

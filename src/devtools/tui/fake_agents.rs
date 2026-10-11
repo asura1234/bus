@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::UnicodeWidthChar;
 
 /// Set in the scratch Bus's environment; the fake only runs where it is set.
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
@@ -242,10 +242,7 @@ pub(super) fn kill_line(draft: &mut String) {
 pub(super) fn prompt_box(shown: &str, provider: &str, cols: u16) -> String {
     let rule = "─".repeat(60);
     let hint = format!("  ? for shortcuts · fake {provider}");
-    let rows = |text: &str| {
-        let cols = usize::from(cols.max(1));
-        UnicodeWidthStr::width(text).div_ceil(cols).max(1)
-    };
+    let rows = |text: &str| screen_rows(text, cols);
     let draft_rows: usize = shown
         .split('\n')
         .map(|line| rows(&format!("❯ {line}")))
@@ -256,6 +253,22 @@ pub(super) fn prompt_box(shown: &str, provider: &str, cols: u16) -> String {
         draft_rows + rows(&rule) + rows(&hint) - 1,
         2 + shown.rsplit('\n').next().unwrap_or("").chars().count()
     )
+}
+
+/// The rows `text` takes on a `cols`-wide pane. A terminal never splits a
+/// wide character across rows: one that would start in the last column
+/// leaves it blank and wraps, so the rows are counted the way it wraps.
+fn screen_rows(text: &str, cols: u16) -> usize {
+    let cols = usize::from(cols.max(1));
+    let (mut rows, mut col) = (1, 0);
+    for width in text.chars().filter_map(UnicodeWidthChar::width) {
+        if col + width > cols {
+            rows += 1;
+            col = 0;
+        }
+        col += width;
+    }
+    rows
 }
 
 /// Replaces the box (the cursor is on its first row) with the submitted
