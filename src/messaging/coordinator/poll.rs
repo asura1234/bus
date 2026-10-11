@@ -82,6 +82,7 @@ impl Worker {
             }
             if let Some(info) = info {
                 update_polled_metadata(&mut state, agent, info, &mut self.branch_checks)?;
+                show_update_error(&mut state, agent, info, &mut self.update_errors)?;
             }
         }
         self.apply_poll(state)?;
@@ -158,6 +159,32 @@ fn confirm_interactive_agent(
         );
     }
     Ok(())
+}
+
+/// The terminal could not install the agent's own update and left its
+/// chooser for a person; show why until the update is over.
+fn show_update_error(
+    state: &mut BusState,
+    agent: &RoomAgent,
+    info: &schema::AgentInfo,
+    shown: &mut BTreeMap<AgentId, String>,
+) -> Result<(), String> {
+    let error = match &info.update_error {
+        Some(error) => {
+            shown.insert(agent.id, error.clone());
+            (agent.actionable_error.as_ref() != Some(error)).then(|| Some(error.clone()))
+        }
+        None => shown
+            .remove(&agent.id)
+            .filter(|error| agent.actionable_error.as_ref() == Some(error))
+            .map(|_| None),
+    };
+    match error {
+        Some(error) => state
+            .set_agent_error(agent.id, error)
+            .map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
 }
 
 fn update_polled_metadata(

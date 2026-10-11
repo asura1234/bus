@@ -4,6 +4,7 @@ pub(crate) mod respawn;
 pub(crate) mod restore_launch;
 mod resume;
 pub(crate) mod scrollback_read;
+pub(crate) mod self_update;
 mod theme_sync;
 mod titles;
 

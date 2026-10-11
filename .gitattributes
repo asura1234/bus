@@ -1,2 +1,4 @@
 * text=auto eol=lf
 packaging/windows/licenses/* binary
+# Raw PTY captures: exact bytes, carriage returns included.
+tests/fixtures/**/*.ansi binary

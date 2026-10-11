@@ -4448,6 +4448,13 @@
               },
               "type": "object"
             },
+            "update_error": {
+              "description": "Why Bus could not install the agent's own update; its update chooser\nthen waits for a person.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "workspace_id": {
               "type": "string"
             }

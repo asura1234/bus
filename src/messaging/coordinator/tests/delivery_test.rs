@@ -154,6 +154,33 @@ fn codex_first_room_prompt_does_not_wait_for_its_deferred_session_start() {
 }
 
 #[test]
+fn codex_idle_under_a_visible_dialog_keeps_its_message_queued() {
+    // A fresh Codex reports Idle under its startup update chooser; a message
+    // typed there picks "Update now" and is lost with submission_unconfirmed.
+    let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
+    let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();
+    identity.session_id = None;
+    worker
+        .state
+        .set_agent_runtime_identity(agent, identity)
+        .unwrap();
+    worker.state.observe_dialog(agent, true).unwrap();
+    worker.save(worker.state.clone()).unwrap();
+    let request = queue(&mut worker, room, agent, "brief");
+    worker.submit_ready().unwrap();
+    assert!(calls.lock().unwrap().is_empty());
+    assert_eq!(
+        worker.state.request(request).unwrap().phase,
+        RequestPhase::Queued
+    );
+    worker.state.observe_dialog(agent, false).unwrap();
+    worker.submit_ready().unwrap();
+    assert_eq!(*calls.lock().unwrap(), vec!["agent.prompt_if_unbound"]);
+    drop(worker);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn deferred_codex_start_and_final_survive_background_sessions_without_rebinding() {
     let (mut worker, agent, room, dir, calls) = fixture(Provider::Codex, vec![]);
     let mut identity = worker.state.agent(agent).unwrap().runtime_identity.clone();

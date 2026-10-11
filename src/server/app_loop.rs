@@ -81,6 +81,7 @@ impl App {
             self.toast_deadline,
             self.state.next_pending_agent_notification_deadline(),
             self.state.next_managed_agent_deadline(),
+            self.state.next_self_update_deadline(),
             self.pending_agent_resume_deadline,
             self.session_save_deadline,
             render_deadline,

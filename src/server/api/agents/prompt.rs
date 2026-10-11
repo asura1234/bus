@@ -95,11 +95,13 @@ pub(super) fn check_unbound_prompt_identity_and_idle(
             "Managed launch identity changed; prompt was not sent",
         ));
     }
+    // A visible dialog takes typed text as its answer, as on a bound agent.
     if !matches!(
         agent.agent_status,
         crate::protocol::api::schema::AgentStatus::Idle
             | crate::protocol::api::schema::AgentStatus::Done
-    ) {
+    ) || agent.dialog_id.is_some()
+    {
         return Err(("agent_not_idle", "Agent is not idle; prompt was not sent"));
     }
     if agent.launch_pending || !agent.interactive_ready {
