@@ -165,25 +165,8 @@ impl BusUi {
                 let Some(region) = self.drag.take() else {
                     return false;
                 };
-                // A click that selected nothing opens the link under it. The
-                // press still starts a selection, so dragging across a link
-                // selects and copies it as plain text.
-                if region == Region::History
-                    && self
-                        .history_selection
-                        .is_some_and(|(anchor, head)| anchor == head)
-                {
-                    if let Some((_, target)) = self
-                        .view
-                        .history_links
-                        .iter()
-                        .find(|(rect, _)| rect.contains((column, row).into()))
-                    {
-                        outcome.actions.push(match target {
-                            Target::Url(url) => ClientShellAction::OpenSafeWebUrl(url.clone()),
-                            Target::Path(path) => ClientShellAction::OpenPath(path.clone()),
-                        });
-                    }
+                if region == Region::History {
+                    self.open_clicked_link(column, row, outcome);
                 }
                 match self.selected_text() {
                     Some(text) => outcome
@@ -194,6 +177,29 @@ impl BusUi {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// A click that selected nothing opens the link under it. The press
+    /// still starts a selection, so dragging across a link selects and
+    /// copies it as plain text.
+    fn open_clicked_link(&self, column: u16, row: u16, outcome: &mut ClientShellInput) {
+        if self
+            .history_selection
+            .is_none_or(|(anchor, head)| anchor != head)
+        {
+            return;
+        }
+        if let Some((_, target)) = self
+            .view
+            .history_links
+            .iter()
+            .find(|(rect, _)| rect.contains((column, row).into()))
+        {
+            outcome.actions.push(match target {
+                Target::Url(url) => ClientShellAction::OpenSafeWebUrl(url.clone()),
+                Target::Path(path) => ClientShellAction::OpenPath(path.clone()),
+            });
         }
     }
 
