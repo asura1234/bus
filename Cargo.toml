@@ -110,3 +110,8 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# `./run tui` builds the TUI driver here, so a scratch Bus never runs from
+# the target/debug binary that `./run dev` rebuilds.
+[profile.tui-driver]
+inherits = "dev"

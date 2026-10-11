@@ -50,12 +50,17 @@ printf '%s\\n' "$@" > "$FAKE_BUS_ARGS"
         path.write_text(content, encoding="utf-8")
         path.chmod(0o755)
 
-    def _run(self, *args: str, cargo_exit: int = 0) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self, *args: str, cargo_exit: int = 0, target_dir: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        env = {key: value for key, value in os.environ.items() if key != "CARGO_TARGET_DIR"}
+        if target_dir is not None:
+            env["CARGO_TARGET_DIR"] = target_dir
         return subprocess.run(
             [str(self.root / "run"), *args],
             cwd=self.root.parent,
             env={
-                **os.environ,
+                **env,
                 "PATH": f"{self.bin_dir}{os.pathsep}{os.environ['PATH']}",
                 "FAKE_CARGO_ARGS": str(self.cargo_args),
                 "FAKE_CARGO_CWD": str(self.cargo_cwd),
@@ -80,6 +85,32 @@ printf '%s\\n' "$@" > "$FAKE_BUS_ARGS"
             self.bus_args.read_text(encoding="utf-8").splitlines(),
             ["--dev", "resume", "--last"],
         )
+
+    def test_tui_builds_its_own_profile_and_never_runs_target_debug(self) -> None:
+        self._write_executable(
+            self.root / "target" / "tui-driver" / "bus",
+            """#!/bin/sh
+printf 'tui-driver\\n' > "$FAKE_BUS_ARGS"
+printf '%s\\n' "$@" >> "$FAKE_BUS_ARGS"
+""",
+        )
+        result = self._run("tui", "snapshot", "--plain", target_dir=None)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.cargo_args.read_text(encoding="utf-8").splitlines(),
+            ["build", "--locked", "--profile", "tui-driver", "--bin", "bus"],
+        )
+        self.assertEqual(
+            self.bus_args.read_text(encoding="utf-8").splitlines(),
+            ["tui-driver", "--dev", "tui", "snapshot", "--plain"],
+        )
+
+    def test_tui_never_runs_a_stale_driver_after_a_failed_build(self) -> None:
+        result = self._run("tui", "start", cargo_exit=9, target_dir=None)
+
+        self.assertEqual(result.returncode, 9)
+        self.assertFalse(self.bus_args.exists())
 
     def test_dev_never_launches_an_existing_binary_after_a_failed_build(self) -> None:
         result = self._run("dev", cargo_exit=17)
