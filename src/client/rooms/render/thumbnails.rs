@@ -365,6 +365,29 @@ pub(super) fn is_image(path: &Path) -> bool {
         })
 }
 
+/// Why the image at `path` cannot be decoded, or None when it decodes. A
+/// header can read while the pixels cannot, so this decodes every pixel. A
+/// file that is not an image, or cannot be opened, is not this check's to
+/// report: attaching it reports a missing file on its own.
+pub(super) fn image_file_error(path: &Path) -> Option<String> {
+    if !is_image(path) {
+        return None;
+    }
+    let reader = image::ImageReader::open(path).ok()?;
+    reader
+        .with_guessed_format()
+        .map_err(|error| error.to_string())
+        .and_then(|reader| reader.decode().map_err(|error| error.to_string()))
+        .err()
+}
+
+/// Why pasted image data cannot be decoded, or None when it decodes.
+pub(super) fn image_data_error(bytes: &[u8]) -> Option<String> {
+    image::load_from_memory(bytes)
+        .err()
+        .map(|error| error.to_string())
+}
+
 /// Fits an image of `pixels` into at most `max_cols` × `max_rows` cells,
 /// preserving its aspect ratio and never enlarging it past its own size.
 pub(super) fn fit(

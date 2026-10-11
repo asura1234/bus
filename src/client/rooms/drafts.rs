@@ -254,6 +254,7 @@ impl BusUi {
         if self.quitting.is_some()
             || self.force_exit_available
             || self.deletion.is_some()
+            || self.alert.is_some()
             || self.form.is_some()
             || self.rename.is_some()
             || self.terminal.is_some()

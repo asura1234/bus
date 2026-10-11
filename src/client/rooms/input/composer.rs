@@ -427,14 +427,37 @@ impl BusUi {
         ) else {
             return;
         };
+        self.attach_image_data(
+            crate::utils::env::bus_data_dir(),
+            &image.bytes,
+            image.extension,
+        );
+    }
+
+    /// Saves pasted image data under `root` (the Bus data directory) and
+    /// attaches the saved file to the open room's draft.
+    pub(in crate::client::rooms) fn attach_image_data(
+        &mut self,
+        root: Option<std::path::PathBuf>,
+        bytes: &[u8],
+        extension: &str,
+    ) {
         let Some(room) = self.room else {
             return;
         };
-        let Some(root) = crate::utils::env::bus_data_dir() else {
+        if let Some(error) = super::super::thumbnails::image_data_error(bytes) {
+            tracing::warn!(event = "bus.attach.image_refused", %error);
+            self.show_alert(
+                "Could not attach the clipboard image".into(),
+                format!("The clipboard image is not a readable image, so it was not attached.\n\n{error}"),
+            );
+            return;
+        }
+        let Some(root) = root else {
             self.error = Some("Could not save the clipboard image: no Bus data directory.".into());
             return;
         };
-        let path = match save_pasted_image(&root, room, &image.bytes, image.extension) {
+        let path = match save_pasted_image(&root, room, bytes, extension) {
             Ok(path) => path,
             Err(error) => {
                 tracing::warn!(event = "bus.paste_image.write_failed", %error);
@@ -446,6 +469,51 @@ impl BusUi {
             BusCommand::AttachFile(room, path.display().to_string()),
             Effect::Files(room),
         );
+    }
+
+    /// Attaches dropped, pasted or typed paths to the room's draft, except
+    /// images Bus cannot decode: history would show those as blank rows, so a
+    /// dialog names each refused file and its decode error instead.
+    pub(in crate::client::rooms) fn attach_paths(&mut self, room: RoomId, paths: Vec<String>) {
+        let mut refused = Vec::new();
+        for path in paths {
+            let file = crate::utils::home_path::expand_tilde_path(&path);
+            if let Some(error) = super::super::thumbnails::image_file_error(&file) {
+                tracing::warn!(event = "bus.attach.image_refused", %error);
+                refused.push((file, error));
+                continue;
+            }
+            let path = self.keep_temporary_image(room, path);
+            self.queue(BusCommand::AttachFile(room, path), Effect::Files(room));
+        }
+        let name = |file: &std::path::Path| {
+            file.file_name().map_or_else(
+                || file.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            )
+        };
+        match refused.as_slice() {
+            [] => {}
+            [(file, error)] => self.show_alert(
+                format!("Could not attach \"{}\"", name(file)),
+                format!(
+                    "{} is not a readable image, so it was not attached.\n\n{error}",
+                    file.display()
+                ),
+            ),
+            refused => self.show_alert(
+                format!("Could not attach {} images", refused.len()),
+                std::iter::once(
+                    "These are not readable images, so they were not attached:".to_owned(),
+                )
+                .chain(
+                    refused
+                        .iter()
+                        .map(|(file, error)| format!("\n{}: {error}", file.display())),
+                )
+                .collect(),
+            ),
+        }
     }
 
     /// A pasted image path in the OS temp folder (a macOS screenshot or a

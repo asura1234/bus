@@ -1,3 +1,5 @@
+#[path = "dialogs/alert.rs"]
+mod alert;
 mod chat_search;
 #[path = "dialogs/deletion.rs"]
 mod deletion;
