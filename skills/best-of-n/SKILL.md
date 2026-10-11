@@ -18,8 +18,8 @@ this skill share the same priors and cannot produce the same disagreement.
 
 Bus can send the same question to claude / codex / cursor agents at the same time, and is currently
 the only cross-model fan-out channel. Bus is this repository: `./run dev` builds and starts the
-interactive `--dev` instance, and control commands go through `./run dev-control COMMAND`. Control
-commands only connect to an **already running** `--dev` instance and will not start one for you —
+interactive instance, and control commands go through `./run dev-control COMMAND`. Control
+commands only connect to an **already running** instance and will not start one for you —
 the interactive UI must be started by the developer in a terminal they keep open.
 
 ```sh
