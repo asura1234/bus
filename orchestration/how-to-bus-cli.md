@@ -3,36 +3,34 @@
 Bus provides two ways to work with rooms and coding agents:
 
 - The interactive terminal UI, where people compose messages and inspect rooms.
-- Developer control commands, which let a person, script, or another agent drive
-  an already-running Bus instance and receive JSON results.
+- Control commands, which let a person, script, or another agent drive an
+  already-running Bus instance and receive JSON results. Every session answers
+  the commands in this guide; `bus --help` lists them.
 
 If you are an agent orchestrating a room, also read the
 [Orchestrator guide](orchestrator-guide.md).
 
 This guide covers both surfaces. It uses an installed `bus` command in examples.
-When working from this repository, use `./run dev` instead of `bus --dev`, and
-use `./run dev COMMAND` instead of `bus COMMAND`. The launcher rebuilds the
-development binary, enables developer control, and forwards the command.
 
 ## Start or resume Bus
 
-Start a new interactive session with developer control enabled:
+Start a new interactive session:
 
 ```sh
-bus --dev
+bus
 ```
 
-Keep that terminal open. Run control commands from a second terminal. Control
-commands connect to an existing `--dev` instance; they never start Bus or enable
-control on a session that was launched without `--dev`.
+Keep that terminal open. Run control commands from a second terminal or from an
+agent inside Bus. Control commands connect to an existing session; they never
+start Bus.
 
 A plain launch always creates a new local session. List saved sessions before
 deciding which one to resume:
 
 ```sh
 bus sessions
-bus resume 0123456789abcdef --dev
-bus resume --last --dev
+bus resume 0123456789abcdef
+bus resume --last
 ```
 
 `bus sessions` prints session IDs, room names, recent activity, and which session
@@ -64,7 +62,7 @@ For scripts, tests, and concurrent Bus sessions, use a dedicated absolute
 
 ```sh
 export BUS_DATA_DIR=/absolute/path/to/my-bus-session
-bus --dev
+bus
 ```
 
 Then, in another terminal:
@@ -329,7 +327,7 @@ queued request exits with code 1. For `--async`,
 a finished turn whose reply was not captured counts as done, not stalled.
 
 Treat `complete: true` from `message status` or `wait` as the settlement signal.
-A successful terminal write, a visually idle agent, or a queued focus change is
+A successful terminal write or a visually idle agent is
 not proof that the request completed.
 
 ### Steer an agent while it works
@@ -455,11 +453,14 @@ bus state | jq '.result.build'
   while its provider is not running in its pane (it exited or crashed, or an
   updater or another program replaced it); deliveries to it stay queued with
   wait reason `agent_unavailable` until the provider is relaunched or resumed.
-- Each agent includes `room_id`, `status`, `dialog`, `details_disclosed`,
+- Each agent includes `room_id`, `status`, `wait_reason`, `dialog`, `details_disclosed`,
   `orchestrates` (a MASTER agent's work room, `null` for work-room agents), and `compactions`:
   `count` and `last_at_ms` of the provider context compactions Bus observed for
   that agent. `dialog` is `true` while a numbered choice dialog waits for an
   answer; see [Answer an agent's dialog](#answer-an-agents-dialog).
+  `wait_reason` says why a message queued for that agent would wait now (for
+  example `prior_request_active`, `session_hook_missing` or
+  `agent_unavailable`), or is `null` when nothing holds delivery back.
 - `build` tells how the running Bus was built: `profile` is `debug` for a
   development build (`./run dev`, `cargo build`) or `release` for an optimized
   build, and `binary` is the running executable's path.
@@ -488,13 +489,8 @@ for the human's own sends. Nothing rings for the first two seconds after start
 or resume, and one ding covers a burst of messages.
 
 MASTER starts with sound on; work rooms start off. Toggle a room from Settings
-in the UI or with the CLI. MASTER's sound is shared by every session (see Shared
-settings below); a work room's sound belongs to its session:
-
-```sh
-bus room sound "$room_id" --on
-bus room sound master --off
-```
+in the UI. MASTER's sound is shared by every session (see Shared settings
+below); a work room's sound belongs to its session.
 
 Each room also picks which sound it plays: `Default`, Bus's own ding, or one of
 the operating system's sounds. Bus lists them from `/System/Library/Sounds`,
@@ -502,19 +498,7 @@ the operating system's sounds. Bus lists them from `/System/Library/Sounds`,
 Windows, and `/usr/share/sounds` (the freedesktop theme first) on Linux, each by
 its file name without the extension. In Settings, Left and Right on a room, or a
 click on `‹` or `›`, step through the sounds and play the new one as a preview.
-From the CLI:
-
-```sh
-bus sounds
-bus room sound "$room_id" --on --sound Glass
-bus room sound master --on --sound Default
-```
-
-The generic form is `room sound ROOM (--on | --off) [--sound NAME]`; names
-match case-insensitively, and an unknown name changes nothing. Without
-`--sound`, the room keeps its sound. `sounds` lists every choice with its
-`name` and `path` (`null` for `Default`). `state` reports each room's `sound`
-and `sound_name`.
+`state` reports each room's `sound` and `sound_name`.
 
 The `All rooms` row at the top of ROOMS in Settings sets every work room at
 once: toggling it turns every room on or off, and changing its sound gives
@@ -522,12 +506,7 @@ every room that sound, leaving the other half of each room's choice alone. It
 is also what new work rooms start with (`room_sound`, off with `Default` until
 changed). Each room's own row below can still differ; while the rooms differ,
 `All rooms` shows `[-]` or the sound `Mixed`, and toggling it turns every room
-on. The CLI sets it with `settings room-sound (--on | --off) [--sound NAME]`,
-which takes names as `room sound` does and keeps the sound without `--sound`:
-
-```sh
-bus settings room-sound --on --sound Glass
-```
+on.
 
 Bus stores the name, not the path, and plays the sound once from the client
 running the session. A sound that is no longer installed or fails to play
@@ -771,20 +750,10 @@ checks, and other workflows; code review is not a special Bus mode.
 ### Resume human work
 
 Use `bus sessions` to identify a saved session, then resume its UI with its
-exact ID. After resuming with `--dev`, normal control commands target it as the
-last opened session.
+exact ID. After resuming, control commands target it as the last opened
+session.
 
-## Navigate or clean up
-
-Queue a room or agent focus change in the interactive UI:
-
-```sh
-bus room focus "$room_id"
-bus agent focus "$agent_id"
-```
-
-A successful focus response means the UI event was queued, not that a frame was
-rendered.
+## Edit or clean up
 
 Replace a room's notes, the free-text box under the room name in the UI. The
 text replaces the whole field; pass `--text ""` to clear it. `state` returns each
@@ -796,17 +765,9 @@ bus room notes "$room_id" --text "Goal: ship notes
 Non-goals: UI changes"
 ```
 
-Show or hide an agent's details in the sidebar, and switch the UI's color-blind
-palette, the same toggles as in the UI:
-
-```sh
-bus agent details "$agent_id" --on
-bus settings color-blind --off
-```
-
-The generic forms are `agent details AGENT (--on | --off)` and
-`settings color-blind (--on | --off)`. `state` reports `details_disclosed` and
-`settings.color_blind_mode`.
+`state` reports whether an agent's details are shown in the sidebar
+(`details_disclosed`) and the UI's color-blind palette
+(`settings.color_blind_mode`); both are toggles in the UI.
 
 ### Shared settings
 
@@ -832,12 +793,6 @@ An explicit `BUS_DATA_DIR` root without a registry session (tests, e2e runs,
 isolated development copies) keeps its own `settings.json` in that root and
 never reads or writes the shared file.
 
-Clear a room's unread count without changing the room open in the UI:
-
-```sh
-bus room seen "$room_id"
-```
-
 Rename rooms and agents, or delete resources explicitly:
 
 ```sh
@@ -850,17 +805,6 @@ bus room delete "$room_id" --confirm
 Deleting a room or agent is destructive. Resolve the target with `state`, prefer
 its numeric ID, and pass `--confirm` only after checking it.
 
-Save and quit the interactive Bus, as Ctrl+Q does in the UI:
-
-```sh
-bus quit
-```
-
-A successful `quit` means the request was queued for the UI. The UI saves
-unsent drafts, then stops the session's server and every agent pane, the way
-`bus stop` does, and exits. It does not wait for the exit. `bus resume` then
-relaunches each agent into its saved conversation.
-
 Stop the session's server and every agent pane it hosts:
 
 ```sh
@@ -868,11 +812,10 @@ bus stop
 ```
 
 `stop` targets the same session as control commands (`BUS_DATA_DIR`, else the
-last opened session) and works without `--dev`. It waits until the server is
-gone and prints `{"stopped":true}`, or `{"stopped":false}` when no server was
-running. An attached UI loses its server and exits without saving drafts, so
-quit the UI with `bus quit` or Ctrl+Q instead, which saves first and then stops
-the server itself.
+last opened session). It waits until the server is gone and prints
+`{"stopped":true}`, or `{"stopped":false}` when no server was running. An
+attached UI loses its server and exits without saving drafts, so quit the UI
+with Ctrl+Q instead, which saves first and then stops the server itself.
 A destructive command without `--confirm` fails and names the missing flag.
 
 Deletion closes an agent's terminal only while the running server still
@@ -881,6 +824,12 @@ example after the provider exited and its pane respawned a shell, Bus still
 deletes the agent and its messages, leaves that terminal open, and lists it
 under `terminals_left_open` in the result. Close it yourself if it is no longer
 needed.
+
+## Upgrading to the always-on control socket
+
+Every session now answers control commands. A Bus that is still running from an
+older build answers them only if the human launched it in developer mode; after
+its next restart, every session does.
 
 ## Upgrading from the orchestrator build
 
@@ -942,32 +891,33 @@ Run `just e2e` before merging changes that touch delivery, callbacks or launch.
 
 ## Diagnose failures
 
-Start with the durable control state and diagnostics:
+Start with the durable control state:
 
 ```sh
 bus state
-bus diagnostics
 bus message status "$message_id"
 bus history --room "$room_id"
+bus agent read "$agent_id" --source visible
 ```
 
-`diagnostics` reports the Bus version, developer-control state, storage and
-coordinator errors, data and log locations, and each agent's status, wait
-reason, actionable error, runtime identity, and current request.
+`state` reports each agent's status, `wait_reason`, `actionable_error`,
+runtime identity and current request. `message status` reports each request's
+`stage` and `reason`, and `agent read` shows what the agent's terminal shows.
 
 Common failure patterns:
 
 - **Control is unavailable:** confirm the intended Bus process is still running
-  and was started with `--dev`, then verify every terminal uses the same
+  (`bus sessions`), then verify every terminal uses the same
   `BUS_DATA_DIR` when an override is present.
 - **A selector is ambiguous:** rerun `state` and use the numeric room or agent
   ID instead of its name.
 - **Agent setup needs consent:** inspect the reported project hook path, then
   use `--consent-hooks` or `agent setup-confirm ... --confirm` only if intended.
-- **A request remains queued:** inspect its `reason` and the agent entry in
-  `diagnostics`; the agent may be busy, blocked, or have an actionable error.
+- **A request remains queued:** inspect its `reason` and the agent's
+  `wait_reason` in `state`; the agent may be busy, blocked, or have an
+  actionable error.
 - **A request remains `awaiting_start`:** submission alone did not establish a
-  trusted provider turn. Inspect diagnostics and recent agent output before
+  trusted provider turn. Inspect `state` and recent agent output before
   deciding whether to retry.
 - **`wait` times out:** retain its returned last status and continue with
   `message status`; a timeout does not prove failure or authorize duplicate

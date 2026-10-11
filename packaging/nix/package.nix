@@ -31,6 +31,8 @@ let
     xcbuild
   ];
 in
+# The release variant: no cargo features are enabled, so the `dev-tools` test tooling
+# (the TUI driver) is not compiled in.
 rustPlatform.buildRustPackage {
   pname = "bus";
   version = manifest.package.version;
@@ -43,6 +45,8 @@ rustPlatform.buildRustPackage {
         # The orchestrator embeds its prompt, docs and workflows at compile time.
         ../../orchestration
         ../../workflows
+        # `bus --dev --help` compiles in the dev-tools doc.
+        ../../docs/dev-tools.md
         ../../src
         # Registered tests and unit fixtures are compile-time Cargo inputs too.
         ../../tests

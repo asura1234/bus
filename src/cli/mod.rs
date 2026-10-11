@@ -54,9 +54,8 @@ fn print_paths(root: &std::path::Path, base: &std::path::Path, dev: bool) -> io:
     Ok(())
 }
 
-pub(crate) fn run(args: &[String]) -> io::Result<()> {
-    let invocation = parse_invocation(args).map_err(io::Error::other)?;
-    let dev = invocation.dev;
+/// `--dev` reaches the server, coordinator and logging through the environment.
+fn apply_dev_environment(dev: bool) {
     if dev {
         std::env::set_var("BUS_DEV", "1");
         std::env::set_var("BUS_LOG", crate::utils::logging::DEV_FILTER);
@@ -64,9 +63,18 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         std::env::remove_var("BUS_DEV");
     }
     std::env::remove_var("BUS_DEV_EXISTING_SERVER");
+}
+
+pub(crate) fn run(args: &[String]) -> io::Result<()> {
+    let invocation = parse_invocation(args).map_err(io::Error::other)?;
+    let dev = invocation.dev;
+    apply_dev_environment(dev);
     if invocation.action == Action::Help {
-        print_help();
+        print_help(dev);
         return Ok(());
+    }
+    if let Action::Tui(args) = &invocation.action {
+        return run_tui(dev, args);
     }
 
     let explicit_root = bus_data_dir();
@@ -119,7 +127,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
             }
         },
         Action::Paths => (explicit_root.unwrap_or_else(|| base.clone()), None),
-        Action::Sessions | Action::Help => unreachable!(),
+        Action::Sessions | Action::Help | Action::Tui(_) => unreachable!(),
     };
     if !root.is_absolute() {
         return Err(io::Error::other(
@@ -130,6 +138,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         // Bus's session setup would otherwise create a missing explicit root
         // with default permissions, which Bus's private control socket rejects.
         bus_io::private_dir(&root)?;
+        require_private_root(&root)?;
     }
     std::env::set_var("BUS_DATA_DIR", &root);
     match &local_session_id {
@@ -158,8 +167,51 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         }
         Action::Run | Action::Resume(_) => run_session(&registry, local_session_id, dev),
         Action::Paths => print_paths(&root, &base, dev),
-        Action::Sessions | Action::Help => unreachable!(),
+        Action::Sessions | Action::Help | Action::Tui(_) => unreachable!(),
     }
+}
+
+/// The TUI driver is test tooling: only the dev variant (cargo feature
+/// `dev-tools`, built by `./run dev`) compiles it in, and only a `--dev`
+/// invocation reaches it. The release variant has no driver code at all.
+fn run_tui(dev: bool, args: &[String]) -> io::Result<()> {
+    #[cfg(not(feature = "dev-tools"))]
+    {
+        let _ = (dev, args);
+        refuse_tui("the TUI driver is only in builds with the dev-tools feature (`./run dev`); this binary was built without it")
+    }
+    #[cfg(feature = "dev-tools")]
+    {
+        if !dev {
+            refuse_tui("dev tool: run `bus --dev tui ...`");
+        }
+        tui_driver(args)
+    }
+}
+
+/// Usage errors exit 2 with one line, as the driver's own errors do.
+fn refuse_tui(message: &str) -> ! {
+    eprintln!("error: DEV_TOOLS_UNAVAILABLE {message}");
+    std::process::exit(2)
+}
+
+/// The driver in `src/devtools` plugs in here.
+#[cfg(feature = "dev-tools")]
+fn tui_driver(_args: &[String]) -> io::Result<()> {
+    Err(io::Error::other("the TUI driver is not built yet"))
+}
+
+/// Every session runs its control socket in the data root, and the socket
+/// refuses a root that others can reach. An existing BUS_DATA_DIR keeps its
+/// mode, so refuse a shared one here, before anything starts, with the fix.
+fn require_private_root(root: &std::path::Path) -> io::Result<()> {
+    crate::platform::ipc::validate_private_socket_directory(root).map_err(|error| {
+        io::Error::other(format!(
+            "BUS_DATA_DIR {} must be private to you, because every session runs its control socket there ({error}); run `chmod 700 {}`",
+            root.display(),
+            root.display()
+        ))
+    })
 }
 
 pub(crate) fn apply_config(config: &mut crate::utils::config::Config) {
@@ -202,7 +254,40 @@ fn run_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_invocation, Action, Invocation, ResumeTarget, USAGE};
+    use super::{parse_invocation, require_private_root, Action, Invocation, ResumeTarget, USAGE};
+
+    /// A normal session used to run without a control socket, so a shared
+    /// BUS_DATA_DIR still started. Now every session runs the socket, which
+    /// refuses such a root, so launch refuses it first and names the fix.
+    #[cfg(unix)]
+    #[test]
+    fn a_normal_session_in_a_shared_data_dir_is_refused_before_it_starts() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::utils::test_temp::unique_temp_path("bshared");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = require_private_root(&dir).unwrap_err().to_string();
+        assert!(error.contains("chmod 700"), "{error}");
+        let (tx, _rx) = std::sync::mpsc::sync_channel(0);
+        assert!(
+            crate::messaging::control::start(&dir, tx).is_err(),
+            "the control socket refuses the shared root the check refuses"
+        );
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o755,
+            "launch never chmods the user's directory"
+        );
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        require_private_root(&dir).unwrap();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(0);
+        let control = crate::messaging::control::start(&dir, tx);
+        assert!(control.is_ok(), "a private root runs the control socket");
+        drop(control);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -260,6 +345,27 @@ mod tests {
         assert_eq!(
             parse_invocation(&args(&["stop", "bus"])).unwrap_err(),
             USAGE
+        );
+    }
+
+    #[test]
+    fn tui_takes_every_later_argument_and_keeps_a_leading_dev() {
+        assert_eq!(
+            parse_invocation(&args(&[
+                "--dev", "tui", "start", "--dev", "--size", "80x24"
+            ]))
+            .unwrap(),
+            Invocation {
+                dev: true,
+                action: Action::Tui(args(&["start", "--dev", "--size", "80x24"])),
+            }
+        );
+        assert_eq!(
+            parse_invocation(&args(&["tui"])).unwrap(),
+            Invocation {
+                dev: false,
+                action: Action::Tui(vec![]),
+            }
         );
     }
 

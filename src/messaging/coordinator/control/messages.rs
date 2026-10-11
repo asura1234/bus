@@ -13,12 +13,12 @@ impl Worker {
         _events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Result<Value, String> {
         match method {
-            "message.send" => self.dev_send(p),
+            "message.send" => self.control_send(p),
             "message.status" => {
                 let id = required(p, "message")?
                     .parse::<u64>()
                     .map_err(|_| "Message must be a numeric ID")?;
-                self.dev_message(PromptId(id))
+                self.control_message(PromptId(id))
             }
             "request.recover" => {
                 let id = required(p, "request")?
@@ -52,11 +52,11 @@ impl Worker {
         }
     }
 
-    pub(in crate::messaging::coordinator) fn dev_send(
+    pub(in crate::messaging::coordinator) fn control_send(
         &mut self,
         p: &Value,
     ) -> Result<Value, String> {
-        let room = self.dev_room(required(p, "room")?)?;
+        let room = self.control_room(required(p, "room")?)?;
         let author = match p.get("as") {
             None => None,
             Some(selector) => {
@@ -71,7 +71,7 @@ impl Worker {
                     a.room_id == room && (selector == a.id.0.to_string() || selector == a.name)
                 });
                 let id = if in_room {
-                    self.dev_agent(selector, Some(room))?
+                    self.control_agent(selector, Some(room))?
                 } else {
                     self.state
                         .orchestrator_of(room)
@@ -100,7 +100,7 @@ impl Worker {
             .iter()
             .any(|s| s.eq_ignore_ascii_case(crate::messaging::model::HUMAN_RECIPIENT));
         if to_human {
-            return self.dev_send_to_human(p, room, author, selectors.len(), files);
+            return self.control_send_to_human(p, room, author, selectors.len(), files);
         }
         let recipients: AgentRecipients = if selectors == ["all"] {
             // An agent's broadcast goes to everyone else in the room.
@@ -121,7 +121,7 @@ impl Worker {
         } else {
             let recipients = selectors
                 .into_iter()
-                .map(|s| self.dev_agent(s, Some(room)))
+                .map(|s| self.control_agent(s, Some(room)))
                 .collect::<Result<AgentRecipients, _>>()?;
             if author.is_some_and(|author| recipients.contains(&author)) {
                 return Err("An agent cannot send a message to itself".into());
@@ -161,7 +161,7 @@ impl Worker {
 
     /// `send --to human`: an agent's message to the Human in MASTER. It is
     /// delivered to no agent, so it has no requests and nothing to wait for.
-    pub(in crate::messaging::coordinator) fn dev_send_to_human(
+    pub(in crate::messaging::coordinator) fn control_send_to_human(
         &mut self,
         p: &Value,
         room: RoomId,
@@ -195,17 +195,17 @@ impl Worker {
         Ok(json!({"message_id":message,"request_ids":[],"stage":"posted"}))
     }
 
-    pub(in crate::messaging::coordinator) fn dev_message(
+    pub(in crate::messaging::coordinator) fn control_message(
         &mut self,
         message: PromptId,
     ) -> Result<Value, String> {
         let now_ms = crate::messaging::storage::io::now_ms();
         self.expire_queued_requests(now_ms)?;
-        self.dev_message_at(message, now_ms)
+        self.control_message_at(message, now_ms)
     }
 
     /// `message status` as of `now_ms`, which stall detection measures against.
-    pub(in crate::messaging::coordinator) fn dev_message_at(
+    pub(in crate::messaging::coordinator) fn control_message_at(
         &self,
         message: PromptId,
         now_ms: u64,

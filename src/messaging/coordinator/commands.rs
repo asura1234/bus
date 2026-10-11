@@ -97,7 +97,7 @@ impl Worker {
                 self.focus_terminal(&mut state, id, events)?;
                 Ok(())
             }
-            BusCommand::Dev(_) | BusCommand::Shutdown => return Ok(()),
+            BusCommand::Control(_) | BusCommand::Shutdown => return Ok(()),
         };
         result.map_err(|e| e.to_string())?;
         self.save(state)

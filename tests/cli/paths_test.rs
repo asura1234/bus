@@ -186,3 +186,67 @@ fn bus_stop_validates_explicit_data_root_without_a_recorded_session() {
     assert!(output.stdout.is_empty());
     assert!(!created_state);
 }
+
+/// Every session runs its control socket in the data root, so a shared
+/// BUS_DATA_DIR is refused before any server starts, with the fix named.
+#[cfg(unix)]
+#[test]
+fn bus_refuses_a_shared_data_dir_before_starting_anything() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = isolated_home("shared-root");
+    let root = home.join("shared");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .env("BUS_DATA_DIR", &root)
+        .env("HOME", &home)
+        .env_remove("BUS_SESSION_ID")
+        .env_remove("BUS_DEV")
+        .output()
+        .expect("run bus");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("chmod 700"), "{stderr}");
+    assert_eq!(
+        std::fs::read_dir(&root).unwrap().count(),
+        0,
+        "nothing started"
+    );
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+/// The release variant (no `dev-tools` feature: `./run prod`, `just build`,
+/// Nix, npm) has no TUI driver, whatever the runtime flag says.
+#[cfg(not(feature = "dev-tools"))]
+#[test]
+fn a_build_without_dev_tools_has_no_tui_driver() {
+    for args in [&["--dev", "tui", "start"][..], &["tui", "--help"][..]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+            .args(args)
+            .env_remove("BUS_DATA_DIR")
+            .output()
+            .expect("run bus");
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("built without it"), "{args:?}: {stderr}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+    }
+    let help = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["--dev", "--help"])
+        .output()
+        .expect("run help");
+    assert!(!String::from_utf8_lossy(&help.stdout).contains("\n  tui"));
+}
+
+/// In the dev variant the driver still needs a `--dev` invocation.
+#[cfg(feature = "dev-tools")]
+#[test]
+fn the_dev_variant_routes_tui_only_under_dev() {
+    let output = Command::new(env!("CARGO_BIN_EXE_bus"))
+        .args(["tui", "start"])
+        .env_remove("BUS_DATA_DIR")
+        .output()
+        .expect("run bus");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("bus --dev tui"));
+}

@@ -79,18 +79,144 @@ fn room_sound_requires_exactly_one_of_on_or_off() {
     ] {
         assert!(command(args).is_err(), "{args:?}");
     }
-    assert!(HELP.contains("room sound ROOM (--on | --off) [--sound NAME]"));
-    assert!(HELP.contains("settings room-sound (--on | --off) [--sound NAME]"));
-    assert!(HELP.contains("\n  sounds\n"));
+    assert!(DEV_HELP.contains("room sound ROOM (--on | --off) [--sound NAME]"));
+    assert!(DEV_HELP.contains("settings room-sound (--on | --off) [--sound NAME]"));
+    assert!(DEV_HELP.contains("\n  sounds\n"));
+}
+
+/// One sample command line per control method, so the tier table, the parser
+/// and both help texts are checked against each other method by method.
+const SAMPLES: &[&[&str]] = &[
+    &["state"],
+    &["settings"],
+    &["room", "create", "r"],
+    &["room", "rename", "r", "s"],
+    &["room", "notes", "r", "--text", "t"],
+    &["room", "delete", "r", "--confirm"],
+    &["history", "--room", "r"],
+    &[
+        "agent",
+        "add",
+        "--room",
+        "r",
+        "--name",
+        "a",
+        "--provider",
+        "codex",
+        "--pwd",
+        "/w",
+    ],
+    &["agent", "read", "a", "--source", "visible"],
+    &["agent", "dialog", "a"],
+    &[
+        "agent",
+        "choose",
+        "a",
+        "--option",
+        "1",
+        "--fingerprint",
+        "f",
+    ],
+    &["agent", "answer", "a", "--skip", "--fingerprint", "f"],
+    &["agent", "clear", "a"],
+    &["agent", "rename", "a", "b"],
+    &["agent", "setup-confirm", "a", "--confirm"],
+    &["agent", "delete", "a", "--confirm"],
+    &["send", "--room", "r", "--to", "a", "--text", "t"],
+    &["message", "status", "1"],
+    &["request", "recover", "1", "--confirm"],
+    &["room", "focus", "r"],
+    &["room", "seen", "r"],
+    &["room", "sound", "r", "--on"],
+    &["agent", "focus", "a"],
+    &["agent", "details", "a", "--on"],
+    &["settings", "color-blind", "--on"],
+    &["settings", "room-sound", "--on"],
+    &["sounds"],
+    &["quit"],
+    &["diagnostics"],
+];
+
+#[test]
+fn every_tier_table_method_parses_from_its_command_and_sits_in_its_tiers_help() {
+    use crate::messaging::coordinator::{dev_tier_mentions, Tier, METHODS};
+    assert_eq!(SAMPLES.len(), METHODS.len());
+    for spec in METHODS {
+        let sample = SAMPLES
+            .iter()
+            .find(|args| command(args).is_ok_and(|c| c.method == spec.method))
+            .unwrap_or_else(|| panic!("no sample parses into {}", spec.method));
+        assert!(sample.join(" ").starts_with(spec.command), "{sample:?}");
+        let line = format!("\n  {}", spec.command);
+        match spec.tier {
+            Tier::Agent => assert!(
+                AGENT_HELP.contains(&line),
+                "{} missing from bus --help",
+                spec.command
+            ),
+            Tier::Dev => {
+                assert!(
+                    DEV_HELP.contains(&line),
+                    "{} missing from bus --dev --help",
+                    spec.command
+                );
+                assert!(
+                    !AGENT_HELP.contains(&line),
+                    "{} is a dev tool in bus --help",
+                    spec.command
+                );
+            }
+        }
+    }
+    assert_eq!(dev_tier_mentions(AGENT_HELP), Vec::<String>::new());
+}
+
+/// `DEV_HELP` is compiled in from docs/dev-tools.md, so every source closure
+/// that builds Bus must carry that file.
+#[test]
+fn the_dev_help_source_ships_with_the_cargo_and_nix_sources() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let read = |path: &str| std::fs::read_to_string(repo.join(path)).unwrap();
+    assert!(read("Cargo.toml").contains("\"docs/dev-tools.md\""));
+    assert!(read("packaging/nix/package.nix").contains("../../docs/dev-tools.md"));
+}
+
+/// Release builds (`./run prod`, `just build`, Nix and so npm) leave the
+/// `dev-tools` test tooling off; the dev builds that resume with `--dev`
+/// (`./run dev`, the dev cutover) turn it on.
+#[test]
+fn release_builds_leave_dev_tools_off_and_dev_builds_turn_it_on() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let read = |path: &str| std::fs::read_to_string(repo.join(path)).unwrap();
+    let manifest: toml::Value = toml::from_str(&read("Cargo.toml")).unwrap();
+    let features = &manifest["features"];
+    assert!(features.get("dev-tools").is_some());
+    assert!(features.get("default").is_none_or(|default| {
+        !default
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f.as_str() == Some("dev-tools"))
+    }));
+    assert!(!read("packaging/nix/package.nix").contains("buildFeatures"));
+    assert!(!read("justfile").contains("dev-tools"));
+    let run = read("run");
+    assert!(run.contains("build_bus --release --bin bus)"), "prod");
+    assert!(
+        run.contains("build_bus --bin bus --features dev-tools)"),
+        "dev"
+    );
+    let cutover = read("tools/cutover.sh");
+    assert!(cutover.contains("cargo build --locked --bin bus --features dev-tools "));
 }
 
 #[test]
 fn orchestrators_have_no_reassign_command() {
     assert!(command(&["agent", "orchestrate", "claude-orch", "--none"]).is_err());
-    assert!(!HELP.contains("agent orchestrate AGENT"));
-    assert!(HELP.contains("exactly one work room for its whole life"));
-    assert!(HELP.contains("[--orchestrates ROOM]"));
-    assert!(HELP.contains("[--system-prompt TEXT | --system-prompt-file PATH]"));
+    assert!(!AGENT_HELP.contains("agent orchestrate AGENT"));
+    assert!(AGENT_HELP.contains("exactly one work room for its whole life"));
+    assert!(AGENT_HELP.contains("[--orchestrates ROOM]"));
+    assert!(AGENT_HELP.contains("[--system-prompt TEXT | --system-prompt-file PATH]"));
 }
 
 #[test]
@@ -862,7 +988,7 @@ fn send_async_rejects_a_message_to_the_human() {
             .unwrap()
             .follow
     );
-    assert!(HELP.contains("[--queue] [--async]"));
+    assert!(AGENT_HELP.contains("[--queue] [--async]"));
 }
 
 #[test]
@@ -1006,7 +1132,7 @@ fn send_queue_asks_for_an_own_turn_and_is_omitted_otherwise() {
     assert_eq!(queued.params["queue"], true);
     let steering = command(&["send", "--room", "r", "--to", "a", "--text", "t"]).unwrap();
     assert!(steering.params.get("queue").is_none());
-    assert!(HELP.contains("[--as AGENT] [--queue]"));
+    assert!(AGENT_HELP.contains("[--as AGENT] [--queue]"));
 }
 
 #[test]
@@ -1245,4 +1371,34 @@ fn async_following_caps_overload_backoff_and_recovers_after_extended_server_busy
     assert!(pauses[5..]
         .iter()
         .all(|pause| *pause == Duration::from_secs(2)));
+}
+
+/// `bus --help` hides the dev tier, but clap's own errors for an incomplete
+/// or mistyped agent-tier command should not advertise dev tools either.
+#[test]
+fn parse_errors_do_not_advertise_dev_tools() {
+    for args in [
+        &["room"][..],
+        &["agent"][..],
+        &["settings", "x"][..],
+        &["room", "focs", "r"][..],
+    ] {
+        let error = command(args).unwrap_err();
+        for dev in [
+            "focus",
+            "seen",
+            "sound",
+            "details",
+            "color-blind",
+            "room-sound",
+            "diagnostics",
+            "sounds",
+            "quit",
+        ] {
+            assert!(
+                !error.contains(dev),
+                "{args:?} names dev tool {dev}: {error}"
+            );
+        }
+    }
 }

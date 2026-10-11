@@ -5,7 +5,12 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     echo "Usage: ./run dev [Bus arguments]" >&2
+    echo "       ./run prod [Bus arguments]" >&2
     echo "       ./run dev-control <command> [arguments]" >&2
+    echo "" >&2
+    echo "dev builds the dev variant (cargo feature dev-tools: the TUI driver and other" >&2
+    echo "test tooling) and launches it with --dev. prod builds the release variant, the" >&2
+    echo "one npm ships, which leaves that tooling out, and launches it as is." >&2
     echo "" >&2
     echo "Examples:" >&2
     echo "  ./run dev" >&2
@@ -14,19 +19,42 @@ usage() {
     echo "  ./run dev-control agent read 3 --source recent --lines 80" >&2
 }
 
+# Build bus and print the executable Cargo reports for it. Cargo alone knows
+# its target dir (CARGO_TARGET_DIR, build.target-dir in any config, ...), so
+# launching its report never runs a stale binary from somewhere else.
+build_bus() {
+    local output executable
+    output=$(cargo build --locked --message-format=json-render-diagnostics "$@") || return $?
+    executable=$(printf '%s\n' "$output" | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -n 1)
+    if [[ -z "$executable" ]]; then
+        echo "Cargo reported no bus executable for this build." >&2
+        return 1
+    fi
+    printf '%s\n' "$executable"
+}
+
 case "${1:-}" in
     dev)
         shift
         cd "$REPO_ROOT"
-        cargo build --locked --bin bus
-        exec "$REPO_ROOT/target/debug/bus" --dev "$@"
+        binary=$(build_bus --bin bus --features dev-tools) || exit $?
+        exec "$binary" --dev "$@"
+        ;;
+    prod)
+        shift
+        cd "$REPO_ROOT"
+        binary=$(build_bus --release --bin bus) || exit $?
+        exec "$binary" "$@"
         ;;
     dev-control)
         shift
         cd "$REPO_ROOT"
+        # The default debug build, which ./run dev uses when no target dir is
+        # set: agents set CARGO_TARGET_DIR for their own builds, which must not
+        # become the CLI that talks to the live Bus.
         binary="$REPO_ROOT/target/debug/bus"
         if [[ ! -x "$binary" ]]; then
-            echo "Bus debug binary is missing; run './run dev' or 'cargo build --locked --bin bus' once before dev-control." >&2
+            echo "Bus debug binary is missing; run './run dev' (or 'cargo build --locked --bin bus --features dev-tools') once before dev-control." >&2
             exit 1
         fi
         exec "$binary" --dev "$@"

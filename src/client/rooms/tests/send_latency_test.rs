@@ -35,11 +35,11 @@ fn poll_status(
     commands: mpsc::SyncSender<(u64, BusCommand)>,
     stop: Arc<std::sync::atomic::AtomicBool>,
 ) {
-    use crate::messaging::control::{server::DevCall, Request};
+    use crate::messaging::control::{server::ControlCall, Request};
     let mut n = 0u64;
     while !stop.load(std::sync::atomic::Ordering::Relaxed) {
         let (reply, _response) = mpsc::sync_channel(1);
-        let call = DevCall {
+        let call = ControlCall {
             request: Request {
                 id: format!("status-{n}"),
                 method: "message.status".into(),
@@ -47,7 +47,7 @@ fn poll_status(
             },
             reply,
         };
-        if commands.send((0, BusCommand::Dev(call))).is_err() {
+        if commands.send((0, BusCommand::Control(call))).is_err() {
             return;
         }
         n += 1;

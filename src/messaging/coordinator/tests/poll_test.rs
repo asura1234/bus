@@ -75,7 +75,7 @@ fn claude_statusline_refresh_is_identity_bound_and_does_not_change_delivery_stat
         // are deliberately no event files in this callback poll.
         worker.consume_callbacks(agent, &spool).unwrap();
         worker.dev_enabled = true;
-        let response = worker.dev_response_with_events(
+        let response = worker.control_response_with_events(
             &crate::messaging::control::Request {
                 id: "usage-state".into(),
                 method: "state".into(),
@@ -150,7 +150,7 @@ fn codex_final_refreshes_usage_from_its_rollout_and_state_reports_it() {
     worker.dev_enabled = true;
     let state = |worker: &mut Worker| {
         worker
-            .dev_response_with_events(
+            .control_response_with_events(
                 &crate::messaging::control::Request {
                     id: format!("state-{}", io::now_ns()),
                     method: "state".into(),

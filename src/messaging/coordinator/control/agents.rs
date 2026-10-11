@@ -15,21 +15,21 @@ impl Worker {
         _events: Option<&mpsc::Sender<BusEvent>>,
     ) -> Result<Value, String> {
         match method {
-            "agent.details" => self.dev_command(BusCommand::SetDetails(
-                self.dev_agent(required(p, "agent")?, None)?,
+            "agent.details" => self.control_command(BusCommand::SetDetails(
+                self.control_agent(required(p, "agent")?, None)?,
                 p.get("on")
                     .and_then(Value::as_bool)
                     .ok_or("Details must be on or off")?,
             )),
-            "agent.rename" => self.dev_command(BusCommand::RenameAgent(
-                self.dev_agent(required(p, "agent")?, None)?,
+            "agent.rename" => self.control_command(BusCommand::RenameAgent(
+                self.control_agent(required(p, "agent")?, None)?,
                 required(p, "name")?.into(),
             )),
-            "agent.delete" => self.dev_command(BusCommand::DeleteAgent(
-                self.dev_agent(required(p, "agent")?, None)?,
+            "agent.delete" => self.control_command(BusCommand::DeleteAgent(
+                self.control_agent(required(p, "agent")?, None)?,
             )),
-            "agent.setup-confirm" => self.dev_command(BusCommand::CompleteHookSetup(
-                self.dev_agent(required(p, "agent")?, None)?,
+            "agent.setup-confirm" => self.control_command(BusCommand::CompleteHookSetup(
+                self.control_agent(required(p, "agent")?, None)?,
             )),
             "agent.add" => {
                 let provider = match required(p, "provider")? {
@@ -38,7 +38,7 @@ impl Worker {
                     "cursor" => Provider::Cursor,
                     _ => return Err("Provider must be claude, codex, or cursor".into()),
                 };
-                let room = self.dev_room(required(p, "room")?)?;
+                let room = self.control_room(required(p, "room")?)?;
                 let master = self.state.master_room().is_some_and(|m| m.id == room);
                 let orchestrates = optional_text(p, "orchestrates")?;
                 let system_prompt = optional_text(p, "system_prompt")?;
@@ -56,11 +56,11 @@ impl Worker {
                 // Every MASTER agent is an orchestrator of exactly one work
                 // room; outside MASTER, --orchestrates still reaches the
                 // model's MASTER-only check.
-                self.dev_command(match orchestrates {
+                self.control_command(match orchestrates {
                     Some(room) => BusCommand::AddOrchestrator(
                         input,
                         OrchestratorSpec {
-                            room: self.dev_room(room)?,
+                            room: self.control_room(room)?,
                             system_prompt: system_prompt.map(Into::into),
                         },
                     ),
@@ -69,14 +69,14 @@ impl Worker {
                 })
             }
             "agent.clear" => {
-                let agent = self.dev_agent(required(p, "agent")?, None)?;
-                self.dev_clear(agent)
+                let agent = self.control_agent(required(p, "agent")?, None)?;
+                self.control_clear(agent)
             }
             _ => Err("Unknown method".into()),
         }
     }
 
-    pub(in crate::messaging::coordinator) fn dev_agent(
+    pub(in crate::messaging::coordinator) fn control_agent(
         &self,
         selector: &str,
         room: Option<RoomId>,
@@ -95,7 +95,7 @@ impl Worker {
     /// Starts a fresh provider context in an idle agent's terminal. The reset
     /// command is typed directly, not sent as a Bus message, and the agent
     /// rebinds to the new provider session its next callback reports.
-    pub(in crate::messaging::coordinator) fn dev_clear(
+    pub(in crate::messaging::coordinator) fn control_clear(
         &mut self,
         id: AgentId,
     ) -> Result<Value, String> {

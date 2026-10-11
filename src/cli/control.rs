@@ -1,8 +1,8 @@
-//! Client commands for an already running, explicitly enabled Bus developer instance.
+//! Client commands for an already running Bus instance.
 mod parse;
 mod wait;
 #[cfg(test)]
-use super::help::HELP;
+use super::help::{AGENT_HELP, DEV_HELP};
 use parse::{parse, ParsedCommand};
 use wait::{execute, follow_message};
 
@@ -62,7 +62,7 @@ pub fn run(data_dir: &Path, args: &[String]) -> io::Result<()> {
 fn next_request_id() -> String {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     format!(
-        "bus-dev-{}-{}-{}",
+        "bus-{}-{}-{}",
         std::process::id(),
         crate::messaging::storage::io::now_ns(),
         SEQUENCE.fetch_add(1, Ordering::Relaxed),
@@ -118,7 +118,7 @@ fn run_with_pause(
     let (code, message) = response
         .error
         .map(|error| (error.code, error.message))
-        .unwrap_or_else(|| (String::new(), "Developer command failed".into()));
+        .unwrap_or_else(|| (String::new(), "Command failed".into()));
     Err(io::Error::other(match code.as_str() {
         "message_stalled" => CliExit {
             code: STALLED_EXIT_CODE,
