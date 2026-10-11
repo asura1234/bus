@@ -137,12 +137,12 @@ is no longer accurate; the accurate claim is **it does not read our replies**, a
 - Red but one of the three kinds of evidence holds → `--admin` merge, and state in the output **for each one** which job and which evidence released it.
   No unnamed summaries like "the rest are environment issues".
 
-## When to stop and ask a human
+## When to stop and ask the developer
 
 - Attribution cannot be made, or the evidence only reaches "I think": stop, report the failing job and the evidence gathered.
 - The failure is caused by this PR but the fix exceeds this PR's goal: stop, hand it to the developer to rule (do not widen scope along the way).
 - A **major conflict** while converging divergence (both sides changed the same function, signature change, delete-vs-modify): stop.
-  merge-pr runs unattended, and a major conflict is by definition the kind that needs a human call; minor conflicts and shared infra
+  merge-pr runs unattended, and a major conflict is by definition the kind that needs the developer's call; minor conflicts and shared infra
   are handled automatically by `rebase-origin-main`'s existing rules.
 - `mergeable` is not `MERGEABLE` and not caused by divergence: stop, report `mergeStateStatus`.
 - The review has an unhandled FLAG: stop. By definition a FLAG needs the developer's call.
@@ -154,7 +154,7 @@ So when section 1 sees `isDraft == true`, run `gh pr ready` first and continue, 
 
 This is not deciding for the developer: invoking merge-pr means "merge this PR", and draft state directly contradicts it
 — if it really should stay a draft, the right move is not to invoke merge-pr. Ready is also reversible (`gh pr ready --undo`), and the cost is completely
-unequal to "stop once, wait for a human to come back and click, rerun everything".
+unequal to "stop once, wait for the developer to come back and click, rerun everything".
 
 ## Branch first, then assert
 
@@ -250,7 +250,7 @@ The correct action for `UNKNOWN` is **to ask again** (section 1c): it may neithe
 nor be treated as a conflict and handed to section 1b.
 
 There are two kinds of divergence, an order of magnitude apart in cost: `BEHIND` = just behind, no conflict; `CONFLICTING` / `DIRTY` = real
-conflicts for a human to resolve. `BLOCKED` / `UNSTABLE` are not divergence at all; nothing this section does will turn them green.
+conflicts for the developer to resolve. `BLOCKED` / `UNSTABLE` are not divergence at all; nothing this section does will turn them green.
 
 ## The criterion that a round is done
 

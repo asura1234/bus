@@ -205,7 +205,7 @@ IF mode == pr AND the github lane was used in this run:
       --pr <pr> --triage <run-root>/triage.md --round-dir <roundDir>
   -- The machine reviewer can re-raise a rejected comment at any time: it has no memory and only sees that the code did not change. With the ledger
   --   on the PR, "why this is not changed" lives in the same place as the code, so the next round (human or machine) can see that reason.
-  -- The script first scans for credentials and local absolute paths and blocks oversized ledgers; on a hit it STOPs and a human decides how to redact;
+  -- The script first scans for credentials and local absolute paths and blocks oversized ledgers; on a hit it STOPs and the developer decides how to redact;
   --   content is not rewritten automatically here, because rewriting would make what is posted differ from the ledger.
   -- `--round-dir` makes the script write `triaged.json` **after a successful post**: the only evidence a round truly finished.
   --   Why `reviewExists` is not enough: [guide.md](guide.md) "The completion marker is written in the last step".

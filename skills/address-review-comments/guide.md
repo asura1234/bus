@@ -186,7 +186,7 @@ and the name written to disk not the same.
 ## Scan the ledger before posting it
 
 The ledger is a local artifact under `temp/`, and the PR is public. Before posting, scan for
-credentials and local absolute paths; on a hit, STOP and let a human decide how to redact it:
+credentials and local absolute paths; on a hit, STOP and let the developer decide how to redact it:
 **do not rewrite the content automatically here**, because rewriting makes what is posted differ
 from the ledger.
 

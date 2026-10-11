@@ -68,7 +68,7 @@ publication:
 - `merge`: publish now on an integration branch `<branch>--base` that merges the
   open parents, so the diff is clean. Costs: one more pushed branch that every
   parent change must re-merge, and a branch someone could mistakenly merge the
-  PR into. Choose it when the human wants the review now.
+  PR into. Choose it when the developer wants the review now.
 
 Linearizing (stacking B on A so D has one parent) is a third option when A and
 B are small or naturally ordered; it trades B's independent merge for a plain
