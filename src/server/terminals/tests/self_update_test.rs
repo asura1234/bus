@@ -305,3 +305,44 @@ async fn a_restored_agent_resumes_its_own_session_after_the_update() {
         Some("saved-session")
     );
 }
+
+#[tokio::test]
+async fn claude_update_notices_never_block_or_open_a_dialog() {
+    // Claude Code updates itself in the background and reports it in the
+    // footer only; the session keeps working on the old version until its
+    // next launch. Captured live from a scratch 2.1.295 native install that
+    // updated itself to 2.1.296.
+    let capture =
+        include_bytes!("../../../../tests/fixtures/claude-update/update-installed-2.1.295.ansi");
+    let runtime = crate::terminal::TerminalRuntime::test_with_screen_bytes(120, 40, capture);
+    let installed = runtime.visible_text();
+    let ansi = runtime.visible_ansi();
+    assert!(
+        installed.contains("Update installed · Restart to update"),
+        "{installed}"
+    );
+    // The other footers of the 2.1.296 updater, verbatim from its bundle.
+    let failed = installed.replace(
+        "✔ Update installed · Restart to update",
+        "✘ Auto-update failed · Run claude doctor",
+    );
+    let package_manager = installed.replace(
+        "✔ Update installed · Restart to update",
+        "Update available! Run: npm i -g @anthropic-ai/claude-code (auto-update failed)",
+    );
+    for screen in [&installed, &failed, &package_manager] {
+        let result = crate::agents::manifest::detect_with_osc(
+            AgentKind::Claude,
+            crate::agents::manifest::DetectionInput {
+                screen,
+                osc_title: "",
+                osc_progress: "",
+            },
+        );
+        assert_ne!(result.state, AgentState::Blocked, "{screen}");
+        assert!(!result.visible_blocker, "{screen}");
+        assert!(crate::agents::manifest::auto_update(AgentKind::Claude, screen).is_none());
+    }
+    assert!(crate::agents::dialog::parse(&ansi).is_none());
+    runtime.shutdown();
+}
