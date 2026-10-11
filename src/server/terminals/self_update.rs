@@ -78,10 +78,7 @@ impl App {
         terminal_id: &TerminalId,
         now: Instant,
     ) -> bool {
-        let (Some(terminal), Some(runtime)) = (
-            self.state.terminals.get(terminal_id),
-            self.terminal_runtimes.get(terminal_id),
-        ) else {
+        let Some(terminal) = self.state.terminals.get(terminal_id) else {
             return false;
         };
         let Some(mut update) = terminal.self_update.clone() else {
@@ -92,42 +89,10 @@ impl App {
                 deadline,
                 interrupted,
             } => {
-                if terminal.managed_agent_kind().is_none() {
-                    // The agent exited: Codex prints its success line last.
-                    let screen = runtime.visible_text();
-                    let failure = if interrupted {
-                        Some(format!(
-                            "the install did not finish within {} minutes",
-                            SELF_UPDATE_INSTALL_TIMEOUT.as_secs() / 60
-                        ))
-                    } else if screen.contains(&update.success) {
-                        None
-                    } else {
-                        Some(exit_failure(&screen))
-                    };
-                    SelfUpdatePhase::Relaunching {
-                        failure,
-                        next_try: now,
-                        deadline: now + SELF_UPDATE_EXIT_TIMEOUT,
-                    }
-                } else if now < deadline {
-                    return false;
-                } else if interrupted {
-                    SelfUpdatePhase::Failed(failed_install(
-                        &update,
-                        "the install did not exit after Bus interrupted it",
-                    ))
-                } else {
-                    // A hung install: interrupting it makes the agent exit
-                    // with a failure, which relaunches it for a person.
-                    if let Err(error) = runtime.try_send_bytes(Bytes::from_static(b"\x03")) {
-                        tracing::warn!(event = "bus.self_update.interrupt_failed", agent = %update.name, %error,
-                            "Could not interrupt a hung agent update");
-                    }
-                    SelfUpdatePhase::Installing {
-                        deadline: now + SELF_UPDATE_EXIT_TIMEOUT,
-                        interrupted: true,
-                    }
+                let exited = terminal.managed_agent_kind().is_none();
+                match self.installing(terminal_id, &update, exited, deadline, interrupted, now) {
+                    Some(phase) => phase,
+                    None => return false,
                 }
             }
             SelfUpdatePhase::Relaunching {
@@ -138,42 +103,9 @@ impl App {
                 if now < next_try {
                     return false;
                 }
-                let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) else {
-                    return false;
-                };
-                let started = self.start_agent(AgentStartParams {
-                    name: update.name.clone(),
-                    kind: crate::agents::agent_label(update.kind).into(),
-                    pane_id: public_pane_id,
-                    args: update.args.clone(),
-                    timeout_ms: None,
-                });
-                match started {
-                    Ok(_) => {
-                        tracing::info!(event = "bus.self_update.relaunched", agent = %update.name,
-                            failure = ?failure, "Started the agent again after its update");
-                        match failure {
-                            Some(reason) => {
-                                SelfUpdatePhase::Failed(failed_install(&update, &reason))
-                            }
-                            None => SelfUpdatePhase::Relaunched,
-                        }
-                    }
-                    // The shell may not have the terminal back yet.
-                    Err(_) if now < deadline => SelfUpdatePhase::Relaunching {
-                        failure,
-                        next_try: now + RELAUNCH_RETRY,
-                        deadline,
-                    },
-                    Err(error) => {
-                        let message = self.agent_start_error_body(error).message;
-                        tracing::warn!(event = "bus.self_update.relaunch_failed", agent = %update.name,
-                            %message, "Could not start the agent again after its update");
-                        SelfUpdatePhase::Failed(format!(
-                            "Bus could not start {} again after its update: {message}. Start it again in its terminal.",
-                            update.name
-                        ))
-                    }
+                match self.relaunch(ws_idx, pane_id, &update, failure, deadline, now) {
+                    Some(phase) => phase,
+                    None => return false,
                 }
             }
             SelfUpdatePhase::Relaunched | SelfUpdatePhase::Failed(_)
@@ -207,6 +139,102 @@ impl App {
             self.supervise_self_update(ws_idx, pane_id, terminal_id, now);
         }
         true
+    }
+
+    /// The next phase of an install, or `None` while it is still running.
+    fn installing(
+        &self,
+        terminal_id: &TerminalId,
+        update: &SelfUpdate,
+        exited: bool,
+        deadline: Instant,
+        interrupted: bool,
+        now: Instant,
+    ) -> Option<SelfUpdatePhase> {
+        let runtime = self.terminal_runtimes.get(terminal_id)?;
+        if exited {
+            // Codex prints its success line last, before it exits.
+            let screen = runtime.visible_text();
+            let failure = if interrupted {
+                Some(format!(
+                    "the install did not finish within {} minutes",
+                    SELF_UPDATE_INSTALL_TIMEOUT.as_secs() / 60
+                ))
+            } else if screen.contains(&update.success) {
+                None
+            } else {
+                Some(exit_failure(&screen))
+            };
+            return Some(SelfUpdatePhase::Relaunching {
+                failure,
+                next_try: now,
+                deadline: now + SELF_UPDATE_EXIT_TIMEOUT,
+            });
+        }
+        if now < deadline {
+            return None;
+        }
+        if interrupted {
+            return Some(SelfUpdatePhase::Failed(failed_install(
+                update,
+                "the install did not exit after Bus interrupted it",
+            )));
+        }
+        // A hung install: interrupting it makes the agent exit with a
+        // failure, which relaunches it for a person.
+        if let Err(error) = runtime.try_send_bytes(Bytes::from_static(b"\x03")) {
+            tracing::warn!(event = "bus.self_update.interrupt_failed", agent = %update.name, %error,
+                "Could not interrupt a hung agent update");
+        }
+        Some(SelfUpdatePhase::Installing {
+            deadline: now + SELF_UPDATE_EXIT_TIMEOUT,
+            interrupted: true,
+        })
+    }
+
+    /// Types the agent's launch command again; `None` when the pane is gone.
+    fn relaunch(
+        &mut self,
+        ws_idx: usize,
+        pane_id: PaneId,
+        update: &SelfUpdate,
+        failure: Option<String>,
+        deadline: Instant,
+        now: Instant,
+    ) -> Option<SelfUpdatePhase> {
+        let public_pane_id = self.public_pane_id(ws_idx, pane_id)?;
+        let started = self.start_agent(AgentStartParams {
+            name: update.name.clone(),
+            kind: crate::agents::agent_label(update.kind).into(),
+            pane_id: public_pane_id,
+            args: update.args.clone(),
+            timeout_ms: None,
+        });
+        Some(match started {
+            Ok(_) => {
+                tracing::info!(event = "bus.self_update.relaunched", agent = %update.name,
+                    failure = ?failure, "Started the agent again after its update");
+                match failure {
+                    Some(reason) => SelfUpdatePhase::Failed(failed_install(update, &reason)),
+                    None => SelfUpdatePhase::Relaunched,
+                }
+            }
+            // The shell may not have the terminal back yet.
+            Err(_) if now < deadline => SelfUpdatePhase::Relaunching {
+                failure,
+                next_try: now + RELAUNCH_RETRY,
+                deadline,
+            },
+            Err(error) => {
+                let message = self.agent_start_error_body(error).message;
+                tracing::warn!(event = "bus.self_update.relaunch_failed", agent = %update.name,
+                    %message, "Could not start the agent again after its update");
+                SelfUpdatePhase::Failed(format!(
+                    "Bus could not start {} again after its update: {message}. Start it again in its terminal.",
+                    update.name
+                ))
+            }
+        })
     }
 
     /// Picks the update in a managed agent's self-update chooser, once.
