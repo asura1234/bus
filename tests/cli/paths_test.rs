@@ -228,10 +228,7 @@ fn a_build_without_dev_tools_has_no_tui_driver() {
             .expect("run bus");
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("only in the dev variant"),
-            "{args:?}: {stderr}"
-        );
+        assert!(stderr.contains("built without it"), "{args:?}: {stderr}");
         assert!(output.stdout.is_empty(), "{args:?}");
     }
     let help = Command::new(env!("CARGO_BIN_EXE_bus"))

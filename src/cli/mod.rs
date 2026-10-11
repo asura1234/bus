@@ -178,7 +178,7 @@ fn run_tui(dev: bool, args: &[String]) -> io::Result<()> {
     #[cfg(not(feature = "dev-tools"))]
     {
         let _ = (dev, args);
-        refuse_tui("the TUI driver is only in the dev variant of Bus (built by `./run dev`); this binary is the release variant")
+        refuse_tui("the TUI driver is only in builds with the dev-tools feature (`./run dev`); this binary was built without it")
     }
     #[cfg(feature = "dev-tools")]
     {
