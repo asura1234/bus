@@ -315,7 +315,10 @@ pub(super) fn ensure_root_isolated(
 ) -> Result<(), String> {
     ensure_env_does_not_point_at(root, inherited)?;
     ensure_outside_bus_homes(root, homes)?;
-    ensure_not_live_bus(root)?;
+    // The root, or any directory above it, must not be a live Bus's data dir.
+    for dir in resolve_existing(root).ancestors() {
+        ensure_not_live_bus(dir)?;
+    }
     let overridden = std::env::var_os(ROOT_ENV).is_some_and(|value| Path::new(&value) == root);
     let entries = std::fs::read_dir(root).map(|entries| {
         entries
@@ -483,6 +486,35 @@ pub(super) fn ensure_not_live_bus(data_dir: &Path) -> Result<(), String> {
     }
 }
 
+/// The path with symlinks and aliases (macOS `/tmp` is `/private/tmp`)
+/// resolved: its deepest existing ancestor canonicalized, the missing rest
+/// appended. Creates nothing.
+pub(super) fn resolve_existing(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut existing = path;
+    loop {
+        if let Ok(resolved) = existing.canonicalize() {
+            return missing
+                .iter()
+                .rev()
+                .fold(resolved, |path, part| path.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// Whether one path contains the other, however each is spelled.
+fn overlaps(a: &Path, b: &Path) -> bool {
+    let (a, b) = (resolve_existing(a), resolve_existing(b));
+    a.starts_with(&b) || b.starts_with(&a)
+}
+
 /// Refuses inherited locator variables that point inside the target, which
 /// would make the scratch Bus and the inherited session the same one.
 pub(super) fn ensure_env_does_not_point_at(
@@ -494,7 +526,7 @@ pub(super) fn ensure_env_does_not_point_at(
             continue;
         }
         let path = PathBuf::from(value);
-        if path.starts_with(target) || target.starts_with(&path) {
+        if overlaps(&path, target) {
             return Err(format!(
                 "refusing to start: inherited {key}={} points at the driver's target {}",
                 path.display(),
@@ -509,7 +541,7 @@ pub(super) fn ensure_env_does_not_point_at(
 /// platform config directory), even though the driver never generates one.
 pub(super) fn ensure_outside_bus_homes(target: &Path, homes: &[PathBuf]) -> Result<(), String> {
     for home in homes {
-        if target.starts_with(home) || home.starts_with(target) {
+        if overlaps(home, target) {
             return Err(format!(
                 "refusing to use {}: it overlaps the Bus home {}",
                 target.display(),

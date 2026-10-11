@@ -284,3 +284,59 @@ fn a_driver_root_must_be_isolated_before_start_touches_it() {
     assert!(ensure_root_isolated(&fresh, &[], &[]).is_ok());
     let _ = std::fs::remove_dir_all(&fresh);
 }
+
+/// A directory and a second spelling of it: through a symlink, and on macOS
+/// also `/private/tmp` for `/tmp`.
+fn aliased_dirs(tag: &str) -> (PathBuf, Vec<(PathBuf, PathBuf)>) {
+    let base = temp_root(tag);
+    let real = base.join("real");
+    create_private_dir(&real).unwrap();
+    let link = base.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let mut pairs = vec![(real.clone(), link)];
+    let canonical = real.canonicalize().unwrap();
+    if canonical != real {
+        pairs.push((canonical, real));
+    }
+    (base, pairs)
+}
+
+#[test]
+fn resolving_follows_aliases_without_creating_anything() {
+    let (base, pairs) = aliased_dirs("resolve");
+    for (real, alias) in &pairs {
+        let canonical = real.canonicalize().unwrap();
+        assert_eq!(resolve_existing(alias), canonical);
+        let missing = alias.join("not").join("yet");
+        assert_eq!(
+            resolve_existing(&missing),
+            canonical.join("not").join("yet")
+        );
+        assert!(!real.join("not").exists());
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn root_guards_see_through_path_aliases() {
+    let (base, pairs) = aliased_dirs("alias");
+    let _listener =
+        crate::platform::ipc::bind_local_listener(&pairs[0].0.join("control.sock")).unwrap();
+    for (real, alias) in &pairs {
+        // A root inside the inherited data dir, spelled differently.
+        let root = alias.join("driver");
+        let locator = vec![("BUS_DATA_DIR".to_owned(), real.clone().into_os_string())];
+        assert!(
+            ensure_env_does_not_point_at(&root, &locator).is_err(),
+            "{} vs {}",
+            root.display(),
+            real.display()
+        );
+        assert!(ensure_outside_bus_homes(&root, std::slice::from_ref(real)).is_err());
+        // Even with no locator or home, a live Bus above the root refuses it.
+        let refusal = ensure_root_isolated(&root, &[], &[]).unwrap_err();
+        assert!(refusal.contains("live Bus"), "{refusal}");
+        assert!(!root.exists());
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}

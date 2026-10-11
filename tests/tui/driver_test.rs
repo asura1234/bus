@@ -434,3 +434,50 @@ fn a_refused_root_override_leaves_the_directory_untouched() {
         );
     }
 }
+
+#[test]
+fn a_root_inside_a_live_data_dir_is_refused_however_it_is_spelled() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = PathBuf::from(format!("/tmp/bus-tui-it-alias{}", std::process::id()));
+    let live = base.join("live-data");
+    let root = live.join("driver");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(live.join("state.json"), b"{\"sentinel\":true}").unwrap();
+    let _listener = std::os::unix::net::UnixListener::bind(live.join("control.sock")).unwrap();
+    // On macOS the canonical spelling is /private/tmp/…, the root's is /tmp/….
+    let canonical = live.canonicalize().unwrap();
+    let snapshot = || {
+        let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        let names: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        (mode, names)
+    };
+    let before = snapshot();
+    let name = session_name("alias");
+    let (code, reply) = parse(tui_raw(
+        &name,
+        &["start", "--run-dir", run_dir().to_str().unwrap()],
+        &[
+            ("BUS_TUI_ROOT", root.to_str().unwrap()),
+            ("BUS_DATA_DIR", canonical.to_str().unwrap()),
+        ],
+    ));
+    let after = snapshot();
+    if code == 0 {
+        let _ = tui_raw(
+            &name,
+            &["stop"],
+            &[("BUS_TUI_ROOT", root.to_str().unwrap())],
+        );
+    }
+    let _ = std::fs::remove_dir_all(&base);
+    assert_eq!(code, 1, "{reply}");
+    assert_eq!(reply["error"]["code"], "refused", "{reply}");
+    assert_eq!(
+        after, before,
+        "start touched a live Bus data dir through an alias"
+    );
+}
