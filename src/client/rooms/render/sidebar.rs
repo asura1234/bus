@@ -287,6 +287,8 @@ impl BusUi {
             view.thumbnails.clear();
         }
         self.view = view;
+        #[cfg(feature = "dev-tools")]
+        self.publish_hits(cols, rows);
     }
     fn sidebar_view(&mut self, view: &mut View, rows: u16) {
         let sidebar = view.sidebar;

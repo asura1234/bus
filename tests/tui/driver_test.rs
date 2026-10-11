@@ -2,7 +2,8 @@
 //! the driver CLI, and the guards that keep it away from every other Bus.
 // Only the dev variant has the driver; the gate runs this target in its
 // dev-tools lane, and an explicit `--test '*'` must still build without it.
-#![cfg(all(unix, feature = "dev-tools"))]
+// Sessions start only on macOS, where the effect recorder covers Bus.
+#![cfg(all(target_os = "macos", feature = "dev-tools"))]
 
 use serde_json::Value;
 use std::path::PathBuf;
@@ -538,4 +539,75 @@ fn a_root_override_with_dot_components_is_refused_before_anything_is_written() {
         assert_eq!(after, before, "{requested} changed the live data dir");
         assert!(!created, "{requested} created its missing component");
     }
+}
+
+#[test]
+fn named_hits_effects_fixtures_and_screenshots_work_on_a_scratch_bus() {
+    let session = Session::start("layer3");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    let hits = session.ok(&["hits"]);
+    let names: Vec<&str> = hits["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|hit| hit["name"].as_str())
+        .collect();
+    for wanted in ["new-room", "new-agent", "settings", "composer", "room:bus"] {
+        assert!(names.contains(&wanted), "{wanted} missing from {names:?}");
+    }
+
+    // Settings by name; the toggle changes the setting and its own row.
+    session.ok(&["click", "--hit", "settings"]);
+    session.ok(&["wait", "--text", "[ ] Color blind mode"]);
+    session.ok(&["click", "--hit", "color-blind"]);
+    session.ok(&["wait", "--changed", "--rows", "0-10"]);
+    session.ok(&["wait", "--text", "[x] Color blind mode"]);
+    session.ok(&["wait", "--state", "settings.color_blind_mode == true"]);
+    session.ok(&["press", "esc"]);
+
+    // Ctrl+V pastes the fixture image through the clipboard stand-in.
+    session.ok(&["fixture", "clipboard-image"]);
+    session.ok(&["click", "--hit", "composer"]);
+    session.ok(&["press", "ctrl+v"]);
+    let read = session.ok(&["wait", "--effect", "clipboard_image"]);
+    assert_eq!(read["effect"]["served"], true, "{read}");
+    session.ok(&["wait", "--text", "[paste-", "--timeout", "5s"]);
+    let (code, missing) = tui(
+        &session.0,
+        &["wait", "--effect", "open", "--timeout", "300ms"],
+    );
+    assert_eq!(code, 1, "{missing}");
+
+    // A style wait reads a named hit's cells: the settings button is not drawn inverse.
+    session.ok(&[
+        "wait",
+        "--style",
+        "--hit",
+        "settings",
+        "--no-attrs",
+        "inverse",
+    ]);
+
+    let shot = session.ok(&["screenshot"]);
+    let path = shot["path"].as_str().unwrap();
+    let bytes = std::fs::read(path).unwrap();
+    assert!(bytes.starts_with(b"\x89PNG"), "{path} is a PNG");
+}
+
+#[test]
+fn a_fixture_file_name_leaves_the_selected_session_alone() {
+    let session = Session::start("fixture");
+    let output = bus(&session.0)
+        .args(["--dev", "tui", "fixture", "file", "--file", "notes.txt"])
+        .env("BUS_TUI_SESSION", &session.0)
+        .output()
+        .expect("create a named fixture in the selected scratch session");
+    let (code, fixture) = parse(output);
+    assert_eq!(code, 0, "named fixture failed: {fixture}");
+    assert_eq!(
+        PathBuf::from(fixture["path"].as_str().unwrap())
+            .file_name()
+            .unwrap(),
+        "notes.txt"
+    );
 }

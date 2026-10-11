@@ -4,6 +4,8 @@ mod dialogs;
 mod inspect;
 mod messages;
 mod rooms;
+#[cfg(feature = "dev-tools")]
+pub(crate) mod ui_hits;
 
 use super::{
     launch, mpsc, schema, AddAgent, AgentId, AgentRecipients, Author, BTreeMap, BusCommand,
@@ -246,6 +248,8 @@ impl Worker {
             "message.send" | "message.status" | "request.recover" => {
                 self.execute_messages(method, p, events)
             }
+            #[cfg(feature = "dev-tools")]
+            "ui.hits" => ui_hits::hits_json(),
             _ => Err("Unknown method".into()),
         }
     }
@@ -491,6 +495,9 @@ pub(crate) const METHODS: &[MethodSpec] = &[
     spec("sounds", "sounds", &[], false, Tier::Dev),
     spec("bus.quit", "quit", &[], true, Tier::Dev),
     spec("diagnostics", "diagnostics", &[], false, Tier::Dev),
+    // The TUI driver's named click targets; only the dev variant has them.
+    #[cfg(feature = "dev-tools")]
+    spec("ui.hits", "ui hits", &[], false, Tier::Dev),
 ];
 
 /// Every place `text` names a dev-tier command the way docs and help do

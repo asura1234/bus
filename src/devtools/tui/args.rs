@@ -1,10 +1,19 @@
 //! Argument parsing for the driver verbs, and `--help` sections cut from
 //! `docs/tui-driver.md` so the help and the docs cannot drift.
-use super::protocol::{Command, Target};
+use super::protocol::{Command, Region, Style, Target};
 use std::time::Duration;
 
 /// Flags that take no value.
-const SWITCHES: &[&str] = &["--regex", "--gone", "--double", "--plain"];
+const SWITCHES: &[&str] = &[
+    "--regex",
+    "--gone",
+    "--double",
+    "--plain",
+    "--real",
+    "--changed",
+    "--all",
+    "--style",
+];
 
 #[derive(Debug, Default)]
 pub(super) struct Parsed {
@@ -135,8 +144,12 @@ fn rows_flag(parsed: &mut Parsed) -> Result<Option<(u16, u16)>, String> {
         .transpose()
 }
 
-/// A target from `--text T [--regex] [--nth N] [--rows A-B]`, else `ROW COL`.
+/// A target from `--hit NAME`, `--text T [--regex] [--nth N] [--rows A-B]`,
+/// else `ROW COL`.
 fn target(parsed: &mut Parsed, text_flag: &str) -> Result<Target, String> {
+    if let Some(name) = parsed.take_value("--hit") {
+        return Ok(Target::Hit { name });
+    }
     if let Some(text) = parsed.take_value(text_flag) {
         let nth = parsed
             .take_value("--nth")
@@ -157,8 +170,12 @@ fn target(parsed: &mut Parsed, text_flag: &str) -> Result<Target, String> {
 
 /// A `ROW COL` target.
 fn cell_target(parsed: &mut Parsed) -> Result<Target, String> {
-    let row = parsed.positional().ok_or("give ROW COL or --text TEXT")?;
-    let col = parsed.positional().ok_or("give ROW COL or --text TEXT")?;
+    let row = parsed
+        .positional()
+        .ok_or("give ROW COL, --text TEXT or --hit NAME")?;
+    let col = parsed
+        .positional()
+        .ok_or("give ROW COL, --text TEXT or --hit NAME")?;
     Ok(Target::Cell {
         row: number(&row, "ROW")?,
         col: number(&col, "COL")?,
@@ -219,6 +236,21 @@ pub(super) fn command(verb: &str, parsed: &mut Parsed) -> Result<Command, String
             Command::Resize { cols, rows }
         }
         "clipboard" => Command::Clipboard,
+        "screenshot" => Command::Screenshot {
+            real: parsed.take_switch("--real"),
+            out: parsed.take_value("--out").map(std::path::PathBuf::from),
+        },
+        "hits" => Command::Hits,
+        "effects" => Command::Effects {
+            kind: parsed.take_value("--kind"),
+        },
+        "focus" => Command::Focus {
+            gained: match parsed.positional().as_deref() {
+                Some("in") => true,
+                Some("out") => false,
+                _ => return Err("usage: focus in|out".into()),
+            },
+        },
         _ => return Err(format!("unknown verb {verb:?}; run `bus --dev tui --help`")),
     };
     parsed.finish()?;
@@ -282,27 +314,77 @@ fn pointer_command(verb: &str, parsed: &mut Parsed) -> Result<Command, String> {
     })
 }
 
-/// Screen waits: `--text T [--regex] [--gone]` or `--stable DURATION`.
+fn region(parsed: &mut Parsed) -> Result<Region, String> {
+    Ok(Region {
+        rows: rows_flag(parsed)?,
+        cols: parsed
+            .take_value("--cols")
+            .map(|cols| parse_rows(&cols))
+            .transpose()?,
+    })
+}
+
+fn names(list: Option<String>) -> Vec<String> {
+    list.map(|list| {
+        list.split(',')
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Host waits: text, stable or changed regions, cell style, or an effect.
 pub(super) fn wait_command(parsed: &mut Parsed, timeout: Duration) -> Result<Command, String> {
-    let rows = rows_flag(parsed)?;
     let timeout_ms = timeout.as_millis() as u64;
-    let command = if let Some(text) = parsed.take_value("--text") {
+    let command = if let Some(kind) = parsed.take_value("--effect") {
+        Command::WaitEffect {
+            kind,
+            target: parsed.take_value("--target"),
+            all: parsed.take_switch("--all"),
+            timeout_ms,
+        }
+    } else if parsed.take_switch("--style") {
+        let style = Style {
+            fg: parsed.take_value("--fg"),
+            bg: parsed.take_value("--bg"),
+            attrs: names(parsed.take_value("--attrs")),
+            no_attrs: names(parsed.take_value("--no-attrs")),
+        };
+        if style.fg.is_none()
+            && style.bg.is_none()
+            && style.attrs.is_empty()
+            && style.no_attrs.is_empty()
+        {
+            return Err("--style needs --fg, --bg, --attrs or --no-attrs".into());
+        }
+        Command::WaitStyle {
+            target: target(parsed, "--text")?,
+            style,
+            timeout_ms,
+        }
+    } else if let Some(text) = parsed.take_value("--text") {
         Command::WaitText {
             text,
             regex: parsed.take_switch("--regex"),
             gone: parsed.take_switch("--gone"),
-            rows,
+            rows: rows_flag(parsed)?,
             timeout_ms,
         }
     } else if let Some(stable) = parsed.take_value("--stable") {
         Command::WaitStable {
             stable_ms: parse_duration(&stable)?.as_millis() as u64,
-            rows,
+            region: region(parsed)?,
+            timeout_ms,
+        }
+    } else if parsed.take_switch("--changed") {
+        Command::WaitChanged {
+            region: region(parsed)?,
             timeout_ms,
         }
     } else {
         return Err(
-            "usage: wait --text T [--regex] [--gone] | --stable 300ms | --state 'PRED' | --message ID"
+            "usage: wait --text T | --stable 300ms | --changed | --style TARGET --fg C | --effect KIND | --state 'PRED' | --message ID"
                 .into(),
         );
     };

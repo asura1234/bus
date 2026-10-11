@@ -25,8 +25,27 @@ the inherited Bus variables.
 
 The scratch Bus finds fake `claude`, `codex` and `cursor-agent` CLIs first on
 its PATH, so agents never start a real provider. The fake Claude fires Bus's
-real hooks and answers each prompt with `fake reply: <prompt>`. A prompt
-containing `fake:work N` keeps it Working for N seconds first.
+real hooks and answers each prompt with `fake reply: <prompt>`. Like Claude
+Code, it submits on Enter (CR), takes a typed LF as a newline, shows each line
+that is one quoted image path as a leading `[Image #N]`, and clears a line on
+Ctrl+K or Ctrl+U. A prompt containing `fake:work N` keeps it Working for N
+seconds first.
+
+The same PATH holds recording stand-ins for `open`, `osascript`,
+`terminal-notifier` and `afplay`, the commands Bus uses on macOS to open links
+and files, show desktop notifications, read a clipboard image and play sounds.
+They record each call (see `effects`) and do nothing else: nothing opens, no
+notification appears, no sound plays, and Ctrl+V pastes the session's fixture
+image (`fixture clipboard-image`), never your clipboard. Sessions therefore run
+on macOS only: on Linux and Windows Bus uses other programs the recorder does
+not stand in for, so `start` refuses there.
+
+What notifies in Bus: the room UI never shows a desktop or terminal
+notification. A new agent reply (or agent notice) in a room whose sound is on
+plays that room's sound (`afplay`); MASTER's sound starts on, work rooms' off.
+Host focus does not matter: `focus out` neither causes nor suppresses it.
+Desktop notifications exist only for agent-pane toasts, which are off by
+default and not shown inside the Bus room UI.
 
 Output: every verb prints one JSON line on stdout, except `journey` (one
 line per step, then the result), `bus` (Bus's own output) and
@@ -47,11 +66,17 @@ left edge. Prefer `--text` targets to raw coordinates.
 
 Artifacts: each session writes a run folder with `trace.ndjson` (every
 request and its result), `pty.cast` (asciicast of the terminal, input and
-output) and, after `stop`, the Bus logs. Inside a Bus checkout it lives under
+output), `pty.raw` (the exact output bytes), `shots/` (screenshots) and, after
+`stop`, the Bus logs. Inside a Bus checkout it lives under
 `temp/tui-driver/runs/`, otherwise under `~/.local/state/bus/tui-runs/`.
 
-Verbs: start, stop, status, list, bus, snapshot, find, cells, type, paste,
-press, click, drag, scroll, resize, wait, expect, clipboard, journey, gc.
+Verbs: start, stop, status, list, bus, snapshot, find, cells, screenshot,
+hits, type, paste, press, click, drag, scroll, resize, focus, wait, expect,
+effects, clipboard, fixture, journey, gc.
+
+Targets: click, scroll and `wait --style` take a cell `ROW COL`, a visible
+text `--text TEXT [--regex] [--nth N] [--rows A-B]`, or a named region of the
+room UI `--hit NAME` (see `hits`). Prefer `--hit`, then `--text`.
 Run `bus --dev tui VERB --help` for one verb.
 
 ### start
@@ -112,6 +137,32 @@ Cells with their symbol, `fg`/`bg` colours (`#rrggbb`, `idx:N` or
 `default`), attributes (bold, dim, italic, underline, inverse, …) and
 hyperlink. Use it for colour questions.
 
+### screenshot
+`screenshot [--real] [--out FILE]`
+
+Writes a PNG of the screen and prints its path; open it to look. By default
+it draws the cells (text, colours, attributes, borders) with a bundled font:
+use it for layout, overlap and colour. It does not draw inline images.
+
+`--real` replays the session's exact output into a fresh Ghostty window the
+driver starts with default settings, checks the window shows the session's
+whole grid, captures only that window by its id and closes it. Use it to see
+what a real terminal shows, inline images (Kitty graphics) included. It needs
+macOS, Ghostty in /Applications and Screen Recording permission for the
+terminal running the driver; a window briefly appears. The replay leaves out
+clipboard writes, notifications and bells.
+
+### hits
+`hits`
+
+The room UI's clickable regions as of its last frame, from the dev-tier
+`bus ui hits`: each with a name, its cells and the text it covers. Names are
+stable: `room:NAME`, `agent:NAME`, `new-room`, `new-agent`, `settings`,
+`color-blind`, `sound:ROOM`, `composer`, `recipients`, `recipient:NAME`,
+`files`, `file:NAME`, `remove-file:NAME`, `field:N`, `provider:claude`,
+`suggestion:N`, `quote:ID`, `add`, `cancel`, `delete-room:NAME`, and more.
+A region covered by a later one is clicked where it is still visible.
+
 ### type
 `type [--] TEXT`
 
@@ -151,6 +202,12 @@ driver sessions, so your clipboard is never touched).
 
 Wheel notches at a cell.
 
+### focus
+`focus in|out`
+
+Tells Bus its terminal gained or lost focus (`CSI I` / `CSI O`), as a real
+terminal does when you switch windows.
+
 ### resize
 `resize COLSxROWS`
 
@@ -158,17 +215,27 @@ Resizes the terminal; Bus relays out.
 
 ### wait
 `wait --text TEXT [--regex] [--gone] [--rows A-B] [--timeout 10s]`
-`wait --stable 300ms [--rows A-B] [--timeout 10s]`
+`wait --stable 300ms [--rows A-B] [--cols A-B] [--timeout 10s]`
+`wait --changed [--rows A-B] [--cols A-B] [--timeout 10s]`
+`wait --style TARGET [--fg C] [--bg C] [--attrs a,b] [--no-attrs a,b] [--timeout 10s]`
+`wait --effect KIND [--target TEXT] [--all] [--timeout 10s]`
 `wait --state 'PATH OP VALUE' [--timeout 10s]`
 `wait --message ID [--timeout 10s]`
 
-Waits for text to appear (or with `--gone`, to disappear), for rows to stay
-unchanged, for `bus state` to match, or for a message to settle. Exit 1 on
-timeout, with a screen excerpt or the actual state value; exit 3 when the
-scratch Bus exits during the wait (a dead Bus's last screen is never
-"stable", and an unreadable state never matches). Never sleep
-instead. Scope `--stable` with `--rows`: agent spinners and toasts keep the
+Waits for text to appear (or with `--gone`, to disappear); for a region to
+stay unchanged (`--stable`) or to differ from how it was just before the
+last input (`--changed`), comparing text and colours; for every non-blank
+cell of a target to have a style; for an effect recorded since the last input
+(`--all`: ever); for `bus state` to match; or for a message to settle. Exit 1
+on timeout, with what it saw; exit 3 when the scratch Bus exits during the
+wait (a dead Bus's last screen is never "stable", and an unreadable state
+never matches). Never sleep instead. Scope `--stable` and
+`--changed` to the region you care about: agent spinners and toasts keep the
 whole screen moving.
+
+Colours are `#rrggbb`, `idx:N` or `default`, as `cells` prints them;
+attributes are bold, dim, italic, underline, inverse, strike, blink, hidden.
+Effect kinds are listed under `effects`.
 
 State predicates: PATH is dotted into the `bus state` result (`visible_room`,
 `rooms.2.name`, `agents.*.status`; `*` means any element). OP is `==`, `!=`,
@@ -180,10 +247,30 @@ string, for example `agents.*.status == idle`.
 
 The same as `wait`, read as an assertion.
 
+### effects
+`effects [--kind KIND]`
+
+What the scratch Bus asked the operating system to do, oldest first, each
+with an index and a time: `open` (a URL or file; `target` is what it named),
+`notification` (title in `target`, `body`), `sound` (the file played),
+`clipboard_image` (an image paste read; `served` says whether a fixture was
+there), `osascript` (other scripts), and `terminal_notification` (OSC 9, 99
+or 777 in Bus's output). `since_last_input` is the index the next
+`wait --effect` starts from.
+
 ### clipboard
 `clipboard`
 
 Every copy Bus made in this session (OSC 52).
+
+### fixture
+`fixture image|file|clipboard-image [--file FILE] [--text TEXT]`
+
+Writes a file for the session to send and prints its path: `image` is a PNG
+with red, blue, yellow and cyan quadrants (clockwise from the top left), easy
+to recognise in a screenshot; `file` is a text file. Both go into the
+session's work directory. `clipboard-image` sets the image that Ctrl+V in the
+composer pastes.
 
 ### journey
 `journey STEPS.json`

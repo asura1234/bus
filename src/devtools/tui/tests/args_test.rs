@@ -143,11 +143,104 @@ fn waits_need_a_condition() {
         .unwrap(),
         Command::WaitStable {
             stable_ms: 300,
-            rows: Some((1, 2)),
+            region: Region {
+                rows: Some((1, 2)),
+                cols: None
+            },
             ..
         }
     ));
     assert!(wait_command(&mut parsed(&[]), timeout).is_err());
+}
+
+#[test]
+fn layer_three_verbs_targets_and_waits_parse() {
+    assert_eq!(
+        command(
+            "screenshot",
+            &mut parsed(&["--real", "--out", "/tmp/s.png"])
+        )
+        .unwrap(),
+        Command::Screenshot {
+            real: true,
+            out: Some("/tmp/s.png".into())
+        }
+    );
+    assert_eq!(
+        command("click", &mut parsed(&["--hit", "new-room"])).unwrap(),
+        Command::Click {
+            target: Target::Hit {
+                name: "new-room".into()
+            },
+            button: "left".into(),
+            mods: String::new(),
+            double: false
+        }
+    );
+    assert_eq!(
+        command("focus", &mut parsed(&["out"])).unwrap(),
+        Command::Focus { gained: false }
+    );
+    assert!(command("focus", &mut parsed(&["sideways"])).is_err());
+    let timeout = Duration::from_secs(1);
+    assert_eq!(
+        wait_command(
+            &mut parsed(&["--effect", "open", "--target", "https://x", "--all"]),
+            timeout
+        )
+        .unwrap(),
+        Command::WaitEffect {
+            kind: "open".into(),
+            target: Some("https://x".into()),
+            all: true,
+            timeout_ms: 1000
+        }
+    );
+    assert_eq!(
+        wait_command(
+            &mut parsed(&[
+                "--style",
+                "--text",
+                "docs",
+                "--fg",
+                "#5a96ff",
+                "--attrs",
+                "underline"
+            ]),
+            timeout
+        )
+        .unwrap(),
+        Command::WaitStyle {
+            target: Target::Text {
+                text: "docs".into(),
+                regex: false,
+                nth: None,
+                rows: None
+            },
+            style: Style {
+                fg: Some("#5a96ff".into()),
+                bg: None,
+                attrs: vec!["underline".into()],
+                no_attrs: Vec::new()
+            },
+            timeout_ms: 1000
+        }
+    );
+    assert!(wait_command(&mut parsed(&["--style", "--text", "docs"]), timeout).is_err());
+    assert_eq!(
+        wait_command(
+            &mut parsed(&["--changed", "--rows", "3", "--cols", "1-4"]),
+            timeout
+        )
+        .unwrap(),
+        Command::WaitChanged {
+            region: Region {
+                rows: Some((3, 3)),
+                cols: Some((1, 4))
+            },
+            timeout_ms: 1000
+        }
+    );
 }
 
 #[test]
@@ -179,6 +272,11 @@ fn help_comes_from_the_doc_sections() {
         "clipboard",
         "journey",
         "gc",
+        "screenshot",
+        "hits",
+        "effects",
+        "fixture",
+        "focus",
     ] {
         assert!(
             help_for(shipped, verb).is_some(),

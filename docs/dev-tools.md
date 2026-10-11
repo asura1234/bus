@@ -9,6 +9,7 @@ Dev tools (answer only in a session started with `bus --dev`):
   sounds
   quit
   diagnostics
+  ui hits      (dev variant only)
 
 Bus's control commands come in two tiers. The agent tier (`bus --help`) is how
 orchestrators and workers coordinate, and every session answers it. Dev tools
@@ -34,5 +35,8 @@ agent details and settings color-blind set the TUI toggles; state shows both.
 quit queues the TUI's save-and-quit (as Ctrl+Q); its receipt only attests queuing.
 The UI saves unsent drafts, then stops the session's server and every agent pane, as
 bus stop does, and exits; bus resume relaunches each agent into its saved conversation.
+ui hits lists the room UI's clickable regions as of its last frame, each with a stable
+name (room:NAME, agent:NAME, new-room, settings, color-blind, composer, files, ...) and its
+cells; the TUI driver clicks them by name. Only the dev variant (./run dev) has it.
 diagnostics shows Bus's internals: version, storage pause, coordinator error, data and log
 paths, and each agent's status, wait reason, detail, runtime identity and current request.

@@ -1,14 +1,19 @@
-//! The run folder: every request and its result (`trace.ndjson`) and the
-//! terminal's input and output as an asciicast v2 recording (`pty.cast`).
+//! The run folder: every request and its result (`trace.ndjson`), the
+//! terminal's input and output as an asciicast v2 recording (`pty.cast`), and
+//! the exact output bytes (`pty.raw`), which `screenshot --real` replays.
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// The client's output bytes, unmodified; the cast stores them as lossy text.
+pub(super) const RAW_OUTPUT: &str = "pty.raw";
+
 pub(super) struct Trace {
     started: Instant,
     cast: BufWriter<File>,
+    raw: BufWriter<File>,
     requests: BufWriter<File>,
     /// The start of a character the last output read split.
     output_tail: Vec<u8>,
@@ -39,6 +44,7 @@ impl Trace {
         Ok(Self {
             started: Instant::now(),
             cast,
+            raw: BufWriter::new(File::create(run_dir.join(RAW_OUTPUT))?),
             requests: BufWriter::new(File::create(run_dir.join("trace.ndjson"))?),
             output_tail: Vec::new(),
         })
@@ -50,6 +56,7 @@ impl Trace {
     }
 
     pub fn output(&mut self, bytes: &[u8]) {
+        let _ = self.raw.write_all(bytes);
         let mut joined = std::mem::take(&mut self.output_tail);
         joined.extend_from_slice(bytes);
         let complete = complete_utf8_len(&joined);
@@ -86,5 +93,6 @@ impl Trace {
     pub fn flush(&mut self) {
         let _ = self.requests.flush();
         let _ = self.cast.flush();
+        let _ = self.raw.flush();
     }
 }

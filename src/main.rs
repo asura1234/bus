@@ -34,13 +34,11 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
-    // A driver session's fake provider CLIs are this binary under a provider's name.
+    // A driver session's fake provider CLIs and effect recorders are this
+    // binary under another command's name.
     #[cfg(feature = "dev-tools")]
-    if let Some(provider) = raw_args
-        .first()
-        .and_then(|arg0| devtools::tui::fake_provider(arg0))
-    {
-        std::process::exit(devtools::tui::run_fake_agent(provider, &raw_args[1..]));
+    if let Some(code) = devtools::tui::run_stand_in(&raw_args) {
+        std::process::exit(code);
     }
     if raw_args.get(1).map(String::as_str) == Some("--bus-callback") {
         let logging_options = cli::logging_options();

@@ -185,7 +185,8 @@ Files are split by ownership, not by helper.
     - `commands.rs`, `agents.rs` (`AddAgent` to `LaunchSpec`, delete, guarded terminal close), `callbacks.rs` (consume the hook spool)
     - `resume.rs` (rebind after restart; validate a resumed agent's room, store and spool from terminal facts), `usage.rs` (newest
       quota per login, throttling, state output), `settings.rs`, `dialogs.rs`
-    - `control/`: handlers for control commands, `rooms.rs`, `agents.rs`, `messages.rs`, `dialogs.rs`, `inspect.rs`
+    - `control/`: handlers for control commands, `rooms.rs`, `agents.rs`, `messages.rs`, `dialogs.rs`, `inspect.rs`,
+      `ui_hits.rs` (dev variant only: the room UI's named click targets for `ui hits`)
     - `tests/`: `delivery_test.rs`, `queue_test.rs`, `poll_test.rs`, `binding_test.rs`, `persistence_test.rs`, `recovery_test.rs`,
       `steering_test.rs`, `resume_test.rs`, `focus_test.rs`, `settings_test.rs`, `dialogs_test.rs`,
       `control/{rooms_test,agents_test,messages_test,dialogs_test,inspect_test}.rs`
@@ -260,7 +261,8 @@ Files are split by ownership, not by helper.
     - `widgets/{editor,recipients}.rs`, `dialogs/{forms,deletion}.rs`
     - `input/`: `mod.rs`, `composer.rs`, `history.rs`, `forms.rs`, `settings.rs`
     - `history/`: `mod.rs`, `exchange.rs`, `markdown.rs`
-    - `render/`: `mod.rs` (view model and hits), `view.rs`, `text.rs`, `sidebar.rs`, `layout.rs`, `room.rs`, `dialogs.rs`, `paint.rs`, `thumbnails.rs`
+    - `render/`: `mod.rs` (view model and hits), `view.rs`, `text.rs`, `sidebar.rs`, `layout.rs`, `room.rs`, `dialogs.rs`, `paint.rs`, `thumbnails.rs`,
+      `hits.rs` (dev variant only: names each hit and publishes them for `ui hits`)
     - `tests/`: `support_test.rs` (fixtures, input drivers, screen capture), `deletion_test.rs`, `sidebar_test.rs`, `toasts_test.rs`,
       `composer_test.rs`, `forms_test.rs`, `layout_test.rs`, `native_shell_test.rs`, `attachments_test.rs`, `selection_test.rs`,
       `history_markdown_test.rs`, `history_slots_test.rs`, `history_scroll_test.rs`, `keys_test.rs`, `master_test.rs`, `sound_test.rs`,
@@ -273,7 +275,9 @@ Files are split by ownership, not by helper.
   - `tui/`: `bus --dev tui`, the TUI driver (reference: `docs/tui-driver.md`): `mod.rs` (verbs, start/stop, waits), `args.rs`,
     `session.rs` (scratch session paths, the guards that refuse live sessions, the scrubbed environment), `host/` (the per-session
     process that owns the hidden terminal, and its actions), `screen.rs` (libghostty-vt screen as text and styled cells), `input.rs` (keys and SGR
-    mouse), `predicate.rs` (`wait --state`), `trace.rs` (run folder), `fake_agents.rs` (fake provider CLIs), `tests/`
+    mouse), `predicate.rs` (`wait --state`), `trace.rs` (run folder), `fake_agents.rs` (fake provider CLIs), `effects.rs` (stand-ins
+    that record `open`, notifications, sounds and clipboard-image reads), `fixtures.rs`, `picture.rs` (cell screenshots with the
+    bundled font in `assets/`), `mirror.rs` (`screenshot --real`: replay into an owned Ghostty window), `tests/`
 
 Local test moves use literal includes where needed to retain their full S9b names. In particular, CLI stop/guidance tests keep
 `utils::paths::tests`, the runtime PTY setup case keeps `terminal::pty::spawn::unix::tests`, and graphics tests keep their Kitty
@@ -291,7 +295,7 @@ dependency rule, and an import-boundary check in `tools/quality` fails the gate 
 flowchart TD
   main --> cli & server & client & agents & devtools
   cli --> client & devtools & messaging & protocol & platform
-  devtools --> terminal & messaging & protocol & platform
+  devtools --> terminal & messaging & agents & protocol & platform
   client --> messaging & agents & protocol & platform
   server --> terminal & messaging & agents & protocol & platform
   messaging --> agents & protocol & platform
@@ -301,8 +305,8 @@ flowchart TD
 ```
 
 The graph is acyclic. `main` is the composition root: it dispatches to `cli`, the hidden `server` and `client` entries, and the
-`--bus-callback` hook entry in `agents`, and the fake provider CLIs a driver session runs in `devtools` (they are `bus` under a
-provider's name). `cli` routes `bus --dev tui` to `devtools`. Both edges exist only in the dev variant.
+`--bus-callback` hook entry in `agents`, and the fake provider CLIs and effect stand-ins a driver session runs in `devtools`
+(they are `bus` under another command's name). `cli` routes `bus --dev tui` to `devtools`. Both edges exist only in the dev variant.
 
 - `messaging` never imports `terminal`, `server` or `client`: it reaches agents through the server's JSON API and the provider hook
   spool. `agents/providers` never imports `messaging`: it takes a room-free `LaunchSpec` and emits neutral provider events.
@@ -397,7 +401,8 @@ the coordinator in its process but only through `BusHandle`.
 
 **devtools**. Test tooling that drives Bus itself, starting with the TUI driver, compiled only with the `dev-tools` feature: a
 release build has none of it. Every driver session is a fresh Bus the
-driver starts in a generated `/tmp` data directory; nothing in `devtools` attaches to an existing session.
+driver starts in a generated `/tmp` data directory; nothing in `devtools` attaches to an existing session. Its fake providers
+follow `agents`' model of each provider (such as which draft lines Claude lifts as images), so the two cannot drift.
 
 **cli**. The `bus` command: session pick, server start and same-build check, client launch, `stop`, and the control commands.
 

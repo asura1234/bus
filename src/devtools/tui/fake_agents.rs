@@ -6,6 +6,10 @@
 //! a process called `claude` (or `codex`, `cursor-agent`). The fake Claude
 //! fires Bus's own hooks from the `--settings` file Bus passes it, draws a
 //! Claude-like prompt box, and answers every prompt with `fake reply: <prompt>`.
+use crate::agents::providers::claude_code::hooks::claude_lifted_images;
+use ratatui::buffer::CellWidth;
+use ratatui::style::Style;
+use ratatui::text::Span;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -15,10 +19,11 @@ use std::process::{Command, Stdio};
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
 const PROVIDER_NAMES: &[&str] = &["claude", "codex", "cursor-agent"];
 
-/// Links each provider name in `bin_dir` to the `bus` binary.
+/// Links each provider name, and each effect stand-in, in `bin_dir` to the
+/// `bus` binary.
 pub(super) fn install(bin_dir: &Path, binary: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(bin_dir)?;
-    for name in PROVIDER_NAMES {
+    for name in PROVIDER_NAMES.iter().chain(super::effects::COMMANDS) {
         let link = bin_dir.join(exe_name(name));
         let _ = std::fs::remove_file(&link);
         link_or_copy(binary, &link)?;
@@ -46,16 +51,18 @@ fn link_or_copy(binary: &Path, link: &Path) -> std::io::Result<()> {
 
 /// The provider a fake should play, when this process is one: invoked under a
 /// provider's name inside a driver session.
-pub(crate) fn fake_provider(argv0: &str) -> Option<&'static str> {
-    std::env::var_os(FAKE_AGENT_ENV)?;
-    let name = Path::new(argv0).file_stem()?.to_str()?;
-    PROVIDER_NAMES
-        .iter()
-        .copied()
-        .find(|provider| *provider == name)
+pub(super) fn fake_provider(argv0: &str) -> Option<&'static str> {
+    stand_in(argv0, PROVIDER_NAMES)
 }
 
-pub(crate) fn run(provider: &str, args: &[String]) -> i32 {
+/// The name of `names` this process runs under, inside a driver session only.
+pub(super) fn stand_in(argv0: &str, names: &[&'static str]) -> Option<&'static str> {
+    std::env::var_os(FAKE_AGENT_ENV)?;
+    let name = Path::new(argv0).file_stem()?.to_str()?;
+    names.iter().copied().find(|candidate| *candidate == name)
+}
+
+pub(super) fn run(provider: &str, args: &[String]) -> i32 {
     if args.iter().any(|a| a == "--version" || a == "-v") {
         let _ = writeln!(std::io::stdout(), "0.0.0 (bus tui fake {provider})");
         return 0;
@@ -88,6 +95,8 @@ struct FakeAgent {
     hooks: Value,
     session: String,
     turns: u64,
+    /// Images attached so far; Claude numbers `[Image #N]` across a session.
+    images: usize,
 }
 
 impl FakeAgent {
@@ -97,6 +106,7 @@ impl FakeAgent {
             hooks,
             session: pseudo_uuid(),
             turns: 0,
+            images: 0,
         }
     }
 
@@ -132,30 +142,20 @@ impl FakeAgent {
         self.hook("SessionStart", json!({"source": "startup"}));
     }
 
-    /// Draws an empty prompt box under the transcript and remembers where its
-    /// first line starts, so a draft can be redrawn in place.
+    /// Draws an empty prompt box under the transcript.
     fn draw_prompt(&self, draft: &str) {
         let rule = "─".repeat(60);
         let mut out = std::io::stdout();
-        let _ = write!(out, "\r\n{rule}\r\n\x1b7");
+        let _ = write!(out, "\r\n{rule}\r\n");
         let _ = out.flush();
         self.redraw(draft);
     }
 
-    /// Redraws the prompt line with the draft. Continuation lines are
-    /// indented under the `❯`, as Claude Code draws them.
     fn redraw(&self, draft: &str) {
-        let lines = draft.split('\n').count();
-        let rule = "─".repeat(60);
+        let (shown, _) = lift_images(draft, self.images);
+        let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
         let mut out = std::io::stdout();
-        let _ = write!(
-            out,
-            "\x1b8\x1b[J❯ {}\r\n{rule}\r\n  ? for shortcuts · fake {}\x1b[{}A\r\x1b[{}C",
-            draft.replace('\n', "\r\n  "),
-            self.provider,
-            1 + lines,
-            2 + draft.rsplit('\n').next().unwrap_or("").chars().count()
-        );
+        let _ = write!(out, "{}", prompt_box(&shown, &self.provider, cols));
         let _ = out.flush();
     }
 
@@ -163,8 +163,7 @@ impl FakeAgent {
         self.turns += 1;
         let turn = format!("{}-{}", self.session, self.turns);
         let mut out = std::io::stdout();
-        // Replace the box with the submitted prompt, as Claude Code does.
-        let _ = write!(out, "\x1b8\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "));
+        let _ = write!(out, "{}", submitted(prompt));
         let _ = out.flush();
         self.hook(
             "UserPromptSubmit",
@@ -194,6 +193,7 @@ impl FakeAgent {
                 Ok(count) => count,
             };
             pending.extend_from_slice(&buffer[..count]);
+
             for event in drain_input(&mut pending) {
                 match event {
                     Input::Text(text) => {
@@ -210,7 +210,9 @@ impl FakeAgent {
                         self.redraw(&draft);
                     }
                     Input::Enter if !draft.trim().is_empty() => {
-                        let prompt = std::mem::take(&mut draft);
+                        let (prompt, images) =
+                            lift_images(&std::mem::take(&mut draft), self.images);
+                        self.images += images;
                         self.submit(&prompt);
                     }
                     Input::Enter => {}
@@ -223,7 +225,7 @@ impl FakeAgent {
 
 /// Empties the draft's last line, or when it is empty already, joins it to
 /// the line before, so repeated kills clear a multi-line draft.
-fn kill_line(draft: &mut String) {
+pub(super) fn kill_line(draft: &mut String) {
     match draft.rfind('\n') {
         Some(at) if at + 1 == draft.len() => {
             draft.pop();
@@ -231,6 +233,67 @@ fn kill_line(draft: &mut String) {
         Some(at) => draft.truncate(at + 1),
         None => draft.clear(),
     }
+}
+
+/// The prompt box redrawn in place the way Claude Code shows a draft: image
+/// lines already lifted into leading `[Image #N]` chips, continuation lines
+/// indented under the `❯`. It starts and ends with the cursor on the box's
+/// first row: moving relative to the cursor, never to a saved position, keeps
+/// the box in place when drawing it scrolls a full pane. The move counts the
+/// rows the box takes on a `cols`-wide pane, so lines that wrap count too.
+pub(super) fn prompt_box(shown: &str, provider: &str, cols: u16) -> String {
+    let rule = "─".repeat(60);
+    let hint = format!("  ? for shortcuts · fake {provider}");
+    let rows = |text: &str| screen_rows(text, cols);
+    let draft_rows: usize = shown
+        .split('\n')
+        .map(|line| rows(&format!("❯ {line}")))
+        .sum();
+    format!(
+        "\r\x1b[J❯ {}\r\n{rule}\r\n{hint}\x1b[{}A\r\x1b[{}C",
+        shown.replace('\n', "\r\n  "),
+        draft_rows + rows(&rule) + rows(&hint) - 1,
+        2 + shown.rsplit('\n').next().unwrap_or("").chars().count()
+    )
+}
+
+/// The rows `text` takes on a `cols`-wide pane, counted the way a terminal
+/// wraps: by whole grapheme clusters (a joined emoji is one two-cell
+/// cluster), and a wide one that would start in the last column leaves it
+/// blank and wraps instead of splitting.
+pub(super) fn screen_rows(text: &str, cols: u16) -> usize {
+    let cols = usize::from(cols.max(1));
+    let (mut rows, mut col) = (1, 0);
+    for grapheme in Span::raw(text).styled_graphemes(Style::default()) {
+        let width = usize::from(grapheme.symbol.cell_width());
+        if col + width > cols {
+            rows += 1;
+            col = 0;
+        }
+        col += width;
+    }
+    rows
+}
+
+/// Replaces the box (the cursor is on its first row) with the submitted
+/// prompt, as Claude Code does.
+pub(super) fn submitted(prompt: &str) -> String {
+    format!("\r\x1b[J> {}\r\n", prompt.replace('\n', "\r\n  "))
+}
+
+/// The draft as Claude Code submits it: lines Bus expects Claude to lift as
+/// images become leading `[Image #N]` chips (numbered after the session's
+/// earlier images), followed by the other non-blank lines. Returns that prompt
+/// and how many images it lifted.
+pub(super) fn lift_images(draft: &str, earlier: usize) -> (String, usize) {
+    let (images, rest) = claude_lifted_images(draft);
+    if images == 0 {
+        return (draft.to_owned(), 0);
+    }
+    let chips: String = (1..=images)
+        .map(|n| format!("[Image #{}]", earlier + n))
+        .collect();
+    (format!("{chips}{rest}"), images)
 }
 
 /// A prompt containing `fake:work N` keeps the fake busy for N seconds (at
