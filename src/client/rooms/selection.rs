@@ -54,12 +54,10 @@ pub(super) fn history_text(lines: &[super::history::Line], start: Point, end: Po
         } else {
             line.text.len()
         };
-        let mut piece = line.text.get(from..to.max(from)).unwrap_or_default();
+        let piece = line.text.get(from..to.max(from)).unwrap_or_default();
         if !first {
             if line.continued {
                 if line.rejoin_space {
-                    // The renderer's continuation indent is layout, not text.
-                    piece = piece.trim_start();
                     text.push(' ');
                 }
             } else {

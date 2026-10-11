@@ -7,7 +7,7 @@ mod widget;
 
 pub use layout::{
     CellRange, CodePolicy, DocumentRow, HeadingPosition, Layout, LayoutError, LayoutOptions,
-    LineLimit, LineLimitError, LinkPosition, TablePolicy, Theme,
+    LineLimit, LineLimitError, LinkPosition, RowBreak, RowWrap, TablePolicy, Theme,
 };
 pub use markdown_model::{Document, HeadingId, LinkId, ParseError};
 use std::sync::Arc;

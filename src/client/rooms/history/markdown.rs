@@ -1,7 +1,9 @@
 //! Markdown message preparation, style preservation and copyable row layout.
 use super::super::render::{display, wrap_ranges};
 use super::{History, Line, MarkdownSource, RowAnchor, Tone};
-use markdown_ratatui::{DocumentRow, LayoutOptions, MarkdownView, Theme, ViewState};
+use markdown_ratatui::{
+    DocumentRow, LayoutOptions, MarkdownView, RowBreak, RowWrap, Theme, ViewState,
+};
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -136,29 +138,32 @@ fn prepared_markdown_lines(
         }
         first += usize::from(height);
     }
-    mark_soft_wraps(&mut lines, width, indent.len());
+    apply_row_breaks(&mut lines, layout.row_breaks(), indent.len());
     Some(lines)
 }
 
-/// Marks which rendered Markdown rows continue a soft-wrapped line. The
-/// renderer keeps no such flag and trims the space at each wrap, so a row
-/// counts as a wrap of the one above when its first word could not have fit
-/// on that row. Copying then rejoins it with one space instead of a line end.
-fn mark_soft_wraps(lines: &mut [Line], width: u16, indent: usize) {
-    use unicode_width::UnicodeWidthStr;
-    for index in 1..lines.len() {
-        let previous = lines[index - 1].text.get(indent..).unwrap_or_default();
-        let current = lines[index]
-            .text
-            .get(indent..)
-            .unwrap_or_default()
-            .trim_start();
-        let first_word = current.split(' ').next().unwrap_or_default();
-        let wrapped = !previous.trim().is_empty()
-            && !first_word.is_empty()
-            && previous.width() + 1 + first_word.width() > usize::from(width);
-        lines[index].continued = wrapped;
-        lines[index].rejoin_space = wrapped;
+/// Copies the renderer's own wrap decisions onto the rows, so a selection
+/// rejoins exactly the rows it wrapped: a split token joins directly, a wrap
+/// at whitespace (trimmed from the row) joins with one space, and the
+/// continuation's list or quote prefix is layout that copying skips.
+fn apply_row_breaks(lines: &mut [Line], breaks: &[RowBreak], indent: usize) {
+    use unicode_width::UnicodeWidthChar;
+    for (line, row) in lines.iter_mut().zip(breaks) {
+        if row.wrap() == RowWrap::HardBreak {
+            continue;
+        }
+        line.continued = true;
+        line.rejoin_space = row.wrap() == RowWrap::ContinuationElidedSep;
+        let mut cells = 0;
+        let prefix = line.text[indent..]
+            .char_indices()
+            .find_map(|(offset, c)| {
+                let found = (cells >= usize::from(row.prefix_width())).then_some(offset);
+                cells += c.width().unwrap_or(0);
+                found
+            })
+            .unwrap_or(line.text.len() - indent);
+        line.copy_from = indent + prefix;
     }
 }
 
@@ -223,7 +228,7 @@ fn line_from_buffer(
         styles,
         thumbnail: None,
         raw_markdown: Some((request, Arc::clone(source))),
-        // Set by `mark_soft_wraps` once every row of the message exists.
+        // Set by `apply_row_breaks` once every row of the message exists.
         continued: false,
         rejoin_space: false,
         copy_from: indent.len(),
