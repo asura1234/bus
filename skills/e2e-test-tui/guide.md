@@ -46,12 +46,13 @@ you saw. You do not decide what the product should do, and you never change the 
   them; `fixture clipboard-image` then Ctrl+V pastes an image. Bus stores an attached image
   under a content-hash name (`paste-<hash>.png`), so the original file name never shows for
   images: assert `[paste-`, the delivered `files`, or the picture itself.
-- Fixtures: `fixture image --pattern quadrants|red-diagonal|blue-circle --name F`,
-  `fixture file --name F [--text T]`; files land in the session's work dir
+- Fixtures: `fixture image --pattern quadrants|red-diagonal|blue-circle --file F`,
+  `fixture file --file F [--text T]`; files land in the session's work dir
   (`/tmp/bus-tui/<name>/work`), which is also the scratch workspace for agents' PWD.
 - Notifications: Bus rooms never show desktop notifications. A new agent reply or post in a
   room whose sound is on plays its sound, recorded as a `sound` effect (`target` is the played
   file: a system sound path, or a temp file for the default ding). Focus does not gate it.
+- Hover details (a chip's full path): `hover --hit file:NAME` or `--text`, then read the screen.
 - Opens: links and files Bus opens are `open` effects with the exact target; nothing opens.
 - Real screenshots need macOS, Ghostty in /Applications and Screen Recording permission; a
   window flashes briefly. If the grid does not fit the screen the driver says so; resize the
