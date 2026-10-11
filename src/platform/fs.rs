@@ -10,6 +10,30 @@ pub(crate) fn create_private_directory(path: &Path) -> io::Result<()> {
     super::create_remote_private_dir(path)
 }
 
+/// Extensions whose default "open" runs code: apps, scripts, installers and
+/// shortcuts.
+const LAUNCHERS: &[&str] = &[
+    "app", "command", "tool", "sh", "exe", "bat", "cmd", "com", "ps1", "msi", "lnk", "scr", "jar",
+    "desktop", "appimage",
+];
+
+/// Whether opening `path` in its default app would run it: a launcher
+/// extension, or a regular file with an execute bit.
+pub(crate) fn launches_code(path: &Path) -> bool {
+    let launcher = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| LAUNCHERS.contains(&extension.to_ascii_lowercase().as_str()));
+    #[cfg(unix)]
+    let executable = std::fs::metadata(path).is_ok_and(|metadata| {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    });
+    #[cfg(not(unix))]
+    let executable = false;
+    launcher || executable
+}
+
 /// Locks an existing file. Creation and path validation belong to the caller.
 pub(crate) fn lock_file(path: &Path) -> io::Result<File> {
     let file = std::fs::OpenOptions::new()

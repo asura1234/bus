@@ -89,3 +89,38 @@ fn private_files_and_directories_are_owner_only() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn launchers_and_executables_are_revealed_not_opened() {
+    let dir = temp_dir("launches");
+    let document = dir.join("notes.md");
+    std::fs::write(&document, "x").unwrap();
+    let bundle = dir.join("Tool.app");
+    std::fs::create_dir_all(&bundle).unwrap();
+    let folder = dir.join("docs");
+    std::fs::create_dir_all(&folder).unwrap();
+    assert!(!launches_code(&document), "a document opens");
+    assert!(!launches_code(&folder), "a folder opens");
+    assert!(launches_code(&bundle), "an app bundle runs");
+    for name in [
+        "setup.EXE",
+        "run.command",
+        "x.ps1",
+        "a.desktop",
+        "b.AppImage",
+        "c.lnk",
+    ] {
+        assert!(launches_code(&dir.join(name)), "{name}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("build");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(launches_code(&script), "an executable file runs");
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!launches_code(&folder), "a searchable folder still opens");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

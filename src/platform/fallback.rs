@@ -157,6 +157,14 @@ pub fn open_url(_url: &str) -> std::io::Result<Option<std::process::Child>> {
 }
 
 /// Unsupported platform stub.
+pub fn reveal_path(_path: &std::path::Path) -> std::io::Result<Option<std::process::Child>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "revealing files is not supported on this platform",
+    ))
+}
+
+/// Unsupported platform stub.
 pub fn read_clipboard_image(_max_bytes: usize) -> Option<ClipboardImage> {
     None
 }

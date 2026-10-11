@@ -107,6 +107,17 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
     }
 }
 
+/// Shows `path` selected in File Explorer without opening it.
+pub fn reveal_path(path: &std::path::Path) -> std::io::Result<Option<std::process::Child>> {
+    use std::os::windows::process::CommandExt;
+    // Explorer parses its own command line: the path is quoted inside the
+    // `/select,` argument, never around it. Windows paths cannot hold `"`.
+    std::process::Command::new("explorer")
+        .raw_arg(format!("/select,\"{}\"", path.display()))
+        .spawn()
+        .map(Some)
+}
+
 pub fn read_clipboard_image(max_bytes: usize) -> Option<ClipboardImage> {
     for attempt in 0..10 {
         if unsafe { OpenClipboard(null_mut()) } != 0 {
