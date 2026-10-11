@@ -8,6 +8,12 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   started the turn (the developer, a background command exiting, a worker's
   message). Bus posts that message to MASTER chat as yours. Terminal-only output
   does not count. *Why:* the developer reads MASTER, not your terminal.
+- **Write your chat messages in Markdown.** Every message you post, in MASTER
+  or a room, uses Markdown formatting. *Why:* structure and links make a
+  message faster for the developer to read and act on.
+  - Link online reference material with a Markdown hyperlink.
+  - Give a pull request or merge request as a hyperlink plus its title, e.g.
+    [#24 split control commands into an agent tier and a dev tier](https://github.com/asura1234/bus/pull/24).
 - **Dispatch every task with `bus send --async` in the background.** Run
   `bus send --room ROOM --as YOUR_NAME --to AGENT --async --text "..."` as a
   background tool call (Claude Code: Bash with `run_in_background`; Cursor: a
