@@ -277,7 +277,7 @@ or 777 in Bus's output). `since_last_input` is the index the next
 Every copy Bus made in this session (OSC 52).
 
 ### fixture
-`fixture image|file|clipboard-image [--file FILE] [--text TEXT] [--pattern P]`
+`fixture image [--file FILE] [--pattern P] | file [--file FILE] [--text TEXT] | clipboard-image [--pattern P]`
 
 Writes a file for the session to send and prints its path: `image` is a
 160x100 PNG easy to recognise in a screenshot, by `--pattern`: `quadrants`

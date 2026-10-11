@@ -10,6 +10,8 @@ const QUADRANTS: [[u8; 3]; 4] = [[220, 40, 40], [40, 90, 220], [230, 210, 40], [
 const IMAGE_W: u32 = 160;
 const IMAGE_H: u32 = 100;
 
+pub(super) const USAGE: &str = "usage: fixture image [--file FILE] [--pattern P] | file [--file FILE] [--text TEXT] | clipboard-image [--pattern P]";
+
 pub(super) fn create(
     paths: &SessionPaths,
     kind: &str,
@@ -17,6 +19,22 @@ pub(super) fn create(
     text: Option<String>,
     pattern: Option<String>,
 ) -> Result<Value, String> {
+    // Each kind takes only its own flags, so a misplaced one is never ignored.
+    let (takes_file, takes_text, takes_pattern) = match kind {
+        "image" => (true, false, true),
+        "file" => (true, true, false),
+        "clipboard-image" => (false, false, true),
+        _ => (true, true, true),
+    };
+    for (given, takes, flag) in [
+        (name.is_some(), takes_file, "--file"),
+        (text.is_some(), takes_text, "--text"),
+        (pattern.is_some(), takes_pattern, "--pattern"),
+    ] {
+        if given && !takes {
+            return Err(format!("{kind} takes no {flag}; {USAGE}"));
+        }
+    }
     let pattern = Pattern::parse(pattern.as_deref())?;
     if name
         .as_deref()
@@ -32,9 +50,6 @@ pub(super) fn create(
             (path.clone(), write_image(&path, pattern)?)
         }
         "clipboard-image" => {
-            if name.is_some() {
-                return Err("clipboard-image takes no --file".into());
-            }
             let path = paths.clipboard_image();
             (path.clone(), write_image(&path, pattern)?)
         }
