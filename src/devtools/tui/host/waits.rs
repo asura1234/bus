@@ -1,6 +1,7 @@
 //! Host waits: each polls the screen (or the effect log) until its condition
 //! holds or its timeout passes, and explains a timeout with what it saw.
 use super::actions::{excerpt, needle};
+use super::visual::Hit;
 use super::{failure, screen, Command, Grid, Host, Target};
 use crate::devtools::tui::effects;
 use crate::devtools::tui::protocol::{Region, Style};
@@ -166,9 +167,10 @@ impl Host {
     fn wait_style(&self, target: &Target, style: &Style, timeout: Duration) -> Value {
         let mut seen = Value::Null;
         let mut last_error = None;
+        let mut hit = None;
         let response = self.poll(
             timeout,
-            |grid| match self.target_cells(grid, target) {
+            |grid| match self.target_cells(grid, target, &mut hit) {
                 Ok(cells) => {
                     let wrong: Vec<&Cell> = cells
                         .iter()
@@ -204,36 +206,44 @@ impl Host {
     fn wait_effect(&self, kind: &str, target: Option<&str>, all: bool, timeout: Duration) -> Value {
         let log = self.paths.effects_log();
         let from = if all { 0 } else { self.effects_mark.get() };
-        let started = Instant::now();
-        loop {
-            let recorded = effects::read(&log);
-            if let Some(found) = recorded
-                .iter()
-                .skip(from)
-                .find(|effect| effects::matches(effect, kind, target))
-            {
-                return json!({"ok": true, "effect": found,
-                              "waited_ms": started.elapsed().as_millis() as u64});
-            }
-            if started.elapsed() >= timeout {
-                let mut response = failure(
-                    "timeout",
-                    format!(
-                        "no {kind} effect{} {} within {} ms",
-                        target.map(|t| format!(" for {t:?}")).unwrap_or_default(),
-                        if all { "ever" } else { "since the last input" },
-                        timeout.as_millis()
-                    ),
-                );
-                response["recent"] = json!(recorded.iter().rev().take(10).collect::<Vec<_>>());
-                return response;
-            }
-            std::thread::sleep(Duration::from_millis(50));
+        let mut recorded = Vec::new();
+        let response = self.poll(
+            timeout,
+            |_| {
+                recorded = effects::read(&log);
+                recorded
+                    .iter()
+                    .skip(from)
+                    .find(|effect| effects::matches(effect, kind, target))
+                    .map(|found| json!({"ok": true, "effect": found}))
+            },
+            |_| Value::Null,
+        );
+        if !response.is_null() {
+            return response;
         }
+        let mut response = failure(
+            "timeout",
+            format!(
+                "no {kind} effect{} {} within {} ms",
+                target.map(|t| format!(" for {t:?}")).unwrap_or_default(),
+                if all { "ever" } else { "since the last input" },
+                timeout.as_millis()
+            ),
+        );
+        response["recent"] = json!(recorded.iter().rev().take(10).collect::<Vec<_>>());
+        response
     }
 
     /// The cells a target covers: one cell, a text match, or a hit's region.
-    pub(super) fn target_cells(&self, grid: &Grid, target: &Target) -> Result<Vec<Cell>, Value> {
+    /// A hit is looked up through `ui hits` until found, then `resolved`
+    /// keeps it, so a wait does not query Bus on every poll.
+    fn target_cells(
+        &self,
+        grid: &Grid,
+        target: &Target,
+        resolved: &mut Option<Hit>,
+    ) -> Result<Vec<Cell>, Value> {
         let (row, col, width, height) = match target {
             Target::Cell { row, col } => (*row, *col, 1, 1),
             Target::Text {
@@ -250,7 +260,10 @@ impl Host {
                 (found.row, found.col, found.width, 1)
             }
             Target::Hit { name } => {
-                let hit = self.find_hit(name)?;
+                let hit = match resolved {
+                    Some(hit) => hit,
+                    None => resolved.insert(self.find_hit(name)?),
+                };
                 (hit.row, hit.col, hit.width, hit.height)
             }
         };
@@ -267,7 +280,7 @@ impl Host {
     }
 }
 
-pub(super) fn region_cells(grid: &Grid, region: Region) -> Vec<Vec<Cell>> {
+fn region_cells(grid: &Grid, region: Region) -> Vec<Vec<Cell>> {
     let last_row = grid.rows.saturating_sub(1);
     let last_col = grid.cols.saturating_sub(1);
     let (first_row, end_row) = region.rows.unwrap_or((0, last_row));
@@ -282,7 +295,7 @@ pub(super) fn region_cells(grid: &Grid, region: Region) -> Vec<Vec<Cell>> {
         .collect()
 }
 
-pub(super) fn style_holds(cell: &Cell, style: &Style) -> bool {
+fn style_holds(cell: &Cell, style: &Style) -> bool {
     let same = |want: &Option<String>, have: &str| {
         want.as_deref()
             .is_none_or(|want| want.eq_ignore_ascii_case(have))

@@ -82,14 +82,7 @@ impl Host {
         hits.iter()
             .find(|hit| hit.name == name)
             .cloned()
-            .ok_or_else(|| {
-                let mut names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
-                names.dedup();
-                failure(
-                    "not_found",
-                    format!("no hit named {name:?}; visible: {}", names.join(", ")),
-                )
-            })
+            .ok_or_else(|| no_hit(name, &hits))
     }
 
     /// A cell of the named hit that no later hit covers (Bus takes the
@@ -99,7 +92,7 @@ impl Host {
         let index = hits
             .iter()
             .position(|hit| hit.name == name)
-            .ok_or_else(|| self.find_hit(name).err().unwrap_or(Value::Null))?;
+            .ok_or_else(|| no_hit(name, &hits))?;
         let hit = &hits[index];
         let later = &hits[index + 1..];
         let middle = (hit.row + hit.height / 2, hit.col + hit.width / 2);
@@ -166,6 +159,16 @@ impl Host {
     }
 }
 
+/// The failure for a name none of `hits` has, listing the names it does have.
+pub(super) fn no_hit(name: &str, hits: &[Hit]) -> Value {
+    let mut names: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
+    names.dedup();
+    failure(
+        "not_found",
+        format!("no hit named {name:?}; visible: {}", names.join(", ")),
+    )
+}
+
 /// The text a hit covers, row by row.
 fn hit_text(grid: &Grid, hit: &Hit) -> String {
     (hit.row..hit.row + hit.height)
@@ -184,3 +187,7 @@ fn hit_text(grid: &Grid, hit: &Hit) -> String {
         .collect::<Vec<_>>()
         .join(" / ")
 }
+
+#[cfg(test)]
+#[path = "../tests/visual_test.rs"]
+mod tests;

@@ -1,4 +1,4 @@
-//! Host verbs: reading the screen, sending input, waiting.
+//! Host verbs: reading the screen and sending input; waits live in waits.rs.
 use super::{
     failure, input, pty_size, screen, Button, Command, Grid, Host, Mods, Needle, Target,
     DOUBLE_CLICK_GAP, FRAME_WAIT, SETTLE_MAX, SETTLE_QUIET,
