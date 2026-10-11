@@ -20,7 +20,7 @@ pub(super) fn create(
         .as_deref()
         .is_some_and(|n| n.is_empty() || n.starts_with('.') || n.contains(['/', '\\']))
     {
-        return Err("--name must be a plain file name".into());
+        return Err("--file must be a plain file name".into());
     }
     let (path, size) = match kind {
         "image" => {
@@ -31,7 +31,7 @@ pub(super) fn create(
         }
         "clipboard-image" => {
             if name.is_some() {
-                return Err("clipboard-image takes no --name".into());
+                return Err("clipboard-image takes no --file".into());
             }
             let path = paths.clipboard_image();
             (path.clone(), write_image(&path)?)

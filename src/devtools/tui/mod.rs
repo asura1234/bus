@@ -719,12 +719,13 @@ fn run_host(args: &[String]) -> i32 {
     }
 }
 
-/// `fixture KIND [--name FILE] [--text TEXT]`: files for the session to send.
+/// `fixture KIND [--file FILE] [--text TEXT]`: files for the session to send.
+/// The file name has its own flag because `--name` selects the session.
 fn fixture(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
     let kind = parsed
         .positional()
-        .ok_or("usage: fixture image|file|clipboard-image [--name FILE] [--text TEXT]")?;
-    let file = parsed.take_value("--name");
+        .ok_or("usage: fixture image|file|clipboard-image [--file FILE] [--text TEXT]")?;
+    let file = parsed.take_value("--file");
     let text = parsed.take_value("--text");
     parsed.finish()?;
     let paths = paths(name);

@@ -593,3 +593,21 @@ fn named_hits_effects_fixtures_and_screenshots_work_on_a_scratch_bus() {
     let bytes = std::fs::read(path).unwrap();
     assert!(bytes.starts_with(b"\x89PNG"), "{path} is a PNG");
 }
+
+#[test]
+fn a_fixture_file_name_leaves_the_selected_session_alone() {
+    let session = Session::start("fixture");
+    let output = bus(&session.0)
+        .args(["--dev", "tui", "fixture", "file", "--file", "notes.txt"])
+        .env("BUS_TUI_SESSION", &session.0)
+        .output()
+        .expect("create a named fixture in the selected scratch session");
+    let (code, fixture) = parse(output);
+    assert_eq!(code, 0, "named fixture failed: {fixture}");
+    assert_eq!(
+        PathBuf::from(fixture["path"].as_str().unwrap())
+            .file_name()
+            .unwrap(),
+        "notes.txt"
+    );
+}
