@@ -7,11 +7,13 @@
 //! fires Bus's own hooks from the `--settings` file Bus passes it, draws a
 //! Claude-like prompt box, and answers every prompt with `fake reply: <prompt>`.
 use crate::agents::providers::claude_code::hooks::claude_lifted_images;
+use ratatui::buffer::CellWidth;
+use ratatui::style::Style;
+use ratatui::text::Span;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use unicode_width::UnicodeWidthChar;
 
 /// Set in the scratch Bus's environment; the fake only runs where it is set.
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
@@ -255,13 +257,15 @@ pub(super) fn prompt_box(shown: &str, provider: &str, cols: u16) -> String {
     )
 }
 
-/// The rows `text` takes on a `cols`-wide pane. A terminal never splits a
-/// wide character across rows: one that would start in the last column
-/// leaves it blank and wraps, so the rows are counted the way it wraps.
-fn screen_rows(text: &str, cols: u16) -> usize {
+/// The rows `text` takes on a `cols`-wide pane, counted the way a terminal
+/// wraps: by whole grapheme clusters (a joined emoji is one two-cell
+/// cluster), and a wide one that would start in the last column leaves it
+/// blank and wraps instead of splitting.
+pub(super) fn screen_rows(text: &str, cols: u16) -> usize {
     let cols = usize::from(cols.max(1));
     let (mut rows, mut col) = (1, 0);
-    for width in text.chars().filter_map(UnicodeWidthChar::width) {
+    for grapheme in Span::raw(text).styled_graphemes(Style::default()) {
+        let width = usize::from(grapheme.symbol.cell_width());
         if col + width > cols {
             rows += 1;
             col = 0;

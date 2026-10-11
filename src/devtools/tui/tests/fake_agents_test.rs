@@ -309,3 +309,34 @@ fn a_wrapped_draft_with_wide_characters_leaves_no_stale_prompt_box() {
         "after submit: {after:#?}"
     );
 }
+
+#[test]
+fn an_emoji_grapheme_at_the_wrap_boundary_preserves_the_composer_rule() {
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(80, 12).unwrap();
+    screen.feed(b"transcript sentinel\r\n");
+    screen.feed(format!("\r\n{}\r\n", "─".repeat(60)).as_bytes());
+    screen.feed(prompt_box("", "claude", 80).as_bytes());
+    // The joined emoji occupies two cells in Ghostty's default grapheme mode.
+    let draft = format!("{}👩‍💻", "x".repeat(76));
+    screen.feed(prompt_box(&draft, "claude", 80).as_bytes());
+    screen.feed(prompt_box(&format!("{draft}y"), "claude", 80).as_bytes());
+    let visible: Vec<String> = screen
+        .grid()
+        .cells
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .map(|row| row.trim_end().to_owned())
+        .collect();
+    let prompt_row = visible.iter().position(|row| row.starts_with('❯')).unwrap();
+    assert!(
+        prompt_row > 0 && visible[prompt_row - 1].starts_with('─'),
+        "the composer reader requires its top rule to survive redraw: {visible:#?}"
+    );
+    assert!(visible.iter().any(|row| row == "transcript sentinel"));
+}
