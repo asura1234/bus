@@ -430,7 +430,7 @@ fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
         "text": required(args, "text")?,
         "files": args.get_many::<String>("file").map(|values| values.cloned().collect::<Vec<_>>()).unwrap_or_default(),
     });
-    // Omitted rather than defaulted so Human sends keep their request shape.
+    // Omitted rather than defaulted so the developer's sends keep their request shape.
     if args.contains_id("as") {
         params["as"] = json!(required(args, "as")?);
     }
@@ -441,9 +441,9 @@ fn parse_send(args: &ArgMatches) -> Result<(Value, bool), String> {
     if follow
         && recipients
             .iter()
-            .any(|r| r.eq_ignore_ascii_case(crate::messaging::model::HUMAN_RECIPIENT))
+            .any(|r| r.eq_ignore_ascii_case(crate::messaging::model::DEVELOPER_RECIPIENT))
     {
-        return Err("--async waits for agents; a message to the human has none".into());
+        return Err("--async waits for agents; a message to the developer has none".into());
     }
     Ok((params, follow))
 }

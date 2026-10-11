@@ -67,7 +67,7 @@ enum ReplyMatch {
 }
 
 /// Cursor's own wake after a background shell, not a Bus message.
-/// The prompt is the short task notice itself, not a human request that
+/// The prompt is the short task notice itself, not a developer request that
 /// happens to quote one.
 pub(crate) fn is_background_task_notice(prompt: &str) -> bool {
     let text = notice_body(prompt);
@@ -80,7 +80,7 @@ pub(crate) fn is_background_task_notice(prompt: &str) -> bool {
 
 fn notice_body(prompt: &str) -> &str {
     let mut text = prompt.trim();
-    // Only Cursor's leading wrapper; a human message may quote one mid-text.
+    // Only Cursor's leading wrapper; a developer message may quote one mid-text.
     if let Some((_, rest)) = text
         .strip_prefix("<timestamp>")
         .and_then(|rest| rest.split_once("</timestamp>"))

@@ -852,7 +852,7 @@ fn wait_exits_early_when_a_recipient_stalls() {
 }
 
 #[test]
-fn send_async_rejects_a_message_to_the_human() {
+fn send_async_rejects_a_message_to_the_developer() {
     let parsed = command(&[
         "send", "--room", "master", "--to", "human", "--text", "x", "--async",
     ]);

@@ -96,11 +96,11 @@ impl Worker {
             .map(|v| v.as_str().ok_or("Recipient must be a name or ID"))
             .collect::<Result<Vec<_>, _>>()?;
         let files = attachment_files(p)?;
-        let to_human = selectors
+        let to_developer = selectors
             .iter()
-            .any(|s| s.eq_ignore_ascii_case(crate::messaging::model::HUMAN_RECIPIENT));
-        if to_human {
-            return self.dev_send_to_human(p, room, author, selectors.len(), files);
+            .any(|s| s.eq_ignore_ascii_case(crate::messaging::model::DEVELOPER_RECIPIENT));
+        if to_developer {
+            return self.dev_send_to_developer(p, room, author, selectors.len(), files);
         }
         let recipients: AgentRecipients = if selectors == ["all"] {
             // An agent's broadcast goes to everyone else in the room.
@@ -137,7 +137,7 @@ impl Worker {
                     files,
                     recipient_ids: recipients,
                 },
-                author.map_or(Author::Human, Author::Agent),
+                author.map_or(Author::Developer, Author::Agent),
                 crate::messaging::storage::io::now_ms(),
                 p.get("queue").and_then(Value::as_bool).unwrap_or(false),
             )
@@ -159,9 +159,9 @@ impl Worker {
         Ok(json!({"message_id":message,"request_ids":ids,"stage":"queued"}))
     }
 
-    /// `send --to human`: an agent's message to the Human in MASTER. It is
+    /// `send --to human`: an agent's message to the developer in MASTER. It is
     /// delivered to no agent, so it has no requests and nothing to wait for.
-    pub(in crate::messaging::coordinator) fn dev_send_to_human(
+    pub(in crate::messaging::coordinator) fn dev_send_to_developer(
         &mut self,
         p: &Value,
         room: RoomId,
@@ -172,9 +172,9 @@ impl Worker {
         if selector_count != 1 {
             return Err("--to human cannot be combined with agent recipients".into());
         }
-        let author =
-            author.ok_or("--to human requires --as AGENT: the human cannot message themselves")?;
-        // Reports belong where the Human reads them all: one MASTER chat.
+        let author = author
+            .ok_or("--to human requires --as AGENT: the developer cannot message themselves")?;
+        // Reports belong where the developer reads them all: one MASTER chat.
         if self.state.room(room).map(|r| r.kind) != Some(RoomKind::Master) {
             return Err("--to human posts only in the MASTER room; use --room master".into());
         }
@@ -183,7 +183,7 @@ impl Worker {
         }
         let mut state = self.state.clone();
         let message = state
-            .post_to_human(
+            .post_to_developer(
                 room,
                 author,
                 optional_text(p, "text")?.unwrap_or_default().into(),

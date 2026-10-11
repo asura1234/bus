@@ -96,7 +96,7 @@ impl Fixture {
                     files: Vec::new(),
                     recipient_ids: [self.agent].into(),
                 },
-                Author::Human,
+                Author::Developer,
                 self.now,
                 queue_only,
             )
@@ -376,9 +376,9 @@ fn messages_that_waited_for_an_unavailable_agent_are_coalesced_into_one_prompt()
     let typed = fixture.typed();
     assert_eq!(typed.len(), 1);
     let text = &typed[0].0;
-    assert!(text.starts_with("[1/2 from the human at "), "{text}");
+    assert!(text.starts_with("[1/2 from the developer at "), "{text}");
     assert!(
-        text.contains("]\nfirst\n\n[2/2 from the human at "),
+        text.contains("]\nfirst\n\n[2/2 from the developer at "),
         "{text}"
     );
     assert!(text.ends_with("]\nsecond"), "{text}");

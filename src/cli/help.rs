@@ -65,7 +65,7 @@ Bus messages a room's orchestrator about each dialog, and
 wait stops early with agent_waiting_on_dialog when a recipient shows one.
 send --as records the message as written by that room agent or the room's MASTER
 orchestrator; --to all then skips it.
-send --room master --as AGENT --to human posts a MASTER agent's message to the human
+send --room master --as AGENT --to human posts a MASTER agent's message to the developer
 in MASTER chat, with no agent recipient and nothing to wait for; it rings like a reply.
 agent clear starts a fresh provider context in an idle agent's terminal (/clear for claude
 and codex, /new-chat for cursor) and keeps the agent bound to the new provider session.

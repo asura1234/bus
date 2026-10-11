@@ -756,7 +756,7 @@ fn an_idle_codex_approval_dialog_keeps_the_recipient_turn_unfinished() {
 }
 
 #[test]
-fn human_request_quoting_a_cursor_task_notice_keeps_its_final_reply() {
+fn developer_request_quoting_a_cursor_task_notice_keeps_its_final_reply() {
     use crate::messaging::model::{
         AgentRuntimeIdentity, BusState, CallbackDisposition, CallbackEventKind, Provider,
         ProviderCallback, RequestPhase, RuntimeStatus, SubmissionOutcome,
@@ -795,7 +795,7 @@ fn human_request_quoting_a_cursor_task_notice_keeps_its_final_reply() {
         )
         .unwrap();
     let started = state.accept_callback(ProviderCallback {
-        callback_id: "human-start".into(),
+        callback_id: "developer-start".into(),
         sequence: 11,
         occurred_at_ms: 11,
         agent_id: agent,
@@ -807,7 +807,7 @@ fn human_request_quoting_a_cursor_task_notice_keeps_its_final_reply() {
         kind: CallbackEventKind::PromptStarted,
     });
     let finished = state.accept_callback(ProviderCallback::final_event(
-        "human-final",
+        "developer-final",
         12,
         agent,
         "launch-cursor",

@@ -131,7 +131,7 @@ impl Fixture {
             .unwrap_or_else(|| request.prompt.rendered_payload())
     }
 
-    /// The orchestrator's messages to the Human in MASTER.
+    /// The orchestrator's messages to the developer in MASTER.
     fn reports(&self) -> Vec<String> {
         self.worker
             .state
@@ -178,10 +178,10 @@ fn an_unprompted_orchestrator_turn_is_reported_in_master_once() {
 }
 
 #[test]
-fn a_reply_to_a_human_message_in_master_is_not_reported_again() {
+fn a_reply_to_a_developer_message_in_master_is_not_reported_again() {
     let mut bus = fixture(Provider::ClaudeCode);
     let (master, orchestrator) = (bus.master, bus.orchestrator);
-    let typed = bus.deliver(master, Author::Human, orchestrator, "How is the PR?");
+    let typed = bus.deliver(master, Author::Developer, orchestrator, "How is the PR?");
     bus.claude_turn(
         orchestrator,
         "asked",
@@ -189,7 +189,7 @@ fn a_reply_to_a_human_message_in_master_is_not_reported_again() {
         "Review is done; merging next.",
     );
     // The final was taken as the reply, which already shows in MASTER under
-    // the human's message.
+    // the developer's message.
     let request = bus
         .worker
         .state
@@ -224,13 +224,13 @@ fn a_turn_that_answers_a_worker_is_reported_in_master() {
 }
 
 #[test]
-fn a_report_the_orchestrator_already_sent_to_the_human_is_not_posted_twice() {
+fn a_report_the_orchestrator_already_sent_to_the_developer_is_not_posted_twice() {
     let mut bus = fixture(Provider::ClaudeCode);
     let (master, orchestrator) = (bus.master, bus.orchestrator);
     let mut state = bus.worker.state.clone();
     // What `bus send --to human` does mid-turn.
     state
-        .post_to_human(master, orchestrator, "Merged PR 12.".into(), Vec::new(), 3)
+        .post_to_developer(master, orchestrator, "Merged PR 12.".into(), Vec::new(), 3)
         .unwrap();
     bus.worker.save(state).unwrap();
     bus.claude_turn(orchestrator, "own", "<task-notification>", "Merged PR 12.");
@@ -323,7 +323,7 @@ fn a_later_turn_that_already_sent_its_report_is_not_posted_twice() {
     let mut state = bus.worker.state.clone();
     // What `bus send --to human` does during the next turn.
     state
-        .post_to_human(master, orchestrator, "Merged PR 13.".into(), Vec::new(), 3)
+        .post_to_developer(master, orchestrator, "Merged PR 13.".into(), Vec::new(), 3)
         .unwrap();
     bus.worker.save(state).unwrap();
     bus.claude_turn(
@@ -341,7 +341,7 @@ fn a_message_an_earlier_turn_sent_does_not_absorb_a_later_turns_report() {
     let (master, orchestrator) = (bus.master, bus.orchestrator);
     let mut state = bus.worker.state.clone();
     state
-        .post_to_human(master, orchestrator, "Gate passed.".into(), Vec::new(), 3)
+        .post_to_developer(master, orchestrator, "Gate passed.".into(), Vec::new(), 3)
         .unwrap();
     bus.worker.save(state).unwrap();
     bus.claude_turn(orchestrator, "first", "<task-notification>", "Gate passed.");

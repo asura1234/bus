@@ -208,7 +208,7 @@ fn author_names_match_and_master_is_searchable() {
         .unwrap();
     snapshot
         .state
-        .post_to_human(
+        .post_to_developer(
             master,
             orchestrator,
             "Gate passed on PR 5.".into(),

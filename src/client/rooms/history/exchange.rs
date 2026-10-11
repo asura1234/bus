@@ -58,7 +58,7 @@ impl History {
                 .requests
                 .insert(request.agent_id, request);
         }
-        // Bus notices for the Human read like messages addressed to nobody.
+        // Bus notices for the developer read like messages addressed to nobody.
         for prompt in &room.notices {
             exchanges.insert(
                 (prompt.submitted_at_ms, prompt.id.0),
@@ -342,7 +342,7 @@ fn wrap_header(
 // width, or age label requires sorting and wrapping those immutable bodies.
 fn participant_label(state: &BusState, participant: &Author) -> String {
     match participant {
-        Author::Human => "You".into(),
+        Author::Developer => "You".into(),
         Author::Bus => "Bus".into(),
         Author::Agent(id) => state
             .agent(*id)
@@ -354,7 +354,7 @@ fn participant_label(state: &BusState, participant: &Author) -> String {
 fn participant_tone(participant: &Author) -> Tone {
     match participant {
         Author::Agent(id) => Tone::Agent(*id),
-        Author::Human => Tone::You,
+        Author::Developer => Tone::You,
         Author::Bus => Tone::Muted,
     }
 }
