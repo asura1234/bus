@@ -70,14 +70,26 @@ pub(super) fn write_png(grid: &Grid, path: &Path) -> Result<(usize, usize), Stri
         usize::from(grid.rows) * CELL_H,
     );
     let mut glyphs: HashMap<char, (fontdue::Metrics, Vec<u8>)> = HashMap::new();
+    // Backgrounds first: a glyph that descends below its cell (`_`, `g`) must
+    // not be painted over by the next row's background.
+    for (row, cells) in grid.cells.iter().enumerate() {
+        for (col, cell) in cells.iter().enumerate() {
+            canvas.fill(
+                col * CELL_W,
+                row * CELL_H,
+                CELL_W,
+                CELL_H,
+                cell_colors(cell).1,
+            );
+        }
+    }
     for (row, cells) in grid.cells.iter().enumerate() {
         let mut col = 0;
         while col < cells.len() {
             let cell = &cells[col];
             let span = cell.symbol.width().clamp(1, 2);
-            let (fg, bg) = cell_colors(cell);
+            let (fg, _) = cell_colors(cell);
             let (x, y) = (col * CELL_W, row * CELL_H);
-            canvas.fill(x, y, CELL_W * span, CELL_H, bg);
             if let Some(ch) = cell.symbol.chars().next().filter(|c| !c.is_whitespace()) {
                 if !draw_box(&mut canvas, ch, x, y, fg) {
                     let glyph = glyphs

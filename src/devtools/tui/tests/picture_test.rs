@@ -80,3 +80,18 @@ fn italic_cells_look_different_from_plain_ones() {
         "italic terminal cells must remain visibly distinct in a cell screenshot"
     );
 }
+
+#[test]
+fn a_descender_survives_the_next_rows_background() {
+    let mut grid = Grid::blank(1, 2);
+    grid.cells[0][0].symbol = "_".into();
+    grid.cells[1][0].bg = "#000000".into();
+    let path = crate::utils::test_temp::unique_temp_path("descender").with_extension("png");
+    write_png(&grid, &path).unwrap();
+    let lit = (0..CELL_W)
+        .flat_map(|x| (0..CELL_H * 2).map(move |y| (x, y)))
+        .filter(|(x, y)| pixel(&path, *x, *y)[0] > 100)
+        .count();
+    assert!(lit > 0, "the underscore is drawn");
+    std::fs::remove_file(path).unwrap();
+}
