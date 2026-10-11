@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -36,6 +38,7 @@ DOC = """# QA
 def filled(results: dict[str, list[str]]) -> str:
     cases = e2e_report.select(e2e_report.parse_doc(DOC), ",".join(results))
     text = e2e_report.render_skeleton("doc.md", cases, "abc", "20261012-000000", "macOS")
+    text = text.replace("- Session: `none`", "- Session: `/runs/sessions/app-0x`")
     for case_id, steps in results.items():
         for result in steps:
             block = f"- Result: `{result}`\n- Evidence: seen it"
@@ -95,6 +98,44 @@ class E2eReportTest(unittest.TestCase):
             self.assertEqual(e2e_report.main(["check", "--doc", str(doc), str(report)]), 1)
             report.write_text(filled({"APP-02": ["PASS"]}), encoding="utf-8")
             self.assertEqual(e2e_report.main(["check", "--doc", str(doc), str(report)]), 0)
+
+    def test_a_case_without_numbered_steps_is_refused_not_passed(self) -> None:
+        # Unnumbered steps (bullets or prose) used to score PASS untouched.
+        for body in ("Launch Bus and verify its initial room.", "- Launch → it starts."):
+            doc = f"# QA\n\n## Cases\n\n### APP-01 — Start\n\n{body}\n"
+            with self.assertRaisesRegex(ValueError, "APP-01: no numbered steps"):
+                e2e_report.parse_doc(doc)
+
+    def test_a_pending_result_cannot_be_hidden_by_a_second_result_field(self) -> None:
+        cases = e2e_report.select(self.cases, "APP-02")
+        report = e2e_report.render_skeleton("doc.md", cases, "abc", "t", "macOS")
+        report = report.replace("- Session: `none`", "- Session: `/runs/app-02`")
+        report += "\n- Result: `PASS`\n- Evidence: room captured in trace.ndjson\n"
+        errors, _ = e2e_report.check(report, self.cases)
+        self.assertIn("APP-02 step 1: repeats Evidence, Result", errors)
+
+    def test_a_report_without_the_case_session_is_refused(self) -> None:
+        report = filled({"APP-02": ["PASS"]}).replace(
+            "- Session: `/runs/sessions/app-0x`", "- Session: `none`"
+        )
+        errors, _ = e2e_report.check(report, self.cases)
+        self.assertIn("APP-02: Session names no driver run folder", errors)
+
+    def test_only_a_fully_passed_run_is_green(self) -> None:
+        self.assertEqual(e2e_report.verdict(["APP-01 PASS", "APP-02 PASS"]), "GREEN")
+        self.assertEqual(e2e_report.verdict(["APP-01 PASS", "APP-02 FAIL"]), "RED")
+        self.assertEqual(e2e_report.verdict(["APP-01 FAIL", "APP-02 SKIP"]), "RED")
+        for skipped in (["APP-01 PARTIAL", "APP-02 PASS"], ["APP-01 SKIP", "APP-02 SKIP"]):
+            self.assertTrue(e2e_report.verdict(skipped).startswith("INCOMPLETE"), skipped)
+        with tempfile.TemporaryDirectory() as root:
+            doc = Path(root, "doc.md")
+            doc.write_text(DOC, encoding="utf-8")
+            report = Path(root, "report.md")
+            report.write_text(filled({"APP-01": ["PASS", "SKIP"], "APP-02": ["PASS"]}), encoding="utf-8")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(e2e_report.main(["check", "--doc", str(doc), str(report)]), 0)
+            self.assertIn("Verdict: INCOMPLETE (1 case not fully run)", out.getvalue())
 
 
 if __name__ == "__main__":

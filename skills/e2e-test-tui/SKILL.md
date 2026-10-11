@@ -1,6 +1,6 @@
 ---
 name: e2e-test-tui
-description: Use to test the Bus TUI end to end like a manual QA tester, against a QA test doc (default tests/e2e-tui/app.md, optionally only some case IDs). Builds the dev-tools variant, drives a fresh scratch Bus through `bus --dev tui` (never the running Bus), judges every step against the doc from screen text, styled cells, screenshots and recorded effects, and writes a run report with PASS/FAIL/SKIP per step and a GREEN/RED verdict.
+description: Use to test the Bus TUI end to end like a manual QA tester, against a QA test doc (default tests/e2e-tui/app.md, optionally only some case IDs). Builds the dev-tools variant, drives a fresh scratch Bus through `bus --dev tui` (never the running Bus), judges every step against the doc from screen text, styled cells, screenshots and recorded effects, and writes a run report with PASS/FAIL/SKIP per step and a GREEN/RED/INCOMPLETE verdict (GREEN only when every step ran and passed).
 ---
 
 # E2E Test TUI
@@ -36,6 +36,8 @@ FOR EACH case in the report, in order:
   Record the start output's run_dir as the case's `Session`.
   Do the case's preconditions/setup with the doc's recipes, through the UI the doc names.
     Use `T bus --name <name> ...` only where the doc allows fixtures or read-only state.
+  IF the setup cannot be completed, or a real provider prompt appears:
+    mark every step of the case FAIL with what happened (fault guess per guide.md); stop the case.
   FOR EACH numbered step:
     Do the step's actions exactly as written (keys, clicks, typing), one driver call each.
     Judge the expected result with the evidence the doc asks for (guide.md "Judging"):
@@ -47,7 +49,8 @@ FOR EACH case in the report, in order:
     Write the step's Result and Evidence into the report immediately.
     IF the result does not match: FAIL with every FAIL field (format doc), a screenshot,
       the session trace path and the effects; guess the fault per guide.md "Fault guess".
-    IF the doc allows SKIP for evidence you cannot capture: SKIP with that reason.
+    IF the doc allows SKIP for evidence you cannot capture: SKIP the whole step with that reason,
+      keeping what was captured in Evidence.
     Never retry a failed step until it passes; a flaky pass is a FAIL with both runs noted.
     IF a later step depends on a failed one: still attempt it; record what happened.
   Run: T stop --name <name>   (always, also after failures)

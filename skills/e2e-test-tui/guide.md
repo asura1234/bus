@@ -66,8 +66,12 @@ you saw. You do not decide what the product should do, and you never change the 
 ## SKIP
 
 SKIP only where the doc allows it, and only with the concrete reason the evidence was out of
-reach. Missing driver capability is a reason; impatience is not. A SKIPped step is neither a
-pass nor a failure; the verdict is GREEN only when no step failed.
+reach. Missing driver capability is a reason; impatience is not. A step is PASS only when every
+assertion it bundles was captured and matched. If the doc lets you skip one of them, the whole
+step is SKIP: Evidence records what was captured, Reason names what was not.
+
+The verdict is GREEN only when every step of every case is PASS. Any FAIL makes it RED; any
+SKIP without a FAIL makes it INCOMPLETE.
 
 ## Fault guess
 

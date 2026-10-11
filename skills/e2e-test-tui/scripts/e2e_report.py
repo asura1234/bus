@@ -43,6 +43,9 @@ def parse_doc(text: str) -> list[Case]:
             cases[-1].steps.append(int(step["n"]))
     found = [case for case in cases if case.id]
     for case in found:
+        # A case with nothing to run would otherwise score PASS untouched.
+        if not case.steps:
+            raise ValueError(f"{case.id}: no numbered steps")
         if case.steps != list(range(1, len(case.steps) + 1)):
             raise ValueError(f"{case.id}: steps are not numbered 1..n: {case.steps}")
     ids = [case.id for case in found]
@@ -117,10 +120,19 @@ def check(report: str, cases: list[Case]) -> tuple[list[str], list[str]]:
         if numbers != [str(n) for n in case.steps]:
             errors.append(f"{case.id}: steps {numbers} differ from the doc's {case.steps}")
             continue
+        session = dict(fields_of(section.split("\n### ", 1)[0].splitlines())).get("Session", "")
+        if unquote(session) in ("", "none"):
+            errors.append(f"{case.id}: Session names no driver run folder")
         results = []
         for number, step in zip(numbers, steps):
             where = f"{case.id} step {number}"
-            values = dict(fields_of(step.splitlines()))
+            fields = fields_of(step.splitlines())
+            names = [name for name, _ in fields]
+            repeated = sorted({name for name in names if names.count(name) > 1})
+            if repeated:
+                # A second Result or Evidence must not hide the first.
+                errors.append(f"{where}: repeats {', '.join(repeated)}")
+            values = dict(fields)
             result = unquote(values.get("Result", ""))
             results.append(result)
             if result not in RESULTS:
@@ -155,6 +167,17 @@ def case_result(results: list[str]) -> str:
     if all(result == "SKIP" for result in results):
         return "SKIP"
     return "PARTIAL"
+
+
+def verdict(summary: list[str]) -> str:
+    """GREEN only when every step ran and passed; any FAIL is RED; else INCOMPLETE."""
+    results = [line.rsplit(" ", 1)[1] for line in summary]
+    if "FAIL" in results:
+        return "RED"
+    if all(result == "PASS" for result in results):
+        return "GREEN"
+    skipped = sum(result != "PASS" for result in results)
+    return f"INCOMPLETE ({skipped} case{'s' if skipped != 1 else ''} not fully run)"
 
 
 def main(argv: list[str]) -> int:
@@ -193,9 +216,8 @@ def main(argv: list[str]) -> int:
     if errors:
         sys.stderr.write("".join(f"invalid: {error}\n" for error in errors))
         return 1
-    failed = any(line.endswith(" FAIL") for line in summary)
     sys.stdout.write("".join(f"{line}\n" for line in summary))
-    sys.stdout.write(f"Verdict: {'RED' if failed else 'GREEN'}\n")
+    sys.stdout.write(f"Verdict: {verdict(summary)}\n")
     return 0
 
 
