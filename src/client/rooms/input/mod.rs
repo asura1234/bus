@@ -77,7 +77,7 @@ impl BusUi {
         outcome: &mut ClientShellInput,
     ) -> bool {
         // Ctrl+C never quits Bus. A focused agent terminal receives it
-        // unchanged below so the human can interrupt the agent; the room
+        // unchanged below so the developer can interrupt the agent; the room
         // composer clears its draft; everywhere else it does nothing.
         let interrupt =
             matches!(key.code, KeyCode::Char('c' | 'C')) && key.modifiers == KeyModifiers::CONTROL;

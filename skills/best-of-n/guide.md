@@ -15,7 +15,7 @@ job — it may be an orchestrating agent in Bus, or the developer. It judges:
 - a technical question → assign one agent to run this skill;
 - fix in this PR or open another, what goes first, priority, owner → **the orchestrator decides itself**.
   It holds exactly this kind of workflow-level context, and N agents' opinions on "when to do it" are not evidence;
-- product trade-offs, user preferences → ask a human;
+- product trade-offs, user preferences → ask the developer;
 - "is the problem real at all" → go back to verification: the first-party evidence of
   `address-review-comments`, the "test that goes red" of `review-pr`. Until a dispute over approaches
   is established, do not come here.
@@ -166,7 +166,7 @@ badly, switch early, do not force it), and `toss_up_reason` must be written — 
 
 `toss_up_reason` is written for the orchestrator. **This skill does not decide what to do next**:
 opening an isolated worktree per candidate for a spike, choosing one by another constraint such as
-schedule/cost, or asking a human, are all the orchestrator's job. Your output is only "where the gap is
+schedule/cost, or asking the developer, are all the orchestrator's job. Your output is only "where the gap is
 and what evidence is missing".
 
 (If a spike really is needed: fix the criterion first — what result counts as success. Otherwise what

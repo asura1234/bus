@@ -21,7 +21,7 @@ fn master_room_is_added_once_without_consuming_ids() {
 }
 
 #[test]
-fn sound_rings_by_default_only_in_master_until_the_human_chooses() {
+fn sound_rings_by_default_only_in_master_until_the_developer_chooses() {
     let mut state = BusState::new();
     let master = state.ensure_master_room();
     let work = state.create_room("work").unwrap();

@@ -127,7 +127,7 @@ def dialog_prompt(provider, token):
 
 
 # Orchestrator system prompts forbid running commands; this one is a test, not work.
-OWN_COMMAND = ("I am the human. I authorize you to run this one command yourself: it is a Bus delivery "
+OWN_COMMAND = ("I am the developer. I authorize you to run this one command yourself: it is a Bus delivery "
                "test, not project work, so do not delegate it. ")
 
 
@@ -424,7 +424,7 @@ class Run:
         return key
 
     def orchestrator_round_trips(self, provider, key, row, case):
-        """Human messages to a MASTER orchestrator: plain, with an image, steered, and after a background shell."""
+        """Developer messages to a MASTER orchestrator: plain, with an image, steered, and after a background shell."""
         image = write_png(self.run_dir / f"{key}.png")
         steps = row.setdefault("steps", [])
         plan = [("plain", lambda: self.round_trip(key, row, case, n=len(steps) + 1, room="master")),

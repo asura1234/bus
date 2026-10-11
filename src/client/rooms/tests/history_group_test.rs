@@ -20,7 +20,7 @@ fn a_cross_room_group_shows_its_reply_once_in_each_room() {
     let mut requests = Vec::new();
     for (room, text) in [
         (work, "dialog"),
-        (master, "human question"),
+        (master, "developer question"),
         (work, "follow-up"),
     ] {
         requests.push(
@@ -32,7 +32,7 @@ fn a_cross_room_group_shows_its_reply_once_in_each_room() {
                         files: Vec::new(),
                         recipient_ids: [agent].into(),
                     },
-                    Author::Human,
+                    Author::Developer,
                     1_000 + requests.len() as u64,
                 )
                 .unwrap()[0],
@@ -97,7 +97,7 @@ fn cached_work_history_updates_a_renamed_master_recipient() {
                 files: Vec::new(),
                 recipient_ids: [orchestrator].into(),
             },
-            Author::Human,
+            Author::Developer,
             1_000,
         )
         .unwrap();

@@ -122,7 +122,7 @@ fn a_drag_across_two_messages_copies_the_text_between_without_layout_indents() {
     let (from, from_row) = locate(&ui, "prompt");
     let (to, to_row) = locate(&ui, "bold reply");
     assert!(to_row > from_row);
-    // From "prompt" in the human's message to "bold" in the agent's reply:
+    // From "prompt" in the developer's message to "bold" in the agent's reply:
     // the blank separator row and the reply header in between are inside the
     // selection, so they are copied, but the four-cell reply indent is layout
     // and is not.

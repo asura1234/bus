@@ -47,7 +47,7 @@ fn dev_room_notes_replace_and_clear_the_room_notes() {
 }
 
 #[test]
-fn room_orchestrator_core_human_abandon_idle_request_preserves_the_agent_and_queue() {
+fn room_orchestrator_core_developer_abandon_idle_request_preserves_the_agent_and_queue() {
     let (mut worker, _room, agent, dir) = fixture();
     worker
         .state
@@ -223,7 +223,7 @@ fn dev_agent_rename_and_room_seen_match_tui_commands() {
     let seen = call(&mut worker, "seen-1", "room.seen", json!({"room":"test"}));
     assert!(seen.ok, "{seen:?}");
     assert_eq!(worker.state.room(room).unwrap().unread_count, 0);
-    // Marking seen is not navigation: the human's view is unchanged.
+    // Marking seen is not navigation: the developer's view is unchanged.
     assert_eq!(worker.state.visible_room(), None);
 
     worker.state.select_room(room).unwrap();

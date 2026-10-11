@@ -252,7 +252,7 @@ fn raising_above_the_count_rearms_and_lowering_fires_an_armed_notice_once() {
 }
 
 #[test]
-fn a_room_without_an_orchestrator_addresses_the_human() {
+fn a_room_without_an_orchestrator_addresses_the_developer() {
     let (mut worker, agent, room, _, dir) = setup(false);
     compact(&mut worker, agent, 5);
     let posted = notices(&worker, room);

@@ -378,7 +378,7 @@ mod ring_decisions {
     }
 
     #[test]
-    fn disabled_rooms_stay_silent_until_the_human_enables_them() {
+    fn disabled_rooms_stay_silent_until_the_developer_enables_them() {
         let (mut state, _, work, _, worker) = rooms_with_agents();
         assert!(!new_message_should_ring(
             &state,
@@ -392,25 +392,25 @@ mod ring_decisions {
     }
 
     #[test]
-    fn an_orchestrator_message_to_the_human_rings_like_a_reply() {
+    fn an_orchestrator_message_to_the_developer_rings_like_a_reply() {
         let (state, master, _, orchestrator, _) = rooms_with_agents();
         let mut reported = state.clone();
         reported
-            .post_to_human(master, orchestrator, "gate passed".into(), Vec::new(), 1)
+            .post_to_developer(master, orchestrator, "gate passed".into(), Vec::new(), 1)
             .unwrap();
         assert_eq!(ringing_room(&state, &reported), Some(master));
         assert!(!new_message_should_ring(&reported, &reported));
     }
 
     #[test]
-    fn agent_authored_messages_ring_and_the_humans_own_never_do() {
+    fn agent_authored_messages_ring_and_the_developers_own_never_do() {
         let (mut state, _, work, orchestrator, worker) = rooms_with_agents();
         state.set_room_sound(work, true).unwrap();
-        let mut human = state.clone();
-        human
-            .submit_message_from(work, draft(worker), Author::Human, 5)
+        let mut developer = state.clone();
+        developer
+            .submit_message_from(work, draft(worker), Author::Developer, 5)
             .unwrap();
-        assert!(!new_message_should_ring(&state, &human));
+        assert!(!new_message_should_ring(&state, &developer));
 
         let mut agent = state.clone();
         agent
@@ -459,7 +459,7 @@ mod ring_coalescing {
     use super::*;
 
     #[test]
-    fn an_agent_message_rings_even_when_the_human_sends_before_the_next_snapshot() {
+    fn an_agent_message_rings_even_when_the_developer_sends_before_the_next_snapshot() {
         let mut state = BusState::default();
         state.ensure_master_room();
         let work = state.create_room("work").unwrap();
@@ -479,13 +479,13 @@ mod ring_coalescing {
         let mut next = state.clone();
         next.submit_message_from(work, draft(reviewer), Author::Agent(author), 5)
             .unwrap();
-        next.submit_message_from(work, draft(author), Author::Human, 6)
+        next.submit_message_from(work, draft(author), Author::Developer, 6)
             .unwrap();
         assert!(new_message_should_ring(&state, &next));
     }
 
     #[test]
-    fn an_agent_reply_still_rings_when_a_human_prompt_is_newer_in_the_same_snapshot() {
+    fn an_agent_reply_still_rings_when_a_developer_prompt_is_newer_in_the_same_snapshot() {
         let mut state = BusState::default();
         state.ensure_master_room();
         let work = state.create_room("work").unwrap();
@@ -512,7 +512,7 @@ mod ring_coalescing {
                 files: Vec::new(),
                 recipient_ids: AgentRecipients::from([reviewer]),
             },
-            Author::Human,
+            Author::Developer,
             6,
         )
         .unwrap();
@@ -520,7 +520,7 @@ mod ring_coalescing {
     }
 
     #[test]
-    fn an_agent_message_still_rings_when_the_human_writes_in_a_different_room() {
+    fn an_agent_message_still_rings_when_the_developer_writes_in_a_different_room() {
         let mut state = BusState::default();
         let master = state.ensure_master_room();
         let work = state.create_room("work").unwrap();
@@ -539,20 +539,20 @@ mod ring_coalescing {
         let mut next = state.clone();
         next.submit_message_from(work, draft(worker), Author::Agent(orchestrator), 5)
             .unwrap();
-        next.submit_message_from(master, draft(orchestrator), Author::Human, 6)
+        next.submit_message_from(master, draft(orchestrator), Author::Developer, 6)
             .unwrap();
         assert!(new_message_should_ring(&state, &next));
     }
 
     #[test]
-    fn an_agent_report_to_the_human_rings_even_when_the_human_sends_before_the_snapshot() {
+    fn an_agent_report_to_the_developer_rings_even_when_the_developer_sends_before_the_snapshot() {
         let mut state = BusState::default();
         let master = state.ensure_master_room();
         let orchestrator = state
             .create_agent(master, "orch", Provider::ClaudeCode, "/repo".into(), None)
             .unwrap();
         let mut next = state.clone();
-        next.post_to_human(master, orchestrator, "gate passed".into(), Vec::new(), 5)
+        next.post_to_developer(master, orchestrator, "gate passed".into(), Vec::new(), 5)
             .unwrap();
         next.submit_message_from(
             master,
@@ -561,13 +561,13 @@ mod ring_coalescing {
                 files: Vec::new(),
                 recipient_ids: AgentRecipients::from([orchestrator]),
             },
-            Author::Human,
+            Author::Developer,
             6,
         )
         .unwrap();
         assert!(
             new_message_should_ring(&state, &next),
-            "a later human send must not hide the new agent report from sound notifications"
+            "a later developer send must not hide the new agent report from sound notifications"
         );
     }
 }

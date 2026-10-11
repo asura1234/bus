@@ -540,7 +540,7 @@ fn agent_clear_refuses_an_agent_that_is_not_idle_or_still_has_messages() {
 }
 
 #[test]
-fn agents_cannot_take_the_reserved_human_name() {
+fn agents_cannot_take_the_reserved_developer_recipient_name() {
     let (mut worker, room, codex, dir) = fixture();
     assert_eq!(
         worker

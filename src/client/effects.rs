@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing::warn;
 
-/// Set when the human quits Bus. The server and its agents stop only after the
+/// Set when the developer quits Bus. The server and its agents stop only after the
 /// client has restored the terminal, so the stop wait and any error stay readable.
 static STOP_SERVER_AFTER_QUIT: AtomicBool = AtomicBool::new(false);
 

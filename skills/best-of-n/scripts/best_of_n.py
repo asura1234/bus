@@ -25,7 +25,7 @@ ledger schema (JSON):
               # clear     = the first place pulls ahead of the rest (beats_runner_up names a mechanism)
               # toss-up   = the ranking is still a total order, but the first place does not lead by much;
               #             toss_up_reason says "what evidence is still missing to separate them",
-              #             and the orchestrator decides whether to spike / choose by another constraint / ask a human
+              #             and the orchestrator decides whether to spike / choose by another constraint / ask the developer
         "options": [
           {
             "id": "A",

@@ -26,7 +26,7 @@ pub(crate) enum DialogKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct QuestionInput {
-    /// Included in the digest so a human's edit invalidates an observation.
+    /// Included in the digest so the developer's edit invalidates an observation.
     pub(crate) value: String,
     pub(crate) skip_key: &'static str,
 }

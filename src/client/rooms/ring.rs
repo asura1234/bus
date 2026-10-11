@@ -8,16 +8,16 @@ pub(super) const RING_COOLDOWN: Duration = Duration::from_millis(1500);
 /// Snapshots this soon after start or resume replay what happened while Bus was closed.
 pub(super) const STARTUP_GRACE: Duration = Duration::from_secs(2);
 
-/// Whether a sound-enabled room gained a message the Human did not write.
+/// Whether a sound-enabled room gained a message the developer did not write.
 #[cfg(test)]
 pub(super) fn new_message_should_ring(previous: &BusState, next: &BusState) -> bool {
     ringing_room(previous, next).is_some()
 }
 
-/// The first sound-enabled room that gained a message the Human did not
+/// The first sound-enabled room that gained a message the developer did not
 /// write: an agent's final reply, a prompt authored by an agent (`send
-/// --as`), or an agent's report to the Human. Every new prompt counts, not
-/// only each room's latest, because the Human may send right after an agent
+/// --as`), or an agent's report to the developer. Every new prompt counts, not
+/// only each room's latest, because the developer may send right after an agent
 /// within one snapshot interval.
 pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomId> {
     let rings = |room: RoomId| next.room(room).is_some_and(Room::sound_enabled);
@@ -64,7 +64,7 @@ pub(super) fn ringing_room(previous: &BusState, next: &BusState) -> Option<RoomI
                 .flat_map(|room| room.notices.iter().map(move |prompt| (room.id, prompt))),
         )
         .find(|(room, prompt)| {
-            prompt.author != Author::Human && !known.contains(&prompt.id) && rings(*room)
+            prompt.author != Author::Developer && !known.contains(&prompt.id) && rings(*room)
         })
         .map(|(room, _)| room)
 }

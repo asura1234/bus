@@ -103,7 +103,7 @@ def _dispute_errors(dispute: dict, index: int) -> list[str]:
         if not dispute.get("toss_up_reason"):
             errors.append(
                 f"{where}: toss-up requires toss_up_reason — **what evidence is still missing to separate them**. "
-                "The orchestrator relies on it to decide whether to spike, choose by another constraint, or ask a human; "
+                "The orchestrator relies on it to decide whether to spike, choose by another constraint, or ask the developer; "
                 "saying only \"they are about the same\" throws the decision back without explaining why"
             )
     if not dispute.get("failure_trigger"):

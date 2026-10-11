@@ -7,7 +7,7 @@ pub enum AgentState {
     Idle,
     /// Agent is actively working/processing.
     Working,
-    /// Agent needs human input and is blocked on a response.
+    /// Agent needs the developer's input and is blocked on a response.
     Blocked,
     /// Plain shell or unrecognized program.
     Unknown,
@@ -23,7 +23,7 @@ pub struct AgentDetection {
     /// True when the current screen visibly shows live idle chrome.
     pub visible_idle: bool,
     /// True when the current screen visibly shows live UI chrome that needs
-    /// human input. This is stronger than arbitrary prompt-like text in the
+    /// the developer's input. This is stronger than arbitrary prompt-like text in the
     /// scrollback and may override a non-blocked integration state.
     pub visible_blocker: bool,
     /// True when the current screen visibly shows live working chrome. PTY

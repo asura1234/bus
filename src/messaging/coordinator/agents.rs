@@ -511,7 +511,7 @@ impl Worker {
                             files: Vec::new(),
                             recipient_ids: [id].into_iter().collect(),
                         },
-                        Author::Human,
+                        Author::Developer,
                         crate::messaging::storage::io::now_ms(),
                         // The system prompt is the agent's first turn of its own.
                         true,

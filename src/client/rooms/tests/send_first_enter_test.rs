@@ -86,7 +86,7 @@ fn typed_text_sends_on_the_first_immediate_enter() {
     }
 }
 
-/// A human unsure whether the last message went out presses Enter again on
+/// A developer unsure whether the last message went out presses Enter again on
 /// the now-empty composer, then types the next message. That Enter has
 /// nothing to send; it must not leave "no text or files" over the new text.
 #[test]
