@@ -722,11 +722,12 @@ fn run_host(args: &[String]) -> i32 {
 /// `fixture KIND [--file FILE] [--text TEXT]`: files for the session to send.
 /// The file name has its own flag because `--name` selects the session.
 fn fixture(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
-    let kind = parsed
-        .positional()
-        .ok_or("usage: fixture image|file|clipboard-image [--file FILE] [--text TEXT]")?;
+    let kind = parsed.positional().ok_or(
+        "usage: fixture image|file|clipboard-image [--file FILE] [--text TEXT] [--pattern P]",
+    )?;
     let file = parsed.take_value("--file");
     let text = parsed.take_value("--text");
+    let pattern = parsed.take_value("--pattern");
     parsed.finish()?;
     let paths = paths(name);
     if !session::session_alive(&paths) {
@@ -735,7 +736,7 @@ fn fixture(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
             format!("no running driver session {name:?}"),
         ));
     }
-    fixtures::create(&paths, &kind, file, text)
+    fixtures::create(&paths, &kind, file, text, pattern)
 }
 
 /// Runs inside the `screenshot --real` mirror window.

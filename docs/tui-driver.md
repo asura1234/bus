@@ -264,11 +264,13 @@ or 777 in Bus's output). `since_last_input` is the index the next
 Every copy Bus made in this session (OSC 52).
 
 ### fixture
-`fixture image|file|clipboard-image [--file FILE] [--text TEXT]`
+`fixture image|file|clipboard-image [--file FILE] [--text TEXT] [--pattern P]`
 
-Writes a file for the session to send and prints its path: `image` is a PNG
-with red, blue, yellow and cyan quadrants (clockwise from the top left), easy
-to recognise in a screenshot; `file` is a text file. Both go into the
+Writes a file for the session to send and prints its path: `image` is a
+160x100 PNG easy to recognise in a screenshot, by `--pattern`: `quadrants`
+(default: red, blue, yellow and cyan, clockwise from the top left),
+`red-diagonal` (a red band from top left to bottom right on white) or
+`blue-circle` (a blue disc on white); `file` is a text file. Both go into the
 session's work directory. `clipboard-image` sets the image that Ctrl+V in the
 composer pastes.
 
