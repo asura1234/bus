@@ -135,6 +135,8 @@ const SAMPLES: &[&[&str]] = &[
     &["sounds"],
     &["quit"],
     &["diagnostics"],
+    #[cfg(feature = "dev-tools")]
+    &["ui", "hits"],
 ];
 
 #[test]

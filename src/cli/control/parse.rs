@@ -46,6 +46,7 @@ fn cli() -> Command {
         )
         .subcommand(subcommand("diagnostics"))
         .subcommand(subcommand("sounds"))
+        .subcommand(ui_cli())
         .subcommand(room_cli())
         .subcommand(agent_cli())
         .subcommand(
@@ -149,6 +150,10 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         },
         "diagnostics" => ("diagnostics", json!({})),
         "sounds" => ("sounds", json!({})),
+        "ui" => match args.subcommand() {
+            Some(("hits", _)) => ("ui.hits", json!({})),
+            _ => return Err("unknown ui command".into()),
+        },
         "room" => parse_room(args)?,
         "agent" => parse_agent(args)?,
         "send" => {
@@ -191,6 +196,14 @@ pub(super) fn parse(args: &[String], request_id: &str) -> Result<ParsedCommand, 
         wait_timeout,
         follow,
     })
+}
+
+/// `ui hits` exists only in the dev variant, with the TUI driver it serves.
+fn ui_cli() -> Command {
+    let ui = subcommand("ui");
+    #[cfg(feature = "dev-tools")]
+    let ui = ui.subcommand(subcommand("hits"));
+    ui
 }
 
 fn room_cli() -> Command {

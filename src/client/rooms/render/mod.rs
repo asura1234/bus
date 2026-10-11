@@ -2,6 +2,8 @@
 mod dialogs;
 #[path = "layout.rs"]
 mod geometry;
+#[cfg(feature = "dev-tools")]
+mod hits;
 mod paint;
 mod room;
 mod sidebar;
