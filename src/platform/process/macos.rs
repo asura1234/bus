@@ -127,18 +127,26 @@ pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJo
     if info.pbi_pgid != process_group_id {
         return None;
     }
-
-    let name = comm_from_bsdinfo(&info)?;
-    let argv = process_argv(process_group_id);
     Some(ForegroundJob {
         process_group_id,
-        processes: vec![ForegroundProcess {
-            pid: process_group_id,
-            name,
-            argv0: process_argv0_name(process_group_id),
-            cmdline: argv.as_ref().map(|parts| parts.join(" ")),
-            argv,
-        }],
+        processes: vec![process_info_from_bsdinfo(process_group_id, &info)?],
+    })
+}
+
+/// The name and command line of any process, whatever its process group.
+pub(crate) fn process_info(pid: u32) -> Option<ForegroundProcess> {
+    process_info_from_bsdinfo(pid, &process_bsdinfo(pid)?)
+}
+
+fn process_info_from_bsdinfo(pid: u32, info: &libc::proc_bsdinfo) -> Option<ForegroundProcess> {
+    let name = comm_from_bsdinfo(info)?;
+    let argv = process_argv(pid);
+    Some(ForegroundProcess {
+        pid,
+        name,
+        argv0: process_argv0_name(pid),
+        cmdline: argv.as_ref().map(|parts| parts.join(" ")),
+        argv,
     })
 }
 

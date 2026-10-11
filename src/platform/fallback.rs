@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::{ClipboardImage, ForegroundJob, Signal};
+use super::{ClipboardImage, ForegroundJob, ForegroundProcess, Signal};
 
 #[cfg(not(unix))]
 pub(super) fn read_terminal_grid_size() -> std::io::Result<(u16, u16)> {
@@ -132,6 +132,10 @@ pub(crate) fn process_birth(_pid: u32) -> Option<u64> {
 }
 
 pub(crate) fn process_parent(_pid: u32) -> Option<u32> {
+    None
+}
+
+pub(crate) fn process_info(_pid: u32) -> Option<ForegroundProcess> {
     None
 }
 

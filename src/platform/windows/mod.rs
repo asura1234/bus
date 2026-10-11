@@ -51,6 +51,7 @@ use process::peb::PANE_RUNTIME_MARKER_ENV_VAR;
 pub(crate) use process::process_birth;
 pub use process::process_cwd;
 pub use process::process_exists;
+pub(crate) use process::process_info;
 pub(crate) use process::process_parent;
 pub use process::session_processes;
 #[cfg(test)]
