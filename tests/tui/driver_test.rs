@@ -578,7 +578,7 @@ fn named_hits_effects_fixtures_and_screenshots_work_on_a_scratch_bus() {
     );
     assert_eq!(code, 1, "{missing}");
 
-    // Composer text is the dimmed placeholder until typed into.
+    // A style wait reads a named hit's cells: the settings button is not drawn inverse.
     session.ok(&[
         "wait",
         "--style",
