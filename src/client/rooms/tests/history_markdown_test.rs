@@ -525,5 +525,8 @@ fn copy_puts_the_whole_reply_markdown_on_the_clipboard() {
         "copying leaves the composer alone"
     );
     assert_eq!(pointer(&mut ui, Down(Left), quote, row), None);
-    assert!(ui.locals[&room].text.text.contains("**bold**"), "Quote still quotes");
+    assert!(
+        ui.locals[&room].text.text.contains("**bold**"),
+        "Quote still quotes"
+    );
 }

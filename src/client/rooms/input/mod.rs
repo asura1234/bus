@@ -154,11 +154,11 @@ impl BusUi {
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
             if let Some(Action::CopyMessage(request)) = hit {
                 if let Some(text) = self.reply_markdown(request) {
-                    outcome
-                        .actions
-                        .push(crate::client::compositor::ClientShellAction::ClipboardWrite(
+                    outcome.actions.push(
+                        crate::client::compositor::ClientShellAction::ClipboardWrite(
                             text.into_bytes(),
-                        ));
+                        ),
+                    );
                 }
                 return Some(true);
             }
