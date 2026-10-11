@@ -106,6 +106,42 @@ printf '%s\\n' "$@" > "$FAKE_BUS_ARGS"
         self.assertEqual(result.returncode, 9)
         self.assertFalse(self.bus_args.exists())
 
+    def test_prod_launches_the_fresh_binary_from_a_custom_cargo_target_dir(self) -> None:
+        target_dir = self.root / "isolated-build"
+        self._write_executable(
+            self.bin_dir / "cargo",
+            """#!/bin/sh
+set -eu
+mkdir -p "$CARGO_TARGET_DIR/release"
+cat > "$CARGO_TARGET_DIR/release/bus" <<'BUS'
+#!/bin/sh
+{ echo fresh-release; printf '%s\\n' "$@"; } > "$FAKE_BUS_ARGS"
+BUS
+chmod +x "$CARGO_TARGET_DIR/release/bus"
+""",
+        )
+        result = subprocess.run(
+            [str(self.root / "run"), "prod", "--paths"],
+            cwd=self.root.parent,
+            env={
+                **os.environ,
+                "PATH": f"{self.bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "CARGO_TARGET_DIR": str(target_dir),
+                "FAKE_BUS_ARGS": str(self.bus_args),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((target_dir / "release" / "bus").is_file())
+        self.assertEqual(
+            self.bus_args.read_text(encoding="utf-8").splitlines(),
+            ["fresh-release", "--paths"],
+            "prod must launch what Cargo just built, not a stale default-target binary",
+        )
+
     def test_dev_never_launches_an_existing_binary_after_a_failed_build(self) -> None:
         result = self._run("dev", cargo_exit=17)
 

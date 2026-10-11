@@ -19,25 +19,33 @@ usage() {
     echo "  ./run dev-control agent read 3 --source recent --lines 80" >&2
 }
 
+# Cargo writes where CARGO_TARGET_DIR (or CARGO_BUILD_TARGET_DIR) points, so
+# launch that fresh build, never a stale one under target/.
+cargo_target_dir() {
+    printf '%s\n' "${CARGO_TARGET_DIR:-${CARGO_BUILD_TARGET_DIR:-$REPO_ROOT/target}}"
+}
+
 case "${1:-}" in
     dev)
         shift
         cd "$REPO_ROOT"
         cargo build --locked --bin bus --features dev-tools
-        exec "$REPO_ROOT/target/debug/bus" --dev "$@"
+        exec "$(cargo_target_dir)/debug/bus" --dev "$@"
         ;;
     prod)
         shift
         cd "$REPO_ROOT"
         cargo build --locked --release --bin bus
-        exec "$REPO_ROOT/target/release/bus" "$@"
+        exec "$(cargo_target_dir)/release/bus" "$@"
         ;;
     dev-control)
         shift
         cd "$REPO_ROOT"
+        # Always the default debug build, as the live Bus runs it: agents set
+        # CARGO_TARGET_DIR for their own builds, which must not become the CLI.
         binary="$REPO_ROOT/target/debug/bus"
         if [[ ! -x "$binary" ]]; then
-            echo "Bus debug binary is missing; run './run dev' or 'cargo build --locked --bin bus' once before dev-control." >&2
+            echo "Bus debug binary is missing; run './run dev' (or 'cargo build --locked --bin bus --features dev-tools') once before dev-control." >&2
             exit 1
         fi
         exec "$binary" --dev "$@"

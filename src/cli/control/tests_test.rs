@@ -181,10 +181,11 @@ fn the_dev_help_source_ships_with_the_cargo_and_nix_sources() {
     assert!(read("packaging/nix/package.nix").contains("../../docs/dev-tools.md"));
 }
 
-/// Release builds ship without the `dev-tools` test tooling: it stays off by
-/// default, and only `./run dev` turns it on.
+/// Release builds (`./run prod`, `just build`, Nix and so npm) leave the
+/// `dev-tools` test tooling off; the dev builds that resume with `--dev`
+/// (`./run dev`, the dev cutover) turn it on.
 #[test]
-fn only_the_dev_launcher_builds_the_dev_tools_variant() {
+fn release_builds_leave_dev_tools_off_and_dev_builds_turn_it_on() {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let read = |path: &str| std::fs::read_to_string(repo.join(path)).unwrap();
     let manifest: toml::Value = toml::from_str(&read("Cargo.toml")).unwrap();
@@ -200,11 +201,16 @@ fn only_the_dev_launcher_builds_the_dev_tools_variant() {
     assert!(!read("packaging/nix/package.nix").contains("buildFeatures"));
     assert!(!read("justfile").contains("dev-tools"));
     let run = read("run");
-    assert_eq!(
-        run.matches("--features dev-tools").count(),
-        1,
-        "only ./run dev"
+    assert!(
+        run.contains("cargo build --locked --release --bin bus\n"),
+        "prod"
     );
+    assert!(
+        run.contains("cargo build --locked --bin bus --features dev-tools\n"),
+        "dev"
+    );
+    let cutover = read("tools/cutover.sh");
+    assert!(cutover.contains("cargo build --locked --bin bus --features dev-tools "));
 }
 
 #[test]
