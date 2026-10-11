@@ -19,6 +19,7 @@ use desktop::copy_wide_truncated;
 pub use desktop::open_url;
 pub use desktop::read_clipboard_image;
 pub use desktop::reveal_path;
+pub(crate) use desktop::shell_runs;
 pub use desktop::show_desktop_notification;
 pub use desktop::write_clipboard;
 pub(crate) use fs::create_remote_private_dir;

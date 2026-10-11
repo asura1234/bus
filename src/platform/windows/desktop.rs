@@ -107,6 +107,20 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
     }
 }
 
+/// Whether the shell runs files with this extension (no dot): a `PATHEXT`
+/// entry, or a type the attachment manager calls dangerous.
+pub(crate) fn shell_runs(extension: &str) -> bool {
+    let dotted = format!(".{extension}");
+    let listed = std::env::var("PATHEXT").is_ok_and(|pathext| {
+        pathext
+            .split(';')
+            .any(|entry| entry.eq_ignore_ascii_case(&dotted))
+    });
+    let association = wide_null(&dotted);
+    // SAFETY: `association` is a NUL-terminated UTF-16 string that outlives the call.
+    listed || unsafe { windows_sys::Win32::UI::Shell::AssocIsDangerous(association.as_ptr()) != 0 }
+}
+
 /// Shows `path` selected in File Explorer without opening it.
 pub fn reveal_path(path: &std::path::Path) -> std::io::Result<Option<std::process::Child>> {
     use std::os::windows::process::CommandExt;

@@ -10,28 +10,75 @@ pub(crate) fn create_private_directory(path: &Path) -> io::Result<()> {
     super::create_remote_private_dir(path)
 }
 
-/// Extensions whose default "open" runs code: apps, scripts, installers and
-/// shortcuts.
+/// Extensions whose default "open" runs code, or follows a shortcut that may
+/// lead to code: apps, scripts, installers, Terminal settings, Finder and
+/// Internet location files, desktop entries.
 const LAUNCHERS: &[&str] = &[
-    "app", "command", "tool", "sh", "exe", "bat", "cmd", "com", "ps1", "msi", "lnk", "scr", "jar",
-    "desktop", "appimage",
+    "app", "command", "tool", "terminal", "fileloc", "inetloc", "webloc", "workflow", "action",
+    "pkg", "mpkg", "sh", "desktop", "appimage", "run", "jar", "url", "exe", "bat", "cmd", "com",
+    "ps1", "msi", "lnk", "scr",
 ];
 
-/// Whether opening `path` in its default app would run it: a launcher
-/// extension, or a regular file with an execute bit.
+/// What the Windows shell also runs: script hosts, HTML applications, Control
+/// Panel applets and shortcut kinds. Only a fallback; the shell is asked first.
+#[cfg(windows)]
+const WINDOWS_LAUNCHERS: &[&str] = &[
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "hta",
+    "cpl",
+    "pif",
+    "psm1",
+    "msp",
+    "reg",
+    "msc",
+    "inf",
+    "appref-ms",
+    "application",
+    "gadget",
+    "scf",
+    "settingcontent-ms",
+    "py",
+    "pyw",
+];
+
+/// Whether opening `path` in its default app might run code: a launcher
+/// kind, or a regular file with an execute bit. A link is judged by what it
+/// points at too, and a path that cannot be resolved counts as one.
 pub(crate) fn launches_code(path: &Path) -> bool {
-    let launcher = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| LAUNCHERS.contains(&extension.to_ascii_lowercase().as_str()));
-    #[cfg(unix)]
-    let executable = std::fs::metadata(path).is_ok_and(|metadata| {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-    });
-    #[cfg(not(unix))]
-    let executable = false;
-    launcher || executable
+    let Ok(target) = std::fs::canonicalize(path) else {
+        return true;
+    };
+    [path, target.as_path()].into_iter().any(|path| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(launcher_extension)
+    }) || executable(&target)
+}
+
+fn launcher_extension(extension: &str) -> bool {
+    let extension = extension.to_ascii_lowercase();
+    #[cfg(windows)]
+    if WINDOWS_LAUNCHERS.contains(&extension.as_str()) || super::shell_runs(&extension) {
+        return true;
+    }
+    LAUNCHERS.contains(&extension.as_str())
+}
+
+#[cfg(unix)]
+fn executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable(_path: &Path) -> bool {
+    false
 }
 
 /// Locks an existing file. Creation and path validation belong to the caller.
