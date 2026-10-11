@@ -631,6 +631,107 @@ fn start_takes_the_graphics_identity_and_refuses_unknown_ones() {
 }
 
 #[test]
+fn caller_home_stays_out_of_file_suggestions_and_agent_settings() {
+    fn files_under(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut files = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                files.extend(files_under(&path));
+            } else if path.is_file() {
+                files.push((path.clone(), std::fs::read(path).unwrap()));
+            }
+        }
+        files.sort();
+        files
+    }
+
+    let name = session_name("prefs");
+    let runs = run_dir();
+    let caller_home = runs.join("caller-home-homeprefs");
+    std::fs::create_dir_all(caller_home.join(".claude")).unwrap();
+    std::fs::write(caller_home.join("caller-home-marker.txt"), b"private").unwrap();
+    std::fs::write(
+        caller_home.join(".claude/settings.json"),
+        br#"{"statusLine":{"type":"command","command":"echo caller-home-must-not-be-read"}}"#,
+    )
+    .unwrap();
+    let before = files_under(&caller_home);
+    let mut start = bus(&name);
+    start.env("HOME", &caller_home);
+    start.env("CLAUDE_CONFIG_DIR", caller_home.join(".claude"));
+    start.env("LC_TERMINAL", "iTerm2");
+    start.env("LC_TERMINAL_VERSION", "3.7.3");
+    start.args(["--dev", "tui", "start", "--name", &name, "--run-dir"]);
+    start.arg(&runs);
+    let (code, status) = parse(start.output().unwrap());
+    let session = Session(name);
+    assert_eq!(code, 0, "{status}");
+    let scratch_home = session_dir(&session.0).join("home");
+    assert_eq!(status["home"], scratch_home.to_str().unwrap());
+    std::fs::write(scratch_home.join("scratch-home-marker.txt"), b"public").unwrap();
+    session.ok(&["press", "ctrl+o"]);
+    session.ok(&["wait", "--text", "scratch-home-marker.txt"]);
+    assert!(!session
+        .ok(&["snapshot"])
+        .to_string()
+        .contains("caller-home-marker"));
+    session.ok(&["press", "esc"]);
+
+    let added = bus(&session.0)
+        .env("HOME", &caller_home)
+        .env("CLAUDE_CONFIG_DIR", caller_home.join(".claude"))
+        .args(["--dev", "tui", "bus", "--name", &session.0])
+        .args([
+            "agent",
+            "add",
+            "--room",
+            "bus",
+            "--name",
+            "home-agent",
+            "--provider",
+            "claude",
+            "--pwd",
+            "~",
+        ])
+        .output()
+        .unwrap();
+    assert!(added.status.success(), "{added:?}");
+    session.ok(&[
+        "wait",
+        "--state",
+        "agents.*.status == idle",
+        "--timeout",
+        "20s",
+    ]);
+    let state = bus_state(&session);
+    let agents = state["agents"].as_array().unwrap();
+    assert_eq!(
+        agents[0]["cwd"],
+        scratch_home.canonicalize().unwrap().to_str().unwrap(),
+        "{state}"
+    );
+    let data = session_dir(&session.0).join("data");
+    let saved: Vec<_> = files_under(&data)
+        .into_iter()
+        .filter(|(path, _)| path.file_name().unwrap() == "claude-statusline.json")
+        .collect();
+    assert_eq!(
+        saved.len(),
+        1,
+        "statusline settings should have been captured"
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&saved[0].1).unwrap(),
+        serde_json::json!({})
+    );
+    let (code, stopped) = tui(&session.0, &["stop"]);
+    assert_eq!(code, 0, "{stopped}");
+    assert_eq!(files_under(&caller_home), before, "caller HOME was written");
+    std::fs::remove_dir_all(caller_home).unwrap();
+}
+
+#[test]
 fn a_refused_root_override_leaves_the_directory_untouched() {
     use std::os::unix::fs::PermissionsExt;
     let base = PathBuf::from(format!("/tmp/bus-tui-it-root{}", std::process::id()));

@@ -78,6 +78,8 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
         ("LC_ALL", "C"),
         ("LC_TERMINAL", "iTerm2"),
         ("LC_TERMINAL_VERSION", "3.7.3"),
+        ("CLAUDE_CONFIG_DIR", "/Users/me/.claude"),
+        ("CODEX_HOME", "/Users/me/.codex"),
         ("BUS_DATA_DIR", "/Users/me/.local/share/bus/live"),
         ("BUS_SESSION_ID", "live"),
         ("HERDR_SOCKET_PATH", "/live/herdr.sock"),
@@ -104,6 +106,9 @@ fn scratch_env_keeps_basics_and_drops_every_inherited_bus_variable() {
     assert_eq!(get("LC_ALL"), Some(OsString::from("C")));
     assert!(get("LC_TERMINAL").is_none());
     assert!(get("LC_TERMINAL_VERSION").is_none());
+    // Provider config locations would point the scratch agents at the developer's settings.
+    assert!(get("CLAUDE_CONFIG_DIR").is_none());
+    assert!(get("CODEX_HOME").is_none());
     assert!(get("PATH")
         .unwrap()
         .to_string_lossy()
