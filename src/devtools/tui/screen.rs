@@ -22,6 +22,9 @@ pub(super) struct Screen {
     cols: u16,
     rows: u16,
     frame_tail: Vec<u8>,
+    /// The start of a frame-start marker the last read split; it is fed with
+    /// the next read, so the marker is always seen whole.
+    begin_tail: Vec<u8>,
     /// The last complete frame, kept while the next one is being drawn.
     complete: Option<Grid>,
 }
@@ -76,6 +79,7 @@ impl Screen {
             cols,
             rows,
             frame_tail: Vec::new(),
+            begin_tail: Vec::new(),
             complete: None,
         };
         screen.resize(cols, rows);
@@ -90,9 +94,13 @@ impl Screen {
             bells: 0,
             frames,
         };
+        let mut joined = std::mem::take(&mut self.begin_tail);
+        joined.extend_from_slice(bytes);
+        let held = split_begin_prefix(&joined);
+        self.begin_tail = joined.split_off(joined.len() - held);
         // Feed up to each frame start; when one starts after a complete
         // screen, keep that screen for readers until the new frame ends.
-        let mut rest = bytes;
+        let mut rest = joined.as_slice();
         while !rest.is_empty() {
             let cut = rest
                 .windows(FRAME_BEGIN.len())
@@ -174,6 +182,14 @@ impl Screen {
 
 pub(super) const CELL_WIDTH_PX: u32 = 8;
 pub(super) const CELL_HEIGHT_PX: u32 = 16;
+
+/// Length of the trailing bytes that could start a split frame-start marker.
+fn split_begin_prefix(bytes: &[u8]) -> usize {
+    (1..FRAME_BEGIN.len().min(bytes.len() + 1))
+        .rev()
+        .find(|len| bytes.ends_with(&FRAME_BEGIN[..*len]))
+        .unwrap_or(0)
+}
 
 /// Counts frame ends across chunk boundaries; `tail` keeps the bytes that
 /// could start a split marker.

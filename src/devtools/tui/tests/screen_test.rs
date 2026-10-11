@@ -126,3 +126,28 @@ fn asciicast_output_keeps_a_character_split_across_reads() {
         .collect();
     assert_eq!(text, "界");
 }
+
+#[test]
+fn a_frame_begin_split_across_reads_keeps_the_last_complete_screen() {
+    let begin = b"\x1b[?2026h";
+    for split in 1..begin.len() {
+        let mut screen = Screen::new(20, 2).unwrap();
+        screen.feed(b"\x1b[?2026hOLD\x1b[?2026l");
+        screen.feed(&begin[..split]);
+        let mut remainder = begin[split..].to_vec();
+        remainder.extend_from_slice(b"\x1b[1;1HNEW");
+        screen.feed(&remainder);
+        assert_eq!(
+            screen.grid().row_text(0),
+            "OLD",
+            "frame begin split at {split}"
+        );
+        screen.feed(b"\x1b[?2026l");
+        assert_eq!(screen.grid().row_text(0), "NEW");
+    }
+    // A held-back lone ESC is not lost when the next read is something else.
+    let mut screen = Screen::new(20, 2).unwrap();
+    screen.feed(b"AB\x1b");
+    screen.feed(b"[1;1HX");
+    assert_eq!(screen.grid().row_text(0), "XB");
+}
