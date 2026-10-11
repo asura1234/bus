@@ -125,7 +125,7 @@ fn a_full_pane_keeps_one_prompt_box_while_typing_and_after_submit() {
     }
     screen.feed(open_box.as_bytes());
     for draft in ["", "h", "he", "hey"] {
-        screen.feed(prompt_box(draft, "claude").as_bytes());
+        screen.feed(prompt_box(draft, "claude", 80).as_bytes());
     }
     assert_eq!(boxes(&screen), vec!["❯ hey"], "{:#?}", rows(&screen));
 
@@ -135,7 +135,7 @@ fn a_full_pane_keeps_one_prompt_box_while_typing_and_after_submit() {
 
     screen.feed(b"\xe2\x8f\xba fake reply: hey\r\n");
     screen.feed(open_box.as_bytes());
-    screen.feed(prompt_box("", "claude").as_bytes());
+    screen.feed(prompt_box("", "claude", 80).as_bytes());
     assert_eq!(boxes(&screen), vec!["❯"], "{:#?}", rows(&screen));
 }
 
@@ -146,4 +146,87 @@ fn the_fake_lifts_exactly_the_lines_bus_expects_claude_to_lift() {
     assert_eq!(lift_images(draft, 0), (draft.to_owned(), 0));
     let escaped = "\"/tmp/a \\\"b\\\".png\"";
     assert_eq!(lift_images(escaped, 0), ("[Image #1]".to_owned(), 1));
+}
+
+#[test]
+fn a_wrapped_draft_keeps_one_prompt_box_and_is_cleared_on_submit() {
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(80, 12).unwrap();
+    for line in 0..30 {
+        screen.feed(format!("transcript {line}\r\n").as_bytes());
+    }
+    screen.feed(format!("\r\n{}\r\n", "─".repeat(60)).as_bytes());
+    screen.feed(prompt_box("", "claude", 80).as_bytes());
+    let draft = "x".repeat(100);
+    screen.feed(prompt_box(&draft, "claude", 80).as_bytes());
+    screen.feed(prompt_box(&format!("{draft}y"), "claude", 80).as_bytes());
+    let rows = |screen: &Screen| -> Vec<String> {
+        screen
+            .grid()
+            .cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .map(|row| row.trim_end().to_owned())
+            .collect()
+    };
+    let visible = rows(&screen);
+    assert_eq!(
+        visible.iter().filter(|row| row.starts_with('❯')).count(),
+        1,
+        "a draft wider than the pane must still have one composer: {visible:#?}"
+    );
+    screen.feed(submitted(&format!("{draft}y")).as_bytes());
+    let visible = rows(&screen);
+    assert!(
+        visible.iter().all(|row| !row.starts_with('❯')),
+        "submitted text must not remain in a stale composer: {visible:#?}"
+    );
+}
+
+#[test]
+fn a_draft_wider_than_the_pane_leaves_no_stale_prompt_box() {
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(80, 24).unwrap();
+    let rows = |screen: &Screen| -> Vec<String> {
+        screen
+            .grid()
+            .cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>()
+            })
+            .map(|row| row.trim_end().to_owned())
+            .collect()
+    };
+    // A room message as Bus types it into the composer, wider than the pane.
+    let message = "[room general] alice: please review the attached plan and reply with the risks you see first!!!";
+    assert_eq!(message.chars().count(), 95);
+    screen.feed(format!("\r\n{}\r\n", "─".repeat(60)).as_bytes());
+    for typed in 0..=message.len() {
+        screen.feed(prompt_box(&message[..typed], "claude", 80).as_bytes());
+    }
+    let prompts: Vec<String> = rows(&screen)
+        .into_iter()
+        .filter(|row| row.starts_with('❯'))
+        .collect();
+    assert_eq!(prompts, vec![format!("❯ {}", &message[..78])]);
+
+    screen.feed(submitted(message).as_bytes());
+    let after = rows(&screen);
+    assert!(
+        after.iter().all(|row| !row.starts_with('❯')),
+        "after submit: {after:#?}"
+    );
+    assert!(
+        after.contains(&format!("> {}", &message[..78])),
+        "{after:#?}"
+    );
 }

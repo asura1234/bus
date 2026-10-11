@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use unicode_width::UnicodeWidthStr;
 
 /// Set in the scratch Bus's environment; the fake only runs where it is set.
 pub(super) const FAKE_AGENT_ENV: &str = "BUS_TUI_FAKE_AGENT";
@@ -150,8 +151,9 @@ impl FakeAgent {
 
     fn redraw(&self, draft: &str) {
         let (shown, _) = lift_images(draft, self.images);
+        let cols = crossterm::terminal::size().map_or(80, |(cols, _)| cols);
         let mut out = std::io::stdout();
-        let _ = write!(out, "{}", prompt_box(&shown, &self.provider));
+        let _ = write!(out, "{}", prompt_box(&shown, &self.provider, cols));
         let _ = out.flush();
     }
 
@@ -235,14 +237,23 @@ pub(super) fn kill_line(draft: &mut String) {
 /// lines already lifted into leading `[Image #N]` chips, continuation lines
 /// indented under the `❯`. It starts and ends with the cursor on the box's
 /// first row: moving relative to the cursor, never to a saved position, keeps
-/// the box in place when drawing it scrolls a full pane.
-pub(super) fn prompt_box(shown: &str, provider: &str) -> String {
-    let lines = shown.split('\n').count();
+/// the box in place when drawing it scrolls a full pane. The move counts the
+/// rows the box takes on a `cols`-wide pane, so lines that wrap count too.
+pub(super) fn prompt_box(shown: &str, provider: &str, cols: u16) -> String {
     let rule = "─".repeat(60);
+    let hint = format!("  ? for shortcuts · fake {provider}");
+    let rows = |text: &str| {
+        let cols = usize::from(cols.max(1));
+        UnicodeWidthStr::width(text).div_ceil(cols).max(1)
+    };
+    let draft_rows: usize = shown
+        .split('\n')
+        .map(|line| rows(&format!("❯ {line}")))
+        .sum();
     format!(
-        "\r\x1b[J❯ {}\r\n{rule}\r\n  ? for shortcuts · fake {provider}\x1b[{}A\r\x1b[{}C",
+        "\r\x1b[J❯ {}\r\n{rule}\r\n{hint}\x1b[{}A\r\x1b[{}C",
         shown.replace('\n', "\r\n  "),
-        1 + lines,
+        draft_rows + rows(&rule) + rows(&hint) - 1,
         2 + shown.rsplit('\n').next().unwrap_or("").chars().count()
     )
 }
