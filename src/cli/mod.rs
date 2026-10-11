@@ -130,6 +130,7 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         // Bus's session setup would otherwise create a missing explicit root
         // with default permissions, which Bus's private control socket rejects.
         bus_io::private_dir(&root)?;
+        require_private_root(&root)?;
     }
     std::env::set_var("BUS_DATA_DIR", &root);
     match &local_session_id {
@@ -160,6 +161,19 @@ pub(crate) fn run(args: &[String]) -> io::Result<()> {
         Action::Paths => print_paths(&root, &base, dev),
         Action::Sessions | Action::Help => unreachable!(),
     }
+}
+
+/// Every session runs its control socket in the data root, and the socket
+/// refuses a root that others can reach. An existing BUS_DATA_DIR keeps its
+/// mode, so refuse a shared one here, before anything starts, with the fix.
+fn require_private_root(root: &std::path::Path) -> io::Result<()> {
+    crate::platform::ipc::validate_private_socket_directory(root).map_err(|error| {
+        io::Error::other(format!(
+            "BUS_DATA_DIR {} must be private to you, because every session runs its control socket there ({error}); run `chmod 700 {}`",
+            root.display(),
+            root.display()
+        ))
+    })
 }
 
 pub(crate) fn apply_config(config: &mut crate::utils::config::Config) {
@@ -202,7 +216,40 @@ fn run_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_invocation, Action, Invocation, ResumeTarget, USAGE};
+    use super::{parse_invocation, require_private_root, Action, Invocation, ResumeTarget, USAGE};
+
+    /// A normal session used to run without a control socket, so a shared
+    /// BUS_DATA_DIR still started. Now every session runs the socket, which
+    /// refuses such a root, so launch refuses it first and names the fix.
+    #[cfg(unix)]
+    #[test]
+    fn a_normal_session_in_a_shared_data_dir_is_refused_before_it_starts() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::utils::test_temp::unique_temp_path("bshared");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = require_private_root(&dir).unwrap_err().to_string();
+        assert!(error.contains("chmod 700"), "{error}");
+        let (tx, _rx) = std::sync::mpsc::sync_channel(0);
+        assert!(
+            crate::messaging::control::start(&dir, tx).is_err(),
+            "the control socket refuses the shared root the check refuses"
+        );
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(
+            mode & 0o777,
+            0o755,
+            "launch never chmods the user's directory"
+        );
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        require_private_root(&dir).unwrap();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(0);
+        let control = crate::messaging::control::start(&dir, tx);
+        assert!(control.is_ok(), "a private root runs the control socket");
+        drop(control);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
