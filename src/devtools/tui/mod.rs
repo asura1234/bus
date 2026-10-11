@@ -377,7 +377,9 @@ fn stop(name: &str) -> Value {
     let paths = paths(name);
     let info = paths.read_info();
     let response = request(name, &Command::Stop);
-    if response["ok"].as_bool() == Some(true) {
+    // The host answered, so it is shutting down, even when it reports a
+    // problem with what it kept.
+    if response["run_dir"].is_string() {
         if let Some(info) = info {
             let deadline = Instant::now() + Duration::from_secs(10);
             while session::process_alive(info.host_pid) && Instant::now() < deadline {

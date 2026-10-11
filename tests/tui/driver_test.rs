@@ -411,6 +411,32 @@ fn a_quit_reports_the_exit_status_of_bus() {
 }
 
 #[test]
+fn stop_reports_when_effect_recording_cannot_be_archived() {
+    let session = Session::start("archive");
+    let status = session.ok(&["status"]);
+    let artifact_dir = PathBuf::from(status["run_dir"].as_str().unwrap());
+    let recording = session_dir(&session.0).join("effects.ndjson");
+    std::fs::write(
+        &recording,
+        b"{\"kind\":\"sound\",\"target\":\"fixture.aiff\",\"at_ms\":1}\n",
+    )
+    .unwrap();
+    // A directory at the destination deterministically makes the copy fail.
+    let destination = artifact_dir.join("effects.ndjson");
+    std::fs::create_dir(&destination).unwrap();
+    let (code, stopped) = tui(&session.0, &["stop"]);
+    let kept = std::fs::read_to_string(&recording).unwrap_or_default();
+    std::fs::remove_dir(&destination).unwrap();
+    let _ = std::fs::remove_dir_all(session_dir(&session.0));
+    assert_ne!(code, 0, "{stopped}");
+    assert_eq!(stopped["error"]["code"], "effects_not_kept", "{stopped}");
+    assert!(
+        kept.contains("fixture.aiff"),
+        "the original recording must survive a failed archive: {stopped}"
+    );
+}
+
+#[test]
 fn a_refused_root_override_leaves_the_directory_untouched() {
     use std::os::unix::fs::PermissionsExt;
     let base = PathBuf::from(format!("/tmp/bus-tui-it-root{}", std::process::id()));

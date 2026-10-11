@@ -100,8 +100,10 @@ run, when the target belongs to a live Bus, when inherited
 
 Quits the scratch Bus, stops its server, terminates processes the session
 started that still hold its directory (never anything else, including the
-caller), copies the Bus logs into the run folder and removes the session
-directory. Prints the run folder.
+caller), copies the Bus logs and `effects.ndjson` into the run folder and
+removes the session directory. Prints the run folder. If the effect log cannot
+be copied, `stop` fails with `effects_not_kept` and leaves the session directory
+(and the log in it) until the next `start` of that session.
 
 ### status
 `status [--name NAME]`

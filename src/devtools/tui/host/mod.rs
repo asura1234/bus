@@ -442,7 +442,9 @@ impl Host {
             let _ = stream.flush();
             if stop {
                 drop(stream);
-                let _ = self.paths.remove();
+                if response["ok"] == true {
+                    let _ = self.paths.remove();
+                }
                 return 0;
             }
         }
@@ -470,11 +472,20 @@ impl Host {
             &self.info.data_dir,
             &self.info.run_dir.join("logs")
         ));
-        // The effect log lives in the session dir, which stop removes; keep it.
-        let _ = std::fs::copy(
+        // The effect log lives in the session dir, which stop removes; keep
+        // it. If the copy fails, say so and leave the session dir in place.
+        let (from, to) = (
             self.paths.effects_log(),
             self.info.run_dir.join("effects.ndjson"),
         );
+        if from.exists() {
+            if let Err(error) = std::fs::copy(&from, &to) {
+                report["ok"] = json!(false);
+                report["error"] = json!({"code": "effects_not_kept", "message": format!(
+                    "could not copy {} to {}: {error}; the session dir is kept until the next start of this session",
+                    from.display(), to.display())});
+            }
+        }
         let leftovers = super::session::pids_owned(&self.paths.dir, &self.token);
         for pid in &leftovers {
             super::session::terminate(*pid);
