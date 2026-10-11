@@ -1,6 +1,8 @@
 //! `bus --dev tui` against the built binary: a scratch Bus driven only through
 //! the driver CLI, and the guards that keep it away from every other Bus.
-#![cfg(unix)]
+// Only the dev variant has the driver; the gate runs this target in its
+// dev-tools lane, and an explicit `--test '*'` must still build without it.
+#![cfg(all(unix, feature = "dev-tools"))]
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
