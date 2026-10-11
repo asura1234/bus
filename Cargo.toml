@@ -14,6 +14,8 @@ include = [
     "orchestration/**/*",
     "workflows/**/*",
     "docs/dev-tools.md",
+    # The tui driver's --help is compiled in from it.
+    "docs/tui-driver.md",
     "vendor/libghostty-vt/**/*",
     "!vendor/libghostty-vt/.zig-cache/**/*",
     "!vendor/libghostty-vt/zig-out/**/*",
