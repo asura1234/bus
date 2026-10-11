@@ -761,12 +761,12 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
         .unwrap();
     let request = |status: &serde_json::Value| status["requests"][0].clone();
 
-    let fresh = request(&worker.dev_message_at(message, now).unwrap());
+    let fresh = request(&worker.control_message_at(message, now).unwrap());
     assert_eq!(fresh["stage"], "queued");
     assert!(fresh["stalled_from"].is_null());
 
     let later = now + crate::messaging::model::QUEUED_STALL_MS;
-    let stalled = request(&worker.dev_message_at(message, later).unwrap());
+    let stalled = request(&worker.control_message_at(message, later).unwrap());
     assert_eq!(stalled["stage"], "stalled", "{stalled}");
     assert_eq!(stalled["stalled_from"], "queued");
     let expected = crate::messaging::diagnostics::wait_reason(worker.state.agent(codex).unwrap());
@@ -781,7 +781,7 @@ fn message_status_shows_a_stalled_stage_with_its_reason() {
         .observe_status(codex, RuntimeStatus::Blocked, later)
         .unwrap();
     let much_later = later + crate::messaging::model::BLOCKED_STALL_MS;
-    let blocked = request(&worker.dev_message_at(message, much_later).unwrap());
+    let blocked = request(&worker.control_message_at(message, much_later).unwrap());
     assert_eq!(blocked["stage"], "queued", "{blocked}");
     assert_eq!(blocked["reason"], "blocked_unanswered");
 
