@@ -209,6 +209,7 @@ def main(argv: list[str]) -> int:
     init.add_argument("--commit", required=True)
     init.add_argument("--platform", required=True)
     init.add_argument("--runs-root", default="temp/e2e-tui/runs")
+    init.add_argument("--name", help="run folder name under --runs-root (default: the UTC start time)")
     checker = commands.add_parser("check")
     checker.add_argument("--doc", required=True)
     checker.add_argument("report")
@@ -220,7 +221,10 @@ def main(argv: list[str]) -> int:
         if args.command == "init":
             chosen = select(cases, args.cases)
             started = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-            run_dir = Path(args.runs_root) / started
+            name = args.name if args.name is not None else started
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+                raise ValueError(f"--name {name!r} must be one plain folder name")
+            run_dir = Path(args.runs_root) / name
             run_dir.mkdir(parents=True, exist_ok=False)
             report = run_dir / "report.md"
             report.write_text(

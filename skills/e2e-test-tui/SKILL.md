@@ -26,7 +26,7 @@ Every driver call for a case names its session: `T <verb> --name <name> ...`.
 
 -- Start the report from the doc; never write case or step headings by hand.
 Run:
-  python3 skills/e2e-test-tui/scripts/e2e_report.py init --doc <doc> [--cases <IDs>] \
+  python3 skills/e2e-test-tui/scripts/e2e_report.py init --doc <doc> [--cases <IDs>] [--name <run folder>] \
     --commit "$(git rev-parse HEAD)" --platform "<OS>, Ghostty <version> for --real, <size>"
 report = its stdout line; run_dir = dirname(report)
 

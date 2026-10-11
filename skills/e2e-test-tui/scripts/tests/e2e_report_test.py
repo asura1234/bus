@@ -105,6 +105,20 @@ class E2eReportTest(unittest.TestCase):
             report.write_text(filled({"APP-02": ["PASS"]}), encoding="utf-8")
             self.assertEqual(e2e_report.main(["check", "--doc", str(doc), str(report)]), 0)
 
+    def test_init_names_the_run_folder_when_asked(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            doc = Path(root, "doc.md")
+            doc.write_text(DOC, encoding="utf-8")
+            args = ["init", "--doc", str(doc), "--commit", "abc", "--platform", "macOS",
+                    "--runs-root", root]
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(e2e_report.main(args + ["--name", "runner-1"]), 0)
+            self.assertEqual(out.getvalue().strip(), str(Path(root, "runner-1", "report.md")))
+            with contextlib.redirect_stderr(io.StringIO()):
+                for bad in ("../up", "a/b", ""):
+                    self.assertEqual(e2e_report.main(args + ["--name", bad]), 2, bad)
+
     def test_a_case_without_numbered_steps_is_refused_not_passed(self) -> None:
         # Unnumbered steps (bullets or prose) used to score PASS untouched.
         for body in ("Launch Bus and verify its initial room.", "- Launch → it starts."):
