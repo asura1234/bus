@@ -81,6 +81,15 @@ impl Host {
                 let needle = needle(text, *regex)?;
                 let matches = screen::find(&grid, &needle, *rows);
                 let chosen = match nth {
+                    Some(n) if *n > matches.len() && !matches.is_empty() => {
+                        return Err(failure(
+                            "not_found",
+                            format!(
+                                "--nth {n}: only {} matches for {text:?} (--nth counts from 1)",
+                                matches.len()
+                            ),
+                        ))
+                    }
                     Some(n) => matches.get(n.saturating_sub(1)),
                     None if matches.len() == 1 => matches.first(),
                     None if matches.is_empty() => None,
@@ -88,7 +97,7 @@ impl Host {
                         return Err(failure(
                             "ambiguous",
                             format!(
-                                "{} matches for {text:?} at {}; pass --nth N or narrow with --rows",
+                                "{} matches for {text:?} at {}; pass --nth N (1 = first, in reading order) or narrow with --rows",
                                 matches.len(),
                                 matches
                                     .iter()

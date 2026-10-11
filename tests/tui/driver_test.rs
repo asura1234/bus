@@ -461,6 +461,25 @@ fn reads_still_work_after_a_quit() {
 }
 
 #[test]
+fn nth_counts_matches_from_one() {
+    let session = Session::start("nth");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    let first = session.ok(&["find", "bus"])["matches"][0].clone();
+    // `--nth 1` is the first match in reading order.
+    let hovered = session.ok(&["hover", "--text", "bus", "--nth", "1"]);
+    assert_eq!(hovered["at"][0], first["row"], "{hovered} vs {first}");
+    let (code, value) = tui(&session.0, &["hover", "--text", "bus", "--nth", "99"]);
+    assert_eq!(code, 1, "{value}");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--nth counts from 1"),
+        "{value}"
+    );
+}
+
+#[test]
 fn stop_keeps_the_recorded_effects_in_the_run_dir() {
     let session = Session::start("ek");
     session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);

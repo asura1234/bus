@@ -81,7 +81,9 @@ expect, effects, clipboard, fixture, journey, gc.
 
 Targets: click, hover, scroll and `wait --style` take a cell `ROW COL`, a
 visible text `--text TEXT [--regex] [--nth N] [--rows A-B]`, or a named
-region of the room UI `--hit NAME` (see `hits`). Prefer `--hit`, then `--text`.
+region of the room UI `--hit NAME` (see `hits`). Prefer `--hit`, then
+`--text`. `--nth N` picks the Nth match counting from 1 (`--nth 1` is the
+first), in reading order: top to bottom, then left to right.
 Run `bus --dev tui VERB --help` for one verb.
 
 ### start
@@ -201,8 +203,8 @@ terminal negotiated, so Esc never waits out a timeout.
 `click (ROW COL | --text TEXT [--regex] [--nth N] [--rows A-B]) [--double] [--button left|middle|right] [--mods shift,alt,ctrl]`
 
 Clicks a cell, or the middle of a visible text match. A text that matches
-more than once needs `--nth N` or `--rows`. `--double` sends two clicks
-inside Bus's double-click window.
+more than once needs `--nth N` (counting from 1, in reading order) or
+`--rows`. `--double` sends two clicks inside Bus's double-click window.
 
 ### hover
 `hover (ROW COL | --text TEXT | --hit NAME)`

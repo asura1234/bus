@@ -35,6 +35,14 @@ fn sizes_durations_and_rows_parse() {
 }
 
 #[test]
+fn nth_counts_from_one() {
+    for bad in ["0", "first", "-1"] {
+        let error = command("click", &mut parsed(&["--text", "Add", "--nth", bad])).unwrap_err();
+        assert!(error.contains("counting from 1"), "{bad}: {error}");
+    }
+}
+
+#[test]
 fn verbs_build_host_commands() {
     let click = command(
         "click",
