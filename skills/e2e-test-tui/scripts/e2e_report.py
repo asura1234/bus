@@ -106,6 +106,8 @@ def check(report: str, cases: list[Case]) -> tuple[list[str], list[str]]:
     if [case.id for case in chosen] != listed:
         errors.append("Cases must be in doc order")
     sections = re.split(r"^## ", report, flags=re.M)[1:]
+    if sections and sections[-1].startswith("Summary\n"):
+        sections.pop()  # the runner appends check's own output; checking it again must not fail
     if [section.split(" — ", 1)[0] for section in sections] != listed:
         return errors + ["case sections do not match `Cases` one to one, in order"], []
     summary = []

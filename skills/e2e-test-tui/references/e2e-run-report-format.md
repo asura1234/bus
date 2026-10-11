@@ -49,3 +49,5 @@ Rules `check` enforces:
 `check` prints one line per case (`<CASE-ID> PASS|FAIL|SKIP|PARTIAL`: FAIL if any step failed,
 PASS if every step passed, SKIP if every step was skipped, else PARTIAL) and a final line
 `Verdict: GREEN` when no step failed, else `Verdict: RED`.
+
+The runner appends that output under a final `## Summary` section; `check` ignores the section.

@@ -66,6 +66,8 @@ class E2eReportTest(unittest.TestCase):
         self.assertEqual(summary, ["APP-01 PARTIAL", "APP-02 PASS"])
         errors, summary = e2e_report.check(filled({"APP-02": ["FAIL"]}), self.cases)
         self.assertEqual((errors, summary), ([], ["APP-02 FAIL"]))
+        summarised = filled({"APP-02": ["FAIL"]}) + "\n## Summary\n\n```text\nAPP-02 FAIL\n```\n"
+        self.assertEqual(e2e_report.check(summarised, self.cases), ([], ["APP-02 FAIL"]))
 
     def test_incomplete_or_malformed_reports_are_refused(self) -> None:
         cases = e2e_report.select(self.cases, "APP-02")
