@@ -65,6 +65,16 @@ pub(super) fn dispatch_client_shell_actions(
                     }
                 }
             }
+            // A relative path would resolve against the client's directory,
+            // not the message author's, and could read as an `open` flag.
+            shell::ClientShellAction::OpenPath(path) if path.is_absolute() => {
+                match crate::platform::open_url(&path.to_string_lossy()) {
+                    Ok(Some(child)) => detached_process_children.push(child),
+                    Ok(None) => {}
+                    Err(err) => warn!(err = %err, path = %path.display(), "failed to open path"),
+                }
+            }
+            shell::ClientShellAction::OpenPath(_) => {}
             shell::ClientShellAction::ReplayMouse(events) => replay_mouse.extend(events),
         }
     }

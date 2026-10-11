@@ -75,7 +75,7 @@ impl BusUi {
             Action::Recipient(None) => "recipient:none".into(),
             Action::Files => "files".into(),
             Action::RemoveFile(path) => format!("remove-file:{}", file(path)),
-            Action::FileDetail(path) => format!("file:{}", file(path)),
+            Action::OpenFile(path) => format!("file:{}", file(path)),
             Action::Details(id) => format!("details:{}", self.agent_name(*id)),
             Action::Quote(id) => format!("quote:{}", id.0),
             Action::Field(index) => format!("field:{index}"),

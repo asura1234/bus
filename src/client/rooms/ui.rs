@@ -95,6 +95,7 @@ pub(in crate::client) struct BusUi {
     pub(super) history_follow_tail: bool,
     pub(super) history: super::history::History,
     pub(super) thumbnails: super::thumbnails::Thumbnails,
+    pub(super) link_paths: super::links::PathProbe,
     /// The screen the last view showed: room, agent terminal, form, dialog.
     pub(super) view_key: Option<ViewKey>,
     /// The view switched screens since the client last repainted every cell.
@@ -194,6 +195,7 @@ impl BusUi {
             history_follow_tail: true,
             history: super::history::History::default(),
             thumbnails: super::thumbnails::Thumbnails::default(),
+            link_paths: super::links::PathProbe::default(),
             view_key: None,
             full_repaint: false,
             graphics: None,
@@ -600,6 +602,7 @@ impl BusUi {
         changed |= self.tick_status_animation(std::time::Instant::now());
         changed |= self.tick_toast(std::time::Instant::now());
         changed |= self.thumbnails.stale();
+        changed |= self.link_paths.poll();
         changed
     }
 

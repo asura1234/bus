@@ -498,7 +498,7 @@ fn image_attachments_draw_as_thumbnails_instead_of_their_name() {
 
     let lines = ui.history.cached();
     assert!(
-        !lines.iter().any(|line| line.text == "[shot.png]"),
+        !lines.iter().any(|line| line.text == "shot.png"),
         "the picture replaces the name placeholder"
     );
     let first = lines
@@ -517,8 +517,8 @@ fn image_attachments_draw_as_thumbnails_instead_of_their_name() {
     assert!(lines[first..first + 4]
         .iter()
         .all(|line| line.text.is_empty()
-            && line.action == Some(render::Action::FileDetail(image.clone()))));
-    assert!(lines.iter().any(|line| line.text == "[notes.md]"));
+            && line.action == Some(render::Action::OpenFile(image.clone()))));
+    assert!(lines.iter().any(|line| line.text == "notes.md"));
     assert_eq!(
         lines.iter().filter(|line| line.thumbnail.is_some()).count(),
         4,
@@ -555,12 +555,12 @@ fn image_attachments_fall_back_to_their_name_without_kitty_or_the_file() {
         .history
         .cached()
         .iter()
-        .any(|line| line.text == "[shot.png]"));
+        .any(|line| line.text == "shot.png"));
 
     ui.thumbnails.set_cell(Some(CELL));
     ui.compute_view(100, 40);
     let lines = ui.history.cached();
-    assert!(lines.iter().any(|line| line.text == "[gone.jpg]"));
+    assert!(lines.iter().any(|line| line.text == "gone.jpg"));
     assert_eq!(
         lines.iter().filter(|line| line.thumbnail.is_some()).count(),
         4,
@@ -766,7 +766,7 @@ fn iterm2_draws_the_picture_at_its_reserved_rows() {
 
     // The picture's rows open the file; no name placeholder is drawn.
     let lines = ui.history.cached();
-    assert!(!lines.iter().any(|line| line.text == "[shot.png]"));
+    assert!(!lines.iter().any(|line| line.text == "shot.png"));
     let rows: Vec<_> = lines
         .iter()
         .filter(|line| line.thumbnail.is_some())
@@ -774,7 +774,7 @@ fn iterm2_draws_the_picture_at_its_reserved_rows() {
     assert_eq!(rows.len(), 4);
     assert!(rows
         .iter()
-        .all(|line| line.action == Some(render::Action::FileDetail(image.clone()))));
+        .all(|line| line.action == Some(render::Action::OpenFile(image.clone()))));
 
     let placement = ui.view.thumbnails[0].clone();
     ui.full_repaint = false;
@@ -816,9 +816,9 @@ fn without_an_image_protocol_the_name_row_is_still_clickable() {
     let lines = ui.history.cached();
     let caption = lines
         .iter()
-        .find(|line| line.text == "[shot.png]")
+        .find(|line| line.text == "shot.png")
         .expect("image name row");
-    assert_eq!(caption.action, Some(render::Action::FileDetail(image)));
+    assert_eq!(caption.action, Some(render::Action::OpenFile(image)));
     assert!(lines.iter().all(|line| line.thumbnail.is_none()));
     assert!(ui.thumbnail_graphics().is_empty());
     std::fs::remove_dir_all(dir).unwrap();

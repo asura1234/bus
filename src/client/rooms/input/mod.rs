@@ -137,7 +137,7 @@ impl BusUi {
             .map(|h| h.action.clone());
         if mouse.kind == MouseEventKind::Moved {
             let detail = match &hit {
-                Some(Action::RemoveFile(path) | Action::FileDetail(path)) => {
+                Some(Action::RemoveFile(path) | Action::OpenFile(path)) => {
                     Some(path.display().to_string())
                 }
                 _ => None,
@@ -152,6 +152,14 @@ impl BusUi {
             return Some(true);
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            if let Some(Action::OpenFile(path)) = &hit {
+                outcome
+                    .actions
+                    .push(crate::client::compositor::ClientShellAction::OpenPath(
+                        path.clone(),
+                    ));
+                return Some(true);
+            }
             if let Some(action) = hit {
                 let double = self.last_click.as_ref().is_some_and(|(last, time)| {
                     *last == action && time.elapsed() < std::time::Duration::from_millis(400)
@@ -548,7 +556,8 @@ impl BusUi {
             Action::Recipient(id) => self.toggle_recipient(id),
             Action::Files => self.open_form(Form::Files(Editor::new("~/".into()))),
             Action::RemoveFile(path) => self.remove_room_file(path),
-            Action::FileDetail(path) => self.detail_path = Some(path.display().to_string()),
+            // Opening needs the client shell; `room_mouse` handles the click.
+            Action::OpenFile(_) => {}
             Action::Details(agent) => {
                 if let Some(a) = self.snapshot.state.agent(agent) {
                     self.queue(

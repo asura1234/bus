@@ -11,6 +11,7 @@ mod forms;
 mod help;
 mod history;
 mod input;
+mod links;
 #[path = "widgets/recipients.rs"]
 mod recipients;
 mod render;
@@ -263,6 +264,9 @@ mod tests {
 
     #[path = "history_slots_test.rs"]
     mod history_slots_tests;
+
+    #[path = "history_links_test.rs"]
+    mod history_links_tests;
 
     #[path = "history_scroll_test.rs"]
     mod history_scroll_tests;

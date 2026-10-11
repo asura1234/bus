@@ -2,6 +2,7 @@
 use super::super::{
     chat_search::ChatSearch,
     history::{Line, Tone},
+    links::{visible_links, Candidate, LINK},
     recipients::Layout as RecipientLayout,
     thumbnails::Placement,
     BusUi, ComposerSize, LocalRoom,
@@ -112,7 +113,12 @@ impl BusUi {
             self.main_scroll.min(view.history_max_scroll)
         };
         view.history_text = Rect::new(layout.x, history_y, width, view.history.height);
-        self.history_rows(view, content);
+        let visible = content
+            .iter()
+            .skip(self.main_scroll)
+            .take(usize::from(view.history.height));
+        let links = visible_links(&mut self.link_paths, visible);
+        self.history_rows(view, content, &links);
         if !title.is_empty() && view.composer_box.height > 0 {
             view.row(
                 Rect::new(layout.x, view.composer_box.y, width, 1),
@@ -318,7 +324,7 @@ impl BusUi {
         }
     }
 
-    fn history_rows(&self, view: &mut View, content: &[Line]) {
+    fn history_rows(&self, view: &mut View, content: &[Line], links: &[Vec<Candidate>]) {
         let Rect {
             x,
             y: history_y,
@@ -379,6 +385,21 @@ impl BusUi {
                 view.select(rect, &line.text, 0, &(from..to), newline);
             }
             self.history_row_styles(view, line, rect);
+            for link in links.get(index).into_iter().flatten() {
+                let column = line.text[..link.range.start].width() as u16;
+                let text = &line.text[link.range.clone()];
+                let link_rect = Rect::new(
+                    rect.x + column,
+                    rect.y,
+                    (text.width() as u16).min(width.saturating_sub(column)),
+                    1,
+                );
+                view.row(link_rect, text, None, false, false);
+                view.style_last_row(link_rect, LINK);
+                if link_rect.width > 0 {
+                    view.history_links.push((link_rect, link.target.clone()));
+                }
+            }
             highlight_history_row(view, line, line_index, rect, current_match.as_ref());
         }
     }
