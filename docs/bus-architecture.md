@@ -190,8 +190,10 @@ Files are split by ownership, not by helper.
       `control/{rooms_test,agents_test,messages_test,dialogs_test,inspect_test}.rs`
   - `native.rs`: `NativeServerClient`, the coordinator's API client to the server
   - `storage/`: `state_store.rs` (`JsonStore`), `sessions.rs` (local session registry), `tests/`
-  - `control/`: `server.rs` (control socket, started only with `--dev`; `send --as` must name an agent in the room or its
-    orchestrator, other commands trust the caller), `protocol.rs` (framing)
+  - `control/`: `server.rs` (`control.sock`, run by every session; `send --as` must name an agent in the room or its
+    orchestrator, other commands trust the caller), `protocol.rs` (framing). The coordinator's `control/mod.rs` holds
+    the method table, where each method has a tier: agent-tier methods answer in every session, dev-tier methods only in
+    a session started with `--dev` (`dev_tools_disabled` otherwise); see `docs/dev-tools.md`
   - `prefs/`: `settings.rs` (`settings.json`), `colors.rs` (agent palette)
   - `orchestration.rs`: embed `orchestration/` and `workflows/`, write the docs into the Bus data root, and fill MASTER
     prompt placeholders; compiled-in copies are the only defaults in every build
