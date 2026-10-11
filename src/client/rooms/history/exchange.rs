@@ -247,7 +247,7 @@ impl History {
                         .cloned(),
                 );
                 lines.push(Line {
-                    text: "    Quote".into(),
+                    text: "    Quote  Copy".into(),
                     action: Some(Action::Quote(request)),
                     tone: Tone::Muted,
                     spans: Vec::new(),

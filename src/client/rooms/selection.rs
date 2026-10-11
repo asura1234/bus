@@ -24,7 +24,7 @@ pub(super) struct Point {
 
 /// Orders a history selection. It is never widened: a drag selects exactly
 /// the characters from press to release, inside rendered Markdown too, the
-/// way a text view does. Whole replies are copied through `Quote` instead.
+/// way a text view does. A reply's `Copy` button copies its Markdown source.
 pub(super) fn normalize_history_selection(
     _lines: &[super::history::Line],
     selection: Option<(Point, Point)>,
@@ -34,7 +34,7 @@ pub(super) fn normalize_history_selection(
 }
 
 /// The text of `lines` between `start` and `end`, as shown: layout indents,
-/// thumbnails and the `Quote` buttons are not message text, soft-wrapped rows
+/// thumbnails and the `Quote`/`Copy` buttons are not message text, soft-wrapped rows
 /// rejoin, and every real line end stays a line end.
 pub(super) fn history_text(lines: &[super::history::Line], start: Point, end: Point) -> String {
     let mut text = String::new();
@@ -54,12 +54,10 @@ pub(super) fn history_text(lines: &[super::history::Line], start: Point, end: Po
         } else {
             line.text.len()
         };
-        let mut piece = line.text.get(from..to.max(from)).unwrap_or_default();
+        let piece = line.text.get(from..to.max(from)).unwrap_or_default();
         if !first {
             if line.continued {
                 if line.rejoin_space {
-                    // The renderer's continuation indent is layout, not text.
-                    piece = piece.trim_start();
                     text.push(' ');
                 }
             } else {
