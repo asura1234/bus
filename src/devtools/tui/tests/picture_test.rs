@@ -44,3 +44,39 @@ fn colors_parse_the_names_the_screen_reports() {
     assert_eq!(parse_color("lightblue"), Some([59, 142, 234]));
     assert_eq!(parse_color("default"), None);
 }
+
+#[test]
+fn italic_cells_look_different_from_plain_ones() {
+    use crate::devtools::tui::screen::Screen;
+
+    let mut screen = Screen::new(5, 1).unwrap();
+    screen.feed(b"plain");
+    let normal = screen.grid();
+    screen.feed(b"\x1b[H\x1b[3mplain\x1b[0m");
+    let italic = screen.grid();
+    assert!(italic.cells[0][0].attrs.contains(&"italic"));
+    assert!(!normal.cells[0][0].attrs.contains(&"italic"));
+
+    let normal_path =
+        crate::utils::test_temp::unique_temp_path("normal-cell-style").with_extension("png");
+    let italic_path =
+        crate::utils::test_temp::unique_temp_path("italic-cell-style").with_extension("png");
+    let normal_size = write_png(&normal, &normal_path).unwrap();
+    let italic_size = write_png(&italic, &italic_path).unwrap();
+    let decode = |path: &Path| {
+        let decoder = png::Decoder::new(std::fs::File::open(path).unwrap());
+        let mut reader = decoder.read_info().unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        reader.next_frame(&mut pixels).unwrap();
+        pixels
+    };
+    let normal_pixels = decode(&normal_path);
+    let italic_pixels = decode(&italic_path);
+    std::fs::remove_file(normal_path).unwrap();
+    std::fs::remove_file(italic_path).unwrap();
+    assert_eq!(normal_size, italic_size);
+    assert!(
+        normal_pixels != italic_pixels,
+        "italic terminal cells must remain visibly distinct in a cell screenshot"
+    );
+}

@@ -113,13 +113,21 @@ fn draw_glyph(
 ) {
     let left = x as i32 + metrics.xmin;
     let top = baseline - metrics.height as i32 - metrics.ymin;
-    // A second pass one pixel right stands in for a bold face.
+    // A second pass one pixel right stands in for a bold face, and a slant
+    // about the baseline for an italic one.
     let passes = if cell.attrs.contains(&"bold") { 2 } else { 1 };
+    let italic = cell.attrs.contains(&"italic");
     for pass in 0..passes {
         for gy in 0..metrics.height {
+            let py = top + gy as i32;
+            let slant = if italic {
+                (baseline - py).div_euclid(4)
+            } else {
+                0
+            };
             for gx in 0..metrics.width {
                 let alpha = coverage[gy * metrics.width + gx];
-                let (px, py) = (left + gx as i32 + pass, top + gy as i32);
+                let px = left + gx as i32 + pass + slant;
                 if px >= 0 && py >= 0 {
                     canvas.blend(px as usize, py as usize, fg, alpha);
                 }
