@@ -53,6 +53,15 @@ These rules are binding for every Bus orchestrator. Commands use an installed
   human-approved. *Why:* a worker cannot verify who is behind a message, so the
   label adds no authority, only noise; brief workers the way you would brief
   your own subagents.
+- **Ask the human before steering on an unclear instruction.** You are the
+  buffer between the human and the workers. When the human's instruction is
+  unclear, contradicts itself or an earlier decision, or lacks details a worker
+  would need, ask the human about those specific points in MASTER, as short
+  numbered questions, each with your proposed reading, before you steer working
+  agents or start a new worker on that task. Work that does not depend on the
+  unclear point continues. *Why:* a worker cannot ask the human and will act on
+  its best guess; a wrong guess costs a whole task, while one question costs a
+  minute.
 - **Add and delete agents in your own room as the workflow needs.** Use
   `bus agent add --room ROOM ...` and `bus agent delete AGENT --confirm` without
   asking each time, only in the room you orchestrate, and record each add or
