@@ -67,6 +67,18 @@ fn terminal_notifications_are_found_across_chunks() {
 }
 
 #[test]
+fn sessions_refuse_to_start_where_effects_would_go_unrecorded() {
+    assert_eq!(unsupported_os("macos"), None);
+    for os in ["linux", "windows"] {
+        let message = unsupported_os(os).expect(os);
+        assert!(
+            message.contains("macOS only") && message.contains(os),
+            "{message}"
+        );
+    }
+}
+
+#[test]
 fn a_notification_cut_short_by_another_sequence_is_seen_and_stripped_alike() {
     // An ESC that is not ST cancels the string and starts the next sequence.
     let bytes = b"a\x1b]9;done\x1b[31mred";

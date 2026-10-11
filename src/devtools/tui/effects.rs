@@ -21,6 +21,19 @@ pub(super) const EFFECTS_ENV: &str = "BUS_TUI_EFFECTS";
 pub(super) const CLIPBOARD_IMAGE_ENV: &str = "BUS_TUI_CLIPBOARD_IMAGE";
 pub(super) const COMMANDS: &[&str] = &["open", "osascript", "afplay", "terminal-notifier"];
 
+/// Why a session cannot start on `os`, if it cannot. The stand-ins cover the
+/// commands Bus uses on macOS only. Elsewhere Bus opens links, notifies and
+/// plays sounds through other programs, which would reach this machine
+/// unrecorded, so sessions refuse to start there (Linux is a non-goal for
+/// now, Windows comes later).
+pub(super) fn unsupported_os(os: &str) -> Option<String> {
+    (os != "macos").then(|| {
+        format!(
+            "driver sessions run on macOS only: the effect recorder cannot stand in for the programs Bus uses on {os} to open links, show notifications and play sounds"
+        )
+    })
+}
+
 /// Runs a stand-in when this process is one; returns its exit code.
 pub(super) fn run(command: &str, args: &[String]) -> i32 {
     let (effect, code) = match command {

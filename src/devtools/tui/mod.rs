@@ -215,6 +215,9 @@ fn start(name: &str, parsed: &mut args::Parsed) -> Result<Value, String> {
     // --run-dir means the caller's cwd.
     let run_root = parsed.take_value("--run-dir").map(|dir| cwd.join(dir));
     parsed.finish()?;
+    if let Some(message) = effects::unsupported_os(std::env::consts::OS) {
+        return Ok(failure("refused", message));
+    }
     let started = Instant::now();
     let binary = std::env::current_exe().map_err(|e| e.to_string())?;
     let allow_target_debug = std::env::var_os(session::ALLOW_TARGET_DEBUG_ENV).is_some();

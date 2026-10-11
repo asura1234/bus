@@ -36,7 +36,9 @@ The same PATH holds recording stand-ins for `open`, `osascript`,
 and files, show desktop notifications, read a clipboard image and play sounds.
 They record each call (see `effects`) and do nothing else: nothing opens, no
 notification appears, no sound plays, and Ctrl+V pastes the session's fixture
-image (`fixture clipboard-image`), never your clipboard.
+image (`fixture clipboard-image`), never your clipboard. Sessions therefore run
+on macOS only: on Linux and Windows Bus uses other programs the recorder does
+not stand in for, so `start` refuses there.
 
 What notifies in Bus: the room UI never shows a desktop or terminal
 notification. A new agent reply (or agent notice) in a room whose sound is on

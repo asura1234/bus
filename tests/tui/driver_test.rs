@@ -2,7 +2,8 @@
 //! the driver CLI, and the guards that keep it away from every other Bus.
 // Only the dev variant has the driver; the gate runs this target in its
 // dev-tools lane, and an explicit `--test '*'` must still build without it.
-#![cfg(all(unix, feature = "dev-tools"))]
+// Sessions start only on macOS, where the effect recorder covers Bus.
+#![cfg(all(target_os = "macos", feature = "dev-tools"))]
 
 use serde_json::Value;
 use std::path::PathBuf;
