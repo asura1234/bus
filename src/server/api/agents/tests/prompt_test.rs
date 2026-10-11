@@ -115,6 +115,16 @@ async fn unbound_codex_prompt_requires_exact_ready_managed_launch_before_writing
     let mut wrong = info.clone();
     wrong.launch_pending = true;
     assert!(check_unbound_prompt_identity_and_idle(&wrong, &params).is_err());
+    // A fresh Codex reports Idle under its startup update chooser; text and
+    // Enter typed there pick "Update now" and the message is lost.
+    let mut wrong = info.clone();
+    wrong.dialog_id = Some("update chooser".into());
+    assert_eq!(
+        check_unbound_prompt_identity_and_idle(&wrong, &params)
+            .unwrap_err()
+            .0,
+        "agent_not_idle"
+    );
     let mut wrong = params.clone();
     wrong.expected_terminal_id = "different".into();
     assert!(run(&mut app, wrong)
