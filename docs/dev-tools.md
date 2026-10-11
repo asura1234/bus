@@ -12,7 +12,7 @@ Dev tools (answer only in a session started with `bus --dev`):
 
 Bus's control commands come in two tiers. The agent tier (`bus --help`) is how
 orchestrators and workers coordinate, and every session answers it. Dev tools
-inspect or change Bus's own UI, the human's view and preferences, and Bus's
+inspect or change Bus's own UI, the developer's view and preferences, and Bus's
 internals. A session answers them only if it was started with `--dev`;
 otherwise they fail with dev_tools_disabled. The `--dev` flag of the session a
 command targets decides, not the flag on the command line, and every build

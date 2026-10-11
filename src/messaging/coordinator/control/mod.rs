@@ -456,7 +456,7 @@ pub(crate) const METHODS: &[MethodSpec] = &[
         true,
         Tier::Agent,
     ),
-    // Dev tier: the human's view and preferences, and Bus's own internals.
+    // Dev tier: the developer's view and preferences, and Bus's own internals.
     spec("room.focus", "room focus", &["room"], true, Tier::Dev),
     spec("room.seen", "room seen", &["room"], true, Tier::Dev),
     spec(

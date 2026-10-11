@@ -828,7 +828,7 @@ needed.
 ## Upgrading to the always-on control socket
 
 Every session now answers control commands. A Bus that is still running from an
-older build answers them only if the human launched it in developer mode; after
+older build answers them only if it was launched in developer mode; after
 its next restart, every session does.
 
 ## Upgrading from the orchestrator build
