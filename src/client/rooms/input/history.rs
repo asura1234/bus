@@ -33,6 +33,12 @@ impl BusUi {
         self.text_changed(room);
     }
 
+    /// The reply's Markdown source exactly as the agent sent it.
+    pub(super) fn reply_markdown(&self, request: RequestId) -> Option<String> {
+        super::super::history::reply(&self.snapshot.state, self.room?, request)
+            .map(|(_, text)| text.to_owned())
+    }
+
     pub(super) fn history_entries(&self, room: RoomId) -> Vec<String> {
         let mut entries = self
             .locals

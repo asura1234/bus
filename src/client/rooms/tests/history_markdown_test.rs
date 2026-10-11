@@ -503,3 +503,27 @@ fn a_wrapped_row_never_starts_with_the_space_that_overflowed() {
     );
     assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, false), reply);
 }
+
+#[test]
+fn copy_puts_the_whole_reply_markdown_on_the_clipboard() {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::Down};
+
+    let (mut ui, room, agent) = fixture();
+    let markdown = "# Title\n\n**bold** and [docs](https://example.com) and `code`\n\n- item";
+    saved_exchange(&mut ui, room, agent, "literal prompt", markdown);
+    ui.compute_view(100, 40);
+    let (column, row) = locate(&ui, "Copy");
+    let (quote, quote_row) = locate(&ui, "Quote");
+    assert_eq!(row, quote_row, "Copy sits beside Quote");
+
+    assert_eq!(
+        pointer(&mut ui, Down(Left), column + 1, row).as_deref(),
+        Some(markdown)
+    );
+    assert!(
+        ui.locals[&room].text.text.is_empty(),
+        "copying leaves the composer alone"
+    );
+    assert_eq!(pointer(&mut ui, Down(Left), quote, row), None);
+    assert!(ui.locals[&room].text.text.contains("**bold**"), "Quote still quotes");
+}

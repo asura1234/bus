@@ -152,6 +152,16 @@ impl BusUi {
             return Some(true);
         }
         if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            if let Some(Action::CopyMessage(request)) = hit {
+                if let Some(text) = self.reply_markdown(request) {
+                    outcome
+                        .actions
+                        .push(crate::client::compositor::ClientShellAction::ClipboardWrite(
+                            text.into_bytes(),
+                        ));
+                }
+                return Some(true);
+            }
             if let Some(action) = hit {
                 let double = self.last_click.as_ref().is_some_and(|(last, time)| {
                     *last == action && time.elapsed() < std::time::Duration::from_millis(400)
@@ -558,6 +568,9 @@ impl BusUi {
                 }
             }
             Action::Quote(agent) => self.quote(agent),
+            // Writing the clipboard needs the input outcome, so `room_mouse`
+            // handles it.
+            Action::CopyMessage(_) => {}
             Action::Field(index) => {
                 if let Some(Form::Agent { field, .. }) = &mut self.form {
                     *field = index;
