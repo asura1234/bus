@@ -346,6 +346,20 @@ impl BusUi {
                 false,
                 matches!(line.tone, Tone::Muted),
             );
+            if let (Some(Action::Quote(request)), Some(column)) =
+                (&line.action, line.text.rfind("Copy"))
+            {
+                // The rest of the row quotes; `Copy` covers its own label.
+                view.hits.push(Hit {
+                    rect: Rect::new(
+                        x + column as u16,
+                        rect.y,
+                        width.saturating_sub(column as u16).min(4),
+                        1,
+                    ),
+                    action: Action::CopyMessage(*request),
+                });
+            }
             if let Some(thumbnail) = line.thumbnail.as_ref().filter(|thumbnail| {
                 // Partly scrolled thumbnails keep their blank rows and name.
                 thumbnail.row == 0

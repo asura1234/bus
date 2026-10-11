@@ -46,6 +46,8 @@ pub(super) enum Action {
     FileDetail(std::path::PathBuf),
     Details(crate::messaging::model::AgentId),
     Quote(crate::messaging::model::RequestId),
+    /// Copies a reply's Markdown source to the clipboard.
+    CopyMessage(crate::messaging::model::RequestId),
     Field(usize),
     Provider(Provider),
     Orchestrates,

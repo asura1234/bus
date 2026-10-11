@@ -1,0 +1,24 @@
+[package]
+name = "markdown-ratatui"
+description = "Backend-independent, width-aware Markdown widgets for ratatui"
+documentation = "https://docs.rs/markdown-ratatui"
+readme = "README.md"
+keywords = ["markdown", "ratatui", "tui", "widget", "terminal"]
+categories = ["command-line-interface", "text-processing"]
+version.workspace = true
+edition.workspace = true
+rust-version = "1.88"
+license.workspace = true
+repository.workspace = true
+[dependencies]
+markdown-model.workspace = true
+ratatui-core.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+[dev-dependencies]
+ratatui.workspace = true
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

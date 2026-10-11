@@ -394,3 +394,139 @@ fn a_history_copy_of_a_wrapped_list_item_skips_its_continuation_indent() {
         "• alpha beta gamma delta epsilon zeta"
     );
 }
+
+#[test]
+fn a_history_copy_keeps_explicit_prompt_newlines_near_the_right_edge() {
+    let (mut ui, room, agent) = fixture();
+    let prompt = "12345678901234567890\nsecond line";
+    saved_exchange(&mut ui, room, agent, prompt, "reply");
+
+    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, true), prompt);
+}
+
+#[test]
+fn a_history_copy_does_not_insert_spaces_inside_a_wrapped_word() {
+    let (mut ui, room, agent) = fixture();
+    let reply = "abcdefghijklmnopqrstuvwxyz0123456789";
+    saved_exchange(&mut ui, room, agent, "prompt", reply);
+
+    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, false), reply);
+}
+
+#[test]
+fn a_history_copy_keeps_a_long_word_after_a_stacked_table() {
+    let (mut ui, room, agent) = fixture();
+    let word = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let reply = format!("| HeaderOne | HeaderTwo |\n| --- | --- |\n| v1 | v2 |\n\n{word}");
+    saved_exchange(&mut ui, room, agent, "prompt", &reply);
+
+    let copied = copy_markdown_body_at_width(&mut ui, room, 20, false);
+
+    assert!(copied.ends_with(word), "copied text: {copied:?}");
+}
+
+#[test]
+fn a_history_copy_of_a_wrapped_url_or_path_matches_the_source() {
+    let (mut ui, room, agent) = fixture();
+    let reply = "see https://example.com/a/very/long/path/to/some/file.rs and /Users/me/work/bus/src/client/rooms/history/markdown.rs ok";
+    saved_exchange(&mut ui, room, agent, "prompt", reply);
+
+    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 30, false), reply);
+}
+
+#[test]
+fn a_history_copy_of_wrapped_cjk_text_adds_no_spaces() {
+    let (mut ui, room, agent) = fixture();
+    let reply = "这是一段很长的中文文本，用来测试换行之后复制是否保持原样。";
+    saved_exchange(&mut ui, room, agent, "prompt", reply);
+
+    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, false), reply);
+}
+
+#[test]
+fn a_history_copy_of_a_wrapped_quote_skips_its_continuation_bar() {
+    let (mut ui, room, agent) = fixture();
+    saved_exchange(
+        &mut ui,
+        room,
+        agent,
+        "prompt",
+        "> alpha beta gamma delta epsilon zeta",
+    );
+
+    assert_eq!(
+        copy_markdown_body_at_width(&mut ui, room, 20, false),
+        "│ alpha beta gamma delta epsilon zeta"
+    );
+}
+
+fn reply_rows_at_width(ui: &mut BusUi, room: RoomId, width: u16) -> Vec<String> {
+    let snapshot = Arc::clone(&ui.snapshot);
+    ui.history
+        .lines(
+            &snapshot.state,
+            snapshot.state.room(room).unwrap(),
+            width,
+            snapshot.revision,
+            2_000,
+            &mut Default::default(),
+        )
+        .iter()
+        .filter(|line| is_reply(line) && !line.text.trim().is_empty())
+        .map(|line| line.text[line.copy_from..].to_owned())
+        .collect()
+}
+
+#[test]
+fn a_sentence_period_never_wraps_onto_a_row_by_itself() {
+    let (mut ui, room, agent) = fixture();
+    // "aaaa bbbb cccccc" exactly fills the 16-cell reply column at width 20.
+    let reply = "aaaa bbbb cccccc.";
+    saved_exchange(&mut ui, room, agent, "prompt", reply);
+
+    assert_eq!(
+        reply_rows_at_width(&mut ui, room, 20),
+        ["aaaa bbbb", "cccccc."]
+    );
+    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, false), reply);
+}
+
+#[test]
+fn a_wrapped_row_never_starts_with_the_space_that_overflowed() {
+    let (mut ui, room, agent) = fixture();
+    let reply = "aaaa bbbb cccccc dddd";
+    saved_exchange(&mut ui, room, agent, "prompt", reply);
+
+    assert_eq!(
+        reply_rows_at_width(&mut ui, room, 20),
+        ["aaaa bbbb cccccc", "dddd"]
+    );
+    assert_eq!(copy_markdown_body_at_width(&mut ui, room, 20, false), reply);
+}
+
+#[test]
+fn copy_puts_the_whole_reply_markdown_on_the_clipboard() {
+    use crossterm::event::{MouseButton::Left, MouseEventKind::Down};
+
+    let (mut ui, room, agent) = fixture();
+    let markdown = "# Title\n\n**bold** and [docs](https://example.com) and `code`\n\n- item";
+    saved_exchange(&mut ui, room, agent, "literal prompt", markdown);
+    ui.compute_view(100, 40);
+    let (column, row) = locate(&ui, "Copy");
+    let (quote, quote_row) = locate(&ui, "Quote");
+    assert_eq!(row, quote_row, "Copy sits beside Quote");
+
+    assert_eq!(
+        pointer(&mut ui, Down(Left), column + 1, row).as_deref(),
+        Some(markdown)
+    );
+    assert!(
+        ui.locals[&room].text.text.is_empty(),
+        "copying leaves the composer alone"
+    );
+    assert_eq!(pointer(&mut ui, Down(Left), quote, row), None);
+    assert!(
+        ui.locals[&room].text.text.contains("**bold**"),
+        "Quote still quotes"
+    );
+}
