@@ -61,7 +61,13 @@ printf '%s\\n' "$@" > "$FAKE_BUS_ARGS"
             [str(self.root / "run"), *args],
             cwd=self.root.parent,
             env={
-                **os.environ,
+                # The launcher follows an inherited target dir (a gate run sets
+                # one), which would bypass this fixture's fake binaries.
+                **{
+                    key: value
+                    for key, value in os.environ.items()
+                    if key not in ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR")
+                },
                 "PATH": f"{self.bin_dir}{os.pathsep}{os.environ['PATH']}",
                 "FAKE_CARGO_ARGS": str(self.cargo_args),
                 "FAKE_CARGO_CWD": str(self.cargo_cwd),
