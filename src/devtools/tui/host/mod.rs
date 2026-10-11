@@ -246,10 +246,17 @@ fn spawn_pump(
         }
         let (lock, ready) = &*output;
         if let Ok(mut out) = lock.lock() {
-            out.exited.get_or_insert_with(|| "terminal closed".into());
+            out.exited.get_or_insert_with(|| TERMINAL_CLOSED.into());
         }
         ready.notify_all();
     });
+}
+
+/// Why the session ended when only its terminal closed, before Bus's status is known.
+const TERMINAL_CLOSED: &str = "terminal closed";
+
+fn exit_reason(status: portable_pty::ExitStatus) -> String {
+    format!("bus exited ({status:?})")
 }
 
 fn spawn_reaper(
@@ -265,7 +272,7 @@ fn spawn_reaper(
         if let Ok(Some(status)) = status {
             let (lock, ready) = &*output;
             if let Ok(mut out) = lock.lock() {
-                out.exited = Some(format!("bus exited ({status:?})"));
+                out.exited = Some(exit_reason(status));
             }
             ready.notify_all();
             return;
@@ -323,7 +330,28 @@ impl Host {
     }
 
     fn exited(&self) -> Option<String> {
-        self.output.0.lock().ok().and_then(|out| out.exited.clone())
+        let reason = self
+            .output
+            .0
+            .lock()
+            .ok()
+            .and_then(|out| out.exited.clone())?;
+        if reason != TERMINAL_CLOSED {
+            return Some(reason);
+        }
+        // The terminal closes a moment before the reaper's next poll sees Bus
+        // exit; ask Bus itself, so a quit reports its exit status, not only EOF.
+        for _ in 0..25 {
+            if let Ok(Ok(Some(status))) = self.child.lock().map(|mut child| child.try_wait()) {
+                let reason = exit_reason(status);
+                if let Ok(mut out) = self.output.0.lock() {
+                    out.exited = Some(reason.clone());
+                }
+                return Some(reason);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Some(reason)
     }
 
     fn grid(&self) -> Grid {

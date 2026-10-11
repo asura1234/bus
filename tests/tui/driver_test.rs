@@ -387,6 +387,30 @@ fn waits_report_a_bus_that_exited() {
 }
 
 #[test]
+fn a_quit_reports_the_exit_status_of_bus() {
+    let session = Session::start("quit");
+    session.ok(&["wait", "--text", "# bus", "--timeout", "10s"]);
+    session.ok(&["press", "ctrl+q"]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let status = loop {
+        let (_, status) = tui(&session.0, &["status"]);
+        if status["alive"] == false || std::time::Instant::now() > deadline {
+            break status;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    // The first status without Bus already says how it exited, not only that
+    // its terminal closed.
+    assert!(
+        status["exited"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("bus exited"),
+        "{status}"
+    );
+}
+
+#[test]
 fn a_refused_root_override_leaves_the_directory_untouched() {
     use std::os::unix::fs::PermissionsExt;
     let base = PathBuf::from(format!("/tmp/bus-tui-it-root{}", std::process::id()));
